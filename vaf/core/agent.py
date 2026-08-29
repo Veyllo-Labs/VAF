@@ -117,7 +117,50 @@ def _is_nonprogress_tool(name: str) -> bool:
 # NAME after a few calls within one step, telling the model to act on what it already gathered.
 _READ_TOOLS_THINKING = frozenset({
     "memory_search", "web_search", "list_automation_notes", "list_automation_todos", "list_automations",
+    "read_automation",
 })
+
+# Tools a given thinking NODE must not call, with the instruction that replaces them. The automation
+# review rung exists to PROPOSE a change and let the user decide; a background pass that edits a
+# user's schedule on its own judgment is the thing the confirmation gate downstream was built to
+# prevent, and blocking it here means the rung cannot get there by accident. Per node, because the
+# forced housekeeping path legitimately creates an automation from a user's own todo.
+_THINKING_NODE_MUTATION_BLOCK = {
+    "automation_review": (
+        frozenset({"update_automation", "create_automation", "delete_automation"}),
+        "[BLOCKED] Do NOT change the automation yourself - propose it and let the user decide: "
+        "ask_user(message=\"<what you noticed + what you suggest>\", proposed_action=\"update "
+        "automation <id>: <the change>\", details=\"<the observation, quoted>\").",
+    ),
+}
+
+# The two tools a background thinking run must ALWAYS be able to reach: the one that contacts the user
+# and the one that ends the run. They are chosen per turn by an LLM router like every other tool, and a
+# forced node additionally sets tool_choice="required" - so a turn where the router happened to omit
+# thinking_done leaves the model obliged to call a tool with no way to stop. That is not hypothetical:
+# a run spent 12 tool turns re-calling a rejecting ask_user because thinking_done was not in its set.
+# Termination is enforced here, in code, never left to the router's judgment.
+_THINKING_EXIT_TOOLS = ("thinking_done", "ask_user")
+
+
+def _apply_tool_cap(selected, router_max: int, pinned) -> list:
+    """Cap the per-turn tool set, never at the expense of a pinned tool.
+
+    Pure and order-preserving so the truncation is reproducible: the caller hands in a LIST, and
+    pinned names survive regardless of where they sit in it. Callers that build the set from a
+    `set()` must sort it first - hash order made the cut arbitrary, which is how a merely
+    force-included tool could still be dropped.
+    """
+    try:
+        cap = max(0, int(router_max))
+    except (TypeError, ValueError):
+        return list(selected or [])
+    items = list(selected or [])
+    if not items or len(items) <= cap:
+        return items
+    keep = [t for t in items if t in (pinned or ())]
+    rest = [t for t in items if t not in keep]
+    return keep + rest[:max(0, cap - len(keep))]
 
 # Working-memory note firewall: outcome/progress CLAIMS a model may only write
 # after real work happened. A weak model narrates its intentions as notes
@@ -346,6 +389,62 @@ _PROACTIVE_DECIDE_NUDGE = (
     "details=\"<a VERBATIM quote of one real memory you just saw>\") - OR, only if nothing is genuinely "
     "groundable, thinking_done(\"Nothing grounded.\"). No more searching, no prose."
 )
+
+# Decision nudge for the GET-TO-KNOW step. Same reasoning as above, and the same defect it was
+# missing: that node has no open note or todo either, yet it used to receive the housekeeping text
+# demanding a `note_id` - which the model cannot obtain, because listing notes is exactly what is
+# blocked. A run burned 12 tool turns reasoning about how to get an id that was unobtainable by
+# construction. State what this node CAN do instead.
+_GETTO_DECIDE_NUDGE = (
+    "[BLOCKED] Do NOT call {fn} - there is no open item here and nothing left to gather. Ask the "
+    "user ONE specific, friendly get-to-know question now: ask_user(message=\"<the question, in the "
+    "user's language>\") - or, if you have nothing to ask, thinking_done(\"Nothing to ask.\"). No "
+    "source_note_id, no delete_automation_note, no prose."
+)
+
+# Decision nudge for the AUTOMATION REVIEW rung. The findings were already computed and handed over,
+# so more listing adds nothing; what is missing is a decision.
+_AUTOMATION_REVIEW_DECIDE_NUDGE = (
+    "[BLOCKED] You already have the checked observations - do NOT call {fn} again. Pick ONE and "
+    "propose it now: ask_user(message=\"<what you noticed + what you suggest>\", "
+    "proposed_action=\"update automation <id>: <the change>\", details=\"<the observation, quoted>\") "
+    "- or thinking_done(\"Nothing worth raising.\") if none of them is worth the user's attention. "
+    "No more reading, no prose."
+)
+
+# Decision nudge for the RELEVANCE rung. Saying nothing is a correct outcome here, so the nudge has to
+# offer that as a first-class option rather than pressing for a message - a rung under pressure to
+# deliver delivers a news digest, which is the failure mode this rung is defined against.
+_RELEVANCE_DECIDE_NUDGE = (
+    "[BLOCKED] You have looked enough - do NOT call {fn} again. Decide now: EITHER tell the user what "
+    "CHANGES for them, with the source and its date "
+    "(ask_user(message=\"<what changes for them, and why>\", details=\"<query, source URL, date, and a "
+    "verbatim quote of the memory it concerns>\")) - OR, if nothing you found changes anything "
+    "concrete for THIS user, thinking_done(\"Nothing relevant.\"). Saying nothing is the normal and "
+    "correct outcome. No summaries, no prose."
+)
+
+# Housekeeping block for the forced-resolution node. Correct ONLY there: that node really does have
+# an open item, and the ledger prompt handed the model its id.
+_FORCED_ITEM_BLOCK = (
+    "[BLOCKED] Gathering is disabled right now, you must resolve the open item. Do "
+    "NOT call {fn}. Call ask_user(message=..., source_note_id=...) or "
+    "delete_automation_note(note_id=...) now."
+)
+
+# Per-NODE read policy: (block text, read-cap). The block text is what the model is told when a
+# gather call is refused, so it must be satisfiable ON THAT NODE - a nudge naming a tool or an
+# argument the node cannot produce reads as nonsense and is answered by searching again. Every
+# entry keeps the "[BLOCKED]" lead: tool_result_is_error() (vaf/core/context.py) keys on it to
+# recognise a soft block as a failed call rather than a green result.
+_THINKING_NODE_POLICY = {
+    "forced_item":       (_FORCED_ITEM_BLOCK, 3),
+    "proactive":         (_PROACTIVE_DECIDE_NUDGE, 2),
+    "getto":             (_GETTO_DECIDE_NUDGE, 3),
+    "automation_review": (_AUTOMATION_REVIEW_DECIDE_NUDGE, 2),
+    "relevance":         (_RELEVANCE_DECIDE_NUDGE, 3),
+}
+_THINKING_NODE_POLICY_DEFAULT = (_FORCED_ITEM_BLOCK, 3)
 
 
 def _resolve_template_variables(template: dict, variables: dict, route_input: str) -> list:
@@ -1367,6 +1466,38 @@ class Agent:
         """
         return getattr(self, "_run_kind", None) == "thinking"
 
+    def _forcing_this_generation(self) -> bool:
+        """Is THIS generation the one the caller forced a tool call on?
+
+        Derived, never stored. A stored twin of this (`_thinking_force_progress`) was set
+        from `force_tool_choice` and never reset, while `_force_tool_choice_used` flips
+        after the first generation - so the two disagreed for the rest of the step and the
+        read-cap kept blocking every gather tool long after the force was gone. Computing it
+        deletes the second source of truth instead of adding a reset path that the next
+        early-return would forget again.
+        """
+        return bool(getattr(self, "_force_tool_choice", None)) and not getattr(
+            self, "_force_tool_choice_used", False
+        )
+
+    def _ensure_thinking_exit_tools(self) -> None:
+        """Guarantee a thinking run can always reach the user and always stop.
+
+        The per-turn tool set is narrowed in five places (router cap, two safety nets, the
+        internal-step subset, the context-pressure subset), and each one used to be able to
+        drop `thinking_done`. Combined with a forced node's tool_choice="required" that is a
+        deadlock by construction: the model must emit a tool call and owns no tool that ends
+        the turn. Called after every narrowing rather than at one of them, because the
+        narrowings sit on different branches and no single one dominates the others.
+
+        No-op outside a thinking run, and no-op when `_active_tools` is None (ALL tools).
+        """
+        if not self._is_thinking_run() or self._active_tools is None:
+            return
+        missing = [t for t in _THINKING_EXIT_TOOLS if t in self.tools and t not in self._active_tools]
+        if missing:
+            self._active_tools = list(self._active_tools) + missing
+
     @staticmethod
     def _is_placeholder_plan(plan) -> bool:
         """True when the working-memory plan is an obvious PLACEHOLDER, not a real approach -- a weak
@@ -1489,6 +1620,27 @@ class Agent:
         except Exception:
             return (None, False)
 
+    def _thinking_node_mutation_block(self, function_name: str):
+        """Refuse a stored-state mutation the CURRENT thinking rung is not allowed to make.
+
+        Returns the replacement instruction, or None. Deterministic, because a prompt rule alone is
+        not a guarantee: the automation-review rung tells the model to propose rather than edit, and
+        this is what makes that true even when it does not listen."""
+        try:
+            if not self._is_thinking_run():
+                return None
+            node = (getattr(self, "_thinking_node", "") or "").strip()
+            blocked, message = _THINKING_NODE_MUTATION_BLOCK.get(node, (frozenset(), ""))
+            if function_name in blocked:
+                try:
+                    append_domain_log("backend", f"[THINKING_NODE_BLOCK] {function_name} on node={node}")
+                except Exception:
+                    pass
+                return message
+            return None
+        except Exception:
+            return None
+
     def _thinking_read_cap_step(self, function_name: str):
         """Thinking-mode-only per-tool-NAME read cap. Counts calls to a read/gather tool within the
         current step; at the Nth (thinking_read_cap_per_tool, default 3) it returns a block string telling
@@ -1502,47 +1654,43 @@ class Agent:
                 return None
             if function_name not in _READ_TOOLS_THINKING:
                 return None
-            # Forced-resolution node: gather tools are blocked from the FIRST call, so a forced
-            # tool_choice="required" can only be satisfied by a decisive/progress tool. EXCEPTION: the
-            # proactive grounding step sets _thinking_allow_search so the model can dig into ONE specific
-            # thing with memory_search itself (still per-tool read-capped below, so it cannot churn);
-            # everything else stays blocked.
-            _proactive = bool(getattr(self, "_thinking_allow_search", False))
-            if getattr(self, "_thinking_force_progress", False):
-                _allow_search = _proactive and function_name == "memory_search"
+            # Which rung is this? The caller names it; a caller that predates the kwarg is inferred
+            # from the one signal that used to stand in for it, so no call site changes behaviour
+            # merely by not having been updated yet.
+            _node = (getattr(self, "_thinking_node", "") or "").strip()
+            if not _node and getattr(self, "_thinking_allow_search", False):
+                _node = "proactive"
+            _block_text, _node_cap = _THINKING_NODE_POLICY.get(_node, _THINKING_NODE_POLICY_DEFAULT)
+            # Forced-resolution node: gather tools are blocked for the generation that is actually
+            # forced, so a tool_choice="required" can only be satisfied by a decisive/progress tool.
+            # EXCEPTION: the proactive grounding step sets _thinking_allow_search so the model can dig
+            # into ONE specific thing with memory_search itself (still per-tool read-capped below, so
+            # it cannot churn); everything else stays blocked.
+            if self._forcing_this_generation():
+                _allow_search = bool(getattr(self, "_thinking_allow_search", False)) and function_name == "memory_search"
                 if not _allow_search:
                     try:
-                        append_domain_log("backend", f"[THINKING_READ_CAP] forced-node blocked {function_name}")
+                        append_domain_log("backend", f"[THINKING_READ_CAP] forced-node blocked {function_name} (node={_node or 'default'})")
                     except Exception:
                         pass
-                    # Proactive grounding step has NO open item -> give the correct DECISION nudge instead of
-                    # the housekeeping "resolve the open item / delete_automation_note" message (which the
-                    # weak model reads as nonsense and answers by searching again).
-                    if _proactive:
-                        return _PROACTIVE_DECIDE_NUDGE.format(fn=function_name)
-                    return (
-                        f"[BLOCKED] Gathering is disabled right now, you must resolve the open item. Do "
-                        f"NOT call {function_name}. Call ask_user(message=..., source_note_id=...) or "
-                        "delete_automation_note(note_id=...) now."
-                    )
+                    return _block_text.format(fn=function_name)
                 # memory_search allowed for the proactive step -> fall through to the (tighter) read-cap.
             from vaf.core.config import Config
             if not Config.get("thinking_read_cap_enabled", True):
                 return None
             cap = max(2, int(Config.get("thinking_read_cap_per_tool", 3) or 3))
-            if _proactive:
-                cap = 2   # the proactive step already has the pre-fetched digest; 2 self-searches is plenty
+            cap = min(cap, _node_cap) if _node in _THINKING_NODE_POLICY else cap
             counts = getattr(self, "_thinking_read_counts", None)
             if counts is None:
                 counts = self._thinking_read_counts = {}
             counts[function_name] = counts.get(function_name, 0) + 1
             if counts[function_name] >= cap:
                 try:
-                    append_domain_log("backend", f"[THINKING_READ_CAP] blocked {function_name} (#{counts[function_name]})")
+                    append_domain_log("backend", f"[THINKING_READ_CAP] blocked {function_name} (#{counts[function_name]}, node={_node or 'default'})")
                 except Exception:
                     pass
-                if _proactive:
-                    return _PROACTIVE_DECIDE_NUDGE.format(fn=function_name)
+                if _node in _THINKING_NODE_POLICY:
+                    return _block_text.format(fn=function_name)
                 return (
                     f"[BLOCKED] You have already called {function_name} {counts[function_name]} times "
                     "this run. Stop gathering, you have enough context. ACT on what you already have "
@@ -8569,6 +8717,7 @@ class Agent:
         images: Optional[List[Dict]] = None,
         force_tool_choice: Optional[str] = None,
         allow_memory_search: bool = False,
+        thinking_node: str = "",
         raw_user_input: Optional[str] = None,
     ):
         """Run one full turn: routing, LLM/tool loop, guardrails, persistence.
@@ -8585,6 +8734,13 @@ class Agent:
         (workflow/skill router, variable extraction, workflow-mention
         advisory) - the LLM still sees the enriched user_input. Callers that
         pass the raw message as user_input already (CLI) omit it.
+
+        thinking_node: which rung of the thinking ladder this step is
+        ("forced_item", "proactive", "getto", ...). Thinking-mode only. It
+        selects the read-cap's block text and budget, so a blocked gather call
+        is answered with the instruction that node can actually satisfy - the
+        housekeeping text ("resolve the open item, pass a note_id") on a node
+        with no open item sent a run into a 12-turn retry loop.
         """
         from vaf.cli.ui import UI
         # Turn-local flag: avoids cross-thread leakage from process-wide env vars.
@@ -8594,7 +8750,9 @@ class Agent:
         # tool (ask_user / delete_* / thinking_done) — the model cannot escape into search/prose.
         self._force_tool_choice = force_tool_choice if (force_tool_choice and thinking_mode) else None
         self._force_tool_choice_used = False  # force only the FIRST generation, then revert to auto
-        self._thinking_force_progress = bool(self._force_tool_choice)
+        # Which NODE of the thinking ladder this step is, so the read-cap can answer with the block
+        # text and the budget that node actually earns. "" for every non-thinking turn.
+        self._thinking_node = (thinking_node or "") if thinking_mode else ""
         # Proactive grounding exception: even in a forced node, let the model dig into ONE specific thing
         # with memory_search itself (read-capped). Set only for the proactive step in thinking_mode.
         self._thinking_allow_search = bool(allow_memory_search and thinking_mode)
@@ -9138,16 +9296,18 @@ class Agent:
                 except Exception:
                     pass
                 
-                # Convert back to list
-                selected_tools = list(tools_set)
+                # Convert back to list. SORTED, not list(set): the cap below truncates whatever
+                # does not fit, and hash order made which tool got cut depend on the run.
+                selected_tools = sorted(tools_set)
 
             # Cap the number of tools to keep the context window clean.
-            # list_tools / search_tools are pinned and don't count against the cap.
+            # Discovery tools are pinned and don't count against the cap; in a thinking run the
+            # exit tools are pinned too, so the run can always end (see _THINKING_EXIT_TOOLS).
             _router_max = int(self.config.get("router_max_tools", 12))
-            if selected_tools and len(selected_tools) > _router_max:
-                _pinned = {t for t in ("list_tools", "search_tools") if t in selected_tools}
-                _rest = [t for t in selected_tools if t not in _pinned]
-                selected_tools = list(_pinned) + _rest[:max(0, _router_max - len(_pinned))]
+            _pin_names = ("list_tools", "search_tools") + (
+                _THINKING_EXIT_TOOLS if self._is_thinking_run() else ()
+            )
+            selected_tools = _apply_tool_cap(selected_tools, _router_max, set(_pin_names))
 
             # SAFETY NET: If router returns empty list, fallback to sensible tools
             # Otherwise the model gets 0 tools and hallucinates using them.
@@ -9188,6 +9348,10 @@ class Agent:
                 ):
                     self._active_tools = list(self._active_tools) + ["use_skill"]
 
+            # Termination guarantee for background runs. Placed after BOTH safety nets and the
+            # cap, so no narrowing above can leave the run without a way to stop.
+            self._ensure_thinking_exit_tools()
+
             # Show final tools once in Web UI (single source; CLI/router logs above already show selection)
             actual_tools = self._active_tools if self._active_tools is not None else list(self.tools.keys())
             final_list = ", ".join(actual_tools)
@@ -9223,6 +9387,7 @@ class Agent:
                 # Emergency fallback for internal steps/retries
                 UI.event("Router", f"Tight context in internal step ({current_tokens}/{max_tokens}). Using internal subset.", style="warning")
                 self._active_tools = [t for t in ["web_search", "memory_search", "list_tools", "search_tools", "update_intent", "read_file", "list_files"] if t in self.tools]
+                self._ensure_thinking_exit_tools()
 
         if not skip_input and user_input:
             # Re-apply after potential compression to ensure the hint stays in history[0].
@@ -9612,6 +9777,7 @@ class Agent:
                              UI.event("Context", "Tight context: Using CORE tool subset to save VRAM.", style="warning")
                              CORE_FALLBACK = ["web_search", "memory_search", "memory_save", "list_tools", "update_intent", "read_file", "list_files", "librarian_agent", "coding_agent"]
                              self._active_tools = [t for t in CORE_FALLBACK if t in self.tools]
+                             self._ensure_thinking_exit_tools()
                              # Re-calculate after tool reduction
                              current_tokens, _ = self.get_token_usage()
 
@@ -10719,6 +10885,17 @@ class Agent:
                     # THINKING READ-CAP: in a background thinking run, block a read/gather tool called too
                     # many times this step (memory_search spin etc.). Soft block — the result tells the
                     # model to act; other tools still work. No-op outside thinking mode.
+                    _mut_block = self._thinking_node_mutation_block(function_name)
+                    if _mut_block:
+                        UI.event("Warning", f"Thinking node-block: {function_name} is propose-only here", style="warning")
+                        self.history.append({
+                            "role": "tool",
+                            "tool_call_id": tc['id'],
+                            "name": function_name,
+                            "content": _mut_block,
+                        })
+                        continue
+
                     _read_block = self._thinking_read_cap_step(function_name)
                     if _read_block:
                         UI.event("Warning", f"Thinking read-cap: blocked {function_name}", style="warning")
@@ -10898,10 +11075,16 @@ class Agent:
                     if function_name == "web_search":
                         # Find the last user message to get the original question
                         user_question = arguments.get('query', '')  # Default to query
-                        for msg in reversed(self.history):
-                            if msg.get('role') == 'user':
-                                user_question = msg.get('content', user_question)
-                                break
+                        # NOT in a background run. There the last "user" message is a system-authored
+                        # ladder prompt or, worse, a real chat line the user wrote to the assistant -
+                        # and this value is sent onward: it steers the per-page analysis of fetched
+                        # pages and lands in the result cache key. A background pass has no user
+                        # question, so its search speaks only for itself.
+                        if not self._is_thinking_run():
+                            for msg in reversed(self.history):
+                                if msg.get('role') == 'user':
+                                    user_question = msg.get('content', user_question)
+                                    break
                         # Add user_question to arguments for web_search
                         arguments['user_question'] = user_question
                     
@@ -11036,7 +11219,16 @@ class Agent:
 
                         # PROACTIVE EVIDENCE POOL: in a thinking run, capture real retrieved memory so the
                         # proactive evidence-gate can verify a suggestion is grounded in it (not fabricated).
-                        if function_name == "memory_search" and getattr(self, "_current_turn_thinking_mode", False):
+                        # On the RELEVANCE rung a web result is also real retrieved evidence, and that
+                        # rung's whole message is built from one - so it is pooled there too. Scoped to
+                        # that node on purpose: everywhere else "grounded" must keep meaning "grounded in
+                        # the user's own memory", which is a different and stronger claim.
+                        _pool_this = (
+                            function_name == "memory_search"
+                            or (function_name == "web_search"
+                                and (getattr(self, "_thinking_node", "") or "") == "relevance")
+                        )
+                        if _pool_this and getattr(self, "_current_turn_thinking_mode", False):
                             try:
                                 from vaf.core.thinking_mode import add_run_evidence
                                 add_run_evidence(getattr(self, "_current_user_scope_id", None), result_str)

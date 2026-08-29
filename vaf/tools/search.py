@@ -249,11 +249,19 @@ def get_search_provider_errors() -> list:
 
 
 def get_web_search_results(query: str, max_results: int, *,
-                           user_scope_id: str | None = None) -> tuple[list, str, str | None]:
+                           user_scope_id: str | None = None,
+                           no_internal_fallback: bool = False) -> tuple[list, str, str | None]:
     """Try Brave API -> Google CSE API -> scrape Google -> DuckDuckGo. Returns (results, source_name, fallback_hint).
 
     ``user_scope_id`` is only consulted by the last-resort memory fallback, and only the
-    caller can know it - see ``_search_internal_knowledge``."""
+    caller can know it - see ``_search_internal_knowledge``.
+
+    ``no_internal_fallback`` refuses that last resort. A caller that is asking the OUTSIDE
+    WORLD whether something changed must never be answered with the user's own memory: the
+    two would be indistinguishable to it, and a background pass would then "find" a fact it
+    had itself stored and report it back as news. With no Brave/Google key configured and
+    Google serving its unusual-traffic page, that path is not exotic - it is the default
+    configuration's own fall-through. Such a caller wants an honest empty result instead."""
     fallback_hint = None
 
     # 1) Brave API
@@ -290,6 +298,9 @@ def get_web_search_results(query: str, max_results: int, *,
     # 5) Last resort: VAF's own long-term memory (RAG). When every web provider
     # fails (rate limit, no API keys, network down) — or the topic is internal
     # and the web genuinely knows nothing — the knowledge base often does.
+    # Refused when the caller needs OUTSIDE information specifically (see the docstring).
+    if no_internal_fallback:
+        return (results, "DuckDuckGo", fallback_hint)
     internal = _search_internal_knowledge(query, max_results, user_scope_id=user_scope_id)
     if internal:
         UI.event("Web Search", f"Falling back to internal knowledge: {len(internal)} snippet(s)", style="dim")
@@ -407,13 +418,20 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def _ws_cache_key(self, query, max_results, deep, trusted_sources_only, user_question) -> str:
+    def _ws_cache_key(self, query, max_results, deep, trusted_sources_only, user_question,
+                      user_scope_id=None) -> str:
+        """Cache identity, keyed per USER.
+
+        The cache directory is shared and its files hold the query and the result in clear
+        text, so without the scope in the key one tenant's search - and whatever private
+        phrasing rode along in `user_question` - is served to, and readable by, another."""
         raw = "|".join([
             (query or "").strip().lower(),
             str(max_results),
             str(int(bool(deep))),
             str(int(bool(trusted_sources_only))),
             (user_question or "").strip().lower(),
+            str(user_scope_id or ""),
         ])
         return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
@@ -444,6 +462,7 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
         trusted_sources_only = bool(kwargs.get("trusted_sources_only", False))
         return_raw = bool(kwargs.get("return_raw", False))  # Internal: return raw results dict
         user_question = kwargs.get("user_question", query)  # Extract original user question (fallback to query)
+        no_internal_fallback = bool(kwargs.get("no_internal_fallback", False))
         if not query:
             return "Error: No query provided." if not return_raw else []
 
@@ -460,7 +479,8 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
             )
             _cache_key = None
             if _cache_eligible:
-                _cache_key = self._ws_cache_key(query, max_results, deep, trusted_sources_only, user_question)
+                _cache_key = self._ws_cache_key(query, max_results, deep, trusted_sources_only,
+                                                user_question, kwargs.get("user_scope_id"))
                 _cached = self._ws_cache_get(_cache_key, _cache_ttl)
                 if _cached is not None:
                     UI.event("Web Search", f"Cache hit ({query[:60]})", style="dim")
@@ -504,7 +524,8 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
             # 1) Search: Brave API -> Google CSE API -> scrape Google -> DuckDuckGo
             reset_search_provider_errors()
             results, search_source, fallback_hint = get_web_search_results(
-                query_with_filter, max_results, user_scope_id=kwargs.get('user_scope_id'))
+                query_with_filter, max_results, user_scope_id=kwargs.get('user_scope_id'),
+                no_internal_fallback=no_internal_fallback)
             # If the filtered query found no real web results, retry without
             # the filter. A site: filter can legitimately have zero hits (live
             # incident: a weather query against a trusted-sources list without
@@ -518,7 +539,8 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
                 UI.event("Smart Search", "No web results with source filter - retrying without filter", style="dim")
                 _filtered_pass = (results, search_source, fallback_hint)
                 results, search_source, fallback_hint = get_web_search_results(
-                    query, max_results, user_scope_id=kwargs.get('user_scope_id'))
+                    query, max_results, user_scope_id=kwargs.get('user_scope_id'),
+                    no_internal_fallback=no_internal_fallback)
                 if not results:
                     results, search_source, fallback_hint = _filtered_pass
             

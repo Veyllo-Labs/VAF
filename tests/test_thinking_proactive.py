@@ -52,23 +52,30 @@ def test_proactive_decide_nudge_replaces_housekeeping_block(monkeypatch):
     from types import SimpleNamespace
     from vaf.core.agent import Agent
 
-    def _fake(**kw):
-        """A thinking-run stand-in: declares its run kind and carries the REAL predicate,
-        so it cannot pass while the agent's own answer differs."""
-        ns = SimpleNamespace(_run_kind="thinking", _thinking_read_counts={}, **kw)
+    def _fake(node="", **kw):
+        """A thinking-run stand-in: declares its run kind and its ladder node, and carries the
+        REAL predicates, so it cannot pass while the agent's own answers differ.
+
+        The force is expressed through the two attributes it is DERIVED from. A stored twin of
+        that answer existed and was never reset, so it outlived the forced generation."""
+        ns = SimpleNamespace(
+            _run_kind="thinking", _thinking_read_counts={}, _thinking_node=node,
+            _force_tool_choice="required", _force_tool_choice_used=False, **kw
+        )
         ns._is_thinking_run = types.MethodType(Agent._is_thinking_run, ns)
+        ns._forcing_this_generation = types.MethodType(Agent._forcing_this_generation, ns)
         return ns
     # proactive step, a non-search tool is reached for -> decision nudge (no delete_automation_note)
-    fake = _fake(_thinking_force_progress=True, _thinking_allow_search=True)
+    fake = _fake(node="proactive", _thinking_allow_search=True)
     msg = Agent._thinking_read_cap_step(fake, "web_search")
     assert msg and "ask_user" in msg and "thinking_done" in msg
     assert "delete_automation_note" not in msg and "web_search" in msg
     # memory_search IS allowed in the proactive step, but capped at 2 -> 1st ok, 2nd nudges to decide
-    fake2 = _fake(_thinking_force_progress=True, _thinking_allow_search=True)
+    fake2 = _fake(node="proactive", _thinking_allow_search=True)
     assert Agent._thinking_read_cap_step(fake2, "memory_search") is None
     assert "ask_user" in (Agent._thinking_read_cap_step(fake2, "memory_search") or "")
     # housekeeping forced node (NOT proactive) keeps the original resolve-the-item message
-    fake3 = _fake(_thinking_force_progress=True, _thinking_allow_search=False)
+    fake3 = _fake(node="forced_item", _thinking_allow_search=False)
     hk = Agent._thinking_read_cap_step(fake3, "memory_search")
     assert hk and "resolve the open item" in hk and "delete_automation_note" in hk
 

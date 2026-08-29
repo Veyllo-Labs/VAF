@@ -15,15 +15,16 @@ from vaf.core.config import Config
 _cap = Agent._thinking_read_cap_step
 
 
-def _obj(run_kind="thinking"):
-    """The stand-in declares its run kind, like the real thinking agent does.
+def _obj(run_kind="thinking", node=""):
+    """The stand-in declares its run kind and its ladder node, like the real thinking agent does.
 
-    It carries the REAL predicate rather than a re-implementation: the cap asks
-    `self._is_thinking_run()`, and a stand-in that answered that question its own way
-    would keep passing if the two ever disagreed.
+    It carries the REAL predicates rather than re-implementations: the cap asks
+    `self._is_thinking_run()` and `self._forcing_this_generation()`, and a stand-in that
+    answered either question its own way would keep passing if the two ever disagreed.
     """
-    ns = types.SimpleNamespace(_run_kind=run_kind)
+    ns = types.SimpleNamespace(_run_kind=run_kind, _thinking_node=node)
     ns._is_thinking_run = types.MethodType(Agent._is_thinking_run, ns)
+    ns._forcing_this_generation = types.MethodType(Agent._forcing_this_generation, ns)
     return ns
 
 
@@ -81,13 +82,50 @@ def test_custom_cap(monkeypatch):
 
 
 def test_forced_node_blocks_gather_on_first_call():
-    """On a forced-resolution node (_thinking_force_progress), gather tools are blocked from call #1 so a
-    forced tool_choice='required' can only be satisfied by a decisive tool."""
-    o = _obj()
-    o._thinking_force_progress = True
+    """On a forced-resolution node, gather tools are blocked from call #1 so a forced
+    tool_choice='required' can only be satisfied by a decisive tool.
+
+    Sets the two REAL attributes the force is derived from, not a stored twin of the answer:
+    that twin existed, was never reset, and kept the block alive for the whole step."""
+    o = _obj(node="forced_item")
+    o._force_tool_choice = "required"
+    o._force_tool_choice_used = False
     blocked = _cap(o, "web_search")
     assert blocked is not None and "Gathering is disabled" in blocked
     assert _cap(o, "memory_search") is not None
     # a decisive/progress tool is still allowed even on a forced node
     assert _cap(o, "ask_user") is None
     assert _cap(o, "delete_automation_note") is None
+
+
+def test_force_progress_is_derived_not_stored():
+    """The block covers ONLY the generation that is actually forced.
+
+    `_force_tool_choice_used` flips to True after the first generation. The stored twin never
+    followed, so gather stayed blocked for the rest of the step - which is how a node that had
+    no open item kept telling the model to resolve one, with listing blocked so it could never
+    find out there was none."""
+    o = _obj(node="forced_item")
+    o._force_tool_choice = "required"
+    o._force_tool_choice_used = False
+    assert _cap(o, "web_search") is not None          # forced generation -> blocked outright
+    o._force_tool_choice_used = True                  # the force is spent
+    assert _cap(o, "web_search") is None              # gather is allowed again (still counted)
+
+
+def test_getto_node_nudge_is_answerable_on_that_node():
+    """The get-to-know node has no open item, so the housekeeping text is unsatisfiable there.
+
+    The nudge must name what this node CAN do (ask a question / finish) and must not demand a
+    note id, which is unobtainable because listing notes is exactly what is blocked."""
+    o = _obj(node="getto")
+    o._force_tool_choice = "required"
+    o._force_tool_choice_used = False
+    blocked = _cap(o, "list_automation_notes")
+    assert blocked is not None
+    assert "ask_user(message=" in blocked
+    # The two unsatisfiable demands must be gone as INSTRUCTIONS. The nudge may still name them
+    # to cancel them explicitly, which is why this asserts on the imperative forms.
+    assert "you must resolve the open item" not in blocked
+    assert "delete_automation_note(note_id=" not in blocked
+    assert blocked.startswith("[BLOCKED]")   # tool_result_is_error() keys on this lead

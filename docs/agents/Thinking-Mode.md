@@ -150,10 +150,15 @@ Key options (in `config.json` or via Web UI **Settings → AI & Model → Thinke
 | `thinking_proactive_min_runs` | `6` | **Deprecated** - rate-limiting no longer silences runs; repeats are prevented by the recent/declined dedup prompts. Unused. |
 | `thinking_proactive_memory_k` | `4` | Per-query top-K when the proactive step pre-fetches real memories to hand the model (it may also `memory_search` once itself). |
 | `thinking_question_dedup_enabled` | `true` | Semantic de-duplication of proactive questions so they vary in topic instead of repeating the same subject. Reuses the shared embedding singleton; on any embedding error it does not block delivery; also requires `memory_enabled`. See [Proactive intelligence](#proactive-intelligence-level-2). |
-| `thinking_question_similarity_threshold` | `0.80` | Cosine ≥ this vs a recent/declined question → rejected as too similar (MiniLM runs ~0.78–0.85; tune per deployment). |
+| `thinking_question_similarity_percentile` | `90` | The reject cutoff is DERIVED per run: this percentile of the recent-question pool's own nearest-neighbour cosines. See [Semantic de-duplication](#proactive-intelligence-level-2). |
+| `thinking_question_similarity_threshold` | `0.80` | FLOOR for that derived cutoff, so a very broad pool cannot drag it down. No longer a threshold on its own. |
+| `thinking_question_similarity_max` | `0.97` | Absolute ceiling: at or above this it is near-identical TEXT in any model, so it is rejected without calibration. |
+| `thinking_question_similarity_min_pool` | `3` | Below this many recent questions the derived half of the gate stands down (nothing to calibrate against). |
 | `thinking_question_similarity_runs` | `12` | Compare a candidate question against questions asked within this many recent runs. |
 | `thinking_question_similarity_max_compare` | `12` | Hard cap on how many recent questions are embedded/compared per turn (cost/leak bound). |
-| `thinking_getto_max_attempts` | `3` | Get-to-know retries enforcing dedup before the final attempt bypasses it (never end a run in silence; must be < the turn limit). |
+| `thinking_getto_max_attempts` | `3` | Dedup rejections allowed per RUN before the next question is delivered as it stands. Spent inside the gate, where the retry happens. |
+| `thinking_max_turns` | `8` | Outer run-loop turns (clamped 1-10, never below `thinking_no_progress_turns` + 2). |
+| `thinking_max_tool_turns` | `15` | Tool-result cycles allowed inside ONE background step. |
 
 **Cost efficiency:** Set `thinking_provider` and optionally `thinking_model` to use a cheaper model for background runs (e.g. a small local model or a low-cost API tier) while keeping the main chat on a more capable model. Configurable in the Web UI under **Settings → AI & Model → Thinker (background)**.
 
@@ -215,7 +220,7 @@ that silences a run; a REPEAT is prevented by the recent/declined dedup prompts,
    inventing any detail - the model calls `thinking_done` and the run defers to the get-to-know question.
    Every stated fact must come from the digest/memory; a half-remembered or paraphrased "fact" counts as
    invention and must not be sent.
-2. **Get-to-know question (fact-free fallback):** if the proactive step grounded nothing, the run does
+5. **Get-to-know question (fact-free fallback):** if the proactive step grounded nothing, the run does
    **not** finish silently - it asks ONE specific, friendly question to get to know the user better (their
    focus/work, a routine they'd like automated, an interest), so future runs can help. A question states no
    fact, so it can never be a fabrication; this is the safe way to honour "always ask one question". The
@@ -225,13 +230,94 @@ that silences a run; a REPEAT is prevented by the recent/declined dedup prompts,
      *wording*, so without a semantic check the model can re-ask the same *topic* reworded. Before a proactive
      question (open or grounded) is delivered, `deliver_tracked_message` runs a semantic gate
      (`_question_too_similar`): it embeds the candidate and compares it by cosine similarity against the last
-     `thinking_question_similarity_runs` (12) asked/declined questions; at ≥ `thinking_question_similarity_threshold`
-     (0.80) the delivery is rejected (`return None`), `ask_user` tells the model the question is too similar and to
-     pick a clearly different area, and the loop re-asks. The candidate is embedded via the **shared embedding
-     singleton** the run already uses (`get_embedding_service().embed_sync`, ≤ `thinking_question_similarity_max_compare`
-     (12) comparisons per turn) - no new model load, nothing persisted, and on any embedding
-     error the check does not block (the message is delivered). The final get-to-know attempt (after `thinking_getto_max_attempts`, default 3) bypasses the
-     gate so a run never ends in silence. Toggle with `thinking_question_dedup_enabled` (also requires `memory_enabled`).
+     `thinking_question_similarity_runs` (12) asked/declined questions. The candidate is embedded via the
+     **shared embedding singleton** the run already uses (`get_embedding_service().embed_sync`,
+     ≤ `thinking_question_similarity_max_compare` (12) comparisons per turn) - no new model load, nothing
+     persisted, and on any embedding error the check does not block (the message is delivered). Toggle with
+     `thinking_question_dedup_enabled` (also requires `memory_enabled`).
+
+     - **The cutoff is DERIVED, not fixed.** An absolute cosine has no stable meaning across embedding
+       models, and on an anisotropic one it has no useful meaning at all: the vectors occupy a narrow cone,
+       so any two same-language, same-register questions score high regardless of topic. Measured on this
+       product with the default `memory_embedding_model` (all-MiniLM-L6-v2) against a real 12-question pool,
+       nine genuinely different candidates scored **0.872-0.912** while the pool's own similarities started at
+       **0.800** - the configured `0.80` therefore sat at the FLOOR of what the model produces for any pair of
+       questions, and **nothing could ever pass**. A run spent 12 tool turns on rejected questions before it
+       was stopped by hand. So the gate now takes each pool question's similarity to its NEAREST other pool
+       question - exactly the quantity it measures for the candidate - and cuts at
+       `thinking_question_similarity_percentile` (90) of those, floored at
+       `thinking_question_similarity_threshold`. It re-calibrates itself when the embedding model changes.
+       On the measured data the derived cutoff is ~0.94 and all nine candidates pass.
+       `thinking_question_similarity_max` (0.97) is kept as an absolute ceiling, checked BEFORE the pool-size
+       stand-down: a cosine that high is near-identical *text* in any model, which is the one property the
+       narrow-cone effect does not distort. With fewer than `thinking_question_similarity_min_pool` (3)
+       recent questions there is no distribution to calibrate against, so only the ceiling applies.
+     - **The retry budget lives in the gate.** A rejection tells the model to ask something else, and the
+       model does so **inside the same `chat_step`**. So the bound lives where the repetition is: after
+       `thinking_getto_max_attempts` (3) rejections in a run, the next question is delivered as it stands.
+       A budget one rung up counted once per outer loop turn and therefore never fired during the incident
+       above. This is what guarantees a run never ends in silence.
+
+3. **Automation review (offered, not forced):** once the user has at least
+   `thinking_automation_review_min_automations` (3) enabled automations, the run stops proposing new
+   ones and looks at the ones they have. The findings are computed **in code**
+   (`automation.review_findings`) from the stored record - never ran, no successful run since a date,
+   disabled and forgotten, two automations in the same time slot, near-identical instructions, a dead
+   output path, and once a run log exists, repeated recorded errors. The model's only job is to phrase
+   ONE of them and propose a fix; the findings go into the run's evidence pool, so the proposal passes
+   the existing grounded gate with **no new gate**. Two things are enforced rather than requested:
+   `update_automation` / `create_automation` / `delete_automation` are **refused on this node**
+   (`_THINKING_NODE_MUTATION_BLOCK`) so the rung can only propose, and de-duplication across runs keys
+   on the AUTOMATION, not the phrasing - an unfixed finding is still true next run, and a run stops
+   after one message, so re-sending it would starve every rung below.
+
+   - **What the record cannot support, and the rung therefore never claims.** `last_run` is stamped
+     only on success (`_stamp_successful_run`), so "no successful run since Tuesday" is byte-identical
+     to "VAF was switched off since Tuesday". No finding may say an automation failed, errored, is
+     broken, runs too long or produces bad output. The bounded per-automation **run log**
+     (`append_run_log` / `load_run_log`, format `autorun-1-7c41d9`, last 50 outcomes beside the task
+     file) is what closes that gap going forward: with it, "its last three recorded runs all ended
+     with an error" becomes sayable. Without it the rung stays at the weaker, honest observations.
+
+4. **Relevance watch (offered, not forced):** if there is nothing to improve either, the run asks
+   whether anything *current* CHANGES something the user has actually planned. It builds a watchlist
+   from memory (plans and deadlines with dates, what the user is working on and what matters to them,
+   their interests and the things they own or use - health is deliberately **not** a category),
+   picks ONE item, checks it with `web_search`, and speaks only if the finding changes something
+   concrete, as an impact statement with the source, its date, and the search query that was run.
+   **Falling through silently is its normal outcome**, and the prompt says so: a news summary is a
+   failure of this rung, not a result. Three things make that stick:
+
+   - **It is an FYI, not a question.** The request is recorded with `kind="relevance"`, which skips
+     `set_waiting_for_reply` and excludes it from `get_open_proactive_request`. Without that, a notice
+     nobody replies to arms the 3-minute nudge and is then re-asked up to `thinking_followup_max` (3)
+     times: one warning, up to eight touches.
+   - **Web results enter the evidence pool on THIS rung only.** A web snippet is real retrieved
+     evidence, so the existing grounded gate accepts a message quoting one - but only here, because
+     everywhere else "grounded" must keep meaning "grounded in the user's own memory". The honest
+     limit: the gate accepts ONE verbatim quote from a pool that now holds both halves, so it cannot
+     force a message to quote the finding *and* the plan it affects. The prompt demands both; the
+     mechanism guarantees one.
+   - **Two brakes.** `thinking_relevance_cooldown_hours` (72) between notices, and a self-disable once
+     2 of the last 10 notices were declined or ignored (read from the reply classification that
+     already exists). The rung stops on its own rather than waiting for someone to find a setting.
+
+   - **The search query is written by the model, under a prompt rule** - name, employer, internal
+     project names and contact details must not enter it, and the query that was actually run is put
+     in the message's `details` so it stays visible. This is a deliberate choice of a prompt rule over
+     a mechanical filter; the trade-off is that a proper name can still reach a third-party search
+     engine. Structurally guaranteed instead: the internal-memory fallback inside `web_search` is
+     **refused** on this rung (or the run would "find" the very memory it is checking against, and the
+     evidence gate would pass perfectly), the last chat message is not attached to a background
+     search, and the result cache is keyed per user.
+
+- **Memory unavailable is not the same as memory empty.** `run_memory_search_sync` returns `""` for a
+  genuinely empty store AND for an unreachable pgvector container. Undistinguished, a database outage
+  would silently degrade every background run to small talk for as long as it lasts. So when the
+  proactive digest comes back empty the run probes once with `check_db_connection_sync` (the helper
+  that exists for exactly this question and is already used this way by the memory tools): `empty`
+  falls through to the get-to-know question, `unavailable` skips the whole proactive ladder, logs
+  `[THINKING] memory unavailable`, and ends the run.
 
 - **Follow up on the open question, then rest (anti-repetition):** before proposing a NEW topic, the run
   checks for the most recent **unanswered** free proactive request (`thinking_requests.get_open_proactive_request` -
@@ -310,8 +396,10 @@ To prevent runaway API usage (e.g. the model repeatedly calling `thinking_done` 
 
 - **`thinking_done` hard break:** When the model calls `thinking_done`, the agent’s internal tool loop exits immediately. The dispatch is special-cased in `vaf/core/agent.py` (chat_step tool loop) and returns before the normal tool execution, so it also runs the `thinking_done(message=...)` delivery inline via `deliver_thinking_done_fallback` (otherwise the message fallback would be silently dropped). No further API request is made for that turn; the tool result is written to history and the run ends.
 - **Completion gate (guards the exit):** the OUTER thinking loop (`thinking_mode.py`) does not accept the first `thinking_done` while a captured note/todo is unresolved - it injects ONE targeted nudge and continues. Single-shot per run (`thinking_gate_enabled`). See [Run flow](#run-flow).
-- **Forced-resolution node (the enforceable gate-tree):** a small local model may narrate its intended action as prose instead of emitting the tool call (for example, describing an `ask_user` call in text while only actually calling `web_search`). So housekeeping is **enforced**, not requested: for each open ledger item, the loop drives a forced node - it calls `chat_step(..., force_tool_choice="required")` with a per-item prompt, and during that step the read-cap blocks ALL gather tools from the first call (`_thinking_force_progress`). The model therefore **must** emit a decisive tool (`ask_user` / `delete_automation_*`) for that item - it can no longer escape into search or prose. The force applies to the first generation of the step only, then reverts to `auto` so the model can finish. `tool_choice` is honoured by the local llama-server (verified). **On DeepSeek** (flash/pro), the API rejects `tool_choice="required"` with a 400, so `APIBackendManager.chat_completion` auto-downgrades it to `"auto"` (see the DeepSeek rows in `docs/llm/PROVIDER_MODES.md`); the forced node still works because the per-item prompt + the read-cap (which blocks all gather tools on the forced step) compel the decisive tool call without the API-level force. In `vaf/core/thinking_mode.py` (`_build_forced_item_prompt` + the outer loop) and `vaf/core/agent.py` (`chat_step(force_tool_choice=...)`).
+- **Forced-resolution node (the enforceable gate-tree):** a small local model may narrate its intended action as prose instead of emitting the tool call (for example, describing an `ask_user` call in text while only actually calling `web_search`). So housekeeping is **enforced**, not requested: for each open ledger item, the loop drives a forced node - it calls `chat_step(..., force_tool_choice="required")` with a per-item prompt, and during that generation the read-cap blocks ALL gather tools from the first call. The model therefore **must** emit a decisive tool (`ask_user` / `delete_automation_*`) for that item - it can no longer escape into search or prose. The force applies to the first generation of the step only, then reverts to `auto` so the model can finish, and the gather block follows it: it is DERIVED from `force_tool_choice` + `_force_tool_choice_used` rather than stored. A stored twin of that answer was never reset, so the block outlived the force and kept every gather tool shut for the whole step. `tool_choice` is honoured by the local llama-server (verified). **On DeepSeek** (flash/pro), the API rejects `tool_choice="required"` with a 400, so `APIBackendManager.chat_completion` auto-downgrades it to `"auto"` (see the DeepSeek rows in `docs/llm/PROVIDER_MODES.md`); the forced node still works because the per-item prompt + the read-cap (which blocks all gather tools on the forced step) compel the decisive tool call without the API-level force. In `vaf/core/thinking_mode.py` (`_build_forced_item_prompt` + the outer loop) and `vaf/core/agent.py` (`chat_step(force_tool_choice=...)`).
 - **Progress-gate (backstop against spinning):** the completion gate only fires *when* the model calls `thinking_done`. As a backstop for the proactive rung, the progress-gate counts consecutive turns with no decisive tool (`ask_user`, `delete_automation_*`, `create_automation`, `save_thinking_suggestion`, `thinking_done`) and, after `thinking_no_progress_turns` (default **5**), forces a single-tool decision. In `vaf/core/thinking_mode.py` (`_turn_used_progress_tool` + the outer loop).
+- **Guaranteed exit tool (termination is enforced, not routed):** the per-turn tool set is chosen by an LLM router and then narrowed again by a size cap and two safety nets. In a thinking run `thinking_done` and `ask_user` are **pinned** through all of it (`_THINKING_EXIT_TOOLS`, `_apply_tool_cap`, `_ensure_thinking_exit_tools` in `vaf/core/agent.py`), because a turn that drops `thinking_done` while `tool_choice="required"` is set is a deadlock by construction: the model must emit a tool call and owns nothing that ends the turn. That is not hypothetical - it is how a run came to spend 12 tool turns re-calling a rejecting `ask_user`. The cap also sorts its input before truncating, so *which* tool gets cut is reproducible rather than hash order.
+- **Node-specific block text:** when the read-cap refuses a gather call it must answer with something the CURRENT rung can actually do. The housekeeping text ("resolve the open item, pass a `source_note_id`") is correct on the forced-resolution node and nonsense on the proactive and get-to-know rungs, which have no open item - and it demands an id the model cannot obtain, because listing notes is exactly what is blocked. `_THINKING_NODE_POLICY` maps the rung (passed as `chat_step(thinking_node=...)`) to its block text and its read budget. Every variant keeps the `[BLOCKED]` lead, which is what `tool_result_is_error()` keys on.
 - **Read-tool cap (anti-churn):** in a thinking run a read/gather tool (`memory_search`, `web_search`, `list_automation_notes/todos`, `list_automations`) is blocked after `thinking_read_cap_per_tool` (default **3**) calls within one step, returning a result that tells the model to act. This catches the varied-query `memory_search`/`web_search` spin the redundant block misses (it needs exact args). Gated by the agent's own run kind (`_is_thinking_run` / `_thinking_read_cap_step` in `vaf/core/agent.py`), never the `VAF_THINKING_MODE` environment variable: that variable is process-global and a background pass sets it for its whole duration, so it used to impose this cap on any chat turn running at the same time. The main chat is unaffected - which is what this line always claimed, and now describes.
 - **Max tool turns per step:** A background thinking turn is capped at `thinking_max_tool_turns` (default **15**) tool-result cycles; the main chat uses a higher cap (75). If the model keeps calling tools without finishing, the run stops at the cap. Enforced in the chat_step tool loop in `vaf/core/agent.py` - this tighter background cap limits the repeated tool calls a small local model can otherwise produce.
 - **Redundant tool call block:** If the model calls the same tool again with the same arguments (already executed in context), that call is blocked and the internal retry counter is incremented so the run can hit the empty/fallback stop logic sooner.
@@ -328,7 +416,7 @@ The agent has **the same tools as the normal agent**, with these exceptions:
 | Tool | Status | Reason |
 |------|--------|--------|
 | `ask_user` | **Only in Thinking Mode** | The single, tracked channel to contact the user (clean `message`; no chain-of-thought leak); records a request |
-| `thinking_done` | **Only in Thinking Mode** | Signals end of the run; optional `message`/`proposed_action`/`source_note_id` deliver a final question as a fallback for `ask_user` (same tracked path) |
+| `thinking_done` | **Only in Thinking Mode**, and **always present** | Signals end of the run; optional `message`/`proposed_action`/`source_note_id` deliver a final question as a fallback for `ask_user` (same tracked path). Pinned into every thinking turn regardless of what the tool router selected - see [Loop protection](#loop-protection-api-cost-safety) |
 | `thinking_note_add` | **Only in Thinking Mode** | Saves persistent notes for next run |
 | `save_thinking_suggestion` | **Only in Thinking Mode** | Proposes user-profile updates for review in Settings |
 | `memory_save` | Excluded | Thinking should read memory, not write to it |
@@ -517,7 +605,7 @@ Debug log: `logs/vaf_think_YYYY-MM-DD.log` (human-readable, all users in one fil
 | `save_thinking_suggestion` tool | `vaf/tools/thinking_suggestion.py` | Proposes profile updates; stored via `vaf/core/thinking_suggestions.py` |
 | Thinking workspace core | `vaf/core/thinking_workspace.py` | `create_task()`, `write_workspace_file()`, `create_handoff()`, `approve_handoff()`, `reject_handoff()` |
 | Thinking workspace tools | `vaf/tools/thinking_workspace_*.py` | Read/write/handoff operations (Thinking Mode only) |
-| Tool loading | `vaf/core/agent.py` | `_load_tools()` - thinking-mode-only tools gated by `VAF_THINKING_MODE=1` |
+| Tool loading | `vaf/core/agent.py` | `_load_tools()` - thinking-mode-only tools gated by the agent's own run kind (`_run_kind == "thinking"`), never the process-global `VAF_THINKING_MODE` |
 | Loop protection | `vaf/core/agent.py` | `chat_step()` - `thinking_done` hard break, max 15 tool turns, redundant call block; see [Loop protection (API cost safety)](#loop-protection-api-cost-safety) |
 | Debug log | `vaf/core/log_helper.py` | `log_thinking_run()` → `logs/vaf_think_YYYY-MM-DD.log` |
 | Session context | `vaf/core/agent.py` | `load_session_context()` |

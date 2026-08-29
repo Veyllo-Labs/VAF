@@ -1497,16 +1497,23 @@ def deliver_tracked_message(
         # _mode == "open" -> allowed (get-to-know question)
         # SEMANTIC DEDUP: for either proactive mode, reject a question too close to one asked/declined
         # recently so the model is pushed to a genuinely different topic (breaks the "always work/VAF"
-        # loop). Enforcement is per-turn (the loop disables it on the final get-to-know attempt so a run
-        # never ends in silence). Fail-open inside _question_too_similar. Note/todo-sourced asks are exempt
+        # loop). Fail-open inside _question_too_similar. Note/todo-sourced asks are exempt
         # (this whole block only runs for FREE messages). A FOLLOW-UP re-ask is ALSO exempt: it intentionally
         # repeats the SAME open question (a pointed yes/no), which the gate would otherwise reject as a
         # near-duplicate of the very request it is following up on.
+        #
+        # The gate has a BUDGET, spent here and nowhere else: after `thinking_getto_max_attempts`
+        # rejections in this run the next question is delivered as it stands. This is the only place
+        # the retry loop can be closed, because the retry happens inside ONE chat_step - ask_user's
+        # rejection text tells the model to call it again immediately. A bypass one level up counted
+        # once per outer turn, so it never fired while a run burned 12 tool turns down here.
         if (_mode in ("open", "grounded")
                 and get_dedup_enforce(user_scope_id)
-                and not get_followup_context(user_scope_id)):
+                and not get_followup_context(user_scope_id)
+                and not ask_rejects_exhausted(user_scope_id)):
             if _question_too_similar(user_scope_id, message):
                 set_reject_reason(user_scope_id, "too_similar")
+                bump_ask_rejects(user_scope_id)
                 return None
 
     run_seq = current_run_seq(user_scope_id)
@@ -1526,7 +1533,9 @@ def deliver_tracked_message(
             source_note_id=(source_note_id or "").strip() or None,
             source_todo_id=(source_todo_id or "").strip() or None,
             details=(details or "").strip() or None,
+            kind=get_message_kind(user_scope_id) or None,
         )
+    _is_fyi = (req.get("kind") or "") == "relevance"
     uname = (username or "").strip() or get_local_admin_username()
     # Anchor the question to ONE web session: a follow-up reuses the original request's session; a new
     # question resolves the latest web session NOW. The nudge + later follow-up reuse this anchor (via the
@@ -1549,10 +1558,13 @@ def deliver_tracked_message(
         sent_channel = None
 
     if sent_channel:
-        set_waiting_for_reply(
-            user_scope_id, username=uname, display_name=uname,
-            question_text=message, request_id=req["id"], session_id=_anchor_sid, channel=sent_channel,
-        )
+        # An FYI is not awaited: setting the waiting state arms the 3-minute nudge and marks the
+        # message as an open question the next runs would follow up on.
+        if not _is_fyi:
+            set_waiting_for_reply(
+                user_scope_id, username=uname, display_name=uname,
+                question_text=message, request_id=req["id"], session_id=_anchor_sid, channel=sent_channel,
+            )
         # Pin the request to the web anchor so a later escalation / follow-up can reach the Web UI.
         if _anchor_sid and req.get("session_id") != _anchor_sid:
             treq.set_request_session(user_scope_id, req["id"], _anchor_sid)
@@ -1563,10 +1575,11 @@ def deliver_tracked_message(
         return req
 
     # FALLBACK: no main messenger configured (or the send failed) — deliver to the Web UI as before.
-    set_waiting_for_reply(
-        user_scope_id, username=uname, display_name=uname,
-        question_text=message, request_id=req["id"], session_id=_anchor_sid, channel="web",
-    )
+    if not _is_fyi:
+        set_waiting_for_reply(
+            user_scope_id, username=uname, display_name=uname,
+            question_text=message, request_id=req["id"], session_id=_anchor_sid, channel="web",
+        )
     # Deliver-gate: if the main agent is actively handling a user turn, do NOT push this live into the
     # middle of that turn. The request is already recorded + waiting_for_reply set (and the run loop
     # persists it to the session), so it surfaces on the user's next load. Defer the live emit, never drop.
@@ -1582,7 +1595,7 @@ def deliver_tracked_message(
     if _effective_sid and req.get("session_id") != _effective_sid:
         treq.set_request_session(user_scope_id, req["id"], _effective_sid)
         req = treq.get_request(user_scope_id, req["id"]) or req
-    if sid and sid != _anchor_sid:
+    if sid and sid != _anchor_sid and not _is_fyi:
         set_waiting_for_reply(
             user_scope_id, username=uname, display_name=uname,
             question_text=message, request_id=req["id"], session_id=sid, channel="web",
@@ -1667,8 +1680,12 @@ def clear_run_evidence(user_scope_id: Optional[str]) -> None:
     _RUN_EVIDENCE.pop(_key(user_scope_id), None)
     _PROACTIVE_MODE.pop(_key(user_scope_id), None)
     # Semantic-dedup per-scope flags must also reset each run so stale state never carries over.
+    # _ASK_REJECTS especially: a counter that survived a run would sit permanently at or above the
+    # budget and silently disable the dedup gate for that scope forever.
     _DEDUP_ENFORCE.pop(_key(user_scope_id), None)
     _REJECT_REASON.pop(_key(user_scope_id), None)
+    _ASK_REJECTS.pop(_key(user_scope_id), None)
+    _MESSAGE_KIND.pop(_key(user_scope_id), None)
 
 
 def set_proactive_mode(user_scope_id: Optional[str], mode: str) -> None:
@@ -1685,8 +1702,17 @@ def get_proactive_mode(user_scope_id: Optional[str]) -> str:
 #     get-to-know attempt so a run never ends in silence). Default True.
 #   _REJECT_REASON: why deliver_tracked_message last returned None this turn, so ask_user.run can give
 #     the right guidance ("too_similar" vs the generic gates). Read-once (popped) by the tool.
+#   _ASK_REJECTS: how many questions the dedup gate has rejected THIS RUN. The retry loop lives inside
+#     one chat_step - ask_user's rejection text tells the model to call it again - so the bound has to
+#     live where the repetition happens. It used to live one level up, counted once per OUTER loop turn,
+#     and therefore stayed at 1 while a run burned 12 tool turns on rejected questions.
+#   _MESSAGE_KIND: what KIND of message this rung sends. "" is a question awaiting a decision;
+#     "relevance" is an FYI, which must not be nudged after three minutes and must not be re-asked as
+#     an unanswered question - a warning nobody replies to would otherwise be pushed up to eight times.
 _DEDUP_ENFORCE: Dict[str, bool] = {}
 _REJECT_REASON: Dict[str, str] = {}
+_ASK_REJECTS: Dict[str, int] = {}
+_MESSAGE_KIND: Dict[str, str] = {}
 
 
 def set_dedup_enforce(user_scope_id: Optional[str], enforce: bool) -> None:
@@ -1704,6 +1730,38 @@ def set_reject_reason(user_scope_id: Optional[str], reason: str) -> None:
 def take_reject_reason(user_scope_id: Optional[str]) -> str:
     """Pop the last delivery-rejection reason for this scope ('' if none)."""
     return _REJECT_REASON.pop(_key(user_scope_id), "")
+
+
+def set_message_kind(user_scope_id: Optional[str], kind: str) -> None:
+    _MESSAGE_KIND[_key(user_scope_id)] = (kind or "").strip()
+
+
+def get_message_kind(user_scope_id: Optional[str]) -> str:
+    return _MESSAGE_KIND.get(_key(user_scope_id), "")
+
+
+def bump_ask_rejects(user_scope_id: Optional[str]) -> int:
+    """Count one dedup rejection for this run and return the new total."""
+    k = _key(user_scope_id)
+    _ASK_REJECTS[k] = _ASK_REJECTS.get(k, 0) + 1
+    return _ASK_REJECTS[k]
+
+
+def get_ask_rejects(user_scope_id: Optional[str]) -> int:
+    return _ASK_REJECTS.get(_key(user_scope_id), 0)
+
+
+def ask_rejects_exhausted(user_scope_id: Optional[str]) -> bool:
+    """Has this run used up its dedup rejections, so the next question must be delivered as-is?
+
+    The bound is per RUN, not per turn: a question always lands within a single step, which is
+    the only place the retry loop can actually be closed."""
+    from vaf.core.config import Config
+    try:
+        budget = int(Config.get("thinking_getto_max_attempts", 3) or 3)
+    except (TypeError, ValueError):
+        budget = 3
+    return get_ask_rejects(user_scope_id) >= max(1, budget)
 
 
 # Per-scope "the free message being delivered this run is a FOLLOW-UP on request <id>" — set in the
@@ -1817,6 +1875,42 @@ def _recent_question_texts(user_scope_id: Optional[str], current_run_seq_val: in
     return texts[:cap]
 
 
+def _pool_cutoff(pool_vecs: List[List[float]], percentile: float, floor: float) -> float:
+    """Reject threshold DERIVED from the pool's own nearest-neighbour distribution.
+
+    An absolute cosine cutoff is not portable across embedding models, and on an anisotropic one it
+    is not even meaningful: the vectors occupy a narrow cone, so every pair of same-language,
+    same-register questions scores high regardless of topic. Measured on this product with
+    all-MiniLM-L6-v2 and a real 12-question pool, unrelated candidates scored 0.872-0.912 while the
+    pool's own minimum pairwise similarity was 0.800 - i.e. the configured 0.80 sat at the FLOOR of
+    what the model produces for any two questions, and nothing could ever pass. Since
+    `memory_embedding_model` is configurable, a replacement constant would break the same way on the
+    next model swap.
+
+    So: take each pool question's similarity to its NEAREST other pool question (that is exactly the
+    quantity the gate measures for the candidate), and cut at a percentile of those. Self-calibrating
+    by construction, and a model swap re-calibrates it for free. `floor` keeps a very broad pool from
+    dragging the cutoff down to where genuinely different questions would be rejected.
+    """
+    n = len(pool_vecs)
+    if n < 2:
+        return floor
+    nn = []
+    for i in range(n):
+        best = 0.0
+        for j in range(n):
+            if i == j:
+                continue
+            sim = _cosine(pool_vecs[i], pool_vecs[j])
+            if sim > best:
+                best = sim
+        nn.append(best)
+    nn.sort()
+    # Nearest-rank percentile: no interpolation, so the result is always an observed value.
+    idx = min(len(nn) - 1, max(0, int(round((percentile / 100.0) * len(nn) + 0.5)) - 1))
+    return max(floor, nn[idx])
+
+
 def _question_too_similar(user_scope_id: Optional[str], candidate: str) -> bool:
     """True if `candidate` is semantically too close to a recently asked/declined question. Fail-OPEN: any
     error (dedup off, memory off, no model, embedding failure) returns False so a question is never lost."""
@@ -1832,32 +1926,51 @@ def _question_too_similar(user_scope_id: Optional[str], candidate: str) -> bool:
         recent = _recent_question_texts(user_scope_id, current_run_seq(user_scope_id))
         if not recent:
             return False
-        threshold = float(Config.get("thinking_question_similarity_threshold", 0.80) or 0.80)
+
+        pool_vecs = [_embed_question(q) for q in recent]      # embedded ONCE, shared by both steps
         cand_vec = _embed_question(candidate)
         best = 0.0
-        for q in recent:
-            sim = _cosine(cand_vec, _embed_question(q))
+        for v in pool_vecs:
+            sim = _cosine(cand_vec, v)
             if sim > best:
                 best = sim
-        if best >= threshold:
+
+        # The one absolute that IS defensible, and it needs no calibration: a cosine this high means
+        # near-identical TEXT in any model, which is the property the narrow-cone effect does not
+        # distort. Checked BEFORE the pool-size stand-down, so a verbatim repeat is caught even when
+        # there is not yet enough history to derive a cutoff from.
+        hard_max = float(Config.get("thinking_question_similarity_max", 0.97) or 0.97)
+        if best >= hard_max:
             logger.info(
-                "Thinking: proactive question rejected as too similar (cosine=%.3f >= %.2f): %r",
-                best, threshold, candidate[:80],
+                "Thinking: proactive question rejected as a near-duplicate (cosine=%.3f >= %.2f, "
+                "pool=%d): %r", best, hard_max, len(recent), candidate[:80],
             )
             return True
+
+        # Below this many recent questions there is no distribution to calibrate against, so the
+        # derived half of the gate stands down rather than guessing. A fresh user therefore gets only
+        # the near-duplicate ceiling for their first few questions; the text-based recent/declined
+        # prompts cover that window.
+        min_pool = max(2, int(Config.get("thinking_question_similarity_min_pool", 3) or 3))
+        if len(recent) < min_pool:
+            return False
+
+        floor = float(Config.get("thinking_question_similarity_threshold", 0.80) or 0.80)
+        pct = float(Config.get("thinking_question_similarity_percentile", 90) or 90)
+        cutoff = _pool_cutoff(pool_vecs, pct, floor)
+        if best > cutoff:
+            logger.info(
+                "Thinking: proactive question rejected as too similar (cosine=%.3f > cutoff=%.3f, "
+                "pool=%d): %r", best, cutoff, len(recent), candidate[:80],
+            )
+            return True
+        logger.debug(
+            "Thinking: question accepted (cosine=%.3f cutoff=%.3f pool=%d)", best, cutoff, len(recent)
+        )
         return False
     except Exception as e:
         logger.debug("Thinking: question-dedup check failed (fail-open): %s", e)
         return False
-
-
-def _getto_should_enforce(attempts: int, getto_max: int, is_last_turn: bool) -> bool:
-    """Whether the semantic-dedup gate is enforced on this get-to-know attempt. It is DISABLED on the final
-    allowed attempt (attempts >= getto_max) OR on the last loop turn, so a too-similar rejection can never
-    leave the run silent — a question always lands once we stop enforcing. Pure/testable (no I/O)."""
-    if is_last_turn:
-        return False
-    return attempts < getto_max
 
 
 def proactive_rate_limited(user_scope_id: Optional[str], current_run_seq_val: int, min_runs: int) -> bool:
@@ -1963,6 +2076,19 @@ _PROMPT_FORCE_DECISION = (
     "Do NOT call web_search, memory_search or list_* again. Decide now."
 )
 
+# The proactive ladder, named. `_proactive_step` walks these in order; a rung that finds nothing calls
+# thinking_done and the post-step keep-alive re-enters the loop at the next one. They are constants and not
+# literals because the keep-alive compares against the LAST one: a bare number there silently stops matching
+# the moment a rung is inserted, and a run that skipped the new rungs would then spin to the turn limit
+# without ever reaching the get-to-know question - losing exactly the "a run never ends in silence"
+# guarantee the ladder exists to provide.
+_STEP_GROUNDED = 0            # offer ONE suggestion, only if real memory supports it
+_STEP_AUTOMATION_REVIEW = 1   # the user already has automations: improve one instead of adding another
+_STEP_RELEVANCE = 2           # check whether something current CHANGES anything for this user
+_STEP_GETTO = 3               # fact-free get-to-know question (the always-available fallback)
+_STEP_DONE = 4                # the ladder is finished for this run
+
+
 # Tools that count as DECISIVE progress in a thinking run (resolve an item, contact the user, or finish).
 # Used by the progress-gate to detect "gathering/analysing forever without acting".
 _PROGRESS_TOOLS = frozenset({
@@ -2060,13 +2186,43 @@ def _build_forced_item_prompt(item: Dict[str, Any]) -> str:
         "Emit the ask_user (or delete) tool call now."
     )
 
-def _build_proactive_memory_digest(agent: Any, user_scope_id: Optional[str]) -> str:
-    """Deterministically pull a representative sample of the user's REAL memories for the proactive step.
-    The weak local model often never searches on its own, and the forced grounding turn cannot gather —
-    so the run does the retrieval in code: a few targeted queries aimed at proactive value (recurring
-    routines, current work, preferences) -> a deduped, length-bounded digest of real memory snippets. The
-    model is shown this digest AND may still memory_search ONCE itself for specifics; it then quotes ONE
-    snippet verbatim (the evidence-gate checks against the same text, which is seeded into the pool)."""
+# Queries for the proactive rung: what could be automated, what is being worked on, what is liked.
+_PROACTIVE_DIGEST_QUERIES = [
+    "a recurring routine or habit the user does regularly - daily or weekly, a repetitive task",
+    "what the user is currently working on - their project, goal or focus",
+    "the user's preferences, interests, likes and recurring needs",
+]
+
+# Queries for the relevance rung: what the user has COMMITTED to and what matters to them, because
+# that is what something in the world can actually affect. Health is deliberately not a category:
+# it exists in memory only as undated free text, the message lands on a lock screen the product does
+# not control, and being wrong about it costs far more than being wrong about a train.
+_WATCHLIST_DIGEST_QUERIES = [
+    "plans, deadlines, appointments and commitments the user has stated, with their dates",
+    "what the user is working on and what matters to them right now, their priorities",
+    "the user's interests, things they follow, places and products they use or own",
+]
+
+
+def _memory_status(user_scope_id: Optional[str]) -> str:
+    """'ok' | 'empty' | 'unavailable' - because an empty retrieval means two opposite things.
+
+    `run_memory_search_sync` returns "" for a genuinely empty store AND for a pgvector container
+    that is down. Left undistinguished, a database outage silently degrades every background run to
+    small talk, for as long as it lasts, with nothing anywhere saying so. The probe that answers
+    exactly this question already exists and is already used this way by the memory tools."""
+    from vaf.core.config import Config
+    if not Config.get("memory_enabled", True):
+        return "empty"
+    try:
+        from vaf.memory.database import check_db_connection_sync
+        return "empty" if check_db_connection_sync(timeout_seconds=3) else "unavailable"
+    except Exception:
+        return "unavailable"
+
+
+def _build_memory_digest(user_scope_id: Optional[str], queries: List[str], k: Optional[int] = None) -> str:
+    """Deterministically pull real memory snippets for the given queries; "" on any failure."""
     try:
         from vaf.core.config import Config
         if not Config.get("memory_enabled", True):
@@ -2079,12 +2235,9 @@ def _build_proactive_memory_digest(agent: Any, user_scope_id: Optional[str]) -> 
                 task_scope = _UUID(str(user_scope_id))
             except (ValueError, TypeError):
                 task_scope = None
-        k = max(2, min(8, int(Config.get("thinking_proactive_memory_k", 4) or 4)))
-        queries = [
-            "a recurring routine or habit the user does regularly — daily or weekly, a repetitive task",
-            "what the user is currently working on — their project, goal or focus",
-            "the user's preferences, interests, likes and recurring needs",
-        ]
+        if k is None:
+            k = int(Config.get("thinking_proactive_memory_k", 4) or 4)
+        k = max(2, min(8, int(k)))
         seen: set = set()
         chunks: List[str] = []
         for q in queries:
@@ -2106,6 +2259,177 @@ def _build_proactive_memory_digest(agent: Any, user_scope_id: Optional[str]) -> 
         return ("\n---\n".join(chunks))[:6000]
     except Exception:
         return ""
+
+
+def _build_proactive_memory_digest(agent: Any, user_scope_id: Optional[str]) -> str:
+    """Deterministically pull a representative sample of the user's REAL memories for the proactive step.
+    The weak local model often never searches on its own, and the forced grounding turn cannot gather -
+    so the run does the retrieval in code: a few targeted queries aimed at proactive value (recurring
+    routines, current work, preferences) -> a deduped, length-bounded digest of real memory snippets. The
+    model is shown this digest AND may still memory_search ONCE itself for specifics; it then quotes ONE
+    snippet verbatim (the evidence-gate checks against the same text, which is seeded into the pool)."""
+    return _build_memory_digest(user_scope_id, _PROACTIVE_DIGEST_QUERIES)
+
+
+def _automation_review_state(user_scope_id: Optional[str], username: Optional[str] = None):
+    """(enabled_task_count, findings) for this user's automations. ([], 0) on any failure.
+
+    Scoped through the SAME accessor the list tool uses, with the run's resolved scope - never the
+    process default, or one tenant's automations would decide another tenant's rung."""
+    try:
+        from vaf.tools.automation import _manager_for_scope
+        from vaf.core.automation import review_findings, load_run_log
+        manager, _ = _manager_for_scope(user_scope_id)
+        tasks = [
+            t for t in manager.list()
+            if t.user_scope_id is None or str(t.user_scope_id) == str(user_scope_id)
+        ]
+    except Exception as e:
+        logger.debug("Thinking: automation review could not read automations: %s", e)
+        return 0, []
+    enabled = [t for t in tasks if t.enabled]
+    # The recorded outcomes, where they exist. They only start existing once a task runs again
+    # after this was built, so a missing log is normal and simply narrows what can be said.
+    run_logs = {}
+    for t in tasks:
+        try:
+            log = load_run_log(manager._path_for_task(t))
+            if log:
+                run_logs[t.id] = log
+        except Exception:
+            continue
+    try:
+        return len(enabled), review_findings(tasks, run_logs=run_logs)
+    except Exception as e:
+        logger.debug("Thinking: automation review findings failed: %s", e)
+        return len(enabled), []
+
+
+def _drop_recently_raised(user_scope_id: Optional[str], findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Findings about an automation this run already asked about recently.
+
+    De-duplicated on the AUTOMATION, not on the phrasing: an unfixed finding is still true next run,
+    so keying on wording would re-send it every time and starve the rungs below - the run stops after
+    one message. The automation's id is what makes a proposal identifiable, and the prompt requires
+    it to appear in the proposal."""
+    try:
+        from vaf.core import thinking_requests as _treq
+        from vaf.core.config import Config
+        runs = int(Config.get("thinking_question_similarity_runs", 12) or 12)
+        recent = _treq.list_requests(user_scope_id, within_runs=runs,
+                                     current_run_seq=current_run_seq(user_scope_id))
+        seen_text = " ".join(
+            f"{r.get('question') or ''} {r.get('proposed_action') or ''} {r.get('details') or ''}"
+            for r in recent
+        ).lower()
+    except Exception:
+        return findings
+    return [f for f in findings if str(f.get("task_id", "")).lower() not in seen_text]
+
+
+def relevance_watch_allowed(user_scope_id: Optional[str]) -> tuple:
+    """(allowed, reason) for the relevance rung. Two brakes, both deliberate.
+
+    COOLDOWN, because this rung fires whenever everything else is clear - the common case for anyone
+    not drowning in notes. At the default run cadence that is a dozen chances a day, and an unbounded
+    FYI lane is a notification machine, not an assistant.
+
+    SELF-DISABLE, because the only honest measure of this rung is whether the user acted on what it
+    sent. Two ignored or declined notices in the last ten and it stops on its own, rather than waiting
+    for someone to find a setting. The reply classification it reads already exists."""
+    from vaf.core.config import Config
+    from vaf.core import thinking_requests as _treq
+    if not Config.get("thinking_relevance_enabled", True):
+        return False, "disabled"
+    try:
+        recent = [
+            r for r in _treq.list_requests(user_scope_id, within_runs=200,
+                                           current_run_seq=current_run_seq(user_scope_id))
+            if (r.get("kind") or "") == "relevance"
+        ]
+    except Exception:
+        return True, "ok"          # no history readable -> do not silence the rung on a read error
+    if recent:
+        # NOT `or 72`: a configured 0 means "no cooldown" and must survive, which the usual
+        # or-fallback silently turns back into the default.
+        _raw = Config.get("thinking_relevance_cooldown_hours", 72)
+        try:
+            hours = float(72 if _raw is None else _raw)
+        except (TypeError, ValueError):
+            hours = 72.0
+        if hours > 0:
+            from datetime import datetime as _dt
+            newest = None
+            for r in recent:            # by timestamp, not by list order
+                try:
+                    at = _dt.fromisoformat(str(r.get("created_at") or ""))
+                except (ValueError, TypeError):
+                    continue
+                if newest is None or at > newest:
+                    newest = at
+            if newest is not None and (_dt.now() - newest).total_seconds() < hours * 3600:
+                return False, "cooldown"
+    last_ten = recent[:10]
+    if len(last_ten) >= 10:
+        ignored = sum(1 for r in last_ten if (r.get("status") or "") in ("declined", "asked"))
+        if ignored >= 2:
+            return False, "self_disabled"
+    return True, "ok"
+
+
+def _build_automation_review_digest(findings: List[Dict[str, Any]]) -> str:
+    """The findings as evidence text, so a proposal quoting one passes the existing grounded gate.
+
+    No new gate: this goes into the run's evidence pool exactly like a retrieved memory does."""
+    return "\n".join(
+        f"- {f['task_name']} ({f['task_id']}): {f['detail']}" for f in findings
+    )[:4000]
+
+
+# Automation-review rung. The findings are computed in CODE and handed over; the model's only job is
+# to phrase ONE of them and propose a fix. It may not read an automation's prompt and invent an
+# improvement: a prompt reads like evidence while saying nothing about how the job behaved, which is
+# the same fabrication surface the un-forced proactive step exists to avoid.
+_PROMPT_AUTOMATION_REVIEW = (
+    "The user already has several automations, so do NOT propose a new one. Below are CHECKED "
+    "observations about the ones they have - each was computed from the stored record, not guessed.\n"
+    "Pick the ONE that is most worth raising and write a short, friendly message about it, in the "
+    "user's language, naming the automation and its id, and proposing a concrete fix:\n"
+    "  ask_user(message=\"<what you noticed + what you suggest>\", proposed_action=\"update automation "
+    "<id>: <the change>\", details=\"<the observation, quoted verbatim from the list below>\")\n"
+    "HARD RULES: state ONLY what the observation says. You may NOT say an automation failed, errored, "
+    "is broken, runs too long or produces bad output - none of that is recorded anywhere, and 'no "
+    "successful run since <date>' looks exactly the same as 'the machine was switched off'. Do NOT "
+    "call update_automation/create_automation/delete_automation yourself - propose it and let the user "
+    "decide. If none of the observations is worth the user's attention, call "
+    "thinking_done(\"Nothing worth raising.\") and say nothing. EXACTLY ONE tool call, no prose.\n\n"
+    "CHECKED OBSERVATIONS:\n"
+)
+
+
+# Relevance rung. The point is IMPACT, not news: the run already knows what the user has committed
+# to, and asks whether anything current changes it. A summary of headlines is a failure of this rung,
+# not an output, and falling through silently is its normal case - which is why it is not forced.
+_PROMPT_RELEVANCE = (
+    "Below is what you actually know about this user's plans, commitments and interests. Pick ONE "
+    "item that something in the world could plausibly AFFECT, and check it with web_search (at most "
+    "two searches).\n"
+    "Then decide honestly:\n"
+    "A) If what you found genuinely CHANGES something for this user - a date, a cost, a route, a "
+    "deadline, something they own or use - tell them, in their language, as an IMPACT statement: what "
+    "you found, and why it matters for THEIR specific plan. Include the source and its date.\n"
+    "   ask_user(message=\"<what changes for them, and why>\", details=\"<the exact search query you "
+    "ran, the source URL and its date, and a VERBATIM quote of the memory this concerns>\")\n"
+    "B) OTHERWISE - and this is the normal outcome - call thinking_done(\"Nothing relevant.\") and say "
+    "nothing at all. Staying quiet is a correct result here.\n"
+    "HARD RULES: a news summary or a digest is NOT an output - if it does not change something "
+    "concrete for THIS user, choose B. Never speculate: 'could', 'might', 'possibly' means you have "
+    "nothing, so choose B. Never state a fact you did not find. Your search query goes to an outside "
+    "search engine, so write it as a query a stranger could have typed: a public topic plus at most a "
+    "city or a date. Do NOT put the user's name, their employer, an internal project name, an email "
+    "address or anything private into it. EXACTLY ONE final tool call, no prose.\n\n"
+    "WHAT YOU KNOW ABOUT THEM:\n"
+)
 
 
 # Floor clear: PROACTIVE intelligence (Stufe 2). Offer ONE suggestion ONLY if the REAL retrieved memories
@@ -2588,7 +2912,9 @@ def _run_thinking_for_user(
         logger.info("Thinking started for user %s", scope_key[:8] if scope_key != "default" else "default")
 
         try:
-            max_turns = int(Config.get("thinking_max_turns", 6) or 6)
+            # Turn 0 gathers; every further rung of the ladder needs a turn of its own, so a run that
+            # walks the whole ladder must still be able to reach the get-to-know question.
+            max_turns = int(Config.get("thinking_max_turns", 8) or 8)
             max_turns = max(1, min(max_turns, 10))
             # Progress-gate: after this many turns with no decisive (act/ask/clear) tool, force a one-tool
             # decision. Give the loop room to reach the threshold + 2 turns to comply (capped at 10).
@@ -2673,8 +2999,7 @@ def _run_thinking_for_user(
             _proactive_enabled = bool(Config.get("thinking_proactive_enabled", True))
             # (rate-limit removed: a clear floor ALWAYS reaches out; repeats handled by dedup prompts.)
             # Proactive grounding turns: 0,1 = grounded (model also searches itself); 2 = get-to-know; 3 = done.
-            _proactive_step = 0
-            _getto_attempts = 0       # get-to-know retries: dedup enforced until the final attempt (no silence)
+            _proactive_step = _STEP_GROUNDED
             _proactive_digest = ""    # real memories retrieved in code, shown to the model + in the pool
             clear_run_evidence(user_scope_id)
             set_proactive_mode(user_scope_id, "off")
@@ -2714,6 +3039,46 @@ def _run_thinking_for_user(
                 except Exception:
                     _proactive_digest = ""
 
+            # Rung availability is decided ONCE, here, and read inside the elif chain. Deciding it in
+            # the loop body instead would make a disabled rung consume a turn on its way to being
+            # skipped, and the last rung - the question that keeps a run from ending in silence - is
+            # what runs out of turns.
+            # An empty memory retrieval means two opposite things, and the proactive ladder is built
+            # entirely on memory. Told apart HERE, once per run: a database outage would otherwise
+            # degrade every background run to small talk for as long as it lasts, silently.
+            if _proactive_enabled and not (_proactive_digest or "").strip():
+                _mem_status = _memory_status(user_scope_id)
+                if _mem_status == "unavailable":
+                    logger.warning("Thinking: memory unavailable - proactive ladder skipped this run")
+                    try:
+                        from vaf.core.log_helper import append_domain_log_always
+                        append_domain_log_always(
+                            "backend", "[THINKING] memory unavailable - proactive ladder skipped")
+                    except Exception:
+                        pass
+                    _proactive_enabled = False   # routes to the existing "nothing to do" branch and ends
+
+            _review_findings: List[Dict[str, Any]] = []
+            _watchlist = ""
+            if _proactive_enabled and Config.get("thinking_relevance_enabled", True):
+                _rel_ok, _rel_why = relevance_watch_allowed(user_scope_id)
+                if _rel_ok:
+                    _watchlist = _build_memory_digest(user_scope_id, _WATCHLIST_DIGEST_QUERIES)
+                    if _watchlist:
+                        add_run_evidence(user_scope_id, _watchlist)
+                else:
+                    logger.info("Thinking: relevance watch skipped (%s)", _rel_why)
+
+            if _proactive_enabled and Config.get("thinking_automation_review_enabled", True):
+                _n_enabled, _found = _automation_review_state(user_scope_id)
+                _min_autos = max(1, int(Config.get("thinking_automation_review_min_automations", 3) or 3))
+                if _n_enabled >= _min_autos:
+                    _review_findings = _drop_recently_raised(user_scope_id, _found)
+                    if _review_findings:
+                        add_run_evidence(user_scope_id, _build_automation_review_digest(_review_findings))
+                        logger.info("Thinking: automation review has %d finding(s) over %d automations",
+                                    len(_review_findings), _n_enabled)
+
             for turn in range(max_turns):
                 _unresolved = (
                     _tledger.unresolved_items(user_scope_id, _run_ledger, _cur_seq, recent_runs=_recent_runs)
@@ -2721,8 +3086,10 @@ def _run_thinking_for_user(
                 )
                 _ledger_clear = not _unresolved
                 _force_tc = None
+                _node = ""             # which rung this turn is: selects the read-cap's block text + budget
                 _allow_search = False   # proactive grounding turns let the model memory_search itself
                 set_proactive_mode(user_scope_id, "off")  # default: block free messages; proactive branch opens it
+                set_message_kind(user_scope_id, "")       # reset per turn: only the relevance rung sends an FYI
                 if turn == 0:
                     # Turn 0: gather (THINKING_PROMPT) — read the notes/todos/memory before acting.
                     prompt = _get_turn_prompt(0, _ledger_clear)
@@ -2732,10 +3099,12 @@ def _run_thinking_for_user(
                     # MUST emit ask_user/delete for this item; it can no longer escape into search or prose.
                     prompt = _build_forced_item_prompt(_unresolved[0])
                     _force_tc = "required"
+                    _node = "forced_item"
                 elif _force_decision_pending:
                     prompt = _PROMPT_FORCE_DECISION
                     _force_decision_pending = False
                     _force_tc = "required"
+                    _node = "forced_item"
                 elif not _proactive_enabled:
                     # Floor clear but proactivity DISABLED -> just finish. (Rate-limiting no longer silences
                     # a run: silence is never the goal. Repeats are prevented by the recent/declined dedup
@@ -2752,14 +3121,15 @@ def _run_thinking_for_user(
                         reconfirm=bool(_open_followup.get("needs_reconfirm")),
                     )
                     _force_tc = "required"
+                    _node = "getto"
                     set_proactive_mode(user_scope_id, "open")
                     set_followup_context(user_scope_id, _open_followup.get("id"))
-                    _proactive_step = 3
+                    _proactive_step = _STEP_DONE
                 elif _open_followup is not None and _followup_action == "rest":
                     # Already followed up the max number of times with no reply -> let the topic rest this
                     # run: no new question (and therefore no nudge) until the user reacts on their own.
                     prompt = _PROMPT_NOTHING_TODO
-                elif _proactive_step < 1:
+                elif _proactive_step <= _STEP_GROUNDED:
                     # PROACTIVE grounding (ONE pass, NOT forced): offer ONE suggestion ONLY if the REAL
                     # memories genuinely support it, ELSE defer to the fact-free get-to-know question. We do
                     # NOT set force_tool_choice here: forcing a fact-containing message ("you must suggest
@@ -2772,30 +3142,46 @@ def _run_thinking_for_user(
                     ) if _proactive_digest else ""
                     prompt = _PROMPT_PROACTIVE + _digest_block
                     _allow_search = True
+                    _node = "proactive"
                     set_proactive_mode(user_scope_id, "grounded")
-                    _proactive_step += 1
+                    _proactive_step = _STEP_AUTOMATION_REVIEW
+                elif _proactive_step <= _STEP_AUTOMATION_REVIEW and _review_findings:
+                    # AUTOMATION REVIEW: the user already has automations, so stop offering new ones
+                    # and offer to improve one instead. NOT forced, for the same reason the grounded
+                    # rung is not: a rung that MUST produce a message is a rung that invents one when
+                    # it has nothing. The findings were computed in code; the model only phrases them.
+                    prompt = _PROMPT_AUTOMATION_REVIEW + _build_automation_review_digest(_review_findings)
+                    _node = "automation_review"
+                    set_proactive_mode(user_scope_id, "grounded")
+                    _proactive_step = _STEP_RELEVANCE
+                elif _proactive_step <= _STEP_RELEVANCE and _watchlist:
+                    # RELEVANCE WATCH: does anything current change something the user has planned?
+                    # Not forced, and falling through is the expected outcome - a rung that MUST send
+                    # something sends a news digest, which is precisely what this must not become.
+                    prompt = _PROMPT_RELEVANCE + _watchlist
+                    _node = "relevance"
+                    _allow_search = True
+                    set_proactive_mode(user_scope_id, "grounded")
+                    set_message_kind(user_scope_id, "relevance")
+                    _proactive_step = _STEP_GETTO
                 else:
                     # GET-TO-KNOW (FORCED): nothing grounded -> still ask ONE get-to-know question (no
                     # evidence-gate; a question states no fact). Always ends the run with a question.
                     prompt = _PROMPT_GET_TO_KNOW
-                    if _getto_attempts > 0:
-                        # The previous attempt was rejected by the semantic-dedup gate (too similar to a
-                        # recent question). Steer the model to a genuinely different area this time.
+                    if get_ask_rejects(user_scope_id) > 0:
+                        # An earlier question this run was rejected by the semantic-dedup gate (too
+                        # similar to a recent one). Steer the model to a genuinely different area.
                         prompt += _GET_TO_KNOW_RETRY_HINT
                     _force_tc = "required"
+                    _node = "getto"
                     set_proactive_mode(user_scope_id, "open")
-                    # Enforce the dedup gate on the first attempts, but DISABLE it on the final allowed
-                    # attempt OR the last loop turn so a question ALWAYS lands (a too-similar rejection must
-                    # never leave the run silent). Independent of max_turns: the last-turn check guarantees
-                    # the bypass even with a low turn budget.
-                    _getto_max = int(Config.get("thinking_getto_max_attempts", 3) or 3)
-                    _enforce = _getto_should_enforce(_getto_attempts, _getto_max, turn >= max_turns - 1)
-                    set_dedup_enforce(user_scope_id, _enforce)
-                    _getto_attempts += 1
-                    # Keep the loop alive across enforced retries (step stays < 3 so the post-step keep-alive
-                    # re-enters this branch next turn); only mark the proactive flow done once we stop
-                    # enforcing (the question on this turn will pass the gate and end the run).
-                    _proactive_step = 3 if not _enforce else 2
+                    set_dedup_enforce(user_scope_id, True)
+                    # ONE rung, ONE turn. The retry budget is spent inside deliver_tracked_message, where
+                    # the retry actually happens (the model re-calls ask_user within this single step), so
+                    # a question always lands here and the rung never has to be re-entered. Counting the
+                    # retries out here instead is what let a run spin: the counter advanced once per turn
+                    # while the model retried a dozen times inside one.
+                    _proactive_step = _STEP_DONE
                 _turn_hist_start = len(getattr(agent, "history", []) or [])
                 mem_ctx = (memory_context or None) if turn == 0 else None
                 agent.chat_step(
@@ -2805,6 +3191,7 @@ def _run_thinking_for_user(
                     thinking_mode=True,
                     force_tool_choice=_force_tc,
                     allow_memory_search=_allow_search,
+                    thinking_node=_node,
                 )
                 current_history = (getattr(agent, "history", []) or [])
                 run_history = _history_delta(current_history, run_history_start)
@@ -2891,6 +3278,8 @@ def _run_thinking_for_user(
                             memory_context=None,
                             thinking_mode=True,
                             force_tool_choice="required",   # backstop: compel a decisive tool call
+                            thinking_node="forced_item",    # the nudge names real open items, so the
+                                                            # housekeeping block text is correct here
                         )
                         current_history = (getattr(agent, "history", []) or [])
                         run_history = _history_delta(current_history, run_history_start)
@@ -2904,8 +3293,8 @@ def _run_thinking_for_user(
                     # Floor clear, but silence is NEVER the end: if the proactive flow has not yet asked the
                     # user anything (no grounded suggestion delivered, get-to-know step not done), keep going
                     # so the run ALWAYS asks ONE question (grounded suggestion or a get-to-know question).
-                    if _proactive_enabled and _proactive_step < 3:
-                        logger.info("Thinking: floor clear but proactive question still pending (step %d) — continuing", _proactive_step)
+                    if _proactive_enabled and _proactive_step < _STEP_DONE:
+                        logger.info("Thinking: floor clear but proactive rung still pending (step %d of %d) - continuing", _proactive_step, _STEP_DONE)
                         continue
                     logger.info("Thinking: breaking loop (thinking_done detected, ledger clear)")
                     break

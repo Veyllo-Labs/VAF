@@ -78,6 +78,7 @@ def add_request(
     details: Optional[str] = None,
     session_id: Optional[str] = None,
     bundle_id: Optional[str] = None,
+    kind: Optional[str] = None,
 ) -> dict:
     """Record a new 'asked' request. source_note_id / source_todo_id link the request to the
     automation note/todo it came from, so that note/todo can be marked handled once the user
@@ -87,6 +88,10 @@ def add_request(
     delivered to (the anchor), so a follow-up on a later run re-uses it instead of re-picking 'latest'.
     `bundle_id` links the request to a handoff bundle (a background automation's full working context),
     so the main agent loads that context when the user replies (None for thinking-mode requests).
+    `kind` marks a request that is NOT a question awaiting a decision - currently only "relevance",
+    an FYI. Everything downstream that chases an unanswered question (the 3-minute nudge, the
+    follow-up re-asks) keys on a question being open, and an FYI that never gets a reply would
+    otherwise be nudged and re-asked up to three times: one warning, up to eight touches.
     Returns the created entry (with id)."""
     path = _path(user_scope_id)
     items = _load(path)
@@ -103,6 +108,7 @@ def add_request(
         "source_todo_id": (source_todo_id or "").strip() or None,
         "session_id": (session_id or "").strip() or None,
         "bundle_id": (bundle_id or "").strip() or None,
+        "kind": (kind or "").strip() or None,
         "user_reply": None,
         "main_reply": None,
         "needs_reconfirm": False,
@@ -270,6 +276,8 @@ def get_open_proactive_request(
     instead of proposing a new topic. Returns the entry or None."""
     recent = list_requests(user_scope_id, status="asked", within_runs=within_runs, current_run_seq=current_run_seq)
     for e in recent:  # newest first
+        if (e.get("kind") or "") == "relevance":
+            continue   # an FYI is not an open question; chasing it turns one notice into many
         if not (e.get("source_note_id") or "").strip() and not (e.get("source_todo_id") or "").strip():
             return e
     return None

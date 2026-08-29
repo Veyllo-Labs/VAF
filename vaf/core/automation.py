@@ -493,6 +493,187 @@ def _stamp_successful_run(task: AutomationTask) -> None:
     task.last_completed_local_date = user_now(_resolve_username(task.user_scope_id)).date().isoformat()
 
 
+# Bounded per-automation run log. Until this existed the record carried `last_run`, stamped ONLY on
+# success, so a job that errored every morning and a machine that was switched off for a week left
+# byte-identical traces - and nothing could honestly be said about either. Kept small and beside the
+# task file, in the same per-user directory, so it inherits the task's isolation.
+_RUN_LOG_FORMAT = "autorun-1-7c41d9"
+_RUN_LOG_MAX = 50
+
+
+def _run_log_path(task_path: Path) -> Path:
+    return task_path.with_suffix(".runs.json")
+
+
+def load_run_log(task_path: Path) -> List[Dict[str, Any]]:
+    """Newest-last run records, or [] when there are none.
+
+    Tolerates a file without the format tag: a store that refuses to read what an earlier version
+    wrote turns an upgrade into data loss."""
+    try:
+        with open(_run_log_path(task_path), "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    runs = data.get("runs")
+    return runs if isinstance(runs, list) else []
+
+
+def append_run_log(task_path: Path, *, status: str, started_at: str, duration_seconds: float,
+                   summary: str = "") -> None:
+    """Record one outcome. Never raises: a bookkeeping write must not fail an automation."""
+    try:
+        runs = load_run_log(task_path)
+        runs.append({
+            "status": "success" if status == "success" else "error",
+            "at": started_at,
+            "seconds": round(float(duration_seconds), 1),
+            "summary": (summary or "").strip()[:200] or None,
+        })
+        path = _run_log_path(task_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"format": _RUN_LOG_FORMAT, "runs": runs[-_RUN_LOG_MAX:]},
+                      f, indent=2, ensure_ascii=False)
+        tmp.replace(path)
+    except Exception as e:
+        try:
+            append_domain_log("backend", f"[AUTOMATION] run log not written for {task_path.name}: {e}")
+        except Exception:
+            pass
+
+
+# How long a task may go without a successful run before that is worth mentioning, per frequency.
+# Two periods, so a single missed occurrence is never reported: an automation that runs daily and
+# has not completed for two days is a real observation, one that missed this morning is noise.
+_REVIEW_GRACE_HOURS = {
+    Frequency.HOURLY: 2,
+    Frequency.DAILY: 48,
+    Frequency.WEEKLY: 24 * 14,
+    Frequency.MONTHLY: 24 * 62,
+}
+
+
+def _review_grace_hours(task: "AutomationTask") -> Optional[float]:
+    """None for ONCE and anything unrecognised - a one-shot task that has run is simply done."""
+    try:
+        return float(_REVIEW_GRACE_HOURS[Frequency(task.frequency)])
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(str(value)) if value else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _prompt_overlap(a: str, b: str) -> float:
+    """Word-level Jaccard, the same crude measure create-time duplicate detection already uses."""
+    import re
+    wa = {w for w in re.findall(r"\w+", (a or "").lower()) if len(w) > 3}
+    wb = {w for w in re.findall(r"\w+", (b or "").lower()) if len(w) > 3}
+    if not wa or not wb:
+        return 0.0
+    return len(wa & wb) / len(wa | wb)
+
+
+def review_findings(tasks: List["AutomationTask"], now: Optional[datetime] = None,
+                    run_logs: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> List[Dict[str, Any]]:
+    """Checkable observations about a user's existing automations, computed in CODE.
+
+    Every finding here is derivable from the stored record, and nothing else is offered. That is a
+    deliberate limit, not a shortcut: an automation's PROMPT reads like evidence while saying nothing
+    about how the job actually behaved, so letting a model read prompts and invent "improvements" is
+    the same fabrication surface the whole background-run design exists to close.
+
+    What the record cannot support, and what a caller must therefore never claim: that an automation
+    FAILED, errored, is broken, ran too long, or produced poor output. `last_run` is stamped only on
+    success (`_stamp_successful_run`), so "no successful run since <date>" is byte-identical to "VAF
+    was switched off for a week". The wording of every finding below stays inside that limit.
+
+    `run_logs` maps task id to that task's recorded outcomes (see `load_run_log`). It is optional
+    because the log only starts existing when a task next runs: with it, "errored on its last N runs"
+    becomes sayable; without it the findings simply stay at what the task record alone supports.
+
+    Returns dicts with a stable `key` (id + kind) so a caller can de-duplicate across runs by the
+    FINDING rather than by phrasing, plus `kind`, `task_id`, `task_name` and a factual `detail`.
+    """
+    run_logs = run_logs or {}
+    now = now or datetime.now()
+    out: List[Dict[str, Any]] = []
+
+    def add(task, kind, detail):
+        out.append({
+            "key": f"{task.id}:{kind}",
+            "kind": kind,
+            "task_id": task.id,
+            "task_name": task.name or task.id,
+            "detail": detail,
+        })
+
+    by_slot: Dict[tuple, List["AutomationTask"]] = {}
+    for task in tasks:
+        created = _parse_iso(task.created_at)
+        last = _parse_iso(task.last_run)
+        grace = _review_grace_hours(task)
+
+        if not task.enabled:
+            if created and (now - created).total_seconds() > 30 * 86400:
+                add(task, "disabled_and_old",
+                    f"disabled since it was created on {created.date().isoformat()}"
+                    if not last else f"disabled, last successful run {last.date().isoformat()}")
+            continue
+
+        if grace is not None:
+            if last is None:
+                if created and (now - created).total_seconds() > grace * 3600:
+                    add(task, "never_completed",
+                        f"created {created.date().isoformat()}, scheduled {task.frequency} at "
+                        f"{task.time}, and has never recorded a successful run")
+            elif (now - last).total_seconds() > grace * 3600:
+                add(task, "no_recent_success",
+                    f"scheduled {task.frequency} at {task.time}; the last recorded successful run "
+                    f"was {last.date().isoformat()}")
+
+        recent_runs = (run_logs.get(task.id) or [])[-5:]
+        if len(recent_runs) >= 3 and all(r.get("status") == "error" for r in recent_runs):
+            last_at = (recent_runs[-1].get("at") or "")[:10]
+            add(task, "repeated_errors",
+                f"its last {len(recent_runs)} recorded runs all ended with an error"
+                + (f", most recently on {last_at}" if last_at else ""))
+
+        if task.output_path:
+            try:
+                if not Path(task.output_path).expanduser().exists():
+                    add(task, "dead_output_path",
+                        f"writes to {task.output_path}, which does not exist")
+            except (OSError, ValueError):
+                pass
+
+        by_slot.setdefault((str(task.frequency), str(task.time)), []).append(task)
+
+    for (freq, when), group in by_slot.items():
+        if len(group) > 1:
+            names = ", ".join(t.name or t.id for t in group)
+            add(group[0], "slot_collision",
+                f"{len(group)} automations are scheduled {freq} at the same time {when}: {names}")
+
+    enabled = [t for t in tasks if t.enabled]
+    for i, a in enumerate(enabled):
+        for b in enabled[i + 1:]:
+            if _prompt_overlap(a.prompt, b.prompt) > 0.6:
+                add(a, "near_duplicate",
+                    f"its instructions overlap heavily with '{b.name or b.id}' ({b.id})")
+                break
+
+    return out
+
+
 def _briefing_family_name(name: str) -> bool:
     """True if the automation name looks like a morning/briefing job (several languages)."""
     n = (name or "").lower()
@@ -1303,6 +1484,10 @@ vaf automation delete <id>   # Delete task
             append_domain_log_always("backend", msg)
             return msg
 
+        # Start of THIS run, for the run log below. `last_run` on the task cannot serve: it is
+        # stamped only on success, which is the whole gap the log closes.
+        _run_started = datetime.now()
+
         # Speichere aktuelle Zeit als letzte Ausführung (für Cooldown beim Erstellen neuer Automatisierungen)
         # WICHTIG: Cooldown wird nur beim ERSTELLEN geprüft, nicht bei geplanten Ausführungen!
         self._save_last_run_time()
@@ -1917,6 +2102,15 @@ vaf automation delete <id>   # Delete task
         # Only one delivery path — no duplicate notification + chat message.
         try:
             status = "error" if (result or "").strip().startswith("Error:") else "success"
+            # The one place both halves of an outcome are known. `last_run` records only the
+            # successes, so without this an errored run leaves no trace at all.
+            append_run_log(
+                self._path_for_task(task),
+                status=status,
+                started_at=_run_started.isoformat(),
+                duration_seconds=(datetime.now() - _run_started).total_seconds(),
+                summary=(result or "")[:200],
+            )
             # For prompt-based tasks the result IS the summary (already clean text).
             # saved_output_path is None for chat-only runs (no file produced) -> text-only delivery.
             # A confirmed in-run send suppresses only the messenger TEXT push (live 2026-07-14:

@@ -12,6 +12,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **When you already have automations, VAF now offers to improve them instead of suggesting more.**
+  Once there are three or more, a background check looks at the ones you have and raises one
+  concrete, checked observation: an automation that has never completed, one that has recorded no
+  success for a while, one that is disabled and forgotten, two scheduled at the same minute, two with
+  near-identical instructions, or one writing to a folder that no longer exists. It proposes the
+  change and leaves the decision to you - it cannot edit an automation itself. Automations now also
+  keep a short record of their last runs, so "its last three runs ended with an error" becomes
+  something VAF can actually tell you apart from "the machine was switched off".
+- **VAF can now notice when something in the world affects a plan you told it about.** When there is
+  nothing else to raise, a background check builds a short list from what it knows about your plans,
+  deadlines and interests, looks up ONE of them, and gets in touch only if what it finds genuinely
+  changes something for you - with the source, its date, and the search it ran. Saying nothing is the
+  normal outcome, and a news summary is explicitly not one: this is not a digest. Such a notice is
+  sent as information rather than a question, so it is never followed up or nudged, there is a
+  three-day gap between notices, and the whole feature switches itself off if two of its last ten
+  notices went ignored. Health is deliberately not one of the things it looks up.
 - **A server install can now be chosen without a keyboard.** `./install.sh --server`
   (and `--desktop`) select the installation mode non-interactively, and the hosted
   one-liner forwards flags (`... | bash -s -- --server`), so provisioning scripts and
@@ -51,6 +67,28 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **A background thinking run can no longer get stuck asking the same question.** When the
+  agent had nothing concrete to suggest and fell back to a friendly get-to-know question,
+  every attempt could be rejected as "too similar to one you already asked" - and the
+  rejection told it to try again, with nothing counting the tries. One run made twelve
+  attempts in a row and had to be stopped by hand. Four things changed: the similarity check
+  now calibrates itself against the user's own recent questions instead of a fixed number
+  (the old value sat below what the embedding model produces for *any* two questions in the
+  same language, so nothing could ever pass); the retry limit moved to where the retries
+  actually happen, so a question always goes out; the run always keeps a way to finish, even
+  when the tool selection is narrowed; and a background run that is told it cannot look
+  things up now gets an instruction it can actually follow instead of being asked to resolve
+  an item that does not exist.
+- **Web search no longer answers a background run with the user's own memory, and no longer
+  carries a private chat line to the search engine.** Three things that were live whenever no
+  Brave or Google API key is configured: the provider chain quietly fell back to VAF's own
+  long-term memory and presented it as a search result, which is fine for a chat answer (it
+  is labelled as memory) but useless to anything asking whether something has actually
+  changed in the world - that path can now be refused. Every search also had the last message
+  from the conversation attached and sent onward into page analysis; a background pass now
+  searches for its own query only. And the shared search cache, which stores queries and
+  results in clear text, is now separated per user - on a multi-user server one person's
+  searches could previously be served to another.
 - **Screenshots reached the browser agent's model as the words "Image[...]", not as
   pictures.** Every screenshot the browser agent ever obtained was passed on as a
   placeholder line describing an image instead of the image itself, so a model that was

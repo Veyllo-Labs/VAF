@@ -115,6 +115,8 @@ def test_format_identities_are_pinned_literals():
     assert ROOM_FORMAT == "a2aroom-1-7f4c1e"
     from vaf.core.threat_db import THREAT_DB_FORMAT
     assert THREAT_DB_FORMAT == "threatdb-1-9c2f7b"
+    from vaf.core.automation import _RUN_LOG_FORMAT
+    assert _RUN_LOG_FORMAT == "autorun-1-7c41d9"
 
 
 def test_chain_with_versioned_seed_verifies():

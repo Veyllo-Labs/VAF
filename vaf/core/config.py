@@ -485,6 +485,12 @@ class Config:
         "thinking_read_cap_enabled": True,                   # Block excessive read/gather tool calls in a thinking run (memory_search/web_search spin etc.)
         "thinking_read_cap_per_tool": 3,                     # Nth call of a read tool (memory_search/web_search/list_*) within one step is blocked
         "thinking_no_progress_turns": 5,                     # After this many turns with no decisive (act/ask/clear) tool, force a single-tool decision
+        "thinking_max_turns": 8,                             # Outer run-loop turns: turn 0 gathers, the rest walk the proactive ladder (clamped 1-10, and never below thinking_no_progress_turns + 2)
+        "thinking_max_tool_turns": 15,                        # Tool-result cycles allowed inside ONE background step (the main chat uses a far higher cap)
+        "thinking_automation_review_enabled": True,          # Ladder rung: once the user has several automations, review the EXISTING ones instead of proposing another
+        "thinking_automation_review_min_automations": 3,     # Enabled automations from which the review rung takes over from "propose a new one"
+        "thinking_relevance_enabled": True,                  # Ladder rung: check whether anything current CHANGES a plan the user has stated (impact, never a news digest)
+        "thinking_relevance_cooldown_hours": 72,             # Minimum gap between two relevance notices; the rung also disables itself after 2 ignored/declined of the last 10
         "model_unload_idle_minutes": 30,                     # Desktop only: unload the local model after the user is really away (no message) this long, once thinking is idle. Server/headless never unloads.
         "thinking_proactive_enabled": True,                  # When the floor (notes/todos) is clear, run a proactive memory-mined suggestion scan (Stufe 2)
         "thinking_proactive_evidence_min_chars": 24,         # Evidence-gate (LOCAL/weak model): a proactive suggestion's message/details must quote >= this many chars verbatim from real retrieved memory/history
@@ -495,12 +501,21 @@ class Config:
         # so the model kept re-asking the SAME topic reworded (always "work/VAF"). This embeds the candidate
         # question and rejects it when it is too similar to a recently asked/declined one, forcing the model to
         # pick a genuinely different area. Reuses the SAME embedding singleton the run already uses every run
-        # (no new vector lane); fail-open; the last get-to-know attempt bypasses the gate so a run never ends silent.
+        # (no new vector lane); fail-open; a per-run rejection budget guarantees a question still lands.
+        # The cutoff is DERIVED from the pool's own nearest-neighbour distribution, not fixed: an absolute
+        # cosine has no stable meaning across embedding models, and on an anisotropic one every pair of
+        # same-language questions scores high regardless of topic. Measured with all-MiniLM-L6-v2 on a real
+        # 12-question pool: unrelated candidates 0.872-0.912, pool self-similarity minimum 0.800 - a fixed
+        # 0.80 therefore rejected everything. `memory_embedding_model` is configurable, so a fixed number
+        # would break the same way on the next model swap.
         "thinking_question_dedup_enabled": True,             # Master kill-switch for the semantic question-dedup (also requires memory_enabled)
-        "thinking_question_similarity_threshold": 0.80,      # Cosine >= this vs a recent question -> reject as too similar (MiniLM runs ~0.78-0.85; tune per deployment)
+        "thinking_question_similarity_threshold": 0.80,      # FLOOR for the derived cutoff (keeps a very broad pool from rejecting genuinely different questions)
+        "thinking_question_similarity_percentile": 90,       # Cutoff = this percentile of the pool's nearest-neighbour similarities
+        "thinking_question_similarity_max": 0.97,            # Absolute ceiling: at/above this it is near-identical TEXT in any model -> always reject
+        "thinking_question_similarity_min_pool": 3,          # Below this many recent questions there is nothing to calibrate against -> gate stands down
         "thinking_question_similarity_runs": 12,             # Compare against questions asked within this many recent runs
         "thinking_question_similarity_max_compare": 12,      # Hard cap on how many recent questions are embedded/compared per turn (leak/cost bound)
-        "thinking_getto_max_attempts": 3,                    # Get-to-know retries that enforce dedup before the gate is bypassed; the bypass also fires on the loop's last turn, so a low turn budget can never cause silence
+        "thinking_getto_max_attempts": 3,                    # Dedup rejections allowed per RUN before the next question is delivered as-is (spent inside the gate, where the retry happens)
 
         # Garbage Collector Settings
         "gc_enabled": True,                    # Enable automatic temp file / log cleanup

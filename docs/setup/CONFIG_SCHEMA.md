@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (332 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (341 keys).
 
 ## How configuration is set
 
@@ -403,10 +403,22 @@ highlights:
 | `thinking_proactive_enabled` | `True` | Allow proactive follow-up questions. |
 | `thinking_quiet_hours_enabled` | `False` | Suppress thinking during quiet hours. |
 | `thinking_quiet_hours_start/end` | `23:00` / `07:00` | Quiet-hours window. |
-| `thinking_question_dedup_enabled` | `True` | Semantic (embedding) de-duplication of proactive questions so they vary in topic instead of repeating the same subject. Kill-switch; reuses the existing embedding singleton, fail-open. Tuning keys: `thinking_question_similarity_threshold` (`0.80`), `thinking_question_similarity_runs`/`_max_compare` (`12`), `thinking_getto_max_attempts` (`3`). |
+| `thinking_question_dedup_enabled` | `True` | Semantic (embedding) de-duplication of proactive questions so they vary in topic instead of repeating the same subject. Kill-switch; reuses the existing embedding singleton, fail-open. |
+| `thinking_question_similarity_percentile` | `90` | The reject cutoff is DERIVED per run: this percentile of the recent-question pool's own nearest-neighbour cosines. An absolute cutoff has no stable meaning across embedding models, and on an anisotropic one (all-MiniLM-L6-v2, the default `memory_embedding_model`) unrelated same-language questions all score high. Measured on a real 12-question pool: unrelated candidates `0.872`-`0.912`, pool self-similarity from `0.800` - so the previously fixed `0.80` rejected every question. |
+| `thinking_question_similarity_threshold` | `0.80` | FLOOR for that derived cutoff, so a very broad pool cannot drag it down to where genuinely different questions get rejected. No longer a threshold on its own. |
+| `thinking_question_similarity_max` | `0.97` | Absolute ceiling, checked before the pool-size stand-down: a cosine this high is near-identical TEXT in any model, which is the one property the narrow-cone effect does not distort. |
+| `thinking_question_similarity_min_pool` | `3` | Below this many recent questions there is no distribution to calibrate against, so the derived half of the gate stands down and only the ceiling applies. A fresh user therefore gets no topic-level dedup for their first few questions; the text-based recent/declined prompts cover that window. |
+| `thinking_question_similarity_runs` / `_max_compare` | `12` / `12` | How many recent questions are considered, and the hard cap on how many are embedded per turn. |
+| `thinking_getto_max_attempts` | `3` | Dedup rejections allowed per RUN before the next question is delivered as it stands. Spent inside the gate, where the retry actually happens: the model re-calls `ask_user` within a single step, so a budget one level up never fired (a run once spent 12 tool turns on rejected questions). |
+| `thinking_max_turns` | `8` | Outer run-loop turns. Turn 0 gathers, the rest walk the proactive ladder. Clamped to 1-10 and never below `thinking_no_progress_turns` + 2. |
+| `thinking_max_tool_turns` | `15` | Tool-result cycles allowed inside ONE background step; the main chat uses a far higher cap (`max_tool_turns_per_step`). |
+| `thinking_automation_review_enabled` | `true` | Ladder rung: once the user has several automations, a clear-floor run reviews the EXISTING ones instead of proposing another. Findings are computed in code from the stored record (never ran, no recent success, disabled and forgotten, slot collision, near-duplicate instructions, dead output path); the model only phrases one and proposes a fix. It cannot edit an automation from this rung - `update/create/delete_automation` are refused there. |
+| `thinking_automation_review_min_automations` | `3` | Enabled automations from which that rung takes over from "propose a new one". |
+| `thinking_relevance_enabled` | `true` | Ladder rung: build a watchlist from what memory holds about the user's plans, commitments and interests, check ONE item with `web_search`, and speak only if the finding CHANGES something concrete for them. A news summary is a failure of this rung, not an output - falling through silently is its normal case. Its message is recorded as an FYI (`kind="relevance"`), so it is never nudged after three minutes and never re-asked as an unanswered question. Health is deliberately not a watchlist category. |
+| `thinking_relevance_cooldown_hours` | `72` | Minimum gap between two relevance notices. The rung also disables itself once 2 of its last 10 notices were declined or ignored, so it stops on its own instead of waiting for someone to find this setting. |
 | `thinking_reply_wait_ttl_hours` | `12` | Safety net: a waiting-for-reply latch older than this is expired at read time, so a stale background question can never claim the user's next message as its "reply" long after the fact (the 10-min skip only runs when a thinking run fires). `0` disables. |
 
-(~24 more `thinking_*` tuning keys exist - see config.py.)
+(~16 more `thinking_*` tuning keys exist - see config.py.)
 
 ## Connections (messaging, email, cloud)
 

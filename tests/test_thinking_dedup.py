@@ -6,8 +6,10 @@
 The text-based "don't repeat" guards only block the same WORDING, so the model kept re-asking the same
 TOPIC reworded (always "work/VAF"). The dedup gate embeds the candidate question and rejects it when it is
 too close to a recently asked/declined one, pushing the model to a genuinely different area. The gate is
-fail-OPEN (never lose a question to an embedding error) and the final get-to-know attempt bypasses it so a
-run never ends in silence. The embedding model is never loaded here — `_embed_question` is monkeypatched.
+fail-OPEN (never lose a question to an embedding error) and carries a per-run rejection budget so a run
+never ends in silence. The cutoff is DERIVED from the pool's own nearest-neighbour distribution rather than
+fixed: an absolute cosine has no stable meaning across embedding models. The embedding model is never
+loaded here - `_embed_question` is monkeypatched.
 """
 import vaf.core.config as cfg
 import vaf.core.thinking_mode as tm
@@ -243,16 +245,72 @@ def test_clear_run_evidence_reclaims_dedup_state(monkeypatch, tmp_path):
     assert k not in tm._PROACTIVE_MODE
 
 
-# --- final-attempt / last-turn enforcement decision (no-silence guarantee) -------------------------
+# --- the retry budget, spent where the retry actually happens (no-silence guarantee) --------------
 
-def test_getto_should_enforce():
-    # retries remain and not the last turn -> enforce
-    assert tm._getto_should_enforce(0, 3, is_last_turn=False) is True
-    assert tm._getto_should_enforce(2, 3, is_last_turn=False) is True
-    # final allowed attempt -> bypass (so a question always lands)
-    assert tm._getto_should_enforce(3, 3, is_last_turn=False) is False
-    # last loop turn ALWAYS bypasses, regardless of attempts (no silence even with a low turn budget)
-    assert tm._getto_should_enforce(0, 3, is_last_turn=True) is False
+def _deliverable(monkeypatch, tmp_path):
+    """A scope whose delivery path is fully stubbed, so the ONLY thing that can stop a message
+    is the dedup gate under test."""
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(tm, "run_has_open_request", lambda scope: False)
+    monkeypatch.setattr(tm, "_main_agent_busy", lambda scope: False)
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: "sid-web")
+    import vaf.core.messaging_connections as mc
+    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text: (False, None))
+
+
+def test_reject_counter_bypasses_within_one_run(monkeypatch, tmp_path):
+    """The regression test for the 12-rejection deadlock.
+
+    The model retries INSIDE one chat_step, because ask_user's rejection text tells it to. So the
+    budget has to be spent here, in the gate. With a gate that rejects everything (which is exactly
+    what a mis-calibrated threshold is), the run must still get a question out - after
+    thinking_getto_max_attempts rejections the next one is delivered as it stands."""
+    _deliverable(monkeypatch, tmp_path)
+    monkeypatch.setattr(tm, "_question_too_similar", lambda scope, msg: True)  # rejects everything
+    scope = "u-budget"
+    tm.set_proactive_mode(scope, "open")
+    tm.set_dedup_enforce(scope, True)
+
+    assert tm.deliver_tracked_message(scope, "Frage 1") is None
+    assert tm.deliver_tracked_message(scope, "Frage 2") is None
+    assert tm.deliver_tracked_message(scope, "Frage 3") is None
+    assert tm.get_ask_rejects(scope) == 3
+    # budget spent -> the fourth question is delivered even though the gate would still reject it
+    req = tm.deliver_tracked_message(scope, "Frage 4")
+    assert req and req.get("delivered") is True
+
+
+def test_reject_counter_resets_per_run(monkeypatch, tmp_path):
+    """A counter that outlived its run would sit at the budget forever and silently switch the
+    dedup gate off for that scope."""
+    _deliverable(monkeypatch, tmp_path)
+    monkeypatch.setattr(tm, "_question_too_similar", lambda scope, msg: True)
+    scope = "u-budget-reset"
+    tm.set_proactive_mode(scope, "open")
+    tm.set_dedup_enforce(scope, True)
+    tm.deliver_tracked_message(scope, "Frage 1")
+    assert tm.get_ask_rejects(scope) == 1
+
+    tm.clear_run_evidence(scope)                      # next run starts
+    assert tm.get_ask_rejects(scope) == 0
+    assert tm._key(scope) not in tm._ASK_REJECTS
+    tm.set_proactive_mode(scope, "open")
+    tm.set_dedup_enforce(scope, True)
+    assert tm.deliver_tracked_message(scope, "Frage 2") is None   # gate enforced again
+
+
+def test_reject_counter_is_per_scope(monkeypatch, tmp_path):
+    """One user's spent budget must never open another user's gate."""
+    _deliverable(monkeypatch, tmp_path)
+    monkeypatch.setattr(tm, "_question_too_similar", lambda scope, msg: True)
+    for s in ("u-budget-a", "u-budget-b"):
+        tm.set_proactive_mode(s, "open")
+        tm.set_dedup_enforce(s, True)
+    for _ in range(3):
+        tm.deliver_tracked_message("u-budget-a", "Frage")
+    assert tm.ask_rejects_exhausted("u-budget-a") is True
+    assert tm.ask_rejects_exhausted("u-budget-b") is False
+    assert tm.deliver_tracked_message("u-budget-b", "Frage") is None
 
 
 # --- follow-up re-ask exemption --------------------------------------------------------------------
@@ -280,24 +338,136 @@ def test_followup_reask_is_exempt_from_dedup(monkeypatch, tmp_path):
     assert tm.take_reject_reason(scope) == ""
 
 
-# --- threshold boundary (the >= comparison at the realistic 0.80 value) ----------------------------
+# --- the derived cutoff (this is where the measured incident is pinned) ---------------------------
 
-def test_threshold_boundary(monkeypatch, tmp_path):
-    import math
-    _isolate(monkeypatch, tmp_path)
-    monkeypatch.setattr(tm, "_recent_question_texts", lambda scope, seq: ["recent"])
+def _geometry(monkeypatch, pool_names, pool_nn, cand_best, **cfg_over):
+    """State the two similarities the gate actually reads, independently.
+
+    The gate asks two separate questions - how close the POOL sits to itself, and how close the
+    CANDIDATE sits to its nearest pool member. Real vectors cannot express those two freely in a
+    handful of dimensions (placing three vectors at chosen angles to a reference also fixes their
+    angles to each other), so the similarity function is stubbed with a table instead. Each
+    "embedding" is a one-element id vector; `_cosine` looks the pair up.
+    """
+    ids = {name: float(i) for i, name in enumerate(pool_names)}
+    ids["__cand__"] = -1.0
 
     def embed(text):
-        if text == "recent":
-            return [1.0, 0.0]
-        target = 0.82 if "hi" in text else 0.78   # controlled cosine vs [1,0]
-        ang = math.acos(target)
-        return [math.cos(ang), math.sin(ang)]
+        return [ids.get(text, ids["__cand__"])]
 
+    def cosine(a, b):
+        ia, ib = a[0], b[0]
+        if ia == ib:
+            return 1.0
+        if -1.0 in (ia, ib):          # candidate against any pool member
+            return cand_best if max(ia, ib) == 0.0 else 0.0
+        return pool_nn                # pool member against pool member
+
+    monkeypatch.setattr(tm, "_recent_question_texts", lambda scope, seq: list(pool_names))
     monkeypatch.setattr(tm, "_embed_question", embed)
-    _set_cfg(monkeypatch, thinking_question_similarity_threshold=0.80)
-    assert tm._question_too_similar("u1", "cand_hi") is True    # cosine 0.82 >= 0.80
-    assert tm._question_too_similar("u1", "cand_lo") is False   # cosine 0.78 <  0.80
+    monkeypatch.setattr(tm, "_cosine", cosine)
+    _set_cfg(monkeypatch, **cfg_over)
+
+
+def test_calibrated_gate_accepts_the_measured_band(monkeypatch, tmp_path):
+    """The real incident, encoded.
+
+    Measured with all-MiniLM-L6-v2 against the user's actual 12-question pool: nine genuinely
+    different candidate questions scored 0.872-0.912, while the pool's own similarities ran
+    0.800-0.943 (median 0.879). Under the old fixed 0.80 every one of those nine was rejected and the
+    run could not get a single question out. The derived cutoff sits inside the pool's own band, so a
+    candidate that is no closer to the pool than the pool is to itself gets through."""
+    _isolate(monkeypatch, tmp_path)
+    _geometry(monkeypatch, ["p1", "p2", "p3"], pool_nn=0.940, cand_best=0.890,
+              thinking_question_similarity_threshold=0.80,
+              thinking_question_similarity_percentile=90,
+              thinking_question_similarity_max=0.97,
+              thinking_question_similarity_min_pool=3)
+    assert tm._question_too_similar("u-cal", "cand") is False
+
+
+def test_derived_cutoff_clears_the_band_the_fixed_one_sat_under(monkeypatch, tmp_path):
+    """The mutation half, stated as arithmetic on the measured numbers.
+
+    Old gate: reject when cosine >= 0.80. The nine real candidates measured 0.872-0.912, so all nine
+    were rejected - and the pool's OWN similarities started at 0.800, i.e. the threshold sat at the
+    floor of what this embedder produces for any two questions at all. The derived cutoff is a
+    percentile of that same pool distribution, so it lands ABOVE the candidate band by construction.
+    """
+    import vaf.core.thinking_mode as _tm
+    measured_candidates = [0.912, 0.890, 0.891, 0.887, 0.895, 0.872, 0.878, 0.876, 0.890]
+    pool_nn = [0.800, 0.879, 0.943]        # the measured pool spread
+
+    class _V(list):
+        pass
+
+    vecs = [_V([i]) for i in range(len(pool_nn))]
+    monkeypatch.setattr(_tm, "_cosine", lambda a, b: pool_nn[max(int(a[0]), int(b[0]))])
+    cutoff = _tm._pool_cutoff(vecs, 90, 0.80)
+
+    assert all(c >= 0.80 for c in measured_candidates)      # every one died on the old fixed threshold
+    assert all(c < cutoff for c in measured_candidates)     # every one survives the derived cutoff
+
+
+def test_near_identical_text_is_always_rejected(monkeypatch, tmp_path):
+    """The one absolute worth keeping: near-1.0 cosine means near-identical TEXT in any model, which
+    is the property the narrow-cone effect does not distort."""
+    _isolate(monkeypatch, tmp_path)
+    _geometry(monkeypatch, ["p1", "p2", "p3"], pool_nn=0.940, cand_best=0.985,
+              thinking_question_similarity_threshold=0.80,
+              thinking_question_similarity_percentile=90,
+              thinking_question_similarity_max=0.97,
+              thinking_question_similarity_min_pool=3)
+    assert tm._question_too_similar("u-cal", "cand") is True
+
+
+def test_candidate_above_the_pool_percentile_is_rejected(monkeypatch, tmp_path):
+    """Closer to an existing question than the pool's own members are to each other -> a real repeat."""
+    _isolate(monkeypatch, tmp_path)
+    _geometry(monkeypatch, ["p1", "p2", "p3"], pool_nn=0.900, cand_best=0.955,
+              thinking_question_similarity_threshold=0.80,
+              thinking_question_similarity_percentile=90,
+              thinking_question_similarity_max=0.97,
+              thinking_question_similarity_min_pool=3)
+    assert tm._question_too_similar("u-cal", "cand") is True
+
+
+def test_small_pool_keeps_only_the_ceiling(monkeypatch, tmp_path):
+    """Fewer questions than min_pool: no distribution to calibrate against, so the derived half
+    stands down and a merely-similar question gets through. The near-duplicate ceiling still
+    applies - it needs no calibration."""
+    _isolate(monkeypatch, tmp_path)
+    _geometry(monkeypatch, ["p1"], pool_nn=1.0, cand_best=0.930,
+              thinking_question_similarity_max=0.97,
+              thinking_question_similarity_min_pool=3)
+    assert tm._question_too_similar("u-cal", "cand") is False
+
+    _geometry(monkeypatch, ["p1"], pool_nn=1.0, cand_best=0.990,
+              thinking_question_similarity_max=0.97,
+              thinking_question_similarity_min_pool=3)
+    assert tm._question_too_similar("u-cal", "cand") is True
+
+
+def test_cutoff_never_falls_below_the_floor():
+    """A very broad pool must not drag the cutoff down to where different questions get rejected."""
+    import math
+
+    def v(c):
+        a = math.acos(c)
+        return [math.cos(a), math.sin(a)]
+
+    # three near-orthogonal vectors -> tiny nearest-neighbour similarities
+    spread = [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0]]
+    assert tm._pool_cutoff(spread, 90, 0.80) == 0.80
+    # and a tight pool pushes the cutoff ABOVE the floor
+    tight = [v(0.90), v(0.92), v(0.95)]
+    assert tm._pool_cutoff(tight, 90, 0.80) > 0.80
+
+
+def test_cutoff_is_the_floor_for_a_degenerate_pool():
+    assert tm._pool_cutoff([], 90, 0.80) == 0.80
+    assert tm._pool_cutoff([[1.0, 0.0]], 90, 0.80) == 0.80
+
 
 
 # --- memory_enabled guard short-circuits BEFORE any embedding (leak-relevant) ----------------------

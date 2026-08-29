@@ -41,10 +41,15 @@ from vaf.core.agent import Agent
 
 
 def _agent(run_kind):
-    """A stand-in carrying the REAL predicate, not a re-implementation of it."""
+    """A stand-in carrying the REAL predicates, not re-implementations of them.
+
+    `_forcing_this_generation` is derived from the two attributes below rather than stored, so
+    the stand-in states those instead of an answer: nothing is forced here."""
     ns = types.SimpleNamespace(_run_kind=run_kind, _thinking_read_counts={},
-                               _nonprogress_streak=0)
+                               _nonprogress_streak=0, _thinking_node="",
+                               _force_tool_choice=None, _force_tool_choice_used=False)
     ns._is_thinking_run = types.MethodType(Agent._is_thinking_run, ns)
+    ns._forcing_this_generation = types.MethodType(Agent._forcing_this_generation, ns)
     return ns
 
 

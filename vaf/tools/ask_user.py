@@ -138,11 +138,26 @@ class AskUserTool(BaseTool):
             if _reason == "too_similar":
                 # The semantic-dedup gate rejected it: too close to a question already asked/declined.
                 # Steer the model to a CLEARLY different area instead of rewording the same topic.
+                # The retry invitation is BUDGETED, and the budget is enforced in the gate itself, not
+                # by this sentence: an unbounded "call it again" is what turned a mis-calibrated gate
+                # into a 12-turn loop. Say how many are left so the model stops guessing.
+                try:
+                    from vaf.core.thinking_mode import get_ask_rejects, ask_rejects_exhausted
+                    _spent = get_ask_rejects(kwargs.get("user_scope_id"))
+                    _last = ask_rejects_exhausted(kwargs.get("user_scope_id"))
+                except Exception:
+                    _spent, _last = 0, False
+                _tail = (
+                    "This was your last retry: call ask_user once more and the question will be sent "
+                    "exactly as you write it, so make it a good one."
+                    if _last else
+                    "Call ask_user again now with a fresh, different question."
+                )
                 return (
-                    "Not sent: that question is too similar to one you already asked recently. Pick a "
-                    "CLEARLY different area — e.g. a hobby, daily life, health/wellbeing, people in their "
-                    "life, learning, or future goals — NOT work/VAF if that was your recent topic. Call "
-                    "ask_user again now with a fresh, different question."
+                    f"Not sent (attempt {_spent}): that question is too similar to one you already asked "
+                    "recently. Pick a CLEARLY different area - e.g. a hobby, daily life, people in their "
+                    "life, learning, or future goals - NOT work/VAF if that was your recent topic. "
+                    + _tail
                 )
             if _mode == "off":
                 # Not in a proactive step (gather / forced-resolution), or a message was already delivered

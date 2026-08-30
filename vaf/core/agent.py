@@ -8358,6 +8358,19 @@ class Agent:
         agent what was ASKED and not what it was ABOUT. Live 2026-08-30: a user answered "Hey sry was ?"
         and got a question about which message they meant, because the reminder was all there was.
         Pure function for unit-testability."""
+        # What to do when the reply is not an answer at all. "Ask one confirming question" was too
+        # vague to act on: live 2026-08-30, a background question about the VAF API met "Sry bin da
+        # was gibt's?" and the main agent answered the USER's literal question with a status report
+        # ("Alles ruhig hier - keine offenen Tasks, keine Termine"), dropping its own. Someone asking
+        # what this is about is asking to be told what was asked, so say that outright. The presence
+        # latch (`_is_presence_ack`) does not cover it - that one is exact-match and capped at 16
+        # characters on purpose, and widening it would risk recording a real answer as a mere ack.
+        _not_an_answer = (
+            " If their reply does not answer it - they only signal they are back, or ask what this "
+            "is about (\"was gibt's?\", \"wie meinst du?\", \"hä?\") - then REPEAT your question in one "
+            "sentence and wait for the real answer. Do NOT report status, do NOT summarise the day, "
+            "and do NOT ask them which message you mean: you know which one, it is quoted above."
+        )
         _subject = (
             f" That was a REMINDER; what it is about is: \"{subject}\". Answer about THAT subject - "
             f"if their reply shows they do not remember it, say what it was, do not ask them which "
@@ -8372,7 +8385,8 @@ class Agent:
                 f"If they CLEARLY agree, continue the task now using THIS context - do not "
                 f"re-derive facts, do not restart.{carry} If they DECLINE, change NOTHING - "
                 f"acknowledge briefly. If their reply is ambiguous or seems unrelated to the "
-                f"question, do NOT act: ask ONE short confirming question first.{_subject}\n"
+                f"question, do NOT act: ask ONE short confirming question first.{_not_an_answer}"
+                f"{_subject}\n"
                 f"{digest}\n"
                 f"Answer about THAT question only. For THIS turn, IGNORE any earlier <user_intent> "
                 f"or working-memory <Plan> shown above - they are unrelated. The user's reply "
@@ -8382,7 +8396,7 @@ class Agent:
             f"[Context: The user's message below is a REPLY to a question YOUR background pass "
             f"asked them: \"{q_text}\".{_subject}{facts}{carry} If they DECLINE, change NOTHING - "
             f"acknowledge briefly. If their reply is ambiguous or seems unrelated to the question, "
-            f"do NOT act: ask ONE short confirming question first. Answer about THAT question "
+            f"do NOT act: ask ONE short confirming question first.{_not_an_answer} Answer about THAT question "
             f"only. For THIS turn, IGNORE any earlier <user_intent> or working-memory <Plan> shown "
             f"above - they are unrelated to this reply and must not be treated as the topic. The "
             f"user's reply follows immediately after this system note.]"

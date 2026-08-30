@@ -144,3 +144,37 @@ def test_the_design_doc_records_the_field():
     doc = (Path(__file__).resolve().parent.parent / "docs" / "agents" / "Thinking-Mode.md") \
         .read_text(encoding="utf-8")
     assert "original_question" in doc, "the data-file table no longer describes the record"
+
+
+# ── 6. a reply that is not an answer ──────────────────────────────────────────────────────
+
+def test_the_note_says_to_repeat_the_question_when_the_user_asks_back():
+    """Live 2026-08-30. The background run asked what the biggest stumbling block with the API
+    was; the reply was "Sry bin da was gibt's?" and the main agent answered the USER's literal
+    question with a status report - "Alles ruhig hier, keine offenen Tasks, keine Termine" -
+    and dropped its own question entirely.
+
+    The note's only guidance for that case was "ask ONE short confirming question first", which
+    does not say WHICH question. Someone asking what this is about is asking to be told what was
+    asked."""
+    note = _note("Was ist dein groesster Stolperstein bei der VAF-API?")
+    assert "REPEAT your question" in note
+    assert "Do NOT report status" in note
+    assert "do NOT summarise the day" in note
+
+
+def test_that_guidance_reaches_the_handoff_lane_too():
+    note = Agent._build_reply_pickup_note("Kurz nachgehakt?", "", "DIGEST", True, "")
+    assert "REPEAT your question" in note, "the automation-handoff lane can be asked back just the same"
+
+
+def test_the_presence_latch_stays_narrow():
+    """Deliberately NOT widened. `_is_presence_ack` re-arms the wait instead of recording an
+    answer, and it is exact-match and length-capped on purpose - a looser one would file a real
+    answer as a mere acknowledgement. The note carries the case instead, which also covers
+    phrasings no word list would catch."""
+    from vaf.core.thinking_mode import _is_presence_ack
+    assert _is_presence_ack("bin da") is True
+    assert _is_presence_ack("ja") is True
+    assert _is_presence_ack("Sry bin da was gibt's?") is False   # the live message
+    assert _is_presence_ack("ja mach das") is False              # a real answer stays one

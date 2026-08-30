@@ -67,6 +67,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **Answering "what's up?" to one of VAF's own questions now gets the question back, not a
+  status report.** When VAF asked something in the background and the reply was "sorry, I'm
+  here, what's up?", it read that as a request for a situation report and answered "all quiet,
+  no open tasks" - dropping the question it had just asked. It now simply repeats what it
+  asked and waits.
 - **What VAF remembers about YOU is no longer buried under the documents it has read.** Every
   place that asks "what do I know about this person" - the profile block in every reply, and
   the background check that decides whether to raise something - searched one pile in which a

@@ -48,7 +48,13 @@ lifecycle, so the background run and the main agent stay coordinated and nothing
     CLEARLY confirm, carry it out now" - the main agent carries it out immediately;
   - **short decline / short unclear** - same note; a decline changes nothing, an ambiguous reply
     triggers exactly one confirming question before any action (the old unconditional continue steered
-    a "nein bitte nicht" into unintended mutations, live 2026-07-13);
+    a "nein bitte nicht" into unintended mutations, live 2026-07-13). When the reply is not an answer
+    at all - the user only signals they are back, or asks what this is about - the note says outright
+    to REPEAT the question and not to report status. "Ask one confirming question" alone was too vague
+    to act on: live 2026-08-30, "Sry bin da was gibt's?" got a summary of the day ("Alles ruhig hier,
+    keine offenen Tasks") and the run's own question was dropped. The presence latch
+    (`_is_presence_ack`) does not cover that phrasing and is deliberately not widened - it is
+    exact-match and length-capped so a real answer is never filed as a mere acknowledgement;
   - **long, task-shaped message** (`new_topic`, > ~80 chars) - the user started something NEW, not an
     answer: only a LIGHT note is injected ("the question was not answered; handle the new request"),
     the carry/handoff framing is skipped, and the proactive-reply mutation gate is DISARMED for the

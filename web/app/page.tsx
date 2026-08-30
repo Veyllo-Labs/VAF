@@ -8784,10 +8784,19 @@ function VAFDashboardContent() {
                                     (() => {
                                         const vm = visibleMessages;
                                         const ans = (m: typeof vm[number]) => stripToolCallsJSON(parseContent(m.content).answer).trim();
+                                        // A bubble nobody asked for (a nudge, a thinking note, an automation result)
+                                        // arrives through `agent_message_append`, whose contract is "its own new bubble,
+                                        // never merged" - it carries a `kind` and belongs to NO turn. It must stay out of
+                                        // the grouping entirely: a turn is the span between user messages, so an
+                                        // unanswered proactive message otherwise falls into the preceding agentic turn,
+                                        // becomes its LAST assistant - and therefore the answer bubble - while the reply
+                                        // the user had already read is folded away as a 'say' step in the collapsed rail.
+                                        const isStandalone = (m: typeof vm[number]) => m.role === 'assistant' && !!m.kind;
                                         const flush = (s: number, e: number) => {
                                             const assistants: number[] = [];
                                             let toolCount = 0;
                                             for (let k = s; k < e; k++) {
+                                                if (isStandalone(vm[k])) continue;
                                                 if (vm[k].role === 'assistant') assistants.push(k);
                                                 else if (vm[k].role === 'tool') toolCount++;
                                             }
@@ -8801,6 +8810,7 @@ function VAFDashboardContent() {
                                             // text becomes a 'say' step in order, alongside its 'think' if present.
                                             const actions: TurnTl['actions'] = [];
                                             for (let k = s; k < e; k++) {
+                                                if (isStandalone(vm[k])) continue;
                                                 if (vm[k].role === 'assistant') {
                                                     if ((parseContent(vm[k].content).thought ?? '').trim() !== '') actions.push({ kind: 'think', msg: vm[k] });
                                                     if (k !== answerIdx && ans(vm[k]) !== '') actions.push({ kind: 'say', msg: vm[k] });
@@ -8810,6 +8820,7 @@ function VAFDashboardContent() {
                                             }
                                             turnTimeline.set(anchor, { actions, answerMsg: vm[answerIdx] });
                                             for (let k = s; k < e; k++) {
+                                                if (isStandalone(vm[k])) continue;   // renders as its own row, never inside the rail
                                                 if (k !== anchor && (vm[k].role === 'tool' || vm[k].role === 'assistant')) consumedVmIdx.add(k);
                                             }
                                         };

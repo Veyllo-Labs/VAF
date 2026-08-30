@@ -58,10 +58,10 @@ def test_a_once_task_that_ran_is_done_not_stale():
 
 
 def test_disabled_and_old_is_reported_and_nothing_else():
-    """A disabled task produces exactly one finding: it is off. Everything else - overdue, dead
-    output path - would be nonsense about a job that is not scheduled to run at all."""
+    """A disabled task produces exactly one finding: it is off. An "overdue" observation about a
+    job that is not scheduled to run at all would be nonsense."""
     off = _task(enabled=False, created_at=(NOW - timedelta(days=90)).isoformat(),
-                last_run=(NOW - timedelta(days=200)).isoformat(), output_path="/nope/out.md")
+                last_run=(NOW - timedelta(days=200)).isoformat())
     assert _kinds([off]) == {"disabled_and_old"}
 
 
@@ -90,17 +90,20 @@ def test_different_prompts_are_not_flagged():
     assert "near_duplicate" not in _kinds([a, b])
 
 
-def test_dead_output_path_is_reported(tmp_path):
-    gone = _task(output_path=str(tmp_path / "does-not-exist" / "out.md"),
-                 last_run=(NOW - timedelta(hours=5)).isoformat())
-    assert "dead_output_path" in _kinds([gone])
+def test_an_output_path_is_never_called_dead(tmp_path):
+    """There is deliberately no "dead output path" finding.
 
-
-def test_live_output_path_is_quiet(tmp_path):
-    f = tmp_path / "out.md"
-    f.write_text("x", encoding="utf-8")
-    ok = _task(output_path=str(f), last_run=(NOW - timedelta(hours=5)).isoformat())
-    assert review_findings([ok], now=NOW) == []
+    run_task resolves folder aliases ("Desktop", "downloads") against the home directory AND
+    creates a missing output directory before writing. So a bare existence check flags a relative
+    alias that works perfectly and an absolute path the next run would simply create. The one case
+    that is a real problem - a path VAF cannot create - makes the run fail, and a failed run is
+    reported from the run log as evidence instead of from a guess."""
+    alias = _task(id="a1", output_path="Desktop",
+                  last_run=(NOW - timedelta(hours=5)).isoformat())
+    absent = _task(id="a2", output_path=str(tmp_path / "does-not-exist" / "out.md"),
+                   last_run=(NOW - timedelta(hours=5)).isoformat())
+    assert review_findings([alias], now=NOW) == []
+    assert review_findings([absent], now=NOW) == []
 
 
 # ── the limit itself ──────────────────────────────────────────────────────────────────────
@@ -113,7 +116,6 @@ def test_no_finding_claims_a_failure():
         _task(id="a1", last_run=None),
         _task(id="a2", last_run=(NOW - timedelta(days=9)).isoformat()),
         _task(id="a3", enabled=False, last_run=(NOW - timedelta(days=200)).isoformat()),
-        _task(id="a4", output_path="/nope/out.md", last_run=(NOW - timedelta(hours=5)).isoformat()),
     ]
     forbidden = ("fail", "error", "broken", "crash", "fehler", "kaputt", "abgestuerzt",
                  "too slow", "bad output", "useless")

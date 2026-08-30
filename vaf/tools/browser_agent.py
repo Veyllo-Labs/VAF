@@ -62,7 +62,13 @@ def _shot_image(image) -> dict:
     if isinstance(image, (bytes, bytearray)):
         return {"data": image, "mime_type": "image/jpeg",
                 "name": "browser-screenshot.jpg"}
-    return {"data": image or "", "name": "browser-screenshot"}
+    # Only INLINE data is image data. `image_to_b64` treats any other string as base64 that is
+    # already decoded, so an http(s) URL would be forwarded to the vision provider as if it were
+    # the picture - which it cannot fetch. Anything that is not a data: URL is handed over as
+    # absent instead, and the callers degrade to DOM-only work the way they do with no image.
+    if isinstance(image, str) and image.startswith("data:"):
+        return {"data": image, "name": "browser-screenshot"}
+    return {"data": "", "name": "browser-screenshot"}
 
 
 def _call_vision(image, prompt: str, max_tokens: int = 512) -> Optional[str]:
@@ -892,6 +898,12 @@ def _make_look_when_stuck(tier: str):
             if last_look is not None and step_no - last_look < _LOOK_COOLDOWN_STEPS:
                 return
 
+            # Stamp the ATTEMPT, not the outcome. `_look` returns None whenever the screenshot
+            # or the vision call produced nothing - which is exactly the state that repeats - so
+            # stamping only on success left the cooldown unset and made the agent take a fresh
+            # screenshot and a fresh vision call on EVERY following step, each with its own
+            # timeout budget, for as long as vision kept failing.
+            agent._vaf_last_look_step = step_no
             note = await asyncio.wait_for(_look(agent, reason), _LOOK_BUDGET_SECONDS)
             if note is None:
                 return
@@ -903,7 +915,6 @@ def _make_look_when_stuck(tier: str):
                 agent.state.last_result.append(note)
             else:
                 agent.state.last_result = [note]
-            agent._vaf_last_look_step = step_no
             agent._vaf_forced_looks = int(getattr(agent, "_vaf_forced_looks", 0)) + 1
             logging.getLogger(__name__).info(
                 "[BrowserVision] forced look #%s (%s tier, step %s): %s",

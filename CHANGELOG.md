@@ -15,9 +15,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **When you already have automations, VAF now offers to improve them instead of suggesting more.**
   Once there are three or more, a background check looks at the ones you have and raises one
   concrete, checked observation: an automation that has never completed, one that has recorded no
-  success for a while, one that is disabled and forgotten, two scheduled at the same minute, two with
-  near-identical instructions, or one writing to a folder that no longer exists. It proposes the
-  change and leaves the decision to you - it cannot edit an automation itself. Automations now also
+  success for a while, one that is disabled and forgotten, two scheduled at the same minute, or two
+  with near-identical instructions. It proposes the change and leaves the decision to you - it
+  cannot edit an automation itself. Automations now also
   keep a short record of their last runs, so "its last three runs ended with an error" becomes
   something VAF can actually tell you apart from "the machine was switched off".
 - **VAF can now notice when something in the world affects a plan you told it about.** When there is

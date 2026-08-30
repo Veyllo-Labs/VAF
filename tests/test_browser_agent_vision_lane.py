@@ -517,3 +517,53 @@ def test_the_tier_is_recorded_on_the_run_it_describes():
            / "browser_agent.py").read_text(encoding="utf-8")
     body = src.split("async def _run_browser", 1)[1]
     assert "agent._vaf_vision_tier = _vision_tier" in body
+
+
+def test_a_look_that_produces_nothing_still_starts_the_cooldown(monkeypatch):
+    """The cooldown has to record the ATTEMPT, not the outcome.
+
+    On the "described" tier the look returns nothing whenever the screenshot or the vision call
+    produced nothing - which is exactly the state that repeats. Stamping only on success left the
+    cooldown unset, so the agent took a fresh screenshot and a fresh vision call on EVERY following
+    step, each with its own timeout budget, for as long as vision kept failing: the opposite of
+    what the cooldown is for."""
+    pytest.importorskip("browser_use", exc_type=ImportError)
+
+    class _Session:
+        def __init__(self):
+            self.shots = 0
+
+        async def take_screenshot(self, **kw):
+            self.shots += 1
+            return b"JPEGBYTES"
+
+    monkeypatch.setattr(ba, "_call_vision_for_screenshot", lambda image: None)
+
+    hook = ba._make_look_when_stuck("described")
+    agent = _FakeAgent(repeated=9, n_steps=1)
+    agent.browser_session = _Session()
+    _run(hook(agent))
+
+    assert not agent.state.last_result, "vision produced nothing, so nothing may be injected"
+    assert getattr(agent, "_vaf_last_look_step", None) == 1, \
+        "a fruitless look left no cooldown - the next step would try again immediately"
+
+    agent.state.n_steps = 2
+    _run(hook(agent))
+    assert agent.browser_session.shots == 1, \
+        "still inside the cooldown, yet it took another screenshot"
+
+
+def test_a_remote_url_is_not_treated_as_image_data():
+    """`image_to_b64` returns any non-`data:` string verbatim as already-decoded base64. An
+    http(s) URL would therefore be forwarded to the vision provider AS the picture, which it
+    cannot fetch. Such a value is handed over as absent instead, and the callers degrade to
+    DOM-only work exactly as they do with no image at all."""
+    from vaf.core.vision_infer import image_to_b64
+    for url in ("https://example.invalid/shot.png", "http://example.invalid/shot.png",
+                "/tmp/shot.png", "file:///tmp/shot.png"):
+        assert image_to_b64(ba._shot_image(url)) is None, url
+    # the two shapes that ARE image data keep working
+    assert image_to_b64(ba._shot_image(b"ABC")) == ("QUJD", "image/jpeg")
+    assert image_to_b64(ba._shot_image("data:image/png;base64,QUJD")) == ("QUJD", "image/png")
+    assert image_to_b64(ba._shot_image(None)) is None

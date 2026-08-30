@@ -158,7 +158,6 @@ Key options (in `config.json` or via Web UI **Settings → AI & Model → Thinke
 | `thinking_question_similarity_max_compare` | `12` | Hard cap on how many recent questions are embedded/compared per turn (cost/leak bound). |
 | `thinking_getto_max_attempts` | `3` | Dedup rejections allowed per RUN before the next question is delivered as it stands. Spent inside the gate, where the retry happens. |
 | `thinking_max_turns` | `8` | Outer run-loop turns (clamped 1-10, never below `thinking_no_progress_turns` + 2). |
-| `thinking_max_tool_turns` | `15` | Tool-result cycles allowed inside ONE background step. |
 
 **Cost efficiency:** Set `thinking_provider` and optionally `thinking_model` to use a cheaper model for background runs (e.g. a small local model or a low-cost API tier) while keeping the main chat on a more capable model. Configurable in the Web UI under **Settings → AI & Model → Thinker (background)**.
 
@@ -224,8 +223,8 @@ that silences a run; a REPEAT is prevented by the recent/declined dedup prompts,
    `thinking_automation_review_min_automations` (3) enabled automations, the run stops proposing new
    ones and looks at the ones they have. The findings are computed **in code**
    (`automation.review_findings`) from the stored record - never ran, no successful run since a date,
-   disabled and forgotten, two automations in the same time slot, near-identical instructions, a dead
-   output path, and once a run log exists, repeated recorded errors. The model's only job is to phrase
+   disabled and forgotten, two automations in the same time slot, near-identical instructions, and
+   once a run log exists, repeated recorded errors. The model's only job is to phrase
    ONE of them and propose a fix; the findings go into the run's evidence pool, so the proposal passes
    the existing grounded gate with **no new gate**. Two things are enforced rather than requested:
    `update_automation` / `create_automation` / `delete_automation` are **refused on this node**

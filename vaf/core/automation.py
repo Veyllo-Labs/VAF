@@ -656,13 +656,14 @@ def review_findings(tasks: List["AutomationTask"], now: Optional[datetime] = Non
                 f"its last {len(recent_runs)} recorded runs all ended with an error"
                 + (f", most recently on {last_at}" if last_at else ""))
 
-        if task.output_path:
-            try:
-                if not Path(task.output_path).expanduser().exists():
-                    add(task, "dead_output_path",
-                        f"writes to {task.output_path}, which does not exist")
-            except (OSError, ValueError):
-                pass
+        # NO "dead output path" finding. It was here and does not survive contact with what
+        # run_task actually does: it resolves folder aliases ("Desktop", "downloads") against the
+        # home directory, and it CREATES a missing output directory before writing. So a plain
+        # `Path(output_path).exists()` check flags a relative alias that works perfectly, and an
+        # absolute path that the next run would simply create. The one case that is a real problem -
+        # a path VAF cannot create, e.g. on a drive that is no longer mounted - makes the run FAIL,
+        # and a failed run is recorded in the run log, where `repeated_errors` reports it from
+        # evidence instead of from a guess.
 
         by_slot.setdefault((str(task.frequency), str(task.time)), []).append(task)
 
@@ -1266,6 +1267,21 @@ vaf automation delete <id>   # Delete task
                 # Move to trash
                 import shutil
                 shutil.move(str(filepath), str(trash_path))
+
+        # The run log lives beside the task file, so it has to follow it - otherwise a deleted
+        # automation leaves its history orphaned in the storage directory forever, and a restore
+        # comes back without the record the review rung reads. Tolerates a missing log: it only
+        # starts existing once the task has actually run.
+        _log_src = _run_log_path(filepath)
+        if _log_src.exists():
+            try:
+                if permanent:
+                    _log_src.unlink()
+                else:
+                    import shutil
+                    shutil.move(str(_log_src), str(_run_log_path(trash_path)))
+            except OSError as _e:
+                append_domain_log("backend", f"[AUTOMATION] run log not moved for {task_id}: {_e}")
         
         del self.tasks[task_id]
         try:
@@ -1297,7 +1313,13 @@ vaf automation delete <id>   # Delete task
                 filepath.parent.mkdir(parents=True, exist_ok=True)
             import shutil
             shutil.move(str(trash_path), str(filepath))
-            
+            _log_trash = _run_log_path(trash_path)
+            if _log_trash.exists():
+                try:
+                    shutil.move(str(_log_trash), str(_run_log_path(filepath)))
+                except OSError as _e:
+                    append_domain_log("backend", f"[AUTOMATION] run log not restored for {task_id}: {_e}")
+
             # Add back to tasks
             self.tasks[task_id] = task
             return True

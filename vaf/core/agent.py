@@ -142,6 +142,15 @@ _THINKING_NODE_MUTATION_BLOCK = {
 # Termination is enforced here, in code, never left to the router's judgment.
 _THINKING_EXIT_TOOLS = ("thinking_done", "ask_user")
 
+# Tools a given thinking NODE cannot do its job without, pinned the same way and for the same reason.
+# The relevance rung is TOLD to check something with web_search; when the router did not offer it, the
+# model spent a tool call on search_tools to go find it first (observed live 2026-08-30, 16:30 run). A
+# prompt that names a tool and a tool set that omits it is the same defect as a forced turn without a
+# way to finish - one wastes a turn, the other cannot end at all.
+_THINKING_NODE_REQUIRED_TOOLS = {
+    "relevance": ("web_search",),
+}
+
 
 def _apply_tool_cap(selected, router_max: int, pinned) -> list:
     """Cap the per-turn tool set, never at the expense of a pinned tool.
@@ -1527,11 +1536,17 @@ class Agent:
         the turn. Called after every narrowing rather than at one of them, because the
         narrowings sit on different branches and no single one dominates the others.
 
+        The same call also pins what the CURRENT rung was told to use (see
+        `_THINKING_NODE_REQUIRED_TOOLS`): a prompt that names a tool the set does not carry costs a
+        turn on discovery, and on a tight turn budget that is the rung.
+
         No-op outside a thinking run, and no-op when `_active_tools` is None (ALL tools).
         """
         if not self._is_thinking_run() or self._active_tools is None:
             return
-        missing = [t for t in _THINKING_EXIT_TOOLS if t in self.tools and t not in self._active_tools]
+        _node = (getattr(self, "_thinking_node", "") or "").strip()
+        _want = _THINKING_EXIT_TOOLS + _THINKING_NODE_REQUIRED_TOOLS.get(_node, ())
+        missing = [t for t in _want if t in self.tools and t not in self._active_tools]
         if missing:
             self._active_tools = list(self._active_tools) + missing
 
@@ -8216,7 +8231,15 @@ class Agent:
         if valid_from_llm:
             UI.event("Router", f"LLM-based: {', '.join(valid_from_llm)}", style="dim")
         elif tool_names and not valid_from_llm:
-            UI.event("Router", "No tools selected (Router response was not a valid tool list)", style="dim")
+            # Log WHAT could not be parsed. Saying only that the answer was invalid leaves the next
+            # occurrence to inference - and this fires on real turns (twice on 2026-08-30, once on a
+            # messenger reply). Truncated and single-lined: it is model output, not a transcript.
+            _bad = " ".join((clean_str or selected_tools_str or "").split())[:200]
+            UI.event("Router", f"No tools selected (unparsable answer): {_bad!r}", style="dim")
+            try:
+                append_domain_log("backend", f"[ROUTER] unparsable tool answer: {_bad!r}")
+            except Exception:
+                pass
         elif not forced_tools:
             UI.event("Router", "No tools selected", style="dim")
         
@@ -9356,7 +9379,9 @@ class Agent:
             # exit tools are pinned too, so the run can always end (see _THINKING_EXIT_TOOLS).
             _router_max = int(self.config.get("router_max_tools", 12))
             _pin_names = ("list_tools", "search_tools") + (
-                _THINKING_EXIT_TOOLS if self._is_thinking_run() else ()
+                _THINKING_EXIT_TOOLS
+                + _THINKING_NODE_REQUIRED_TOOLS.get((getattr(self, "_thinking_node", "") or "").strip(), ())
+                if self._is_thinking_run() else ()
             )
             selected_tools = _apply_tool_cap(selected_tools, _router_max, set(_pin_names))
 
@@ -9380,9 +9405,16 @@ class Agent:
                     used_core_subset = True
                 else:
                     # Router found no specific tools: give only discovery tools so the model can list/search
+                    # Discovery PLUS what this turn was already using. Discovery-only made the model
+                    # re-find tools it had just called - a wasted turn on exactly the turns where the
+                    # router had already failed once. _get_recent_tools is the same decay-tracked list
+                    # the normal path merges in; nothing new is introduced here.
                     DISCOVERY_ONLY = ["list_tools", "search_tools"]
-                    self._active_tools = [t for t in DISCOVERY_ONLY if t in self.tools]
-                    UI.event("Router", "Safety Net: Router found none. Using list_tools, search_tools.", style="dim")
+                    self._active_tools = self._merge_tool_lists(
+                        [t for t in DISCOVERY_ONLY if t in self.tools], self._get_recent_tools()
+                    )
+                    UI.event("Router", f"Safety Net: Router found none. Using {len(self._active_tools)} "
+                                       "discovery + recent tools.", style="dim")
             else:
                 self._active_tools = selected_tools
 

@@ -2295,7 +2295,12 @@ def _build_memory_digest(user_scope_id: Optional[str], queries: List[str], k: Op
         for q in queries:
             try:
                 res = run_memory_search_sync(
-                    query=q, k=k, user_scope_id=task_scope, caller="thinking_proactive"
+                    query=q, k=k, user_scope_id=task_scope, caller="thinking_proactive",
+                    # Both digests ask about the PERSON - a routine, a plan, an interest. Learned
+                    # document text answers none of those and outnumbers them: measured 2026-08-30,
+                    # these queries returned 14/20 and 17/20 document chunks, so two of the four
+                    # "REAL MEMORIES about the user" a run was handed were PDF text.
+                    exclude_documents=True,
                 ) or ""
             except Exception:
                 res = ""

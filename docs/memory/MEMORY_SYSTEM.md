@@ -377,7 +377,7 @@ curl -X POST http://localhost:8000/api/memory/search \
     "metadata": {
         "title": "string",
         "tags": ["string"],
-        "type": "note|document|code|conversation|knowledge",
+        "type": "note|conversation|document|document_index|attachment_section|attachment_ephemeral|code|knowledge",
         "preview": "string (first 200 chars)",
         "created_at": "ISO datetime"
     },
@@ -400,6 +400,50 @@ curl -X POST http://localhost:8000/api/memory/search \
     "label": "string | null"
 }
 ```
+
+### Retrieval: document text vs facts about the person
+
+A learned PDF contributes hundreds of chunks; the facts about someone are a handful. A similarity
+search over everything therefore returns document text by sheer volume, and the two places that ask
+for personal facts do so in plain words with no way to say what they mean.
+
+Measured on a real store on 2026-08-30 - 704 chunks, of which 475 (67.5%) were document-derived
+(`document` 455, `document_index` 6, `attachment_section` 5, `attachment_ephemeral` 9):
+
+| query the product actually runs | document chunks in its top 8 |
+|---|---|
+| `user profile facts preferences about this user` (the `known_facts` block of **every** system prompt) | 4 / 8 |
+| `plans, deadlines, appointments and commitments the user has stated` (relevance rung) | 6 / 8 |
+| `a recurring routine or habit the user does regularly` (proactive digest) | 6 / 8 |
+
+`RagPipeline.search(..., exclude_documents=True)` keeps that text out. Three properties matter:
+
+- **It is applied in SQL, not after the fetch.** The older `metadata_filter` runs in Python over rows
+  the database already ranked, so filtering there returns FEWER results rather than better ones - out
+  of a 20-candidate window dominated by documents it hands back the 3 personal ones that happened to
+  be included. In SQL the vector search ranks WITHIN the personal memories. Measured after the change:
+  0/8 document chunks on all three queries, **still 8 results** - recall is kept, not traded away.
+- **Both lanes of the hybrid search apply it.** The fusion is only as clean as its worse half; without
+  it the lexical lane feeds documents back into the RRF the vector lane just excluded them from.
+- **Untyped memories are KEPT.** The exclusion names the document types rather than listing the
+  personal ones, because this store predates the `type` field and an inclusion list would silently
+  drop old facts.
+
+**Ordinary RAG is unchanged.** The flag is off by default, so every other lookup - the chat memory
+block, the `memory_search` tool, librarian, coder, research, voice, mail - searches the whole store
+exactly as before, and a question about a document still answers from the document. Verified on the
+same store after the change, through the ordinary path with no flag:
+
+| query, default path | document chunks in the top 8 |
+|---|---|
+| `BSI Testkriterien Re-Evaluation` | 6 / 8 - a document question still answers from documents |
+| `was habe ich zu VAF gespeichert` | 1 / 8 - a mixed question is still mixed |
+
+The attachment lane is untouched as well: it builds the same `RagPipeline` but runs its own retrieval
+with its own `attachment_rag_*` keys and never passes through this argument.
+
+Exactly two callers opt in, both of which ask about the PERSON in plain words:
+`refresh_user_profile_summary` and the thinking run's memory digest.
 
 ## Encryption
 

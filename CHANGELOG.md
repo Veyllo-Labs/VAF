@@ -67,6 +67,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **What VAF remembers about YOU is no longer buried under the documents it has read.** Every
+  place that asks "what do I know about this person" - the profile block in every reply, and
+  the background check that decides whether to raise something - searched one pile in which a
+  single learned PDF outnumbers a year of personal notes. Measured on a real store: two thirds
+  of everything stored was document text, and six of the eight memories fetched for "what are
+  this user's plans and commitments" were pages out of a PDF. Those two lookups now leave
+  document text out and return the same number of results, so the space goes to things about
+  you. **Nothing else changed:** asking about a document still answers from the document, and
+  every other lookup - chat memory, the search tool, the file and research agents, voice, mail,
+  attachments - searches the whole store exactly as before.
 - **When VAF reminds you about something and you ask "what?", it now knows what it meant.** A
   reminder is deliberately short ("shall we carry on with the commit - yes or no?"), and it used
   to REPLACE the actual question in VAF's own record. After one reminder nothing said what the

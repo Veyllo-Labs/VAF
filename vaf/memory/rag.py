@@ -38,6 +38,29 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 ATTACHMENT_EPHEMERAL_SOURCE = "attachment_ephemeral"
+
+# Memory types whose content is DOCUMENT text, not something about the person. A learned PDF
+# contributes hundreds of chunks; the facts about a user are a handful, so on any similarity search
+# the document mass wins by volume alone. Measured on a real store 2026-08-30: 704 chunks, of which
+# 475 (67.5%) are document-derived - and the three queries the product actually runs for personal
+# facts came back 14/20, 17/20 and 14/20 document chunks. Two of the four "REAL MEMORIES about the
+# user" handed to a background run were PDF text, and the same is true of the `known_facts` block in
+# every system prompt.
+#
+# Written by vaf/tools/learn_job.py (`document`), learn_attached_knowledge.py (`document`) and
+# learn_document.py (`document_index`), plus the attachment lanes in vaf/memory/attachment_rag.py.
+_DOCUMENT_MEMORY_TYPES = ("document", "document_index", "attachment_section", "attachment_ephemeral")
+
+
+def _not_document_memory():
+    """SQL condition: this memory is not learned document text.
+
+    One expression, used by BOTH lanes of the hybrid search - the fusion is only as clean as its
+    worse half. Untyped memories pass: the store predates the type field."""
+    return or_(
+        Memory.meta["type"].astext.is_(None),
+        Memory.meta["type"].astext.notin_(_DOCUMENT_MEMORY_TYPES),
+    )
 _ingest_profile_lock = threading.Lock()
 _ingest_profile_seq = 0
 
@@ -375,6 +398,7 @@ class RagPipeline:
         metadata_filter: Optional[Dict[str, Any]] = None,
         user_scope_id: Optional[UUID] = None,
         hybrid: Optional[bool] = None,
+        exclude_documents: bool = False,
     ) -> List[RagSource]:
         """
         Search for relevant memories using vector similarity.
@@ -390,6 +414,16 @@ class RagPipeline:
                 scores stay COSINE similarities - the hybrid fusion returns
                 rank-based RRF values, which no similarity threshold can read.
                 The memory_save duplicate check is the consumer this exists for.
+            exclude_documents: keep learned DOCUMENT text out, for a caller asking
+                about the PERSON. Applied in SQL, not after the fetch: the existing
+                `metadata_filter` runs in Python over rows the database already
+                ranked, so filtering there would return FEWER results rather than
+                better ones - out of 20 candidates dominated by document chunks it
+                would hand back the 3 personal ones it happened to include. In SQL
+                the vector search ranks WITHIN the personal memories instead.
+                An UNTYPED memory is kept: this store predates the type field, and
+                excluding what it cannot classify would silently drop old facts.
+                Off by default, so every existing caller is byte-identical.
 
         Returns:
             List of RagSource objects
@@ -437,6 +471,8 @@ class RagPipeline:
                     Memory.meta["source"].astext != ATTACHMENT_EPHEMERAL_SOURCE,
                 )
             )
+        if exclude_documents:
+            filters.append(_not_document_memory())
 
         # USER ISOLATION: the scope is mandatory and this fails CLOSED. An empty scope must never be
         # treated as "search ALL memories (no filter)", which would return one user's chunks/tags to
@@ -526,6 +562,10 @@ class RagPipeline:
         query_tokens = _content_tokens(_tokenize_lexical_query(query))
 
         lexical_filters = [Memory.is_deleted == False]
+        if exclude_documents:
+            # The fusion is only as clean as its worse half: without this the lexical lane feeds
+            # document chunks straight back into the RRF the vector lane just excluded them from.
+            lexical_filters.append(_not_document_memory())
         if not wants_attachment_lane:
             lexical_filters.append(
                 or_(
@@ -1629,6 +1669,10 @@ def refresh_user_profile_summary(user_scope_id: Optional[UUID]) -> None:
             "user profile facts preferences about this user",
             k=8,
             user_scope_id=user_scope_id,
+            # This cache becomes the `known_facts` block of EVERY system prompt, and it asks for
+            # facts about the PERSON. Measured 2026-08-30 on a real store: 14 of the 20 candidates
+            # this exact query retrieved were learned document text.
+            exclude_documents=True,
         )
         cache_dir = Path(Config.APP_DIR) / "user_profile_cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -1865,6 +1909,7 @@ def run_memory_search_sync(
     user_scope_id: Optional[UUID] = None,
     caller: Optional[str] = None,
     include_ids: bool = False,
+    exclude_documents: bool = False,
 ) -> str:
     """
     Run RAG search synchronously for use from sync code (e.g. headless runner).
@@ -1958,7 +2003,8 @@ def run_memory_search_sync(
         async with get_db(user_scope_id=user_scope_id) as db:
             pipeline = RagPipeline(db)
             sources = await pipeline.search(
-                query, k=k, threshold=threshold, metadata_filter=metadata_filter, user_scope_id=user_scope_id
+                query, k=k, threshold=threshold, metadata_filter=metadata_filter,
+                user_scope_id=user_scope_id, exclude_documents=exclude_documents,
             )
             
             # PUSH TO WEB UI (for Hover/Info)

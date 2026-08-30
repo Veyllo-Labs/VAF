@@ -97,3 +97,35 @@ def test_backstop_only_pins_registered_tools():
     o = _obj(active=["list_tools"], tools=["thinking_done"])
     o._ensure_thinking_exit_tools()
     assert o._active_tools == ["list_tools", "thinking_done"]
+
+
+# ── the rung that is told to search must own the search tool ──────────────────────────────
+
+def test_the_relevance_rung_always_carries_web_search():
+    """Its prompt says "check it with web_search". When the router did not offer it, the model
+    spent a tool call on search_tools to go find it first (live 2026-08-30, the 16:30 run). A
+    prompt that names a tool and a set that omits it costs a turn - and on a tight turn budget
+    that is the rung."""
+    from vaf.core.agent import _THINKING_NODE_REQUIRED_TOOLS
+    assert _THINKING_NODE_REQUIRED_TOOLS["relevance"] == ("web_search",)
+
+    o = _obj(active=["list_tools"], tools=["thinking_done", "ask_user", "web_search"])
+    o._thinking_node = "relevance"
+    o._ensure_thinking_exit_tools()
+    assert "web_search" in o._active_tools
+    assert "thinking_done" in o._active_tools, "the exit tool is still pinned alongside"
+
+
+def test_other_rungs_do_not_gain_web_search():
+    """Only the rung that needs it. The proactive rung is capped at memory_search on purpose."""
+    for node in ("proactive", "getto", "automation_review", "forced_item", ""):
+        o = _obj(active=["list_tools"], tools=["thinking_done", "ask_user", "web_search"])
+        o._thinking_node = node
+        o._ensure_thinking_exit_tools()
+        assert "web_search" not in o._active_tools, f"node {node!r} gained a tool it was not told to use"
+
+
+def test_a_required_tool_survives_the_cap_from_the_last_position():
+    incoming = [f"tool_{i:02d}" for i in range(19)] + ["web_search"]
+    out = _apply_tool_cap(incoming, 12, {"list_tools", "search_tools", "web_search"})
+    assert "web_search" in out

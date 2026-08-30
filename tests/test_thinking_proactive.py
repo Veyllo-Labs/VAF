@@ -31,8 +31,11 @@ def test_proactive_digest_dedups_real_memories(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     calls = []
 
-    def fake_search(query, k, user_scope_id=None, caller=None):
-        calls.append(query)
+    def fake_search(query, k, user_scope_id=None, caller=None, exclude_documents=False):
+        # The signature is spelled out, not **kwargs: the digest swallows a TypeError from this
+        # call and returns "" (an empty digest, which the run then reads as "nothing known"), so a
+        # stub that absorbed any argument would hide a real signature drift instead of failing.
+        calls.append((query, exclude_documents))
         # the SAME snippet for every query -> must collapse to one in the digest
         return "[Source 1] (Relevance: 90%)\nUser checks the Berlin weather every morning at 7.\n\n---"
 
@@ -42,6 +45,10 @@ def test_proactive_digest_dedups_real_memories(monkeypatch, tmp_path):
     assert "Berlin weather every morning" in digest
     assert digest.count("Berlin weather every morning") == 1   # deduped across the queries
     assert len(calls) >= 3                                       # several targeted, distinct queries
+    assert all(excl for _, excl in calls), (
+        "the digest asks about the PERSON - it must keep learned document text out, or a single "
+        "learned PDF outnumbers every personal fact in the store (measured: 6 of 8)"
+    )
 
 
 def test_proactive_decide_nudge_replaces_housekeeping_block(monkeypatch):

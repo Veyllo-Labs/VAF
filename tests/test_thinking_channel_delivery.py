@@ -7,7 +7,8 @@
 main_messenger FIRST (Telegram/WhatsApp/Discord) and only falls back to the Web
 UI when none is configured. If a messenger question stays unanswered past the
 skip window, `_process_waiting_reply` escalates it ONCE to the Web UI with a note
-that it was already asked there, then gives up on the next miss. Storage is
+that it was already asked there, then stops CHASING on the next miss - keeping the
+question itself, so a reply that arrives later is still understood. Storage is
 isolated per test to a tmp vaf_dir; the messenger send and the Web UI emit are
 stubbed.
 """
@@ -106,7 +107,7 @@ def test_no_messenger_falls_back_to_web(monkeypatch, tmp_path):
 ])
 def test_unanswered_messenger_question_escalates_once_to_web(monkeypatch, tmp_path, channel, label):
     """A messenger question the user never answers is re-asked ONCE in the Web UI (with an
-    'already asked on <Channel>' note); a second miss gives up and clears the waiting state."""
+    'already asked on <Channel>' note); a second miss ends the chase but keeps the question."""
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setattr("vaf.core.last_interaction.get_last_interaction", lambda scope: None)
     web_emits = []
@@ -143,8 +144,8 @@ def test_unanswered_messenger_question_escalates_once_to_web(monkeypatch, tmp_pa
 
 
 def test_escalation_gives_up_when_no_reachable_web_session(monkeypatch, tmp_path):
-    """If there is no web chat to escalate to (emit returns None), the unanswered messenger question is
-    given up on (cleared) — it must NOT loop forever returning 'skip'."""
+    """If there is no web chat to escalate to (emit returns None), the chase for the unanswered
+    messenger question ends - it must NOT loop forever returning 'skip'."""
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setattr("vaf.core.last_interaction.get_last_interaction", lambda scope: None)
     # No reachable web session -> emit_message_to_web_ui returns None.
@@ -182,7 +183,7 @@ def test_escalated_flag_alone_blocks_re_escalation(monkeypatch, tmp_path):
 
 def test_legacy_waiting_entry_without_channel_treated_as_web(monkeypatch, tmp_path):
     """A waiting.json entry written by the pre-change code has no channel/escalated_to_web keys; the new
-    escalation logic must treat it as 'web' (clear at skip, no messenger escalation) and never crash."""
+    escalation logic must treat it as 'web' (end the chase at skip, no messenger escalation) and never crash."""
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setattr("vaf.core.last_interaction.get_last_interaction", lambda scope: None)
     web_emits = []

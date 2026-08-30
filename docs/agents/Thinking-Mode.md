@@ -129,8 +129,8 @@ Key options (in `config.json` or via Web UI **Settings → AI & Model → Thinke
 | `thinking_max_duration_minutes` | `30` | Max duration per run (then release lock) |
 | `thinking_wait_nudge_minutes` | `3` | If user does not reply: send nudge after this many minutes |
 | `thinking_followup_max` | `3` | When a proactive question is unanswered, re-ask the SAME one (pointed follow-up) up to N times, then let the topic rest (no question, no nudge) until the user reacts. |
-| `thinking_wait_skip_minutes` | `10` | If still no reply: clear waiting state after this many minutes |
-| `thinking_reply_wait_ttl_hours` | `12` | Safety net: a waiting latch older than this is expired at READ time (`get_waiting_for_reply`), so a stale question can never claim the user's next message as its "reply" when the 10-min skip never ran (thinking disabled/crashed/restart). `0` disables. |
+| `thinking_wait_skip_minutes` | `10` | If still no reply: stop CHASING after this many minutes (no more nudges/escalation). The question record itself is kept for the main agent's reply pickup until `thinking_reply_wait_ttl_hours`. |
+| `thinking_reply_wait_ttl_hours` | `12` | How long a question stays understandable: a waiting latch older than this is expired at READ time (`get_waiting_for_reply`), so a stale question can never claim the user's next message as its "reply". This is the real lifetime of the record - the 10-minute skip above only ends the chasing - and it also covers a latch left behind when thinking mode is disabled/crashed/restarted. `0` disables. |
 | `thinking_nudge_activity_minutes` | `5` | Do not nudge if user was active on any channel in the last N minutes |
 | `thinking_provider` | `"inherit"` | AI provider for thinking mode (`inherit` = same as main chat, or `openai`, `anthropic`, `deepseek`, `local`) |
 | `thinking_model` | `null` | Specific model for thinking mode (empty = use provider default) |
@@ -469,10 +469,20 @@ one soft reconfirm instead of logging a refusal. The question text comes from th
   phrasings are generated/expanded across languages by `scripts/generate_vocab.py` (dev-time; the runtime
   never calls an LLM for a nudge).
   - **Inactivity Protection:** No nudge is sent if the user was active on ANY channel within the last `thinking_nudge_activity_minutes` (default 5 min).
-- **Skip:** After `thinking_wait_skip_minutes`, the waiting state is cleared. This runs inside
-  `_process_waiting_reply`, i.e. only when a thinking run actually fires - the TTL safety net
-  (`thinking_reply_wait_ttl_hours`, checked in `get_waiting_for_reply`) covers the case where it never
-  does.
+- **Stop chasing (not "forget"):** After `thinking_wait_skip_minutes` the agent stops chasing the
+  question - no further nudge, no second escalation, and background runs are no longer held back. The
+  RECORD of the question is kept (`end_reply_chase` stamps `chase_ended_at_ts`; `chase_is_active()` is
+  the predicate for "the agent is blocked on the user"). Deleting it here used to end both at once, and
+  the record is the only thing that tells the main agent what a later message is answering: a live
+  incident had the question escalated to the web chat at 11:49:50, the record deleted at 11:59:51, and
+  the user's answer at 12:31 reaching an agent that behaved as if it had never asked. The kept record is
+  bounded by the same TTL safety net (`thinking_reply_wait_ttl_hours`, checked in
+  `get_waiting_for_reply`) that covers a latch left behind when thinking mode is disabled, crashed or
+  restarted - so a question is never immortal, and a message days later is not framed as its answer.
+  This lane runs inside `_process_waiting_reply`, i.e. only when a thinking run actually fires.
+  The admin panel's "waiting for a reply" line follows the CHASE, not the record: once the chase ends
+  the line disappears and the open question stays visible in the same panel's request list, with its
+  `asked` badge. Pinned by `tests/test_late_reply_still_carries_the_question.py`.
 - **User replies:** When the user next sends a message, `clear_waiting_for_reply(user_reply_text=...)`
   is called with the RAW message text (the enriched WebUI text would store the workspace preamble as
   the recorded reply - observed live in a request record).
@@ -492,6 +502,11 @@ To ensure the background agent doesn't keep waiting (and nudging) while the user
    - **Context Injection:** If the user was being waited on, the Main Agent receives a context hint explaining which background question the user is likely responding to. This prevents "I'm not sure what you mean" replies to short answers like "Yes, why?".
 2. **Early Cleanup:** To avoid race conditions where a nudge might be triggered while a message is being processed, both the **Web Server** and **Headless Runner** attempt to clear the state as soon as a message is received.
 
+The other end of the lifecycle is deliberately NOT a cleanup: when the user never replies, the chase
+stops after `thinking_wait_skip_minutes` but the question is kept (see [Waiting for user reply](#waiting-for-user-reply)),
+because the context hint above is the only thing that lets the main agent understand an answer that
+arrives later.
+
 The reply is:
 - Injected as "User reply to your last question" in the next run's system prompt
 - Captured onto the tracked request (status → `replied`); the next run classifies the outcome, and a
@@ -509,7 +524,10 @@ newest run log, and the recent question lifecycle from `thinking_requests`
 (whitelisted fields only - replies and details stay in the chat surfaces).
 It is built on `thinking_status_snapshot()` in `thinking_mode.py`, which is
 strictly read-only: an expired waiting latch is skipped but never deleted
-(deletion belongs to the lifecycle readers, not to a status probe). Non-admins
+(deletion belongs to the lifecycle readers, not to a status probe). The
+waiting line follows the CHASE, not the record: once the chase has ended
+(`chase_ended_at_ts`) the panel stops claiming a wait, while the open question
+stays in the same panel's request list with its `asked` badge. Non-admins
 get 403; there is no per-user variant of this route. Guarded by
 `tests/test_thinking_status_route.py`.
 
@@ -561,7 +579,7 @@ Thinking mode output is **not shown in the Web UI chat list**. It is logged to:
 | File | Purpose |
 |------|---------|
 | `thinking_mode_locks.json` | Per-user run locks (run_id, started_at_ts) |
-| `thinking_waiting_reply.json` | Per-user "waiting for reply" state (question_sent_at_ts, nudge_sent_at_ts, username, question_text) |
+| `thinking_waiting_reply.json` | Per-user "waiting for reply" state (question_sent_at_ts, nudge_sent_at_ts, chase_ended_at_ts, username, question_text, request_id, session_id, channel, escalated_to_web). `chase_ended_at_ts` set = the chase is over and the record only survives so a late reply is still understood; absent in records written before it existed, which read as an ACTIVE chase |
 | `thinking_last_reply.json` | Per-user last reply preview for the next run (consumed on read) |
 | `thinking_last_session_id.json` | Per-user last thinking session id (for attaching user replies) |
 | `thinking_last_completed.json` | Per-user timestamp of last completed run (for cooldown) |
@@ -588,7 +606,7 @@ Debug log: `logs/vaf_think_YYYY-MM-DD.log` (human-readable, all users in one fil
 | Cooldown | `vaf/core/thinking_mode.py` | `_last_completed_path()`, `_set_last_run_completed()`, `_minutes_since_last_run()` |
 | Declined questions | `vaf/core/thinking_mode.py` | `_declined_path()`, `_save_declined_entry()`, `_get_declined_questions_prompt()` |
 | Reply classification | `vaf/core/thinking_mode.py` | `_classify_replied_requests()`, `_classify_reply_outcome()`; `agent._generate_for_classification()` |
-| Waiting for reply | `vaf/core/thinking_mode.py` | `set_waiting_for_reply()`, `clear_waiting_for_reply()`, `get_waiting_for_reply()` |
+| Waiting for reply | `vaf/core/thinking_mode.py` | `set_waiting_for_reply()`, `clear_waiting_for_reply()`, `get_waiting_for_reply()`, `end_reply_chase()`, `chase_is_active()` - the last two split "stop chasing" from "forget the question" |
 | Persistent notes | `vaf/core/thinking_notes.py` | `add_note()`, `get_notes()`, `build_notes_prompt()` |
 | Background requests | `vaf/core/thinking_requests.py` | `add_request()`, `record_reply()`, `reopen_for_reconfirm()`, `update_request_status()`, `list_requests()`, `recent_requests_prompt()` |
 | Run counter | `vaf/core/thinking_mode.py` | `next_run_seq()`, `current_run_seq()` |

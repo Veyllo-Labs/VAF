@@ -73,6 +73,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   carried a stray carriage return. In a terminal that is not cosmetic: it sends the cursor
   back to the start of the line and overwrites what was just drawn. The backfill path was
   always correct; the two line splitters in the same component simply disagreed.
+- **When you answer a question VAF asked a while ago, it now knows what you are answering.**
+  If VAF asked something in the background (on your messenger, or in the chat) and you replied later
+  than ten minutes, it had already forgotten the question and greeted you as if it had never asked -
+  on Telegram and in the web chat alike. Waiting for an answer and remembering the question were the
+  same thing, and both ended together. They are now separate: VAF stops chasing after ten minutes as
+  before (no more nudges, no repeated escalation), but keeps the question itself for up to twelve
+  hours, so a late answer is understood, replied to properly, and recorded against the question that
+  prompted it.
 - **A message VAF sends on its own no longer overwrites the answer above it in the chat.**
   When VAF asked something on Telegram, got no reply and followed up in the web chat, its
   "are you there?" appeared glued to the end of the previous turn while the reply you had

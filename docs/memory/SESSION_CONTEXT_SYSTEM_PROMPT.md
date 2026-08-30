@@ -202,6 +202,8 @@ Earlier versions prepended `[Context: ...]` to `user_input` itself. This caused 
 
 **Scope:** works across all channels (WebUI, Telegram, WhatsApp, Discord) - the state is keyed by `user_scope_id`, not by channel or session.
 
+**How long it survives:** the injection only happens while the question record still exists, so its lifetime IS this feature's reach. Chasing the user (nudge, one escalation) stops after `thinking_wait_skip_minutes`, but the record itself is kept until `thinking_reply_wait_ttl_hours` (default 12h) - the two used to end together, and a user who answered later than ten minutes reached an agent that behaved as if it had never asked. See [Thinking-Mode.md](../agents/Thinking-Mode.md) → "Waiting for user reply".
+
 **Code locations:**
 
 | Responsibility | File | Notes |
@@ -210,6 +212,7 @@ Earlier versions prepended `[Context: ...]` to `user_input` itself. This caused 
 | Read + stash on reply | `vaf/core/agent.py` | `chat_step()` - sets `self._thinking_reply_context` |
 | Inject into LLM messages | `vaf/core/agent.py` | `_prepare_messages()` - system msg before last user msg; clears after use |
 | Clear waiting state | `vaf/core/thinking_mode.py` | `clear_waiting_for_reply()` called in `chat_step()` after stash |
+| Stop chasing, keep the question | `vaf/core/thinking_mode.py` | `end_reply_chase()` / `chase_is_active()` - an unanswered question stops nudging but stays injectable until the TTL |
 
 ---
 

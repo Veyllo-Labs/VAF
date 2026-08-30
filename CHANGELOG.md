@@ -67,6 +67,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **When VAF reminds you about something and you ask "what?", it now knows what it meant.** A
+  reminder is deliberately short ("shall we carry on with the commit - yes or no?"), and it used
+  to REPLACE the actual question in VAF's own record. After one reminder nothing said what the
+  topic had been, so answering the reminder with a question left VAF asking you back which
+  message you meant, instead of simply saying what it was about. The subject is now kept
+  alongside the reminder, a reminder has to carry what it is about, and the agent that picks up
+  your reply is told the subject rather than only the last thing it sent you.
 - **The server dashboard's log pane no longer garbles every line on Windows.** `vaf top`
   followed an appended log by splitting on the line feed alone, so on Windows - where a log
   written in text mode ends each line with a carriage return as well - every line it drew

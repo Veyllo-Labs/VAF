@@ -1568,7 +1568,13 @@ def deliver_tracked_message(
     if _fu_id and not (source_note_id or "").strip() and not (source_todo_id or "").strip():
         # This free message is a FOLLOW-UP on an existing open question — update that request (bump its
         # follow-up counter + refresh recency/text) instead of creating a duplicate entry.
-        req = treq.bump_followup(user_scope_id, _fu_id, new_question=message, run_seq=run_seq)
+        # details/proposed_action ENRICH: a follow-up that carries substance fills a gap the original
+        # left; one that carries none must not blank what the original already knew.
+        req = treq.bump_followup(
+            user_scope_id, _fu_id, new_question=message, run_seq=run_seq,
+            details=(details or "").strip() or None,
+            proposed_action=(proposed_action or "").strip() or None,
+        )
     if req is None:
         req = treq.add_request(
             user_scope_id,
@@ -2535,11 +2541,28 @@ _PROMPT_NOTHING_TODO = (
 )
 
 
+# What a follow-up must hand over, in both lanes. A reminder is deliberately terse, and the person
+# reading it on a messenger hours later often answers "what?" rather than yes or no - at which point the
+# MAIN agent has to take the topic over, and it can only work from what the request carries. So the
+# reminder is not allowed to be the whole record: `details` says what this was about, in a form somebody
+# who never saw the original run can act on. Live 2026-08-30: a "Sollen wir heute mit dem Commit
+# weitermachen - ja oder nein?" met a "Hey sry was ?", and the main agent had nothing but that one line,
+# so it asked which message was meant instead of naming the subject.
+_FOLLOWUP_CONTEXT_RULE = (
+    "\nHand the context over with it, ALWAYS: details=\"<what this is actually about - the subject in "
+    "your own words, what you found or proposed, and anything the user would need to make sense of the "
+    "reminder>\", proposed_action=\"<the concrete thing to do if they say yes>\". The user may well answer "
+    "'what?' rather than yes or no, and the main agent then takes over from `details` alone - a reminder "
+    "without it leaves it with nothing to say."
+)
+
+
 def _build_followup_prompt(question: str, reconfirm: bool = False) -> str:
     """Re-ask the SAME open question instead of proposing a new topic. Normally a pointed yes/no
     follow-up (the user has not replied yet). When `reconfirm` is True the user DID reply once but
     ambiguously and the run could not tell whether it got done, so ask a SOFT, retrospective check-back
-    (a recap) rather than a fresh pitch."""
+    (a recap) rather than a fresh pitch. Both lanes must carry the subject over - see
+    `_FOLLOWUP_CONTEXT_RULE`."""
     q = (question or "").strip().replace("\n", " ")[:300]
     if reconfirm:
         return (
@@ -2548,14 +2571,16 @@ def _build_followup_prompt(question: str, reconfirm: bool = False) -> str:
             f"  \"{q}\"\n"
             "Do NOT pitch it again from scratch. Ask ONE casual, friendly check-back, phrased as a RECAP in "
             "the user's language — e.g. 'Hey, sorry — hatten wir das eigentlich gemacht/eingerichtet?'. "
-            "Emit EXACTLY ONE tool call: ask_user(message=\"<the check-back>\"). No other tools, no prose."
+            "Emit EXACTLY ONE tool call: ask_user(message=\"<the check-back>\")."
+            + _FOLLOWUP_CONTEXT_RULE + " No other tools, no prose."
         )
     return (
         "You earlier reached out to the user with the question below, and they have NOT replied yet:\n"
         f"  \"{q}\"\n"
         "Do NOT introduce a new topic. Ask ONE short, friendly FOLLOW-UP on the SAME thing, phrased so it is "
         "easy to answer with a quick yes/no (e.g. 'Soll ich das einrichten — ja oder nein?'), in the user's "
-        "language. Emit EXACTLY ONE tool call: ask_user(message=\"<the follow-up>\"). No other tools, no prose."
+        "language. Emit EXACTLY ONE tool call: ask_user(message=\"<the follow-up>\")."
+        + _FOLLOWUP_CONTEXT_RULE + " No other tools, no prose."
     )
 
 

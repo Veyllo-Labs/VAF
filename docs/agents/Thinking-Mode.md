@@ -325,7 +325,18 @@ that silences a run; a REPEAT is prevented by the recent/declined dedup prompts,
   status `asked`, not note/todo-sourced, within the recency window). If one exists, the run re-asks **that**
   question as a short, pointed yes/no **follow-up** (`_build_followup_prompt`) instead of inventing a new
   topic, and the delivery **updates that request** (bumps a `followups` counter via `bump_followup`,
-  `set_followup_context`) rather than logging a duplicate. After `thinking_followup_max` (default 3) unanswered
+  `set_followup_context`) rather than logging a duplicate.
+
+  - **A reminder must not become the whole record.** A follow-up is deliberately terse ("Soll ich das
+    einrichten - ja oder nein?"), and it used to REPLACE the substantive question in the request. After
+    one round nothing said what the topic had been - and the person answering on a messenger hours later
+    is exactly the person who asks "what?" rather than yes or no, at which point the MAIN agent owns the
+    topic and can only work from what the request carries. Live 2026-08-30: a "Sollen wir heute mit dem
+    Commit weitermachen?" met "Hey sry was ?" and the main agent asked back which message was meant. The
+    handover itself was fine (`[REPLY_CTX] lane=plain len=919`, question quoted); the payload was empty.
+    So `bump_followup` preserves the subject once in `original_question` and never overwrites it, its
+    `details`/`proposed_action` only ever ENRICH, the follow-up prompt requires both
+    (`_FOLLOWUP_CONTEXT_RULE`), and the pickup note names the subject rather than only the reminder. After `thinking_followup_max` (default 3) unanswered
   follow-ups the topic **rests**: the run does not ask anything (so no new question and no nudge) until the
   user reacts on their own. This prevents the near-duplicate suggestions and repeated nudges that a
   "brand-new topic every run" approach would otherwise produce.
@@ -586,7 +597,7 @@ Thinking mode output is **not shown in the Web UI chat list**. It is logged to:
 | `thinking_declined_questions.json` | Per-user list of refused questions (auto-expire 30 days) |
 | `thinking_notes.db` | Per-user SQLite DB of persistent agent notes (auto-expire 30 days) |
 | `thinking_suggestions/` | Per-user directory for profile suggestions from `save_thinking_suggestion` (review in Settings) |
-| `thinking_requests/<scope>/requests.json` | Per-user background requests + status (`asked`/`replied`/`done`/`declined`; `confirmed` legacy) from `ask_user` or the `thinking_done(message=)` fallback. Fields incl. `proposed_action`, `details` (real content for the handoff), `source_note_id`/`source_todo_id`, `user_reply`/`main_reply` (the captured triple for outcome classification), `needs_reconfirm` |
+| `thinking_requests/<scope>/requests.json` | Per-user background requests + status (`asked`/`replied`/`done`/`declined`; `confirmed` legacy) from `ask_user` or the `thinking_done(message=)` fallback. Fields incl. `proposed_action`, `details` (real content for the handoff), `source_note_id`/`source_todo_id`, `user_reply`/`main_reply` (the captured triple for outcome classification), `needs_reconfirm`, `original_question` (the subject a follow-up would otherwise have overwritten - see [Follow up](#proactive-intelligence-level-2)) |
 | `thinking_run_seq.json` | Per-user monotonic run counter (drives the "recently asked" window and the gate's "this run" boundary) |
 | `automation_planner/<scope>/notes.json` · `todos.json` | Per-user notes/todos - the Level-0 ledger source; a note is cleared by delete or `handled`, a todo by delete or `done` |
 | `workspaces/<scope_key>/` | Per-user Thinking Workspace (tasks, workspace files, handoffs, archives) |

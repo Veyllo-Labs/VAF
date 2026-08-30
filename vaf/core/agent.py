@@ -8317,7 +8317,7 @@ class Agent:
         return "\n".join(parts).strip(), bool(summary)
 
     @staticmethod
-    def _build_reply_pickup_note(q_text, carry, digest, curated, facts) -> str:
+    def _build_reply_pickup_note(q_text, carry, digest, curated, facts, subject="") -> str:
         """Build the system note injected when the user replies to a tracked background question.
 
         Three lanes (incident 2026-07-13: the old note asserted 'CONTINUE the task now' on an
@@ -8329,7 +8329,19 @@ class Agent:
         - handoff without curated findings: treated like a plain question (the digest is dropped -
           in the incident it was garbage), no automation-continuation claim;
         - plain background question: as before, plus the decline/uncertainty guidance.
+
+        `subject` is the ORIGINAL question when this one has been chased. A follow-up is deliberately
+        terse ("Soll ich das einrichten - ja oder nein?"), so quoting only the reminder tells the main
+        agent what was ASKED and not what it was ABOUT. Live 2026-08-30: a user answered "Hey sry was ?"
+        and got a question about which message they meant, because the reminder was all there was.
         Pure function for unit-testability."""
+        _subject = (
+            f" That was a REMINDER; what it is about is: \"{subject}\". Answer about THAT subject - "
+            f"if their reply shows they do not remember it, say what it was, do not ask them which "
+            f"message you mean."
+            if (subject or "").strip() and (subject or "").strip() != (q_text or "").strip()
+            else ""
+        )
         if digest and curated:
             return (
                 f"[Context: The user's message below is a REPLY to a question a BACKGROUND "
@@ -8337,7 +8349,7 @@ class Agent:
                 f"If they CLEARLY agree, continue the task now using THIS context - do not "
                 f"re-derive facts, do not restart.{carry} If they DECLINE, change NOTHING - "
                 f"acknowledge briefly. If their reply is ambiguous or seems unrelated to the "
-                f"question, do NOT act: ask ONE short confirming question first.\n"
+                f"question, do NOT act: ask ONE short confirming question first.{_subject}\n"
                 f"{digest}\n"
                 f"Answer about THAT question only. For THIS turn, IGNORE any earlier <user_intent> "
                 f"or working-memory <Plan> shown above - they are unrelated. The user's reply "
@@ -8345,7 +8357,7 @@ class Agent:
             )
         return (
             f"[Context: The user's message below is a REPLY to a question YOUR background pass "
-            f"asked them: \"{q_text}\".{facts}{carry} If they DECLINE, change NOTHING - "
+            f"asked them: \"{q_text}\".{_subject}{facts}{carry} If they DECLINE, change NOTHING - "
             f"acknowledge briefly. If their reply is ambiguous or seems unrelated to the question, "
             f"do NOT act: ask ONE short confirming question first. Answer about THAT question "
             f"only. For THIS turn, IGNORE any earlier <user_intent> or working-memory <Plan> shown "
@@ -8967,8 +8979,9 @@ class Agent:
                             else:
                                 _facts = (" You do not have the specifics on hand; if the user asks for details, look "
                                           "them up (e.g. web_search) - do NOT make up facts.")
+                            _subject_text = str((_req or {}).get("original_question") or "").strip()
                             self._thinking_reply_context = self._build_reply_pickup_note(
-                                q_text, _carry, _bundle_ctx, _bundle_curated, _facts
+                                q_text, _carry, _bundle_ctx, _bundle_curated, _facts, _subject_text
                             )
                             # Observability (incident lesson: the injected note is mid-list and appears in
                             # no prompt log - the next incident should be a grep, not an inference).

@@ -24,7 +24,10 @@ router = APIRouter(prefix="/api/thinking", tags=["thinking"])
 
 # Whitelisted request fields for the dashboard (never the full record: replies
 # and details stay in the chat/session surfaces).
-_REQUEST_FIELDS = ("id", "question", "status", "needs_reconfirm", "created_at", "updated_at")
+# `original_question` rides along because the panel had the same confusion the chat did: after a
+# follow-up, `question` is the terse reminder and the subject is only in this field.
+_REQUEST_FIELDS = ("id", "question", "original_question", "status", "needs_reconfirm",
+                   "created_at", "updated_at")
 
 
 def _requests_by_key(admin_scope: str) -> Dict[str, List[Dict[str, Any]]]:

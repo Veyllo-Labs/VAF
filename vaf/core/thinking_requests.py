@@ -109,6 +109,8 @@ def add_request(
         "session_id": (session_id or "").strip() or None,
         "bundle_id": (bundle_id or "").strip() or None,
         "kind": (kind or "").strip() or None,
+        # Set by bump_followup on the first follow-up; None while a request has never been chased.
+        "original_question": None,
         "user_reply": None,
         "main_reply": None,
         "needs_reconfirm": False,
@@ -242,9 +244,21 @@ def bump_followup(
     request_id: str,
     new_question: Optional[str] = None,
     run_seq: Optional[int] = None,
+    details: Optional[str] = None,
+    proposed_action: Optional[str] = None,
 ) -> Optional[dict]:
     """Increment a request's follow-up counter and refresh its recency/text. Used when the run re-asks the
-    SAME open (unanswered) question instead of creating a duplicate entry. Returns the updated entry or None."""
+    SAME open (unanswered) question instead of creating a duplicate entry. Returns the updated entry or None.
+
+    The ORIGINAL question is preserved on the first follow-up and never overwritten again. A follow-up is
+    deliberately terse ("Soll ich das einrichten - ja oder nein?"), and it used to REPLACE the substantive
+    question it was chasing, so after one round nothing in the record said what the topic had been. The
+    main agent then picked up a reply to that terse line with nothing to talk about: live 2026-08-30, a
+    user answered "Hey sry was ?" and got back a question about which message they meant, because the
+    record held the reminder and not the subject.
+
+    `details` and `proposed_action` only ever ENRICH: a follow-up that carries substance fills a gap the
+    original left, and one that carries none must not blank what the original knew."""
     path = _path(user_scope_id)
     items = _load(path)
     updated = None
@@ -252,7 +266,14 @@ def bump_followup(
         if isinstance(e, dict) and e.get("id") == request_id:
             e["followups"] = int(e.get("followups") or 0) + 1
             if new_question:
+                # Keep the subject before the reminder replaces it - once, on the first follow-up.
+                if not (e.get("original_question") or "").strip():
+                    e["original_question"] = str(e.get("question") or "").strip()[:1000] or None
                 e["question"] = str(new_question).strip()[:1000]
+            if (details or "").strip():
+                e["details"] = str(details).strip()[:4000]
+            if (proposed_action or "").strip():
+                e["proposed_action"] = str(proposed_action).strip()[:500]
             if run_seq is not None:
                 e["run_seq"] = int(run_seq)
             e["status"] = "asked"

@@ -89,6 +89,37 @@ The same automation calendar UI includes a **per-user planner**:
 
 Planner data is loaded when the calendar is opened (footer or Settings). Create/update/delete use WebSocket messages; the agent can manage the same data via tools: `add_automation_note`, `add_automation_todo`, `list_automation_notes`, `list_automation_todos`, `delete_automation_note`, `delete_automation_todo`. See [WEBUI_WEBSOCKET_FLOW.md](../web-ui/WEBUI_WEBSOCKET_FLOW.md) for message formats.
 
+## Run log, and what may be said about an automation
+
+Until recently the only trace an automation left was `last_run`, and
+`_stamp_successful_run` writes it **only on success**. A job that errored every
+morning and a machine that was switched off for a week therefore left
+byte-identical records, and nothing could honestly be said about either.
+
+Each task now keeps a bounded run log beside its own file -
+`<task_id>.runs.json` in the same per-user directory, format `autorun-1-7c41d9`,
+the last 50 outcomes with status, start time and duration. It is written where
+the outcome is known (`append_run_log`, both the ordinary path and the
+workflow-success path, which returns earlier), follows the task into and out of
+the trash, and is read back with `load_run_log`. A missing log is normal: it
+only starts existing once the task has run again.
+
+`review_findings()` in [vaf/core/automation.py](../../vaf/core/automation.py)
+computes what can be checked from those records: never completed, no successful
+run since a date, disabled and forgotten, two automations in the same time slot,
+near-identical instructions, and - once the log has entries - repeated recorded
+errors. The background agent's automation-review rung phrases ONE of them and
+proposes a fix; it cannot edit an automation itself (the write tools are refused
+on that node). See [Thinking-Mode.md](../agents/Thinking-Mode.md#proactive-intelligence-level-2).
+
+**What is deliberately NOT a finding:** a "dead output path". `run_task`
+resolves folder aliases (`Desktop`, `downloads`) against the home directory and
+creates a missing output directory before writing, so a bare existence check
+flags a relative alias that works and an absolute path the next run would simply
+create. The one case that is a real problem - a path VAF cannot create - makes
+the run fail, and a failed run is now in the log, where it is reported from
+evidence rather than from a guess.
+
 ## Related
 
 - [WEB_UI.md](../web-ui/WEB_UI.md) – Settings → Automations and automation calendar UI.

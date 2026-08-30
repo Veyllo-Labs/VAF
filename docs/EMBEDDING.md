@@ -972,6 +972,29 @@ Two limits, stated plainly:
   contract.** They exist for VAF's own lanes and may change without a major
   version; the table above is what is kept.
 
+### If you build your own loop: keep a way to stop
+
+Worth stating because VAF learned it the expensive way. If your loop ever asks a
+provider for a tool call it *must* make - OpenAI's `tool_choice="required"`, or
+any equivalent - then the tool set you send has to contain something the model
+can call to FINISH. Narrow that set anywhere (a size cap, a router, a
+context-pressure fallback) and the terminating tool can silently fall out of it;
+the model is then obliged to call a tool and owns none that ends the turn, so it
+re-calls whatever is left until a cap stops it. One of VAF's own background runs
+spent twelve tool turns re-calling a tool that kept refusing.
+
+Two things follow, and neither is specific to VAF:
+
+- **Pin the terminating tool through every narrowing**, in code. A tool that is
+  merely "usually selected" is not pinned.
+- **Never let a tool's error text be the only thing bounding a retry.** If a
+  refusal says "try again", something outside the model has to count the tries -
+  and it has to count them where the retry actually happens, which is inside one
+  request/response round, not in whatever loop wraps it.
+
+`ToolCaller` does not force tool calls, so it cannot produce this on its own; the
+warning is for the loop you write around it.
+
 ---
 
 ## Running a voice turn yourself: `VoiceTurnEngine`

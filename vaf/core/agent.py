@@ -1483,19 +1483,39 @@ class Agent:
                 return msg.get("content", user_question)
         return user_question
 
-    def _forcing_this_generation(self) -> bool:
-        """Is THIS generation the one the caller forced a tool call on?
+    def _take_forced_tool_choice(self, current_tools):
+        """Consume this step's ONE forced generation and record that this round is it.
 
-        Derived, never stored. A stored twin of this (`_thinking_force_progress`) was set
-        from `force_tool_choice` and never reset, while `_force_tool_choice_used` flips
-        after the first generation - so the two disagreed for the rest of the step and the
-        read-cap kept blocking every gather tool long after the force was gone. Computing it
-        deletes the second source of truth instead of adding a reset path that the next
-        early-return would forget again.
+        Returns the tool_choice to send, or None. Three request-building branches used to
+        carry this three-line dance by hand; having them share it is what keeps the snapshot
+        below from being forgotten in one of them.
+
+        The snapshot matters because the two events happen at different times: the flag is
+        spent while the REQUEST is built, and the read-cap that depends on it runs later,
+        while the tool calls that request produced are processed. Deriving the answer from
+        `_force_tool_choice_used` at that later moment therefore always said "not forced" -
+        the forced node's gather block never fired for the very generation it exists to
+        constrain. And storing it without a per-round reset is the opposite defect, the one
+        that made the block outlive the force. Set on every round, true on exactly one.
         """
-        return bool(getattr(self, "_force_tool_choice", None)) and not getattr(
-            self, "_force_tool_choice_used", False
+        forced = (
+            bool(current_tools)
+            and bool(getattr(self, "_force_tool_choice", None))
+            and not getattr(self, "_force_tool_choice_used", False)
         )
+        self._forced_round = forced
+        if forced:
+            self._force_tool_choice_used = True
+            return self._force_tool_choice
+        return None
+
+    def _forcing_this_generation(self) -> bool:
+        """Is the generation whose tool calls are being processed right now the forced one?
+
+        Reads the per-round snapshot taken by `_take_forced_tool_choice`, never the spent
+        flag - see the note there for why the two cannot be the same value.
+        """
+        return bool(getattr(self, "_forced_round", False))
 
     def _ensure_thinking_exit_tools(self) -> None:
         """Guarantee a thinking run can always reach the user and always stop.
@@ -8767,6 +8787,7 @@ class Agent:
         # tool (ask_user / delete_* / thinking_done) — the model cannot escape into search/prose.
         self._force_tool_choice = force_tool_choice if (force_tool_choice and thinking_mode) else None
         self._force_tool_choice_used = False  # force only the FIRST generation, then revert to auto
+        self._forced_round = False            # snapshot: is the round being PROCESSED the forced one
         # Which NODE of the thinking ladder this step is, so the read-cap can answer with the block
         # text and the budget that node actually earns. "" for every non-thinking turn.
         self._thinking_node = (thinking_node or "") if thinking_mode else ""
@@ -9577,9 +9598,9 @@ class Agent:
                     # callability without a different array, the router's pick
                     # becomes the restriction and the array stays byte-identical.
                     current_tools, tool_choice = self._tools_and_choice(disable_tools)
-                    if current_tools and getattr(self, "_force_tool_choice", None) and not self._force_tool_choice_used:
-                        tool_choice = self._force_tool_choice  # forced-resolution node: model MUST emit a tool
-                        self._force_tool_choice_used = True     # only the first generation is forced
+                    _forced = self._take_forced_tool_choice(current_tools)
+                    if _forced:
+                        tool_choice = _forced   # forced-resolution node: model MUST emit a tool
 
                     first_token = True
                     # json, sys, escape already imported globally
@@ -9827,9 +9848,9 @@ class Agent:
                         # Disable tools if requested (forces text response)
                         current_tools = self.TOOLS if not disable_tools else None
                         current_tool_choice = "auto" if not disable_tools else "none"
-                        if current_tools and getattr(self, "_force_tool_choice", None) and not self._force_tool_choice_used:
-                            current_tool_choice = self._force_tool_choice  # forced-resolution node
-                            self._force_tool_choice_used = True             # only the first generation is forced
+                        _forced = self._take_forced_tool_choice(current_tools)
+                        if _forced:
+                            current_tool_choice = _forced   # forced-resolution node
 
                         payload = {
                              "messages": prepared_messages,
@@ -10241,9 +10262,9 @@ class Agent:
                 prepared_messages = self._append_turn_block(prepared_messages)
                 _lib_tools = self.TOOLS if not disable_tools else None
                 _lib_tool_choice = "auto" if _lib_tools else "none"
-                if _lib_tools and getattr(self, "_force_tool_choice", None) and not self._force_tool_choice_used:
-                    _lib_tool_choice = self._force_tool_choice
-                    self._force_tool_choice_used = True
+                _forced = self._take_forced_tool_choice(_lib_tools)
+                if _forced:
+                    _lib_tool_choice = _forced
                 # The local sibling lane already reads this key; sharing it is what
                 # stops a fourth output cap from drifting away from the other three.
                 _lib_max_tokens = int(Config.get("max_generation_tokens", 10000) or 10000)

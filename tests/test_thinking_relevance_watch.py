@@ -251,9 +251,11 @@ def test_prompt_requires_a_verifiable_source():
 def test_the_relevance_nudge_offers_silence_as_a_first_class_option():
     ns = types.SimpleNamespace(_run_kind="thinking", _thinking_node="relevance",
                                _thinking_read_counts={}, _force_tool_choice="required",
-                               _force_tool_choice_used=False)
+                               _force_tool_choice_used=False, _forced_round=False)
     ns._is_thinking_run = types.MethodType(Agent._is_thinking_run, ns)
     ns._forcing_this_generation = types.MethodType(Agent._forcing_this_generation, ns)
+    ns._take_forced_tool_choice = types.MethodType(Agent._take_forced_tool_choice, ns)
+    ns._take_forced_tool_choice(["web_search"])   # the forced REQUEST is built first
     blocked = Agent._thinking_read_cap_step(ns, "web_search")
     assert blocked and blocked.startswith("[BLOCKED]")
     assert "thinking_done" in blocked

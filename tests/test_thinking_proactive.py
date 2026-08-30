@@ -56,14 +56,18 @@ def test_proactive_decide_nudge_replaces_housekeeping_block(monkeypatch):
         """A thinking-run stand-in: declares its run kind and its ladder node, and carries the
         REAL predicates, so it cannot pass while the agent's own answers differ.
 
-        The force is expressed through the two attributes it is DERIVED from. A stored twin of
-        that answer existed and was never reset, so it outlived the forced generation."""
+        The forced round is entered the way the product enters it - by building the forced
+        request - because the flag is spent there and read later, while that request's tool
+        calls are processed."""
         ns = SimpleNamespace(
             _run_kind="thinking", _thinking_read_counts={}, _thinking_node=node,
-            _force_tool_choice="required", _force_tool_choice_used=False, **kw
+            _force_tool_choice="required", _force_tool_choice_used=False,
+            _forced_round=False, **kw
         )
         ns._is_thinking_run = types.MethodType(Agent._is_thinking_run, ns)
         ns._forcing_this_generation = types.MethodType(Agent._forcing_this_generation, ns)
+        ns._take_forced_tool_choice = types.MethodType(Agent._take_forced_tool_choice, ns)
+        ns._take_forced_tool_choice(["web_search"])   # the forced REQUEST is built first
         return ns
     # proactive step, a non-search tool is reached for -> decision nudge (no delete_automation_note)
     fake = _fake(node="proactive", _thinking_allow_search=True)

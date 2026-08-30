@@ -22,9 +22,12 @@ def _obj(run_kind="thinking", node=""):
     `self._is_thinking_run()` and `self._forcing_this_generation()`, and a stand-in that
     answered either question its own way would keep passing if the two ever disagreed.
     """
-    ns = types.SimpleNamespace(_run_kind=run_kind, _thinking_node=node)
+    ns = types.SimpleNamespace(_run_kind=run_kind, _thinking_node=node,
+                               _force_tool_choice=None, _force_tool_choice_used=False,
+                               _forced_round=False)
     ns._is_thinking_run = types.MethodType(Agent._is_thinking_run, ns)
     ns._forcing_this_generation = types.MethodType(Agent._forcing_this_generation, ns)
+    ns._take_forced_tool_choice = types.MethodType(Agent._take_forced_tool_choice, ns)
     return ns
 
 
@@ -85,12 +88,12 @@ def test_forced_node_blocks_gather_on_first_call():
     """On a forced-resolution node, gather tools are blocked from call #1 so a forced
     tool_choice='required' can only be satisfied by a decisive tool.
 
-    Sets the two REAL attributes the force is derived from, not a stored twin of the answer:
-    that twin existed, was never reset, and kept the block alive for the whole step."""
+    Goes through the real request-build step rather than setting the flags by hand, so the
+    block is exercised in the order the product actually produces it."""
     o = _obj(node="forced_item")
     o._force_tool_choice = "required"
-    o._force_tool_choice_used = False
-    blocked = _cap(o, "web_search")
+    assert o._take_forced_tool_choice(["web_search"]) == "required"   # the request is built...
+    blocked = _cap(o, "web_search")                                   # ...then its calls are processed
     assert blocked is not None and "Gathering is disabled" in blocked
     assert _cap(o, "memory_search") is not None
     # a decisive/progress tool is still allowed even on a forced node
@@ -98,19 +101,24 @@ def test_forced_node_blocks_gather_on_first_call():
     assert _cap(o, "delete_automation_note") is None
 
 
-def test_force_progress_is_derived_not_stored():
-    """The block covers ONLY the generation that is actually forced.
+def test_the_block_covers_the_forced_round_and_only_that_round():
+    """Walked in the REAL order, because the two halves happen at different times.
 
-    `_force_tool_choice_used` flips to True after the first generation. The stored twin never
-    followed, so gather stayed blocked for the rest of the step - which is how a node that had
-    no open item kept telling the model to resolve one, with listing blocked so it could never
-    find out there was none."""
+    The forced flag is spent while the REQUEST is built; the read-cap runs later, while the
+    tool calls that request produced are processed. A version that recomputed the answer from
+    the spent flag at that later moment always said "not forced", so the block never fired for
+    the generation it exists to constrain - and a version that stored it without a per-round
+    reset kept the block alive for the whole step. Only the per-round snapshot is both."""
     o = _obj(node="forced_item")
     o._force_tool_choice = "required"
-    o._force_tool_choice_used = False
-    assert _cap(o, "web_search") is not None          # forced generation -> blocked outright
-    o._force_tool_choice_used = True                  # the force is spent
-    assert _cap(o, "web_search") is None              # gather is allowed again (still counted)
+
+    assert o._take_forced_tool_choice(["web_search"]) == "required"
+    assert _cap(o, "web_search") is not None, \
+        "the forced round's own tool calls escaped the gather block"
+
+    # next round: the force is spent, so the request is not forced and gather reopens
+    assert o._take_forced_tool_choice(["web_search"]) is None
+    assert _cap(o, "web_search") is None
 
 
 def test_getto_node_nudge_is_answerable_on_that_node():
@@ -120,7 +128,7 @@ def test_getto_node_nudge_is_answerable_on_that_node():
     note id, which is unobtainable because listing notes is exactly what is blocked."""
     o = _obj(node="getto")
     o._force_tool_choice = "required"
-    o._force_tool_choice_used = False
+    o._take_forced_tool_choice(["list_automation_notes"])
     blocked = _cap(o, "list_automation_notes")
     assert blocked is not None
     assert "ask_user(message=" in blocked

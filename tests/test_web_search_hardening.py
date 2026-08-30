@@ -103,3 +103,46 @@ def test_cache_key_is_stable_for_one_user():
     t = WebSearchTool()
     assert (t._ws_cache_key("q", 5, True, False, "uq", "scope-a")
             == t._ws_cache_key("q", 5, True, False, "uq", "scope-a"))
+
+
+def _cacheable_tool(monkeypatch, tmp_path, *, shared_instance):
+    t = WebSearchTool()
+    monkeypatch.setattr(t, "_ws_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(search, "reset_search_provider_errors", lambda: None)
+    monkeypatch.setattr(search, "get_web_search_results",
+                        lambda q, n, **kw: ([{"title": "T", "href": "https://e.invalid", "body": "B"}],
+                                            "DuckDuckGo", None))
+    monkeypatch.setattr(search.Config, "get", staticmethod(
+        lambda k, d=None: {"web_search_cache_enabled": True,
+                           "web_search_cache_ttl_seconds": 900,
+                           "local_network_enabled": shared_instance}.get(k, d)))
+    return t
+
+
+def test_an_unscoped_call_is_not_cached_on_a_shared_instance(monkeypatch, tmp_path):
+    """The cache directory is shared and holds query and result in clear text, so an entry keyed
+    on an EMPTY scope is a bucket every unscoped caller reads from and writes to. Where more than
+    one identity can reach the machine, that is refused - the same rule the memory lane applies to
+    a missing scope, deliberately not a second one."""
+    t = _cacheable_tool(monkeypatch, tmp_path, shared_instance=True)
+    reads = {"n": 0}
+    monkeypatch.setattr(t, "_ws_cache_get", lambda key, ttl: reads.__setitem__("n", reads["n"] + 1) or None)
+
+    t.run(query="wetter berlin", deep=False, user_scope_id="")
+    assert reads["n"] == 0, "an unscoped call looked in the shared cache"
+    assert list(tmp_path.glob("*.json")) == [], "an unscoped call wrote into the shared cache"
+
+
+def test_an_unscoped_call_still_caches_on_a_single_user_install(monkeypatch, tmp_path):
+    """Refusing everywhere would silently switch caching off for every lane that does not get an
+    identity injected. With exactly one identity on the machine there is no one to leak to, so the
+    entry is filed under the local admin - again mirroring the memory lane."""
+    t = _cacheable_tool(monkeypatch, tmp_path, shared_instance=False)
+    t.run(query="wetter berlin", deep=False, user_scope_id="")
+    assert list(tmp_path.glob("*.json")), "single-user install lost its search cache"
+
+
+def test_a_scoped_call_always_caches(monkeypatch, tmp_path):
+    t = _cacheable_tool(monkeypatch, tmp_path, shared_instance=True)
+    t.run(query="wetter berlin", deep=False, user_scope_id="scope-a")
+    assert list(tmp_path.glob("*.json")), "a scoped call must still fill the cache"

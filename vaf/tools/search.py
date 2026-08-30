@@ -471,16 +471,36 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
 
             # ── result cache lookup: serve identical queries from the cache ──
             _cache_ttl = int(Config.get("web_search_cache_ttl_seconds", 900) or 0)
+            # WHOSE cache entry this is. An entry keyed on an EMPTY scope is a bucket every
+            # unscoped caller reads from and writes to, and the files hold the query and the
+            # result in clear text - so on a shared instance one person's search would be served
+            # to another. Resolved exactly the way the memory lane already resolves a missing
+            # scope (vaf/memory/rag.py): refuse when more than one identity can reach this
+            # machine, fall back to the local admin when only one can. Deliberately the same
+            # rule and not a second one, so the two cannot drift apart.
+            _cache_scope = str(kwargs.get("user_scope_id") or "").strip()
+            if not _cache_scope:
+                try:
+                    _shared_instance = bool(Config.get("local_network_enabled", False))
+                except Exception:
+                    _shared_instance = True     # cannot tell -> treat as shared
+                if not _shared_instance:
+                    try:
+                        from vaf.core.config import get_local_admin_scope_id
+                        _cache_scope = str(get_local_admin_scope_id() or "").strip()
+                    except Exception:
+                        _cache_scope = ""
             _cache_eligible = (
                 bool(Config.get("web_search_cache_enabled", True))
                 and not return_raw
                 and not open_in_browser
                 and _cache_ttl > 0
+                and bool(_cache_scope)
             )
             _cache_key = None
             if _cache_eligible:
                 _cache_key = self._ws_cache_key(query, max_results, deep, trusted_sources_only,
-                                                user_question, kwargs.get("user_scope_id"))
+                                                user_question, _cache_scope)
                 _cached = self._ws_cache_get(_cache_key, _cache_ttl)
                 if _cached is not None:
                     UI.event("Web Search", f"Cache hit ({query[:60]})", style="dim")

@@ -424,12 +424,15 @@ def set_waiting_for_reply(
     session_id is the web session the question was delivered to (the anchor/web fallback), so the nudge/escalation
     lands in the SAME chat instead of re-picking the 'latest' session.
     channel is where the question was actually delivered ("telegram"/"whatsapp"/"discord"/"web"); when it is a
-    messenger and the user never answers, _process_waiting_reply escalates ONCE to the Web UI (escalated_to_web)."""
+    messenger and the user never answers, _process_waiting_reply escalates ONCE to the Web UI (escalated_to_web).
+    Setting a new question always re-opens the chase (chase_ended_at_ts back to None): the newest question is the
+    one being waited on, and it replaces whatever was in this slot."""
     key = _key(user_scope_id)
     data = _load_waiting()
     data[key] = {
         "question_sent_at_ts": time.time(),
         "nudge_sent_at_ts": None,
+        "chase_ended_at_ts": None,
         "username": (username or "").strip() or "admin",
         "display_name": (display_name or username or "admin").strip() or "admin",
         "question_text": (question_text or "")[:500],
@@ -497,8 +500,44 @@ def clear_waiting_for_reply(
         _save_waiting(data)
 
 
+def end_reply_chase(user_scope_id: Optional[str]) -> None:
+    """Stop CHASING an unanswered question, but keep the record so a late reply is still understood.
+
+    Two different things were one thing here, and conflating them is what made the agent blind:
+
+    - chasing (nudge at 3 min, escalate once, then stop) is about not pestering the user;
+    - remembering WHAT was asked is about understanding their answer whenever it comes.
+
+    Deleting the record at the 10-minute give-up ended both at once, so a reply that arrived half an
+    hour later reached a main agent with no idea a question was ever asked - it answered as if nothing
+    had been raised (live incident: question escalated to the web chat at 11:49:50, given up at
+    11:59:51, the user answered at 12:31 and got a blank "nothing much going on"). The record now
+    outlives the chase and is bounded by `thinking_reply_wait_ttl_hours` (the same TTL that already
+    guards a latch left behind by a crashed or disabled thinking mode) instead of by ten minutes.
+
+    Idempotent; a missing entry is a no-op.
+    """
+    key = _key(user_scope_id)
+    data = _load_waiting()
+    entry = data.get(key)
+    if entry is None or entry.get("chase_ended_at_ts"):
+        return
+    entry["chase_ended_at_ts"] = time.time()
+    _save_waiting(data)
+
+
+def chase_is_active(entry: Optional[Dict[str, Any]]) -> bool:
+    """Is this waiting record still being chased (nudges/escalation), rather than only kept for a late
+    reply? Callers that mean "the agent is blocked on the user" ask this; callers that mean "what did we
+    ask them" use the record itself."""
+    return bool(entry) and not entry.get("chase_ended_at_ts")
+
+
 def get_waiting_for_reply(user_scope_id: Optional[str]) -> Optional[Dict[str, Any]]:
     """Return waiting state for this user or None.
+
+    A record whose chase has ended (`chase_ended_at_ts`) is still returned: it is what lets the main
+    agent understand a late reply. Use `chase_is_active()` to ask the other question.
 
     TTL safety net: the normal lifecycle skips an unanswered question after
     ~10 minutes (_process_waiting_reply) - but only when a thinking run
@@ -737,12 +776,17 @@ def _escalate_question_to_web(user_scope_id: Optional[str], w: Dict[str, Any], c
 
 def _process_waiting_reply(user_scope_id: Optional[str]) -> str:
     """
-    If user is in 'waiting for reply' state: send nudge at 3 min, clear at 10 min.
-    Returns: 'allow_run' (no waiting or just cleared), 'skip' (still waiting or nudge sent).
+    If user is in 'waiting for reply' state: send nudge at 3 min, stop chasing at 10 min.
+    Returns: 'allow_run' (nothing to chase any more), 'skip' (still waiting or nudge sent).
+
+    "Stop chasing" is not "forget": the question record stays readable for the main agent until the
+    TTL, so a reply that arrives later is still understood (see end_reply_chase).
     """
     from vaf.core.config import Config
     w = get_waiting_for_reply(user_scope_id)
-    if not w:
+    if not chase_is_active(w):
+        # No record, or one we already gave up chasing. Runs are free to proceed; the record is kept
+        # for the main agent alone and must not nudge, escalate or block a run a second time.
         return "allow_run"
     try:
         question_ts = float(w.get("question_sent_at_ts", 0))
@@ -790,10 +834,12 @@ def _process_waiting_reply(user_scope_id: Optional[str]) -> str:
                     data[key]["question_sent_at_ts"] = now  # fresh web window
                     data[key]["nudge_sent_at_ts"] = None
                     _save_waiting(data)
-                logger.info("Thinking: %s question unanswered — escalated once to Web UI", ch)
+                logger.info("Thinking: %s question unanswered - escalated once to Web UI", ch)
                 return "skip"
-            # No reachable web chat to escalate to — fall through and give up.
-        clear_waiting_for_reply(user_scope_id)
+            # No reachable web chat to escalate to - fall through and stop chasing.
+        # Stop chasing, KEEP the question: the user may still answer, and the main agent needs to
+        # know what they are answering when they do.
+        end_reply_chase(user_scope_id)
         return "allow_run"
     if nudge_ts is None:
         if _send_nudge(
@@ -3745,6 +3791,11 @@ def thinking_status_snapshot() -> Dict[str, Dict[str, Any]]:
             sent_ts = float(w.get("question_sent_at_ts") or 0)
             if ttl_h > 0 and sent_ts > 0 and (now - sent_ts) > ttl_h * 3600:
                 w = None  # expired: skip (read-only - the lifecycle owns deletion)
+            elif not chase_is_active(w):
+                # The chase is over; the record only survives so a late reply is understood. The
+                # panel's line is "waiting for a reply", and that has stopped being true - the open
+                # question stays visible in the same panel's request list with its 'asked' badge.
+                w = None
         out[key] = {
             "running": bool(lock) and (now - started_ts) < 30 * 60,
             "run_started_ts": started_ts or None,

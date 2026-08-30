@@ -67,6 +67,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **The server dashboard's log pane no longer garbles every line on Windows.** `vaf top`
+  followed an appended log by splitting on the line feed alone, so on Windows - where a log
+  written in text mode ends each line with a carriage return as well - every line it drew
+  carried a stray carriage return. In a terminal that is not cosmetic: it sends the cursor
+  back to the start of the line and overwrites what was just drawn. The backfill path was
+  always correct; the two line splitters in the same component simply disagreed.
+- **A message VAF sends on its own no longer overwrites the answer above it in the chat.**
+  When VAF asked something on Telegram, got no reply and followed up in the web chat, its
+  "are you there?" appeared glued to the end of the previous turn while the reply you had
+  already read disappeared into that turn's collapsed action list. The chat groups everything
+  between two of your messages into one turn and shows the last part as the answer, and a
+  message nobody asked for has no message of yours in front of it, so it was counted as part
+  of the turn before it. Such messages - a thinking-run question, its follow-up, a fired timer
+  and an automation result - now always stand on their own, in the live chat and after a
+  reload, with their own time and their own avatar animation.
 - **A background thinking run can no longer get stuck asking the same question.** When the
   agent had nothing concrete to suggest and fell back to a friendly get-to-know question,
   every attempt could be rejected as "too similar to one you already asked" - and the

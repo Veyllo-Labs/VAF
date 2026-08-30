@@ -35,6 +35,11 @@ def _wire(monkeypatch, tmp_path, running=None, tty=True):
         pid = 4321
         def wait(self, timeout=None):
             return 0
+        def terminate(self):
+            # The Windows stop path. _stop_spawned_tray tries the process GROUP first and
+            # falls back to this when os.killpg is unavailable, so a fake without it made
+            # the fallback vanish into the product's own except-clause.
+            calls["killpg"].append(("terminate", self.pid))
 
     monkeypatch.setattr(main_mod.os, "isatty", lambda fd: tty)
     monkeypatch.delenv("VAF_NATIVE_WRAPPER", raising=False)
@@ -46,9 +51,12 @@ def _wire(monkeypatch, tmp_path, running=None, tty=True):
                         lambda **kw: calls.__setitem__("top", calls["top"] + 1))
     monkeypatch.setattr(main_mod.subprocess, "Popen",
                         lambda argv, **kw: calls["popen"].append(argv) or FakeProc())
-    monkeypatch.setattr(main_mod.os, "getpgid", lambda pid: pid)
+    # raising=False: os.getpgid/os.killpg are POSIX-only and do not exist on Windows, where
+    # monkeypatch.setattr would fail the test at setup instead of exercising anything. The
+    # product already treats their absence as "use proc.terminate() instead".
+    monkeypatch.setattr(main_mod.os, "getpgid", lambda pid: pid, raising=False)
     monkeypatch.setattr(main_mod.os, "killpg",
-                        lambda pgid, sig: calls["killpg"].append((pgid, sig)))
+                        lambda pgid, sig: calls["killpg"].append((pgid, sig)), raising=False)
     monkeypatch.setitem(sys.modules, "vaf.tray", types.SimpleNamespace(
         run_app=lambda: calls.__setitem__("run_app", calls["run_app"] + 1),
         run_headless=lambda: calls.__setitem__("run_headless", calls["run_headless"] + 1),
@@ -66,6 +74,8 @@ def test_interactive_tray_spawns_child_and_takes_the_dashboard(monkeypatch, tmp_
     assert len(calls["popen"]) == 1
     assert "--no-top" in calls["popen"][0], "the child must never recurse into the dashboard"
     assert calls["top"] == 1
+    # Asserts the CONTRACT, not one platform's mechanism: the spawned tray is stopped, by
+    # the process group where that exists and by terminate() where it does not.
     assert calls["killpg"], "leaving the dashboard must stop the tray we spawned"
     assert calls["run_app"] == 0
 
@@ -227,13 +237,15 @@ def test_the_wrapper_only_drops_a_pid_record_that_is_still_its_own(monkeypatch, 
     import vaf.cli.cmd.service as service_mod
     pf = tmp_path / "service.pid"
     monkeypatch.setattr(service_mod, "_pid_file", lambda: pf)
-    monkeypatch.setattr(main_mod.os, "getpgid", lambda pid: pid)
-    monkeypatch.setattr(main_mod.os, "killpg", lambda pgid, sig: None)
+    monkeypatch.setattr(main_mod.os, "getpgid", lambda pid: pid, raising=False)
+    monkeypatch.setattr(main_mod.os, "killpg", lambda pgid, sig: None, raising=False)
 
     class P:
         pid = 111
         def wait(self, timeout=None):
             return 0
+        def terminate(self):
+            return None
 
     pf.write_text("222")                       # a NEWER service owns the record
     main_mod._stop_spawned_tray(P())

@@ -360,8 +360,13 @@ class WebInterfaceManager:
         agent turn to attach to. The streaming `agent_message_update` path would
         otherwise overwrite the last assistant bubble or drop the text entirely.
 
-        `kind` (optional) tags a system-activity / wake-up message (e.g. "timer") so the
-        Web UI can render it in its own left-side area with a kind-specific look.
+        `kind` tags the message as system activity (e.g. "timer", "thinking", "nudge",
+        "automation"). It decides the look, and it is also what makes the standalone
+        property survive into the TRANSCRIPT: the web UI groups a turn's assistant
+        messages into one actions timeline, and a proactive message it cannot recognise
+        lands inside the preceding turn and takes over its answer bubble. So every
+        proactive lane passes one, and persists it on the stored message; that pairing is
+        pinned in tests/test_proactive_bubbles_stand_alone.py.
         """
         payload = {
             "type": "agent_message_append",

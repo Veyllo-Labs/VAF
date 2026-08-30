@@ -312,7 +312,13 @@ class _LogTail:
             lines = data.split(b"\n")
             self._carry = lines.pop()    # unfinished last line waits for its newline
             for raw in lines:
-                self._buffer.append(raw.decode("utf-8", errors="replace"))
+                # Drop the CR of a CRLF. A log written in text mode on Windows ends every
+                # line with \r\n, and splitting on \n alone leaves the CR attached - which in
+                # a terminal dashboard is not cosmetic: a stray carriage return sends the
+                # cursor back to column 0 and overwrites the line being drawn. The backfill
+                # path above never had this because splitlines() already handles CRLF; the
+                # two line-splitters in this class simply disagreed.
+                self._buffer.append(raw.rstrip(b"\r").decode("utf-8", errors="replace"))
         except Exception:
             pass
 

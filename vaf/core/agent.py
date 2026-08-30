@@ -12083,8 +12083,11 @@ class Agent:
                 # (_reply_needs_user), with a last-line "?" heuristic as fallback.
                 _ac_needs_user = False
                 try:
-                    from vaf.core.thinking_mode import get_waiting_for_reply
-                    if get_waiting_for_reply(getattr(self, "_current_user_scope_id", None)):
+                    from vaf.core.thinking_mode import chase_is_active, get_waiting_for_reply
+                    # An ACTIVE chase means the agent is blocked on the user. A record whose chase has
+                    # ended is kept only so a late reply is still understood - it is not a reason to
+                    # hold the brake down for the rest of the TTL.
+                    if chase_is_active(get_waiting_for_reply(getattr(self, "_current_user_scope_id", None))):
                         _ac_needs_user = True
                 except Exception:
                     pass

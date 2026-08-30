@@ -44,9 +44,12 @@ class Message:
     # the agent aware of its own tool calls and their results across reloads.
     tool_call_id: Optional[str] = None
     name: Optional[str] = None
-    # Proactive-bubble tag ("thinking" / "nudge" / "timer") that drives the per-bubble
-    # agent-avatar animation in the Web UI. Persisted so the animation survives a reload /
-    # chat-switch (to_dict omits it when None; from_dict tolerates old sessions without it).
+    # Proactive-bubble tag ("thinking" / "nudge" / "timer" / "automation") that drives the
+    # per-bubble agent-avatar animation in the Web UI. Persisted so the animation survives a
+    # reload / chat-switch (to_dict omits it when None; from_dict tolerates old sessions
+    # without it). It is also the marker that keeps such a message OUT of the preceding
+    # turn's actions timeline: a message nobody asked for belongs to no turn, and one the
+    # transcript cannot recognise takes over that turn's answer bubble.
     kind: Optional[str] = None
 
     def to_dict(self) -> Dict:

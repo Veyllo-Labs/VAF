@@ -384,13 +384,16 @@ def _push_result_to_web_ui(
 
         loaded = sm.load(sid)
         if loaded:
-            loaded.add_message(role="assistant", content=web_msg)
+            # The kind is persisted too, not only emitted: after a reload the transcript
+            # has nothing else to tell a proactive message from the tail of the turn
+            # before it, and one it cannot recognise gets folded into that turn.
+            loaded.add_message(role="assistant", content=web_msg, kind="automation")
             sm.save(loaded)
         if wi:
-            # Append as a standalone bubble — automation results are proactive and
+            # Append as a standalone bubble - automation results are proactive and
             # have no live agent turn, so the streaming update path would overwrite
             # the previous reply instead of showing a new "done" message.
-            wi.emit_agent_message_append(web_msg, session_id=sid)
+            wi.emit_agent_message_append(web_msg, session_id=sid, kind="automation")
             wi.emit_session_unread(sid)
         web_ok = True
     except Exception as _e:

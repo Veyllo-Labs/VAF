@@ -488,3 +488,70 @@ def test_contained_path_refuses_a_rooted_fragment_under_windows_semantics(tmp_pa
     with mock.patch.object(os, "path", ntpath):
         with pytest.raises(vaf.PathEscape, match="must be relative"):
             vaf.contained_path(tmp_path, "/etc/escape.txt")
+
+
+# ── 3. POSIX-only os attributes patched where they do not exist ───────────────
+#
+# The class, measured when it went red: 10 `monkeypatch.setattr(<mod>.os, "<posix
+# name>", ...)` calls across two test files. On Linux every one of them succeeds
+# and the tests are green; on Windows the attribute does not exist, so setattr
+# raises at SETUP and the test fails before it has exercised anything - which is
+# a failure of the harness, not a finding about the product. Five such tests took
+# the Windows leg red 27 minutes into a push while the whole local suite was
+# green, because this machine has every one of these attributes.
+#
+# The product itself is fine either way: its POSIX calls sit inside try/except and
+# fall back to the portable path. Only the patching needs to say so.
+#
+# Two spellings are accepted, both mechanical:
+#   * `raising=False` on the call - the patch becomes a no-op and the test runs
+#     the platform's real fallback, which is the more useful of the two; or
+#   * a module-level skip keyed on `hasattr(os, ...)`, the pattern
+#     tests/test_stop_frontend_safety.py established.
+
+_POSIX_ONLY_OS_ATTRS = (
+    "getpgid", "killpg", "setsid", "getuid", "geteuid", "getgid", "setpgrp",
+    "fork", "forkpty", "getppid", "nice", "wait3", "wait4", "WIFEXITED",
+)
+
+_POSIX_PATCH_RE = re.compile(
+    r"monkeypatch\.setattr\(\s*[^,]*\bos\s*,\s*[\"'](" + "|".join(_POSIX_ONLY_OS_ATTRS) + r")[\"']"
+)
+
+
+def _posix_patches_without_a_guard(path: Path):
+    """(line_no, attr) for each unguarded patch of a POSIX-only os attribute."""
+    source = path.read_text(encoding="utf-8")
+    # A module-level skip keyed on the attribute's presence covers the whole file.
+    if re.search(r"skipif\([^)]*hasattr\(\s*os\s*,", source, re.S):
+        return []
+    out = []
+    lines = source.splitlines()
+    for i, line in enumerate(lines, 1):
+        m = _POSIX_PATCH_RE.search(line)
+        if not m:
+            continue
+        # the call may wrap; look at it and the next two lines for raising=False
+        window = "\n".join(lines[i - 1:i + 2])
+        if "raising=False" not in window:
+            out.append((i, m.group(1)))
+    return out
+
+
+def test_the_class_is_real_on_this_platform():
+    """Windows has none of these; this host has them all, which is the whole gap."""
+    import os as _os
+    assert any(hasattr(_os, a) for a in _POSIX_ONLY_OS_ATTRS), \
+        "the guard below would be vacuous if this host had none of them either"
+
+
+def test_no_posix_only_os_attribute_is_patched_without_a_guard():
+    offenders = []
+    for path in sorted((_REPO / "tests").rglob("test_*.py")):
+        for line_no, attr in _posix_patches_without_a_guard(path):
+            offenders.append(f"{path.relative_to(_REPO).as_posix()}:{line_no}: os.{attr}")
+    assert not offenders, (
+        "monkeypatch.setattr on a POSIX-only os attribute fails at setup on Windows.\n"
+        "Add raising=False (preferred: the test then runs the platform's real fallback), "
+        "or a module-level skipif keyed on hasattr(os, ...):\n  " + "\n  ".join(offenders)
+    )

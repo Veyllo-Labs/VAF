@@ -176,3 +176,37 @@ def test_log_source_drops_files_older_than_the_running_service(tmp_path, monkeyp
     src = top_mod._resolve_log_source(candidates=[old, fresh],
                                       not_older_than=time.time() - 60)
     assert src == {"kind": "file", "path": fresh}
+
+
+def test_log_tail_drops_the_cr_of_a_crlf_log(tmp_path):
+    """A log written in text mode on Windows ends every line with \\r\\n.
+
+    `poll_file` splits on \\n alone, so without stripping the CR every line the dashboard
+    draws carries a trailing carriage return - and that is not cosmetic in a terminal: CR
+    sends the cursor back to column 0 and overwrites the line being drawn. Its sibling
+    `_backfill_file` never had the problem because splitlines() handles CRLF, so the two
+    line-splitters in one class simply disagreed.
+
+    Written as BYTES on purpose: that makes the CRLF case executable on every platform,
+    instead of only where the OS produces it. The Windows leg found this 27 minutes into a
+    push while the whole local suite was green."""
+    log = tmp_path / "vaf_run.log"
+    log.write_bytes(b"one\r\ntwo\r\n")
+    tail = top_mod._LogTail({"kind": "file", "path": log})
+    tail._backfill_file(log)
+    assert tail.lines(10) == ["one", "two"]      # splitlines() already handled it
+
+    with open(log, "ab") as fh:
+        fh.write(b"three\r\npart")
+    tail.poll_file()
+    assert tail.lines(10) == ["one", "two", "three"], "a CR survived the append path"
+
+    with open(log, "ab") as fh:
+        fh.write(b"ial\r\n")
+    tail.poll_file()
+    assert tail.lines(10)[-1] == "partial", "a CR survived a line split across two polls"
+
+    # a lone LF log (the Linux shape) is unchanged
+    log.write_bytes(b"fresh\n")
+    tail.poll_file()
+    assert tail.lines(10)[-1] == "fresh"

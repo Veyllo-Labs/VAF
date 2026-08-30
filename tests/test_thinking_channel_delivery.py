@@ -36,6 +36,20 @@ def _backdate_waiting(scope, minutes_ago):
     tm._save_waiting(data)
 
 
+def _assert_chase_over_question_kept(scope, question=None):
+    """Giving up ends the CHASE, not the memory of the question.
+
+    The record stays readable (that is what lets the main agent understand a reply that arrives
+    later, see test_late_reply_still_carries_the_question.py) while `chase_is_active` goes false, so
+    nothing nudges, escalates or blocks a run because of it any more.
+    """
+    w = tm.get_waiting_for_reply(scope)
+    assert w is not None, "the question was forgotten - a later reply cannot be understood"
+    assert tm.chase_is_active(w) is False, "the chase is still active after giving up"
+    if question is not None:
+        assert w.get("question_text") == question
+
+
 @pytest.mark.parametrize("channel", ["telegram", "whatsapp", "discord"])
 def test_delivers_via_main_messenger_and_skips_web(monkeypatch, tmp_path, channel):
     """main_messenger configured -> the question goes to that messenger, NOT the Web UI, and the
@@ -117,10 +131,14 @@ def test_unanswered_messenger_question_escalates_once_to_web(monkeypatch, tmp_pa
     assert w and w.get("escalated_to_web") is True
     assert w.get("channel") == "web"
 
-    # 2) Still unanswered after the one-time web escalation -> give up and clear, no second escalation.
+    # 2) Still unanswered after the one-time web escalation -> stop chasing, no second escalation.
     _backdate_waiting(scope, minutes_ago=11)
     assert tm._process_waiting_reply(scope) == "allow_run"
-    assert tm.get_waiting_for_reply(scope) is None
+    _assert_chase_over_question_kept(scope, "Soll ich das Meeting verschieben?")
+    assert len(web_emits) == 1
+    # ...and a further pass must stay quiet: the kept record is for the main agent, not a second round.
+    _backdate_waiting(scope, minutes_ago=11)
+    assert tm._process_waiting_reply(scope) == "allow_run"
     assert len(web_emits) == 1
 
 
@@ -139,7 +157,7 @@ def test_escalation_gives_up_when_no_reachable_web_session(monkeypatch, tmp_path
     )
     _backdate_waiting(scope, minutes_ago=11)
     assert tm._process_waiting_reply(scope) == "allow_run"
-    assert tm.get_waiting_for_reply(scope) is None
+    _assert_chase_over_question_kept(scope, "Q?")
 
 
 def test_escalated_flag_alone_blocks_re_escalation(monkeypatch, tmp_path):
@@ -159,7 +177,7 @@ def test_escalated_flag_alone_blocks_re_escalation(monkeypatch, tmp_path):
     _backdate_waiting(scope, minutes_ago=11)
     assert tm._process_waiting_reply(scope) == "allow_run"
     assert web_emits == []
-    assert tm.get_waiting_for_reply(scope) is None
+    _assert_chase_over_question_kept(scope, "Q?")
 
 
 def test_legacy_waiting_entry_without_channel_treated_as_web(monkeypatch, tmp_path):
@@ -180,8 +198,10 @@ def test_legacy_waiting_entry_without_channel_treated_as_web(monkeypatch, tmp_pa
         "question_text": "Legacy Q?", "request_id": "r-old", "session_id": "sid-old",
     }})
     assert tm._process_waiting_reply(scope) == "allow_run"
-    assert tm.get_waiting_for_reply(scope) is None
-    assert web_emits == []  # treated as web -> cleared, no messenger escalation
+    assert web_emits == []  # treated as web -> no messenger escalation
+    # A legacy entry has no chase_ended_at_ts key at all: it must be chased normally and then
+    # carry the field, not be treated as already-given-up (which would skip the nudge entirely).
+    _assert_chase_over_question_kept(scope, "Legacy Q?")
 
 
 def test_nudge_routes_to_messenger_for_messenger_channel(monkeypatch, tmp_path):

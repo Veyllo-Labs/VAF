@@ -21,27 +21,60 @@ fi
 pip install --quiet ruff pytest
 
 echo ""
-echo "=== 1/8  Ruff lint (errors only) ==="
+echo "=== 0/9  The tree under test is the tree that gets pushed ==="
+# Everything below tests the WORKING TREE. What reaches CI is what is committed.
+# Those are the same thing only when the tree is clean, and when they diverge the
+# stages below report a green for a state nobody will ever run.
+#
+# Live incident 2026-08-30: a suite run green here, then a commit of a SUBSET of
+# that tree (a test file without the web/ change it asserts on, edited by another
+# session in the same checkout). The push was red on six runners inside seven
+# minutes, and no amount of test coverage could have caught it - the checks were
+# right, the tree was not the one being shipped. This stage is the missing half.
+#
+# It also covers the shared-checkout case directly: another session's in-flight
+# edits are exactly what makes the tree differ from the commit.
+DIRTY="$(git status --porcelain)"
+if [ -n "$DIRTY" ]; then
+    if [ "${VAF_CI_ALLOW_DIRTY:-}" = "1" ]; then
+        echo "    WARNING: tree is dirty and VAF_CI_ALLOW_DIRTY=1 - this run does NOT"
+        echo "    speak for what a commit would push:"
+        echo "$DIRTY" | sed 's/^/      /'
+    else
+        echo "ERROR: the working tree is not clean, so this run cannot vouch for what" >&2
+        echo "a push would contain. Commit or stash first, then re-run." >&2
+        echo "" >&2
+        echo "$DIRTY" | sed 's/^/  /' >&2
+        echo "" >&2
+        echo "Set VAF_CI_ALLOW_DIRTY=1 to run anyway (the verdict is then advisory)." >&2
+        exit 1
+    fi
+else
+    echo "    OK"
+fi
+
+echo ""
+echo "=== 1/9  Ruff lint (errors only) ==="
 ruff check . --select=E9,F63,F7,F82 --exclude vaf/tools/coder_templates
 echo "    OK"
 
 echo ""
-echo "=== 2/8  Ruff lint (warnings) ==="
+echo "=== 2/9  Ruff lint (warnings) ==="
 ruff check . --exit-zero --exclude vaf/tools/coder_templates
 echo "    OK (warnings don't block CI)"
 
 echo ""
-echo "=== 3/8  Doc links ==="
+echo "=== 3/9  Doc links ==="
 python scripts/check_doc_links.py
 echo "    OK"
 
 echo ""
-echo "=== 4/8  License headers ==="
+echo "=== 4/9  License headers ==="
 python scripts/check_license_headers.py
 echo "    OK"
 
 echo ""
-echo "=== 5/8  Lock file freshness ==="
+echo "=== 5/9  Lock file freshness ==="
 # The lock-sync job exists ONLY in remote CI, and that asymmetry is how a
 # dependency swap once shipped with a stale requirements.lock as the first red
 # of a 28-commit push. Regenerating the lock here would need CI's exact pins in
@@ -61,7 +94,7 @@ else
 fi
 
 echo ""
-echo "=== 6/8  Pytest ==="
+echo "=== 6/9  Pytest ==="
 # HOME is redirected even here. The suite has twice written into the real user
 # store - once destroying the machine's recovery key - and the isolation
 # fixtures do not cover every axis. A scratch home costs nothing and removes
@@ -74,7 +107,7 @@ rm -rf "$VAF_CI_HOME"
 echo "    OK"
 
 echo ""
-echo "=== 7/8  Hostile environment ==="
+echo "=== 7/9  Hostile environment ==="
 # The same suite in an environment less generous than this machine: narrow
 # output encoding, optional packages hidden, scratch home. Three CI failures in
 # a row were environment differences rather than logic errors, and none could
@@ -85,7 +118,7 @@ python scripts/hostile_env.py
 echo "    OK"
 
 echo ""
-echo "=== 8/8  Web build ==="
+echo "=== 8/9  Web build ==="
 # Only when web/ differs from what origin/main has (or carries uncommitted
 # changes): the build takes a minute and proves nothing when nothing changed.
 # Without origin/main to compare against, it runs - a skipped stage that might

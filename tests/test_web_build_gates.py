@@ -68,7 +68,11 @@ def test_the_local_gate_refuses_a_stale_node_modules():
     installed against what is locked, and it must not go back to building
     whatever happens to be on disk."""
     gate = (_REPO / "scripts" / "ci_check.sh").read_text(encoding="utf-8")
-    web_stage = gate.split("8/8  Web build", 1)[1]
+    # Anchored on the stage NAME, not its number: inserting a stage renumbers every
+    # one after it, and an anchor that carries the count turns that into a red test
+    # about nothing (it did, when stage 0 was added).
+    assert "Web build ===" in gate, "the web build stage is gone from the local gate"
+    web_stage = gate.split("Web build ===", 1)[1]
     assert "node_modules/.package-lock.json" in web_stage, \
         "the local web build no longer checks the installed tree against the lock"
     assert re.search(r"npm run build", web_stage), "the local web build stage is gone"

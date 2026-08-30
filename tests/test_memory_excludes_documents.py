@@ -18,7 +18,7 @@ With the exclusion: 0/8 in all three, and still 8 results - recall is kept, not 
 is the reason it belongs in SQL. The pre-existing `metadata_filter` runs in PYTHON over rows the
 database already ranked, so filtering there would have returned the 2-4 personal chunks that
 happened to be in the window instead of ranking within the personal memories."""
-import re
+import ast
 from pathlib import Path
 
 from sqlalchemy.dialects import postgresql
@@ -74,33 +74,106 @@ def test_the_condition_does_not_name_the_personal_types():
         assert personal not in sql
 
 
-# ── the wiring: both lanes, both callers, and an unchanged default ────────────────────────
+# ── the wiring: both lanes, both callers, and an unchanged default ────────────────────
 
 def _src() -> str:
     return _RAG.read_text(encoding="utf-8")
 
 
+def _search_fn():
+    """`RagPipeline.search`, parsed. Structure, not text: the claim below is about WHERE the
+    condition lands inside the statement, and a substring search cannot see that."""
+    for node in ast.walk(ast.parse(_src())):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "search":
+            if any(isinstance(n, ast.Name) and n.id == "lexical_filters" for n in ast.walk(node)):
+                return node
+    raise AssertionError("RagPipeline.search not found - this guard is pointing at nothing")
+
+
+def _appended_to(fn, list_name):
+    """Lines of `<list_name>.append(_not_document_memory())`."""
+    return [n.lineno for n in ast.walk(fn)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "append"
+            and isinstance(n.func.value, ast.Name) and n.func.value.id == list_name
+            and len(n.args) == 1 and isinstance(n.args[0], ast.Call)
+            and isinstance(n.args[0].func, ast.Name)
+            and n.args[0].func.id == "_not_document_memory"]
+
+
+def _and_splat(fn, list_name):
+    """The `and_(*<list_name>)` a `.where(...)` consumes, plus that `.where` call."""
+    for n in ast.walk(fn):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "where"):
+            continue
+        for a in n.args:
+            if (isinstance(a, ast.Call) and isinstance(a.func, ast.Name) and a.func.id == "and_"
+                    and any(isinstance(s, ast.Starred) and isinstance(s.value, ast.Name)
+                            and s.value.id == list_name for s in a.args)):
+                return a, n
+    return None, None
+
+
+def _executed_line(fn, where_call):
+    """Line of the `db.execute(<stmt>)` that runs the statement carrying `where_call`."""
+    for n in ast.walk(fn):
+        if not (isinstance(n, ast.Assign) and n.targets and isinstance(n.targets[0], ast.Name)):
+            continue
+        if not any(x is where_call for x in ast.walk(n)):
+            continue
+        stmt_name = n.targets[0].id
+        for e in ast.walk(fn):
+            if (isinstance(e, ast.Call) and isinstance(e.func, ast.Attribute)
+                    and e.func.attr == "execute"
+                    and any(isinstance(a, ast.Name) and a.id == stmt_name for a in e.args)):
+                return e.lineno
+    return -1
+
+
+_LANES = ("filters", "lexical_filters")
+
+
 def test_both_lanes_of_the_hybrid_search_apply_it():
     """The fusion is only as clean as its worse half: the lexical lane would otherwise feed
     document chunks straight back into the RRF the vector lane just excluded them from."""
-    src = _src()
-    assert re.search(r"filters\.append\(_not_document_memory\(\)\)", src), "vector lane"
-    assert re.search(r"lexical_filters\.append\(_not_document_memory\(\)\)", src), "lexical lane"
+    fn = _search_fn()
+    for lane in _LANES:
+        assert len(_appended_to(fn, lane)) == 1, \
+            f"{lane}: expected exactly one `{lane}.append(_not_document_memory())`"
 
 
 def test_it_is_applied_in_sql_not_after_the_fetch():
-    """The whole reason it is not the existing metadata_filter. Both applications must sit in a
-    filter list that reaches the WHERE clause, never in the post-fetch loop."""
-    src = _src()
-    for marker in ("filters.append(_not_document_memory())",
-                   "lexical_filters.append(_not_document_memory())"):
-        before = src.split(marker, 1)[0]
-        assert before.rstrip().endswith(":") or "append" in marker, marker
-    # the post-fetch loop must not have grown a type check
-    post = src.split("# Apply metadata filter", 1)
-    if len(post) > 1:
-        assert "_DOCUMENT_MEMORY_TYPES" not in post[1][:800], \
-            "the exclusion drifted into the post-fetch loop, where it costs recall"
+    """The whole reason it is not the existing metadata_filter. Each append must reach the WHERE
+    clause of the statement its own lane executes, and reach it BEFORE the execute - an append
+    that lands after the statement is built is dead code that changes no query."""
+    fn = _search_fn()
+    for lane in _LANES:
+        appended = _appended_to(fn, lane)[0]
+        splat, where_call = _and_splat(fn, lane)
+        assert splat is not None, f"{lane} never reaches a WHERE clause - the list is unused"
+        executed = _executed_line(fn, where_call)
+        assert executed > 0, f"{lane}: the statement carrying that WHERE is never executed"
+        assert appended < splat.lineno < executed, (
+            f"{lane}: append(line {appended}) -> and_(line {splat.lineno}) -> "
+            f"execute(line {executed}) is not in that order"
+        )
+
+
+def test_the_exclusion_is_never_applied_after_the_fetch():
+    """Post-fetch filtering costs recall: the database has already ranked AND truncated, so
+    dropping documents afterwards returns the 2-4 personal chunks that happened to be in the
+    window instead of ranking within the personal memories. The two filter appends must
+    therefore be the only uses of the condition anywhere in this function."""
+    fn = _search_fn()
+    used = sorted(n.lineno for n in ast.walk(fn)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                  and n.func.id == "_not_document_memory")
+    assert used == sorted(_appended_to(fn, "filters") + _appended_to(fn, "lexical_filters")), \
+        "the exclusion is used outside the two filter appends - check the post-fetch loop"
+    assert not [n for n in ast.walk(fn)
+                if isinstance(n, ast.Name) and n.id == "_DOCUMENT_MEMORY_TYPES"], \
+        "search() compares the type tuple directly - that is a post-fetch check, not SQL"
 
 
 def test_the_default_is_unchanged_for_every_existing_caller():

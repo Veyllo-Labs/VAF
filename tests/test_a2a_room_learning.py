@@ -213,7 +213,8 @@ def test_one_place_clamps_the_retrieval_size():
     # one answer on purpose: off, unreachable and nothing-matched all mean the prompt
     # gets no extra block, and a caller could not act on the difference anyway.
     import vaf.core.config as cfg_mod
-    assert rag.turn_memory_context("x", user_scope_id=None, caller="test") == "" or True
+    assert isinstance(rag.turn_memory_context("x", user_scope_id=None, caller="test"), str), \
+        "an unscoped call must answer with a string, never raise into the turn"
     orig = cfg_mod.Config.get
     try:
         cfg_mod.Config.get = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("store down"))

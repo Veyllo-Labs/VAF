@@ -28,4 +28,7 @@ def test_import_all_modules():
     import vaf.core.agent
     import vaf.core.config
     import vaf.cli.tui
-    assert True
+    # The imports above are the test - a broken module raises here. The loop only keeps
+    # every name referenced, so `assert True` is not needed as a marker.
+    for mod in (vaf.main, vaf.core.agent, vaf.core.config, vaf.cli.tui):
+        assert mod.__name__.startswith("vaf."), mod

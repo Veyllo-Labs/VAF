@@ -1872,8 +1872,10 @@ def test_a_vote_counts_the_last_ballot_and_names_who_is_missing(tmp_path):
     # A guest may open one too: a question is not an order.
     second = room.open_vote(a, "Ship on Friday?")
     assert second.kind == "vote"
-    assert [e["question"] for e in room.votes() if e["id"] == second.id] == ["Ship on Friday?"]
-    assert room.votes()[0]["options"] == ["yes", "no"] or True
+    (guest_vote,) = [e for e in room.votes() if e["id"] == second.id]
+    assert guest_vote["question"] == "Ship on Friday?"
+    assert guest_vote["options"] == ["yes", "no"], \
+        "a vote opened without options must fall back to the yes/no default"
 
 
 def test_a_ballot_is_an_answer_so_an_older_peer_can_still_vote(tmp_path):

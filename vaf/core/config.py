@@ -490,7 +490,15 @@ class Config:
         "thinking_automation_review_enabled": True,          # Ladder rung: once the user has several automations, review the EXISTING ones instead of proposing another
         "thinking_automation_review_min_automations": 3,     # Enabled automations from which the review rung takes over from "propose a new one"
         "thinking_relevance_enabled": True,                  # Ladder rung: check whether anything current CHANGES a plan the user has stated (impact, never a news digest)
-        "thinking_relevance_cooldown_hours": 72,             # Minimum gap between two relevance notices; the rung also disables itself after 2 ignored/declined of the last 10
+        # Minimum gap between two relevance notices. FREQUENCY ONLY - it is not what stops the same
+        # thing being reported twice. Three mechanisms already do that, and none of them is a clock:
+        # the declined-questions log (30 days, injected as "DO NOT ask these again"), the semantic
+        # dedup gate (the rung delivers in mode "grounded", and _recent_question_texts feeds it BOTH
+        # recent requests and that declined log), and the self-disable after 2 declined of the last
+        # 10. Sized at 72h this key was doing a job it does not have, and doing it far too bluntly:
+        # a finding about tomorrow would have waited three days. Six hours bounds a burst while
+        # keeping a genuinely time-critical finding same-day.
+        "thinking_relevance_cooldown_hours": 6,
         "model_unload_idle_minutes": 30,                     # Desktop only: unload the local model after the user is really away (no message) this long, once thinking is idle. Server/headless never unloads.
         "thinking_proactive_enabled": True,                  # When the floor (notes/todos) is clear, run a proactive memory-mined suggestion scan (Stufe 2)
         "thinking_proactive_evidence_min_chars": 24,         # Evidence-gate (LOCAL/weak model): a proactive suggestion's message/details must quote >= this many chars verbatim from real retrieved memory/history

@@ -340,3 +340,44 @@ def test_the_note_calls_a_notice_a_notice():
     assert "nothing to carry out" in note
     assert "Never call it an internal or system message" in note
     assert "you sent it to them on purpose" in note
+
+
+# ── 6. which brake does what ──────────────────────────────────────────────────────────────
+
+def test_the_cooldown_bounds_frequency_and_nothing_else():
+    """It was 72 hours on the assumption that it also kept the same thing from being reported
+    twice. It does not, and it never did - three mechanisms already do that job, so the clock was
+    only ever a frequency bound, and three days is a blunt one: a finding about tomorrow would
+    have waited past the event."""
+    from vaf.core.config import Config
+    assert Config.DEFAULTS["thinking_relevance_cooldown_hours"] == 6
+
+
+def test_a_repeat_is_stopped_by_the_mechanisms_that_actually_do_that():
+    """Pinned as wiring, because the temptation is to build a fourth one. All three exist:
+
+    1. the declined-questions log, 30 days, injected as "DO NOT ask these again";
+    2. the semantic dedup gate - this rung delivers in mode `grounded`, and the gate's comparison
+       pool is fed from BOTH the recent requests and that declined log;
+    3. the self-disable after 2 declined of the last 10."""
+    from pathlib import Path
+    src = Path(tm.__file__).read_text(encoding="utf-8")
+
+    pool = src.split("def _recent_question_texts", 1)[1].split("\ndef ", 1)[0]
+    assert "_load_declined" in pool, "the dedup gate no longer sees declined questions"
+    assert "list_requests" in pool, "the dedup gate no longer sees recent requests"
+
+    gate = src.split("_mode in (\"open\", \"grounded\")", 1)[1][:400]
+    assert "_question_too_similar" in gate, "a grounded delivery no longer passes the dedup gate"
+
+    allowed = src.split("def relevance_watch_allowed", 1)[1].split("\ndef ", 1)[0]
+    assert 'status") or "") == "declined"' in allowed, "the self-disable no longer counts declines"
+
+
+def test_the_rung_delivers_in_a_mode_the_dedup_gate_covers():
+    """The link that makes point 2 true. `off` would skip the gate entirely."""
+    from pathlib import Path
+    src = Path(tm.__file__).read_text(encoding="utf-8")
+    rung = src.split('_node = "relevance"', 1)[1][:300]
+    assert 'set_proactive_mode(user_scope_id, "grounded")' in rung, \
+        "the relevance rung left the mode that subjects it to the dedup gate"

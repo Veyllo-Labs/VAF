@@ -67,6 +67,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **A background notice no longer stays silent for three days.** The gap between two
+  "I looked this up and it affects you" messages was three days, on the assumption that it
+  also stopped the same thing being reported twice. It never did that - a refused question is
+  already kept out for 30 days, and a reworded repeat is caught before it is sent. So the gap
+  was only ever about frequency, and three days is too long for something that concerns
+  tomorrow. It is six hours now, and everything that prevents repeats is unchanged.
 - **When VAF tells you something on its own and you reply, it now knows what you are replying
   to.** A background notice was deliberately marked "no answer expected" so it would not nag
   you about it - but that also removed the only note saying what had been sent, so a reply

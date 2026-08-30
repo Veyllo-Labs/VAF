@@ -288,8 +288,14 @@ that silences a run; a REPEAT is prevented by the recent/declined dedup prompts,
      limit: the gate accepts ONE verbatim quote from a pool that now holds both halves, so it cannot
      force a message to quote the finding *and* the plan it affects. The prompt demands both; the
      mechanism guarantees one.
-   - **Two brakes.** `thinking_relevance_cooldown_hours` (72) between notices, and a self-disable once 2 of the
-     last 10 notices were DECLINED (read from the reply classification that already exists). Declined,
+   - **Two brakes, and neither of them is what prevents a repeat.** The same thing is kept from
+     being reported twice by mechanisms that already exist: the **declined-questions log** (30 days,
+     injected into the next run as "DO NOT ask these again") and the **semantic dedup gate** - this
+     rung delivers in mode `grounded`, and `_recent_question_texts` feeds that gate BOTH the recent
+     requests and the declined log. So `thinking_relevance_cooldown_hours` (6) bounds FREQUENCY and
+     nothing else; at 72 it was doing a job it does not have, and doing it bluntly enough that a
+     finding about tomorrow would have waited three days. The second brake is a self-disable once 2 of
+     the last 10 notices were DECLINED (read from the reply classification that already exists). Declined,
      not merely unanswered: an FYI is never replied to, so counting silence as rejection would
      switch the rung off for good on exactly the behaviour it is designed for. The rung stops on
      its own rather than waiting for someone to find a setting.

@@ -262,10 +262,26 @@ that silences a run; a REPEAT is prevented by the recent/declined dedup prompts,
    **Falling through silently is its normal outcome**, and the prompt says so: a news summary is a
    failure of this rung, not a result. Three things make that stick:
 
-   - **It is an FYI, not a question.** The request is recorded with `kind="relevance"`, which skips
-     `set_waiting_for_reply` and excludes it from `get_open_proactive_request`. Without that, a notice
-     nobody replies to arms the 3-minute nudge and is then re-asked up to `thinking_followup_max` (3)
-     times: one warning, up to eight touches.
+   - **It is an FYI, not a question - but it is still RECORDED.** The request carries
+     `kind="relevance"` and is excluded from `get_open_proactive_request`, and its waiting record is
+     written and then immediately closed with `end_reply_chase`. So nobody chases it: no 3-minute
+     nudge, no re-ask (a notice nobody answers would otherwise become up to eight touches). What it
+     does keep is the record itself, which is the ONLY thing that tells the main agent what a later
+     reply refers to.
+
+     **The rule, and it holds for every background message:** whenever the background pass writes
+     into the user's chat, the main agent must be able to tell what a reply refers to - it is the one
+     that becomes active there. The first version of this rung skipped the record to avoid the nudge
+     and thereby re-created, one step earlier in the lifecycle, exactly the defect `end_reply_chase`
+     exists to prevent. Live 2026-08-30: the run sent a researched notice about Anthropic rate
+     limits, the user answered "Okay das waren jetzt viele Infos auf einmal :D", and the main agent -
+     with nothing to connect that to - called its own notice "nur interne System-Infos ... es gibt
+     nichts zu tun". `tests/test_thinking_relevance_watch.py` pins both halves, including a static
+     guard that no delivery branch may skip the record again.
+   - **The pickup note calls a notice a notice.** For `kind="relevance"` it says the user's message
+     is a REACTION to something the run SENT, that nothing is being answered and nothing is to be
+     carried out, and that the agent must never describe it as an internal or system message. Framing
+     it as a question makes the agent hunt for an answer in a remark and, finding none, disown it.
    - **Web results enter the evidence pool on THIS rung only.** A web snippet is real retrieved
      evidence, so the existing grounded gate accepts a message quoting one - but only here, because
      everywhere else "grounded" must keep meaning "grounded in the user's own memory". The honest

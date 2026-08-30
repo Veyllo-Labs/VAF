@@ -6,8 +6,10 @@
 Its value is impact, not information, and its dominant failure mode is degenerating into a news
 ticker. Four properties hold it in place, all enforced in code:
 
-1. Its message is an FYI, not a question. A tracked question arms a three-minute nudge and is
-   re-asked up to three times when nobody replies - one notice would become up to eight touches.
+1. Its message is an FYI, not a question: recorded so the main agent can pick up a reply, but with
+   the chase ended, so it is never nudged and never re-asked. Those two are separate and were once
+   confused here - skipping the record to avoid the nudge also took away the only thing that tells
+   the main agent what a later reply refers to.
 2. Web results reach the run's evidence pool ONLY on this rung, so "grounded" keeps meaning
    "grounded in the user's own memory" everywhere else.
 3. Two brakes: a cooldown, and a self-disable once its notices are being DECLINED (not merely
@@ -40,17 +42,25 @@ def _deliverable(monkeypatch, tmp_path):
 
 # ── 1. an FYI is delivered, not awaited ───────────────────────────────────────────────────
 
-def test_a_relevance_notice_does_not_arm_the_nudge(monkeypatch, tmp_path):
+def test_a_relevance_notice_is_recorded_and_marked_as_not_awaited(monkeypatch, tmp_path):
+    """Both halves at once, because the first version of this rung got them confused.
+
+    It skipped the waiting record entirely so an FYI would not be nudged - and thereby took away
+    the ONLY thing that tells the main agent what a later reply refers to. The record and the
+    chase are separate: the record says what was sent, `chase_ended_at_ts` says nobody is waiting
+    on an answer."""
     _deliverable(monkeypatch, tmp_path)
-    waited = {"n": 0}
-    monkeypatch.setattr(tm, "set_waiting_for_reply", lambda *a, **kw: waited.__setitem__("n", waited["n"] + 1))
     scope = "u-fyi"
     tm.clear_run_evidence(scope)
     tm.set_proactive_mode(scope, "open")
     tm.set_message_kind(scope, "relevance")
     req = tm.deliver_tracked_message(scope, "Dein Zug am 14. faellt aus (Quelle: example.org, 2026-08-28).")
     assert req and req.get("kind") == "relevance"
-    assert waited["n"] == 0, "an FYI must not set the waiting state - that is what arms the 3-minute nudge"
+
+    w = tm.get_waiting_for_reply(scope)
+    assert w and "Dein Zug am 14." in (w.get("question_text") or ""), \
+        "the main agent would have nothing to connect a reply to"
+    assert tm.chase_is_active(w) is False, "an FYI must not be nudged after three minutes"
 
 
 def test_an_ordinary_question_still_arms_it(monkeypatch, tmp_path):
@@ -260,3 +270,73 @@ def test_the_relevance_nudge_offers_silence_as_a_first_class_option():
     assert blocked and blocked.startswith("[BLOCKED]")
     assert "thinking_done" in blocked
     assert "normal and correct outcome" in blocked
+
+
+# ── 5. EVERY background message leaves context for the main agent ─────────────────────────
+
+def test_an_fyi_still_leaves_a_record_for_the_main_agent(monkeypatch, tmp_path):
+    """The invariant, stated by the owner and violated by the first version of this rung:
+    whenever the background pass writes into the user's chat, the main agent must be able to
+    tell what a later reply refers to - it is the one that becomes active there.
+
+    Live 2026-08-30: the run sent a researched notice about Anthropic rate limits, the user
+    answered "Okay das waren jetzt viele Infos auf einmal :D", and the main agent - with no
+    record to connect that to - called its OWN notice "nur interne System-Infos ... es gibt
+    nichts zu tun"."""
+    _deliverable(monkeypatch, tmp_path)
+    scope = "u-fyi-ctx"
+    tm.clear_run_evidence(scope)
+    tm.set_proactive_mode(scope, "open")
+    tm.set_message_kind(scope, "relevance")
+    tm.deliver_tracked_message(scope, "Dein Zug am 14. faellt aus (Quelle: example.org).")
+
+    w = tm.get_waiting_for_reply(scope)
+    assert w, "an FYI left NO record - a reply to it reaches an agent that knows nothing"
+    assert "Dein Zug am 14." in (w.get("question_text") or ""), "the record does not carry what was sent"
+
+
+def test_but_nobody_chases_an_fyi(monkeypatch, tmp_path):
+    """The other half, and the reason the record was skipped in the first place. The two are
+    separable, and this module already separates them: the record says WHAT was sent,
+    `chase_ended_at_ts` says nobody is waiting on an answer."""
+    _deliverable(monkeypatch, tmp_path)
+    scope = "u-fyi-nochase"
+    tm.clear_run_evidence(scope)
+    tm.set_proactive_mode(scope, "open")
+    tm.set_message_kind(scope, "relevance")
+    tm.deliver_tracked_message(scope, "Dein Zug am 14. faellt aus.")
+
+    w = tm.get_waiting_for_reply(scope)
+    assert tm.chase_is_active(w) is False, "an FYI would be nudged after three minutes"
+
+
+def test_an_ordinary_question_is_chased(monkeypatch, tmp_path):
+    _deliverable(monkeypatch, tmp_path)
+    scope = "u-q-chase"
+    tm.clear_run_evidence(scope)
+    tm.set_proactive_mode(scope, "open")
+    tm.set_message_kind(scope, "")
+    tm.deliver_tracked_message(scope, "Soll ich dir das einrichten?")
+    assert tm.chase_is_active(tm.get_waiting_for_reply(scope)) is True
+
+
+def test_no_delivery_branch_may_skip_the_record():
+    """A static guard on the invariant itself, because it is easy to break again the way it was
+    broken the first time: by adding "this kind does not need a latch" to one branch. Every
+    set_waiting_for_reply in the delivery path must be unconditional."""
+    from pathlib import Path
+    src = (Path(tm.__file__)).read_text(encoding="utf-8")
+    body = src.split("def deliver_tracked_message", 1)[1].split("\ndef ", 1)[0]
+    assert "if not _is_fyi:\n        set_waiting_for_reply" not in body, \
+        "a delivery branch skips the record again - the main agent would lose the context"
+    assert body.count("set_waiting_for_reply(") >= 3, "a delivery branch lost its record entirely"
+
+
+def test_the_note_calls_a_notice_a_notice():
+    """Calling it a question makes the agent hunt for an answer in a remark and, finding none,
+    disown the notice."""
+    note = Agent._build_reply_pickup_note("Dein Zug faellt aus.", "", "", False, "", "", "relevance")
+    assert "not a question" in note
+    assert "nothing to carry out" in note
+    assert "Never call it an internal or system message" in note
+    assert "you sent it to them on purpose" in note

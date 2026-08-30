@@ -8340,7 +8340,7 @@ class Agent:
         return "\n".join(parts).strip(), bool(summary)
 
     @staticmethod
-    def _build_reply_pickup_note(q_text, carry, digest, curated, facts, subject="") -> str:
+    def _build_reply_pickup_note(q_text, carry, digest, curated, facts, subject="", kind="") -> str:
         """Build the system note injected when the user replies to a tracked background question.
 
         Three lanes (incident 2026-07-13: the old note asserted 'CONTINUE the task now' on an
@@ -8357,7 +8357,24 @@ class Agent:
         terse ("Soll ich das einrichten - ja oder nein?"), so quoting only the reminder tells the main
         agent what was ASKED and not what it was ABOUT. Live 2026-08-30: a user answered "Hey sry was ?"
         and got a question about which message they meant, because the reminder was all there was.
+        `kind` is the request's kind. "relevance" means the run sent a NOTICE, not a question - the
+        user is commenting on it, and there is nothing to carry out. Calling that a question makes the
+        agent look for an answer in a remark and, when it finds none, disown the notice: live
+        2026-08-30, a researched notice about API rate limits met "Okay das waren jetzt viele Infos auf
+        einmal :D" and the reply called it "nur interne System-Infos ... es gibt nichts zu tun".
+
         Pure function for unit-testability."""
+        if (kind or "").strip() == "relevance":
+            return (
+                f"[Context: The user's message below is a REACTION to something YOUR background pass "
+                f"SENT them - a notice, not a question: \"{q_text}\". They are not answering anything, "
+                f"so there is nothing to carry out and nothing to confirm.{facts} Talk about THAT "
+                f"notice: if they find it long or unclear, say the essence in one or two sentences; if "
+                f"they ask about it, answer from it. Never call it an internal or system message and "
+                f"never say it means nothing - you sent it to them on purpose. For THIS turn, IGNORE "
+                f"any earlier <user_intent> or working-memory <Plan> shown above. The user's reaction "
+                f"follows immediately after this system note.]"
+            )
         # What to do when the reply is not an answer at all. "Ask one confirming question" was too
         # vague to act on: live 2026-08-30, a background question about the VAF API met "Sry bin da
         # was gibt's?" and the main agent answered the USER's literal question with a status report
@@ -9017,13 +9034,16 @@ class Agent:
                                 _facts = (" You do not have the specifics on hand; if the user asks for details, look "
                                           "them up (e.g. web_search) - do NOT make up facts.")
                             _subject_text = str((_req or {}).get("original_question") or "").strip()
+                            _req_kind = str((_req or {}).get("kind") or "").strip()
                             self._thinking_reply_context = self._build_reply_pickup_note(
-                                q_text, _carry, _bundle_ctx, _bundle_curated, _facts, _subject_text
+                                q_text, _carry, _bundle_ctx, _bundle_curated, _facts,
+                                _subject_text, _req_kind,
                             )
                             # Observability (incident lesson: the injected note is mid-list and appears in
                             # no prompt log - the next incident should be a grep, not an inference).
                             try:
-                                _lane = ("handoff" if (_bundle_ctx and _bundle_curated)
+                                _lane = ("relevance" if _req_kind == "relevance"
+                                         else "handoff" if (_bundle_ctx and _bundle_curated)
                                          else ("handoff_uncurated" if _bundle_ctx else "plain"))
                                 append_domain_log(
                                     "prompt",

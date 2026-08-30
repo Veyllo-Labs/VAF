@@ -500,6 +500,29 @@ def clear_waiting_for_reply(
         _save_waiting(data)
 
 
+def _end_chase_for_fyi(user_scope_id: Optional[str]) -> None:
+    """Record an FYI the way a given-up question is recorded: kept, but never chased.
+
+    An FYI (a relevance notice) is not awaiting a decision, so it must not arm the 3-minute nudge
+    or be re-asked. The first version achieved that by writing NO waiting record at all - and that
+    re-created, one step earlier in the lifecycle, exactly the defect `end_reply_chase` below was
+    built to fix: with no record, a user who DOES reply reaches a main agent that has no idea what
+    they are replying to.
+
+    Live 2026-08-30, and it reads like the incident in that docstring. The run sent a researched
+    notice about Anthropic rate limits; the user answered "Okay das waren jetzt viele Infos auf
+    einmal :D"; the main agent, with nothing to connect that to, called its OWN notice "nur interne
+    System-Infos ... es gibt nichts zu tun" and disowned it.
+
+    The two things are separable and this module already separates them: the record carries what was
+    sent, `chase_ended_at_ts` says nobody is waiting on an answer. So write the record, then end the
+    chase immediately."""
+    try:
+        end_reply_chase(user_scope_id)
+    except Exception as e:
+        logger.debug("Thinking: could not end the chase for an FYI: %s", e)
+
+
 def end_reply_chase(user_scope_id: Optional[str]) -> None:
     """Stop CHASING an unanswered question, but keep the record so a late reply is still understood.
 
@@ -1610,13 +1633,12 @@ def deliver_tracked_message(
         sent_channel = None
 
     if sent_channel:
-        # An FYI is not awaited: setting the waiting state arms the 3-minute nudge and marks the
-        # message as an open question the next runs would follow up on.
-        if not _is_fyi:
-            set_waiting_for_reply(
-                user_scope_id, username=uname, display_name=uname,
-                question_text=message, request_id=req["id"], session_id=_anchor_sid, channel=sent_channel,
-            )
+        set_waiting_for_reply(
+            user_scope_id, username=uname, display_name=uname,
+            question_text=message, request_id=req["id"], session_id=_anchor_sid, channel=sent_channel,
+        )
+        if _is_fyi:
+            _end_chase_for_fyi(user_scope_id)
         # Pin the request to the web anchor so a later escalation / follow-up can reach the Web UI.
         if _anchor_sid and req.get("session_id") != _anchor_sid:
             treq.set_request_session(user_scope_id, req["id"], _anchor_sid)
@@ -1627,11 +1649,12 @@ def deliver_tracked_message(
         return req
 
     # FALLBACK: no main messenger configured (or the send failed) — deliver to the Web UI as before.
-    if not _is_fyi:
-        set_waiting_for_reply(
-            user_scope_id, username=uname, display_name=uname,
-            question_text=message, request_id=req["id"], session_id=_anchor_sid, channel="web",
-        )
+    set_waiting_for_reply(
+        user_scope_id, username=uname, display_name=uname,
+        question_text=message, request_id=req["id"], session_id=_anchor_sid, channel="web",
+    )
+    if _is_fyi:
+        _end_chase_for_fyi(user_scope_id)
     # Deliver-gate: if the main agent is actively handling a user turn, do NOT push this live into the
     # middle of that turn. The request is already recorded + waiting_for_reply set (and the run loop
     # persists it to the session), so it surfaces on the user's next load. Defer the live emit, never drop.
@@ -1647,11 +1670,13 @@ def deliver_tracked_message(
     if _effective_sid and req.get("session_id") != _effective_sid:
         treq.set_request_session(user_scope_id, req["id"], _effective_sid)
         req = treq.get_request(user_scope_id, req["id"]) or req
-    if sid and sid != _anchor_sid and not _is_fyi:
+    if sid and sid != _anchor_sid:
         set_waiting_for_reply(
             user_scope_id, username=uname, display_name=uname,
             question_text=message, request_id=req["id"], session_id=sid, channel="web",
         )
+        if _is_fyi:
+            _end_chase_for_fyi(user_scope_id)
     req = dict(req)
     req["delivered"] = bool(sid)
     return req

@@ -67,6 +67,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **When VAF tells you something on its own and you reply, it now knows what you are replying
+  to.** A background notice was deliberately marked "no answer expected" so it would not nag
+  you about it - but that also removed the only note saying what had been sent, so a reply
+  reached VAF with no idea what it referred to. Asked about its own researched message, it
+  called it "just internal system info, nothing to do" and disowned it. Such a notice is now
+  remembered like any other message it sends you, while still never being chased or repeated,
+  and it is described to the answering agent as something it sent rather than as a question.
 - **Answering "what's up?" to one of VAF's own questions now gets the question back, not a
   status report.** When VAF asked something in the background and the reply was "sorry, I'm
   here, what's up?", it read that as a request for a situation report and answered "all quiet,

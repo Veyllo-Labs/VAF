@@ -173,6 +173,43 @@ class UnsupportedRequirement(FrameError):
         self.missing = tuple(sorted(missing))
 
 
+def object_field(value: Any, name: str) -> Dict[str, Any]:
+    """A frame field that must be an object, where somebody is ASSERTING it.
+
+    Two different situations read the same field and must answer differently.
+    ``from_dict`` is reading a file back and takes a non-object as ``{}`` on
+    purpose: a stored frame has to stay readable whatever is in it, and refusing to
+    parse one would remove it from the transcript, which is rule 2's mistake. This
+    is the other situation - a caller minting a frame, or a peer submitting one -
+    where there is somebody in front of it to tell. Telling them beats writing a
+    shape the reader would then silently discard, because the two halves of the
+    frame would afterwards disagree about what it says.
+
+    Anything empty, of any type, means "nothing here" and is the same answer as
+    absent. Only a non-empty value that is not an object is a refusal.
+    """
+    if not value:
+        return {}
+    if not isinstance(value, Mapping):
+        raise MalformedFrame(
+            f"{name!r} must be an object, got {type(value).__name__}"
+        )
+    return dict(value)
+
+
+def required_names(value: Any) -> Tuple[str, ...]:
+    """``must_understand`` as ``from_dict`` will read it back.
+
+    A single string is refused rather than iterated: ``tuple("id")`` is
+    ``('i', 'd')``, three field names nobody asked for.
+    """
+    if not value:
+        return ()
+    if isinstance(value, (str, bytes)):
+        raise MalformedFrame("must_understand must be a list of field names")
+    return tuple(str(f) for f in value)
+
+
 @dataclass
 class Frame:
     """One message in a room.
@@ -225,7 +262,18 @@ class Frame:
         ts: Optional[float] = None,
     ) -> "Frame":
         """Mint a frame. ``frame_id`` and ``ts`` are injectable so a test can pin
-        both without patching the clock or the uuid module."""
+        both without patching the clock or the uuid module.
+
+        Every field is read the way ``from_dict`` will read it back, and that
+        symmetry is load-bearing rather than tidy. A frame lives twice: once as the
+        object the minting process holds, and once as the object a reader parses out
+        of the file. Where the two coercions differed, one frame had two meanings -
+        ``must_understand=[1, 2]`` was ``(1, 2)`` in memory and ``('1', '2')`` after
+        a round trip, and ``reply_to=""`` was ``''``, then absent, then ``None``.
+        Nothing read those fields closely enough to break, which is precisely why it
+        went unnoticed; anything that compares a frame against its stored form needs
+        them to agree.
+        """
         return cls(
             id=frame_id or str(uuid.uuid4()),
             room=str(room),
@@ -234,12 +282,12 @@ class Frame:
             sender=str(sender),
             role=str(role),
             kind=str(kind),
-            to=dict(to) if to else {"room": True},
+            to=object_field(to, "to") or {"room": True},
             ts=float(ts) if ts is not None else time.time(),
-            body=dict(body) if body else {},
-            reply_to=reply_to,
-            must_understand=tuple(must_understand),
-            ext=dict(ext) if ext else {},
+            body=object_field(body, "body"),
+            reply_to=(str(reply_to) if reply_to else None),
+            must_understand=required_names(must_understand),
+            ext=object_field(ext, "ext"),
         )
 
     @classmethod

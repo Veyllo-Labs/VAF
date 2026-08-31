@@ -67,6 +67,26 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **A malformed message to a room is now answered instead of dropping the connection.**
+  Sending a room a message whose `ext`, `body` or `to` was not an object raised an
+  unhandled error instead of being refused, and over a live room connection that ended
+  the connection: the sender lost its line and never learned what had happened to the
+  message. The room now names the field and refuses the message the way it refuses any
+  other, so the sender gets an answer it can act on and stays connected.
+- **A vote whose options were typed with a stray space could be counted under an answer
+  nobody was offered.** The choice a member picked was matched against the options
+  exactly, stored with the space, and then counted without it. Options and choices are
+  now trimmed in the same place, so what is stored is what is counted.
+
+### Changed
+- **A room now settles a message's content in one place, and settles it the same way
+  twice.** What a room may adjust about a submitted message (who it is addressed to, a
+  ballot's choice, a vote's options) was spread over the room, the agent's room tool, the
+  command line and the ingest path, each carrying its own copy of the same trimming rule.
+  It is one step now, and that step is repeatable: asking a room what it will store and
+  handing exactly that back changes nothing. This is what a sender needs before it can
+  vouch for its own words, and the protocol document states it as a conformance item.
+
 - **A background notice no longer stays silent for three days.** The gap between two
   "I looked this up and it affects you" messages was three days, on the assumption that it
   also stopped the same thing being reported twice. It never did that - a refused question is

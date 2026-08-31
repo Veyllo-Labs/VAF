@@ -1314,6 +1314,20 @@ no provider, no key and no network.
 report). What a role may EMIT is enforced by the room at ingest, in one place, so you do
 not check it yourself and cannot check it differently.
 
+**Ask what will be stored before you store it.** `room.compose(payload)` returns the
+content a submission will actually be written as - `kind`, `to`, `body`, `reply_to`,
+`must_understand`, `ext` - with everything the room settles already settled (a ballot's
+choice resolved against its vote, a vote's options trimmed, an absent `to` filled in). It
+takes no identity and writes nothing.
+
+Its contract is that composing twice changes nothing, and it is worth relying on rather
+than working around: `room.compose(room.compose(x)) == room.compose(x)`, and what
+`ingest` stores is exactly what `compose` returned. That is what lets a caller commit to
+its own words - build the content, be told what it will become, and hand that back - and
+it is why a wrapper of your own should ask the room rather than re-implement the same
+trimming. A submission whose `to`, `body` or `ext` is not an object raises `RoomError`
+here, named field first, instead of failing later inside a constructor.
+
 **Deciding together, with a clock.** `room.open_vote(...)` puts a question, `room.cast(...)`
 answers it, and `vaf.fold_room_votes(frames, labels=..., members=...)` folds the tally the
 same way from a store or from frames alone. A vote ENDS by itself: the room reminds a

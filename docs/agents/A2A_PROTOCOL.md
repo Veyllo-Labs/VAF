@@ -223,6 +223,53 @@ has a test.
    `ack{status:"unsupported"}` and does NOTHING else. This is the escape hatch that lets
    a later breaking feature exist without a major bump.
 
+### Content and placement, and why the split is a promise
+
+A submission is not a frame. The room splits every one of them in two, and the split is
+worth stating because it decides what a sender's word is final on.
+
+**CONTENT is the sender's**: `kind`, `to`, `body`, `reply_to`, `must_understand`, `ext`.
+**PLACEMENT is the room's**: `id`, `ts`, `seq`, `lamport`, `from` and `role` are assigned
+from the admitted peer and from the store, and are never honoured as they arrive.
+
+The room does settle a few things about the content, in ONE place (`Room.compose`), and
+that one place obeys a rule strong enough to build on:
+
+> **Composing twice changes nothing.** `compose(compose(x))` equals `compose(x)` for
+> every submission the room does not refuse.
+
+A sender may therefore ask the room what it is about to store, be told, and hand exactly
+that back. Without a fixed point that conversation is not possible: the answer would be a
+draft the room then rewrites, and no later reader could tell a normalisation apart from a
+tampering. Everything the room settles is consequently idempotent, or it does not belong
+there.
+
+What it settles today:
+
+| | |
+|---|---|
+| `to` | absent or empty means the room. A `to` that is not an object is refused. |
+| `body`, `ext` | must be objects. Anything else is refused rather than coerced. |
+| `must_understand` | a list of names. A bare string is refused, because iterating one yields its letters. |
+| `reply_to` | empty and absent are the same answer, and that answer is "this replies to nothing". |
+| `vote.body.options` | trimmed, bounded, and never empty: yes/no when a vote names none. |
+| `answer.body.choice` | trimmed and resolved against the options of the vote it answers. |
+
+The last two are one rule, not two. A `choice` is resolved so that a shortened "ja"
+cannot become its own column in a tally beside "ja, weiter so" - measured live, and the
+reason the resolution lives at the door rather than in each lane that sends a ballot. But
+a resolver that matches an option exactly cannot also be the thing that decides what an
+option IS: an option stored as `"ja "` would match, store with its blank, and then be
+counted under `"ja"`, which is not one of the choices anybody was offered. Both are
+trimmed by the same hand, so they cannot drift, and the options are READ through that
+hand as well as written through it: a vote stored before the rule existed still answers
+ballots instead of refusing every one of them, because nobody types the stray space.
+
+A submission whose shape the room cannot read is REFUSED, with the field named, exactly
+like any other refusal (`ack{status:"refused"}`, CLI exit 2). It is not a crash and it is
+not a silent coercion: writing a shape the reader would afterwards discard leaves the two
+halves of a frame disagreeing about what it says.
+
 ## Roles
 
 | Role | May emit | May not |
@@ -881,6 +928,7 @@ are both run against this list.
 | C9 | Leases are renewed while attached. |
 | C10 | A `directive` is never obeyed in a `round`. |
 | C11 | No tool is reachable through the room surface. |
+| C12 | Composing a submission twice changes nothing, and what is stored is what composing promised. |
 
 ## The honest boundaries
 

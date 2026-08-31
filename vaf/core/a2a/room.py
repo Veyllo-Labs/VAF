@@ -42,8 +42,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from vaf.core.a2a.frame import (KINDS, REPORT_STATUSES, Frame, canonical_sort_key,
-                                read_progress)
+from vaf.core.a2a.frame import (KINDS, REPORT_STATUSES, Frame, MalformedFrame,
+                                canonical_sort_key, object_field, read_progress,
+                                required_names)
 from vaf.core.a2a.store import (
     RoomStore,
     StoreError,
@@ -306,6 +307,37 @@ class BudgetExceeded(RoomError):
 
 class TicketInvalid(RoomError):
     """A join ticket is unknown, spent, expired, or minted for another room."""
+
+
+class MalformedContent(RoomError):
+    """A submission is the wrong SHAPE, before any rule about it applies.
+
+    Separate from the refusals above because it answers a different question. Those
+    say "you may not"; this says "I cannot tell what you sent". It is a `RoomError`
+    so every door already handles it: the hub answers `ack{status:"refused"}`, the
+    CLI exits 2, and the agent's tool hands the sentence back to the model.
+
+    Before it existed, a field like `ext: "x"` reached `dict(value)` and raised a
+    bare ValueError past `Hub.submit`, which catches `RoomError` and nothing else.
+    On the socket that ended the receive loop: the peer lost its connection and
+    never got an ack for the frame it had just sent, which is the one failure a
+    protocol built on acknowledged writes cannot afford to have.
+    """
+
+
+def content_object(value: Any, name: str) -> Dict[str, Any]:
+    """A submitted field that must be an object, refused the way a room refuses.
+
+    The rule about what a frame field may BE belongs to the frame module and is
+    implemented once there. What differs here is who is being told: a caller minting
+    a `Frame` is holding a programming error and gets `MalformedFrame`, while a peer
+    that just submitted this over a socket is holding a bad message and gets a
+    `RoomError` every door already answers.
+    """
+    try:
+        return object_field(value, name)
+    except MalformedFrame as e:
+        raise MalformedContent(str(e)) from None
 
 
 class RoomClosed(RoomError):
@@ -757,9 +789,8 @@ class Room:
         for "this answers that", and an implementation that has never heard of
         `vote` still shows the question and the answers to it (rule 2).
         """
-        choices = [str(o).strip()[:60] for o in (options or []) if str(o).strip()]
         body = {"text": str(question or "").strip()[:400],
-                "options": choices or ["yes", "no"]}
+                "options": list(options or [])}
         if closes_in_s and closes_in_s > 0:
             # Advisory, like every wall clock in this protocol: a reader marks a
             # vote closed by comparing it, and nothing is ever refused because of
@@ -784,15 +815,15 @@ class Room:
         reads that refusal and can retry, while a silently accepted invention
         turns the count into noise nobody notices.
 
-        The resolution that COUNTS happens in `ingest`, which every ballot crosses
-        whatever lane it came from. It is called here as well, and only so this
-        method can word its own sentence with the option the room will record;
-        resolving an already-resolved choice returns it unchanged.
+        The resolution that COUNTS happens in `compose`, which every ballot crosses
+        whatever lane it came from. This method ASKS compose what will be stored, so
+        that the sentence it writes names the option the room is about to record
+        rather than a second opinion about it. Handing the answer back is free:
+        compose is a fixed point, so composing an already-composed choice returns it
+        unchanged.
         """
-        options = self._vote_options(vote_id)
-        resolved = str(choice or "").strip()[:60]
-        if options:
-            resolved = self._resolve_choice(resolved, options)
+        resolved = self.compose({"kind": "answer", "reply_to": vote_id,
+                                 "body": {"choice": choice}})["body"]["choice"]
         return self.ingest({
             "kind": "answer", "reply_to": vote_id,
             "body": {"text": comment or f"votes: {resolved}", "choice": resolved},
@@ -805,7 +836,7 @@ class Room:
         so."""
         for frame in self.store.frames():
             if frame.id == vote_id and frame.kind == "vote":
-                return [str(o) for o in ((frame.body or {}).get("options") or [])]
+                return self._trimmed_options((frame.body or {}).get("options"))
         return []
 
     @staticmethod
@@ -1384,6 +1415,82 @@ class Room:
             return False
         return kind in CAPABILITIES.get(role, frozenset())
 
+    # The one member of a vote's body a reader counts on, and the width every lane
+    # already trimmed it to by hand before `compose` became the single place.
+    CHOICE_WIDTH = 60
+
+    def compose(self, payload: Any) -> Dict[str, Any]:
+        """What this room will actually STORE as a frame's content, normalised.
+
+        Six things about a submission are the room's to settle: the kind, who it is
+        addressed to, the body, what it answers, what it demands of a receiver, and
+        the extension namespace. Everything else on a frame - `id`, `ts`, `seq`,
+        `lamport`, `from`, `role` - is placement rather than content, is assigned
+        from the admitted peer and the store, and is deliberately not here.
+
+        **The contract is that compose is IDEMPOTENT**: `compose(compose(x))` equals
+        `compose(x)` for every submission it does not refuse. That is the whole
+        reason it is a method of its own rather than four lines inside `ingest`.
+        A sender can ask what the room will store, be told, and hand exactly that
+        back. Without a fixed point there is no honest way for a peer to commit to
+        its own words, because it would be committing to a draft the room then
+        rewrites, and no way for a later reader to tell a normalisation apart from
+        a tampering.
+
+        The ballot is the case that made the property necessary. A `choice` is
+        resolved against its vote's options HERE, once, because every lane that
+        resolved it for itself was another place to forget: measured live, the
+        remote lane did forget, and a shortened "ja" became its own column in the
+        tally beside "ja, weiter so". Resolving twice returns the same answer, which
+        is what lets the normalisation and the fixed point coexist. The vote's own
+        options are trimmed by the same hand, because a resolver that matches
+        exactly cannot also be the thing that decides what an option is: an option
+        stored as `"ja "` would resolve, store, and then be counted under `"ja"`,
+        which is not one of the choices anyone was offered.
+        """
+        data = dict(payload.to_dict() if isinstance(payload, Frame) else payload)
+        kind = str(data.get("kind") or "say")
+        reply_to = str(data["reply_to"]) if data.get("reply_to") else None
+
+        to = content_object(data.get("to"), "to") or {"room": True}
+        body = content_object(data.get("body"), "body")
+        ext = content_object(data.get("ext"), "ext")
+        try:
+            demanded = required_names(data.get("must_understand"))
+        except MalformedFrame as e:
+            raise MalformedContent(str(e)) from None
+
+        if kind == "vote":
+            body["options"] = self._vote_choices(body.get("options"))
+        elif kind == "answer" and reply_to and body.get("choice"):
+            # Only when a `choice` is present, so an ordinary answer never pays for
+            # the lookup.
+            options = self._vote_options(reply_to)
+            trimmed = str(body["choice"]).strip()[:self.CHOICE_WIDTH]
+            body["choice"] = self._resolve_choice(trimmed, options) if options else trimmed
+
+        return {"kind": kind, "to": to, "body": body, "reply_to": reply_to,
+                "must_understand": demanded, "ext": ext}
+
+    @classmethod
+    def _trimmed_options(cls, options: Any) -> List[str]:
+        """A vote's options, trimmed and bounded, with the empty ones dropped.
+
+        The one place that decides what an option IS. Read as well as written
+        through it, so a vote stored before that rule existed still answers ballots
+        instead of refusing every one of them: a stored `"ja "` is read as `"ja"`,
+        which is what a member typing `ja` is offering.
+        """
+        if isinstance(options, (str, bytes)) or not isinstance(options, Iterable):
+            return []
+        return [o for o in (str(x).strip()[:cls.CHOICE_WIDTH] for x in options) if o]
+
+    def _vote_choices(self, options: Any) -> List[str]:
+        """The options as a vote will STORE them: never empty, so a question always
+        has an answer somebody can give. Empty means yes/no, which is what every
+        reader already assumed."""
+        return self._trimmed_options(options) or ["yes", "no"]
+
     def ingest(self, payload: Any, *, identity: Identity) -> Frame:
         """Accept one frame from an admitted peer, or refuse it.
 
@@ -1422,7 +1529,10 @@ class Room:
         # a round has no leader by design, so its own host would be locked out of
         # ending a conversation living in their own files.
         if kind == "kick":
-            target = str((data.get("body") or {}).get("peer") or "")
+            # Shaped before it is read: a body that is not an object used to reach
+            # `.get` and raise an AttributeError out of whichever door was holding
+            # the submission, which is the same failure `ext: "x"` had.
+            target = str(content_object(data.get("body"), "body").get("peer") or "")
             if not target:
                 raise RoomError("a kick names the peer it removes")
             if target in self.host_peers():
@@ -1447,36 +1557,17 @@ class Room:
         if kind in KINDS and not host_acting and not self.may(role, kind):
             raise NotPermitted(f"a {role} may not emit {kind!r} in this room")
 
-        body = data.get("body") or {}
-        if kind == "answer" and data.get("reply_to") and body.get("choice"):
-            # A BALLOT arriving from anywhere - our own tool, a shell on this
-            # machine, a peer over the wire, a third-party implementation. The
-            # choice is resolved HERE rather than in each of those lanes, because
-            # every lane that resolved it itself would be another place to forget:
-            # measured live, the remote lane did forget, and a shortened "ja"
-            # became its own column in the tally beside "ja, weiter so".
-            #
-            # Only when a `choice` is present, so an ordinary answer never pays for
-            # the lookup. Resolving an already-resolved choice returns it unchanged,
-            # so a lane that resolves first (to word its own text) costs nothing but
-            # the second lookup.
-            options = self._vote_options(str(data.get("reply_to") or ""))
-            if options:
-                body = dict(body)
-                body["choice"] = self._resolve_choice(str(body["choice"]), options)
-
+        # What the room will store, settled in one place and idempotently, so a
+        # sender can be told it in advance and hand exactly it back. Everything
+        # below is placement: assigned from the admitted peer and the store, and
+        # never honoured as it arrived.
         frame = Frame.new(
             room=self.room_id,
             sender=identity.peer_id,
             role=role,
-            kind=kind,
             seq=self.store.next_seq(identity.peer_id),
             lamport=self.store.next_lamport(),
-            to=data.get("to") or {"room": True},
-            body=body,
-            reply_to=data.get("reply_to"),
-            must_understand=data.get("must_understand") or (),
-            ext=data.get("ext") or {},
+            **self.compose(data),
         )
         return self.store.append(frame)
 

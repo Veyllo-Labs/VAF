@@ -305,13 +305,11 @@ class RoomSendTool(BaseTool):
 
         body: Dict[str, Any] = {"text": text}
         if kind == "vote":
-            given = [str(o).strip()[:60] for o in (kwargs.get("options") or [])
-                     if str(o).strip()]
-            body["options"] = given or ["yes", "no"]
+            body["options"] = list(kwargs.get("options") or [])
         if kind == "answer" and str(kwargs.get("choice") or "").strip():
             # A ballot is an answer that names its choice - the protocol already
             # has "this answers that", so a vote needed no second way to say it.
-            body["choice"] = str(kwargs["choice"]).strip()[:60]
+            body["choice"] = str(kwargs["choice"])
         if kind == "report":
             body["status"] = str(kwargs.get("status") or "completed")
             # Normalised by the reader that consumes it, so this tool cannot put

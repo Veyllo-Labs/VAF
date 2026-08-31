@@ -951,7 +951,11 @@ def vote(room_id: str = typer.Argument(...),
         record = _remote_record(room_id)
         if record is None:
             _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
-        body = {"text": question, "options": [o for o in (option or []) if o.strip()] or ["yes", "no"]}
+        # Options are trimmed, bounded and defaulted by the ROOM that stores them,
+        # the same way a local vote's are. Doing it here as well would be a second
+        # opinion about what an option is, on the one lane where the two machines
+        # are not even the same install.
+        body = {"text": question, "options": list(option or [])}
         if closes_in:
             # The deadline used to be dropped silently on this lane: a remote
             # `--closes-in 3` opened a vote the host knew no end for. It is stamped

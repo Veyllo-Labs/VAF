@@ -267,3 +267,53 @@ def test_the_wire_has_no_delete(client):
     lane = source.split("the room workspace over the wire")[1][:9000]
     assert "@app.delete" not in lane
     assert "DELETING over the" in lane and "stays with" in lane
+
+
+def test_every_guest_verb_is_wired_to_a_handler():
+    """MUTATION: register a subcommand with `func=` instead of `handler=`.
+
+    `main` dispatches on `args.handler`, so a verb registered under any other name
+    parses, prints its own `--help`, and dies with an AttributeError the moment
+    somebody actually runs it. That is exactly how `verify` shipped: twelve
+    subparsers used `handler=`, the thirteenth used `func=`, and the tests called
+    `cmd_verify` directly and never went through the parser at all. It was found by
+    a stranger on another machine running the verb for its intended purpose.
+
+    Asserted against the parser OBJECT rather than the source text, so a verb added
+    with a different spelling still has to answer for itself.
+    """
+    import argparse
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location("a2a_guest_wiring", WIRE_PEER)
+    guest = importlib.util.module_from_spec(spec)
+    sys.modules["a2a_guest_wiring"] = guest
+    spec.loader.exec_module(guest)
+
+    captured = {}
+    real = argparse.ArgumentParser.parse_args
+
+    def capture(self, argv=None, namespace=None):
+        # The parser is built inside main(); this is the seam that hands it over
+        # without asking the file to be restructured for a test.
+        captured["parser"] = self
+        raise SystemExit(0)
+
+    argparse.ArgumentParser.parse_args = capture
+    try:
+        try:
+            guest.main(["rooms"])
+        except SystemExit:
+            pass
+    finally:
+        argparse.ArgumentParser.parse_args = real
+
+    parser = captured.get("parser")
+    assert parser is not None, "the guest client's parser could not be reached"
+    actions = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+    assert actions, "the guest client has no subcommands"
+
+    unwired = sorted(name for name, sub in actions[0].choices.items()
+                     if "handler" not in (sub._defaults or {}))
+    assert not unwired, f"these verbs parse but cannot run: {unwired}"

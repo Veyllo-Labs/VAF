@@ -335,6 +335,16 @@ without one withdraws the claim.
 | `foreign_key` | A real signature, by a key this peer never published. What a frame written into the wrong lane looks like. |
 | `invalid` | A signature that does not cover this content. The only verdict that accuses anybody. |
 
+**Three implementations produce these bytes**, and they are checked against each
+other rather than each against itself: VAF, `examples/10_a2a_reference_peer.py` (the
+rules, from this document alone) and `examples/12_a2a_wire_peer.py` (the single file
+a guest downloads). The reference peer implements the canonical form and the verdict
+and takes the curve arithmetic as an injected primitive, reporting `unchecked`
+without one rather than guessing; the guest client does the whole sum in the standard
+library, because the party that most needs to check a signature is the one with
+nothing installed. A byte of drift between any two of them would refuse every
+signature crossing between them, silently, with nothing in either log saying why.
+
 **A verdict never removes a frame**, and is never computed on the read path. The store
 already skips a file it cannot parse, so a verifier that raised would silently delete
 frames and tear the lamport chain for every reader after them. A bad signature downgrades
@@ -645,10 +655,13 @@ without seeing that the same urgent question had been put to it three times,
 because `read` only searched the local disk. What the wire genuinely cannot
 know stays honest instead of invented: a remote `members` reports `stale: null`
 (liveness lives on the host, and a roster that marks everyone far away as
-absent is worse than none) and no household pairing. `export`, `audit`,
-`mission`, `introduce`, `kick` and `close` remain local: the first three read
+absent is worse than none) and no household pairing. `export`, `audit`, `verify`,
+`mission`, `introduce`, `kick` and `close` remain local: the first four read
 host-side state the frames do not carry, and the last two are the host's
-authority by design.
+authority by design. `verify` is the newest of them and the reason is worth
+saying: the key that decides a verdict is folded from the room's join frames,
+which is host-side state, so a seat asking the question would be asking the host
+for the answer it is supposed to be checking.
 
 A leading `@Name` mention sent over the wire travels as TEXT: the member
 table that resolves names lives on the host, and a half-resolved mention would
@@ -709,8 +722,15 @@ rest itself. Two unauthenticated downloads exist for exactly this case:
   line of their own. It pins
   the authority against the invitation's fingerprint, redeems the ticket, keeps the
   seat owner-only under `~/.vaf-a2a-guest/`, and speaks `join`, `read`, `wait`,
-  `say`, `answer`, `report`, `rooms`, `howto`, `files`, `fetch`, `push`,
-  `update` and `leave`. `update` refetches the client over the authority the
+  `say`, `answer`, `report`, `verify`, `rooms`, `howto`, `files`, `fetch`, `push`,
+  `update` and `leave`. `verify` is the one that costs it something: Ed25519 in
+  pure Python, about sixty lines of curve arithmetic, so a guest CHECKS a signature
+  instead of taking the host's word for it. Signed is half of it - a claim nobody
+  can recompute is a claim - and the machine that would be checked is exactly the
+  one that must not be asked. It also carries `CLIENT_VERSION`, which is this FILE's
+  generation and not the protocol's: a single-file client is downloaded to be used
+  as a library, so a peer holding an older copy has to be able to tell rather than
+  find out through an AttributeError. `update` refetches the client over the authority the
   guest already pinned: the invitation's checksum secures the FIRST download,
   when nothing is pinned and the channel cannot be verified, and after that a
   verified refetch is the stronger route - a checksum that no longer matches

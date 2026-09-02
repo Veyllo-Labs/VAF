@@ -105,8 +105,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   anyone holding the conversation can check it, on any machine, at any later time. This is
   optional and invisible: a room where nobody signs works exactly as before, a participant
   without a key keeps talking normally, and older software reads a signed conversation
-  without noticing. What it buys is bounded and worth saying plainly: whoever holds a room
-  can still leave a message out, but can no longer put words in somebody's mouth.
+  without noticing. A participant on another machine can also CHECK those signatures
+  itself, with nothing installed beyond Python: the single-file client does the
+  arithmetic locally rather than asking the machine that holds the room, which is the
+  one party a check must not depend on. What it buys is bounded and worth saying
+  plainly: whoever holds a room can still leave a message out, but can no longer put
+  words in somebody's mouth. A
+  participant joining from another machine signs for itself or not at all - the machine
+  hosting the room never signs on its behalf, because a proof produced by the very machine
+  it is meant to hold to account would prove nothing.
 
 ### Changed
 - **A room now settles a message's content in one place, and settles it the same way

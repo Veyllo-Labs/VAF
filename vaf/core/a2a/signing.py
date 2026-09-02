@@ -127,15 +127,34 @@ def _check_canonical(value: Any, path: str = "body") -> None:
 def covered_payload(room_id: str, content: Mapping[str, Any]) -> Dict[str, Any]:
     """The object a signature is computed over, built from `Room.compose`'s output.
 
-    `must_understand` becomes a list because JSON has no tuples and a verifier will
-    read one back as a list; leaving it a tuple would make the two sides disagree
-    about a value neither of them changed.
+    EVERY field is normalised to its empty form rather than passed through, and that
+    is not tidiness. A frame on disk does not carry its empty fields: `to_dict` emits
+    `ext` only when it holds something. So the party that VERIFIES is reading a frame
+    where `ext` is absent, while the party that SIGNED had it as `{}` from compose. If
+    absent and empty produced different bytes, every frame with an empty extension
+    namespace - which is nearly all of them - would verify for the signer and for
+    nobody else.
+
+    It went unnoticed here because VAF verifies through parsed `Frame` objects, whose
+    reader already coerces absent to empty. A foreign implementation reading the JSON
+    does not, and would have found the two sides disagreeing about a value neither of
+    them changed. Caught by checking the bytes against the two VAF-free peers rather
+    than by checking VAF against itself.
+
+    `must_understand` becomes a list for the same reason: JSON has no tuples, and a
+    verifier reads one back as a list.
     """
     payload: Dict[str, Any] = {"v": VERSION, "room": str(room_id)}
     for field in COVERED:
         value = content.get(field)
         if field == "must_understand":
             value = [str(name) for name in (value or ())]
+        elif field == "reply_to":
+            value = str(value) if value else None
+        elif field in ("to", "body", "ext"):
+            value = dict(value) if isinstance(value, Mapping) else {}
+        else:                                   # kind, which is a name
+            value = str(value or "")
         payload[field] = value
     return payload
 

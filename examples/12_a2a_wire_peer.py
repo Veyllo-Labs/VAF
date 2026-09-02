@@ -73,6 +73,14 @@ from urllib.parse import quote, urlsplit
 PROTOCOL = "vaf-a2a"
 VERSION = 1
 
+#: This FILE's generation, which is not the protocol's. Bumped whenever the shape a
+#: library user touches changes, so somebody holding an older copy can tell rather
+#: than discover it as an AttributeError. Measured need: `RoomConnection.frames()`
+#: became `backlog()` / `next_frame()` and a peer that had kept the previous file as
+#: a library found out by crashing. The protocol version above says what the WIRE
+#: speaks; this one says what this file offers.
+CLIENT_VERSION = 2
+
 #: RFC 6455 handshake constant, not a secret.
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -522,6 +530,167 @@ def _fail(reason: str, code: int = 1):
     raise SystemExit(code)
 
 
+# ── checking who wrote a message ───────────────────────────────────────────
+#
+# A frame MAY carry `sig`, the sender's claim that it wrote the content. Signed is
+# only half of it: a claim nobody can check is a claim. So this file does the sum
+# itself, in the standard library, because the whole point of this client is that a
+# stranger can read it and run it without installing anything.
+#
+# Ed25519 verification is about sixty lines of curve arithmetic (RFC 8032). That is
+# more than one would like in a single-file client, and it is still less than asking
+# the reader to trust a signature nobody on this machine ever recomputed.
+
+_P = 2**255 - 19
+_D = -121665 * pow(121666, _P - 2, _P) % _P
+_I = pow(2, (_P - 1) // 4, _P)
+
+
+def _ed_recover_x(y: int) -> int:
+    xx = (y * y - 1) * pow(_D * y * y + 1, _P - 2, _P)
+    x = pow(xx, (_P + 3) // 8, _P)
+    if (x * x - xx) % _P != 0:
+        x = x * _I % _P
+    return _P - x if x % 2 else x
+
+
+_ED_B = (_ed_recover_x(4 * pow(5, _P - 2, _P) % _P), 4 * pow(5, _P - 2, _P) % _P)
+
+
+def _ed_add(P, Q):
+    x1, y1 = P
+    x2, y2 = Q
+    t = _D * x1 * x2 * y1 * y2 % _P
+    return ((x1 * y2 + x2 * y1) * pow(1 + t, _P - 2, _P) % _P,
+            (y1 * y2 + x1 * x2) * pow(1 - t, _P - 2, _P) % _P)
+
+
+def _ed_mul(P, e: int):
+    if e == 0:
+        return (0, 1)
+    Q = _ed_mul(P, e // 2)
+    Q = _ed_add(Q, Q)
+    return _ed_add(Q, P) if e & 1 else Q
+
+
+def _ed_bit(h: bytes, i: int) -> int:
+    return (h[i // 8] >> (i % 8)) & 1
+
+
+def _ed_encode(P) -> bytes:
+    x, y = P
+    bits = [(y >> i) & 1 for i in range(255)] + [x & 1]
+    return bytes(sum(bits[i * 8 + j] << j for j in range(8)) for i in range(32))
+
+
+def _ed_decode(raw: bytes):
+    y = sum(2**i * _ed_bit(raw, i) for i in range(255))
+    x = _ed_recover_x(y)
+    if x & 1 != _ed_bit(raw, 255):
+        x = _P - x
+    if (-x * x + y * y - 1 - _D * x * x * y * y) % _P != 0:
+        raise ValueError("point is not on the curve")
+    return (x, y)
+
+
+def ed25519_verify(public_key: bytes, signature: bytes, message: bytes) -> bool:
+    """RFC 8032 verification. False rather than raising: a reader walks a whole
+    transcript, and one frame it cannot check must cost that frame its verdict, never
+    the walk."""
+    if len(signature) != 64 or len(public_key) != 32:
+        return False
+    try:
+        R = _ed_decode(signature[:32])
+        A = _ed_decode(public_key)
+    except ValueError:
+        return False
+    S = sum(2**i * _ed_bit(signature[32:64], i) for i in range(256))
+    h = hashlib.sha512(signature[:32] + public_key + message).digest()
+    k = sum(2**i * _ed_bit(h, i) for i in range(512))
+    return _ed_encode(_ed_mul(_ED_B, S)) == _ed_encode(_ed_add(R, _ed_mul(A, k)))
+
+
+SIG_DOMAIN = b"vaf-a2a-sig/v1\n"
+
+#: The content fields a signature covers. `room` is covered too, so a signed frame
+#: cannot be lifted into another room. `id`, `ts`, `seq`, `lamport`, `from` and
+#: `role` are PLACEMENT: the room assigns them after the payload arrives, so a
+#: sender cannot sign them and must not try.
+SIG_COVERED = ("kind", "to", "body", "reply_to", "must_understand", "ext")
+
+
+def signing_bytes(frame: dict) -> bytes:
+    """The exact bytes a signature over this frame was computed on.
+
+    Sorted keys, no whitespace, UTF-8 rather than escapes, behind a domain prefix.
+    Every part of that matters: two implementations that disagree by one byte reject
+    each other's signatures and neither can see why.
+    """
+    payload = {"v": VERSION, "room": str(frame.get("room") or "")}
+    for field in SIG_COVERED:
+        value = frame.get(field)
+        if field == "must_understand":
+            value = [str(name) for name in (value or [])]
+        elif field == "reply_to":
+            value = str(value) if value else None
+        elif field in ("to", "body", "ext"):
+            value = dict(value) if isinstance(value, dict) else {}
+        payload[field] = value
+    return SIG_DOMAIN + json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def signing_keys(frames) -> dict:
+    """Which public key each peer published, folded from the `join` frames.
+
+    From the LOG, never from a peer record: a record is mutable and lives on the
+    host's disk, and a host that could swap a key there could forge every later frame
+    from that peer. A join frame sits in that peer's own write-once lane. The last
+    key published wins, so rejoining rotates one and rejoining without one withdraws
+    the claim.
+    """
+    keys = {}
+    for frame in sorted(frames, key=sort_key):
+        if str(frame.get("kind") or "") != "join":
+            continue
+        sender = str(frame.get("from") or "")
+        published = str((frame.get("body") or {}).get("sign_key") or "")
+        if len(published) == 64:
+            keys[sender] = published
+        else:
+            keys.pop(sender, None)
+    return keys
+
+
+def verdict_for(frame: dict, keys: dict) -> str:
+    """What may be concluded about who wrote this frame's content.
+
+    `unsigned` is the ordinary answer and not a complaint. `unreadable` is a claim
+    this version cannot parse, which is what a newer scheme looks like from here.
+    `valid` means the signature covers this content AND the key is the one that peer
+    published in the room. `foreign_key` is a real signature by a key it never
+    published - what a frame written into the wrong lane looks like. `invalid` is the
+    only one that accuses anybody.
+
+    Never raises, and a verdict never removes a frame: a failed signature downgrades
+    what may be concluded and nothing else.
+    """
+    sig = frame.get("sig")
+    if not isinstance(sig, dict) or not sig:
+        return "unsigned"
+    key, blob = str(sig.get("key") or ""), str(sig.get("sig") or "")
+    if str(sig.get("alg") or "") != "ed25519" or len(key) != 64 or len(blob) != 128:
+        return "unreadable"
+    try:
+        if not ed25519_verify(bytes.fromhex(key), bytes.fromhex(blob), signing_bytes(frame)):
+            return "invalid"
+    except Exception:
+        return "unreadable"
+    published = keys.get(str(frame.get("from") or ""))
+    return "valid" if published and published == key else "foreign_key"
+
+
 def _print_frame(frame: dict) -> None:
     print(json.dumps(frame, ensure_ascii=False))
 
@@ -586,6 +755,37 @@ def cmd_read(args) -> None:
     save_record(record)
     for frame in rows:
         _print_frame(frame)
+
+
+def cmd_verify(args) -> None:
+    """One verdict per message: who wrote it, as far as the transcript can prove.
+
+    A room RECORDS an author by assigning it, which is worth as much as the machine
+    holding the room. A signed message can be checked by anybody holding the
+    transcript, on any machine, later - and this verb is that check, done here rather
+    than taken on trust from the host.
+
+    Reads without consuming: the cursor is left where it was, so verifying does not
+    swallow messages this peer has not read yet.
+    """
+    record = load_record(args.room)
+    line = _line_for(args.room, record)
+    if line is not None:
+        frames = line.seen()
+    else:
+        connection = _open(record)
+        try:
+            frames = connection.backlog()
+        finally:
+            connection.close()
+    frames = [f for f in frames if str(f.get("kind") or "") not in _TRANSPORT_KINDS]
+    keys = signing_keys(frames)
+    for frame in sorted(frames, key=sort_key):
+        _print_frame({"id": frame.get("id"), "peer": frame.get("from"),
+                      "seq": frame.get("seq"),
+                      "kind": frame.get("kind"), "lamport": frame.get("lamport"),
+                      "verdict": verdict_for(frame, keys),
+                      "key": (frame.get("sig") or {}).get("key") or ""})
 
 
 def cmd_wait(args) -> None:
@@ -820,6 +1020,16 @@ class RoomLine:
     def error(self) -> str:
         with self._cv:
             return self._error
+
+    def seen(self) -> list:
+        """Every frame this held line has taken in, WITHOUT consuming anything.
+
+        `take_new` answers "what is new for me" and moves the reader on; this
+        answers "what do I hold", which is the question a check about authorship
+        asks. Verifying must not swallow a message nobody has read yet.
+        """
+        with self._cv:
+            return list(self._frames)
 
     def alive(self) -> bool:
         with self._cv:
@@ -1489,6 +1699,11 @@ def main(argv=None) -> None:
                              help="submitted, working, input_required, completed, "
                                   "failed, rejected, canceled")
         sub.set_defaults(handler=_send, kind=kind)
+
+    verify = commands.add_parser(
+        "verify", help="who really wrote each message, checked here rather than trusted")
+    verify.add_argument("room")
+    verify.set_defaults(handler=cmd_verify)
 
     rooms = commands.add_parser("rooms", help="list the seats this machine holds")
     rooms.set_defaults(handler=cmd_rooms)

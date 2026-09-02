@@ -26,6 +26,7 @@ Run it to watch the rules work:
 
     python examples/10_a2a_reference_peer.py
 """
+import json
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
 PROTOCOL = "vaf-a2a"
@@ -203,6 +204,127 @@ def dedupe(frames: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
             seen.add(key)
         out.append(dict(frame))
     return out
+
+
+# ── signatures: the BYTES, which are the part that drifts ──────────────────
+
+SIG_DOMAIN = b"vaf-a2a-sig/v1\n"
+
+#: What a signature covers, in the order the document lists them. Not carried on the
+#: wire: `v` inside the signed bytes is what pins the set, so a different coverage
+#: would be a different version.
+COVERED = ("kind", "to", "body", "reply_to", "must_understand", "ext")
+
+
+class NotCanonical(Refused):
+    """A payload two implementations would not serialise identically."""
+
+
+def _canonical(value: Any, path: str = "payload") -> None:
+    """Refuse what cannot be written down the same way twice.
+
+    A fractional number is the one that bites in practice: no two languages print
+    every float alike, so a deadline written by one peer verifies nowhere else. NaN
+    and infinity are not JSON at all. A key that is not a string collapses two
+    different objects onto one set of signed bytes.
+    """
+    if isinstance(value, bool):
+        return
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            raise NotCanonical(f"{path} is not a number a payload can carry")
+        raise NotCanonical(f"{path} is fractional; a signed payload carries whole numbers")
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise NotCanonical(f"{path} has a key that is not a string: {key!r}")
+            _canonical(item, f"{path}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _canonical(item, f"{path}[{index}]")
+
+
+def signing_bytes(frame: Mapping[str, Any]) -> bytes:
+    """The exact bytes a signature over this frame is computed on.
+
+    Written from the document's Signing section and nothing else, which is the whole
+    point of this file: if these bytes and VAF's differ by one byte, every signature
+    crossing between the two implementations fails, and it fails silently. `room` is
+    covered so a signed frame cannot be lifted into another room; `id`, `ts`, `seq`,
+    `lamport`, `from` and `role` are placement, assigned after the payload arrives,
+    and a sender cannot sign what somebody else fills in.
+    """
+    payload: Dict[str, Any] = {"v": VERSION, "room": str(frame.get("room") or "")}
+    for field in COVERED:
+        value = frame.get(field)
+        if field == "must_understand":
+            value = [str(name) for name in (value or [])]
+        elif field == "reply_to":
+            value = str(value) if value else None
+        elif field in ("to", "body", "ext"):
+            value = dict(value) if isinstance(value, Mapping) else {}
+        payload[field] = value
+    _canonical(payload)
+    return SIG_DOMAIN + json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def signing_keys(frames: Iterable[Mapping[str, Any]]) -> Dict[str, str]:
+    """Which public key each peer published, folded from the `join` frames.
+
+    A FOLD, like the roles, so any reader recomputes it from the transcript alone.
+    Never from a peer record: that is mutable and lives on the host's disk, and a
+    host that could swap a key there could forge every later frame from that peer.
+    The last key a peer published wins, so rejoining is how one rotates; rejoining
+    without a key withdraws the claim.
+    """
+    keys: Dict[str, str] = {}
+    for frame in sorted(frames, key=sort_key):
+        if str(frame.get("kind") or "") != "join":
+            continue
+        sender = str(frame.get("from") or "")
+        published = str((frame.get("body") or {}).get("sign_key") or "")
+        if len(published) == 64:
+            keys[sender] = published
+        else:
+            keys.pop(sender, None)
+    return keys
+
+
+def verdict(frame: Mapping[str, Any], keys: Mapping[str, str],
+            verify: Any = None) -> str:
+    """What a reader may conclude about who wrote this frame's content.
+
+    `verify(public_key_hex, signature_hex, message)` is injected because Ed25519 is
+    not in the standard library and this file is about the PROTOCOL, not about curve
+    arithmetic. Without one, a frame that carries a signature is `unchecked` rather
+    than trusted - the honest answer for a reader that cannot do the sum.
+
+    Five answers, and the distinctions are the point: `unsigned` (nothing claimed,
+    the ordinary case), `unreadable` (a claim this version cannot parse, which is
+    what a newer scheme looks like to an older reader), `valid`, `foreign_key` (a
+    real signature by a key this peer never published, which is what a frame written
+    into the wrong lane looks like), `invalid` (the only verdict that accuses).
+
+    It NEVER raises and never removes a frame: a bad signature downgrades what may
+    be concluded, nothing more.
+    """
+    sig = frame.get("sig")
+    if not isinstance(sig, Mapping) or not sig:
+        return "unsigned"
+    key, blob = str(sig.get("key") or ""), str(sig.get("sig") or "")
+    if str(sig.get("alg") or "") != "ed25519" or len(key) != 64 or len(blob) != 128:
+        return "unreadable"
+    if verify is None:
+        return "unchecked"
+    try:
+        if not verify(key, blob, signing_bytes(frame)):
+            return "invalid"
+    except Exception:
+        return "unreadable"
+    published = keys.get(str(frame.get("from") or ""))
+    return "valid" if published and published == key else "foreign_key"
 
 
 def gaps(seqs: Iterable[int]) -> List[int]:

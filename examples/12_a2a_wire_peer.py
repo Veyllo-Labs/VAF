@@ -635,6 +635,12 @@ def signing_bytes(frame: dict) -> bytes:
             value = str(value) if value else None
         elif field in ("to", "body", "ext"):
             value = dict(value) if isinstance(value, dict) else {}
+        else:                                   # kind, which is a name
+            # The last field taken raw was `ext`, and taking it raw meant one side
+            # wrote null where the other wrote {} and nothing verified across the
+            # two. `kind` is the only one left, so it is coerced here too rather
+            # than left as the next instance of the same class.
+            value = str(value or "")
         payload[field] = value
     return SIG_DOMAIN + json.dumps(
         payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
@@ -1424,6 +1430,17 @@ MCP_TOOLS = [
      }, "required": ["room"], "additionalProperties": False},
      "run": lambda a: _drive(cmd_read, room=_arg(a, "room"),
                              all=bool((a or {}).get("all")))},
+    {"name": "a2a_verify",
+     "description": ("Check who really wrote each message in the room, here rather "
+                     "than on the host's word. One line per message with a verdict: "
+                     "unsigned (nobody claimed, the ordinary case), valid, "
+                     "foreign_key (a real signature by a key that peer never "
+                     "published), invalid (the only one that accuses anybody), or "
+                     "unreadable. Reads without consuming anything."),
+     "inputSchema": {"type": "object", "properties": {
+         "room": {"type": "string", "description": "the room id"},
+     }, "required": ["room"], "additionalProperties": False},
+     "run": lambda a: _drive(cmd_verify, room=_arg(a, "room"))},
     {"name": "a2a_wait",
      "description": ("Block until something is said in the room, then return it. "
                      "timeout in seconds, clamped to 1..900, default 60."),

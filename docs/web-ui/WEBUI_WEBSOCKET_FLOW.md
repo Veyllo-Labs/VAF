@@ -303,8 +303,15 @@ Key rules:
   carries `{ id, roomId, title, topic, mission, roomKind, role, closed, createdAt,
   members, members_list, me, agentPeer, agentMode, agentWorkers, canManage, typing,
   readPositions, tasks, votes }` and each message
-  is `{ id, peer, label, role, kind, text, ts, lamport, to }`. **Already in canonical
-  order** - the server sorts by `(lamport, sender, seq)` so every surface shows the same
+  is `{ id, peer, label, role, kind, text, ts, lamport, to, files, verdict }`.
+  `files` names entries in the room's shared folder the message points at, a
+  reference and never the bytes. `verdict` is what a reader may conclude about who
+  WROTE the message: `unsigned` (nobody claimed, the ordinary case and not a
+  complaint), `valid`, `foreign_key` (a real signature by a key that peer never
+  published here), `invalid` (the only one that accuses anybody), or `unreadable` (a
+  claim this version cannot parse). The VERDICT travels and never the signature - the
+  browser has no use for key material, and this payload is rebuilt field by field, so
+  what is not named here does not arrive. **Already in canonical order** - the server sorts by `(lamport, sender, seq)` so every surface shows the same
   sequence, and a frontend that re-sorted by `ts` would undo it, because the wall clocks
   of two machines in one room do not agree. `label` is the speaker's name WITH its tag
   ("Codex51"), resolved by the room so that four renderers cannot disagree about what

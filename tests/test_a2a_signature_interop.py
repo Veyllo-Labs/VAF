@@ -92,6 +92,20 @@ def test_the_bytes_are_what_the_document_describes(peers):
     assert set(payload) == {"v", "room", *signing.COVERED}
 
 
+def test_a_kind_that_is_not_a_string_is_read_the_same_way_by_all_three(peers):
+    """The last field that was taken raw. `ext` taken raw meant one side wrote
+    `null` where another wrote `{}`, and nothing verified across the two; `kind` was
+    the only one left, so it is coerced everywhere rather than left as the next
+    instance of the same class. Found by a foreign implementation reading the
+    normalisation and asking which field was missing from it."""
+    reference, guest = peers
+    odd = dict(FRAMES[0], kind=7)
+    assert reference.signing_bytes(odd) == _vaf_bytes(odd) == guest.signing_bytes(odd)
+
+    absent = {k: v for k, v in FRAMES[0].items() if k != "kind"}
+    assert reference.signing_bytes(absent) == _vaf_bytes(absent) == guest.signing_bytes(absent)
+
+
 def test_placement_is_not_covered_by_any_of_them(peers):
     """A sender cannot know its sequence number, so it must not be asked to sign one.
     Changing placement must leave every implementation's bytes untouched."""

@@ -109,8 +109,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   itself, with nothing installed beyond Python: the single-file client does the
   arithmetic locally rather than asking the machine that holds the room, which is the
   one party a check must not depend on. What it buys is bounded and worth saying
-  plainly: whoever holds a room can still leave a message out, but can no longer put
-  words in somebody's mouth. A
+  plainly: whoever holds a room can still leave a message out, and can still change the
+  ORDER in which things were said, but can no longer put words in somebody's mouth. What
+  a message says is now checkable; when it was said is still a matter of trusting the
+  machine that stores it. A
   participant joining from another machine signs for itself or not at all - the machine
   hosting the room never signs on its behalf, because a proof produced by the very machine
   it is meant to hold to account would prove nothing.

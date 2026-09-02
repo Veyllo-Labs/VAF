@@ -1328,6 +1328,56 @@ it is why a wrapper of your own should ask the room rather than re-implement the
 trimming. A submission whose `to`, `body` or `ext` is not an object raises `RoomError`
 here, named field first, instead of failing later inside a constructor.
 
+**Who wrote what, provably.** A room ASSIGNS authorship - `ingest` overwrites `from`
+with the admitted peer - which is sound while the machine holding the room is the one
+that admitted the connection, and says nothing to anybody reading the transcript
+elsewhere. A peer may therefore SIGN what it says, and a reader holding only the
+transcript can check it.
+
+```python
+room.signing_keys()          # {peer_id: public key}, folded from the join frames
+room.verdict_for(frame)      # what a reader may conclude about one frame
+room.verify_frames()         # [(frame, verdict)] for the whole room, keys folded once
+```
+
+Five verdicts, and the distinctions are the point: `unsigned` (nothing was claimed,
+the ordinary case and not a complaint), `valid`, `foreign_key` (a real signature by a
+key that peer never published here, which is what a frame written into the wrong lane
+looks like), `invalid` (the only one that accuses anybody) and `unreadable` (a claim
+this version cannot parse, which is what a newer scheme looks like to an older
+reader). Nothing here raises, and a verdict never removes a frame: a failed signature
+downgrades what may be concluded and nothing more.
+
+Four things an embedder should know before building on it:
+
+- **Signing is optional in both directions.** A room where nobody signs behaves
+  exactly as it always has, and a peer that has never heard of the field relays and
+  renders a signed frame unchanged.
+- **VAF signs only for its OWN actors**, the `agent` and `cli` lanes, whose keys come
+  out of this machine's keyring. A peer arriving over the wire signs by PRESENTING a
+  signature or stays unsigned. Do not "helpfully" sign for a remote party: a proof
+  produced by the machine it is meant to hold to account proves nothing, and it makes
+  `valid` mean less than it says.
+- **The key belongs to a peer by a FOLD over the log**, never by a peer record. A
+  record is mutable and lives on the host's disk; a join frame does not. If you build
+  your own membership view, read the keys the same way or do not read them at all.
+- **What it buys is bounded, and the bound is worth knowing.** A signature binds
+  CONTENT to a key. `seq`, `lamport`, `ts`, `id` and `role` are not covered, because
+  the sender controls none of them - it cannot sign a sequence number it learns only
+  after speaking. So the content of a conversation is tamper-evident and its ORDER is
+  not: rewriting a stored frame's `lamport` or `role` leaves the verdict at `valid`.
+  If you render a verdict beside a role, do not let the pairing suggest the role was
+  signed; the authority on a role is the fold over `join`, `role` and `leave`.
+
+The canonical byte form is specified in
+[docs/agents/A2A_PROTOCOL.md](agents/A2A_PROTOCOL.md), precisely enough to reproduce -
+`examples/10_a2a_reference_peer.py` and `examples/12_a2a_wire_peer.py` both implement
+it from that text and import nothing from VAF, and a test pins all three to the same
+bytes. `vaf.core.a2a.signing` is deliberately NOT on the public facade yet: everything
+an embedder has needed so far is reachable through `Room`, and nothing has yet
+measured a need to mint or check a signature outside one. Say so if you hit that
+wall - a named boundary is easier to move than a guess.
+
 **Deciding together, with a clock.** `room.open_vote(...)` puts a question, `room.cast(...)`
 answers it, and `vaf.fold_room_votes(frames, labels=..., members=...)` folds the tally the
 same way from a store or from frames alone. A vote ENDS by itself: the room reminds a

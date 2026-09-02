@@ -263,6 +263,12 @@ def signing_bytes(frame: Mapping[str, Any]) -> bytes:
             value = str(value) if value else None
         elif field in ("to", "body", "ext"):
             value = dict(value) if isinstance(value, Mapping) else {}
+        else:                                   # kind, which is a name
+            # The last field taken raw was `ext`, and taking it raw meant one side
+            # wrote null where the other wrote {} and nothing verified across the
+            # two. `kind` is the only one left, so it is coerced here too rather
+            # than left as the next instance of the same class.
+            value = str(value or "")
         payload[field] = value
     _canonical(payload)
     return SIG_DOMAIN + json.dumps(

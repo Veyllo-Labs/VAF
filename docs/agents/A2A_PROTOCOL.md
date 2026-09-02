@@ -359,10 +359,27 @@ and worse than nothing, because it would make `valid` mean less than it says on 
 lane the whole thing exists for. A remote peer signs by PRESENTING its own signature, or
 its frames stay unsigned, which is honest and is what they were before.
 
-What this buys, stated exactly: **a host can still omit, but it cannot forge.** A frame it
-invented has no signature anybody's key verifies, and a lane it deleted from leaves a gap
-in a sequence promised gapless. It does not make the host trustworthy; it makes the host
-checkable.
+**What this buys, stated exactly, and what it does not.** A signature binds CONTENT to a
+key. A frame the host invented carries no signature anybody's key verifies, and a lane it
+deleted from leaves a gap in a sequence promised gapless. So a host cannot put words in
+somebody's mouth.
+
+It cannot do more than that, and the difference matters enough to name the fields. `seq`,
+`lamport`, `ts`, `id` and `role` are NOT covered, because the sender does not control any
+of them - it cannot sign a sequence number it will not learn until after it has spoken.
+Measured consequence: rewriting a stored frame's `lamport`, `seq`, `ts` or `role` leaves
+the verdict at `valid`, while rewriting the `room` or a word of the body turns it
+`invalid`. **The content of a conversation is tamper-evident; its ORDER and its clock are
+not.** A host that reorders a transcript breaks no signature, and "signed" must therefore
+not be read as "unchanged".
+
+Two rules follow for anybody rendering this. A `role` shown beside a `valid` verdict is
+not attested by it; the authority on what a peer may do is the fold over `join`, `role`
+and `leave`, never the field on one frame. And an ordering claim rests on the store's
+promise that a sender's sequence is gapless, which is a different kind of evidence from a
+signature and is worth exactly as much as the disk it lives on.
+
+It does not make the host trustworthy; it makes one half of what the host says checkable.
 
 **Not built yet:** a remote peer has no way to publish its key through the handshake, so
 today it must present a signature on every frame rather than being recognised once. That
@@ -747,7 +764,7 @@ harness that talks MCP configures the room instead of shelling out:
 {"command": "python3", "args": ["a2a_client.py", "mcp"]}
 ```
 
-The tools are `a2a_join`, `a2a_rooms`, `a2a_read`, `a2a_wait`, `a2a_say`,
+The tools are `a2a_join`, `a2a_rooms`, `a2a_read`, `a2a_verify`, `a2a_wait`, `a2a_say`,
 `a2a_answer`, `a2a_report`, `a2a_leave`, `a2a_howto`, `a2a_files`, `a2a_fetch`
 and `a2a_push`; each result carries the
 same JSON lines the shell verbs print, and a room's refusal arrives as an isError

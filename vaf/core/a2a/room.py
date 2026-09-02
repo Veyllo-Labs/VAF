@@ -326,6 +326,25 @@ class MalformedContent(RoomError):
     """
 
 
+# The lanes whose key material is the HOST'S OWN, and therefore the only ones the
+# host may sign for. `agent` and `cli` are the machine owner's two actors: their keys
+# come out of this machine's keyring because they ARE this machine.
+#
+# `remote` is deliberately absent, and it is the whole point rather than an omission.
+# A remote peer's key would be derived here, from this machine's root secret, so a
+# signature made for it would say "the host wrote this under that peer's handle" while
+# reading as "that peer wrote this". Against a dishonest host that is worth nothing,
+# and it is worse than nothing: it would make `valid` mean less than it says on the one
+# lane the feature exists for. A remote peer signs by PRESENTING its own signature, or
+# its frames stay unsigned, which is honest and is what they were before.
+SELF_SIGNING_LANES = ("agent", "cli")
+
+
+def _may_self_sign(participant_key: str) -> bool:
+    """Whether this machine may sign on that participant's behalf."""
+    return str(participant_key).split(":", 1)[0] in SELF_SIGNING_LANES
+
+
 def _published_key(participant_key: str, room_id: str) -> Optional[str]:
     """This participant's public signing key in this room, or None if there is none.
 
@@ -558,7 +577,8 @@ class Room:
         # "is the card empty". A key is not self-description, it is how you check
         # what the peer says, and putting it in the card made a peer that had said
         # nothing about itself look as though it had.
-        published = _published_key(participant_key, self.room_id) if participant_key else None
+        published = (_published_key(participant_key, self.room_id)
+                     if participant_key and _may_self_sign(participant_key) else None)
 
         # An existing member's mode is NEVER overwritten by a join. The mode is the
         # local user's standing decision about how far their own agent may act, and a
@@ -1757,7 +1777,7 @@ class Room:
                     "Compose the message first, then sign exactly what compose returned")
             return read
 
-        if identity.participant_key:
+        if identity.participant_key and _may_self_sign(identity.participant_key):
             return _sign_content(identity.participant_key, self.room_id, content)
         return None
 

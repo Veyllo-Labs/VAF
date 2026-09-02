@@ -270,3 +270,56 @@ def test_a_room_where_nobody_signs_says_unsigned_rather_than_nothing(rooms):
     entry = [r for r in room.transcript() if r["kind"] == "say"][0]
     assert entry["verdict"] == "unsigned"
     assert _row(entry)["verdict"] == "unsigned"
+
+
+# ── the lane the whole feature exists for ───────────────────────────────────
+
+def test_the_host_never_signs_for_a_remote_peer(rooms):
+    """The defect this rule was written against, and it is the one that would have
+    mattered most.
+
+    A remote peer's key would be derived HERE, from this machine's root secret. A
+    signature made for it would say "the host wrote this under that peer's handle"
+    while reading as "that peer wrote this" - which against a dishonest host is worth
+    nothing, and is worse than nothing, because it makes `valid` mean less than it
+    says on the one lane the feature exists for. Unsigned is honest and is what those
+    frames were before.
+    """
+    key = participant_key("remote", "scope-far")
+    room = Room.create(kind="round", owner_scope=None, base=rooms, room_id="room-far")
+    far = room.join(display="Mac", scope_id="scope-far",
+                    peer_id=derive_peer_id(key, "room-far"), participant_key=key)
+
+    assert room.signing_keys() == {}, "a key the peer does not hold must not be published"
+    frame = room.say(far, "vom anderen Rechner")
+    assert frame.sig is None
+    assert room.verdict_for(frame) == "unsigned"
+
+
+def test_a_remote_peer_that_signs_for_itself_is_valid(rooms):
+    """The way a remote peer DOES get a signature: it presents one. Nothing about the
+    refusal above stops that, and this is the path a second machine takes."""
+    key = participant_key("remote", "scope-far")
+    room = Room.create(kind="round", owner_scope=None, base=rooms, room_id="room-far2")
+    far = room.join(display="Mac", scope_id="scope-far",
+                    peer_id=derive_peer_id(key, "room-far2"), participant_key=key)
+
+    payload = {"kind": "join", "body": {"display": "Mac", "card": {},
+                                        "sign_key": signing.public_key(key, room.room_id)}}
+    room.ingest(payload, identity=far)
+
+    content = room.compose({"kind": "say", "body": {"text": "selbst signiert"}})
+    sig = signing.sign(signing.covered_payload(room.room_id, content),
+                       participant_key=key, room_id=room.room_id)
+    frame = room.ingest({"kind": "say", "body": {"text": "selbst signiert"}, "sig": sig},
+                        identity=far)
+    assert room.verdict_for(frame) == "valid"
+
+
+@pytest.mark.parametrize("lane,signs", [("agent", True), ("cli", True), ("remote", False)])
+def test_only_this_machines_own_actors_are_signed_for(rooms, lane, signs):
+    key = participant_key(lane, "scope-x")
+    room = Room.create(kind="round", owner_scope=None, base=rooms, room_id=f"room-{lane}")
+    who = room.join(display=lane, scope_id="scope-x",
+                    peer_id=derive_peer_id(key, f"room-{lane}"), participant_key=key)
+    assert bool(room.say(who, "hallo").sig) is signs

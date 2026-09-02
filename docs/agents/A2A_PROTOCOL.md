@@ -340,10 +340,23 @@ already skips a file it cannot parse, so a verifier that raised would silently d
 frames and tear the lamport chain for every reader after them. A bad signature downgrades
 what may be concluded and nothing else.
 
+**A host signs only for its OWN actors**, which are the `agent` and `cli` lanes: their
+keys come out of this machine's keyring because they ARE this machine. The `remote` lane
+is deliberately excluded. A remote peer's key would be derived here, from this machine's
+root secret, so a signature made for it would say "the host wrote this under that peer's
+handle" while reading as "that peer wrote this" - worth nothing against a dishonest host,
+and worse than nothing, because it would make `valid` mean less than it says on the one
+lane the whole thing exists for. A remote peer signs by PRESENTING its own signature, or
+its frames stay unsigned, which is honest and is what they were before.
+
 What this buys, stated exactly: **a host can still omit, but it cannot forge.** A frame it
 invented has no signature anybody's key verifies, and a lane it deleted from leaves a gap
 in a sequence promised gapless. It does not make the host trustworthy; it makes the host
 checkable.
+
+**Not built yet:** a remote peer has no way to publish its key through the handshake, so
+today it must present a signature on every frame rather than being recognised once. That
+is the next piece of this lane, not a property of the design.
 
 ## Roles
 

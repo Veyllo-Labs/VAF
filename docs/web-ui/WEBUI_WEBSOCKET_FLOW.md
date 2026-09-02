@@ -346,8 +346,10 @@ Key rules:
   carries `kind` (`human` / `agent` / `unknown`), `partner` and `partnerLabel`: who
   belongs to whom, DERIVED by the room from the account each handle was built from and
   never read from a member's own record - a member could otherwise name itself somebody
-  else's partner. `unknown` is the honest answer for a guest that arrived on an
-  invitation and named no account; a surface must not draw it as one of the other two.
+  else's partner. A guest that arrived on an invitation and named no account is paired
+  only when its join carries its owner's attestation, which the room checks against the
+  log the same way (A2A_PROTOCOL.md, Signing); otherwise `unknown` is the honest answer,
+  and a surface must not draw it as one of the other two.
   `room.tasks` and `room.votes` are DERIVED server-side from the same frames (the task
   board and the vote fold), never stored: two surfaces cannot then disagree about what
   "working" means or who abstained. A vote carries

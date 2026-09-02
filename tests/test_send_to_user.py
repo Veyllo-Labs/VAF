@@ -11,6 +11,7 @@ tool must join (thinking-mode strip set, agent/engine scope injection, router
 pin, engine path map), the front-office default-deny, and the automation-lane
 double-delivery dedup.
 """
+import pytest
 from pathlib import Path
 
 import vaf.core.agent as agent_mod
@@ -204,80 +205,83 @@ def test_agent_history_dedup_requires_send_tool_and_success():
 
 # ── router outbound recording (live 2026-07-14: 'aktive timer?' context gap) ─
 
-def test_router_records_outbound_into_channel_session(monkeypatch):
-    import vaf.core.messaging_connections as mc
-    saved = {}
-
-    class _FakeSession:
-        def __init__(self):
-            self.messages = []
-        def add_message(self, role, content, **kw):
-            self.messages.append((role, content))
-
-    class _FakeSM:
-        def load(self, sid, restore_state=False):
-            saved["sid"] = sid
-            saved.setdefault("session", _FakeSession())
-            return saved["session"]
-        def save(self, session, sync_state=False):
-            saved["saved"] = True
-
+@pytest.fixture
+def _session_store(tmp_path, monkeypatch):
     import vaf.core.session as session_mod
-    monkeypatch.setattr(session_mod, "SessionManager", _FakeSM)
+    monkeypatch.setattr(session_mod, "default_sessions_dir", lambda: tmp_path / "sessions")
+    return tmp_path / "sessions"
+
+
+def test_router_records_outbound_into_channel_session(monkeypatch, _session_store):
+    import vaf.core.messaging_connections as mc
+    from vaf.core.session import SessionManager, take_transcript_changed
     store_calls = []
     import vaf.core.channel_message_store as store_mod
     monkeypatch.setattr(store_mod, "append_message",
                         lambda **kw: store_calls.append(kw))
 
     mc._record_outbound("telegram", "12345", "Hello", "alice", "scope1")
-    assert saved["sid"] == "telegram_12345"
-    assert ("assistant", "Hello") in saved["session"].messages
-    assert saved.get("saved") is True
+    saved = SessionManager().load("telegram_12345", restore_state=False, repoint=False)
+    assert [(m.role, m.content) for m in saved.messages] == [("assistant", "Hello")]
+    # An outbound-FIRST session is stamped with its owner scope (ownership gates).
+    assert saved.metadata.get("user_scope_id") == "scope1"
     assert len(store_calls) == 1 and store_calls[0]["channel"] == "telegram"
+    # The append went through the background primitive: the live agent on this
+    # session is told its file grew.
+    assert take_transcript_changed("telegram_12345") is True
 
 
-def test_router_recording_respects_whatsapp_bridge_ownership(monkeypatch):
+def test_router_recording_persists_the_message_kind(monkeypatch, _session_store):
+    """MUTATION: drop `kind=kind` from any `_record_outbound` call in
+    send_to_main_messenger. A thinking question mirrored into the Telegram session
+    carries kind="thinking", the same tag the Web UI path persists, so the chat
+    renders it as the proactive bubble it was."""
+    import vaf.core.messaging_connections as mc
+    from vaf.core.session import SessionManager
+    import vaf.core.channel_message_store as store_mod
+    monkeypatch.setattr(store_mod, "append_message", lambda **kw: None)
+    monkeypatch.setattr(mc, "get_messaging_connections",
+                        lambda username, user_scope_id: {"main_messenger": "telegram", "available": []})
+    monkeypatch.setattr(mc, "get_telegram_chat_id", lambda scope, uname: "12345")
+    monkeypatch.setattr("vaf.core.telegram_reply.send_telegram_reply", lambda chat_id, text: True)
+
+    assert mc.send_to_main_messenger("scope1", "alice", "Soll ich?", kind="thinking") == (True, "telegram")
+
+    saved = SessionManager().load("telegram_12345", restore_state=False, repoint=False)
+    assert [(m.role, m.content, m.kind) for m in saved.messages] == [("assistant", "Soll ich?", "thinking")]
+
+
+def test_router_recording_respects_whatsapp_bridge_ownership(monkeypatch, _session_store):
     # WhatsApp: session id follows the bridge convention (username inside) and
     # the STORE append is skipped - the bridge sender loop records it itself.
     import vaf.core.messaging_connections as mc
-    saved = {}
-
-    class _FakeSession:
-        def add_message(self, role, content, **kw):
-            saved["msg"] = content
-
-    class _FakeSM:
-        def load(self, sid, restore_state=False):
-            saved["sid"] = sid
-            return _FakeSession()
-        def save(self, session, sync_state=False):
-            pass
-
-    import vaf.core.session as session_mod
-    monkeypatch.setattr(session_mod, "SessionManager", _FakeSM)
+    from vaf.core.session import SessionManager
     store_calls = []
     import vaf.core.channel_message_store as store_mod
     monkeypatch.setattr(store_mod, "append_message",
                         lambda **kw: store_calls.append(kw))
 
     mc._record_outbound("whatsapp", "4917012345@s.whatsapp.net", "Hi", "alice", None)
-    assert saved["sid"] == "whatsapp_alice_4917012345"
+    saved = SessionManager().load("whatsapp_alice_4917012345", restore_state=False, repoint=False)
+    assert [m.content for m in saved.messages] == ["Hi"]
     assert store_calls == []
 
 
-def test_thinking_callers_opt_out_of_recording():
-    # Tracked requests are reconstructed scope-keyed at reply time; a session
-    # append would duplicate them in context. Both thinking-mode call sites
-    # must pass record=False.
+def test_thinking_callers_record_their_sends():
+    # The waiting latch is one scope-keyed slot that any turn on the scope can
+    # consume; the transcript is the record. Neither thinking-mode call site may
+    # opt out of recording again (live 2026-09-02: a room wake took the latch,
+    # and the user's real answer on Telegram met an agent with no trace of its
+    # own question). The kinds are pinned in test_background_reply_needs_a_person.
     from pathlib import Path
     import re
     import vaf.core.thinking_mode as tm
     src = Path(tm.__file__).read_text(encoding="utf-8")
     calls = re.findall(r"send_to_main_messenger\([^)]*\)", src)
     assert calls, "thinking-mode no longer calls send_to_main_messenger?"
-    without_opt_out = [c for c in calls if "record=False" not in c]
-    assert not without_opt_out, (
-        f"thinking-mode send_to_main_messenger call(s) missing record=False: {without_opt_out}"
+    opted_out = [c for c in calls if "record=False" in c]
+    assert not opted_out, (
+        f"thinking-mode send_to_main_messenger call(s) opt out of recording: {opted_out}"
     )
 
 

@@ -9,6 +9,7 @@ import json
 import uuid
 import gzip
 import random
+import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Iterator, List, Optional, Tuple
@@ -385,6 +386,50 @@ def _generate_session_id() -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# A TRANSCRIPT THAT CHANGED UNDERNEATH A LIVE AGENT
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# A background lane - a thinking-mode question and its nudge, an automation
+# result, a router-delivered messenger message - appends to a session FILE while
+# the agent serving that session may still hold the transcript in memory. For a
+# live agent the in-memory history is authoritative (load_session_context returns
+# early when it is already on the session), so the file append alone stays
+# invisible until the next session switch: the user answers a question the agent
+# can see in its own chat file and not in its own context. The lane that appends
+# says so here, and load_session_context reads the note and rebuilds from the file.
+#
+# Process-local by design. Every background lane of the product (the thinking
+# and automation threads, the router, the runner's worker threads) runs inside
+# the one server process. A second PROCESS on the same store - a terminal
+# session next to the running app - keeps the behaviour it always had, which is
+# to read the file once when it opens the session.
+_TRANSCRIPT_CHANGED: set = set()
+_TRANSCRIPT_CHANGED_LOCK = threading.Lock()
+
+
+def note_transcript_changed(session_id: Optional[str]) -> None:
+    """A lane that is not the live turn appended to this session's file."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return
+    with _TRANSCRIPT_CHANGED_LOCK:
+        _TRANSCRIPT_CHANGED.add(sid)
+
+
+def take_transcript_changed(session_id: Optional[str]) -> bool:
+    """Was this session's file appended to behind a live agent? Consumes the note:
+    the caller is about to rebuild from the file, so the next question starts clean."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return False
+    with _TRANSCRIPT_CHANGED_LOCK:
+        if sid in _TRANSCRIPT_CHANGED:
+            _TRANSCRIPT_CHANGED.discard(sid)
+            return True
+    return False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # SESSION MANAGER
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -419,6 +464,54 @@ class SessionManager:
             metadata=metadata
         )
         self._current = session
+        return session
+
+    def append_background_message(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        role: str = "assistant",
+        kind: Optional[str] = None,
+        create: bool = False,
+        name: Optional[str] = None,
+        user_scope_id: Optional[Any] = None,
+    ) -> Optional[Session]:
+        """Append ONE message to a stored session from a lane that is NOT the live
+        turn on it, and leave the note that lets the live agent notice.
+
+        This is THE way a background lane writes into a chat: a thinking-mode
+        question or nudge, an automation result, a message the router delivered
+        on the user's messenger. Five sites used to hand-roll load, add_message,
+        save - and none of them could tell the agent holding that session in
+        memory, so the message the user was answering was in the file and not in
+        the agent's context.
+
+        `kind` is the proactive-bubble tag (`Message.kind`: "thinking", "nudge",
+        "automation", ...): it drives the Web UI's avatar animation and keeps the
+        message out of the preceding turn's actions timeline, and it is persisted
+        so a reload still knows. `create=True` builds the session when the store
+        has none (a messenger session whose first message is outbound), named
+        `name` and stamped with `user_scope_id` so the ownership gates let its
+        real owner open it. Returns the saved session, or None when the session
+        does not exist and `create` is False - the caller then picks another chat.
+        Never touches the state registry: this is a transcript append, not a turn.
+        """
+        sid = str(session_id or "").strip()
+        content = str(content or "")
+        if not sid or not content.strip():
+            return None
+        try:
+            session = self.load(sid, restore_state=False, repoint=False)
+        except FileNotFoundError:
+            if not create:
+                return None
+            session = Session(id=sid, name=name or sid)
+            if user_scope_id:
+                session.metadata["user_scope_id"] = str(user_scope_id)
+        session.add_message(role=role, content=content, kind=kind)
+        self.save(session, sync_state=False)
+        note_transcript_changed(sid)
         return session
     
     def save(self, session: Session = None, compress: bool = False, sync_state: bool = True) -> Path:

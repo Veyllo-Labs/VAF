@@ -37,7 +37,7 @@ def _deliverable(monkeypatch, tmp_path):
     monkeypatch.setattr(tm, "_question_too_similar", lambda scope, msg: False)
     monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: "sid-web")
     import vaf.core.messaging_connections as mc
-    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text, record=True: (False, None))
+    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text, **kw: (False, None))
 
 
 # ── 1. an FYI is delivered, not awaited ───────────────────────────────────────────────────

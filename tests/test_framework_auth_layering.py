@@ -41,7 +41,7 @@ AUTH_IMPORT_BASELINE = {
     "vaf/core/agent.py": 1,
     "vaf/core/messaging_connections.py": 1,
     "vaf/core/system_prompt.py": 4,
-    "vaf/core/thinking_mode.py": 8,
+    "vaf/core/thinking_mode.py": 6,
     "vaf/core/user_time.py": 1,
     "vaf/core/vocab/__init__.py": 1,
     "vaf/core/web_server.py": 9,

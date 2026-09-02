@@ -367,6 +367,7 @@ def _record_outbound(
     username: Optional[str],
     user_scope_id: Optional[Any],
     file_path: Optional[str] = None,
+    kind: Optional[str] = None,
 ) -> None:
     """Mirror a router-delivered outbound message into the channel session history
     (and, where the bridge does not do it itself, the channel message store).
@@ -376,6 +377,12 @@ def _record_outbound(
     trace, so the channel main agent lacked its own last message when the user
     replied to it (live 2026-07-14: the agent could not know which "Timer" the
     user meant and confabulated). Best-effort: never raises, never blocks a send.
+
+    `kind` is the proactive-bubble tag persisted on the message ("thinking",
+    "nudge", ...), see `Session.append_background_message`. The append goes
+    through that primitive so the agent holding this session in memory learns
+    that its file grew - a message it cannot see in its own context is the
+    incident above in a second form.
     """
     uname = (username or "admin").strip() or "admin"
     if channel == "whatsapp":
@@ -383,21 +390,16 @@ def _record_outbound(
     else:
         session_id = f"{channel}_{endpoint}"
     try:
-        from vaf.core.session import SessionManager, Session
-        sm = SessionManager()
-        try:
-            session = sm.load(session_id, restore_state=False)
-        except FileNotFoundError:
-            session = Session(id=session_id, name=f"{channel.capitalize()} {endpoint}")
-            # Stamp the owner scope on an outbound-FIRST session (automation
-            # message before the user ever wrote inbound), like the inbound
-            # lane (headless_runner) does. A scopeless session is admin-only
-            # under the ownership gates - without this stamp its real owner
-            # could see it in the sidebar but never open its workspace.
-            if user_scope_id:
-                session.metadata["user_scope_id"] = str(user_scope_id)
-        session.add_message(role="assistant", content=text)
-        sm.save(session, sync_state=False)
+        from vaf.core.session import SessionManager
+        # create=True: an outbound-FIRST session (automation message before the
+        # user ever wrote inbound) is built here and stamped with its owner scope,
+        # like the inbound lane (headless_runner) does. A scopeless session is
+        # admin-only under the ownership gates - without the stamp its real owner
+        # could see it in the sidebar but never open its workspace.
+        SessionManager().append_background_message(
+            session_id, text, kind=kind, create=True,
+            name=f"{channel.capitalize()} {endpoint}", user_scope_id=user_scope_id,
+        )
     except Exception:
         pass
     # Channel store: the WhatsApp bridge already records every outbound send
@@ -421,6 +423,7 @@ def send_to_main_messenger(
     text: str,
     file_path: Optional[str] = None,
     record: bool = True,
+    kind: Optional[str] = None,
 ) -> "tuple[bool, Optional[str]]":
     """Send ``text`` to the user's configured ``main_messenger`` (Telegram/WhatsApp/Discord).
 
@@ -444,9 +447,15 @@ def send_to_main_messenger(
     when an in-run send already delivered the text.
 
     ``record`` (default True): mirror the delivered text into the channel session history
-    so the channel main agent has context when the user replies to it. Thinking-mode
-    callers pass ``record=False`` - their tracked requests are reconstructed scope-keyed
-    at reply time, and a session append would duplicate the question in context.
+    so the channel main agent has context when the user replies to it. ``kind`` tags that
+    mirrored message (`Message.kind`: "thinking" for a background question, "nudge" for
+    its reminder) so the chat renders it as the proactive bubble it was. Thinking mode
+    used to pass ``record=False`` on the theory that its waiting latch would reconstruct
+    the question at reply time and a session append would show it twice; the latch is
+    one scope-keyed slot that any turn on the scope can consume, and when it went the
+    question was nowhere (live 2026-09-02: the user answered a background question on
+    Telegram and the agent had no record of ever asking). The transcript is the record;
+    the latch adds the proposal and the findings on top of it.
     """
     text = (text or "").strip()
     import os as _os
@@ -476,7 +485,7 @@ def send_to_main_messenger(
                     delivered = bool(send_telegram_reply(chat_id, caption, file_path=attach))
                 if delivered:
                     if record:
-                        _record_outbound("telegram", str(chat_id), text or caption, username, user_scope_id, attach)
+                        _record_outbound("telegram", str(chat_id), text or caption, username, user_scope_id, attach, kind=kind)
                     return True, "telegram"
         elif main == "whatsapp":
             jid = get_whatsapp_chat_jid(user_scope_id, username)
@@ -505,7 +514,7 @@ def send_to_main_messenger(
                     delivered = "sent via whatsapp" in str(_wa_result or "").lower()
                 if delivered:
                     if record:
-                        _record_outbound("whatsapp", str(jid), text or caption, username, user_scope_id, attach)
+                        _record_outbound("whatsapp", str(jid), text or caption, username, user_scope_id, attach, kind=kind)
                     return True, "whatsapp"
         elif main == "discord":
             user_id = get_discord_user_id(user_scope_id, username)
@@ -526,7 +535,7 @@ def send_to_main_messenger(
                         delivered = bool(send_discord_dm(bot_token, user_id, caption, file_path=attach))
                     if delivered:
                         if record:
-                            _record_outbound("discord", str(user_id), text or caption, username, user_scope_id, attach)
+                            _record_outbound("discord", str(user_id), text or caption, username, user_scope_id, attach, kind=kind)
                         return True, "discord"
     except Exception:
         pass

@@ -146,14 +146,16 @@ def test_emit_message_pins_anchor_and_falls_back(monkeypatch, tmp_path):
     import vaf.core.thinking_mode as tm
 
     class _FakeSession:
-        def add_message(self, *a, **k): pass
+        pass
+    appended = []
     class _FakeSM:
         def list(self, **k): return [{"id": "latest", "metadata": {}}]
-        def load(self, sid):
+        def append_background_message(self, sid, content, **kw):
+            # The primitive's contract: None when the session does not exist.
+            appended.append((sid, kw.get("kind")))
             if sid == "dead":
-                raise FileNotFoundError(sid)
+                return None
             return _FakeSession()
-        def save(self, s): pass
     emits = []
     class _FakeWI:
         def emit_agent_message_append(self, **k): emits.append(("append", k.get("session_id")))
@@ -164,6 +166,8 @@ def test_emit_message_pins_anchor_and_falls_back(monkeypatch, tmp_path):
     assert tm.emit_message_to_web_ui("u", "hi", session_id="sess-A") == "sess-A"   # anchor alive
     assert tm.emit_message_to_web_ui("u", "hi", session_id="dead") == "latest"     # anchor gone -> fallback
     assert ("append", "latest") in emits and ("unread", "latest") in emits
+    # Persisted through the background primitive, tagged as a background question.
+    assert ("sess-A", "thinking") in appended and ("latest", "thinking") in appended
 
 
 def test_ask_user_tool_creates_request_and_waiting(monkeypatch, tmp_path):

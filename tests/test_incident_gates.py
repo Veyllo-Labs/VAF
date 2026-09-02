@@ -149,9 +149,13 @@ def test_pending_latch_not_cleared_by_synthetic_turns():
                 and "_pending_user_question" in ast.dump(ast.Module(body=n.body, type_ignores=[]))
                 and "Constant(value=None)" in ast.dump(ast.Module(body=n.body, type_ignores=[]))]
     assert clearing, "nothing clears the pending-question latch any more"
+    # The condition is ONE predicate (`_turn_is_from_the_user`), shared with the
+    # thinking-mode reply pickup: the `if` reads it, the predicate carries the markers.
     for test in clearing:
-        assert "_synthetic_drain_turn" in test, "the latch no longer survives drain turns"
-        assert "_turn_is_human" in test, "a timer or an automation can answer for the user"
+        assert "_turn_is_from_the_user" in test, "the latch is cleared by a bare user_input test again"
+    predicate = src.split("def _turn_is_from_the_user(")[1].split("\n    def ")[0]
+    assert "_synthetic_drain_turn" in predicate, "the latch no longer survives drain turns"
+    assert "_turn_is_human" in predicate, "a timer or an automation can answer for the user"
 
 
 def test_config_kill_switches_exist():

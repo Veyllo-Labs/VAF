@@ -107,6 +107,7 @@ grep the symbol names to find them.
 | # | Phase | Key methods / symbols |
 |---|-------|------------------------|
 | 1 | Pre-turn setup / context decay / compress | `decay_state`, `prompt_manager.build_prompt`, `context_manager.should_compress` |
+| 1b | Who is speaking: the two "the user replied" latches | `_turn_is_from_the_user` decides whether this turn is the user in their own chat; only then is the ask-first latch (`_pending_user_question`) cleared and a waiting background question (`thinking_mode.get_waiting_for_reply`) picked up as answered and cleared. A synthetic drain turn (`_synthetic_drain_turn`: runner drain, A2A room wake), a queue turn the harness marked as not a person (`_turn_is_human=False`: timer, automation) and a background run's own prompt (`run_kind` thinking/automation) fail the test. See [Thinking-Mode.md](Thinking-Mode.md) (Automatic Cleanup) |
 | 2 | Workflow / skill match | `_try_workflow` |
 | 3 | Record input + intent | `main_persistence.update_user_intent` |
 | 4 | Tool router | `_route_tools` |

@@ -98,13 +98,20 @@ def test_persisted_proactive_messages_carry_the_same_tag():
             f"{rel}:{line} emits a user-role card; add it to the named exception above "
             "with the reason, or tag it like the assistant lanes."
         )
+    # The lanes persist through SessionManager.append_background_message (the one
+    # way a background lane writes into a chat); the primitive itself is where the
+    # kind reaches Message.add_message.
     for rel in ("vaf/core/thinking_mode.py", "vaf/core/automation.py"):
         src = _src(_REPO / rel)
-        assert re.search(r"add_message\([^)]*kind=", src, flags=re.S), (
+        assert re.search(r"append_background_message\([^)]*kind=", src, flags=re.S), (
             f"{rel} persists a proactive message without its `kind`: it comes back from "
             "disk indistinguishable from an ordinary reply and is folded into the "
             "preceding turn on the next chat load."
         )
+    primitive = _src(_REPO / "vaf/core/session.py").split("def append_background_message(")[1]
+    assert re.search(r"add_message\([^)]*kind=kind", primitive), (
+        "the background-append primitive drops the kind on the way to the stored message"
+    )
 
 
 def test_the_transcript_keeps_a_proactive_message_out_of_the_turn_grouping():

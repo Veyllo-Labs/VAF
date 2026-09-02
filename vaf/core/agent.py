@@ -5150,9 +5150,16 @@ class Agent:
         from the version the store no longer holds.
         """
         from vaf.core.subagent_ipc import set_current_session_id
+        from vaf.core.session import take_transcript_changed
+
+        # A background lane appended to this session's FILE behind this agent's
+        # in-memory history (see session.note_transcript_changed): rebuild from
+        # the file even when already on the session. The note is consumed here.
+        changed_underneath = take_transcript_changed(session_id)
 
         # Check if we are already in this session
-        if not force and hasattr(self, 'current_session_id') and self.current_session_id == session_id:
+        if not force and hasattr(self, 'current_session_id') and self.current_session_id == session_id \
+                and not changed_underneath:
             return
 
         # Load new session data
@@ -8807,6 +8814,52 @@ class Agent:
             return [*prepared_messages[:-1], turn_msg, prepared_messages[-1]]
         return [*prepared_messages, turn_msg]
 
+    # Run kinds whose turns are never a person answering: the run's own prompt
+    # reaches chat_step as `user_input`, so without this it would be filed as
+    # the user's reply to whatever question is open on that user's scope.
+    _BACKGROUND_RUN_KINDS = ("thinking", "automation")
+
+    def _turn_is_from_the_user(self, user_input, skip_input: bool = False) -> bool:
+        """Is this turn the user speaking to the agent in their own chat?
+
+        The one answer both "the user replied" latches read: the ask-first latch
+        (`_pending_user_question`) and the thinking-mode reply pickup
+        (`waiting_for_reply`). Three lanes reach chat_step with real text that is
+        NOT the user answering, and each one has been an incident:
+
+        - a synthetic drain turn (the runner delivering sub-agent results, an A2A
+          room wake): the ROOM PROMPT was recorded as the user's reply to an open
+          background question and the latch was cleared, so the real answer on
+          Telegram an hour later reached an agent that had never asked
+          (live 2026-09-02);
+        - a queue turn the harness knows was not a person (a timer, an automation
+          re-using the user's own text): it opened the ask-first gate on the
+          user's behalf;
+        - a background run's own prompt (thinking, automation): the waiting latch
+          is scope-keyed on disk and shared across Agent instances, so the run
+          that asked could consume its own answer slot.
+
+        The harness marks the first two at the queue boundary (`_turn_is_human`,
+        `_synthetic_drain_turn`); the third is the agent's own construction
+        (`run_kind`). A lane that sets no marker at all - the terminal, an
+        embedder calling chat_step directly - is a person typing, and stays one.
+
+        Named boundary: a public chat_step parameter for the turn's origin would
+        replace two harness-set attributes with one value. That is an API decision
+        for the facade (docs/EMBEDDING.md), not a side effect of this fix; until it
+        is taken, the three markers are the contract and this method their only
+        reader.
+        """
+        if not user_input or skip_input:
+            return False
+        if getattr(self, "_synthetic_drain_turn", False):
+            return False
+        if not getattr(self, "_turn_is_human", True):
+            return False
+        if getattr(self, "_run_kind", None) in self._BACKGROUND_RUN_KINDS:
+            return False
+        return True
+
     def chat_step(
         self,
         user_input: str,
@@ -8883,16 +8936,10 @@ class Agent:
         # background turns (runner drain sets _synthetic_drain_turn) must NOT clear it - that is
         # exactly the window in which new write actions stay blocked until the user answers.
         # The latch means "the agent asked its user something and is waiting". Only a
-        # PERSON answering may clear it. A timer and an automation both reach this line
-        # looking exactly like a user turn - real text, no background marker - so a
-        # scheduled job ten minutes later used to open a gate that promised to stay shut
-        # until the user replied. chat_step cannot tell them apart on its own, because
-        # the lanes that have no queue (the terminal, an embedder) are genuinely a
-        # person typing; the queue boundary sets `_turn_is_human` when it knows better,
-        # and the absence of the flag keeps those lanes behaving exactly as before.
-        if (user_input and not skip_input
-                and not getattr(self, "_synthetic_drain_turn", False)
-                and getattr(self, "_turn_is_human", True)):
+        # PERSON answering may clear it - `_turn_is_from_the_user` is the one place that
+        # decides what counts as one (a timer, an automation, a room wake and a background
+        # run's own prompt all reach this line with real text, and none of them is the user).
+        if self._turn_is_from_the_user(user_input, skip_input):
             self._pending_user_question = None
 
         # Cross Chat Hint: resolved ONCE per turn, from the raw message. The block is
@@ -8915,8 +8962,15 @@ class Agent:
 
         self.context_manager.decay_state()
 
-        # 🔒 NUDGE KILLER & CONTEXT SYNC: Clear background waiting status on ANY user interaction.
-        if user_input and not skip_input:
+        # 🔒 NUDGE KILLER & CONTEXT SYNC: a message FROM THE USER answers the background
+        # question that is waiting on their scope, and clears the waiting state. The same
+        # test as the ask-first latch above, and for the same reason: the waiting latch
+        # lives on disk, keyed by the user's scope, so EVERY chat_step on that scope reads
+        # it - the runner's room and drain turns, an automation run, the thinking run
+        # itself. Live 2026-09-02: an A2A room wake ran through here, the ROOM PROMPT was
+        # recorded as the user's reply and the latch was cleared, and the user's real
+        # answer on Telegram an hour later met an agent with no idea what it had asked.
+        if self._turn_is_from_the_user(user_input, skip_input):
             try:
                 from vaf.core.thinking_mode import (
                     clear_waiting_for_reply, get_waiting_for_reply, set_waiting_for_reply, _is_presence_ack,

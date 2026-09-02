@@ -382,13 +382,13 @@ def _push_result_to_web_ui(
                 new_session = sm.create(user_scope_id=task.user_scope_id, metadata={"source": "automation_result"})
                 sid = new_session.id
 
-        loaded = sm.load(sid)
-        if loaded:
-            # The kind is persisted too, not only emitted: after a reload the transcript
-            # has nothing else to tell a proactive message from the tail of the turn
-            # before it, and one it cannot recognise gets folded into that turn.
-            loaded.add_message(role="assistant", content=web_msg, kind="automation")
-            sm.save(loaded)
+        # The kind is persisted too, not only emitted: after a reload the transcript
+        # has nothing else to tell a proactive message from the tail of the turn
+        # before it, and one it cannot recognise gets folded into that turn. The
+        # append goes through the background primitive so a live agent on this
+        # session rebuilds from the file instead of answering the user's reaction
+        # to a result it never saw.
+        sm.append_background_message(sid, web_msg, kind="automation")
         if wi:
             # Append as a standalone bubble - automation results are proactive and
             # have no live agent turn, so the streaming update path would overwrite

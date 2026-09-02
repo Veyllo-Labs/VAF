@@ -117,7 +117,7 @@ def test_gate_allows_when_not_similar(monkeypatch, tmp_path):
     monkeypatch.setattr(tm, "emit_message_to_web_ui",
                         lambda scope, content, session_id=None: "sid-web")
     import vaf.core.messaging_connections as mc
-    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text: (False, None))
+    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text, **kw: (False, None))
     scope = "u-gate2"
     tm.set_proactive_mode(scope, "open")
     tm.set_dedup_enforce(scope, True)
@@ -134,7 +134,7 @@ def test_gate_bypassed_when_enforce_off(monkeypatch, tmp_path):
     monkeypatch.setattr(tm, "emit_message_to_web_ui",
                         lambda scope, content, session_id=None: "sid-web")
     import vaf.core.messaging_connections as mc
-    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text: (False, None))
+    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text, **kw: (False, None))
     scope = "u-gate3"
     tm.set_proactive_mode(scope, "open")
     tm.set_dedup_enforce(scope, False)   # final-attempt bypass
@@ -151,7 +151,7 @@ def test_duplicate_guard_does_not_set_too_similar_reason(monkeypatch, tmp_path):
     monkeypatch.setattr(tm, "emit_message_to_web_ui",
                         lambda scope, content, session_id=None: "sid-web")
     import vaf.core.messaging_connections as mc
-    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text: (False, None))
+    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text, **kw: (False, None))
     scope = "u-dup"
     tm.set_proactive_mode(scope, "open")
     tm.set_dedup_enforce(scope, True)
@@ -255,7 +255,7 @@ def _deliverable(monkeypatch, tmp_path):
     monkeypatch.setattr(tm, "_main_agent_busy", lambda scope: False)
     monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: "sid-web")
     import vaf.core.messaging_connections as mc
-    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text: (False, None))
+    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text, **kw: (False, None))
 
 
 def test_reject_counter_bypasses_within_one_run(monkeypatch, tmp_path):
@@ -324,7 +324,7 @@ def test_followup_reask_is_exempt_from_dedup(monkeypatch, tmp_path):
     monkeypatch.setattr(tm, "_main_agent_busy", lambda scope: False)
     monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: "sid-web")
     import vaf.core.messaging_connections as mc
-    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text: (False, None))
+    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text, **kw: (False, None))
     scope = "u-fu"
     existing = tr.add_request(scope, "Soll ich dir eine VAF-Erinnerung einrichten?", run_seq=1)
     tm.set_proactive_mode(scope, "open")

@@ -1620,7 +1620,15 @@ Stable public surface (safe to build on):
   call, including `memory_context` as the seam for per-turn retrieved context (see
   "Injecting retrieved context"). The parameter NAMES and defaults are the promise;
   the section text the engine wraps `memory_context` in is not, and neither is the
-  return value beyond the contract in [CORE_AGENT.md](CORE_AGENT.md).
+  return value beyond the contract in [CORE_AGENT.md](CORE_AGENT.md). A turn you feed
+  in is taken as the user speaking in their own chat - it answers whatever question
+  the agent has open on that user (the ask-first latch, a background question that
+  is waiting for a reply) - unless the agent was constructed with
+  `run_kind="automation"` or `"thinking"` (see [CORE_AGENT.md](CORE_AGENT.md)),
+  which is how a scheduler of your own keeps its prompts from being filed as the
+  user's answers. A per-call origin parameter does not exist yet; that is a named
+  boundary, not an oversight - VAF's own runner marks its synthetic turns with two
+  attributes on the agent, and one public value replacing them is a facade decision.
 - `file_encryption_enabled` as the switch between the two at-rest modes, and the
   promise that turning it off leaves the whole store readable: encrypted files
   still decrypt, and plaintext is tolerated on read again. A store that is

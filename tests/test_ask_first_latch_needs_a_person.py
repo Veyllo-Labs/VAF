@@ -83,10 +83,15 @@ def test_the_latch_is_cleared_only_for_a_turn_a_person_sent():
             clearing.append(ast.dump(node.test))
 
     assert clearing, "nothing clears the latch any more"
+    # The condition lives in ONE predicate now (`_turn_is_from_the_user`), shared
+    # with the thinking-mode reply pickup; the `if` must read it, and the
+    # predicate must still carry both markers.
     for test in clearing:
-        assert "_turn_is_human" in test, (
+        assert "_turn_is_from_the_user" in test, (
             "the latch is cleared by a condition a timer also satisfies")
-        assert "_synthetic_drain_turn" in test
+    predicate = source.split("def _turn_is_from_the_user(")[1].split("\n    def ")[0]
+    assert "_turn_is_human" in predicate
+    assert "_synthetic_drain_turn" in predicate
 
 
 def test_the_queue_boundary_decides_and_excludes_timers_and_automations():

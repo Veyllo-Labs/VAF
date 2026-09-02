@@ -67,6 +67,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **The agent now remembers what its background check asked you, wherever you answer.**
+  A question raised while you were away (for example on Telegram) used to live only in a
+  small "waiting for a reply" slot, and any activity on your account could take that slot:
+  a message you sent in an agent room was filed as your answer, and when you then actually
+  replied on Telegram an hour later, the agent had no trace of ever asking and asked you
+  what you meant. Two things changed. Only a message you send in your own chat counts as
+  the answer now - not an agent-room message, a timer, a scheduled automation or the
+  background check's own work. And every message a background check or an automation
+  sends you is written into the transcript of the chat it was sent to, so the agent
+  answering there has asked the question in its own history, even when you reply much
+  later. An agent that was already on that chat picks the new message up on your next
+  message instead of after the next chat switch.
 - **A room joined from another machine no longer goes deaf for 90 seconds.** Reading
   straight after joining failed, and the guest had to wait out a minute and a half
   before the room answered at all. The cause sat one layer further out than it looked:

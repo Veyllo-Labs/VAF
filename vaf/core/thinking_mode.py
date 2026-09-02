@@ -717,10 +717,10 @@ def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str, 
         # is anchored to the web chat (channel="web", e.g. after an escalation), then go straight to web.
         if (channel or "").strip().lower() != "web":
             from vaf.core.messaging_connections import send_to_main_messenger
-            # record=False: the nudge belongs to a tracked request that is
-            # reconstructed scope-keyed at reply time - a session append would
-            # duplicate it in the channel agent's context.
-            sent, _ch = send_to_main_messenger(user_scope_id, username, nudge, record=False)
+            # Recorded in the channel session like the question it chases: when
+            # the user answers "ja" to "are you there?", the agent must see that
+            # it asked. kind="nudge" is the same tag the Web UI path persists.
+            sent, _ch = send_to_main_messenger(user_scope_id, username, nudge, kind="nudge")
             if sent:
                 return True
         # Fallback: no messenger configured — push to the ANCHOR Web UI session (the chat the question
@@ -732,30 +732,17 @@ def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str, 
             if not wi:
                 return False
             sm = SessionManager()
-            sid = None
-            _sess = None
-            if (session_id or "").strip():
-                try:
-                    _sess = sm.load(session_id.strip())
-                    sid = session_id.strip()
-                except Exception:
-                    _sess = None
+            # Append + persist (not emit_agent_message, which overwrites the last assistant bubble
+            # and is lost on refresh). kind drives the away-scene avatar animation. The anchor
+            # chat first; when it is gone, the latest web chat.
+            sid = (session_id or "").strip() or None
+            if sid and sm.append_background_message(sid, nudge, kind="nudge") is None:
+                sid = None
             if not sid:
                 sid = _latest_web_session_id(user_scope_id)
                 if sid:
-                    try:
-                        _sess = sm.load(sid)
-                    except Exception:
-                        _sess = None
+                    sm.append_background_message(sid, nudge, kind="nudge")
             if sid:
-                # Append + persist (not emit_agent_message, which overwrites the last assistant bubble
-                # and is lost on refresh). kind drives the away-scene avatar animation.
-                try:
-                    if _sess is not None:
-                        _sess.add_message("assistant", nudge, kind="nudge")
-                        sm.save(_sess)
-                except Exception:
-                    pass
                 wi.emit_agent_message_append(content=nudge, session_id=sid, role="assistant", kind="nudge")
                 wi.emit_session_unread(sid)
                 logger.info("Thinking nudge sent via Web UI session %s", sid)
@@ -1465,30 +1452,16 @@ def emit_message_to_web_ui(
         if not wi:
             return None
         sm = SessionManager()
-        # Prefer the anchor session if it still exists; else the latest web session.
-        sid = None
-        _sess = None
-        if (session_id or "").strip():
-            try:
-                _sess = sm.load(session_id.strip())
-                sid = session_id.strip()
-            except Exception:
-                _sess = None
+        # Persist + stream as a new bubble (survives a chat refresh). kind drives the avatar
+        # animation. Prefer the anchor session if it still exists; else the latest web session.
+        sid = (session_id or "").strip() or None
+        if sid and sm.append_background_message(sid, content, kind="thinking") is None:
+            sid = None
         if not sid:
             sid = _latest_web_session_id(user_scope_id)
             if not sid:
                 return None
-            try:
-                _sess = sm.load(sid)
-            except Exception:
-                _sess = None
-        # Persist + stream as a new bubble (survives a chat refresh). kind drives the avatar animation.
-        try:
-            if _sess is not None:
-                _sess.add_message("assistant", content, kind="thinking")
-                sm.save(_sess)
-        except Exception:
-            pass
+            sm.append_background_message(sid, content, kind="thinking")
         wi.emit_agent_message_append(content=content, session_id=sid, role="assistant", kind="thinking")
         wi.emit_session_unread(sid)
         logger.info("Thinking Mode: ask_user message emitted to Web UI session %s", sid)
@@ -1617,16 +1590,18 @@ def deliver_tracked_message(
     # waiting state / the request) instead of independently re-picking 'latest', so they stay in the same chat.
     _anchor_sid = (req.get("session_id") if req else None) or _latest_web_session_id(user_scope_id)
 
-    # PRIMARY: deliver to the user's configured main messenger (Telegram/WhatsApp/Discord). The reply
-    # comes back on that channel and is reconstructed scope-keyed in chat_step, so the main agent answers
-    # there WITH context. The web session stays the anchor for the later escalation / web fallback.
+    # PRIMARY: deliver to the user's configured main messenger (Telegram/WhatsApp/Discord). The
+    # question is recorded in that channel's session (kind="thinking", like the Web UI path
+    # persists it), so the main agent answering there has asked it in its own transcript; the
+    # waiting latch adds the proposal and the findings on top when the user replies. The latch
+    # alone was the record once, and it is one scope-keyed slot any turn on the scope can
+    # consume - a room wake took it, and the user's real answer on Telegram met an agent with
+    # no trace of the question (live 2026-09-02). The web session stays the anchor for the
+    # later escalation / web fallback.
     from vaf.core.messaging_connections import send_to_main_messenger
     sent_channel = None
     try:
-        # record=False: tracked questions are persisted via the request store and
-        # reconstructed scope-keyed in chat_step when the user replies - a session
-        # append here would put the question into context twice.
-        _ok, sent_channel = send_to_main_messenger(user_scope_id, uname, message, record=False)
+        _ok, sent_channel = send_to_main_messenger(user_scope_id, uname, message, kind="thinking")
         if not _ok:
             sent_channel = None
     except Exception:
@@ -2106,19 +2081,6 @@ def deliver_thinking_done_fallback(
     take_reject_reason(scope)
     return " (the fallback message was not grounded/eligible and was not sent)"
 
-
-def _try_emit_to_web_ui_and_wait(
-    run_history: List[Dict[str, Any]],
-    user_scope_id: Optional[str],
-    username: str,
-    display_name: str,
-) -> bool:
-    """Deprecated no-op. The background run now contacts the user ONLY via the explicit `ask_user`
-    tool, which emits a clean message and sets waiting_for_reply itself. The old behaviour scraped the
-    last assistant text and pushed it to the Web UI when it had a '?' or was < 600 chars — that leaked
-    chain-of-thought into the chat (observed: "Based on my analysis… Let me send him a message…").
-    Kept as a stub so the call site stays stable; always returns False."""
-    return False
 
 # Content-driven prompts for thinking-mode turns 1+ (turn 0 uses THINKING_PROMPT). The phase is driven by
 # WORK DONE (is the housekeeping floor clear?), NOT by turn count. There is deliberately no "wrap up now /
@@ -2623,58 +2585,6 @@ def _get_turn_prompt(turn: int, ledger_clear: bool = True) -> str:
     return _PROMPT_PROACTIVE if ledger_clear else _PROMPT_HOUSEKEEPING
 
 
-def _detect_and_set_waiting_for_reply(
-    history: List[Dict[str, Any]],
-    user_scope_id: Optional[str],
-    agent: Any = None,
-    recent_only: bool = False,
-) -> Optional[Dict[str, Any]]:
-    """Scan agent history for send_telegram/send_whatsapp/send_discord tool calls.
-
-    If found, call set_waiting_for_reply() with the extracted question_text and return
-    the assistant message dict.
-    When *recent_only* is True, only check the last 3 messages (used per-turn in the loop);
-    otherwise scan the full history (used as post-run fallback).
-    """
-    msgs = (history or [])[-3:] if recent_only else (history or [])
-    for msg in reversed(msgs) if recent_only else msgs:
-        if not isinstance(msg, dict) or msg.get("role") != "assistant":
-            continue
-        for tc in msg.get("tool_calls") or []:
-            name = (tc.get("function") or {}).get("name") or tc.get("name") or ""
-            if name not in _SENT_TOOLS:
-                continue
-            uname = (getattr(agent, "_current_username", None) if agent else None) or "admin"
-            display_name = uname
-            try:
-                from vaf.auth.user_workspace import get_user_workspace
-                ws = get_user_workspace(uname)
-                ui = ws.get_user_identity() or {}
-                display_name = (ui.get("name") or "").strip() or uname
-            except Exception:
-                pass
-            question_text = ""
-            try:
-                args_raw = (tc.get("function") or {}).get("arguments") or ""
-                if isinstance(args_raw, str):
-                    args_parsed = json.loads(args_raw)
-                elif isinstance(args_raw, dict):
-                    args_parsed = args_raw
-                else:
-                    args_parsed = {}
-                question_text = (
-                    args_parsed.get("text")
-                    or args_parsed.get("message")
-                    or args_parsed.get("content")
-                    or ""
-                )
-            except (json.JSONDecodeError, TypeError, AttributeError):
-                pass
-            set_waiting_for_reply(user_scope_id, uname, display_name=display_name, question_text=question_text)
-            return msg
-    return None
-
-
 def _extract_run_summary(agent_history: List[Dict[str, Any]]) -> str:
     """Extract a concise summary of what the thinking run actually did."""
     summary_parts = []
@@ -2880,7 +2790,6 @@ def _run_thinking_for_user(
         agent.init_chat()
 
         # Load the user's main chat session so the thinking agent sees the full conversation history.
-        _loaded_session = False
         try:
             from vaf.core.messaging_connections import (
                 get_messaging_connections,
@@ -2914,7 +2823,6 @@ def _run_thinking_for_user(
                     # below then read the OWNER's workspace into this tenant's
                     # prompt. The run's own identity is authoritative.
                     reassert_identity(agent, identity)
-                    _loaded_session = True
                     logger.info("Thinking agent loaded chat session: %s", chat_session_id)
                 except Exception as e:
                     logger.debug("Could not load chat session %s for thinking: %s", chat_session_id, e)
@@ -3070,7 +2978,6 @@ def _run_thinking_for_user(
             except Exception:
                 memory_context = ""
 
-            _waiting_already_set = False
             # Log/summary must include only messages created during THIS run,
             # not preloaded session history.
             run_history_start = len(getattr(agent, "history", []) or [])
@@ -3303,62 +3210,6 @@ def _run_thinking_for_user(
                 current_history = (getattr(agent, "history", []) or [])
                 run_history = _history_delta(current_history, run_history_start)
 
-                # Immediately set waiting_for_reply when the agent sends a message in this turn.
-                # Also PERSIST this message to the main chat session so the Main Agent sees it!
-                if not _waiting_already_set:
-                    try:
-                        tm_msg = _detect_and_set_waiting_for_reply(
-                            run_history,
-                            user_scope_id,
-                            agent=agent,
-                            recent_only=True,
-                        )
-                        if tm_msg:
-                            _waiting_already_set = True
-                            # Persist to main session history
-                            if _loaded_session and chat_session_id:
-                                try:
-                                    from vaf.core.session import SessionManager
-                                    sm = SessionManager()
-                                    session = sm.load(chat_session_id)
-                                    
-                                    # Strip reasoning from content before saving to history
-                                    clean_content = str(tm_msg.get("content") or "")
-                                    import re
-                                    clean_content = re.sub(r'<think>.*?</think>', '', clean_content, flags=re.DOTALL).strip()
-                                    if not clean_content: clean_content = "(Thinking Mode Question)"
-                                    
-                                    # Add to session
-                                    session.add_message(
-                                        role="assistant", 
-                                        content=clean_content, 
-                                        tool_calls=tm_msg.get("tool_calls")
-                                    )
-                                    sm.save(session)
-                                    logger.info("Thinking Mode question persisted to session: %s", chat_session_id)
-                                except Exception as _save_err:
-                                    logger.debug("Could not persist TM question to session: %s", _save_err)
-                    except Exception:
-                        pass
-
-                # Fallback: if no messenger send tool fired but the agent produced text
-                # directed at the user, emit it to the Web UI and wait for a reply there.
-                if not _waiting_already_set:
-                    try:
-                        _uname = getattr(agent, "_current_username", None) or "admin"
-                        _dname = _uname
-                        try:
-                            from vaf.auth.user_workspace import get_user_workspace
-                            _ws = get_user_workspace(_uname)
-                            _ui = _ws.get_user_identity() or {}
-                            _dname = (_ui.get("name") or "").strip() or _uname
-                        except Exception:
-                            pass
-                        if _try_emit_to_web_ui_and_wait(run_history, user_scope_id, _uname, _dname):
-                            _waiting_already_set = True
-                    except Exception:
-                        pass
-
                 # A tracked question was raised this run (ask_user / forced node) -> the run's job is DONE:
                 # end NOW and wait for the user's reply. Max 1 message per run. Continuing (e.g. climbing to
                 # the proactive rung) would leave the background run alive and racing the main agent on the
@@ -3556,18 +3407,6 @@ def _run_thinking_for_user(
                         )
             except Exception as _ws_save_err:
                 logger.debug("Could not persist thinking workspace artifacts: %s", _ws_save_err)
-            # If agent sent a message (question), wait for reply: nudge at 3 min, skip question after 10 min.
-            # Usually already set during the turn loop above; this is a fallback for edge cases.
-            if not _waiting_already_set:
-                try:
-                    _detect_and_set_waiting_for_reply(
-                        run_history,
-                        user_scope_id,
-                        agent=agent,
-                        recent_only=False,
-                    )
-                except Exception:
-                    pass
         except Exception as e:
             logger.exception("Thinking run error for user %s: %s", scope_key[:8] if scope_key != "default" else "default", e)
             run_status = "error"

@@ -10,6 +10,7 @@ it names; and the two downloads answer without an account, because a guest holds
 join ticket and nothing else.
 """
 import hashlib
+import re
 from pathlib import Path
 
 import pytest
@@ -317,3 +318,50 @@ def test_every_guest_verb_is_wired_to_a_handler():
     unwired = sorted(name for name, sub in actions[0].choices.items()
                      if "handler" not in (sub._defaults or {}))
     assert not unwired, f"these verbs parse but cannot run: {unwired}"
+
+
+def test_the_document_names_every_verb_the_client_actually_has():
+    """The registry/doc copy pair for VERBS, guarded the way the MCP tools already are.
+
+    A verb the document does not name is a surface a stranger cannot find, and a verb
+    the document names that the file does not have is an instruction that fails in
+    their hands. Set equality in BOTH directions, because both have gone wrong here.
+    """
+    import argparse
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location("a2a_guest_verbs", WIRE_PEER)
+    guest = importlib.util.module_from_spec(spec)
+    sys.modules["a2a_guest_verbs"] = guest
+    spec.loader.exec_module(guest)
+
+    doc = (Path(__file__).resolve().parents[1] / "docs" / "agents" /
+           "A2A_PROTOCOL.md").read_text(encoding="utf-8")
+    # From "and speaks" to the end of that sentence. Slicing there and not earlier
+    # matters: the seat path in the line above carries a dot of its own.
+    described = doc.split("and speaks", 1)[1].split(".", 1)[0]
+    named = set(re.findall(r"`([a-z]+)`", described))
+
+    captured = {}
+    real = argparse.ArgumentParser.parse_args
+
+    def capture(self, argv=None, namespace=None):
+        captured["parser"] = self
+        raise SystemExit(0)
+
+    argparse.ArgumentParser.parse_args = capture
+    try:
+        try:
+            guest.main(["rooms"])
+        except SystemExit:
+            pass
+    finally:
+        argparse.ArgumentParser.parse_args = real
+
+    actions = [a for a in captured["parser"]._actions
+               if isinstance(a, argparse._SubParsersAction)]
+    verbs = set(actions[0].choices)
+    assert verbs == named, (f"the document and the client disagree: "
+                            f"only in the file {sorted(verbs - named)}, "
+                            f"only in the document {sorted(named - verbs)}")

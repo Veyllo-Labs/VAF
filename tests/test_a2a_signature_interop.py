@@ -14,6 +14,7 @@ the other is lying, and nothing in either log says why. It was found the honest 
 a foreign agent on another machine tried seven plausible serialisations against a
 real transcript and none verified, because it had no specification to work from.
 """
+import argparse
 import importlib.util
 import json
 import sys
@@ -22,6 +23,18 @@ from pathlib import Path
 import pytest
 
 from vaf.core.a2a import signing
+from vaf.core.a2a.frame import Frame
+from vaf.core.a2a.room import content_signature
+
+
+def _pair(seed=bytes(range(32))):
+    """A keypair that is nobody's: this file pins arithmetic, not real identities."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private = Ed25519PrivateKey.from_private_bytes(seed)
+    return private, private.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -65,7 +78,8 @@ FRAMES = [
 
 def _vaf_bytes(frame):
     content = {field: frame.get(field) for field in signing.COVERED}
-    return signing.canonical_bytes(signing.covered_payload(frame["room"], content))
+    return signing.canonical_bytes(
+        signing.covered_payload(frame["room"], frame.get("from") or "", content))
 
 
 @pytest.mark.parametrize("frame", FRAMES, ids=lambda f: f["id"])
@@ -85,11 +99,11 @@ def test_the_bytes_are_what_the_document_describes(peers):
         "escaped non-ASCII would be a second valid encoding of one message"
 
     raw = _vaf_bytes(FRAMES[0])
-    assert raw.startswith(b"vaf-a2a-sig/v1\n")
+    assert raw.startswith(b"vaf-a2a-sig/v2\n")
     assert b", " not in raw and b'": ' not in raw, "a separator carrying whitespace"
-    payload = json.loads(raw[len(b"vaf-a2a-sig/v1\n"):].decode("utf-8"))
+    payload = json.loads(raw[len(b"vaf-a2a-sig/v2\n"):].decode("utf-8"))
     assert list(payload) == sorted(payload)
-    assert set(payload) == {"v", "room", *signing.COVERED}
+    assert set(payload) == {"v", "room", "from", *signing.COVERED}
 
 
 def test_a_kind_that_is_not_a_string_is_read_the_same_way_by_all_three(peers):
@@ -131,10 +145,22 @@ def test_placement_is_not_covered_by_any_of_them(peers):
     """A sender cannot know its sequence number, so it must not be asked to sign one.
     Changing placement must leave every implementation's bytes untouched."""
     reference, guest = peers
-    moved = dict(FRAMES[0], id="other", ts=999.0, seq=77, lamport=99,
-                 **{"from": "p-somebody-else", "role": "leader"})
+    moved = dict(FRAMES[0], id="other", ts=999.0, seq=77, lamport=99, role="leader")
     for produce in (_vaf_bytes, reference.signing_bytes, guest.signing_bytes):
         assert produce(moved) == produce(FRAMES[0])
+
+
+def test_the_handle_is_covered_by_all_of_them(peers):
+    """`from` sits with the placement fields and does not belong there.
+
+    A peer learns its handle when it is admitted and keeps it for the whole room, so
+    unlike a sequence number it is something the sender CAN sign - and leaving it out
+    meant a host could carry a frame, signature intact, onto somebody else's name.
+    """
+    reference, guest = peers
+    renamed = dict(FRAMES[0], **{"from": "p-somebody-else"})
+    for produce in (_vaf_bytes, reference.signing_bytes, guest.signing_bytes):
+        assert produce(renamed) != produce(FRAMES[0])
 
 
 def test_the_room_is_covered_by_all_of_them(peers):
@@ -152,7 +178,7 @@ def test_the_guest_verifies_a_real_signature_in_pure_python(peers):
     key = "cli:scope-a"
     signed = dict(FRAMES[0])
     signed["sig"] = signing.sign(
-        signing.covered_payload(signed["room"],
+        signing.covered_payload(signed["room"], signed["from"],
                                 {f: signed.get(f) for f in signing.COVERED}),
         participant_key=key, room_id=signed["room"])
 
@@ -160,10 +186,16 @@ def test_the_guest_verifies_a_real_signature_in_pure_python(peers):
     joined = {"v": 1, "id": "j", "room": signed["room"], "seq": 1, "lamport": 1,
               "from": "p-a", "role": "peer", "kind": "join", "to": {"room": True},
               "body": {"display": "A", "card": {}, "sign_key": published}}
-    keys = guest.signing_keys([joined, signed])
+    # SELF-SIGNED, by the very key it publishes. VAF made this signature and the
+    # guest is about to accept it, which is the interop half of the same rule.
+    joined["sig"] = signing.sign(
+        signing.covered_payload(joined["room"], joined["from"],
+                                {f: joined.get(f) for f in signing.COVERED}),
+        participant_key=key, room_id=joined["room"])
+    keys = guest.signing_keys([joined, signed], signed["room"])
 
     assert keys == {"p-a": published}
-    assert guest.verdict_for(signed, keys) == "valid"
+    assert guest.verdict_for(signed, keys, signed["room"]) == "valid"
 
 
 def test_the_guest_notices_a_changed_message(peers):
@@ -171,25 +203,25 @@ def test_the_guest_notices_a_changed_message(peers):
     key = "cli:scope-a"
     signed = dict(FRAMES[0])
     signed["sig"] = signing.sign(
-        signing.covered_payload(signed["room"],
+        signing.covered_payload(signed["room"], signed["from"],
                                 {f: signed.get(f) for f in signing.COVERED}),
         participant_key=key, room_id=signed["room"])
     published = signing.public_key(key, signed["room"])
 
     tampered = dict(signed, body={"text": "untergeschoben"})
-    assert guest.verdict_for(tampered, {"p-a": published}) == "invalid"
+    assert guest.verdict_for(tampered, {"p-a": published}, tampered["room"]) == "invalid"
 
 
 def test_a_real_signature_by_an_unpublished_key_is_not_valid_for_the_guest(peers):
     _reference, guest = peers
     signed = dict(FRAMES[0])
     signed["sig"] = signing.sign(
-        signing.covered_payload(signed["room"],
+        signing.covered_payload(signed["room"], signed["from"],
                                 {f: signed.get(f) for f in signing.COVERED}),
         participant_key="cli:stranger", room_id=signed["room"])
     published = signing.public_key("cli:scope-a", signed["room"])
 
-    assert guest.verdict_for(signed, {"p-a": published}) == "foreign_key"
+    assert guest.verdict_for(signed, {"p-a": published}, signed["room"]) == "foreign_key"
 
 
 @pytest.mark.parametrize("sig", [None, {}, "x", {"alg": "rsa", "key": "a" * 64, "sig": "b" * 128},
@@ -199,8 +231,8 @@ def test_neither_peer_treats_an_unreadable_claim_as_a_forgery(peers, sig):
     one of them accuses somebody."""
     reference, guest = peers
     frame = dict(FRAMES[0], sig=sig) if sig is not None else dict(FRAMES[0])
-    assert guest.verdict_for(frame, {}) in ("unsigned", "unreadable")
-    assert reference.verdict(frame, {}, None) in ("unsigned", "unreadable")
+    assert guest.verdict_for(frame, {}, frame["room"]) in ("unsigned", "unreadable")
+    assert reference.verdict(frame, {}, None, frame["room"]) in ("unsigned", "unreadable")
 
 
 def test_the_reference_peer_says_unchecked_rather_than_guessing(peers):
@@ -208,8 +240,9 @@ def test_the_reference_peer_says_unchecked_rather_than_guessing(peers):
     not curve arithmetic. Without a verifier it reports that it could not check,
     which a reader must not confuse with a frame nobody signed."""
     reference, _guest = peers
-    signed = dict(FRAMES[0], sig={"alg": "ed25519", "key": "a" * 64, "sig": "b" * 128})
-    assert reference.verdict(signed, {}, None) == "unchecked"
+    signed = dict(FRAMES[0], sig={"alg": "ed25519", "v": signing.VERSION,
+                                  "key": "a" * 64, "sig": "b" * 128})
+    assert reference.verdict(signed, {}, None, signed["room"]) == "unchecked"
 
 
 def test_the_guest_client_names_its_own_generation():
@@ -254,12 +287,15 @@ def test_vaf_accepts_and_verifies_a_signature_the_guest_made(peers, rooms):
 
     # The guest publishes its key the way the client does: a join of its own.
     published = guest.ed25519_public(seed).hex()
-    room.ingest({"kind": "join", "body": {"display": "Gast", "card": {},
-                                          "sign_key": published}}, identity=stranger)
+    room.ingest(guest.sign_payload({"kind": "join", "body": {"display": "Gast",
+                                                            "card": {},
+                                                            "sign_key": published}},
+                                   room.room_id, seed, stranger.peer_id),
+                identity=stranger)
     assert room.signing_keys()["p-stranger"] == published
 
     payload = guest.sign_payload({"kind": "say", "body": {"text": "vom Gast signiert"}},
-                                 room.room_id, seed)
+                                 room.room_id, seed, stranger.peer_id)
     frame = room.ingest(payload, identity=stranger)
 
     assert frame.sig["key"] == published
@@ -268,7 +304,7 @@ def test_vaf_accepts_and_verifies_a_signature_the_guest_made(peers, rooms):
     # And the room refuses a guest signature over something else, the same way it
     # refuses one of its own.
     other = guest.sign_payload({"kind": "say", "body": {"text": "etwas anderes"}},
-                               room.room_id, seed)
+                               room.room_id, seed, stranger.peer_id)
     with pytest.raises(RoomError):
         room.ingest({"kind": "say", "body": {"text": "das hier"}, "sig": other["sig"]},
                     identity=stranger)
@@ -284,19 +320,222 @@ def test_a_guest_signature_survives_the_round_trip_to_disk(peers, rooms):
     stranger = room.join(display="Gast", scope_id=None, peer_id="p-stranger")
     record = {"room": room.room_id}
     seed = guest.seat_signing_seed(record)
-    room.ingest({"kind": "join", "body": {"display": "Gast", "card": {},
-                                          "sign_key": guest.ed25519_public(seed).hex()}},
-                identity=stranger)
+    room.ingest(guest.sign_payload(
+        {"kind": "join", "body": {"display": "Gast", "card": {},
+                                  "sign_key": guest.ed25519_public(seed).hex()}},
+        room.room_id, seed, stranger.peer_id), identity=stranger)
 
     for text in ("kurz", "mit Ümlaut und grün", "a" * 500):
         room.ingest(guest.sign_payload({"kind": "say", "body": {"text": text}},
-                                       room.room_id, seed), identity=stranger)
+                                       room.room_id, seed, stranger.peer_id),
+                    identity=stranger)
 
     verdicts = [v for f, v in room.verify_frames() if f.kind == "say"]
     assert verdicts == ["valid", "valid", "valid"]
 
     # And the guest reaches the same conclusion about its own frames, from the JSON.
     stored = [f.to_dict() for f in room.store.frames()]
-    keys = guest.signing_keys(stored)
-    assert [guest.verdict_for(f, keys) for f in stored if f["kind"] == "say"] == \
+    keys = guest.signing_keys(stored, room.room_id)
+    assert [guest.verdict_for(f, keys, room.room_id) for f in stored
+            if f["kind"] == "say"] == \
         ["valid", "valid", "valid"]
+
+
+# ── the same fold rule in all three, which is the only way it means anything ──
+
+def _announcement(room_id, key, sender="p-a"):
+    """A join that publishes a key and attests it, as any of the three would read it."""
+    body = {"display": "A", "card": {}, "sign_key": signing.public_key(key, room_id)}
+    frame = {"v": 1, "id": "j-1", "room": room_id, "seq": 1, "lamport": 1, "ts": 1.0,
+             "from": sender, "role": "peer", "kind": "join", "to": {"room": True},
+             "body": body}
+    frame["sig"] = signing.sign(
+        signing.covered_payload(room_id, frame["from"],
+                                {f: frame.get(f) for f in signing.COVERED}),
+        participant_key=key, room_id=room_id)
+    return frame
+
+
+def test_all_three_folds_refuse_a_key_its_join_does_not_attest(peers, rooms):
+    """The lift, asked of every implementation the protocol advertises.
+
+    A fold that is strict in one reader and lax in another is worse than a lax one
+    everywhere: the same transcript would then be authoritative or forged depending on
+    who opened it, and neither log would say why.
+    """
+    from vaf.core.a2a.room import Room, derive_peer_id, participant_key
+
+    reference, guest = peers
+    key = participant_key("cli", "scope-a")
+    room = Room.create(kind="round", owner_scope="scope-a", base=rooms, room_id="room-3f")
+    joined = _announcement("room-3f", key)
+    unattested = {**joined, "id": "j-2", "from": "p-b", "sig": None}
+
+    def verify(key_hex, blob_hex, message):
+        """The curve arithmetic the reference peer deliberately does not carry.
+
+        Borrowed from the guest, which does it in the standard library - so the
+        reference peer is checked against an implementation that is not VAF's.
+        """
+        return guest.ed25519_verify(bytes.fromhex(key_hex), bytes.fromhex(blob_hex),
+                                    message)
+
+    room.join(display="A", scope_id="scope-a",
+              peer_id=derive_peer_id(key, "room-3f"), participant_key=key)
+    stored = [f.to_dict() for f in room.store.frames()]
+
+    # The guest does the curve arithmetic itself, so it can answer outright.
+    assert guest.signing_keys([joined], "room-3f")["p-a"] == joined["body"]["sign_key"]
+    assert guest.signing_keys([unattested], "room-3f") == {}
+    assert guest.signing_keys(stored, "room-3f"), "and it agrees about a key VAF wrote"
+
+    # The reference peer takes verification as an injected primitive and refuses to
+    # guess without one - which is exactly what it must do about attestation too.
+    assert reference.signing_keys([joined], "room-3f") == {}, "no verifier, nothing attested"
+    assert reference.verdict(joined, {}, None, "room-3f") == "unchecked", "and so it accuses nobody"
+    assert reference.signing_keys([joined], "room-3f", verify)["p-a"] == \
+        joined["body"]["sign_key"]
+    assert reference.signing_keys([unattested], "room-3f", verify) == {}
+
+    # A join that IS signed, by the key it names, whose body was changed afterwards.
+    # The sharper case: everything about the announcement looks right until the sum is
+    # actually done, so a fold that stops at "there is a signature and it names this
+    # key" would bind a handle to a key on the strength of a broken proof.
+    tampered = {**joined, "body": {**joined["body"], "display": "jemand anders"}}
+    assert guest.signing_keys([tampered], "room-3f") == {}
+    assert reference.signing_keys([tampered], "room-3f", verify) == {}
+
+
+def test_the_guest_clients_own_join_publishes_a_key_the_room_will_bind(peers, rooms):
+    """The one frame whose correctness cannot be checked by reading a transcript.
+
+    Every other frame the client sends is judged after the fact by its verdict. Get
+    the ANNOUNCEMENT wrong and there is no verdict to read: every later frame simply
+    says `foreign_key` and nothing says why. It went untested because the interop
+    tests all build a join by hand, so the client's own could have shipped unsigned.
+    """
+    from vaf.core.a2a.room import Room
+
+    _reference, guest = peers
+    room = Room.create(kind="round", owner_scope="s", base=rooms, room_id="room-cli")
+    stranger = room.join(display="Gast", scope_id=None, peer_id="p-cli")
+
+    record = {"room": room.room_id}
+    seed = guest.seat_signing_seed(record)
+    announcement = guest.join_announcement("Gast", room.room_id, seed, stranger.peer_id)
+    assert announcement["sig"]["key"] == announcement["body"]["sign_key"], \
+        "it must be signed by the very key it publishes"
+
+    room.ingest(announcement, identity=stranger)
+    assert room.signing_keys()["p-cli"] == guest.ed25519_public(seed).hex()
+
+    spoken = room.ingest(guest.sign_payload({"kind": "say", "body": {"text": "hallo"}},
+                                            room.room_id, seed, stranger.peer_id),
+                         identity=stranger)
+    assert room.verdict_for(spoken) == "valid"
+
+
+def test_an_upgraded_guest_recovers_its_own_past_without_losing_its_handle(peers, rooms):
+    """The migration, and the reason `announce` exists as a verb at all.
+
+    A guest that joined with a client too old to sign its announcement holds a key the
+    room will not bind: everything it ever said reads `foreign_key`. Redeeming a fresh
+    invitation would fix the signing and lose the peer - a new invitation mints a new
+    handle, so the whole history stays behind under the old one.
+
+    Sending the announcement over the SEAT keeps the handle, and because the seed lives
+    in the seat and does not change, it is the same key. So a past that could not be
+    verified becomes verifiable, with not one stored byte rewritten.
+
+    The recovery is real but bounded, and the bound is worth knowing before anybody
+    promises it to a user: it works for frames whose SIGNATURE this reader can still
+    check, which means frames of the current signature version. A frame signed under an
+    older version is not revived by any announcement, because the proof it carries was
+    made over something the current rule no longer asks about. Those read `unreadable`
+    forever, which is the honest word for them.
+    """
+    from vaf.core.a2a.room import Room
+
+    _reference, guest = peers
+    room = Room.create(kind="round", owner_scope="s", base=rooms, room_id="room-mig")
+    stranger = room.join(display="Gast", scope_id=None, peer_id="p-old")
+    record = {"room": room.room_id}
+    seed = guest.seat_signing_seed(record)
+
+    # THE OLD CLIENT: it announces its key without signing the announcement.
+    room.ingest({"kind": "join", "body": {"display": "Gast", "card": {},
+                                          "sign_key": guest.ed25519_public(seed).hex()}},
+                identity=stranger)
+    spoken = room.ingest(guest.sign_payload({"kind": "say",
+                                             "body": {"text": "vor dem Update"}},
+                                            room.room_id, seed, stranger.peer_id),
+                         identity=stranger)
+    assert room.verdict_for(spoken) == "foreign_key", "announced, but nothing attested it"
+
+    # THE UPGRADE: exactly what `announce` sends, over the seat it already holds.
+    room.ingest(guest.join_announcement("Gast", room.room_id, seed, stranger.peer_id),
+                identity=stranger)
+
+    assert room.signing_keys()["p-old"] == guest.ed25519_public(seed).hex()
+    assert room.verdict_for(spoken) == "valid", "the past binds, unrewritten"
+    assert [f.sender for f in room.store.frames()].count("p-old") == 4, \
+        "and it is still the same peer"
+
+
+def test_the_announce_verb_sends_the_seats_own_key_and_not_a_fresh_one(peers, monkeypatch):
+    """Driving the VERB, not the function under it.
+
+    The function was covered and the command around it was not, which is how the same
+    gap shipped twice in this file's history: a helper proven correct, reached by a
+    caller nobody ran. If `announce` minted a key instead of reading the seat's, every
+    assertion about recovery above would still pass and the verb would be useless -
+    the peer would bind a key none of its past was signed with.
+    """
+    _reference, guest = peers
+    record = {"room": "room-verb", "url": "wss://x", "seat": "s-1", "ca_pem": "",
+              "display": "Gast"}
+    expected = guest.ed25519_public(guest.seat_signing_seed(record)).hex()
+    sent = []
+
+    class Line:
+        room, peer = "room-verb", "p-verb"
+
+        def submit(self, payload):
+            sent.append(payload)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(guest, "load_record", lambda room: dict(record))
+    monkeypatch.setattr(guest, "save_record", lambda rec: Path("seat"))
+    monkeypatch.setattr(guest, "_open", lambda rec: Line())
+
+    guest.cmd_announce(argparse.Namespace(room="room-verb"))
+
+    assert len(sent) == 1 and sent[0]["kind"] == "join"
+    assert sent[0]["body"]["sign_key"] == expected, "the seat's key, not a new one"
+    assert sent[0]["sig"]["key"] == expected, "and the announcement attests it"
+
+
+def test_all_three_read_a_version_one_signature_as_unreadable_rather_than_forged(peers):
+    """What every frame signed before this change now looks like, in all three.
+
+    Version 2 added the sender's handle to what a signature covers, so a version 1
+    signature is a real signature over bytes that no longer mean the same thing. Every
+    reader has to land on `unreadable` and not `invalid`: the difference is whether an
+    honest peer's whole history is quietly accused the day the coverage changes.
+    """
+    reference, guest = peers
+    private, public = _pair()
+    old = dict(FRAMES[0])
+    old["sig"] = {"alg": "ed25519", "key": public,
+                  "sig": private.sign(guest.signing_bytes(old, old["room"])).hex()}
+
+    def verify(key_hex, blob_hex, message):
+        return guest.ed25519_verify(bytes.fromhex(key_hex), bytes.fromhex(blob_hex),
+                                    message)
+
+    assert guest.verdict_for(old, {"p-a": public}, old["room"]) == "unreadable"
+    assert reference.verdict(old, {"p-a": public}, verify, old["room"]) == "unreadable"
+
+    assert content_signature(Frame.from_dict(old), old["room"])[0] == "unreadable"

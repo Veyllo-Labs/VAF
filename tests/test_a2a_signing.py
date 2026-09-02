@@ -9,10 +9,13 @@ is the half that fails quietly: a signature that verifies on the machine that ma
 it and nowhere else looks exactly like one that works.
 
 The other half defends the two separations the design rests on. A signature says
-"the holder of this key wrote this content in this room" and deliberately nothing
-about placement, so the covered payload carries no `seq`, `from` or `ts`. And
-whether the key BELONGS to the peer a frame is filed under is a different question
-with a different answer, folded from the room's join frames.
+"the holder of this key wrote this, under this name, in this room" and deliberately
+nothing about placement, so the covered payload carries no `seq`, `lamport` or `ts`.
+The handle IS covered, and that is the line worth being exact about: a peer learns it
+when it is admitted and keeps it for the whole room, so unlike a sequence number it is
+something the sender can sign. And whether the key BELONGS to the peer a frame is
+filed under is a different question with a different answer, folded from the room's
+join frames.
 """
 import hashlib
 import inspect
@@ -24,8 +27,9 @@ from vaf.core.a2a import signing
 
 
 PAYLOAD = {
-    "v": 1,
+    "v": 2,
     "room": "room-abc",
+    "from": "p-a",
     "kind": "say",
     "to": {"room": True},
     "body": {"text": "guten Morgen"},
@@ -56,10 +60,10 @@ def test_the_canonical_bytes_are_pinned():
     accident. A stranger implementing this from the document reproduces this hash or
     their signatures will not verify against ours."""
     canonical = signing.canonical_bytes(PAYLOAD)
-    assert canonical.startswith(b"vaf-a2a-sig/v1\n")
+    assert canonical.startswith(b"vaf-a2a-sig/v2\n")
     assert hashlib.sha256(canonical).hexdigest() == (
         hashlib.sha256(
-            b"vaf-a2a-sig/v1\n"
+            b"vaf-a2a-sig/v2\n"
             + json.dumps(PAYLOAD, sort_keys=True, ensure_ascii=False,
                          separators=(",", ":")).encode("utf-8")
         ).hexdigest()
@@ -123,21 +127,27 @@ def test_whole_numbers_and_booleans_are_fine():
 
 # ── what is covered ─────────────────────────────────────────────────────────
 
-def test_the_covered_payload_carries_content_and_the_room_and_nothing_else():
+def test_the_covered_payload_carries_content_the_room_the_handle_and_nothing_else():
     """Placement is the room's: a sender cannot know `seq`, `lamport` or `id`, and
-    signing what somebody else fills in is the mistake this split exists to avoid."""
+    signing what somebody else fills in is the mistake this split exists to avoid.
+
+    `from` is the one that looks like placement and is not. A peer learns its handle
+    when it is admitted and keeps it for the whole room, so it can sign it - and while
+    it did not, a host could carry a frame onto another name with its signature intact.
+    """
     content = {"kind": "say", "to": {"room": True}, "body": {"text": "hi"},
                "reply_to": None, "must_understand": (), "ext": {}}
-    payload = signing.covered_payload("room-abc", content)
-    assert set(payload) == {"v", "room", *signing.COVERED}
-    for absent in ("id", "ts", "seq", "lamport", "from", "role"):
+    payload = signing.covered_payload("room-abc", "p-a", content)
+    assert set(payload) == {"v", "room", "from", *signing.COVERED}
+    assert payload["from"] == "p-a"
+    for absent in ("id", "ts", "seq", "lamport", "role"):
         assert absent not in payload
 
 
 def test_must_understand_is_carried_as_a_list():
     """compose returns a tuple and JSON has none; a verifier reads a list back, so
     the two sides would otherwise disagree about a value neither of them changed."""
-    payload = signing.covered_payload("r", {"must_understand": ("deadline",)})
+    payload = signing.covered_payload("r", "p-a", {"must_understand": ("deadline",)})
     assert payload["must_understand"] == ["deadline"]
     signing.canonical_bytes(payload)
 
@@ -146,7 +156,7 @@ def test_must_understand_is_carried_as_a_list():
 
 def test_a_signature_verifies_over_the_payload_it_was_made_for():
     private, public = _key_from_seed()
-    sig = {"alg": "ed25519", "key": public,
+    sig = {"alg": "ed25519", "v": 2, "key": public,
            "sig": private.sign(signing.canonical_bytes(PAYLOAD)).hex()}
     assert signing.verify(PAYLOAD, sig) is True
 
@@ -154,6 +164,7 @@ def test_a_signature_verifies_over_the_payload_it_was_made_for():
 @pytest.mark.parametrize("change", [
     {"body": {"text": "guten Abend"}},
     {"room": "room-xyz"},
+    {"from": "p-somebody-else"},
     {"kind": "directive"},
     {"to": {"peer": "p-bob"}},
     {"reply_to": "f-1"},
@@ -161,7 +172,7 @@ def test_a_signature_verifies_over_the_payload_it_was_made_for():
 ])
 def test_changing_any_covered_field_breaks_the_signature(change):
     private, public = _key_from_seed()
-    sig = {"alg": "ed25519", "key": public,
+    sig = {"alg": "ed25519", "v": 2, "key": public,
            "sig": private.sign(signing.canonical_bytes(PAYLOAD)).hex()}
     assert signing.verify({**PAYLOAD, **change}, sig) is False
 
@@ -169,7 +180,7 @@ def test_changing_any_covered_field_breaks_the_signature(change):
 def test_another_key_does_not_verify():
     private, _ = _key_from_seed()
     _, other_public = _key_from_seed(bytes(range(1, 33)))
-    sig = {"alg": "ed25519", "key": other_public,
+    sig = {"alg": "ed25519", "v": 2, "key": other_public,
            "sig": private.sign(signing.canonical_bytes(PAYLOAD)).hex()}
     assert signing.verify(PAYLOAD, sig) is False
 
@@ -225,3 +236,25 @@ def test_signing_and_verifying_with_a_derived_key():
     assert sig["key"] == signing.public_key("cli:scope-a", "room-abc")
     assert signing.verify(PAYLOAD, sig) is True
     assert signing.verify({**PAYLOAD, "body": {"text": "other"}}, sig) is False
+
+
+def test_a_signature_from_an_older_version_is_unreadable_and_not_a_forgery():
+    """The mirror of the case `unreadable` was written for, and the one that bites.
+
+    A version 1 signature is a REAL signature, made honestly, over bytes that no longer
+    mean the same thing - version 2 added the sender's handle to what is covered. Trying
+    it anyway and reporting `invalid` would accuse every peer who ever signed before the
+    change. An absent `v` is version 1, which is how those land here instead.
+    """
+    private, public = _key_from_seed()
+    old = {"alg": "ed25519", "key": public,
+           "sig": private.sign(signing.canonical_bytes(PAYLOAD)).hex()}
+    assert signing.read_signature(old) is None, "nothing here this reader can check"
+    assert signing.verify(PAYLOAD, old) is False
+
+    later = {**old, "v": 3}
+    assert signing.read_signature(later) is None, "and a newer scheme reads the same way"
+
+    current = {**old, "v": 2}
+    assert signing.read_signature(current) is not None
+    assert signing.verify(PAYLOAD, current) is True

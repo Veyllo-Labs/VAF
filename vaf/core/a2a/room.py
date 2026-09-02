@@ -361,7 +361,7 @@ def _published_key(participant_key: str, room_id: str) -> Optional[str]:
         return None
 
 
-def _sign_content(participant_key: str, room_id: str,
+def _sign_content(participant_key: str, room_id: str, sender: str,
                   content: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     """A signature over what the room is about to store, or None. NEVER raises.
 
@@ -371,10 +371,54 @@ def _sign_content(participant_key: str, room_id: str,
     """
     try:
         from vaf.core.a2a import signing
-        payload = signing.covered_payload(room_id, content)
+        payload = signing.covered_payload(room_id, sender, content)
         return signing.sign(payload, participant_key=participant_key, room_id=room_id)
     except Exception:
         return None
+
+
+def content_signature(frame: "Frame", room_id: str) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Whether a frame's own signature really covers its own content, HERE.
+
+    `room_id` is the room doing the reading, and it is a parameter rather than
+    `frame.room` because the frame's own room field is exactly the thing an attacker
+    supplies. Trusting it made a whole conversation portable: copy the files from one
+    room's store into another's and every frame still read `valid`, because the
+    verifier rebuilt the covered payload out of the room id the frame claimed. The
+    door never had this bug - `_settle_signature` has always used the room's own id -
+    so the two halves of one check disagreed about which room they were in.
+
+    ONE implementation, because two questions need this answer and they must not be
+    able to disagree: what a reader may conclude about a frame (`verdict_for`), and
+    whether a `join` really attests the key it publishes (`signing_keys`). Answering
+    it twice is how the two could drift into judging the same frame differently.
+
+    Four answers, and NONE of them is about whose key it is - that is deliberately
+    the caller's second question:
+
+    - `unsigned`: nothing was claimed.
+    - `unreadable`: a `sig` this peer cannot parse, or crypto this install lacks.
+    - `invalid`: a signature that does not cover this content.
+    - `signed`: it does, by the key it names, which comes back alongside.
+
+    NEVER raises. `transcript()` folds keys with nothing catching it, and an install
+    without the crypto library has to keep rooms working exactly as they did before
+    signatures existed at all.
+    """
+    if not frame.sig:
+        return "unsigned", None
+    try:
+        from vaf.core.a2a import signing
+        read = signing.read_signature(frame.sig)
+        if read is None:
+            return "unreadable", None
+        content = {field: getattr(frame, field) for field in signing.COVERED}
+        if not signing.verify(signing.covered_payload(room_id, frame.sender, content),
+                              read):
+            return "invalid", None
+    except Exception:
+        return "unreadable", None
+    return "signed", read
 
 
 def content_object(value: Any, name: str) -> Dict[str, Any]:
@@ -553,12 +597,17 @@ class Room:
         in the fold that decides roles.
 
         ``participant_key`` is the lane-and-scope pair the handle was derived from. Given
-        one, the join PUBLISHES this peer's public signing key in its card, which is what
-        later makes its signatures checkable by anybody holding the transcript. The key is
-        self-asserted exactly like the rest of the card, and that is the honest shape: a
-        card claims, and what turns the claim into something worth anything is that every
-        later frame from this peer verifies against it. A peer with no key here simply
-        publishes none and keeps sending unsigned frames.
+        one, the join PUBLISHES this peer's public signing key BESIDE the card, which is
+        what later makes its signatures checkable by anybody holding the transcript.
+
+        Unlike the card, the key is not merely self-asserted: the join carrying it is
+        SIGNED BY THAT KEY, and `signing_keys` counts no announcement that is not. A
+        card claims and is believed by nobody; a key claims and proves possession in
+        the same frame, which is what stops the announcement being forged into somebody
+        else's lane. If the body cannot be signed the card gives way rather than the
+        key, because a join with no key is how a peer withdraws one.
+
+        A peer with no key here simply publishes none and keeps sending unsigned frames.
         """
         if self.closed:
             raise RoomError(f"room {self.room_id!r} is closed")
@@ -592,10 +641,39 @@ class Room:
             "lease": time.time(),
             "card": dict(card),
         })
+        body: Dict[str, Any] = {"display": identity.display, "card": dict(card)}
+        if published:
+            # PUBLISH ONLY A KEY THIS JOIN CAN ATTEST. A reader believes a published
+            # key because the join carrying it is signed by that same key, so a join
+            # that publishes one it cannot sign publishes nothing usable - and worse
+            # than nothing, because this peer's own later frames would then read
+            # `foreign_key`, which accuses somebody. The two conditions were decided
+            # in two places and could disagree: deriving the key needs only the
+            # keyring, while signing needs the body to be canonical, and a card
+            # holding a fractional number is not. Measured with `card={"load": 0.75}`.
+            # One extra signature per join, once, is the price of them agreeing.
+            # WITHOUT THE CARD IF THE CARD IS WHAT BLOCKS IT. Deriving the key needs
+            # only the keyring, while signing needs the body to be canonical, and a
+            # card holding a fractional number is not - no two languages print every
+            # float alike. Publishing the key unsigned was not an option: it binds
+            # nothing, so every later frame this peer signs would read `foreign_key`,
+            # the verdict that points at somebody. Publishing NOTHING was worse still,
+            # because a join with no key is how a peer WITHDRAWS one, so an odd card
+            # would have retracted a binding the peer never meant to give up. So the
+            # card, which is self-description and is kept in the member record either
+            # way, is what gives.
+            for shape in (dict(body) | {"sign_key": published},
+                          {"display": identity.display, "sign_key": published}):
+                try:
+                    probe = {"kind": "join", "to": {"room": True}, "body": shape}
+                    if _sign_content(identity.participant_key or "", self.room_id,
+                                     identity.peer_id, self.compose(probe)):
+                        body = shape
+                        break
+                except Exception:
+                    continue
         joined = self.ingest(
-            {"kind": "join", "to": {"room": True},
-             "body": ({"display": identity.display, "card": dict(card)}
-                      | ({"sign_key": published} if published else {}))},
+            {"kind": "join", "to": {"room": True}, "body": body},
             identity=identity,
         )
         # WHAT A NEW MEMBER MAY READ, honoured here rather than promised in the
@@ -1493,28 +1571,55 @@ class Room:
 
         A FOLD over the `join` frames, for the same reason roles are one: any reader
         recomputes it from the transcript alone and two readers cannot disagree. It
-        deliberately does NOT read the member files, and that is the whole security
-        of it. A member file is mutable and lives on the host's disk; a host that
-        could swap a key there could forge every later frame from that peer and no
-        reader would see it. A join frame cannot be swapped: it sits in that peer's
-        own write-once lane at a sequence number the room promises is gapless, so
-        removing or replacing it leaves a hole a reader can name.
+        deliberately does NOT read the member files: a member file is mutable and
+        lives on the host's disk, so a host that could swap a key there could forge
+        every later frame from that peer.
 
-        The LAST key a peer published wins, so rejoining is how a peer rotates. That
-        is the same rule the roles fold uses, and it has the same honest limit: a
-        reader holding only part of a transcript folds only what it holds.
+        A KEY COUNTS ONLY IF ITS OWN JOIN IS SIGNED BY IT. Position in a write-once
+        lane is not enough, and believing it was is what made the rest of this module
+        claim more than it delivered. A public key is PUBLIC - it sits in the log in
+        plain sight - so a host that writes the log could copy one peer's key into
+        another peer's join frame and then file the first peer's signed frames under
+        the second handle, where they read `valid`. Measured, not theorised. Requiring
+        the join to carry a signature by the very key it publishes closes it, because
+        the host would need the private half to produce one.
+
+        What it does NOT close, said plainly: a host can still mint a fresh keypair
+        and publish it under a peer that never signed anything, and a self-signature
+        proves possession, never ownership. The gain is narrower and real - a key
+        already in the room cannot be re-pointed at a different handle, so a forged
+        attribution now has to happen inside the victim's OWN lane, where the victim's
+        gapless sequence makes it something they can find.
+
+        Three things a `join` can do to a peer's key, and the third is the one worth
+        stating: publishing an ATTESTED key binds it (the LAST one wins, so rejoining
+        is how a peer rotates); publishing NO key withdraws the claim; and publishing
+        a key that is not attested does NOTHING AT ALL. It neither binds nor
+        withdraws, because a claim this reader cannot check must not be allowed to
+        undo one it already checked.
+
+        That third rule denies the host one specific move - stripping a `sig` to
+        RETRACT a binding an earlier join already made - and it is worth being exact
+        about how little that is. A host holding the disk can always deny: strip every
+        announcement, or delete the files outright, and the peer's frames read
+        `foreign_key` with nothing to appeal to. Denial cannot be closed by any rule
+        that asks for a proof, because the proof is on the same disk. What the rule
+        buys is that denial has to be complete and visible rather than surgical.
+
+        The honest limit is unchanged: a reader holding only part of a transcript
+        folds only what it holds.
         """
         keys: Dict[str, str] = {}
         for frame in self.store.frames():
             if frame.kind != "join":
                 continue
             published = str((frame.body or {}).get("sign_key") or "")
-            if len(published) == 64:
+            if not published:
+                keys.pop(frame.sender, None)
+                continue
+            state, read = content_signature(frame, self.room_id)
+            if state == "signed" and read["key"] == published:
                 keys[frame.sender] = published
-            elif frame.sender in keys:
-                # A rejoin that published nothing withdraws the earlier claim rather
-                # than leaving a key standing that its owner no longer asserts.
-                del keys[frame.sender]
         return keys
 
     def verdict_for(self, frame: Frame, keys: Optional[Dict[str, str]] = None) -> str:
@@ -1527,8 +1632,13 @@ class Room:
           an accusation - a newer scheme would look like this to an older reader.
         - `valid`: the signature covers this content AND the key is the one this
           peer published in the room. The full claim.
-        - `foreign_key`: the signature is real, but by a key this peer never
-          published. This is what a host moving a frame between lanes looks like.
+        - `foreign_key`: the signature is real, but by no key this peer published
+          in a form a reader can check. TWO causes, and they are worth telling
+          apart before anybody is accused. A host that moved a frame between lanes
+          looks like this - and so does an honest peer whose client published its
+          key in a `join` it did not sign, which is what every guest did before the
+          fold began asking. The log says which: look for a `join` in that peer's
+          lane carrying a `sign_key` that its own signature does not attest.
         - `invalid`: a signature that does not cover this content. The only verdict
           that accuses anybody.
 
@@ -1538,19 +1648,9 @@ class Room:
         downgrades what may be concluded and nothing else, the way RFC 6376 treats a
         failed DKIM signature.
         """
-        if not frame.sig:
-            return "unsigned"
-        from vaf.core.a2a import signing
-        read = signing.read_signature(frame.sig)
-        if read is None:
-            return "unreadable"
-        content = {field: getattr(frame, field) for field in signing.COVERED}
-        try:
-            payload = signing.covered_payload(frame.room, content)
-            if not signing.verify(payload, read):
-                return "invalid"
-        except Exception:
-            return "unreadable"
+        state, read = content_signature(frame, self.room_id)
+        if state != "signed":
+            return state
         published = (self.signing_keys() if keys is None else keys).get(frame.sender)
         return "valid" if published and published == read["key"] else "foreign_key"
 
@@ -1771,14 +1871,16 @@ class Room:
                 raise MalformedContent(
                     "'sig' is not a signature this room can read; expected "
                     "{'alg': 'ed25519', 'key': <64 hex>, 'sig': <128 hex>}")
-            if not signing.verify(signing.covered_payload(self.room_id, content), read):
+            if not signing.verify(
+                    signing.covered_payload(self.room_id, identity.peer_id, content), read):
                 raise NotPermitted(
                     "this signature does not cover the content the room would store. "
                     "Compose the message first, then sign exactly what compose returned")
             return read
 
         if identity.participant_key and _may_self_sign(identity.participant_key):
-            return _sign_content(identity.participant_key, self.room_id, content)
+            return _sign_content(identity.participant_key, self.room_id,
+                                 identity.peer_id, content)
         return None
 
     # ── convenience, all of it routed through ingest ────────────────────────
@@ -2327,6 +2429,16 @@ def attached_files(body: Any) -> List[Dict[str, Any]]:
     return out
 
 
+#: How a verdict reads to somebody who is not reading a verdict column. Only the ones
+#: that should change what a reader concludes are in here: `valid` and `unsigned` are
+#: deliberately absent, because a mark on every line is a mark nobody sees.
+SIGNATURE_DOUBTS = {
+    "invalid": "signature does not match this message",
+    "foreign_key": "signed by a key this member never published here",
+    "unreadable": "signature in a form this version cannot check",
+}
+
+
 def describe(entry: Dict[str, Any]) -> str:
     """A transcript row as a line a human reads.
 
@@ -2335,15 +2447,24 @@ def describe(entry: Dict[str, Any]) -> str:
     lives here, once, because four surfaces render the same transcript (the CLI's
     log, the terminal app, the classic lane and the browser) and four copies of a
     phrase are four chances to drift.
+
+    A SIGNATURE IS NAMED ONLY WHEN IT IS NOT PLAINLY IN ORDER. `unsigned` is the
+    ordinary case and saying so on every line would be noise; `valid` is the good case
+    and a badge on every line is the kind that gets scanned past within a day. What a
+    reader must not miss is the opposite: a line whose name it should not take at face
+    value. Asking the whole question for every line is what `vaf a2a verify` is for.
     """
     kind = str(entry.get("kind") or "")
     body = entry.get("body") or {}
     text = str(entry.get("text") or "")
+    doubt = SIGNATURE_DOUBTS.get(str(entry.get("verdict") or ""))
     shared = ", ".join(f["path"] for f in attached_files(body))
     if shared and kind in ("say", "ask", "answer", "report", "directive"):
         # Said once here, so the CLI log, the terminal app and both web lanes
         # agree on how a shared file reads.
         text = f"{text} [shared: {shared}]".strip()
+    if doubt and kind in ("say", "ask", "answer", "report", "directive"):
+        text = f"{text} [{doubt}]".strip()
     if kind == "join":
         card = body.get("card") or {}
         skills = str(card.get("skills") or "").strip()

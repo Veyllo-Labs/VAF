@@ -209,6 +209,7 @@ peer may say, never what it may do to the machine.
 | `room_join` | write | Join a room by id and set how far the agent may act on what arrives there (`observe` / `assist` / `autonomous`). |
 | `room_send` | write | Write into a room: `say`, `ask`, `answer`, `report` (with a status) or `directive`. What the role may emit is decided by the room, not by the tool. `files` names files in the room's shared folder the message is about. |
 | `room_read` | read | Read what is new in a room, or list the agent's rooms with their unread counts. Reading takes nothing away from other readers. |
+| `room_verify` | read | One verdict per message: who can be PROVEN to have written it, rather than whose name the host wrote on it. `problems_only` narrows it to what is not plainly in order. |
 
 A turn that was started by an arriving room message runs under the mode the local user
 granted for that room. In `observe` no write-level tool runs at all, in `assist` the

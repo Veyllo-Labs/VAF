@@ -208,7 +208,12 @@ def dedupe(frames: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
 
 # ── signatures: the BYTES, which are the part that drifts ──────────────────
 
-SIG_DOMAIN = b"vaf-a2a-sig/v1\n"
+SIG_DOMAIN = b"vaf-a2a-sig/v2\n"
+
+#: The SIGNATURE version, which is not the protocol version above and only looked
+#: like it while both were 1. It counts what a signature COVERS: v2 added the
+#: sender's handle, so v1 signatures no longer verify anywhere.
+SIG_VERSION = 2
 
 #: What a signature covers, in the order the document lists them. Not carried on the
 #: wire: `v` inside the signed bytes is what pins the set, so a different coverage
@@ -244,7 +249,7 @@ def _canonical(value: Any, path: str = "payload") -> None:
             _canonical(item, f"{path}[{index}]")
 
 
-def signing_bytes(frame: Mapping[str, Any]) -> bytes:
+def signing_bytes(frame: Mapping[str, Any], room_id: str = "") -> bytes:
     """The exact bytes a signature over this frame is computed on.
 
     Written from the document's Signing section and nothing else, which is the whole
@@ -253,8 +258,20 @@ def signing_bytes(frame: Mapping[str, Any]) -> bytes:
     covered so a signed frame cannot be lifted into another room; `id`, `ts`, `seq`,
     `lamport`, `from` and `role` are placement, assigned after the payload arrives,
     and a sender cannot sign what somebody else fills in.
+
+    `room_id` is the room the READER is in, and covering that rather than the frame's
+    own field is what makes the sentence above true. A frame carries a `room` of its
+    own; believing it means a store copied into another room verifies there as well,
+    which is the lift the field was supposed to prevent.
+
+    `from` is read off the frame, and that is right where `room` is wrong. A reader
+    is judging the handle the frame claims, so covering the claimed value is what makes
+    editing it break the signature. A room is not claimed by the frame at all: the
+    reader already knows which room it opened.
     """
-    payload: Dict[str, Any] = {"v": VERSION, "room": str(frame.get("room") or "")}
+    payload: Dict[str, Any] = {"v": SIG_VERSION,
+                               "room": str(room_id or frame.get("room") or ""),
+                               "from": str(frame.get("from") or "")}
     for field in COVERED:
         value = frame.get(field)
         if field == "must_understand":
@@ -281,30 +298,53 @@ def signing_bytes(frame: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
-def signing_keys(frames: Iterable[Mapping[str, Any]]) -> Dict[str, str]:
+def signing_keys(frames: Iterable[Mapping[str, Any]], room_id: str,
+                 verify: Any = None) -> Dict[str, str]:
     """Which public key each peer published, folded from the `join` frames.
 
     A FOLD, like the roles, so any reader recomputes it from the transcript alone.
     Never from a peer record: that is mutable and lives on the host's disk, and a
     host that could swap a key there could forge every later frame from that peer.
-    The last key a peer published wins, so rejoining is how one rotates; rejoining
-    without a key withdraws the claim.
+
+    A KEY COUNTS ONLY IF ITS OWN JOIN IS SIGNED BY IT, which is why this fold takes
+    the same injected `verify` the verdict does. Lying in a write-once lane is not
+    enough by itself: a public key is public, so a host that writes the log can copy
+    one peer's key into another peer's join and file the first peer's signed frames
+    under the second handle. A join signed by the key it carries cannot be produced
+    without the private half.
+
+    Three outcomes: an attested key binds (the last wins, so rejoining rotates), no
+    key withdraws, and an UNATTESTED key does nothing at all - it must not withdraw,
+    or stripping a `sig` off a stored join would downgrade an honest peer's whole
+    history.
+
+    WITHOUT A VERIFIER nothing can be attested and this returns an empty mapping.
+    That is the same refusal to guess `verdict` makes, and it costs a reader nothing:
+    without a verifier every signed frame is `unchecked` before the keys are ever
+    consulted.
     """
     keys: Dict[str, str] = {}
     for frame in sorted(frames, key=sort_key):
         if str(frame.get("kind") or "") != "join":
             continue
         sender = str(frame.get("from") or "")
-        published = str((frame.get("body") or {}).get("sign_key") or "")
-        if len(published) == 64:
-            keys[sender] = published
-        else:
+        # A body that is not an object is a malformed frame, not a key. Reading it
+        # with .get would raise, and a fold that raises takes the reader with it.
+        body = frame.get("body")
+        published = str(body.get("sign_key") or "") if isinstance(body, Mapping) else ""
+        if not published:
             keys.pop(sender, None)
+            continue
+        sig = frame.get("sig")
+        if not isinstance(sig, Mapping) or str(sig.get("key") or "") != published:
+            continue
+        if verdict(frame, {sender: published}, verify, room_id) == "valid":
+            keys[sender] = published
     return keys
 
 
 def verdict(frame: Mapping[str, Any], keys: Mapping[str, str],
-            verify: Any = None) -> str:
+            verify: Any = None, room_id: str = "") -> str:
     """What a reader may conclude about who wrote this frame's content.
 
     `verify(public_key_hex, signature_hex, message)` is injected because Ed25519 is
@@ -315,8 +355,10 @@ def verdict(frame: Mapping[str, Any], keys: Mapping[str, str],
     Five answers, and the distinctions are the point: `unsigned` (nothing claimed,
     the ordinary case), `unreadable` (a claim this version cannot parse, which is
     what a newer scheme looks like to an older reader), `valid`, `foreign_key` (a
-    real signature by a key this peer never published, which is what a frame written
-    into the wrong lane looks like), `invalid` (the only verdict that accuses).
+    real signature by no key this peer ever published in a checkable form, which is
+    what a frame written into the wrong lane looks like, and equally what a peer whose
+    client announced a key without signing the announcement looks like), `invalid`
+    (the only verdict that accuses).
 
     It NEVER raises and never removes a frame: a bad signature downgrades what may
     be concluded, nothing more.
@@ -325,12 +367,20 @@ def verdict(frame: Mapping[str, Any], keys: Mapping[str, str],
     if not isinstance(sig, Mapping) or not sig:
         return "unsigned"
     key, blob = str(sig.get("key") or ""), str(sig.get("sig") or "")
-    if str(sig.get("alg") or "") != "ed25519" or len(key) != 64 or len(blob) != 128:
+    # An absent `v` IS version 1. A signature from another version was made over bytes
+    # that mean something else, so there is nothing here this reader can check - and
+    # that is not `invalid`, the one verdict that accuses somebody.
+    try:
+        version = int(sig.get("v") or 1)
+    except (TypeError, ValueError):
+        return "unreadable"
+    if (str(sig.get("alg") or "") != "ed25519" or version != SIG_VERSION
+            or len(key) != 64 or len(blob) != 128):
         return "unreadable"
     if verify is None:
         return "unchecked"
     try:
-        if not verify(key, blob, signing_bytes(frame)):
+        if not verify(key, blob, signing_bytes(frame, room_id)):
             return "invalid"
     except Exception:
         return "unreadable"

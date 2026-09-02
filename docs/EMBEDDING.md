@@ -1342,8 +1342,10 @@ room.verify_frames()         # [(frame, verdict)] for the whole room, keys folde
 
 Five verdicts, and the distinctions are the point: `unsigned` (nothing was claimed,
 the ordinary case and not a complaint), `valid`, `foreign_key` (a real signature by a
-key that peer never published here, which is what a frame written into the wrong lane
-looks like), `invalid` (the only one that accuses anybody) and `unreadable` (a claim
+key that peer ever published here in a form a reader can check - a frame written into
+the wrong lane, or a peer whose client announced a key without signing the
+announcement),
+`invalid` (the only one that accuses anybody) and `unreadable` (a claim
 this version cannot parse, which is what a newer scheme looks like to an older
 reader). Nothing here raises, and a verdict never removes a frame: a failed signature
 downgrades what may be concluded and nothing more.
@@ -1360,14 +1362,26 @@ Four things an embedder should know before building on it:
   handshake field. Do not "helpfully" sign for a remote party: a proof
   produced by the machine it is meant to hold to account proves nothing, and it makes
   `valid` mean less than it says.
-- **The key belongs to a peer by a FOLD over the log**, never by a peer record. A
-  record is mutable and lives on the host's disk; a join frame does not. If you build
-  your own membership view, read the keys the same way or do not read them at all.
+- **SIGN THE ANNOUNCEMENT, with the key it announces.** This is the one thing a peer
+  you write can get wrong in a way no verdict will tell you about. An unattested key
+  is not folded, so every frame that peer ever signs reads `foreign_key` and nothing
+  says why. `examples/12_a2a_wire_peer.py` has it as `join_announcement()`, in one
+  function, for exactly that reason.
+- **The key belongs to a peer by a FOLD over the log**, never by a peer record, and
+  the fold asks the `join` to prove it. A record is mutable and lives on the host's
+  disk; a join frame does not. But position alone was never enough: a public key is
+  public, so a host that writes the log could otherwise copy one peer's key into
+  another peer's `join` and file the first peer's signed frames under the second
+  handle. If you build your own membership view, read the keys the same way -
+  attested, last one wins, an unattested key changing nothing either way - or do not
+  read them at all.
 - **What it buys is bounded, and the bound is worth knowing.** A signature binds
-  CONTENT to a key. `seq`, `lamport`, `ts`, `id` and `role` are not covered, because
-  the sender controls none of them - it cannot sign a sequence number it learns only
-  after speaking. So the content of a conversation is tamper-evident and its ORDER is
-  not: rewriting a stored frame's `lamport` or `role` leaves the verdict at `valid`.
+  CONTENT, the ROOM and the peer's own HANDLE to a key. `seq`, `lamport`, `ts`, `id`
+  and `role` are not covered, because the sender controls none of them - it cannot
+  sign a sequence number it learns only after speaking. A handle it can: it is given
+  once at admission and kept, which is why it is covered and they are not. So the
+  content of a conversation is tamper-evident and its ORDER is not: rewriting a stored
+  frame's `lamport` or `role` leaves the verdict at `valid`.
   If you render a verdict beside a role, do not let the pairing suggest the role was
   signed; the authority on a role is the fold over `join`, `role` and `leave`.
 

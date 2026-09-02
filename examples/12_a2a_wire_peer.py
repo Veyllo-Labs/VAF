@@ -79,7 +79,7 @@ VERSION = 1
 #: became `backlog()` / `next_frame()` and a peer that had kept the previous file as
 #: a library found out by crashing. The protocol version above says what the WIRE
 #: speaks; this one says what this file offers.
-CLIENT_VERSION = 2
+CLIENT_VERSION = 3
 
 #: RFC 6455 handshake constant, not a secret.
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -643,7 +643,12 @@ def ed25519_sign(seed: bytes, message: bytes) -> bytes:
 
 _ED_Q = 2**252 + 27742317777372353535851937790883648493
 
-SIG_DOMAIN = b"vaf-a2a-sig/v1\n"
+SIG_DOMAIN = b"vaf-a2a-sig/v2\n"
+
+#: The SIGNATURE version, which is not the protocol version above and only looked
+#: like it while both were 1. It counts what a signature COVERS: v2 added the
+#: sender's handle, so v1 signatures no longer verify anywhere.
+SIG_VERSION = 2
 
 #: The content fields a signature covers. `room` is covered too, so a signed frame
 #: cannot be lifted into another room. `id`, `ts`, `seq`, `lamport`, `from` and
@@ -652,14 +657,20 @@ SIG_DOMAIN = b"vaf-a2a-sig/v1\n"
 SIG_COVERED = ("kind", "to", "body", "reply_to", "must_understand", "ext")
 
 
-def signing_bytes(frame: dict) -> bytes:
+def signing_bytes(frame: dict, room_id: str = "") -> bytes:
     """The exact bytes a signature over this frame was computed on.
 
     Sorted keys, no whitespace, UTF-8 rather than escapes, behind a domain prefix.
     Every part of that matters: two implementations that disagree by one byte reject
     each other's signatures and neither can see why.
     """
-    payload = {"v": VERSION, "room": str(frame.get("room") or "")}
+    # The room the READER is in, never the one the frame claims. A frame carries its
+    # own `room` field, and rebuilding the covered payload out of it means a whole
+    # store copied into another room verifies there too. Falls back to the frame's own
+    # only for a caller that is signing a frame it is about to send, which is the one
+    # case where the two cannot differ.
+    payload = {"v": SIG_VERSION, "room": str(room_id or frame.get("room") or ""),
+               "from": str(frame.get("from") or "")}
     for field in SIG_COVERED:
         value = frame.get(field)
         if field == "must_understand":
@@ -685,25 +696,45 @@ def signing_bytes(frame: dict) -> bytes:
     ).encode("utf-8")
 
 
-def signing_keys(frames) -> dict:
+def signing_keys(frames, room_id: str) -> dict:
     """Which public key each peer published, folded from the `join` frames.
 
     From the LOG, never from a peer record: a record is mutable and lives on the
     host's disk, and a host that could swap a key there could forge every later frame
-    from that peer. A join frame sits in that peer's own write-once lane. The last
-    key published wins, so rejoining rotates one and rejoining without one withdraws
-    the claim.
+    from that peer.
+
+    A KEY COUNTS ONLY IF ITS OWN JOIN IS SIGNED BY IT. Sitting in a write-once lane
+    is not enough on its own: a public key is public, so a host that writes the log
+    can copy one peer's key into another peer's join and then file the first peer's
+    signed frames under the second handle. Requiring the join to be signed by the very
+    key it carries closes that, because producing the signature needs the private
+    half. It does not make the host trustworthy - a fresh keypair can still be minted
+    under a peer that never signed - it stops a key already in the room being pointed
+    at a different handle.
+
+    Three outcomes, and the third is the one to get right: an attested key binds (the
+    last one wins, so rejoining rotates); no key at all withdraws; and a key that is
+    NOT attested does nothing whatever. It must not withdraw, or stripping the `sig`
+    off a stored join would quietly downgrade every later frame from an honest peer.
     """
     keys = {}
     for frame in sorted(frames, key=sort_key):
         if str(frame.get("kind") or "") != "join":
             continue
         sender = str(frame.get("from") or "")
-        published = str((frame.get("body") or {}).get("sign_key") or "")
-        if len(published) == 64:
-            keys[sender] = published
-        else:
+        # A body that is not an object is a malformed frame, not a key: reading it
+        # with .get would raise here and take the whole verify verb down with it.
+        body = frame.get("body")
+        published = str(body.get("sign_key") or "") if isinstance(body, dict) else ""
+        if not published:
             keys.pop(sender, None)
+            continue
+        sig = frame.get("sig")
+        if not isinstance(sig, dict) or str(sig.get("key") or "") != published:
+            continue
+        # The same check `verdict_for` makes, deliberately asked of the join itself.
+        if verdict_for(frame, {sender: published}, room_id) == "valid":
+            keys[sender] = published
     return keys
 
 
@@ -728,7 +759,7 @@ def seat_signing_seed(record: dict) -> bytes:
     return fresh
 
 
-def sign_payload(payload: dict, room_id: str, seed: bytes) -> dict:
+def sign_payload(payload: dict, room_id: str, seed: bytes, sender: str = "") -> dict:
     """The payload with a `sig` attached, over what the ROOM will store.
 
     The bytes are built by the same function that checks somebody else's, which is
@@ -743,20 +774,45 @@ def sign_payload(payload: dict, room_id: str, seed: bytes) -> dict:
     first and sign the answer it gets back.
     """
     signed = dict(payload)
-    signed["sig"] = {"alg": "ed25519", "key": ed25519_public(seed).hex(),
-                     "sig": ed25519_sign(seed, signing_bytes({**payload, "room": room_id})).hex()}
+    # The HANDLE is signed too, so a frame cannot be carried onto another name. A peer
+    # learns its own when it is admitted and keeps it for the room, which is what makes
+    # it signable at all - unlike `seq`, `lamport`, `id` and `ts`, decided per frame
+    # after the payload arrives.
+    signed["sig"] = {"alg": "ed25519", "v": SIG_VERSION,
+                     "key": ed25519_public(seed).hex(),
+                     "sig": ed25519_sign(seed, signing_bytes(
+                         {**payload, "from": sender}, room_id)).hex()}
     return signed
 
 
-def verdict_for(frame: dict, keys: dict) -> str:
+def join_announcement(display: str, room_id: str, seed: bytes, sender: str) -> dict:
+    """The `join` a peer sends to publish its own signing key, SELF-SIGNED.
+
+    An unsigned announcement is a key anybody could have put there, and a fold that
+    counted one would let a host copy somebody else's public key - which is public,
+    it is right there in the log - into this peer's lane and file that peer's signed
+    frames here. Signing it proves whoever published the key held the private half.
+
+    The signature covers this frame's own body, the key included, so the key cannot be
+    swapped afterwards without breaking it. Its own function because it is the one
+    frame whose correctness cannot be checked by reading a transcript afterwards: get
+    it wrong and everything this peer ever says reads `foreign_key`.
+    """
+    return sign_payload({"kind": "join", "body": {
+        "display": display, "card": {},
+        "sign_key": ed25519_public(seed).hex()}}, room_id, seed, sender)
+
+
+def verdict_for(frame: dict, keys: dict, room_id: str) -> str:
     """What may be concluded about who wrote this frame's content.
 
     `unsigned` is the ordinary answer and not a complaint. `unreadable` is a claim
     this version cannot parse, which is what a newer scheme looks like from here.
     `valid` means the signature covers this content AND the key is the one that peer
     published in the room. `foreign_key` is a real signature by a key it never
-    published - what a frame written into the wrong lane looks like. `invalid` is the
-    only one that accuses anybody.
+    published in a form this reader can check - what a frame written into the wrong
+    lane looks like, and what a peer whose client announced a key without signing the
+    announcement looks like too. `invalid` is the only one that accuses anybody.
 
     Never raises, and a verdict never removes a frame: a failed signature downgrades
     what may be concluded and nothing else.
@@ -765,10 +821,19 @@ def verdict_for(frame: dict, keys: dict) -> str:
     if not isinstance(sig, dict) or not sig:
         return "unsigned"
     key, blob = str(sig.get("key") or ""), str(sig.get("sig") or "")
-    if str(sig.get("alg") or "") != "ed25519" or len(key) != 64 or len(blob) != 128:
+    # An absent `v` IS version 1. A signature from another version is a real signature
+    # over bytes that mean something else, so it is nothing this reader can check -
+    # never `invalid`, which is the one verdict that accuses somebody.
+    try:
+        version = int(sig.get("v") or 1)
+    except (TypeError, ValueError):
+        return "unreadable"
+    if (str(sig.get("alg") or "") != "ed25519" or version != SIG_VERSION
+            or len(key) != 64 or len(blob) != 128):
         return "unreadable"
     try:
-        if not ed25519_verify(bytes.fromhex(key), bytes.fromhex(blob), signing_bytes(frame)):
+        if not ed25519_verify(bytes.fromhex(key), bytes.fromhex(blob),
+                              signing_bytes(frame, room_id)):
             return "invalid"
     except Exception:
         return "unreadable"
@@ -808,11 +873,12 @@ def cmd_join(args) -> None:
         # takes the LAST one per peer. So one frame does what a handshake field
         # would have done, with no change to the protocol and with rotation falling
         # out of the same rule: joining again with a new key replaces the old.
-        published = ed25519_public(seat_signing_seed(record)).hex()
+        seed = seat_signing_seed(record)
+        published = ed25519_public(seed).hex()
         try:
-            connection.submit({"kind": "join", "body": {
-                "display": record.get("display") or connection.peer,
-                "card": {}, "sign_key": published}})
+            connection.submit(join_announcement(
+                record.get("display") or connection.peer, connection.room, seed,
+                connection.peer))
             record["sign_key"] = published
         except Refused:
             # A room that will not take it is a room this peer speaks in unsigned,
@@ -837,6 +903,38 @@ def _open(record: dict) -> RoomConnection:
     if not credential:
         raise Refused("this record holds no seat - join again with a fresh invitation")
     return RoomConnection.connect(record["url"], credential, record["ca_pem"])
+
+
+def cmd_announce(args) -> None:
+    """Publish this seat's signing key into a room it already belongs to.
+
+    The migration path, and it exists because upgrading a client would otherwise cost
+    a peer its identity. A key counts only if the `join` carrying it is signed by it,
+    so a seat that joined with an older client holds a key the room will not bind.
+    Redeeming a FRESH invitation would fix the signing and lose everything else: a new
+    invitation mints a new handle, so the peer's whole history stays behind under the
+    old one, unbindable forever.
+
+    Sending the announcement over the seat keeps the handle. And because the seed is
+    the seat's own and does not change, the key is the SAME key, so every frame this
+    peer signed BEFORE the upgrade binds the moment this lands - a past that was
+    unverifiable becomes verifiable without rewriting a byte of it.
+    """
+    record = load_record(args.room)
+    seed = seat_signing_seed(record)
+    connection = _open(record)
+    try:
+        connection.submit(join_announcement(
+            record.get("display") or connection.peer, connection.room, seed,
+            connection.peer))
+    finally:
+        connection.close()
+    record["sign_key"] = ed25519_public(seed).hex()
+    save_record(record)
+    print(json.dumps({"room": record["room"], "peer": connection.peer,
+                      "sign_key": record["sign_key"],
+                      "note": "signed announcement sent; run verify to see it bind"},
+                     ensure_ascii=False, indent=2))
 
 
 def cmd_read(args) -> None:
@@ -880,12 +978,12 @@ def cmd_verify(args) -> None:
         finally:
             connection.close()
     frames = [f for f in frames if str(f.get("kind") or "") not in _TRANSPORT_KINDS]
-    keys = signing_keys(frames)
+    keys = signing_keys(frames, record["room"])
     for frame in sorted(frames, key=sort_key):
         _print_frame({"id": frame.get("id"), "peer": frame.get("from"),
                       "seq": frame.get("seq"),
                       "kind": frame.get("kind"), "lamport": frame.get("lamport"),
-                      "verdict": verdict_for(frame, keys),
+                      "verdict": verdict_for(frame, keys, record["room"]),
                       "key": (frame.get("sig") or {}).get("key") or ""})
 
 
@@ -976,7 +1074,8 @@ def _send(args, kind: str) -> None:
     if getattr(args, "to", ""):
         payload["to"] = {"peer": args.to}
     if record.get("sign_seed"):
-        payload = sign_payload(payload, record["room"], seat_signing_seed(record))
+        payload = sign_payload(payload, record["room"], seat_signing_seed(record),
+                               str(record.get("peer") or ""))
     line = _line_for(args.room, record)
     if line is not None:
         ack = line.submit(payload)
@@ -1818,6 +1917,11 @@ def main(argv=None) -> None:
         "verify", help="who really wrote each message, checked here rather than trusted")
     verify.add_argument("room")
     verify.set_defaults(handler=cmd_verify)
+
+    announce = commands.add_parser(
+        "announce", help="publish this seat's signing key, keeping the same handle")
+    announce.add_argument("room")
+    announce.set_defaults(handler=cmd_announce)
 
     rooms = commands.add_parser("rooms", help="list the seats this machine holds")
     rooms.set_defaults(handler=cmd_rooms)

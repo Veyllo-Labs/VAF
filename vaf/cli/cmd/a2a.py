@@ -1646,8 +1646,9 @@ def verify(room_id: str = typer.Argument(...),
 
     `unsigned` is the ordinary answer and not a complaint. `valid` means the signature
     covers the message and the key is the one that peer published here. `foreign_key`
-    means a real signature by a key this peer never published, which is what a message
-    written into the wrong lane looks like. `invalid` is the only one that accuses
+    means a real signature by no key this peer ever published in a checkable form:
+    a message written into the wrong lane, or a peer whose client announced its key
+    without signing the announcement. `invalid` is the only one that accuses
     anybody. `unreadable` means a claim this version cannot parse, which is what a
     newer scheme looks like to an older reader.
 

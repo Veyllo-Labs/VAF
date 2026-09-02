@@ -9,19 +9,30 @@ admitted the connection and stops being sound the moment somebody reads the
 transcript somewhere else. `vaf a2a export` is a claim, not evidence.
 
 WHAT IS SIGNED, and why exactly that. The peer is the authority over CONTENT and
-the room over PLACEMENT, so the covered payload is the room's id plus the six
-fields `Room.compose` returns, and nothing else:
+over WHO IT IS, the room over everything it assigns afterwards. So the covered
+payload is the room's id, the sender's handle, and the six fields `Room.compose`
+returns:
 
-    {"v": 1, "room": ..., "kind": ..., "to": ..., "body": ...,
+    {"v": 2, "room": ..., "from": ..., "kind": ..., "to": ..., "body": ...,
      "reply_to": ..., "must_understand": [...], "ext": {...}}
 
-`room` is in there so a signed frame cannot be lifted into another room. `id`,
-`ts`, `seq`, `lamport`, `from` and `role` are deliberately out: they are assigned
-after the payload arrives, so a sender cannot know them, and signing what another
-party fills in is the mistake RFC 9421 warns about (do not sign what an
-intermediary alters). A host that files one peer's signed frame into another
-peer's lane is caught anyway, because a reader checks the signing key against the
-key that lane's own join frame carries.
+`room` is in there so a signed frame cannot be lifted into another room, and `from`
+so it cannot be lifted onto another name. `from` looks at first like the other
+assigned fields and is not: a peer learns its handle when it is admitted and keeps
+it for the whole room, so it CAN sign it, while `id`, `ts`, `seq`, `lamport` and
+`role` are decided per frame after the payload arrives and remain deliberately out -
+signing what another party fills in is the mistake RFC 9421 warns about.
+
+Leaving `from` out cost more than it looked. Measured: a host that writes the log
+copies a peer's own fully attested `join` file into another lane, edits only the
+uncovered fields, and the same key binds under two names; the peer's signed sentence,
+moved the same way, reads `valid` under the other one. No key material is needed for
+that, only the bytes the host already stores. The `join` being self-signed does not
+help, because the signature proves possession of the key and said nothing about which
+handle the announcement was filed under. Covering `from` is what actually closes it,
+and it is why version 1 is not merely improved but replaced: a different coverage is
+a different version, so the domain separator says `v2` and a v1 signature no longer
+verifies anywhere.
 
 There is no covered-field list on the wire. RFC 6376 and RFC 9421 both put the
 coverage claim inside the signed bytes so it cannot be edited afterwards, and both
@@ -54,7 +65,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 
 # The bytes every signature is computed over start with this, so they can never be
 # mistaken for the input of some other signature in this system.
-DOMAIN = b"vaf-a2a-sig/v1\n"
+DOMAIN = b"vaf-a2a-sig/v2\n"
 
 # The keyring entry every room key is derived from. One secret per machine account;
 # the per-room keys come out of it and are never stored.
@@ -70,7 +81,7 @@ ALG = "ed25519"
 # Not sent on the wire: `v` inside the signed bytes is what pins them.
 COVERED = ("kind", "to", "body", "reply_to", "must_understand", "ext")
 
-VERSION = 1
+VERSION = 2
 
 
 class SigningError(Exception):
@@ -124,7 +135,8 @@ def _check_canonical(value: Any, path: str = "body") -> None:
             _check_canonical(item, f"{path}[{index}]")
 
 
-def covered_payload(room_id: str, content: Mapping[str, Any]) -> Dict[str, Any]:
+def covered_payload(room_id: str, sender: str,
+                    content: Mapping[str, Any]) -> Dict[str, Any]:
     """The object a signature is computed over, built from `Room.compose`'s output.
 
     EVERY field is normalised to its empty form rather than passed through, and that
@@ -143,8 +155,14 @@ def covered_payload(room_id: str, content: Mapping[str, Any]) -> Dict[str, Any]:
 
     `must_understand` becomes a list for the same reason: JSON has no tuples, and a
     verifier reads one back as a list.
+
+    `sender` is the handle the room files this under, and a caller must pass the one
+    the ROOM resolved rather than one a frame claims: on the signing side that is the
+    peer's own id, and on the verifying side it is whose lane the reader is judging.
+    Passing a frame's self-declared value back to the verifier would check the
+    signature against the very field an attacker edits.
     """
-    payload: Dict[str, Any] = {"v": VERSION, "room": str(room_id)}
+    payload: Dict[str, Any] = {"v": VERSION, "room": str(room_id), "from": str(sender)}
     for field in COVERED:
         value = content.get(field)
         if field == "must_understand":
@@ -223,10 +241,19 @@ def public_key(participant_key: str, room_id: str) -> str:
 
 
 def sign(payload: Mapping[str, Any], *, participant_key: str, room_id: str) -> Dict[str, str]:
-    """The `sig` object for a covered payload."""
+    """The `sig` object for a covered payload.
+
+    `v` rides on the wire as well as inside the signed bytes, and the two do different
+    jobs. Inside, it pins what the signature COVERS so the claim cannot be edited.
+    Outside, it lets a reader tell an older scheme from a forgery without doing the
+    sum - which matters because the verdicts differ by more than a shade: `invalid` is
+    the one that accuses somebody, and a message signed under version 1 has accused
+    nobody. DKIM carries its `v=` on the wire for the same reason.
+    """
     private, public = keypair(participant_key, room_id)
     return {
         "alg": ALG,
+        "v": VERSION,
         "key": public,
         "sig": private.sign(canonical_bytes(payload)).hex(),
     }
@@ -238,20 +265,32 @@ def read_signature(value: Any) -> Optional[Dict[str, str]]:
     Read defensively: it arrives from a foreign agent, and a shape this peer cannot
     use is not the same as a forgery. None means "there is nothing here to check",
     which a reader must render differently from "this did not verify".
+
+    A version other than this one reads as nothing to check, in BOTH directions. A
+    newer scheme is the case the `unreadable` verdict was written for; an older one is
+    its mirror and matters more in practice, because a version 1 signature is a real
+    signature by an honest peer over bytes that no longer mean the same thing. Trying
+    it and reporting `invalid` would accuse everybody who signed anything before the
+    coverage changed. An absent `v` IS version 1, which is what makes those frames
+    land here rather than in the accusation.
     """
     if not isinstance(value, Mapping):
         return None
     alg = str(value.get("alg") or "")
     key = str(value.get("key") or "")
     sig = str(value.get("sig") or "")
-    if alg != ALG or len(key) != 64 or len(sig) != 128:
+    try:
+        version = int(value.get("v") or 1)
+    except (TypeError, ValueError):
+        return None
+    if alg != ALG or version != VERSION or len(key) != 64 or len(sig) != 128:
         return None
     try:
         bytes.fromhex(key)
         bytes.fromhex(sig)
     except ValueError:
         return None
-    return {"alg": alg, "key": key, "sig": sig}
+    return {"alg": alg, "v": version, "key": key, "sig": sig}
 
 
 def verify(payload: Mapping[str, Any], signature: Any) -> bool:

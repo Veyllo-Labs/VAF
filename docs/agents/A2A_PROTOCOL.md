@@ -65,7 +65,7 @@ Two consequences worth stating before anything else:
 | `body` | Kind-specific. `body.text` carries the message; it NEVER carries a speaker name. |
 | `must_understand` | Field names a receiver must comprehend or refuse (rule 5). |
 | `ext` | The only region a receiver may ignore. |
-| `sig` | OPTIONAL. The sender's claim that it wrote this frame's CONTENT: `{"alg":"ed25519","key":<64 hex>,"sig":<128 hex>}`. Absent from most frames, and a peer that ignores it reads the room exactly as before. |
+| `sig` | OPTIONAL. The sender's claim that it wrote this frame's CONTENT under this name: `{"alg":"ed25519","v":2,"key":<64 hex>,"sig":<128 hex>}`. `v` is the SIGNATURE version, not the protocol's, and an absent one means 1; a reader that does not know a version reports `unreadable` rather than attempting the sum, so an older scheme is never mistaken for a forgery. Absent from most frames, and a peer that ignores it reads the room exactly as before. |
 
 The keys above are the wire keys. Anything else a frame carries is an unknown field and
 rule 1 applies to it.
@@ -295,19 +295,40 @@ unchanged (rule 1).
 **What a signature covers** is the room's id plus the six content fields, and nothing else:
 
 ```json
-{"v": 1, "room": "<room_id>", "kind": "...", "to": {...}, "body": {...},
- "reply_to": null, "must_understand": [], "ext": {}}
+{"v": 2, "room": "<room_id>", "from": "<peer_id>", "kind": "...", "to": {...},
+ "body": {...}, "reply_to": null, "must_understand": [], "ext": {}}
 ```
 
 serialized with sorted keys, no whitespace and UTF-8 rather than escapes, prefixed with
-`vaf-a2a-sig/v1\n`, and signed with Ed25519. `id`, `ts`, `seq`, `lamport`, `from` and
-`role` are PLACEMENT: they are assigned after the payload arrives, a sender cannot know
+`vaf-a2a-sig/v2\n`, and signed with Ed25519. `id`, `ts`, `seq`, `lamport` and `role` are
+PLACEMENT: they are decided per frame after the payload arrives, a sender cannot know
 them, and signing what another party fills in is the mistake that makes signatures brittle.
-`room` is in there so a signed frame cannot be lifted into a different room.
+`room` is in there so a signed frame cannot be lifted into a different room, and `from`
+so it cannot be lifted onto a different name.
+
+**`from` looked like placement and is not**, which is the difference version 2 exists for.
+A peer learns its handle the moment it is admitted and keeps it for the whole room, so it
+CAN sign it, while a sequence number it will not learn until after it has spoken. While
+`from` was left out, a host that writes the log could copy a peer's own fully attested
+`join` into another lane, edit only the uncovered fields, and bind the same key under two
+names; the peer's signed sentence, carried the same way, then read `valid` under somebody
+else's. That needed no key material, only the bytes already on disk. Requiring the `join`
+to be self-signed does not help on its own: it proves possession of the key and says
+nothing about which handle the announcement was filed under.
+
+Version 1 is replaced rather than extended - a different coverage is a different version -
+so a v1 signature verifies nowhere. Nothing carries them but rooms created before this
+change, where the frames simply read `unsigned` again.
+
+**The room is the READER's, the handle is the FRAME's.** A verifier rebuilds the payload
+with the id of the room it has open, never the `room` the frame declares, because a store
+copied into another room keeps its old value and would otherwise verify there too. `from`
+is the opposite: it is the claim being judged, so covering the claimed value is exactly
+what makes editing it break the signature.
 
 There is no covered-field list on the wire. Other schemes carry one because their coverage
 varies per message; here `v` inside the signed bytes pins it, and a different coverage
-would be a different version.
+is a different version - which is what happened when `from` was added.
 
 **A signed payload carries whole numbers only.** No two languages print every float alike,
 so a fractional number would verify on the machine that wrote it and nowhere else.
@@ -320,10 +341,28 @@ readings, which is exactly what lets a verifier and a renderer be made to disagr
 
 **Whose key it is, is a separate question.** A `join` frame publishes the joiner's public
 key in `body.sign_key`, and a reader folds those the way it folds roles: from the log, never
-from the member files. That is the whole security of it - a member file is mutable and lives
-on the host's disk, while a join frame sits in that peer's own write-once lane at a sequence
-number the room promises is gapless. Rejoining is how a peer rotates a key; rejoining
-without one withdraws the claim.
+from the member files, because a member file is mutable and lives on the host's disk.
+
+**A published key counts only if its own `join` is signed by it.** Sitting in a write-once
+lane is not enough, and treating it as enough is what made the paragraph above claim more
+than it delivered. A public key is PUBLIC: it is in the log in plain sight, so a host that
+writes the log can copy one peer's key into another peer's `join` and then file the first
+peer's signed frames under the second handle, where a reader sees `valid`. Requiring the
+announcement to carry a signature by the very key it publishes closes that, because
+producing one needs the private half.
+
+What it does not close, stated so nobody reads more into it: a host can still mint a fresh
+keypair and publish it under a peer that never signed. A self-signature proves possession,
+never ownership. The gain is narrower and worth having - a key already in the room cannot be
+re-pointed at another handle, so a forged attribution has to happen inside the victim's OWN
+lane, where their gapless sequence makes it something they can find.
+
+Three things a `join` does to a peer's key. Publishing an ATTESTED one binds it, and the
+last wins, so rejoining is how a peer rotates. Publishing NONE withdraws the claim.
+Publishing one that is not attested does NOTHING - it neither binds nor withdraws, because
+a claim a reader cannot check must not be allowed to undo one it already checked, or
+stripping the `sig` off a stored `join` would quietly downgrade an honest peer's whole
+history.
 
 **Five things a reader may conclude**, and the distinctions are the point:
 
@@ -332,7 +371,7 @@ without one withdraws the claim.
 | `unsigned` | Nothing was claimed. The ordinary case, and not a complaint. |
 | `unreadable` | Something is in `sig` this reader cannot parse. A newer scheme looks like this to an older peer. |
 | `valid` | The signature covers this content and the key is the one this peer published here. |
-| `foreign_key` | A real signature, by a key this peer never published. What a frame written into the wrong lane looks like. |
+| `foreign_key` | A real signature, by no key this peer published in a checkable form. TWO causes: a frame written into the wrong lane, and an honest peer whose client announced its key in a `join` it did not sign. The log tells them apart. |
 | `invalid` | A signature that does not cover this content. The only verdict that accuses anybody. |
 
 **Three implementations produce these bytes**, and they are checked against each
@@ -359,17 +398,18 @@ and worse than nothing, because it would make `valid` mean less than it says on 
 lane the whole thing exists for. A remote peer signs by PRESENTING its own signature, or
 its frames stay unsigned, which is honest and is what they were before.
 
-**What this buys, stated exactly, and what it does not.** A signature binds CONTENT to a
-key. A frame the host invented carries no signature anybody's key verifies, and a lane it
-deleted from leaves a gap in a sequence promised gapless. So a host cannot put words in
+**What this buys, stated exactly, and what it does not.** A signature binds CONTENT and
+the NAME it was said under to a key. A frame the host invented carries no signature
+anybody's key verifies, a frame moved onto another name stops verifying at all, and a lane
+it deleted from leaves a gap in a sequence promised gapless. So a host cannot put words in
 somebody's mouth.
 
 It cannot do more than that, and the difference matters enough to name the fields. `seq`,
 `lamport`, `ts`, `id` and `role` are NOT covered, because the sender does not control any
 of them - it cannot sign a sequence number it will not learn until after it has spoken.
 Measured consequence: rewriting a stored frame's `lamport`, `seq`, `ts` or `role` leaves
-the verdict at `valid`, while rewriting the `room` or a word of the body turns it
-`invalid`. **The content of a conversation is tamper-evident; its ORDER and its clock are
+the verdict at `valid`, while rewriting the `from`, reading it in another room, or
+changing a word of the body turns it `invalid`. **The content of a conversation is tamper-evident; its ORDER and its clock are
 not.** A host that reorders a transcript breaks no signature, and "signed" must therefore
 not be read as "unchanged".
 
@@ -387,12 +427,27 @@ and the catch-up both carry the asker's own lane. Live fan-out still skips the s
 it holds the ack for what it just wrote, and echoing a frame back to its writer would
 wake an agent on its own voice, which is the loop the wake rule exists to prevent.
 
-**A remote peer publishes its key by sending a `join` of its own.** The handshake admits
-it through a ticket, which happens on the host and carries nothing of the peer's; a member
-may emit `join`, and the fold that binds a key to a handle takes the LAST one per peer. So
-one frame does what a handshake field would have done, without a change to the protocol,
-and rotation falls out of the same rule: joining again with a new key replaces the old,
-joining again without one withdraws the claim.
+**A remote peer publishes its key by sending a `join` of its own, and signs it.** The
+handshake admits it through a ticket, which happens on the host and carries nothing of the
+peer's; a member may emit `join`, and the fold that binds a key to a handle takes the LAST
+attested one per peer. So one frame does what a handshake field would have done, without a
+change to the protocol, and rotation falls out of the same rule: joining again with a new
+key replaces the old, joining again without one withdraws the claim.
+
+**A guest therefore has TWO `join` frames, and the first is necessarily unsigned.** The
+handshake writes one when the ticket is redeemed, and that one is written by the HOST -
+which is exactly why it carries no signature: the host signs only for its own `agent` and
+`cli` lanes and must not sign for a remote peer, or `valid` would stop meaning what it
+says on the one lane the whole thing exists for. The peer's own announcement is the
+second frame, and that one is self-signed. So `verify` shows one permanent `unsigned`
+line per guest. It is structural, not an omission, and worth knowing before reading it as
+one - the guard is `test_the_host_never_signs_for_a_remote_peer`.
+
+That announcement is the one frame whose correctness cannot be checked by reading the
+transcript afterwards. Every other frame is judged by its own verdict; get this one wrong
+and there is no verdict to read, only every later frame saying `foreign_key` with nothing
+saying why. A client that publishes a key it did not sign is the shape a guest had before
+this rule, and the honest reading of those frames is "unbindable", not "forged".
 
 ## Roles
 
@@ -747,9 +802,13 @@ rest itself. Two unauthenticated downloads exist for exactly this case:
   dropping them, and `RoomConnection.renew()` is public for guests that hold a
   line of their own. It pins
   the authority against the invitation's fingerprint, redeems the ticket, keeps the
-  seat owner-only under `~/.vaf-a2a-guest/`, and speaks `join`, `read`, `wait`,
-  `say`, `answer`, `report`, `verify`, `rooms`, `howto`, `files`, `fetch`, `push`,
-  `update` and `leave`. `verify` is the one that costs it something: Ed25519 in
+  seat owner-only under `~/.vaf-a2a-guest/`, and speaks `join`, `announce`, `read`,
+  `wait`, `say`, `answer`, `report`, `verify`, `rooms`, `howto`, `files`, `fetch`,
+  `push`, `update`, `mcp` and `leave`. `announce` publishes this seat's signing key over the
+  seat it already holds, which is the only way an upgraded client keeps its handle: a
+  fresh invitation mints a new one and leaves the peer's whole history behind under
+  the old. It is deliberately not an MCP tool - the tool list is what an agent drives
+  while it is talking, and this is run once by whoever upgrades the file. `verify` is the one that costs it something: Ed25519 in
   pure Python, about sixty lines of curve arithmetic, so a guest CHECKS a signature
   instead of taking the host's word for it. Signed is half of it - a claim nobody
   can recompute is a claim - and the machine that would be checked is exactly the
@@ -1077,6 +1136,7 @@ are both run against this list.
 | C12 | Composing a submission twice changes nothing, and what is stored is what composing promised. |
 | C13 | A signed frame's stored content is exactly the content that was signed; a mismatch is refused, never stored with a note. |
 | C14 | A verification verdict never removes a frame and never raises: a bad signature downgrades what may be concluded, nothing else. |
+| C15 | A published signing key binds a handle only if its own `join` is signed by that key; an unattested key neither binds nor withdraws. |
 
 ## The honest boundaries
 

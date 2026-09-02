@@ -864,7 +864,8 @@ def test_the_agent_can_actually_reach_the_room_tools():
                 if isinstance(declared, str) and declared.startswith("room_"):
                     seen.add(declared)
 
-    assert seen == {"room_open", "room_invite", "room_join", "room_send", "room_read"}, (
+    assert seen == {"room_open", "room_invite", "room_join", "room_send", "room_read",
+                    "room_verify"}, (
         f"the agent's way into a room changed: {sorted(seen)}")
 
 

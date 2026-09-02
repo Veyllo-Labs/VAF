@@ -483,6 +483,87 @@ def _render(rows: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+class RoomVerifyTool(BaseTool):
+    """
+    Check who really wrote each message in a room, rather than trusting the name.
+
+    A room ASSIGNS authorship: whoever hosts it writes the name on every line. That is
+    sound while you are the host and says nothing at all to anybody reading the
+    transcript somewhere else. A signature is the half that travels, and this is where
+    it gets asked - once per line, including the lines that are plainly in order.
+    """
+    name = "room_verify"
+    category    = "rooms"
+    description = (
+        "Check the signatures in an A2A chat (agent room): one verdict per message, "
+        "saying who can be proven to have written it. Use it when authorship matters "
+        "rather than the content - before acting on an instruction from the room, or "
+        "when somebody asks whether a message is really from whom it says."
+    )
+    identity_kwargs = ("user_scope_id", "user_role")
+    permission_level = "read"
+    parameters: Dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "room_id": {"type": "string", "description": "Room to check."},
+            "problems_only": {
+                "type": "boolean",
+                "description": "Show only what is not plainly in order (default false).",
+            },
+        },
+        "required": ["room_id"],
+    }
+    input_aliases = {"room_id": ["room", "id"]}
+
+    #: One line per verdict, written for a reader rather than a column. `unsigned` says
+    #: what it is NOT, deliberately: the ordinary case is not a complaint, and a peer
+    #: reading this must not start treating unsigned rooms as suspect.
+    MEANING = {
+        "valid": "written by this member, provably",
+        "unsigned": "nothing was claimed - the ordinary case, not a complaint",
+        "unreadable": "carries a signature in a form this version cannot check",
+        "foreign_key": "signed by a key this member never published here",
+        "invalid": "the signature does not cover this message",
+    }
+
+    def run(self, **kwargs) -> str:
+        from vaf.core.a2a.room import describe
+        from vaf.core.a2a.store import StoreError
+
+        key = _acting_key(kwargs.get("user_scope_id"))
+        room_id = str(kwargs.get("room_id") or "").strip()
+        if not room_id:
+            return "Error: room_verify needs a room_id."
+        try:
+            room = _open(room_id)
+        except StoreError:
+            return f"Error: there is no room called '{room_id}' on this machine."
+        if room.identity_for(key) is None:
+            return f"Error: you have not joined '{room_id}'. Use room_join first."
+
+        members = {p: m.get("display") or p for p, m in (room.members() or {}).items()}
+        rows = []
+        tally: Dict[str, int] = {}
+        for frame, verdict in room.verify_frames():
+            tally[verdict] = tally.get(verdict, 0) + 1
+            if kwargs.get("problems_only") and verdict in ("valid", "unsigned"):
+                continue
+            said = describe({"kind": frame.kind, "body": frame.body,
+                             "text": (frame.body or {}).get("text") or ""})
+            rows.append(f"- {members.get(frame.sender, frame.sender)} "
+                        f"[{frame.kind} #{frame.seq}]: {verdict} - "
+                        f"{self.MEANING.get(verdict, verdict)}"
+                        + (f"\n    {said}" if said else ""))
+
+        if not tally:
+            return f"'{room_id}' has nothing in it yet."
+        counted = ", ".join(f"{n} {name}" for name, n in sorted(tally.items()))
+        head = f"Signatures in '{room_id}': {counted}."
+        if not rows:
+            return f"{head}\nNothing here is out of order."
+        return head + "\n" + "\n".join(rows)
+
+
 class RoomOpenTool(BaseTool):
     """
     Open a new agent-to-agent room and join it yourself.

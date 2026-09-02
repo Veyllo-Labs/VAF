@@ -67,6 +67,37 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **A signed message in a group chat can no longer be moved onto somebody else's name.**
+  A room checks a signature against the key its author announced when joining. Two
+  things let that be worked around, and both are closed. The announcement did not have
+  to be signed itself, and a public key is public, so whoever runs the room could copy
+  one member's key onto another member's name. And a signature did not cover the name
+  it was said under, so even a properly signed announcement could simply be carried to
+  a different member and taken along with everything that member had said. Either way
+  the room went on showing the messages as verified, under the wrong person. Now an
+  announcement counts only if it is signed by the key it announces, and the name is part
+  of what every signature covers.
+- **The agent can now check who really wrote a message in a group chat.** Asked in
+  plain words to verify a room, it could not: the terminal command existed, the browser
+  received the answer, and the agent itself had no way to ask, so it did the nearest
+  thing it could instead. It now has `room_verify`, which gives one verdict per message
+  and can be narrowed to only what looks wrong. A message whose signature does not
+  hold up is also marked in the ordinary transcript now, wherever a room is read.
+- **Messages signed before this release show as unverified, and stay that way.** What a
+  signature covers changed, so older ones cannot be checked any more - not now and not
+  later, because the older proof was made over something the new rule no longer asks
+  about. They are shown as unverified rather than as suspect, which is the honest
+  reading: they were signed in good faith under the older rule. Nothing is lost and
+  nothing is altered - the messages are all still there and still say what they said -
+  and everything said from here on is verified.
+  Note for guests connecting from another machine: run `update` to fetch the current
+  client (it checks the download against the host you already trust, so there is no
+  checksum to compare by hand and the one printed in your old invitation is expected
+  to differ now), then run `announce` once for each room you are in. Until you do,
+  your messages show as unverified. Nothing is lost by waiting: `announce` keeps the
+  name you already have, and everything you said before is verified again the moment
+  it lands. Do not ask for a new invitation for this. A new invitation gives you a new
+  name and leaves your earlier messages behind under the old one.
 - **Asking for a group chat twice in a row no longer leaves you with two.** When the
   same topic was opened again within a few minutes, a second room appeared beside the
   first, with the same messages sent into both and an invitation for each. VAF now

@@ -170,6 +170,7 @@ NEWLY_IDENTIFIED = {
     "room_open": ('user_role', 'user_scope_id', 'username'),
     "room_read": ('user_role', 'user_scope_id'),
     "room_send": ('user_role', 'user_scope_id'),
+    "room_verify": ('user_role', 'user_scope_id'),
     "telegram_inbox": ('user_scope_id', 'username'),
     # Added 2026-08-04. Its schema always told the model this field was "injected by the
     # framework"; it was not, because the tool declared no identity_kwargs, so the tool fell

@@ -323,12 +323,13 @@ def test_both_implementations_answer_identically_across_the_whole_matrix():
                        vaf.may_emit(role, kind, room_kind), (room_kind, role, kind)
 
 
-# ── C8, C9, C11, C12, C13, C14: checked where they live, named here ────────
+# ── C8, C9, C11, C12, C13, C14, C15: checked where they live, named here ───
 
 def test_the_items_this_file_does_not_cover_are_covered_elsewhere():
     """C8 (write only into your own lane), C9 (renew the lease), C11 (no tool through
-    the room surface), C12 (composing twice changes nothing) and C13/C14 (what a
-    signature promises and what a verdict may never do) are properties of a
+    the room surface), C12 (composing twice changes nothing) and C13/C14/C15 (what a
+    signature promises, what a verdict may never do, and what makes a published key
+    bind a handle) are properties of a
     STORE and of a HOST, not of a frame receiver, so a reference peer that is neither
     cannot demonstrate them. They are asserted in their own files, and this test fails
     if those files disappear - which is the difference between a named gap and one
@@ -337,7 +338,7 @@ def test_the_items_this_file_does_not_cover_are_covered_elsewhere():
     for name in ("test_a2a_store.py", "test_a2a_room.py", "test_a2a_compose.py",
                  "test_a2a_signed_frames.py"):
         assert (ROOT / "tests" / name).exists(), \
-            f"{name} carried C8/C9/C11/C12/C13/C14 and is gone"
+            f"{name} carried C8/C9/C11/C12/C13/C14/C15 and is gone"
 
     room_tests = (ROOT / "tests" / "test_a2a_room.py").read_text(encoding="utf-8")
     assert "execute_tool" in room_tests, "the C11 source guard is no longer in place"
@@ -353,3 +354,7 @@ def test_the_items_this_file_does_not_cover_are_covered_elsewhere():
         "the C13 guard is no longer in place"
     assert "test_a_verdict_never_raises_and_never_drops_a_frame" in signed_tests, \
         "the C14 guard is no longer in place"
+    assert "test_a_host_cannot_lend_one_peers_key_to_another_lane" in signed_tests, \
+        "the C15 guard is no longer in place"
+    assert "test_stripping_a_signature_off_a_join_does_not_withdraw_the_key" in \
+        signed_tests, "the C15 half about what an unattested key does NOT do is gone"

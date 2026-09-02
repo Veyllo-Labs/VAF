@@ -159,6 +159,7 @@ KWARGS_BASELINE = {
     "room_open":                 ("chat", ["user_role", "user_scope_id", "username"]),
     "room_read":                 ("chat", ["user_role", "user_scope_id"]),
     "room_send":                 ("chat", ["user_role", "user_scope_id"]),
+    "room_verify":               ("chat", ["user_role", "user_scope_id"]),
     "project_rollback":          ("chat", []),
     # DELIBERATE change: the trust store is per user now, and this tool reads
     # the policy itself (vaf/tools/python_exec.py) - without the declared

@@ -290,7 +290,7 @@ def test_say_reaches_the_room_and_reports_the_ack(peer, server, capsys):
         bytes.fromhex(peer.load_record(ROOM)["sign_seed"])).hex()
     assert sent["sig"]["key"] == published
     assert peer.verdict_for({**sent, "room": ROOM, "from": "p-guest1"},
-                            {"p-guest1": published}) == "valid"
+                            {"p-guest1": published}, ROOM) == "valid"
 
     assert server["state"]["pongs"][-1] is True, (
         "the server pinged before acking; an unanswered ping kills live rooms")

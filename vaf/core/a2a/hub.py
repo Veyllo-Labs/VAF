@@ -82,8 +82,18 @@ class Hub:
         self._leases[peer_id] = (token, self._clock() + WRITER_LEASE_TTL_S)
 
         position = self.room.store.cursor(peer_id) if cursor is None else int(cursor)
-        backlog = [f for f in self.room.store.read_since(position)
-                   if f.sender != peer_id]
+        # A PEER'S OWN FRAMES TRAVEL TOO, and leaving them out was the one thing a
+        # reader could not check. What signing buys is that a host can omit but not
+        # forge - and omitting is exactly the half a peer would want to check on
+        # ITSELF: does the room still hold what I said, unaltered. A backlog that
+        # skips the asker answers everything except that.
+        #
+        # It costs nothing in what anybody sees. The client already drops its own
+        # echo unless asked for the whole transcript, and `read --all` has always
+        # promised "own echo included" - a promise nothing could keep while the
+        # server withheld them. Live fan-out still skips the sender: it holds the
+        # ack for what it just wrote, and echoing it back would be noise.
+        backlog = list(self.room.store.read_since(position))
         for frame in sorted(backlog, key=canonical_sort_key):
             self._emit(peer_id, frame.to_dict())
         highest = backlog[-1].lamport if backlog else position
@@ -185,8 +195,10 @@ class Hub:
         the price of the files being the record rather than this object, and it is paid
         deliberately: the alternative is a hub that must be running for a room to work.
         """
-        return [f.to_dict() for f in self.room.store.read_since(int(lamport))
-                if f.sender != identity.peer_id]
+        # The asker's own frames included, for the same reason the backlog carries
+        # them: a peer that cannot read back what it wrote cannot check whether the
+        # room still holds it.
+        return [f.to_dict() for f in self.room.store.read_since(int(lamport))]
 
     def members(self) -> Dict[str, Dict[str, Any]]:
         """Who is in the room, and which of them this hub currently carries."""

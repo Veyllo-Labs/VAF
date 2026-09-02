@@ -610,6 +610,39 @@ def ed25519_verify(public_key: bytes, signature: bytes, message: bytes) -> bool:
     return _ed_encode(_ed_mul(_ED_B, S)) == _ed_encode(_ed_add(R, _ed_mul(A, k)))
 
 
+def _ed_clamped(seed: bytes) -> int:
+    h = hashlib.sha512(seed).digest()
+    return 2**254 + sum(2**i * _ed_bit(h, i) for i in range(3, 254))
+
+
+def ed25519_public(seed: bytes) -> bytes:
+    """The public half of a 32-byte seed."""
+    return _ed_encode(_ed_mul(_ED_B, _ed_clamped(seed)))
+
+
+def ed25519_sign(seed: bytes, message: bytes) -> bytes:
+    """RFC 8032 signing, so a guest can vouch for its OWN words rather than only
+    checking somebody else's.
+
+    Deterministic, like the rest of Ed25519: no randomness is drawn, so this works
+    the same on a machine with a poor entropy source and produces the same signature
+    twice for the same message, which makes a mismatch a real difference rather than
+    a coin toss.
+    """
+    h = hashlib.sha512(seed).digest()
+    a = _ed_clamped(seed)
+    public = _ed_encode(_ed_mul(_ED_B, a))
+    r = sum(2**i * _ed_bit(hashlib.sha512(bytes(h[32:64]) + message).digest(), i)
+            for i in range(512))
+    R = _ed_encode(_ed_mul(_ED_B, r))
+    k = sum(2**i * _ed_bit(hashlib.sha512(R + public + message).digest(), i)
+            for i in range(512))
+    S = (r + k * a) % _ED_Q
+    return R + S.to_bytes(32, "little")
+
+
+_ED_Q = 2**252 + 27742317777372353535851937790883648493
+
 SIG_DOMAIN = b"vaf-a2a-sig/v1\n"
 
 #: The content fields a signature covers. `room` is covered too, so a signed frame
@@ -633,7 +666,12 @@ def signing_bytes(frame: dict) -> bytes:
             value = [str(name) for name in (value or [])]
         elif field == "reply_to":
             value = str(value) if value else None
-        elif field in ("to", "body", "ext"):
+        elif field == "to":
+            # Absent means THE ROOM. A sender that omits it would otherwise sign
+            # {} while the room stores {"room": true}, and the signature would be
+            # refused for a message nobody tampered with.
+            value = (dict(value) if isinstance(value, dict) else {}) or {"room": True}
+        elif field in ("body", "ext"):
             value = dict(value) if isinstance(value, dict) else {}
         else:                                   # kind, which is a name
             # The last field taken raw was `ext`, and taking it raw meant one side
@@ -667,6 +705,47 @@ def signing_keys(frames) -> dict:
         else:
             keys.pop(sender, None)
     return keys
+
+
+def seat_signing_seed(record: dict) -> bytes:
+    """This seat's own signing seed, minted once and kept beside the seat.
+
+    A guest has no keyring on this machine and no account anywhere, so the key is
+    simply its own: 32 random bytes in the seat file, which is written owner-only
+    like the seat credential next to it. Losing the file loses the ability to sign
+    as that peer, which is the same honest outcome the seat itself already has -
+    and it costs nothing already said, because a signature that was made stays
+    checkable by anybody holding the transcript.
+    """
+    seed = str(record.get("sign_seed") or "")
+    if len(seed) == 64:
+        try:
+            return bytes.fromhex(seed)
+        except ValueError:
+            pass
+    fresh = os.urandom(32)
+    record["sign_seed"] = fresh.hex()
+    return fresh
+
+
+def sign_payload(payload: dict, room_id: str, seed: bytes) -> dict:
+    """The payload with a `sig` attached, over what the ROOM will store.
+
+    The bytes are built by the same function that checks somebody else's, which is
+    the point: a signer and a verifier that disagree by one byte reject each other
+    silently, so there is one implementation here and not two.
+
+    What is signed is the payload as this client sends it. The room settles a few
+    things about content on the way in, and for everything this client can send that
+    settling is exactly the normalisation `signing_bytes` already applies. The one
+    case that would differ is a ballot, whose choice the room resolves against its
+    vote - this client has no vote verb, and a client that grows one must compose
+    first and sign the answer it gets back.
+    """
+    signed = dict(payload)
+    signed["sig"] = {"alg": "ed25519", "key": ed25519_public(seed).hex(),
+                     "sig": ed25519_sign(seed, signing_bytes({**payload, "room": room_id})).hex()}
+    return signed
 
 
 def verdict_for(frame: dict, keys: dict) -> str:
@@ -723,6 +802,22 @@ def cmd_join(args) -> None:
             record["welcome"] = connection.packet
         backlog = connection.backlog()
         fold_new(backlog, record, show_all=False)   # start read AFTER history
+        # PUBLISH THE KEY, by sending a `join` of our own. The room admitted this
+        # peer through the ticket, which happens on the host and carries nothing of
+        # ours; a member may emit `join`, and the fold that binds a key to a handle
+        # takes the LAST one per peer. So one frame does what a handshake field
+        # would have done, with no change to the protocol and with rotation falling
+        # out of the same rule: joining again with a new key replaces the old.
+        published = ed25519_public(seat_signing_seed(record)).hex()
+        try:
+            connection.submit({"kind": "join", "body": {
+                "display": record.get("display") or connection.peer,
+                "card": {}, "sign_key": published}})
+            record["sign_key"] = published
+        except Refused:
+            # A room that will not take it is a room this peer speaks in unsigned,
+            # which is what every guest did until now. Never a reason to fail a join.
+            record.pop("sign_seed", None)
         saved = save_record(record)
         summary = {"room": connection.room, "peer": connection.peer,
                    "role": connection.role, "seat_saved": str(saved),
@@ -880,6 +975,8 @@ def _send(args, kind: str) -> None:
         payload["reply_to"] = args.reply_to
     if getattr(args, "to", ""):
         payload["to"] = {"peer": args.to}
+    if record.get("sign_seed"):
+        payload = sign_payload(payload, record["room"], seat_signing_seed(record))
     line = _line_for(args.room, record)
     if line is not None:
         ack = line.submit(payload)

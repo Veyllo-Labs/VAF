@@ -263,13 +263,35 @@ def test_read_all_shows_the_whole_transcript_echo_included(peer, server, capsys)
 
 # ── speaking: the ack, the pong, the big frame out ─────────────────────────
 
+def _content(payload: dict) -> dict:
+    """A submitted payload without its signature.
+
+    The guest signs what it says now, so a test that compares whole payloads is
+    comparing a signature it cannot predict. What these tests are about is the
+    CONTENT that reached the wire; the signature has its own test, where it is
+    recomputed rather than waved through.
+    """
+    return {k: v for k, v in payload.items() if k != "sig"}
+
+
 def test_say_reaches_the_room_and_reports_the_ack(peer, server, capsys):
     _join(peer, server, capsys)
     peer.main(["say", ROOM, "hello over the wire"])
     ack = json.loads(capsys.readouterr().out)
     assert ack["status"] == "committed"
     sent = server["state"]["submissions"][-1]
-    assert sent == {"kind": "say", "body": {"text": "hello over the wire"}}
+    assert {k: v for k, v in sent.items() if k != "sig"} == {
+        "kind": "say", "body": {"text": "hello over the wire"}}
+
+    # The guest signs what it says, and the signature is checked here rather than
+    # merely tolerated: a test that allowed any `sig` through would pass just as
+    # happily on one computed over the wrong bytes.
+    published = peer.ed25519_public(
+        bytes.fromhex(peer.load_record(ROOM)["sign_seed"])).hex()
+    assert sent["sig"]["key"] == published
+    assert peer.verdict_for({**sent, "room": ROOM, "from": "p-guest1"},
+                            {"p-guest1": published}) == "valid"
+
     assert server["state"]["pongs"][-1] is True, (
         "the server pinged before acking; an unanswered ping kills live rooms")
 
@@ -461,7 +483,8 @@ def test_mcp_call_say_commits_a_frame_on_the_real_wire(peer, server, capsys):
     assert not failed, text
     assert json.loads(text.splitlines()[-1])["status"] == "committed"
     sent = server["state"]["submissions"][before:]
-    assert {"kind": "say", "body": {"text": "ueber die MCP-Tuer"}} in sent
+    assert {"kind": "say", "body": {"text": "ueber die MCP-Tuer"}} in \
+        [_content(p) for p in sent]
 
 
 def test_mcp_refusals_are_results_not_protocol_errors(peer):
@@ -542,7 +565,8 @@ def test_vafs_own_mcp_client_drives_the_guest_bridge(peer, server, capsys):
                           arguments={"room": ROOM, "text": "vaf drives its bridge"})
         assert "committed" in answer, answer
         sent = server["state"]["submissions"][before:]
-        assert {"kind": "say", "body": {"text": "vaf drives its bridge"}} in sent
+        assert {"kind": "say", "body": {"text": "vaf drives its bridge"}} in \
+            [_content(p) for p in sent]
     finally:
         for process in tool._server_processes.values():
             process.terminate()
@@ -675,7 +699,8 @@ def test_a_held_line_serves_many_calls_on_one_connection(peer, server, capsys, h
     assert server["state"]["connections"] == after_join + 1, (
         "three calls opened more than the one line that was already held")
     sent = [s for s in server["state"]["submissions"] if s.get("kind") == "say"]
-    assert {"kind": "say", "body": {"text": "und noch einmal"}} in sent
+    assert {"kind": "say", "body": {"text": "und noch einmal"}} in \
+        [_content(p) for p in sent]
 
 
 def test_a_held_wait_answers_from_the_mirror_without_dialling(peer, server, capsys, held):

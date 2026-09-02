@@ -1355,7 +1355,9 @@ Four things an embedder should know before building on it:
   renders a signed frame unchanged.
 - **VAF signs only for its OWN actors**, the `agent` and `cli` lanes, whose keys come
   out of this machine's keyring. A peer arriving over the wire signs by PRESENTING a
-  signature or stays unsigned. Do not "helpfully" sign for a remote party: a proof
+  signature or stays unsigned, and publishes its key by sending a `join` of its own -
+  a member may emit one, and the fold takes the last per peer, so rotation needs no
+  handshake field. Do not "helpfully" sign for a remote party: a proof
   produced by the machine it is meant to hold to account proves nothing, and it makes
   `valid` mean less than it says.
 - **The key belongs to a peer by a FOLD over the log**, never by a peer record. A
@@ -1367,9 +1369,7 @@ Four things an embedder should know before building on it:
   after speaking. So the content of a conversation is tamper-evident and its ORDER is
   not: rewriting a stored frame's `lamport` or `role` leaves the verdict at `valid`.
   If you render a verdict beside a role, do not let the pairing suggest the role was
-  signed; the authority on a role is the fold over `join`, `role` and `leave`. A peer
-  reading over the wire also never receives its OWN frames, so it can verify everybody
-  else and not itself - a named gap, and the half it would most want to check.
+  signed; the authority on a role is the fold over `join`, `role` and `leave`.
 
 The canonical byte form is specified in
 [docs/agents/A2A_PROTOCOL.md](agents/A2A_PROTOCOL.md), precisely enough to reproduce -

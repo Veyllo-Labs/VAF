@@ -395,3 +395,46 @@ def test_a_renewed_lease_outlives_the_original_ttl(rooms):
     now["t"] += WRITER_LEASE_TTL_S + 1.0       # now let it truly lapse
     with pytest.raises(NotWriter):
         hub.renew(alice, token)
+
+
+def test_a_peer_gets_its_own_frames_back(wired):
+    """A peer that cannot read back what it wrote cannot check that the room still
+    holds it - and that is exactly the half a signature does NOT cover. What signing
+    buys is "a host can omit but cannot forge", so omitting is the part worth
+    checking on oneself, and a backlog that skipped the asker answered everything
+    except that.
+
+    It changes nothing anybody sees: a client drops its own echo unless it asks for
+    the whole transcript, and `read --all` has always said "own echo included" - a
+    promise nothing could keep while the server withheld them.
+    """
+    room, hub, alice, bob, delivered = wired
+    room.say(alice, "was Alice sagte")
+    room.say(bob, "was Bob sagte")
+
+    hub.attach(alice)
+    mine = [m for p, m in delivered if p == alice.peer_id and m.get("kind") == "say"]
+    assert [m["body"]["text"] for m in mine] == ["was Alice sagte", "was Bob sagte"]
+
+
+def test_catching_up_carries_the_askers_own_frames_too(wired):
+    room, hub, alice, bob, delivered = wired
+    room.say(alice, "meine Zeile")
+    caught = hub.catch_up(alice, 0)
+    assert [f["body"]["text"] for f in caught if f["kind"] == "say"] == ["meine Zeile"]
+
+
+def test_live_fanout_still_skips_the_sender(wired):
+    """The other direction stays as it was: a peer holds the ack for what it just
+    wrote, and echoing the frame back to its writer would be noise - and would loop
+    an agent onto its own voice, which is what the wake rule exists to prevent."""
+    room, hub, alice, bob, delivered = wired
+    token = hub.attach(alice)
+    hub.attach(bob)
+    delivered.clear()
+
+    hub.submit(alice, token, {"kind": "say", "body": {"text": "live gesprochen"}})
+    to_alice = [m for p, m in delivered if p == alice.peer_id and m.get("kind") == "say"]
+    to_bob = [m for p, m in delivered if p == bob.peer_id and m.get("kind") == "say"]
+    assert to_alice == []
+    assert [m["body"]["text"] for m in to_bob] == ["live gesprochen"]

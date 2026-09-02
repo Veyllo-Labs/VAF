@@ -129,7 +129,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   plainly: whoever holds a room can still leave a message out, and can still change the
   ORDER in which things were said, but can no longer put words in somebody's mouth. What
   a message says is now checkable; when it was said is still a matter of trusting the
-  machine that stores it. A
+  machine that stores it. A participant on another machine can now also sign what IT
+  says, and read its own messages back to check that the room still holds them
+  unchanged - the half nobody could check before, and the one that matters most to
+  whoever wrote them. A
   participant joining from another machine signs for itself or not at all - the machine
   hosting the room never signs on its behalf, because a proof produced by the very machine
   it is meant to hold to account would prove nothing.

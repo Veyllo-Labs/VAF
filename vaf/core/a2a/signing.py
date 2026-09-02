@@ -151,7 +151,15 @@ def covered_payload(room_id: str, content: Mapping[str, Any]) -> Dict[str, Any]:
             value = [str(name) for name in (value or ())]
         elif field == "reply_to":
             value = str(value) if value else None
-        elif field in ("to", "body", "ext"):
+        elif field == "to":
+            # ABSENT MEANS THE ROOM, and the default belongs in the covered form
+            # rather than only in `compose`. Without it a sender that omits `to`
+            # signs `{}` while the room stores `{"room": true}` and the signature
+            # is refused - found by the first test in which a foreign peer signed
+            # and VAF checked, which is the mirror of the `ext` divergence and the
+            # reason both directions have to be pinned.
+            value = (dict(value) if isinstance(value, Mapping) else {}) or {"room": True}
+        elif field in ("body", "ext"):
             value = dict(value) if isinstance(value, Mapping) else {}
         else:                                   # kind, which is a name
             value = str(value or "")

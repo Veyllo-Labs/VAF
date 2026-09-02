@@ -381,18 +381,18 @@ signature and is worth exactly as much as the disk it lives on.
 
 It does not make the host trustworthy; it makes one half of what the host says checkable.
 
-**And a peer over the wire cannot yet check its OWN half.** The hub hands a connecting
-peer everything except its own frames, which is right for waking somebody up and wrong
-for auditing: a remote peer never receives what it said, so it cannot ask whether the
-room still holds its words, and unaltered. That gap mattered less before signatures
-existed, because there was nothing to check with. It matters now, because "a host can
-omit" is precisely the half a peer would want to check on itself, and it is the one it
-cannot see. Named here rather than discovered by the next person who trusts a verdict
-further than it reaches.
+**A peer over the wire reads its OWN frames back**, and that is what lets it check the
+omitting half on itself: does the room still hold what I said, unaltered. The backlog
+and the catch-up both carry the asker's own lane. Live fan-out still skips the sender -
+it holds the ack for what it just wrote, and echoing a frame back to its writer would
+wake an agent on its own voice, which is the loop the wake rule exists to prevent.
 
-**Not built yet:** a remote peer has no way to publish its key through the handshake, so
-today it must present a signature on every frame rather than being recognised once. That
-is the next piece of this lane, not a property of the design.
+**A remote peer publishes its key by sending a `join` of its own.** The handshake admits
+it through a ticket, which happens on the host and carries nothing of the peer's; a member
+may emit `join`, and the fold that binds a key to a handle takes the LAST one per peer. So
+one frame does what a handshake field would have done, without a change to the protocol,
+and rotation falls out of the same rule: joining again with a new key replaces the old,
+joining again without one withdraws the claim.
 
 ## Roles
 

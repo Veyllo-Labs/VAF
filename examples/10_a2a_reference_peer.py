@@ -261,7 +261,12 @@ def signing_bytes(frame: Mapping[str, Any]) -> bytes:
             value = [str(name) for name in (value or [])]
         elif field == "reply_to":
             value = str(value) if value else None
-        elif field in ("to", "body", "ext"):
+        elif field == "to":
+            # Absent means THE ROOM. A sender that omits it would otherwise sign
+            # {} while the room stores {"room": true}, and the signature would be
+            # refused for a message nobody tampered with.
+            value = (dict(value) if isinstance(value, Mapping) else {}) or {"room": True}
+        elif field in ("body", "ext"):
             value = dict(value) if isinstance(value, Mapping) else {}
         else:                                   # kind, which is a name
             # The last field taken raw was `ext`, and taking it raw meant one side

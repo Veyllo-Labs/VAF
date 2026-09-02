@@ -106,6 +106,27 @@ def test_a_kind_that_is_not_a_string_is_read_the_same_way_by_all_three(peers):
     assert reference.signing_bytes(absent) == _vaf_bytes(absent) == guest.signing_bytes(absent)
 
 
+@pytest.mark.parametrize("given", [None, {}, {"room": True}])
+def test_an_absent_addressee_means_the_room_everywhere(peers, given):
+    """The mirror of the `ext` divergence, and the reason both directions matter.
+
+    A sender that omits `to` signs it as empty while the room stores it as "to the
+    room". Every implementation therefore applies the default inside the covered
+    form, so a payload as SENT and the same payload as STORED produce one set of
+    bytes. Found the first time a foreign peer signed and VAF checked; checking
+    VAF's signatures with foreign code could not have shown it, because VAF only
+    ever signed content that had already been through compose.
+    """
+    reference, guest = peers
+    frame = {k: v for k, v in FRAMES[0].items() if k != "to"}
+    if given is not None:
+        frame["to"] = given
+    expected = _vaf_bytes(dict(FRAMES[0], to={"room": True}))
+    assert _vaf_bytes(frame) == expected
+    assert reference.signing_bytes(frame) == expected
+    assert guest.signing_bytes(frame) == expected
+
+
 def test_placement_is_not_covered_by_any_of_them(peers):
     """A sender cannot know its sequence number, so it must not be asked to sign one.
     Changing placement must leave every implementation's bytes untouched."""
@@ -199,3 +220,83 @@ def test_the_guest_client_names_its_own_generation():
     guest = (ROOT / "examples" / "12_a2a_wire_peer.py").read_text(encoding="utf-8")
     assert "CLIENT_VERSION" in guest
     assert "VERSION = 1" in guest, "the protocol version is a different number"
+
+
+# ── the direction that was missing ──────────────────────────────────────────
+
+@pytest.fixture()
+def rooms(tmp_path, monkeypatch):
+    import vaf.core.a2a.store as store_mod
+    monkeypatch.setattr(store_mod, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    return tmp_path
+
+
+def test_vaf_accepts_and_verifies_a_signature_the_guest_made(peers, rooms):
+    """The half that could not be tested until the guest could sign.
+
+    Everything before this checked VAF's signatures with foreign code. That found
+    one real divergence and would have missed its mirror image: a field the GUEST
+    normalises differently on the way OUT looks fine to every verifier here,
+    because VAF would then be checking its own idea of the bytes against a
+    signature made under somebody else's. Signing and checking have to be pinned in
+    both directions or half the interop surface is untested.
+    """
+    from vaf.core.a2a.room import Room, RoomError
+
+    _reference, guest = peers
+    room = Room.create(kind="round", owner_scope="s", base=rooms, room_id="room-rev")
+    stranger = room.join(display="Gast", scope_id=None, peer_id="p-stranger")
+
+    record = {"room": room.room_id}
+    seed = guest.seat_signing_seed(record)
+    assert len(record["sign_seed"]) == 64, "the seat keeps its own seed"
+
+    # The guest publishes its key the way the client does: a join of its own.
+    published = guest.ed25519_public(seed).hex()
+    room.ingest({"kind": "join", "body": {"display": "Gast", "card": {},
+                                          "sign_key": published}}, identity=stranger)
+    assert room.signing_keys()["p-stranger"] == published
+
+    payload = guest.sign_payload({"kind": "say", "body": {"text": "vom Gast signiert"}},
+                                 room.room_id, seed)
+    frame = room.ingest(payload, identity=stranger)
+
+    assert frame.sig["key"] == published
+    assert room.verdict_for(frame) == "valid"
+
+    # And the room refuses a guest signature over something else, the same way it
+    # refuses one of its own.
+    other = guest.sign_payload({"kind": "say", "body": {"text": "etwas anderes"}},
+                               room.room_id, seed)
+    with pytest.raises(RoomError):
+        room.ingest({"kind": "say", "body": {"text": "das hier"}, "sig": other["sig"]},
+                    identity=stranger)
+
+
+def test_a_guest_signature_survives_the_round_trip_to_disk(peers, rooms):
+    """A guest's frame is read back by VAF's parser, not by the guest's. That is the
+    seam the `ext` divergence lived in, from the other side."""
+    from vaf.core.a2a.room import Room
+
+    _reference, guest = peers
+    room = Room.create(kind="round", owner_scope="s", base=rooms, room_id="room-rev2")
+    stranger = room.join(display="Gast", scope_id=None, peer_id="p-stranger")
+    record = {"room": room.room_id}
+    seed = guest.seat_signing_seed(record)
+    room.ingest({"kind": "join", "body": {"display": "Gast", "card": {},
+                                          "sign_key": guest.ed25519_public(seed).hex()}},
+                identity=stranger)
+
+    for text in ("kurz", "mit Ümlaut und grün", "a" * 500):
+        room.ingest(guest.sign_payload({"kind": "say", "body": {"text": text}},
+                                       room.room_id, seed), identity=stranger)
+
+    verdicts = [v for f, v in room.verify_frames() if f.kind == "say"]
+    assert verdicts == ["valid", "valid", "valid"]
+
+    # And the guest reaches the same conclusion about its own frames, from the JSON.
+    stored = [f.to_dict() for f in room.store.frames()]
+    keys = guest.signing_keys(stored)
+    assert [guest.verdict_for(f, keys) for f in stored if f["kind"] == "say"] == \
+        ["valid", "valid", "valid"]

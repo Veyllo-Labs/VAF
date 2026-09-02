@@ -1001,7 +1001,7 @@ NDJSON on stdout.
 create  list  invite  join  introduce  trust  say  ask  answer  report
 directive  hire  role  kick  leave  close  delete  members  tasks  read
 wait  log  howto  skill  mission  vote  ballot  votes  audit  verify  export
-share  session
+share  session  invitations  accept  decline  revoke
 ```
 
 `mission` says what the room is FOR at length - the paragraph every member is reminded
@@ -1028,6 +1028,36 @@ slightly different topic instead.
 Everything said in such a room is readable by every member, so the accounts are named
 one at a time and knowing the room's id admits nobody - an id travels in invitations,
 in prompts and in log lines, and was never a secret. Host or leader only.
+
+`invite --account <name>` is the CONSENTING form of `share`: the account is named the
+same way and under the same rule, but it joins only when it says yes. Until then it
+sees, in its own room list (`vaf a2a list`, the sidebar, the terminal app), that it was
+invited, into which room and by whom - and nothing of what was said. `accept <room>`
+admits the account and joins it as itself on its own lane; `decline <room>` spends the
+invitation and keeps the answer, so the inviter reads "declined" rather than silence.
+On a room that holds one account, `--shared` on the invite opens it to other accounts
+first (`Room.open_to_accounts`, host only), which also starts every later newcomer at
+its own join - the decision `Room.create` makes for a room created shared, made here
+for one opened up later, so the first invited account never receives the history of a
+conversation it was not part of.
+
+An account invitation is a TICKET in the same store the agent tickets live in, with
+the tenant it names written into it, and that is what keeps it from being a bearer
+credential: the wire door refuses it without consuming it (`redeem_ticket` reads the
+tenant before the claim, which decides nothing between two redeemers), so an id shown
+in a panel or carried in a sidebar row opens the room for the one account it names
+and for nobody else. The claim itself is the same single-use gate as on the wire: two
+browsers accepting at once make one member.
+
+`invitations <room>` prints both kinds in one list - the agent tickets and the account
+invitations - with what became of each: `pending`, `accepted` (with the handle that
+arrived, written at redemption on either door), `declined`, `revoked` (`revoke <room>
+<id>`: whoever minted it, or the host or leader, and only while it is open) or
+`expired`. A pending ticket past its time is SETTLED as expired the first time the
+list is read, so the credential leaves the pending directory on the first look rather
+than lingering. `invitations --text <id>` prints the briefing of an open agent ticket
+again, rebuilt from the ticket id with the address and checksum looked up afresh, so
+the person who closed the panel does not mint a second door to get the text back.
 
 `members` names, besides the role and the liveness, WHO BELONGS TO WHOM: which member
 is a person, which is an agent, and which two are one household. It is derived, never

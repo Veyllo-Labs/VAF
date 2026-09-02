@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (341 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (342 keys).
 
 ## How configuration is set
 
@@ -172,6 +172,7 @@ These are sent only on the local path; cloud APIs ignore them.
 | `room_unattended_report_enabled` | `True` | Admin-only. Tell the owner when an A2A room keeps running without them. |
 | `room_unattended_report_every_turns` | `20` | Admin-only. Room-driven turns for ONE room without a message from a real person between notices to the owner (20, 40, 60, ...). The work is never stopped: halting unattended but legitimate work only moves the damage, and the hard ceiling is `spend_budget_usd_per_day`. A timer or an automation does not count as the person being back. |
 | `a2a_room_ping_minutes` | `60` | Admin-only. A room checks in on a member that has neither read nor written in it for this long; `0` turns it off. Addressed to that ONE peer, so a check-in never wakes the whole room, and the text is shaped by that peer's role - what a leader is told differs from what an idle worker is told. It is an invitation and never an order: a room is input, not authority, and saying nothing is a valid answer. The timer runs on the machine that HOLDS the room. |
+| `a2a_room_invite_directory` | `True` | Admin-only. Whether every signed-in account may see the NAMES of the other accounts in a room's invite picker (names only, never email or role). `False` keeps the picker for admins; anybody else invites by typing the exact account name. A directory of who has an account on this machine is the operator's call. |
 | `nonprogress_max_turns` | `6` | Consecutive read-only/verify-only tool turns (`list_*`/`read_*`/`get_*`, `list_automations`, …; not `web_search`/`memory_search`) before a nudge then a forced text answer. Catches a "verify forever" loop; any mutating/producing tool resets it. |
 | `chat_step_wall_clock_seconds` | `3600` | Main-loop wall-clock **backstop** (1h): a single user turn can never grind past this (checked at each tool-turn boundary), independent of tool count or provider speed. Deliberately generous - never aborts legitimate long work; the no-progress guard + per-tool timeouts stop the common case far earlier. The 75-turn cap is a secondary guard. |
 | `max_tool_turns_per_step` | `75` | Admin-only. Hard stop: tool turns one user turn may use before the loop protection ends it. The soft goal-reminder keeps its distance below the cap (min(50, cap-3), so 50 at the default). Clamped to at least 5. |

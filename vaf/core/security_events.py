@@ -73,6 +73,9 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "room_account_admitted": "An account was let into a room shared across accounts; "
                              "every member of such a room reads everything said in it. "
                              "`path` carries the room id, `username` who admitted",
+    "room_account_invited": "An account was invited into a room shared across accounts and "
+                            "may accept or decline; nothing is readable until it accepts. "
+                            "`path` carries the room id, `username` who invited, `detail` whom",
     # arriving content (attachments, uploads, shared folders, messenger files)
     "upload_blocked": "Arriving content matched the machine's known-bad hash list and was "
                       "refused; `channel` carries the lane it arrived on, `path` the digest prefix",

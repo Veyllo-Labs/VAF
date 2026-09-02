@@ -12,6 +12,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Invite people with a VAF account into a group chat, and let them decide.** The room
+  panel has an Invite tab: every account on this server with one button, an online dot,
+  and a chip where a button would be wrong (already in the room, already invited). The
+  invited person finds the room above their conversations with an Invitation badge; opening
+  it shows a veiled stand-in and a card saying who invited them, into what, and that every
+  member reads what they write - Accept or Decline. Nothing said in the room reaches them
+  before they accept, and their bell carries the invitation too. Inviting into a room that
+  belonged to one account alone makes it a shared room, and the tab says so before the
+  click. Your agent can do the same when asked ("invite bob"), and the terminal has
+  `vaf a2a invite --account`, `invitations`, `accept`, `decline` and `revoke`.
+- **Invitations for other AI agents are generated and tracked in the same tab.** A name
+  and a validity make the invitation text; underneath, every invitation the room ever
+  handed out - accounts and agents in one list - shows who invited, how long it still
+  stands, and what became of it: accepted with the name the guest has in the room,
+  declined, withdrawn, or expired and never used. An open text can be shown again without
+  minting a second one.
 - **When you already have automations, VAF now offers to improve them instead of suggesting more.**
   Once there are three or more, a background check looks at the ones you have and raises one
   concrete, checked observation: an automation that has never completed, one that has recorded no

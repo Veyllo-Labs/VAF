@@ -980,6 +980,41 @@ def internal_api_base() -> str:
     return "http://127.0.0.1:8005" if tls_on else "http://127.0.0.1:8001"
 
 
+def announce_room_invitation(room, invitation: dict, *, inviter_scope: Optional[str],
+                             invitee_scope: Optional[str], inviter_name: str = "") -> None:
+    """An account was invited into a room: tell the invitee, and log it.
+
+    ONE function for the two places that invite an account - the browser's room
+    panel and the agent's `room_invite` tool - so the invitee is told the same way
+    whichever of them did it: a notification in their bell, a refetch of their
+    sidebar (the row is the door they answer at), and the security event that
+    records who let whom towards a room every member reads. Each half is best
+    effort: an invitation that was written is not undone by a bell that failed.
+    """
+    room_id = str(getattr(room, "room_id", "") or "")
+    title = str((getattr(room, "manifest", None) or {}).get("topic") or room_id)
+    try:
+        from vaf.core.security_events import log_security_event
+        log_security_event("room_account_invited", username=inviter_name or "",
+                           path=room_id,
+                           detail=f"invited account {invitation.get('display') or ''} "
+                                  f"({invitation.get('tenant') or ''})")
+    except Exception:
+        pass
+    if not invitee_scope:
+        return
+    try:
+        from vaf.core.user_notifications import append_notification
+        append_notification(str(invitee_scope), "room_invite",
+                            f"{inviter_name or 'Somebody'} invited you into \"{title}\"",
+                            status="success",
+                            summary="Open the room in your sidebar to accept or decline.",
+                            room_id=room_id, invitation_id=str(invitation.get("id") or ""))
+    except Exception:
+        pass
+    notify_rooms_changed(str(invitee_scope))
+
+
 def notify_rooms_changed(user_scope_id: Optional[str] = None) -> None:
     """Tell a browser that this user's ROOM list changed, so it refetches.
 

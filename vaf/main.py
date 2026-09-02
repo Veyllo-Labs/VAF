@@ -298,11 +298,13 @@ install_thread_excepthook()
 # tests/test_account_allowlist_wiring.py.
 from vaf.core.tool_dispatch import (
     set_account_allowlist_resolver,
+    set_account_directory_resolver,
     set_agent_persona_resolver,
     set_confirmation_bypass_resolver,
     set_workflow_allowlist_resolver,
 )
 from vaf.auth.permissions import (
+    list_accounts as _account_directory_resolver,
     resolve_allowed_tools as _account_allowlist_resolver,
     resolve_allowed_workflows as _workflow_allowlist_resolver,
     resolve_confirmation_bypass as _confirmation_bypass_resolver,
@@ -311,6 +313,10 @@ from vaf.auth.user_workspace import agent_display_name as _agent_persona_resolve
 set_account_allowlist_resolver(_account_allowlist_resolver)
 set_workflow_allowlist_resolver(_workflow_allowlist_resolver)
 set_confirmation_bypass_resolver(_confirmation_bypass_resolver)
+# Who has an account here, by name: what "invite bob" resolves against and what the
+# room panel's picker lists. Registered for the same reason as the allowlist above -
+# the framework must not read the harness's auth store to answer it.
+set_account_directory_resolver(_account_directory_resolver)
 # Presentation, not policy: the room tools introduce the agent under its persona
 # name, and the persona lives in the harness's user store - registered here for
 # the same direction rule as the three above.

@@ -145,6 +145,13 @@ type Session = {
     unread?: number;
     members?: number;
     closed?: boolean;
+    /** The row is a DOOR, not a room: this account was invited and has not
+     *  answered. Clicking it opens the accept/decline card, never a transcript. */
+    invited?: boolean;
+    invitedBy?: string;
+    invitationId?: string;
+    /** Unix seconds. */
+    expiresAt?: number;
 };
 
 /**
@@ -180,6 +187,20 @@ type RoomView = {
     id: string; roomId: string; title: string; roomKind?: string;
     role?: string; closed?: boolean; members?: number; me?: string;
     canManage?: boolean;
+    /** Whether the viewer may bring another ACCOUNT in - the room's rule (host or
+     *  leader), answered by the server so the panel never offers a tab the room
+     *  would refuse. */
+    canInvite?: boolean;
+    /** Opened to other accounts: every member reads everything said here. */
+    shared?: boolean;
+    /** Set when the viewer is INVITED and not in: the payload then carries no
+     *  messages, and the view draws the door instead of the transcript. */
+    invited?: { by: string; expiresAt: number; invitationId: string };
+    /** Every invitation this room handed out - accounts and agents in one list -
+     *  and what became of each. Refreshed by the 3s poll like everything else. */
+    invitations?: Array<{ id: string; kind: string; display: string; status: string;
+        invitedBy: string; mintedAt: number; expiresAt: number;
+        decidedAt?: number | null; acceptedAs?: string }>;
     /** Who is composing, and only actually composing: 'turn' = our agent's room
      *  turn is running right now, 'keys' = a human is pressing keys in their
      *  input box. Merely READING paints nobody as typing any more - that signal
@@ -1227,6 +1248,329 @@ function VoteCountdown({ deadline, done }: { deadline: number; done: boolean }) 
     );
 }
 
+/** Seconds since the epoch, re-read on a slow tick, so a line like "expires in
+ *  58 min" stays true between polls without a poll behind it. */
+function useNowSeconds(everyMs = 30000) {
+    const [now, setNow] = useState(() => Date.now() / 1000);
+    useEffect(() => {
+        const id = setInterval(() => setNow(Date.now() / 1000), everyMs);
+        return () => clearInterval(id);
+    }, [everyMs]);
+    return now;
+}
+
+/** "58 min", "6 h", "3 d": how long an invitation still stands. Never below one
+ *  minute while it is open, because "0 min" reads as expired and it is not. */
+function fmtTimeLeft(seconds: number, t: (key: string, values?: Record<string, string | number>) => string): string {
+    const s = Math.max(0, Math.round(seconds));
+    if (s >= 86400) return t('roomInviteTimeDays', { count: Math.round(s / 86400) });
+    if (s >= 3600) return t('roomInviteTimeHours', { count: Math.round(s / 3600) });
+    return t('roomInviteTimeMinutes', { count: Math.max(1, Math.round(s / 60)) });
+}
+
+/** The room as an INVITEE sees it: a veiled stand-in where the transcript would be,
+ *  and the one card that matters - who invited them, into what, and two buttons.
+ *
+ *  The veil hides nothing real. The server sends an invited viewer no messages at
+ *  all (they read the room the moment they accept, not one poll earlier), so what
+ *  blurs here is a static skeleton: the shape of a conversation, with none of it. */
+function RoomInvitationGate({ room, t, busy, connected, onAnswer, onMembers, membersTitle }: {
+    room: RoomView;
+    t: (key: string, values?: Record<string, string | number>) => string;
+    busy: boolean;
+    connected: boolean;
+    onAnswer: (accept: boolean) => void;
+    onMembers: () => void;
+    membersTitle: string;
+}) {
+    const now = useNowSeconds(30000);
+    const left = (room.invited?.expiresAt || 0) - now;
+    const who = room.invited?.by || '';
+    const note = t('roomInvitedFrom', { who });
+    return (
+        <>
+            {/* Below md the room's identity is a sticky line here, exactly as the
+                transcript draws it; on a desktop the page draws it in the header band. */}
+            <div className="md:hidden sticky top-0 z-20 -mx-6 px-6 max-md:-mx-3 max-md:px-3 mb-2 border-b border-gray-200 dark:border-[#2a2a2a] bg-white/80 dark:bg-[#181818]/80 backdrop-blur-md">
+                <div className="flex items-center gap-3 py-3">
+                    <RoomIdentity room={room} connected={connected} onMembers={onMembers}
+                        membersTitle={membersTitle} invitedNote={note} />
+                </div>
+            </div>
+            <div className="relative min-h-[440px]">
+                <div className="blur-[6px] opacity-60 select-none pointer-events-none pt-4" aria-hidden="true">
+                    {[72, 46, 64, 38, 58, 50].map((w, i) => (
+                        <div key={i} className="flex gap-3 py-2">
+                            <div className="w-8 h-8 rounded-full shrink-0 bg-gray-200 dark:bg-[#2a2a2a]" />
+                            <div className="min-w-0 flex-1 flex flex-col gap-2 pt-1">
+                                <div className="h-3 rounded bg-gray-200 dark:bg-[#2a2a2a]" style={{ width: '18%' }} />
+                                <div className="h-4 rounded-lg bg-gray-200 dark:bg-[#2a2a2a]" style={{ width: `${w}%` }} />
+                            </div>
+                        </div>
+                    ))}
+                </div>
+                <div className="absolute inset-0 flex items-center justify-center p-2">
+                    <div className="w-full max-w-[400px] rounded-2xl border border-gray-200 dark:border-[#2a2a2a] bg-white dark:bg-[#181818] shadow-2xl px-6 pt-6 pb-5 text-center">
+                        <div className="w-11 h-11 rounded-xl bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-[#181818] flex items-center justify-center mx-auto mb-3 text-[15px] font-semibold">
+                            {(who || '?').slice(0, 1).toUpperCase()}
+                        </div>
+                        <h3 className="text-[15px] font-semibold text-gray-900 dark:text-[#e6e6e6] mb-1.5">
+                            {t('roomInviteGateTitle', { who, room: room.title })}
+                        </h3>
+                        <p className="text-xs leading-relaxed text-gray-500 dark:text-[#8a8a8a]">
+                            {t('roomInviteGateBody', { count: room.members ?? 0 })}
+                        </p>
+                        <div className="flex gap-2 mt-4">
+                            <button type="button" disabled={busy} onClick={() => onAnswer(false)}
+                                className="flex-1 px-3 py-2 rounded-lg text-[13px] border border-gray-200 text-gray-700 hover:bg-gray-50 dark:border-[#2a2a2a] dark:text-[#c8c8c8] dark:hover:bg-[#242424] disabled:opacity-50">
+                                {t('roomInviteDecline')}
+                            </button>
+                            <button type="button" disabled={busy} onClick={() => onAnswer(true)}
+                                className="flex-1 px-3 py-2 rounded-lg text-[13px] font-medium bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] disabled:opacity-50">
+                                {t('roomInviteAccept')}
+                            </button>
+                        </div>
+                        <div className="text-[11px] text-gray-400 mt-3">
+                            {left > 0 ? t('roomInviteGateExpires', { time: fmtTimeLeft(left, t) }) : t('roomInviteStatusExpired')}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </>
+    );
+}
+
+type RoomInvitation = NonNullable<RoomView['invitations']>[number];
+
+/** The room panel's invite tab: the accounts on this server (one button each),
+ *  the agent invitation generator, and every invitation the room handed out with
+ *  what became of it. Presentation only - every action is a socket command the
+ *  page sends, and every fact on screen came from the server: the candidate list
+ *  is asked for, the invitation list rides in the transcript. */
+function RoomInvitePanel({ view, t, candidates, filter, setFilter, name, setName, agentName, setAgentName,
+    ttl, setTtl, text, clearText, copied, now, timeFormat, onInvite, onRevoke, onShowText, onGenerate, onCopy }: {
+    view: RoomView;
+    t: (key: string, values?: Record<string, string | number>) => string;
+    candidates: { accounts: Array<{ username: string; online: boolean; state: string; expiresAt: number }>; directory: boolean } | null;
+    filter: string; setFilter: (v: string) => void;
+    name: string; setName: (v: string) => void;
+    agentName: string; setAgentName: (v: string) => void;
+    ttl: number; setTtl: (v: number) => void;
+    text: { id: string; display: string; role: string; expiresAt: number; briefing: string } | null;
+    clearText: () => void;
+    copied: boolean;
+    now: number;
+    timeFormat?: '24h' | '12h';
+    onInvite: (account: string) => void;
+    onRevoke: (id: string) => void;
+    onShowText: (id: string) => void;
+    onGenerate: (display: string, ttl: number) => void;
+    onCopy: (briefing: string) => void;
+}) {
+    const invitations = view.invitations || [];
+    const needle = filter.trim().toLowerCase();
+    const accounts = (candidates?.accounts || []).filter(a => !needle || a.username.toLowerCase().includes(needle));
+    const when = (ts?: number | null) => ts
+        ? new Date(ts * 1000).toLocaleString(undefined, {
+            day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: timeFormat === '12h' })
+        : '';
+    const chipClass = (status: string) => cn(
+        "text-[10px] px-2 py-0.5 rounded-full inline-flex items-center gap-1.5 whitespace-nowrap shrink-0",
+        status === 'pending' ? "bg-amber-50 text-amber-700 dark:bg-[#292114] dark:text-amber-400"
+            : status === 'accepted' ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-400"
+                : status === 'declined' ? "bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400"
+                    : "bg-gray-100 text-gray-500 dark:bg-[#242424] dark:text-[#8a8a8a]");
+    const statusLabel = (status: string) => t(
+        status === 'pending' ? 'roomInviteStatusPending'
+            : status === 'accepted' ? 'roomInviteStatusAccepted'
+                : status === 'declined' ? 'roomInviteStatusDeclined'
+                    : status === 'revoked' ? 'roomInviteStatusRevoked' : 'roomInviteStatusExpired');
+    const line = (inv: RoomInvitation) => {
+        if (inv.status === 'pending') return t('roomInviteLinePending', { who: inv.invitedBy || '', time: fmtTimeLeft(inv.expiresAt - now, t) });
+        if (inv.status === 'accepted') return t('roomInviteLineAccepted', { when: when(inv.decidedAt), name: inv.acceptedAs || inv.display });
+        if (inv.status === 'declined') return t('roomInviteLineDeclined', { when: when(inv.decidedAt) });
+        if (inv.status === 'revoked') return t('roomInviteLineRevoked', { when: when(inv.decidedAt) });
+        return t('roomInviteLineExpired', { when: when(inv.decidedAt || inv.expiresAt) });
+    };
+    const sectionHead = "text-[10px] uppercase tracking-wide text-gray-400 mb-2 flex items-center justify-between";
+    const quietBtn = "shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-gray-500 border border-gray-200 hover:bg-gray-50 dark:border-[#2a2a2a] dark:hover:bg-[#242424] transition-colors";
+    const primaryBtn = "shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] transition-colors disabled:opacity-50";
+    const initials = (label: string) => (label || '?').replace(/\s+/g, '').slice(0, 2);
+    const ttlOptions: Array<[number, string]> = [[3600, 'roomInviteTtl1h'], [21600, 'roomInviteTtl6h'], [86400, 'roomInviteTtl24h'], [604800, 'roomInviteTtl7d']];
+    const textLeft = text ? text.expiresAt - now : 0;
+    return (
+        <div>
+            {/* The accounts on this server: one button per row, or a chip saying why
+                there is none (already in, already asked). */}
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-[#2a2a2a]">
+                <div className={sectionHead}>
+                    <span>{t('roomInviteAccountsTitle')}</span>
+                    {candidates && candidates.directory && (
+                        <span className="normal-case tracking-normal">{t('roomInviteAccountsCount', { count: candidates.accounts.length })}</span>
+                    )}
+                </div>
+                <div className="flex items-start gap-2 text-[11px] leading-relaxed rounded-lg border px-3 py-2 mb-3 bg-amber-50 border-amber-200 text-amber-700 dark:bg-[#292114] dark:border-[#564529] dark:text-amber-400">
+                    <Info size={13} className="shrink-0 mt-0.5" />
+                    <span>{view.shared ? t('roomInviteSharedAlready') : t('roomInviteSharedNote')}</span>
+                </div>
+                {candidates && !candidates.directory ? (
+                    <div>
+                        <p className="text-[11px] text-gray-400 mb-2">{t('roomInviteNoDirectory')}</p>
+                        <div className="flex items-center gap-2">
+                            <input value={name} onChange={e => setName(e.target.value)}
+                                onKeyDown={e => { if (e.key === 'Enter' && name.trim()) onInvite(name.trim()); }}
+                                placeholder={t('roomInviteByName')}
+                                className="flex-1 min-w-0 px-3 py-1.5 rounded-lg text-xs border border-gray-200 bg-transparent text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-gray-400 dark:border-[#2a2a2a] dark:text-[#e6e6e6] dark:focus:border-[#484848]" />
+                            <button type="button" disabled={!name.trim()} onClick={() => onInvite(name.trim())} className={primaryBtn}>
+                                {t('roomInviteButton')}
+                            </button>
+                        </div>
+                    </div>
+                ) : (<>
+                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-[#2a2a2a] mb-2">
+                        <Search size={13} className="text-gray-400 shrink-0" />
+                        <input value={filter} onChange={e => setFilter(e.target.value)} placeholder={t('roomInviteSearch')}
+                            className="flex-1 min-w-0 bg-transparent text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none dark:text-[#e6e6e6]" />
+                    </div>
+                    {candidates && accounts.length === 0 && (
+                        <p className="text-[11px] text-gray-400 px-1 py-2">{t('roomInviteNobody')}</p>
+                    )}
+                    <div className="space-y-0.5">
+                        {accounts.map(a => (
+                            <div key={a.username} className="flex items-center gap-3 px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-[#202020]">
+                                <div className="relative w-8 h-8 rounded-lg bg-gray-100 dark:bg-[#2d2d2d] text-gray-900 dark:text-[#e6e6e6] flex items-center justify-center text-xs font-semibold shrink-0">
+                                    {initials(a.username).toUpperCase()}
+                                    <span className={cn("absolute -right-0.5 -bottom-0.5 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-[#181818]",
+                                        a.online ? "bg-emerald-500" : "bg-gray-300 dark:bg-[#484848]")} />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                    <div className={cn("text-[13px] font-medium truncate", a.state === 'member' ? "text-gray-400" : "text-gray-900 dark:text-[#e6e6e6]")}>{a.username}</div>
+                                    <div className="text-[11px] text-gray-400 truncate">
+                                        {a.state === 'member' ? t('roomInviteStateMember')
+                                            : a.state === 'invited' ? t('roomInviteStateInvited', { time: fmtTimeLeft(a.expiresAt - now, t) })
+                                                : a.online ? t('roomInviteOnline') : t('roomInviteOffline')}
+                                    </div>
+                                </div>
+                                {a.state === 'open' ? (
+                                    <button type="button" onClick={() => onInvite(a.username)} className={primaryBtn}>{t('roomInviteButton')}</button>
+                                ) : (
+                                    <span className={chipClass(a.state === 'invited' ? 'pending' : 'member')}>
+                                        <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                                        {a.state === 'invited' ? t('roomInviteStatusPending') : t('roomInviteStateMemberChip')}
+                                    </span>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </>)}
+            </div>
+
+            {/* Foreign agents: a name, a validity, one button; the text appears
+                underneath and is the invitation itself. */}
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-[#2a2a2a]">
+                <div className={sectionHead}><span>{t('roomInviteAgentsTitle')}</span></div>
+                <div className="grid grid-cols-2 gap-2 mb-2">
+                    <label className="rounded-lg border border-gray-200 dark:border-[#2a2a2a] px-3 py-1.5 block">
+                        <span className="block text-[10px] uppercase tracking-wide text-gray-400">{t('roomInviteAgentName')}</span>
+                        <input value={agentName} onChange={e => setAgentName(e.target.value)} placeholder="Codex"
+                            className="w-full bg-transparent text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none dark:text-[#e6e6e6]" />
+                    </label>
+                    <label className="rounded-lg border border-gray-200 dark:border-[#2a2a2a] px-3 py-1.5 block">
+                        <span className="block text-[10px] uppercase tracking-wide text-gray-400">{t('roomInviteValidFor')}</span>
+                        <select value={ttl} onChange={e => setTtl(Number(e.target.value))}
+                            className="w-full bg-transparent text-xs text-gray-900 focus:outline-none dark:text-[#e6e6e6] dark:bg-[#181818]">
+                            {ttlOptions.map(([secs, key]) => <option key={secs} value={secs}>{t(key)}</option>)}
+                        </select>
+                    </label>
+                </div>
+                <button type="button" onClick={() => onGenerate(agentName.trim() || 'guest', ttl)} className={primaryBtn}>
+                    <Plus size={13} />{t('roomInviteGenerate')}
+                </button>
+                {text && (
+                    <div className="mt-4 rounded-xl border border-gray-200 dark:border-[#2a2a2a] p-3">
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                            <div className="min-w-0">
+                                <div className="text-[13px] font-medium text-gray-900 dark:text-[#e6e6e6] truncate">
+                                    {t('roomInviteTextTitle', { name: text.display, role: text.role })}
+                                </div>
+                                <div className="text-[11px] text-gray-400">
+                                    {t('roomInviteTextHint', { time: fmtTimeLeft(textLeft, t) })}
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                                <button type="button" onClick={() => onCopy(text.briefing)} className={primaryBtn}>
+                                    {copied ? <Check size={13} /> : <Copy size={13} />}
+                                    {copied ? t('roomInviteCopied') : t('roomInviteCopy')}
+                                </button>
+                                <button type="button" onClick={clearText} className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-[#242424]" aria-label={t('roomInviteClose')}>
+                                    <X size={14} />
+                                </button>
+                            </div>
+                        </div>
+                        <pre className="text-[11px] leading-relaxed whitespace-pre-wrap break-words font-mono max-h-48 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 text-gray-600 px-3 py-2 dark:border-[#2a2a2a] dark:bg-[#202020] dark:text-[#8a8a8a]">
+                            {text.briefing}
+                        </pre>
+                        <p className="text-[11px] text-gray-400 mt-2">{t('roomInviteTextFoot')}</p>
+                    </div>
+                )}
+            </div>
+
+            {/* Everything ever handed out, and what became of it. */}
+            <div className="px-6 py-4">
+                <div className={sectionHead}><span>{t('roomInviteListTitle')}</span></div>
+                {invitations.length === 0 && (
+                    <p className="text-[11px] text-gray-400 px-1 py-2">{t('roomInviteListEmpty')}</p>
+                )}
+                <div className="space-y-0.5">
+                    {invitations.map(inv => {
+                        const spent = inv.status !== 'pending' && inv.status !== 'accepted';
+                        const total = Math.max(1, inv.expiresAt - inv.mintedAt);
+                        const frac = Math.max(0, Math.min(1, (inv.expiresAt - now) / total));
+                        return (
+                            <div key={inv.id} className={cn("flex items-center gap-3 px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-[#202020]", spent && "opacity-70")}>
+                                <div className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-[#2d2d2d] text-gray-900 dark:text-[#e6e6e6] flex items-center justify-center text-xs font-semibold shrink-0">
+                                    {initials(inv.display)}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                    <div className="text-[13px] truncate">
+                                        <span className="font-medium text-gray-900 dark:text-[#e6e6e6]">{inv.display}</span>
+                                        <span className="text-[11px] text-gray-400">{` \u00b7 ${inv.kind === 'account' ? t('roomInviteKindAccount') : t('roomInviteKindAgent')}`}</span>
+                                    </div>
+                                    <div className="text-[11px] text-gray-400 truncate">{line(inv)}</div>
+                                    {inv.status === 'pending' && (
+                                        <div className="h-[3px] rounded-full bg-gray-200 dark:bg-[#2d2d2d] mt-1.5 overflow-hidden">
+                                            <div className="h-full bg-amber-600 dark:bg-amber-400" style={{ width: `${Math.round(frac * 100)}%` }} />
+                                        </div>
+                                    )}
+                                </div>
+                                <span className={chipClass(inv.status)}>
+                                    <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                                    {statusLabel(inv.status)}
+                                </span>
+                                {inv.status === 'pending' && inv.kind === 'agent' && (
+                                    <button type="button" onClick={() => onShowText(inv.id)} className={quietBtn}>{t('roomInviteShowText')}</button>
+                                )}
+                                {inv.status === 'pending' && (
+                                    <button type="button" onClick={() => onRevoke(inv.id)} className={cn(quietBtn, "hover:text-red-600")}>{t('roomInviteRevoke')}</button>
+                                )}
+                                {spent && (
+                                    <button type="button" className={quietBtn}
+                                        onClick={() => {
+                                            if (inv.kind === 'account') onInvite(inv.display);
+                                            else { setAgentName(inv.display); onGenerate(inv.display, ttl); }
+                                        }}>
+                                        {t('roomInviteAgain')}
+                                    </button>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 /** The open votes, docked above the message box.
  *
  *  Above the composer rather than at the top of the transcript, because that is
@@ -1625,11 +1969,13 @@ function RoomTaskHistory({ rows, loading, timeFormat }: {
  * its padding, its gap), so the same content sits in a 64px band on a desktop
  * and in a padded sticky line on a phone without either place restyling it.
  */
-function RoomIdentity({ room, connected, onMembers, membersTitle }: {
+function RoomIdentity({ room, connected, onMembers, membersTitle, invitedNote }: {
     room: RoomView;
     connected: boolean;
     onMembers: () => void;
     membersTitle: string;
+    /** Drawn in place of the role line while the viewer is only invited. */
+    invitedNote?: string;
 }) {
     return (
         <>
@@ -1650,6 +1996,8 @@ function RoomIdentity({ room, connected, onMembers, membersTitle }: {
                         <span className="text-amber-600 dark:text-amber-400">
                             Verbindung wird wiederhergestellt\u2026
                         </span>
+                    ) : invitedNote ? (
+                        <span className="text-amber-700 dark:text-amber-400">{invitedNote}</span>
                     ) : (<>
                         {room.roomKind}
                         {room.role ? ` \u00b7 you are ${room.role}` : ''}
@@ -2566,7 +2914,55 @@ function VAFDashboardContent() {
     // "who is here"; opening it from the work strip asks "who is on what", so the
     // caller says which - a panel that always opened on the same tab would make the
     // strip's click a two-step.
-    const [roomPanelTab, setRoomPanelTab] = useState<'members' | 'work' | 'history'>('members');
+    const [roomPanelTab, setRoomPanelTab] = useState<'members' | 'work' | 'history' | 'invite'>('members');
+    // The invite tab's own state. The candidate list is fetched when the tab
+    // opens and after every answer (it is not in the 3s payload: a directory of
+    // accounts is asked for, never pushed); the briefing is what the last
+    // "generate" or "show text" answered with.
+    const [roomInviteCandidates, setRoomInviteCandidates] = useState<{
+        accounts: Array<{ username: string; online: boolean; state: string; expiresAt: number }>;
+        directory: boolean } | null>(null);
+    const [roomInviteFilter, setRoomInviteFilter] = useState('');
+    const [roomInviteName, setRoomInviteName] = useState('');
+    const [roomInviteAgentName, setRoomInviteAgentName] = useState('');
+    const [roomInviteTtl, setRoomInviteTtl] = useState(3600);
+    const [roomInvitationText, setRoomInvitationText] = useState<{
+        id: string; display: string; role: string; expiresAt: number; briefing: string } | null>(null);
+    const [roomInviteCopied, setRoomInviteCopied] = useState(false);
+    // One answer at a time at the door: the buttons disarm until the server has
+    // spoken, so a double click cannot accept and then error on the second try.
+    const [roomInviteBusy, setRoomInviteBusy] = useState(false);
+    const roomInviteNow = useNowSeconds(30000);
+    const roomInvitedNote = roomView?.room.invited
+        ? tMain('roomInvitedFrom', { who: roomView.room.invited.by }) : undefined;
+    const requestRoomInviteCandidates = () => {
+        const rid = roomViewRef.current?.room.roomId;
+        if (!rid) return;
+        wsSocketRef.current?.send(JSON.stringify({ type: 'room_invite_candidates', room_id: rid }));
+    };
+    const answerRoomInvite = (accept: boolean) => {
+        const rid = roomViewRef.current?.room.roomId;
+        if (!rid || roomInviteBusy) return;
+        setRoomInviteBusy(true);
+        wsSocketRef.current?.send(JSON.stringify({
+            type: accept ? 'accept_room_invite' : 'decline_room_invite', room_id: rid }));
+    };
+    // The door's buttons re-arm when the view changes underneath them - the answer
+    // turned the door into the room, or took the row away - and after a few
+    // seconds regardless, so an error reply leaves a door that can be tried again.
+    useEffect(() => { setRoomInviteBusy(false); }, [roomView?.room.roomId, roomView?.room.invited?.invitationId]);
+    useEffect(() => {
+        if (!roomInviteBusy) return;
+        const id = window.setTimeout(() => setRoomInviteBusy(false), 8000);
+        return () => window.clearTimeout(id);
+    }, [roomInviteBusy]);
+    // The candidate list follows the invitations: an answer given on another
+    // screen moves a row from "invited" back to "open" or on to "member".
+    const roomInvitationsKey = (roomView?.room.invitations || []).map(i => `${i.id}:${i.status}`).join(',');
+    useEffect(() => {
+        if (roomMembersOpen && roomPanelTab === 'invite') requestRoomInviteCandidates();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [roomInvitationsKey, roomMembersOpen, roomPanelTab]);
     // The record, fetched when it is asked for. It is not in the room payload on
     // purpose: that is polled every three seconds, and a room that has run for a month
     // would pay for its whole history on every tick.
@@ -3750,7 +4146,7 @@ function VAFDashboardContent() {
         // human is composing. Throttled to one signal per two seconds; nothing
         // fires on an emptied box (that is deletion or a send, not composing)
         // and nothing ever fires for ordinary chats - typing there stays local.
-        if (roomView && !roomView.room.closed && val.trim()
+        if (roomView && !roomView.room.closed && !roomView.room.invited && val.trim()
             && ws && ws.readyState === WebSocket.OPEN) {
             const now = Date.now();
             if (now - roomTypingSentRef.current > 2000) {
@@ -5314,6 +5710,21 @@ function VAFDashboardContent() {
                                 p.roomId === rid && Date.now() - p.ts < 30000 && !texts.has(p.text.trim())));
                         }
                     }
+                }
+                else if (data.type === 'room_invite_candidates') {
+                    if (data.roomId === roomViewRef.current?.room.roomId) {
+                        setRoomInviteCandidates({
+                            accounts: Array.isArray(data.accounts) ? data.accounts : [],
+                            directory: data.directory !== false,
+                        });
+                    }
+                }
+                else if (data.type === 'room_invitation') {
+                    // The briefing for one agent invitation - freshly minted, or an
+                    // open one shown again. Kept apart from roomView so the poll
+                    // never overwrites it.
+                    setRoomInvitationText(data.invitation || null);
+                    setRoomInviteCopied(false);
                 }
                 else if (data.type === 'room_task_history') {
                     // The record, answered once per click. Kept apart from roomView so
@@ -7061,6 +7472,10 @@ function VAFDashboardContent() {
             // refusal is the one that counts - this only spares the user watching
             // their sentence disappear into an error.
             if (roomView.room.closed) return;
+            // Invited, not in: the door has two buttons and no message box. The
+            // server refuses this too (an invitee is not a member); this only keeps
+            // the sentence in the box instead of showing an error for it.
+            if (roomView.room.invited) return;
             // The chat path checks this further down; this branch returns before it
             // reaches that check. On a CLOSING socket the browser drops the frame
             // with nothing but a console warning - so the message vanished while
@@ -8346,10 +8761,19 @@ function VAFDashboardContent() {
                                             </span>
                                         )}
                                         <div className="flex items-center gap-1.5 shrink-0 pl-2">
+                                            {s.invited ? (
+                                                /* The door. A count would promise a room the
+                                                   person is not in yet; the badge says what the
+                                                   click will actually open. */
+                                                <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200 dark:bg-[#292114] dark:text-amber-400 dark:border-[#564529]">
+                                                    {tMain('roomInviteBadge')}
+                                                </span>
+                                            ) : (
                                             <span className="text-[10px] text-gray-400 tabular-nums">
                                                 {s.members ?? 0}
                                                 {(s.unread || 0) > 0 ? ` · ${s.unread}` : ''}
                                             </span>
+                                            )}
                                             {/* Where a conversation has a bin, a room has a key.
                                                 It is not the same act: a chat is DELETED, a room is
                                                 CLOSED - it stays readable forever and only stops
@@ -8361,7 +8785,7 @@ function VAFDashboardContent() {
                                                 readable forever - but it is the act a person reaches
                                                 for in that spot, and giving it a different icon made
                                                 them hunt for it. */}
-                                            {!s.closed && (
+                                            {!s.closed && !s.invited && (
                                                 <div className="flex items-center gap-1.5 opacity-0 group-hover/item:opacity-100 max-md:opacity-100 transition-opacity">
                                                     <Edit2 size={12} className="text-gray-400 hover:text-gray-900"
                                                         onClick={(e) => { e.stopPropagation(); startEditing(s, 'sidebar'); }} />
@@ -8535,6 +8959,7 @@ function VAFDashboardContent() {
                                 role, mission) are set tight inside it. */}
                             {roomView ? (
                                 <RoomIdentity room={roomView.room} connected={isConnected}
+                                    invitedNote={roomInvitedNote}
                                     onMembers={() => { setRoomPanelTab('members'); setRoomMembersOpen(true); }}
                                     membersTitle={tMain('roomMembersTitle')} />
                             ) : (
@@ -8769,7 +9194,7 @@ function VAFDashboardContent() {
                                     conversation in one way only: it has several speakers. Two earlier
                                     attempts got this wrong by building a surface of their own, first a
                                     narrow dialog and then a full-screen layer that covered the sidebar. */}
-                                {roomView ? (
+                                {roomView ? (!roomView.room.invited ? (
                                     <RoomConversation view={roomView} onMembers={() => { setRoomPanelTab('members'); setRoomMembersOpen(true); }}
                                         closedNote={tMain('roomClosedNote')}
                                         membersTitle={tMain('roomMembersTitle')}
@@ -8780,7 +9205,13 @@ function VAFDashboardContent() {
                                         pending={pendingRoomSays.filter(p => p.roomId === roomView.room.roomId)}
                                         pendingNote={tMain('roomSending')}
                                         recentSends={recentRoomSendsRef.current} />
-                                ) : roomOpening ? (
+                                ) : (
+                                    /* Invited, not in: the door where the transcript would be. */
+                                    <RoomInvitationGate room={roomView.room} t={tMain} busy={roomInviteBusy}
+                                        connected={isConnected} onAnswer={answerRoomInvite}
+                                        onMembers={() => { setRoomPanelTab('members'); setRoomMembersOpen(true); }}
+                                        membersTitle={tMain('roomMembersTitle')} />
+                                )) : roomOpening ? (
                                     <LoadingIllusion kind="room" label={roomOpening.name} />
                                 ) : (<>
                                 {/* Reconnecting banner — shown when WebSocket is disconnected or reconnecting */}
@@ -10219,7 +10650,7 @@ function VAFDashboardContent() {
                                                     onChange={handleInputChange}
                                                     onScroll={(e) => { if (ghostRef.current) ghostRef.current.scrollTop = e.currentTarget.scrollTop; }}
                                                     onKeyDown={handleKeyDown}
-                                                    placeholder={isIndexing ? tMain('indexingAttachments', { count: activeAttachmentIndexCount || 1 }) : input ? "" : "Ask anything..."}
+                                                    placeholder={isIndexing ? tMain('indexingAttachments', { count: activeAttachmentIndexCount || 1 }) : roomView?.room.invited ? tMain('roomInviteComposer') : input ? "" : "Ask anything..."}
                                                     className="w-full min-h-[2.5rem] max-md:min-h-[3.25rem] max-h-[12.5rem] py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10 resize-none overflow-y-auto"
                                                     // Chat-while-subagent-runs: never lock typing while a sub-agent is
                                                     // active — a lingering isGenerating (delegation turn / late events)
@@ -11872,8 +12303,10 @@ function VAFDashboardContent() {
                             inside the member list would bury it under everybody who has
                             nothing running. Same tab shape the sub-agent window uses. */}
                         <div className="flex items-end gap-1 px-6 pt-2 border-b border-gray-200 dark:border-[#2a2a2a] shrink-0">
-                            {([['members', tMain('roomTabMembers')],
-                               ['history', tMain('roomTabTasks')]] as const).map(([key, label]) => (
+                            {([['members', tMain('roomTabMembers')] as const,
+                               ...(roomView.room.canInvite && !roomView.room.closed
+                                   ? [['invite', tMain('roomTabInvite')] as const] : []),
+                               ['history', tMain('roomTabTasks')] as const]).map(([key, label]) => (
                                 <button key={key} type="button" role="tab"
                                     aria-selected={roomPanelTab === key}
                                     onClick={() => {
@@ -11889,6 +12322,7 @@ function VAFDashboardContent() {
                                                 room_id: roomView.room.roomId,
                                             }));
                                         }
+                                        if (key === 'invite') requestRoomInviteCandidates();
                                     }}
                                     className={cn(
                                         "flex-none rounded-t-lg border border-b-0 px-3 py-1.5 text-[12px]",
@@ -11951,6 +12385,42 @@ function VAFDashboardContent() {
                                 <RoomTaskHistory rows={roomHistory}
                                     loading={roomHistoryLoading}
                                     timeFormat={userTimeFormat} />
+                            )}
+                            {roomPanelTab === 'invite' && (
+                                <RoomInvitePanel view={roomView.room} t={tMain}
+                                    candidates={roomInviteCandidates}
+                                    filter={roomInviteFilter} setFilter={setRoomInviteFilter}
+                                    name={roomInviteName} setName={setRoomInviteName}
+                                    agentName={roomInviteAgentName} setAgentName={setRoomInviteAgentName}
+                                    ttl={roomInviteTtl} setTtl={setRoomInviteTtl}
+                                    text={roomInvitationText} clearText={() => setRoomInvitationText(null)}
+                                    copied={roomInviteCopied}
+                                    now={roomInviteNow}
+                                    timeFormat={userTimeFormat}
+                                    onInvite={(account) => {
+                                        wsSocketRef.current?.send(JSON.stringify({
+                                            type: 'invite_account', room_id: roomView.room.roomId, account }));
+                                        setRoomInviteName('');
+                                        // The panel repaints from the transcript reply; the
+                                        // candidate list is asked for again, because a row just
+                                        // changed from "open" to "invited".
+                                        window.setTimeout(requestRoomInviteCandidates, 400);
+                                    }}
+                                    onRevoke={(id) => {
+                                        wsSocketRef.current?.send(JSON.stringify({
+                                            type: 'revoke_room_invite', room_id: roomView.room.roomId, invitation_id: id }));
+                                        if (roomInvitationText?.id === id) setRoomInvitationText(null);
+                                        window.setTimeout(requestRoomInviteCandidates, 400);
+                                    }}
+                                    onShowText={(id) => wsSocketRef.current?.send(JSON.stringify({
+                                        type: 'room_invitation_text', room_id: roomView.room.roomId, invitation_id: id }))}
+                                    onGenerate={(display, ttl) => wsSocketRef.current?.send(JSON.stringify({
+                                        type: 'room_invite_agent', room_id: roomView.room.roomId, display, ttl }))}
+                                    onCopy={async (briefing) => {
+                                        const ok = await copyText(briefing);
+                                        setRoomInviteCopied(!!ok);
+                                        window.setTimeout(() => setRoomInviteCopied(false), 2000);
+                                    }} />
                             )}
                             {roomPanelTab === 'members' && (<>
 

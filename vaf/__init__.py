@@ -14,7 +14,9 @@ if TYPE_CHECKING:
     from .core.pdf_extract import extract_pdf_markdown
     from .core.system_prompt import SOUL_CONTINUITY_ADDENDUM, build_capability_addendum
     from .core.threat_db import UploadVerdict, inspect_upload, record_threat
-    from .core.tool_dispatch import ToolCaller, ToolRequest, set_account_allowlist_resolver, set_confirmation_bypass_resolver
+    from .core.tool_dispatch import (ToolCaller, ToolRequest, set_account_allowlist_resolver,
+                                     set_account_directory_resolver,
+                                     set_confirmation_bypass_resolver)
     from .framework import Agent, CoreAgent
     from .tools.base import BaseTool
     from .tools.filesystem import user_jail
@@ -29,9 +31,10 @@ __all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
            "derive_peer_id",
            "describe_room_entry", "extract_pdf_markdown",
            "fold_room_tasks", "fold_room_votes", "inspect_upload",
-           "install_thread_excepthook", "joined_rooms", "markers",
+           "install_thread_excepthook", "invited_rooms", "joined_rooms", "markers",
            "participant_key", "record_threat", "room_invitation",
            "safe_entry_name", "set_account_allowlist_resolver",
+           "set_account_directory_resolver",
            "set_confirmation_bypass_resolver", "unread_counts", "user_jail"]
 
 
@@ -117,6 +120,15 @@ def __getattr__(name):
         # underneath, so the slim base is unaffected. See docs/EMBEDDING.md.
         from .core.tool_dispatch import set_account_allowlist_resolver
         return set_account_allowlist_resolver
+    if name == "set_account_directory_resolver":
+        # Which accounts exist here, by name: what "invite bob" resolves against and
+        # what a room's invite picker lists. Exported on the day it was measured -
+        # the two framework files that were about to read the harness's auth store
+        # for it (config.py, the room commands) are the same import the allowlist
+        # resolver deleted, and a multi-tenant embedder holds this directory in
+        # their own backend exactly as they hold the plans table.
+        from .core.tool_dispatch import set_account_directory_resolver
+        return set_account_directory_resolver
     if name == "set_confirmation_bypass_resolver":
         # The allowlist resolver's sibling: whether an ACCOUNT holds the admin-granted
         # hands-off switch that skips the tool-confirmation dialog. Consulted UNDER the
@@ -152,7 +164,7 @@ def __getattr__(name):
     if name in ("BOOKKEEPING_KINDS", "Room", "RoomError", "StoreError", "UnsafeName",
                 "derive_peer_id",
                 "describe_room_entry", "fold_room_tasks", "fold_room_votes",
-                "joined_rooms", "participant_key", "room_invitation",
+                "invited_rooms", "joined_rooms", "participant_key", "room_invitation",
                 "unread_counts"):
         # Rooms: several agents in one conversation, some of which may not be VAF and
         # may not be on this machine. Exported because SIX surfaces outside the room
@@ -193,10 +205,16 @@ def __getattr__(name):
         # "which frames are the room talking about itself". An embedder rendering or
         # scanning a transcript has that exact question, and a hand-written copy of
         # the set would silently miss the next bookkeeping kind.
+        #
+        # `invited_rooms` is the moment BEFORE `joined_rooms`: an account invited
+        # into a room is not a member yet, so the lookup that finds a participant's
+        # rooms cannot find the one waiting for its answer. Every surface that
+        # lists rooms for a person (the sidebar, the terminal app, `vaf a2a list`)
+        # asks both questions, and an embedder's surface asks them too.
         from .core.a2a.room import (BOOKKEEPING_KINDS, Room, RoomError,
                                     derive_peer_id, describe,
-                                    fold_tasks, fold_votes, joined_rooms,
-                                    participant_key, unread_counts)
+                                    fold_tasks, fold_votes, invited_rooms,
+                                    joined_rooms, participant_key, unread_counts)
         from .core.a2a.store import StoreError, UnsafeName
         from .core.a2a.invite import invitation
         return {"BOOKKEEPING_KINDS": BOOKKEEPING_KINDS,
@@ -205,7 +223,7 @@ def __getattr__(name):
                 "derive_peer_id": derive_peer_id,
                 "describe_room_entry": describe, "fold_room_tasks": fold_tasks,
                 "fold_room_votes": fold_votes,
-                "joined_rooms": joined_rooms,
+                "invited_rooms": invited_rooms, "joined_rooms": joined_rooms,
                 "participant_key": participant_key, "room_invitation": invitation,
                 "unread_counts": unread_counts}[name]
     if name in ("RemoteRoom", "RemoteRefused"):

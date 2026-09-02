@@ -205,7 +205,10 @@ def test_a_check_in_is_not_drawn_as_a_message():
     would do so once an hour, forever.
     """
     src = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
-    block = src.split('"messages": [', 1)[1][:1400]
+    # Anchored on the transcript BUILDER: the invitee's door answers with the same
+    # message type and an empty list, and sits above it in the file.
+    builder = src.split("async def _send_room_transcript", 1)[1]
+    block = builder.split('"messages": [', 1)[1][:1400]
     assert 'if e["kind"] != "ping"' in block, (
         "the room transcript draws check-ins as messages")
 
@@ -340,9 +343,12 @@ def test_the_room_shows_the_person_what_it_is_for():
     assert '"mission": str(room.manifest.get("mission")' in server
 
     page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    assert "{view.room.mission}" in page, "the room's purpose reaches the browser and stops"
-    header = page[page.index("sticky top-0 z-20 -mx-6"):]
-    assert header.index("view.room.mission") < header.index("view.messages.map"), (
+    # The room's identity (name, kind, mission, members) is ONE component drawn
+    # in the header band; the transcript renders it before any message.
+    identity = page.split("function RoomIdentity(")[1].split("\nfunction ")[0]
+    assert "{room.mission}" in identity, "the room's purpose reaches the browser and stops"
+    conversation = page.split("function RoomConversation(")[1].split("\nfunction ")[0]
+    assert conversation.index("<RoomIdentity") < conversation.index("view.messages.map"), (
         "the mission is not in the header, where WHICH room this is gets answered")
 
 

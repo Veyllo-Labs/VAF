@@ -689,7 +689,10 @@ class RoomInviteTool(BaseTool):
         "when the user asks you to invite somebody - including agents that are not "
         "VAF, such as Claude, Claude Code, Codex or OpenCode. INVITING IS THIS CALL "
         "PLUS SHOWING THE TEXT: nothing to install, no API key, no account, no setup, "
-        "no code, and you never join on the other agent's behalf."
+        "no code, and you never join on the other agent's behalf. To invite a PERSON "
+        "who has a VAF account on this server, pass their user name as `account`: "
+        "they get the room in their own sidebar and accept or decline there - no "
+        "text to hand over."
     )
     identity_kwargs = ("user_scope_id", "user_role")
     permission_level = "write"
@@ -707,11 +710,17 @@ class RoomInviteTool(BaseTool):
                         "description": "Name the invited agent will appear under, e.g. 'Codex'."},
             "ttl": {"type": "integer",
                     "description": "Seconds the invitation stays valid. Default 3600."},
+            "account": {"type": "string",
+                        "description": ("User name of a VAF ACCOUNT on this server to invite "
+                                        "instead of a foreign agent. The person answers in "
+                                        "their own sidebar; the room becomes shared across "
+                                        "accounts (every member reads everything).")},
         },
         "required": ["room_id"],
     }
     input_aliases = {"room_id": ["room", "id"], "display": ["name", "who", "guest"],
-                     "ttl": ["expires_in", "valid_for"]}
+                     "ttl": ["expires_in", "valid_for"],
+                     "account": ["user", "username", "person"]}
 
     def run(self, **kwargs) -> str:
         from vaf.core.a2a.invite import invitation
@@ -736,6 +745,10 @@ class RoomInviteTool(BaseTool):
         if identity is None:
             return (f"Error: you are not a member of '{room_id}', and only a member "
                     f"may invite. Join it first.")
+        account = str(kwargs.get("account") or "").strip()
+        if account:
+            return self._invite_account(room, identity, account, ttl,
+                                        inviter_scope=kwargs.get("user_scope_id"))
         try:
             # Assembled by the room layer, exactly as `vaf a2a invite` gets it. Two
             # inviters telling a guest two different things is the whole reason that
@@ -759,4 +772,46 @@ class RoomInviteTool(BaseTool):
             "----- copy from here -----\n"
             f"{row['briefing']}"
             "----- to here -----"
+        )
+
+    def _invite_account(self, room, identity, account: str, ttl: float, *,
+                        inviter_scope) -> str:
+        """The account door, on the same primitive the browser's panel and the CLI
+        use: `Room.invite_account`. The agent is the host's hand here, so opening a
+        one-account room to other accounts is done for the user and SAID, because a
+        room every member reads is the one consequence they have to know about."""
+        import time as _time
+
+        from vaf.core.a2a.room import RoomError
+        from vaf.core.config import resolve_caller_username, scope_id_for_username
+
+        scope = scope_id_for_username(account)
+        if not scope:
+            return (f"Error: there is no VAF account called '{account}' on this server. "
+                    f"Ask the user for the exact user name.")
+        opened = False
+        try:
+            if not room.manifest.get("multi_scope"):
+                room.open_to_accounts(identity)
+                opened = True
+            row = room.invite_account(identity, scope, display=account, ttl_s=ttl)
+        except RoomError as e:
+            return f"Could not invite '{account}' into '{room.room_id}': {e}"
+        try:
+            from vaf.core.web_interface import announce_room_invitation
+            announce_room_invitation(
+                room, row, inviter_scope=inviter_scope, invitee_scope=scope,
+                inviter_name=resolve_caller_username(None, inviter_scope, allow_lookup=True))
+        except Exception:
+            pass
+        _announce(inviter_scope)
+        minutes = max(1, int(float(row.get("expires_at") or 0) - _time.time()) // 60)
+        return (
+            f"Invited the account '{account}' into '{room.room_id}'. They now see the room "
+            f"in their own sidebar and decide there; the invitation stays open for about "
+            f"{minutes} minutes and you will see 'accepted' or 'declined' in the room's "
+            f"invitations. Nothing to hand over and nothing to install."
+            + (" NOTE: the room was private to this account and is now SHARED - every "
+               "member reads everything said in it from here on; newcomers see only "
+               "what is written after they join." if opened else "")
         )

@@ -11,6 +11,7 @@ import {
   XCircle, Loader2, Link2, Zap, Sparkles, MessageSquare, Info, GraduationCap, Menu,
   LayoutGrid, Bot, ShieldQuestion,
   type LucideIcon,
+  Users,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useThemeStore } from '@/lib/themeStore';
@@ -363,6 +364,7 @@ const KIND_META: Record<string, KindMeta> = {
   automation:    { bg: 'bg-amber-50',  text: 'text-amber-700',  border: 'border-amber-200',  Icon: Zap },
   channel_reply: { bg: 'bg-sky-50',    text: 'text-sky-700',    border: 'border-sky-200',    Icon: MessageSquare },
   system:        { bg: 'bg-slate-50',  text: 'text-slate-600',  border: 'border-slate-200',  Icon: Info },
+  room_invite:   { bg: 'bg-amber-50',  text: 'text-amber-700',  border: 'border-amber-200',  Icon: Users },
 };
 const KIND_META_DEFAULT: KindMeta = { bg: 'bg-gray-50', text: 'text-gray-600', border: 'border-gray-200', Icon: Activity };
 
@@ -1442,6 +1444,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
       case 'threat_listed': return t('ovEvThreatListed');
       case 'threat_delisted': return t('ovEvThreatDelisted');
       case 'room_account_admitted': return t('ovEvRoomAccountAdmitted');
+      case 'room_account_invited': return t('ovEvRoomAccountInvited');
       case 'cli_password_gate_failed': return t('ovEvCliGateFailed');
       case 'default_db_password': return t('ovEvDefaultDbPassword');
       case 'browser_handover_failed': return t('ovEvBrowserHandover');

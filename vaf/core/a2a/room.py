@@ -98,6 +98,12 @@ DEFAULT_MAX_CHILDREN = 8
 # A lease older than this makes a peer "stale" to readers. It never makes them gone:
 # only a leave frame does that, and only the peer or a leader writes one.
 LEASE_TTL_S = 90.0
+#: How long an invitation waits for its answer unless the inviter says otherwise.
+#: One hour, the same default the agent ticket has always had: long enough to
+#: walk over and paste it, short enough that a forgotten one is not a standing door.
+DEFAULT_INVITE_TTL_S = 3600.0
+#: What an invitation can be. Written once here so every surface names them alike.
+INVITATION_STATES = ("pending", "accepted", "declined", "revoked", "expired")
 
 
 # Which lane a participant acts from. The lane is part of the key because the machine
@@ -767,6 +773,17 @@ class Room:
         shared one: opening a room that every member reads is a decision somebody makes
         deliberately, not a side effect of inviting one more person.
         """
+        self._check_may_admit(identity)
+        wanted = owner_tenant(tenant)
+        if not wanted:
+            raise RoomError("name the account to let in")
+        self._admit_tenant(wanted)
+        return self.tenants()
+
+    def _check_may_admit(self, identity: Identity) -> None:
+        """The one rule for letting another account in, shared by the direct door
+        (`admit`) and the consenting one (`invite_account`): host or leader, and
+        only into a room that was deliberately opened to other accounts."""
         if not (self.is_host(identity) or self.role_of(identity.peer_id) == "leader"):
             raise NotPermitted(
                 "only the room's host or its leader lets another account in")
@@ -774,15 +791,33 @@ class Room:
             raise RoomError(
                 f"room {self.room_id!r} holds one account; open a shared room to let "
                 "other accounts in")
-        wanted = owner_tenant(tenant)
-        if not wanted:
-            raise RoomError("name the account to let in")
+
+    def _admit_tenant(self, tenant: str) -> None:
+        """Write one account onto the guest list. Permission is the CALLER's question."""
         current = [t for t in (self.manifest.get("tenants") or []) if t]
-        if wanted not in current and wanted != owner_tenant(self.manifest.get("owner_scope")):
-            current.append(wanted)
+        if tenant not in current and tenant != owner_tenant(self.manifest.get("owner_scope")):
+            current.append(tenant)
             self.store.update_manifest(tenants=current)
             self.manifest["tenants"] = current
-        return self.tenants()
+
+    def open_to_accounts(self, identity: Identity) -> Dict[str, Any]:
+        """Turn a one-account room into one other accounts may be invited into.
+
+        Host only, and a separate act rather than a side effect of the first
+        invitation: every member of a shared room reads everything said in it, so
+        this is the decision, and the invitation that follows is only who. A room
+        that is already shared is left as it is.
+
+        Newcomers to a shared room start reading at their own join (`backlog`),
+        which `Room.create` decides at creation; a room opened up later has to
+        make the same decision here, or the first invited account would receive
+        the whole history of a conversation it was never part of.
+        """
+        if not self.is_host(identity):
+            raise NotPermitted("only the room's host opens it to other accounts")
+        if self.manifest.get("multi_scope"):
+            return self.manifest
+        return self.update(multi_scope=True, backlog="since_join")
 
     def household_peers(self, tenant: str) -> Dict[str, str]:
         """The handles ONE account holds in this room, by lane.
@@ -2062,18 +2097,27 @@ class Room:
     # ── tickets: a bearer credential for exactly one room ──────────────────
 
     def mint_ticket(self, identity: Identity, *, display: str = "",
-                    ttl_s: float = 3600.0) -> str:
+                    ttl_s: float = 3600.0, tenant: Optional[str] = None) -> str:
         role = self.role_of(identity.peer_id) or ""
         if not role:
             raise NotAMember("only a member may invite")
         ticket_id = "t-" + secrets.token_hex(12)
+        wanted = owner_tenant(tenant)
+        now = time.time()
         self.store.put_ticket(ticket_id, {
             "room": self.room_id,
             "display": display or "guest",
-            "expires_at": time.time() + float(ttl_s),
+            "minted_at": now,
+            "expires_at": now + float(ttl_s),
             # Recorded for the transcript, not consulted for permission: what a guest
             # may do is decided when they act, not when they were invited.
             "minted_by": identity.peer_id,
+            # Which door this opens. An AGENT ticket is a bearer credential, redeemed
+            # on the wire by whoever holds it. An ACCOUNT ticket names the one tenant
+            # on this machine that may accept it, and opens nothing on the wire at
+            # all - knowing its id is not holding a credential.
+            "kind": "account" if wanted else "agent",
+            "tenant": wanted or None,
         })
         return ticket_id
 
@@ -2082,19 +2126,207 @@ class Room:
                       card: Optional[Dict[str, Any]] = None) -> Identity:
         """Spend a ticket and join. The claim IS the check, so it is single use.
 
-        Nothing is read before the claim. Reading first would put the decision back in
-        front of the race and let two handshakes arriving together both redeem the same
-        invitation, which is the one thing a single-use bearer credential must not do.
+        Nothing that decides between two redeemers is read before the claim. Reading
+        first would put the decision back in front of the race and let two handshakes
+        arriving together both redeem the same invitation, which is the one thing a
+        single-use bearer credential must not do. The one read that does come first
+        decides nothing between redeemers: an ACCOUNT invitation is not a bearer
+        credential and is refused on this door without being consumed, so the
+        account it names can still accept it.
         """
+        peek = self.store.ticket(ticket_id)
+        if isinstance(peek, dict) and peek.get("tenant"):
+            raise TicketInvalid("this invitation is for an account on this machine and "
+                                "is accepted from that account, not redeemed here")
         record = self.store.claim_ticket(ticket_id)
         if record is None:
             raise TicketInvalid("this invitation has already been used, or does not exist")
         if str(record.get("room")) != self.room_id:
             raise TicketInvalid("this ticket is not for this room")
         if float(record.get("expires_at") or 0.0) < time.time():
+            self._settle_ticket(record, "expired")
             raise TicketInvalid("this ticket has expired")
-        return self.join(display=display or str(record.get("display") or "guest"),
-                         scope_id=None, mode=mode, card=card or {})
+        identity = self.join(display=display or str(record.get("display") or "guest"),
+                             scope_id=None, mode=mode, card=card or {})
+        # The outcome, written where a listing can find it: a spent ticket with no
+        # record of who redeemed it reads as "used" and answers none of the questions
+        # the inviter has - did they arrive, and under which name.
+        self._settle_ticket(record, "accepted", redeemed_by=identity.peer_id)
+        return identity
+
+    # ── invitations: the tickets read as a list, and the account door ─────────
+
+    def _settle_ticket(self, record: Mapping[str, Any], status: str, **fields: Any) -> None:
+        """Best effort by design: the claim already happened, and a listing that is
+        one field short is better than an accepted invitation raising afterwards."""
+        try:
+            self.store.settle_ticket(str(record.get("ticket_id") or ""), status=status,
+                                     decided_at=time.time(), **fields)
+        except Exception:
+            pass
+
+    def _invitation_row(self, record: Mapping[str, Any], *, now: float) -> Dict[str, Any]:
+        """One ticket as an invitation: the same fields whichever door it opens."""
+        expires_at = float(record.get("expires_at") or 0.0)
+        status = str(record.get("status") or "")
+        if not status:
+            status = "expired" if expires_at and expires_at < now else "pending"
+        minted_by = str(record.get("minted_by") or "")
+        redeemed_by = str(record.get("redeemed_by") or "")
+        return {
+            "id": str(record.get("ticket_id") or ""),
+            "kind": str(record.get("kind") or ("account" if record.get("tenant") else "agent")),
+            "display": str(record.get("display") or ""),
+            "tenant": str(record.get("tenant") or "") or None,
+            "status": status,
+            "minted_by": minted_by,
+            "minted_by_label": self.label_for(minted_by) if minted_by else "",
+            "minted_at": float(record.get("minted_at") or 0.0),
+            "expires_at": expires_at,
+            "decided_at": float(record.get("decided_at") or 0.0) or None,
+            "redeemed_by": redeemed_by or None,
+            "redeemed_by_label": self.label_for(redeemed_by) if redeemed_by else "",
+        }
+
+    def invitations(self, identity: Identity) -> List[Dict[str, Any]]:
+        """Every invitation this room handed out, with what became of it. Members only.
+
+        Both doors in one list - the agent tickets the wire redeems and the account
+        invitations another tenant accepts - because the person who invited does not
+        think of them as two lists: "who did I invite, and who has arrived" is one
+        question. A pending ticket past its time is SETTLED here as expired rather
+        than merely shown so: the credential leaves the pending directory the first
+        time anybody looks, which is the cleanup `drop_ticket` promised and no caller
+        ever ran.
+        """
+        if not self.role_of(identity.peer_id):
+            raise NotAMember("only a member sees a room's invitations")
+        now = time.time()
+        rows: List[Dict[str, Any]] = []
+        for record in self.store.tickets():
+            if (not record.get("status")
+                    and float(record.get("expires_at") or 0.0) < now
+                    and self.store.claim_ticket(str(record.get("ticket_id") or ""))):
+                self._settle_ticket(record, "expired")
+                record = dict(record, status="expired", decided_at=now)
+            rows.append(self._invitation_row(record, now=now))
+        rows.sort(key=lambda r: (r["status"] != "pending", -(r["minted_at"] or 0.0)))
+        return rows
+
+    def invitation_for(self, tenant: str) -> Optional[Dict[str, Any]]:
+        """The pending invitation for ONE account, or None. Needs no membership.
+
+        Answered for the invitee, who by definition is not a member yet: what it
+        reveals is that account's own invitation and nothing about anybody else's.
+        """
+        wanted = owner_tenant(tenant)
+        if not wanted:
+            return None
+        now = time.time()
+        for record in self.store.tickets():
+            if record.get("status") or owner_tenant(record.get("tenant")) != wanted:
+                continue
+            if float(record.get("expires_at") or 0.0) < now:
+                continue
+            return self._invitation_row(record, now=now)
+        return None
+
+    def invite_account(self, identity: Identity, tenant: str, *, display: str = "",
+                       ttl_s: float = DEFAULT_INVITE_TTL_S) -> Dict[str, Any]:
+        """Invite another ACCOUNT on this machine, and let it decide.
+
+        The consenting counterpart to `admit`, under the same rule (host or leader,
+        and only into a room opened to other accounts): the account is named here,
+        but it joins only when it accepts, and until then it can see that it was
+        invited and by whom, and nothing of what was said. A pending invitation for
+        the same account is returned rather than doubled, for the reason `just_opened`
+        gives: a second invitation to the same person is nearly always a lost track
+        of the first.
+        """
+        self._check_may_admit(identity)
+        wanted = owner_tenant(tenant)
+        if not wanted:
+            raise RoomError("name the account to invite")
+        if wanted == owner_tenant(self.manifest.get("owner_scope")):
+            raise RoomError("that account holds this room already")
+        for lane in PARTICIPANT_LANES:
+            if self.role_of(derive_peer_id(participant_key(lane, wanted), self.room_id)):
+                raise RoomError("that account is already in this room")
+        existing = self.invitation_for(wanted)
+        if existing is not None:
+            return existing
+        ticket = self.mint_ticket(identity, display=display or "account",
+                                  ttl_s=float(ttl_s), tenant=wanted)
+        row = self.invitation_for(wanted)
+        return row if row is not None else {"id": ticket, "kind": "account",
+                                            "tenant": wanted, "status": "pending"}
+
+    def accept_invitation(self, tenant: str, *, display: str) -> Identity:
+        """The invited account says yes: it is admitted and joins as itself.
+
+        Two things happen and they happen in this order. The guest list is written
+        first, because `join` walks through `_check_tenant` like every other join and
+        must find the account there - the invitation is what permits the admission,
+        so the room writes it on the invitee's behalf; there is no host in the loop
+        at this moment and there does not need to be, the host decided when it
+        invited. The join is the person's own lane (the CLI lane, which the browser
+        shares with the terminal), so the room shows one person and not two.
+
+        The claim is single use exactly as on the wire door: two browsers accepting
+        at once produce one member, and the loser is told the invitation is gone.
+        """
+        wanted = owner_tenant(tenant)
+        pending = self.invitation_for(wanted)
+        if pending is None:
+            raise TicketInvalid("there is no open invitation for this account here")
+        record = self.store.claim_ticket(pending["id"])
+        if record is None or owner_tenant(record.get("tenant")) != wanted:
+            raise TicketInvalid("this invitation has already been answered")
+        if float(record.get("expires_at") or 0.0) < time.time():
+            self._settle_ticket(record, "expired")
+            raise TicketInvalid("this invitation has expired")
+        self._admit_tenant(wanted)
+        key = participant_key("cli", wanted)
+        identity = self.join(display=display or str(record.get("display") or "guest"),
+                             scope_id=wanted, peer_id=derive_peer_id(key, self.room_id),
+                             participant_key=key)
+        self._settle_ticket(record, "accepted", redeemed_by=identity.peer_id)
+        return identity
+
+    def decline_invitation(self, tenant: str) -> Dict[str, Any]:
+        """The invited account says no. The invitation is spent, and the answer is
+        kept, so the inviter reads "declined" and not "never got round to it"."""
+        wanted = owner_tenant(tenant)
+        pending = self.invitation_for(wanted)
+        if pending is None:
+            raise TicketInvalid("there is no open invitation for this account here")
+        record = self.store.claim_ticket(pending["id"])
+        if record is None or owner_tenant(record.get("tenant")) != wanted:
+            raise TicketInvalid("this invitation has already been answered")
+        self._settle_ticket(record, "declined")
+        return dict(pending, status="declined", decided_at=time.time())
+
+    def revoke_invitation(self, identity: Identity, invitation_id: str) -> Dict[str, Any]:
+        """Take an invitation back before it is answered. Whoever minted it, or the
+        host or leader, and only while it is still pending: an answered invitation
+        is an answer, not something to withdraw."""
+        role = self.role_of(identity.peer_id)
+        if not role:
+            raise NotAMember("only a member may withdraw an invitation")
+        record = self.store.ticket(invitation_id)
+        if not isinstance(record, dict):
+            raise TicketInvalid("that invitation is not open any more")
+        may = (str(record.get("minted_by") or "") == identity.peer_id
+               or self.is_host(identity) or role == "leader")
+        if not may:
+            raise NotPermitted("only whoever invited, or the room's host or leader, "
+                               "withdraws an invitation")
+        claimed = self.store.claim_ticket(invitation_id)
+        if claimed is None:
+            raise TicketInvalid("that invitation is not open any more")
+        self._settle_ticket(claimed, "revoked")
+        return self._invitation_row(dict(claimed, status="revoked", decided_at=time.time()),
+                                    now=time.time())
 
     # ── seats: how a redeemed ticket comes back ─────────────────────────────
 
@@ -2610,6 +2842,34 @@ def joined_rooms(key: str, *, base: Optional[Path] = None) -> List[Tuple[Room, I
         identity = room.identity_for(key)
         if identity is not None:
             found.append((room, identity))
+    return found
+
+
+def invited_rooms(tenant: str, *, base: Optional[Path] = None) -> List[Tuple[Room, Dict[str, Any]]]:
+    """Every open room on this machine that has invited this ACCOUNT and is still
+    waiting for its answer, with the invitation.
+
+    The counterpart of `joined_rooms` for the moment before a join: a sidebar shows
+    an invited room so the person can answer, and it is the same directory scan,
+    tolerant of the same damage. A closed room withdraws its invitations by being
+    closed - nothing could be joined there any more.
+    """
+    found: List[Tuple[Room, Dict[str, Any]]] = []
+    if not owner_tenant(tenant):
+        return found
+    for room_id in list_rooms(base):
+        try:
+            room = Room.open(room_id, base=base)
+        except Exception:
+            continue
+        if room.closed:
+            continue
+        try:
+            row = room.invitation_for(tenant)
+        except Exception:
+            continue
+        if row is not None:
+            found.append((room, row))
     return found
 
 

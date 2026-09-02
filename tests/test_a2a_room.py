@@ -2094,7 +2094,10 @@ def test_the_agent_tool_and_the_browser_both_carry_the_reference(tmp_path, monke
     assert row["files"] == [{"path": "draft.md"}], "the escape must not ride along"
 
     source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
-    projection = source.split('"messages": [', 1)[1][:1400]
+    # Anchored on the transcript BUILDER: the invitee's door answers with the same
+    # message type and an empty list, and sits above it in the file.
+    builder = source.split("async def _send_room_transcript", 1)[1]
+    projection = builder.split('"messages": [', 1)[1][:1400]
     assert '"files": e.get("files")' in projection, \
         "the browser rebuilds each row field by field; an unforwarded field is dropped"
 

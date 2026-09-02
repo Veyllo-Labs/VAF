@@ -267,6 +267,30 @@ Key rules:
   run for a month would pay for its entire history on every tick. The transcript
   carries a WINDOW of finished work (thirty minutes); this is the record behind it,
   fetched when somebody opens it.
+- `invite_account` (`{ room_id, account, ttl? }`), `revoke_room_invite` (`{ room_id,
+  invitation_id }`), `room_invite_agent` (`{ room_id, display, ttl? }`),
+  `room_invitation_text` (`{ room_id, invitation_id }`) and `room_invite_candidates`
+  (`{ room_id }`): a MEMBER handing out, withdrawing or reading the room's
+  invitations. Members only (`member_room_ids`), and deliberately NOT part of the
+  acting block above: that block joins a non-member the moment they speak, and
+  looking at invitations must never make anybody a member. `invite_account` names
+  a VAF account by user name (resolved to its scope off the loop); on a room that
+  holds one account it first opens the room to other accounts (`Room.open_to_accounts`,
+  which the panel warned about before the click), then `Room.invite_account` mints
+  the invitation, the invitee's bell and sidebar are told (`announce_room_invitation`)
+  and `room_account_invited` is logged. `room_invite_agent` mints the briefing exactly
+  as `vaf a2a invite` does and answers with `room_invitation`; `room_invitation_text`
+  rebuilds the briefing of an OPEN agent ticket (address and checksum looked up afresh)
+  so closing the panel never costs a second ticket. All but the two lookups answer
+  with a fresh `room_transcript`, whose `invitations` list is where the outcome shows.
+- `accept_room_invite` and `decline_room_invite` (`{ room_id }`): the INVITEE at the
+  door. Membership is exactly what they do not have, so the check is the invitation
+  itself - the `invited` row `_room_rows` built for them - and the framework does the
+  rest in one step (`Room.accept_invitation`: admission onto the guest list, then the
+  join on the person's CLI lane; `decline_invitation` spends the ticket and keeps the
+  answer). Both push a fresh `session_list` to every screen of that person (the door
+  becomes a room, or leaves the list); accepting also answers with the room's
+  transcript, and logs `room_account_admitted`.
 - `cast_room_vote` (`{ room_id, vote_id, choice }`): the person voting in an open
   question, on the same CLI lane. The choice is RESOLVED against the vote's options by
   the room at ingest, not here - a shortened answer lands on the option it means, and one
@@ -301,8 +325,8 @@ Key rules:
   every attempt to leave the room bounced back within seconds).
   Payload: `{ room, messages }`, where `room`
   carries `{ id, roomId, title, topic, mission, roomKind, role, closed, createdAt,
-  members, members_list, me, agentPeer, agentMode, agentWorkers, canManage, typing,
-  readPositions, tasks, votes }` and each message
+  members, members_list, me, agentPeer, agentMode, agentWorkers, canManage, canInvite,
+  shared, invitations, typing, readPositions, tasks, votes }` and each message
   is `{ id, peer, label, role, kind, text, ts, lamport, to, files, verdict }`.
   `files` names entries in the room's shared folder the message points at, a
   reference and never the bytes. `verdict` is what a reader may conclude about who
@@ -332,9 +356,27 @@ Key rules:
   its countdown off it, rather than off a seconds-left recomputed each poll - a clock
   that only moves when a poll lands stutters. A vote LEAVES this list when the room has
   written its result (a `tally` frame, which arrives as an ordinary message), so the
-  card and the result change places instead of both being absent for a moment. Fields
+  card and the result change places instead of both being absent for a moment.
+  `room.invitations` is every invitation the room handed out - accounts and agents in
+  ONE list, as `Room.invitations` answers it - each `{ id, kind, display, status,
+  invitedBy, mintedAt, expiresAt, decidedAt, acceptedAs }` with `status` one of
+  `pending`, `accepted`, `declined`, `revoked`, `expired`; the browser runs the
+  "expires in" line off `expiresAt` on a slow tick of its own. `canInvite` is the
+  room's own rule (host or leader) so the panel offers the invite tab only where the
+  room would say yes; `shared` says whether the room is open to other accounts.
+  For an INVITED viewer the same message type carries the DOOR instead: `room.invited`
+  (`{ by, expiresAt, invitationId }`), `role` empty, `members_list` by label only and
+  `messages` EMPTY - nothing said in the room reaches an account that has not
+  accepted, not a line and not a file name (`_send_room_door`). Fields
   added here must be forwarded explicitly by the frontend, which rebuilds these objects
   field by field - an unforwarded field is silently dropped.
+- `room_invite_candidates` (`{ roomId, accounts, directory }`): the accounts on this
+  machine a member could invite, NAMES ONLY (`username`, `online`, `state` of
+  `member` / `invited` / `open`, `expiresAt`), never the admin's user table. With
+  `a2a_room_invite_directory` off a non-admin gets `directory: false` and an empty
+  list, and the panel offers a name field instead.
+- `room_invitation` (`{ roomId, invitation: { id, display, role, expiresAt,
+  briefing } }`): the briefing of one agent invitation, freshly minted or shown again.
 
 - `sidebar_documents_set`: sent after processing `set_sidebar_documents`. Payload: `{ contents: Array<{ name, content, data?, mimeType?, htmlContent? }>, sessionId?, error? }`. Each entry has `name` and `content` (extracted text for the LLM); `data` (base64) and `mimeType` for display. When Gotenberg is available, Office docs (.docx, .xlsx, .pptx, .odt, .ods, .odp) are converted to PDF on the backend and returned as `mimeType: application/pdf` with `data` (PDF base64), so the frontend uses the PDF viewer for original layout. Without Gotenberg, the backend provides `htmlContent` or the frontend falls back to client-side mammoth.js for DOCX.
 - `editor_apply_edit`: sent when the agent calls `replace_editor_selection` or when `replace_editor_text` resolves an exact text match in the current editor document. Payload: `{ sessionId, selectionIndex, newText, start, end }`. The frontend replaces the character range `[start, end]` in the Document Editor with `newText` and removes that selection chip when `selectionIndex >= 0`. For native DOCX sessions, this is applied to the native document model; for legacy editor sessions it is applied to HTML/text content.

@@ -178,6 +178,53 @@ def resolve_confirmation_bypass(user_scope_id: Optional[str]) -> bool:
     return _resolve_cached(scope, _bypass_cache, _lookup_confirmation_bypass) is True
 
 
+def list_accounts() -> list:
+    """The account directory resolver the harness registers (`set_account_directory_resolver`).
+
+    Every account in the auth store as ``{"username", "user_scope_id", "active"}``,
+    names as stored. Never raises: an unreachable store is an empty directory, which
+    for the one thing built on it - finding somebody to invite - is the safe answer.
+    Runs the async store from a sync caller the way the other resolvers here do; when
+    an event loop is already running (a WebSocket handler) the lookup goes to a side
+    thread, so callers on the loop should hand this to an executor.
+    """
+    import asyncio
+
+    async def _lookup() -> list:
+        from sqlalchemy import select
+        from vaf.auth.database import get_auth_db
+        from vaf.auth.models import LocalUser
+        async with get_auth_db() as db:
+            rows = (await db.execute(select(LocalUser.username, LocalUser.user_scope_id,
+                                            LocalUser.is_active))).all()
+        return [{"username": str(name), "user_scope_id": str(scope), "active": bool(active)}
+                for name, scope, active in rows if name and scope]
+
+    try:
+        try:
+            asyncio.get_running_loop()
+            running = True
+        except RuntimeError:
+            running = False
+        if not running:
+            return asyncio.run(_lookup())
+        import threading
+        box: list = [[]]
+
+        def _run() -> None:
+            try:
+                box[0] = asyncio.run(_lookup())
+            except Exception:
+                box[0] = []
+
+        worker = threading.Thread(target=_run, daemon=True)
+        worker.start()
+        worker.join(timeout=5.0)
+        return list(box[0] or [])
+    except Exception:
+        return []
+
+
 def invalidate_permissions_cache(user_scope_id: Optional[str] = None) -> None:
     """Called by the admin update route so a revocation beats the TTL. Clears BOTH
     allowlists: the route writes tools and workflows in one save."""

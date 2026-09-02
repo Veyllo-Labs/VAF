@@ -308,9 +308,11 @@ def test_the_header_renders_the_members_and_marks_our_own(rooms):
     about who said what depends on it.
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    block = source.split("(view.room.members_list || []).map(m => (")[1].split("</div>")[0]
+    # The member chips live in RoomIdentity, the one component that draws the
+    # room's identity wherever the header band is.
+    block = source.split("(room.members_list || []).map(m => (")[1].split("</div>")[0]
 
-    assert "m.peer === view.room.me" in block, "our own agent is not marked"
+    assert "m.peer === room.me" in block, "our own agent is not marked"
     assert "{m.label}" in block, "the header shows something other than the resolved name"
 
 
@@ -509,10 +511,12 @@ def test_the_header_asks_who_is_here_rather_than_offering_a_third_way_out():
     actually asked for: who is in this room.
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    header = source.split("function RoomIdentity(")[1].split("\nfunction ")[0]
     block = source.split("function RoomConversation(")[1].split("\nfunction ")[0]
 
-    assert "onMembers" in block and "<Info size={16} />" in block
-    assert "onClose" not in block, "the header still carries a way to close the view"
+    assert "onMembers" in header and "<Info size={16} />" in header
+    assert "onClose" not in header and "onClose" not in block, (
+        "the header still carries a way to close the view")
 
 
 def test_removing_somebody_asks_first_and_says_something_different_from_ending_the_room():

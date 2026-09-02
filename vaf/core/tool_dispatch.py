@@ -664,6 +664,73 @@ def get_account_allowlist_resolver():
     return _account_allowlist_resolver
 
 
+# ── the account directory resolver ───────────────────────────────────────────
+#
+# The allowlist resolver answers "what may THIS account do"; this one answers "which
+# accounts are there at all", by NAME. It exists for one measured reason: inviting a
+# person into a room by their user name ("invite bob") needs the tenant behind the
+# name, and the picker that offers the names needs the list - and both were about to
+# be answered by the framework reaching into the harness's auth database, in
+# vaf/core/config.py and in the room commands, which is exactly the import the
+# allowlist resolver was built to delete. Same topology: one per process, registered
+# by the application at startup, and an embedder that registers nothing has no
+# directory - names then resolve to nobody, which is the safe answer for a door.
+_account_directory_resolver = None
+
+
+def set_account_directory_resolver(resolver) -> None:
+    """Register the application's answer to "which accounts exist here, by name?".
+
+    ``resolver() -> iterable of {"username": str, "user_scope_id": str, "active": bool}``
+
+    A LOOKUP, not a guard, so its polarity differs from the allowlist resolver's: a
+    raising resolver is read as an EMPTY directory rather than a refusal, because the
+    only thing built on it is finding somebody to invite, and "nobody found" is already
+    the safe outcome. Names are compared case-insensitively by the callers; the
+    resolver returns them as stored. Never cached here - a directory that changes when
+    an account is created should show the account on the next look, and a resolver
+    that finds lookups expensive caches inside itself.
+
+    Process-wide; the last registration wins and ``None`` deregisters. See
+    docs/EMBEDDING.md.
+    """
+    global _account_directory_resolver
+    _account_directory_resolver = resolver
+
+
+def get_account_directory_resolver():
+    """The currently registered resolver, or None. For wiring checks."""
+    return _account_directory_resolver
+
+
+def resolve_account_directory() -> list:
+    """Internal: every account the registered resolver names, normalized.
+
+    ``[{"username", "user_scope_id", "active"}]``, empty when nothing is registered or
+    the resolver raised. Rows without a name or a scope are dropped: a row that cannot
+    be addressed cannot be invited, and one that cannot be scoped cannot be admitted.
+    """
+    fn = _account_directory_resolver          # local capture: a mid-call detach is safe
+    if fn is None:
+        return []
+    try:
+        rows = fn() or []
+    except Exception:                                             # noqa: BLE001
+        return []
+    out = []
+    for row in rows:
+        try:
+            name = str(row.get("username") or "").strip()
+            scope = str(row.get("user_scope_id") or "").strip()
+        except AttributeError:
+            continue
+        if not name or not scope:
+            continue
+        out.append({"username": name, "user_scope_id": scope,
+                    "active": bool(row.get("active", True))})
+    return out
+
+
 def resolve_account_allowlist(user_scope_id: str):
     """Internal: the registered resolver's answer for one scope, normalized.
 

@@ -447,6 +447,40 @@ def _workspace_block(workspace: Optional[str]) -> str:
     )
 
 
+def invitation_text(room: Room, record: Dict[str, Any]) -> str:
+    """The briefing for an agent invitation that is still open, rebuilt.
+
+    An invitation is minted once and its briefing is shown once; the person who
+    closed that panel and needs the text again should not have to mint a second
+    ticket (and leave the first one standing as a door nobody will ever use). The
+    ticket id is the only stored part - the address, the fingerprint and the
+    checksum are looked up afresh, so a text rebuilt after the host's LAN address
+    changed carries the address that works now, which a stored copy would not.
+
+    Only for a PENDING AGENT ticket: an account invitation has no briefing (the
+    account answers in its own sidebar), and a spent one has nothing left to say.
+    """
+    if str(record.get("kind") or "agent") != "agent":
+        raise ValueError("an account invitation has no briefing to hand over")
+    if str(record.get("status") or "pending") != "pending":
+        raise ValueError("this invitation is not open any more")
+    ticket = str(record.get("id") or record.get("ticket_id") or "")
+    if not ticket:
+        raise ValueError("this record names no ticket")
+    role = "peer" if room.kind == "round" else "worker"
+    try:
+        workspace = room.workspace_dir(create=False)
+    except Exception:
+        workspace = None
+    return briefing(
+        room_id=room.room_id, ticket=ticket, role=role,
+        display=str(record.get("display") or "guest"),
+        room_kind=room.kind, topic=str(room.manifest.get("topic") or ""),
+        endpoint=lan_endpoint(room.room_id),
+        workspace=str(workspace) if workspace else None,
+    )
+
+
 def invitation(room: Room, identity: Identity, *, display: str = "guest",
                ttl_s: float = 3600.0) -> Dict[str, Any]:
     """Mint a single-use invitation and everything that has to travel with it.

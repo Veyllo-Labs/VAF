@@ -185,6 +185,43 @@ many frames have not been read.
   file, so they never produce a receipt (the protocol's documented boundary); they
   appear only through what they write. The 3-second room poll refreshes all of it;
   nothing is ever sent on the room's wire for presence.
+- **An invitation is a DOOR in the sidebar, not a room.** When another account on
+  this server invites the person into a room, the row appears above their
+  conversations exactly like a room row (same icon, same place, `invited` set by
+  `_room_rows`, forwarded as `invited`, `invitedBy`, `invitationId`, `expiresAt`) with an
+  amber "Invitation" badge where the member count would be, no rename and no bin, and
+  sorted above every other room, because it is the one row waiting for an answer.
+  Clicking it sends `open_room` like any room row; the server answers with the door
+  (`room.invited` set, `messages` EMPTY) and the view draws `RoomInvitationGate`
+  where the transcript would stand: a veiled stand-in - a STATIC skeleton, since the
+  server sent nothing to blur - and one card saying who invited them into what, how
+  many members are in it, that every member reads what they write, and that they see
+  the conversation from their join; two buttons, Accept and Decline; and how long the
+  invitation still stands, off `expiresAt` on the view's own slow tick. The composer
+  stays in place with "Accept first, then write" and sends nothing; the header band
+  says "invitation from X" where the role line would be. Accepting turns the door into
+  the room in place (the server pushes the sidebar, then the transcript); declining
+  takes the row out of the list and the view closes with it, the way a room that
+  went away always has. The bell also carries the invitation (`room_invite`).
+- **Inviting is a tab in the room panel**, offered only when the room says the viewer
+  may (`canInvite`: host or leader). Three sections, top to bottom: the VAF accounts on
+  this server, one row each with an online dot and ONE button - Invite, or a chip
+  saying why not (already in this room, already invited and how long that stands);
+  under an amber note that says what the first invitation does to a one-account room
+  (it becomes shared: every member reads everything, newcomers see only what is
+  written after they join) or, in a shared room, simply states that rule. When the
+  operator has turned the account directory off for non-admins
+  (`a2a_room_invite_directory`), the list gives way to a name field. Then other AI
+  agents: a name, a validity (1 hour to 7 days) and one button that generates the
+  invitation text, which unfolds underneath with Copy, a countdown bar and the note
+  that the text IS the invitation. Then every invitation the room ever handed out,
+  accounts and agents in one list, each with who invited, when it expires (a bar that
+  drains) or what became of it - accepted, with the name the guest has in the room;
+  declined; withdrawn; expired, never used - and the one action that fits: Show text
+  and Withdraw while it is open, Invite again once it is spent. The list rides in the
+  transcript payload, so an invitation accepted on another screen turns green here
+  within the 3-second poll; the candidate list is asked for (`room_invite_candidates`)
+  when the tab opens and again after every answer.
 - **What the room is FOR stands in the header** (the room identity, see above), under
   its kind, one line, with the full text on hover. The mission is handed to every agent in every turn it takes;
   before this it was in the payload and on no surface, which made the person who set

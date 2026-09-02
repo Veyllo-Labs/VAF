@@ -669,6 +669,15 @@ def list_rooms() -> None:
                "role": identity.role, "peer": identity.peer_id,
                "unread": pending.get(room.room_id, 0),
                "mode": room.mode_of(identity.peer_id), "closed": room.closed})
+    # The rooms waiting for THIS account's answer, after the ones it is in. Not a
+    # member yet, so no role, no peer and no unread count: the line names the door.
+    from vaf.core.a2a.room import invited_rooms
+    for room, invitation in invited_rooms(_scope()):
+        _emit({"room": room.room_id, "kind": room.kind, "topic": room.manifest.get("topic", ""),
+               "invited": True, "invited_by": invitation.get("minted_by_label", ""),
+               "invitation": invitation.get("id", ""),
+               "expires_at": invitation.get("expires_at"),
+               "accept": f"vaf a2a accept {room.room_id}"})
 
 
 @app.command()
@@ -676,6 +685,15 @@ def invite(
     room_id: str = typer.Argument(..., help="Room to invite into."),
     display: str = typer.Option("guest", help="Name the guest will appear under."),
     ttl: int = typer.Option(3600, help="Seconds the invitation stays valid."),
+    account: str = typer.Option(
+        "", "--account",
+        help="Invite an ACCOUNT on this machine by its user name instead of a foreign "
+             "agent. The account sees the room in its own sidebar and accepts or "
+             "declines there; nothing is readable until it accepts."),
+    shared: bool = typer.Option(
+        False, "--shared",
+        help="With --account on a room that holds one account: open the room to other "
+             "accounts first. Every member then reads everything said in it."),
 ) -> None:
     """Mint a single-use invitation and print the line, and the briefing, to hand over.
 
@@ -683,16 +701,124 @@ def invite(
     hands out the same thing when somebody says "open a room and invite Codex", and two
     agents told different things by two inviters is the failure that would follow from
     building it twice.
+
+    With --account there is no briefing to hand over: the invitation IS the row in the
+    other account's sidebar, and the answer comes back as `accepted` or `declined` in
+    `vaf a2a invitations`.
     """
     from vaf.core.a2a.invite import invitation
     from vaf.core.a2a.room import RoomError
     room = _room(room_id)
     identity = _me(room)
+    if account:
+        from vaf.core.config import scope_id_for_username
+        scope = scope_id_for_username(account)
+        if not scope:
+            _fail(f"There is no account called {account!r} on this machine.", EXIT_REFUSED)
+        try:
+            if not room.manifest.get("multi_scope"):
+                if not shared:
+                    _fail(f"Room {room_id!r} holds one account. Pass --shared to open it "
+                          "to other accounts; every member then reads everything said "
+                          "in it.", EXIT_REFUSED)
+                room.open_to_accounts(identity)
+            row = room.invite_account(identity, scope, display=account, ttl_s=float(ttl))
+        except RoomError as e:
+            _fail(str(e), EXIT_REFUSED)
+        # The bell and the sidebar refetch reach a browser only from the process that
+        # serves it; from this terminal the security event is what always lands, and
+        # the invitee's row appears with their next sidebar refresh, exactly like a
+        # room opened from this terminal.
+        try:
+            from vaf.core.web_interface import announce_room_invitation
+            announce_room_invitation(room, row, inviter_scope=_scope(), invitee_scope=scope,
+                                     inviter_name=_display())
+        except Exception:
+            pass
+        _emit({"ok": True, "room": room.room_id, "account": account, "invitation": row})
+        return
     try:
         row = invitation(room, identity, display=display, ttl_s=float(ttl))
     except RoomError as e:
         _fail(str(e), EXIT_REFUSED)
     _emit({"ok": True, **row})
+
+
+@app.command()
+def invitations(
+    room_id: str = typer.Argument(..., help="A room you are in."),
+    text: str = typer.Option("", "--text",
+                             help="Print the briefing of this OPEN agent invitation again "
+                                  "instead of the list."),
+) -> None:
+    """Every invitation this room handed out, and what became of each: pending,
+    accepted (by whom), declined, revoked or expired. Accounts and agents in one list."""
+    from vaf.core.a2a.room import RoomError
+    room = _room(room_id)
+    identity = _me(room)
+    try:
+        rows = room.invitations(identity)
+    except RoomError as e:
+        _fail(str(e), EXIT_REFUSED)
+    if text:
+        from vaf.core.a2a.invite import invitation_text
+        record = next((r for r in rows if r["id"] == text), None)
+        if record is None:
+            _fail(f"No invitation {text!r} in room {room_id!r}.", EXIT_REFUSED)
+        try:
+            _emit({"ok": True, "room": room.room_id, "invitation": record["id"],
+                   "briefing": invitation_text(room, record)})
+        except ValueError as e:
+            _fail(str(e), EXIT_REFUSED)
+        return
+    for row in rows:
+        _emit(row)
+
+
+@app.command()
+def accept(
+    room_id: str = typer.Argument(..., help="A room that invited this account."),
+    display: str = typer.Option("", help="Your name in the room."),
+) -> None:
+    """Accept an invitation into a room: you are admitted and join as yourself."""
+    from vaf.core.a2a.room import RoomError, TicketInvalid
+    room = _room(room_id)
+    try:
+        me = room.accept_invitation(_scope(), display=display or _display())
+    except (TicketInvalid, RoomError) as e:
+        _fail(str(e), EXIT_REFUSED)
+    _emit({"ok": True, "room": room.room_id, "peer": me.peer_id, "role": me.role})
+
+
+@app.command()
+def decline(
+    room_id: str = typer.Argument(..., help="A room that invited this account."),
+) -> None:
+    """Decline an invitation into a room. The inviter reads "declined", not silence."""
+    from vaf.core.a2a.room import RoomError, TicketInvalid
+    room = _room(room_id)
+    try:
+        row = room.decline_invitation(_scope())
+    except (TicketInvalid, RoomError) as e:
+        _fail(str(e), EXIT_REFUSED)
+    _emit({"ok": True, "room": room.room_id, "invitation": row["id"], "status": row["status"]})
+
+
+@app.command()
+def revoke(
+    room_id: str = typer.Argument(..., help="A room you are in."),
+    invitation_id: str = typer.Argument(..., help="The invitation to withdraw (from `invitations`)."),
+) -> None:
+    """Withdraw an invitation that has not been answered yet. Whoever minted it, or
+    the room's host or leader."""
+    from vaf.core.a2a.room import RoomError
+    room = _room(room_id)
+    identity = _me(room)
+    try:
+        row = room.revoke_invitation(identity, invitation_id)
+    except RoomError as e:
+        _fail(str(e), EXIT_REFUSED)
+    _emit({"ok": True, "room": room.room_id, "invitation": row["id"], "status": row["status"]})
 
 
 @app.command()

@@ -945,6 +945,21 @@ class VafApp(App):
             self.add_event_note("Rooms", f"no room {room_id!r} on this machine", "warning")
             return
 
+        # Invited but not in: the door is shown, the transcript is not. This console
+        # is the machine owner's and could read the store, which is exactly why the
+        # rule is stated here rather than relied on: an invitation answered by
+        # reading is not an invitation.
+        try:
+            from vaf.core.a2a.room import participant_key
+            waiting = room.invitation_for(key)
+            if waiting and room.identity_for(participant_key("cli", key)) is None:
+                self.add_system_note(
+                    f"{waiting.get('minted_by_label') or 'A member'} invited you into "
+                    f"{room_id} ({room.kind}). Accept with `vaf a2a accept {room_id}` "
+                    f"or decline with `vaf a2a decline {room_id}`.")
+                return
+        except Exception:
+            pass
         rows = room.transcript()
         if not rows:
             self.add_system_note(f"{room_id} is empty")

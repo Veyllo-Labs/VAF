@@ -324,6 +324,7 @@ class Config:
                 "room_unattended_report_enabled": True,        # global kill-switch
                 "room_unattended_report_every_turns": 20,      # room-driven turns for ONE room without a human between messages to the owner (20, 40, 60, ...); work continues either way
                 "a2a_room_ping_minutes": 60,                   # a room checks in on a member that has neither read nor written for this long (0 = never). Per PEER, addressed to that one, so a check-in never costs the whole room a turn. Host-side: the timer runs on the machine that holds the room.
+                "a2a_room_invite_directory": True,             # room invite picker lists the other accounts' names for every signed-in account (False: admins only)
                 "chat_step_wall_clock_seconds": 3600,          # MAIN-loop wall-clock BACKSTOP (1h): a single user turn can never grind past this (checked at each tool-turn boundary), independent of tool count/provider speed. Deliberately generous — the no-progress guard + per-tool timeouts stop the common case far earlier; this only catches a true infinite/zombie loop without ever aborting legitimate long work. Configurable.
                 "max_tool_turns_per_step": 75,                 # Hard stop: tool turns ONE user turn may use before the loop protection ends it. The soft goal-reminder keeps its distance below it (min(50, cap-3)). Admin-only: a tenant must not raise their own budget.
                 "tool_loop_unlimited": False,                  # Switch: disable the hard stop AND the wall-clock backstop entirely (spend budget still applies). Read by the agent loop since the loop-protection round but never registered; registered here so it is documented, admin-only and visible to Settings.
@@ -985,6 +986,10 @@ class Config:
         # it is emitted by this machine to peers that may not be on it - the same
         # kind of decision, one layer out.
         "a2a_room_ping_minutes",
+        # Whether every signed-in account may see the NAMES of the other accounts in
+        # the room invite picker. A directory of who has an account on this machine
+        # is the operator's call, not a per-user preference.
+        "a2a_room_invite_directory",
         # Loop-protection budgets: a limit its own subject can raise is not a limit.
         "max_tool_turns_per_step", "tool_loop_unlimited",
         # Which tools the coding agent may reach for. The built-in list deliberately
@@ -1677,6 +1682,43 @@ def resolve_caller_username(
     except Exception:
         # Cannot tell whose scope this is -> must not answer with the owner's name.
         return get_local_admin_username() if not user_scope_id else "scope_unknown"
+
+
+def scope_id_for_username(username: str) -> Optional[str]:
+    """The scope an account NAME resolves to, or None when there is no such account.
+
+    The reverse of `resolve_caller_username`, for the places that are handed a name
+    by a person - "invite bob" - and need the tenant the stores key on. The local
+    admin resolves from the config without a lookup, like the forward direction;
+    anybody else is found in the account directory the application registered
+    (`set_account_directory_resolver`) - never by reading an auth store from here,
+    which is the import the resolver exists to keep out of the framework. Names are
+    compared case-insensitively.
+
+    Never invents: a name that matches no account answers None, and the caller says
+    so, because inviting a synthetic scope would admit nobody and tell the inviter it
+    had. An embedder with no directory registered gets None for every name but the
+    owner's, which is the safe answer for a door.
+    """
+    name = str(username or "").strip()
+    if not name:
+        return None
+    try:
+        if name.casefold() == str(get_local_admin_username() or "").strip().casefold():
+            admin = str(get_local_admin_scope_id() or "").strip()
+            if admin:
+                return admin
+    except Exception:
+        pass
+    try:
+        from vaf.core.tool_dispatch import resolve_account_directory
+        wanted = name.casefold()
+        for row in resolve_account_directory():
+            if row["username"].casefold() == wanted and row.get("active", True):
+                return row["user_scope_id"]
+    except Exception:
+        return None
+    return None
 
 
 def subagent_provider_override() -> Optional[str]:

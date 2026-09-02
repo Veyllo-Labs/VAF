@@ -459,6 +459,46 @@ class RoomStore:
             pass
         return record
 
+    def settle_ticket(self, ticket_id: str, **fields: Any) -> Dict[str, Any]:
+        """Write the OUTCOME onto a claimed ticket: accepted, declined, revoked, expired.
+
+        The claim decides who may act on a ticket; this records what they did, so a
+        listing can answer "was this invitation ever used, and by whom" after the
+        credential itself is beyond reach. Only the spent copy is ever written - a
+        pending ticket is never annotated, because a pending ticket is a credential
+        and the outcome fields would be a claim nobody has made yet. A spent copy
+        that is missing (a crash between claim and move) is created from the fields
+        alone rather than skipped, so the outcome survives even then.
+        """
+        name = check_name(ticket_id, what="ticket id")
+        path = self.tickets_dir / "spent" / f"{name}.json"
+        record = data_files.read_json(path, default=None)
+        if not isinstance(record, dict):
+            record = {"ticket_id": name, "room": self.room_id}
+        record.update({k: v for k, v in fields.items() if v is not None})
+        path.parent.mkdir(parents=True, exist_ok=True)
+        harden_dir(path.parent)
+        data_files.write_json_atomic(path, record, indent=2)
+        return record
+
+    def tickets(self) -> List[Dict[str, Any]]:
+        """Every ticket this room minted, pending ones first, then the spent ones.
+
+        Records as stored, untouched: a pending record has no ``status`` field
+        because nothing has happened to it yet, and the room decides whether a
+        pending one has expired (the store does not read clocks). The ``.claim``
+        markers beside the spent copies are the mutex, not records, and are skipped.
+        """
+        out: List[Dict[str, Any]] = []
+        for directory in (self.tickets_dir, self.tickets_dir / "spent"):
+            if not directory.is_dir():
+                continue
+            for path in sorted(directory.glob("*.json")):
+                record = data_files.read_json(path, default=None)
+                if isinstance(record, dict) and record.get("ticket_id"):
+                    out.append(record)
+        return out
+
 
 def list_rooms(base: Optional[Path] = None) -> List[str]:
     """Room ids present on this machine, newest activity last is NOT implied - the

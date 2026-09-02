@@ -1251,6 +1251,30 @@ data and never touches the parent's `os.environ`; it is currently internal (a
 named boundary: no embedder demand measured yet), but it is the pattern to
 copy.
 
+**Which accounts exist at all, by name: `set_account_directory_resolver`.** The
+allowlist answers what one account may do; a room invitation ("invite bob") needs
+the tenant behind a NAME, and the picker that offers the names needs the list. Both
+live in your backend, so you register a directory once per process:
+
+```python
+from vaf import set_account_directory_resolver
+
+def accounts():
+    return [{"username": u.name, "user_scope_id": u.scope, "active": u.enabled}
+            for u in users.all()]
+
+set_account_directory_resolver(accounts)
+```
+
+A LOOKUP, not a guard, so the polarity differs from the allowlist: a raising
+resolver is read as an empty directory rather than a refusal, because the only thing
+built on it is finding somebody to invite, and "nobody found" is already the safe
+outcome. Names are compared case-insensitively; an inactive account is listed but
+never resolved for an invitation; nothing is cached here. Unregistered means no
+directory: `Room.invite_account` still works with a scope you resolved yourself, and
+the name-based lanes (`vaf a2a invite --account`, the agent's `room_invite` with
+`account`) answer "no such account" for every name but the owner's.
+
 Runnable demonstration: part 6 of
 [examples/07_tool_caller_and_authorizer.py](../examples/07_tool_caller_and_authorizer.py).
 
@@ -1309,6 +1333,30 @@ bookkeeping kind silently lands in your output as if somebody had said it.
 
 Runnable end to end in [examples/11_a2a_room.py](../examples/11_a2a_room.py), which needs
 no provider, no key and no network.
+
+**Inviting, and being invited.** A foreign agent gets a bearer ticket and a briefing
+(`vaf.room_invitation`); an ACCOUNT on the same machine is invited by name and joins
+only when it says yes. Both are tickets in one store, so one list answers "who did I
+invite and who arrived":
+
+```python
+room = vaf.Room.create(kind="round", owner_scope="tenant-a", multi_scope=True)
+# or, on a room that already exists and holds one account:
+room.open_to_accounts(host)                 # host only; newcomers then read from their join
+
+row = room.invite_account(host, "tenant-b")  # host or leader; returns the pending record
+vaf.invited_rooms("tenant-b")                # -> [(room, record)]: the invitee's sidebar
+me  = room.accept_invitation("tenant-b", display="Bob")   # admitted, then joined as itself
+room.decline_invitation("tenant-b")          # spent, and the answer is kept
+room.revoke_invitation(host, row["id"])      # whoever minted it, or host or leader
+room.invitations(host)                       # both kinds, with status: pending, accepted
+                                             # (and by whom), declined, revoked, expired
+```
+
+An account invitation is not a bearer credential: `redeem_ticket` refuses it without
+consuming it, so an invitation id shown in a panel opens the room for the one account
+it names and for nobody else. `invited_rooms` is the moment before `joined_rooms` - a
+surface that lists a person's rooms asks both.
 
 `kind` is `"round"` (peers, nobody commands) or `"chain"` (one leader, workers who
 report). What a role may EMIT is enforced by the room at ingest, in one place, so you do

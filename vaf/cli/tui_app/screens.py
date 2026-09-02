@@ -1430,6 +1430,13 @@ class SessionsPanel(Vertical):
                 tail = str(entry.get("room_id") or "")[:24]
                 if entry.get("closed"):
                     tail += " · closed"
+                if entry.get("invited"):
+                    # The door, not the room: this account was invited and has not
+                    # answered. The row says who asked; the answer is a command,
+                    # because this panel replays rooms and does not act in them.
+                    head += " [$warning]invitation[/]"
+                    meta = f"from {entry.get('invited_by') or 'a member'} · {meta}"
+                    tail = f"vaf a2a accept {str(entry.get('room_id') or '')[:20]}"
                 lv.append(ListItem(Static(
                     f"{head}\n"
                     f"  [$text-disabled]{_esc(meta)}[/]\n"

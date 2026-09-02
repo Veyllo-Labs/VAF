@@ -1541,6 +1541,15 @@ def session_list_payload(rows: List[Dict]) -> List[Dict]:
                 "members": int(s.get("members") or 0),
                 "closed": bool(s.get("closed")),
             })
+            if s.get("invited"):
+                # The door, not the room: the browser draws an invitation badge and,
+                # on click, the accept/decline card instead of a transcript.
+                item.update({
+                    "invited": True,
+                    "invitedBy": str(s.get("invited_by") or ""),
+                    "invitationId": str(s.get("invitation_id") or ""),
+                    "expiresAt": float(s.get("expires_at") or 0.0),
+                })
         out.append(item)
     return out
 
@@ -2179,8 +2188,52 @@ def _room_rows(user_scope_id: Optional[str] = None) -> List[Dict]:
                 })
         except Exception:
             continue
-    rows.sort(key=lambda row: (-row["unread"], row["room_id"]))
+    # Rooms that have INVITED this person and are waiting for the answer. They are
+    # not members yet and the row says so (`invited`), which is what lets the surface
+    # draw the door instead of the room. Every consumer that reads this list to
+    # decide MEMBERSHIP must skip such rows: `member_room_ids` below is that filter,
+    # and the one answer to "is this user in that room" stays this function.
+    try:
+        from vaf.core.a2a.room import invited_rooms
+        for room, invitation in invited_rooms(user_scope_id):
+            if room.room_id in seen:
+                continue
+            seen.add(room.room_id)
+            rows.append({
+                "id": f"room:{room.room_id}",
+                "kind": "room",
+                "room_id": room.room_id,
+                "name": room.manifest.get("topic") or room.room_id,
+                "room_kind": room.kind,
+                "role": "",
+                "peer": "",
+                "unread": 0,
+                "members": len(room.members()),
+                "closed": False,
+                "updated_at": "",
+                "message_count": 0,
+                "invited": True,
+                "invited_by": invitation.get("minted_by_label") or "",
+                "invitation_id": invitation.get("id") or "",
+                "expires_at": float(invitation.get("expires_at") or 0.0),
+            })
+    except Exception:
+        pass
+    # An open invitation stands above everything: it is the one row waiting for an
+    # answer. Then the rooms with news, then the rest by id.
+    rows.sort(key=lambda row: (0 if row.get("invited") else 1, -row["unread"], row["room_id"]))
     return rows
+
+
+def member_room_ids(user_scope_id: Optional[str] = None) -> set:
+    """The rooms this person is IN, as opposed to merely invited into.
+
+    The same rows `_room_rows` builds, minus the invitations: the sidebar shows both,
+    but reading a transcript, speaking, or opening the shared folder is for members.
+    Five commands asked `_room_rows` this question with the same comprehension;
+    when the invited rows arrived, every one of them would have let an invitee in.
+    """
+    return {row["room_id"] for row in _room_rows(user_scope_id) if not row.get("invited")}
 
 
 def _matched_words(terms, text) -> List[str]:

@@ -558,6 +558,21 @@ class RoomOpenTool(BaseTool):
         display = _own_display(kwargs)
         topic = str(kwargs.get("topic") or "").strip()
 
+        # A REPEAT, refused. Measured live: this tool ran twice inside one task,
+        # twenty-one seconds apart, and the room got opened, spoken in and invited
+        # into twice - after which the agent explained the second room to its user
+        # as a "double submission", which the queue log shows never happened. The
+        # answer names the room that already exists, because that is what the caller
+        # wanted in the first place and a refusal it can act on beats a duplicate it
+        # has to apologise for.
+        from vaf.core.a2a.room import just_opened
+        existing = just_opened(key, topic)
+        if existing:
+            return (f"You already opened a room for '{topic}' a moment ago: "
+                    f"'{existing}'. Use that one - room_send writes into it, "
+                    f"room_invite brings somebody in. Open a second room under the "
+                    f"same topic only by giving it a topic of its own.")
+
         try:
             room = Room.create(kind=kind, owner_scope=scope, topic=topic)
             # The opener joins as itself. In a chain that seat is the leader's, which

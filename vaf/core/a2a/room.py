@@ -2492,6 +2492,45 @@ def joined_rooms(key: str, *, base: Optional[Path] = None) -> List[Tuple[Room, I
     return found
 
 
+#: How long a room stays "just opened" for the duplicate check below. Measured
+#: rather than chosen: the failure it exists for was an agent that repeated a whole
+#: room_open -> say -> say -> invite sequence inside ONE task, twenty-one seconds
+#: apart, and then explained the second room to its user as a "double submission"
+#: that the queue log shows never happened. Minutes, not hours - a weekly standup
+#: room opened under the same topic last week is a different room, not a mistake.
+JUST_OPENED_S = 600.0
+
+
+def just_opened(key: str, topic: str, *, within_s: float = JUST_OPENED_S,
+                base: Optional[Path] = None, now: Optional[float] = None) -> Optional[str]:
+    """The room this participant just opened under this topic, or None.
+
+    A REPEAT detector, deliberately not a uniqueness rule. Two rooms may share a
+    topic and often should; what is almost never meant is the same participant
+    opening the same topic twice within minutes, which is what an agent does when it
+    loses track of a tool call it already made. So the window is short and the answer
+    names the existing room, which is what the caller actually wants: use that one.
+
+    Asks only about rooms this participant is IN, through the same walk `joined_rooms`
+    does, so it cannot see or leak a room belonging to another tenant. A closed room
+    never matches - reopening a topic after closing it is a new conversation.
+    """
+    wanted = str(topic or "").strip().casefold()
+    if not wanted:
+        return None
+    moment = time.time() if now is None else float(now)
+    for room, _identity in joined_rooms(key, base=base):
+        if str(room.manifest.get("topic") or "").strip().casefold() != wanted:
+            continue
+        try:
+            born = float(room.manifest.get("created_at") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if born and 0 <= (moment - born) <= float(within_s) and not room.closed:
+            return room.room_id
+    return None
+
+
 # Membership bookkeeping. It belongs in the transcript and it is NOT worth waking a
 # participant for: an agent that starts a whole turn because somebody joined is noise,
 # and who is present is answered by members() whenever it does read. An unknown kind is

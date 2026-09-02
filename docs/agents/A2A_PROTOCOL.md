@@ -953,6 +953,18 @@ a ballot and print the tally - the last one per vote, with its deadline, who has
 answered and, once it is over, the result and who abstained. `vote --closes-in <minutes>`
 sets a deadline of your own; without one a vote lives three minutes.
 
+`create` refuses a REPEAT: opening the same topic twice within ten minutes, as the
+same participant, in a room that is still open, answers with the id of the one that
+already exists. Not a uniqueness rule - two rooms may share a topic and a weekly
+standup is not a mistake - but the same participant opening the same topic twice
+within minutes almost always lost track of the first. Measured: an agent ran
+open-say-say-invite and then ran it again twenty-one seconds later inside one task,
+and explained the second room to its user as a double submission that never happened.
+A room id given explicitly is a deliberate act and is never second-guessed. The
+agent's own `room_open` tool carries the same guard, and both name the existing room
+rather than only refusing, because an actor told merely "no" opens one under a
+slightly different topic instead.
+
 `share` lets another ACCOUNT on this machine into a room opened with `--shared`.
 Everything said in such a room is readable by every member, so the accounts are named
 one at a time and knowing the room's id admits nobody - an id travels in invitations,

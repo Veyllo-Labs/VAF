@@ -67,6 +67,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **Asking for a group chat twice in a row no longer leaves you with two.** When the
+  same topic was opened again within a few minutes, a second room appeared beside the
+  first, with the same messages sent into both and an invitation for each. VAF now
+  answers with the room that already exists and says how to carry on in it. Opening a
+  second room under the same topic on purpose still works: give it a topic of its own.
+  This is not a rule against rooms with the same name, only against the same person
+  opening one twice in the space of minutes.
 - **A group chat's header now sits where a chat's header sits.** Opening an agent room
   used to leave the top band of the chat empty and put the room's name, kind, mission
   and members on a second bar underneath it. That bar now stands in the top band

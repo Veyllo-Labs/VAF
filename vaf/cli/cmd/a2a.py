@@ -597,7 +597,19 @@ def create(
 ) -> None:
     """Open a room and join it."""
     from vaf.core.a2a.room import Room, RoomError, derive_peer_id
+    from vaf.core.a2a.room import just_opened
     from vaf.core.a2a.store import StoreError
+
+    # The same repeat guard the agent's tool carries, for the same reason: a caller
+    # that opens one topic twice within minutes almost always lost track of the first
+    # one, and naming it is more useful than making a second. A room id given
+    # explicitly is a deliberate act and is never second-guessed.
+    if not room_id:
+        already = just_opened(_key(), topic)
+        if already:
+            _fail(f"you opened a room for {topic!r} a moment ago: {already!r}. Use that "
+                  f"one, or give this one a topic of its own.", EXIT_REFUSED)
+
     try:
         # The TENANT, not this lane's participant key. They differ by a prefix and the
         # difference is invisible until something derives from it: a room whose owner

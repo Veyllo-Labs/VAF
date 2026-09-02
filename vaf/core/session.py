@@ -15,6 +15,29 @@ from datetime import datetime
 from typing import Dict, Any, Iterator, List, Optional, Tuple
 from dataclasses import dataclass, field, asdict, fields
 
+#: One lock per session, so two background lanes appending to the SAME chat cannot
+#: lose a message. The sequence is read-modify-write against a whole file: both callers
+#: load the same transcript, each adds its own line, and the second save overwrites the
+#: first. Measured rather than feared - forcing both loads to happen before either write
+#: drops one message every time.
+#:
+#: THE LIMIT, so nobody reads more into it: this serialises threads in ONE process. Two
+#: processes appending to one chat can still lose a line, the way every other
+#: file-backed store here can, and closing that needs a file lock rather than this.
+#: In-process is where the background lanes actually collide - thinking mode, room
+#: wake-ups and automations all run here.
+#:
+#: Keyed by id and never evicted: a lock is a few dozen bytes and the number of chats
+#: is bounded by the disk, so a reaper would be more moving parts than it saves.
+_APPEND_LOCKS: Dict[str, threading.Lock] = {}
+_APPEND_LOCKS_GUARD = threading.Lock()
+
+
+def _append_lock(session_id: str) -> threading.Lock:
+    with _APPEND_LOCKS_GUARD:
+        return _APPEND_LOCKS.setdefault(session_id, threading.Lock())
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA CLASSES
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -501,16 +524,21 @@ class SessionManager:
         content = str(content or "")
         if not sid or not content.strip():
             return None
-        try:
-            session = self.load(sid, restore_state=False, repoint=False)
-        except FileNotFoundError:
-            if not create:
-                return None
-            session = Session(id=sid, name=name or sid)
-            if user_scope_id:
-                session.metadata["user_scope_id"] = str(user_scope_id)
-        session.add_message(role=role, content=content, kind=kind)
-        self.save(session, sync_state=False)
+        # LOAD, APPEND AND SAVE AS ONE. Read-modify-write against a whole file, so two
+        # lanes appending to the same chat at once lose one of the two lines - measured,
+        # not feared. The lock is per session: a global one would serialise every
+        # background lane in the process behind whichever chat is slowest to write.
+        with _append_lock(sid):
+            try:
+                session = self.load(sid, restore_state=False, repoint=False)
+            except FileNotFoundError:
+                if not create:
+                    return None
+                session = Session(id=sid, name=name or sid)
+                if user_scope_id:
+                    session.metadata["user_scope_id"] = str(user_scope_id)
+            session.add_message(role=role, content=content, kind=kind)
+            self.save(session, sync_state=False)
         note_transcript_changed(sid)
         return session
     

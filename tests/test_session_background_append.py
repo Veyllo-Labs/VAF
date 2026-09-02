@@ -188,3 +188,49 @@ def test_a_note_for_another_session_is_consumed_by_the_switch(monkeypatch):
 
     assert a.current_session_id == "telegram_12345"
     assert take_transcript_changed("telegram_12345") is False
+
+
+def test_two_lanes_appending_to_one_chat_do_not_lose_a_message(store):
+    """Read-modify-write against a whole file, done by lanes that run at the same time.
+
+    Both callers load the same transcript, each adds its own line, and the second save
+    overwrites the first. Forced rather than hoped for: both loads are made to happen
+    before either write, so this failed EVERY time before the lock rather than once in
+    a while, which is the only kind of concurrency test worth having.
+
+    Thinking mode, room wake-ups and automations all write through here, and two of them
+    landing on one chat is an ordinary Tuesday rather than a corner.
+    """
+    import threading
+
+    sm = SessionManager()
+    sm.append_background_message("chat-one", "first", create=True)
+
+    both_loaded = threading.Barrier(2, timeout=1.0)
+    real_save, calls = sm.save, {"n": 0}
+
+    def save_after_both_have_read(session=None, **kw):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            try:
+                both_loaded.wait()
+            except threading.BrokenBarrierError:
+                pass          # with the lock the second caller cannot get here: correct
+        return real_save(session, **kw)
+
+    sm.save = save_after_both_have_read
+    try:
+        writers = [threading.Thread(target=sm.append_background_message,
+                                    args=("chat-one", text))
+                   for text in ("second", "third")]
+        for w in writers:
+            w.start()
+        for w in writers:
+            w.join(10)
+    finally:
+        sm.save = real_save
+
+    kept = [m.content for m in
+            SessionManager().load("chat-one", restore_state=False, repoint=False).messages]
+    assert kept == ["first", "second", "third"] or kept == ["first", "third", "second"], \
+        f"a background message was lost: {kept}"

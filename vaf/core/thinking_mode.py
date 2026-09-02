@@ -740,8 +740,12 @@ def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str, 
                 sid = None
             if not sid:
                 sid = _latest_web_session_id(user_scope_id)
-                if sid:
-                    sm.append_background_message(sid, nudge, kind="nudge")
+                # ASKED THE SAME QUESTION AS THREE LINES ABOVE, and it was not asked
+                # here: a chat can be deleted between being named as the newest one and
+                # being written to, and a save can fail. Without the check the emit went
+                # out anyway and the run logged a delivery that never landed.
+                if sid and sm.append_background_message(sid, nudge, kind="nudge") is None:
+                    sid = None
             if sid:
                 wi.emit_agent_message_append(content=nudge, session_id=sid, role="assistant", kind="nudge")
                 wi.emit_session_unread(sid)
@@ -1461,7 +1465,11 @@ def emit_message_to_web_ui(
             sid = _latest_web_session_id(user_scope_id)
             if not sid:
                 return None
-            sm.append_background_message(sid, content, kind="thinking")
+            # The same check the anchor session gets above. A question the user never
+            # sees is worse here than in the nudge path: the run goes on believing it
+            # asked and waits for an answer to something nobody was shown.
+            if sm.append_background_message(sid, content, kind="thinking") is None:
+                return None
         wi.emit_agent_message_append(content=content, session_id=sid, role="assistant", kind="thinking")
         wi.emit_session_unread(sid)
         logger.info("Thinking Mode: ask_user message emitted to Web UI session %s", sid)

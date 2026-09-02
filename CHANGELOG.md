@@ -77,6 +77,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the room went on showing the messages as verified, under the wrong person. Now an
   announcement counts only if it is signed by the key it announces, and the name is part
   of what every signature covers.
+- **Two background messages arriving at one chat at the same time no longer lose one.**
+  A thinking-mode question, a room wake-up and an automation result all write into a
+  chat the same way, and two of them landing together meant one line was written over
+  the other and gone. They are now written one after the other.
+- **A message the agent could not save is no longer reported as sent.** When the chat a
+  background message was meant for had been deleted, it was still shown as delivered
+  and marked unread, and a question nobody was ever shown was waited on for an answer.
 - **The agent can now check who really wrote a message in a group chat.** Asked in
   plain words to verify a room, it could not: the terminal command existed, the browser
   received the answer, and the agent itself had no way to ask, so it did the nearest

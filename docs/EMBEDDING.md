@@ -1475,8 +1475,27 @@ for peer, entry in room.pairs().items():
 Nothing is read from a member's own file, and that is the whole point: a member writes
 its own record, so a `speaks_for` field in one would be a peer naming its own partner.
 Where no derivation reaches - a guest that redeemed a ticket carries no account at all -
-the answer is `unknown` rather than a guess. A person becomes a member only when they
-first act in a room, so `partner: ""` on your own agent is the ordinary starting state.
+the answer is `unknown` rather than a guess, unless the transcript carries the answer:
+an agent's `join` may hold its OWNER's attestation, a signature by the owner's room key
+over the agent's handle and key, and `pairs()` reads those too, marked
+`proof: "attested"` beside the derivation's `derived`. A person becomes a member only
+when they first act in a room, so `partner: ""` on your own agent is the ordinary
+starting state.
+
+```python
+vaf.fold_room_owners(frames, room_id)   # {agent peer: owner peer}, from frames alone
+```
+
+is the same fold for a reader that has frames and no store - a peer on the wire, which
+has no accounts to derive from and is the reason the answer had to be in the log. The
+rules it applies are the keys' (see Signing above): the agent's `join` must be attested
+or the block is not read, the owner's key must be the one the owner's own attested `join`
+bound or the claim binds nothing, and the last attested `join` per agent decides. VAF
+puts the block on its own agent's `join` at admission, so your reader folds the host's
+household without the host doing anything for you; a household on another machine
+attests its agent with the guest client's `attest` verb. What it proves is bounded and
+worth saying to your users: whoever holds the key that signed the owner's own words in
+this room vouched for this agent. It grants the agent nothing, and it does not expire.
 
 **A room across accounts** is off by default and takes only the accounts it was told to
 take: `Room.create(..., multi_scope=True)` opens one and `room.admit(identity, account)`

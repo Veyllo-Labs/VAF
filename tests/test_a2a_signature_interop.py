@@ -539,3 +539,164 @@ def test_all_three_read_a_version_one_signature_as_unreadable_rather_than_forged
     assert reference.verdict(old, {"p-a": public}, verify, old["room"]) == "unreadable"
 
     assert content_signature(Frame.from_dict(old), old["room"])[0] == "unreadable"
+
+
+# ── who an agent belongs to: the same fold in all three ───────────────────
+
+def _household_frames(rooms, room_id):
+    """The host's own household as VAF writes it: the person's attested join and the
+    agent's, carrying the person's attestation. Returned as stored dicts, which is
+    what a reader on the wire holds."""
+    from vaf.core.a2a.room import Room, derive_peer_id, participant_key
+
+    room = Room.create(kind="round", owner_scope="scope-a", base=rooms, room_id=room_id)
+    person_key, agent_key = participant_key("cli", "scope-a"), participant_key("agent", "scope-a")
+    person = room.join(display="Alice", scope_id="scope-a",
+                       peer_id=derive_peer_id(person_key, room_id), participant_key=person_key)
+    agent = room.join(display="Nobel", scope_id="scope-a",
+                      peer_id=derive_peer_id(agent_key, room_id), participant_key=agent_key)
+    return room, person, agent, [f.to_dict() for f in room.store.frames()]
+
+
+def test_all_three_fold_the_same_household(peers, rooms):
+    """A pair that one reader sees and another does not is worse than no pair: the
+    same transcript would say "Alice's agent" here and "unknown" there."""
+    from vaf.core.a2a.room import fold_owners
+
+    reference, guest = peers
+    room, person, agent, stored = _household_frames(rooms, "room-3h")
+    expected = {agent.peer_id: person.peer_id}
+
+    def verify(key_hex, blob_hex, message):
+        return guest.ed25519_verify(bytes.fromhex(key_hex), bytes.fromhex(blob_hex), message)
+
+    assert fold_owners(room.store.frames(), "room-3h") == expected
+    assert guest.owners(stored, "room-3h") == expected
+    assert reference.owners(stored, "room-3h", verify) == expected
+    assert reference.owners(stored, "room-3h") == {}, "no verifier, nothing owned"
+
+    # A changed block. The agent's join is still self-signed, so the tamper is in
+    # the covered body and breaks the join's own signature: the key is gone and the
+    # block with it, in every reader alike.
+    tampered = [dict(f) for f in stored]
+    for frame in tampered:
+        if frame.get("from") == agent.peer_id and frame.get("kind") == "join":
+            frame["body"] = {**frame["body"], "owner": {**frame["body"]["owner"], "peer": "p-x"}}
+    assert fold_owners([Frame.from_dict(f) for f in tampered], "room-3h") == {}
+    assert guest.owners(tampered, "room-3h") == {}
+    assert reference.owners(tampered, "room-3h", verify) == {}
+
+
+def test_a_guest_made_attestation_binds_in_vaf(peers, rooms):
+    """The direction that matters: a household on ANOTHER machine, whose owner made
+    the block with the guest client, is paired by the host and by every reader."""
+    from vaf.core.a2a.room import Room, fold_owners
+
+    reference, guest = peers
+    room = Room.create(kind="round", owner_scope="s", base=rooms, room_id="room-gh")
+    ana = room.join(display="Ana", scope_id=None, peer_id="p-ana")
+    iris = room.join(display="Iris", scope_id=None, peer_id="p-iris")
+    ana_seed = guest.seat_signing_seed({"room": "room-gh"})
+    iris_seed = guest.seat_signing_seed({"room": "room-gh"})
+
+    room.ingest(guest.join_announcement("Ana", "room-gh", ana_seed, ana.peer_id), identity=ana)
+    block = guest.attest_owner("room-gh", ana_seed, ana.peer_id, iris.peer_id,
+                               guest.ed25519_public(iris_seed).hex())
+    room.ingest(guest.join_announcement("Iris", "room-gh", iris_seed, iris.peer_id, block),
+                identity=iris)
+
+    assert fold_owners(room.store.frames(), "room-gh") == {iris.peer_id: ana.peer_id}
+    assert room.pairs()[iris.peer_id]["proof"] == "attested"
+    stored = [f.to_dict() for f in room.store.frames()]
+    assert guest.owners(stored, "room-gh") == {iris.peer_id: ana.peer_id}
+
+    def verify(key_hex, blob_hex, message):
+        return guest.ed25519_verify(bytes.fromhex(key_hex), bytes.fromhex(blob_hex), message)
+
+    assert reference.owners(stored, "room-gh", verify) == {iris.peer_id: ana.peer_id}
+
+    # The negative every reader must agree on: a block naming an owner who never
+    # spoke with that key. It verifies with the key it names, and binds nothing.
+    room2 = Room.create(kind="round", owner_scope="s", base=rooms, room_id="room-gh2")
+    ana2 = room2.join(display="Ana", scope_id=None, peer_id="p-ana")
+    iris2 = room2.join(display="Iris", scope_id=None, peer_id="p-iris")
+    stranger_seed = guest.seat_signing_seed({"room": "room-gh2"})
+    room2.ingest(guest.join_announcement("Ana", "room-gh2", ana_seed, ana2.peer_id),
+                 identity=ana2)
+    forged = guest.attest_owner("room-gh2", stranger_seed, ana2.peer_id, iris2.peer_id,
+                                guest.ed25519_public(iris_seed).hex())
+    room2.ingest(guest.join_announcement("Iris", "room-gh2", iris_seed, iris2.peer_id, forged),
+                 identity=iris2)
+    stored2 = [f.to_dict() for f in room2.store.frames()]
+    assert fold_owners(room2.store.frames(), "room-gh2") == {}
+    assert guest.owners(stored2, "room-gh2") == {}
+    assert reference.owners(stored2, "room-gh2", verify) == {}
+
+
+def test_the_attest_verb_prints_a_block_the_room_binds(peers, rooms, monkeypatch, capsys):
+    """Driving the VERB: the owner runs it from their own seat and hands the printed
+    line to their agent. If it minted a key instead of reading the seat's, the block
+    would name a key the owner never spoke with and bind nothing."""
+    from vaf.core.a2a.room import Room, fold_owners
+
+    _reference, guest = peers
+    room = Room.create(kind="round", owner_scope="s", base=rooms, room_id="room-verb2")
+    ana = room.join(display="Ana", scope_id=None, peer_id="p-ana")
+    iris = room.join(display="Iris", scope_id=None, peer_id="p-iris")
+    record = {"room": "room-verb2", "peer": ana.peer_id, "display": "Ana"}
+    ana_seed = guest.seat_signing_seed(record)
+    iris_seed = guest.seat_signing_seed({"room": "room-verb2"})
+    room.ingest(guest.join_announcement("Ana", "room-verb2", ana_seed, ana.peer_id), identity=ana)
+
+    monkeypatch.setattr(guest, "load_record", lambda room_id: dict(record))
+    monkeypatch.setattr(guest, "save_record", lambda rec: Path("seat"))
+    guest.cmd_attest(argparse.Namespace(room="room-verb2", agent=iris.peer_id,
+                                        agent_key=guest.ed25519_public(iris_seed).hex()))
+    block = json.loads(capsys.readouterr().out.strip())
+    assert block["peer"] == ana.peer_id and block["key"] == guest.ed25519_public(ana_seed).hex()
+
+    room.ingest(guest.join_announcement("Iris", "room-verb2", iris_seed, iris.peer_id, block),
+                identity=iris)
+    assert fold_owners(room.store.frames(), "room-verb2") == {iris.peer_id: ana.peer_id}
+
+    with pytest.raises(guest.Refused):
+        guest.cmd_attest(argparse.Namespace(room="room-verb2", agent=iris.peer_id,
+                                            agent_key="short"))
+
+
+def test_the_members_verb_reads_the_household_back(peers, rooms, monkeypatch, capsys):
+    """MUTATION: print `unknown` for everybody, or read the pair from a peer record.
+    The guest client had no roster verb at all; this is where a guest agent learns
+    whose user is speaking to it."""
+    from vaf.core.a2a.room import Room
+
+    _reference, guest = peers
+    room = Room.create(kind="round", owner_scope="s", base=rooms, room_id="room-mem")
+    ana = room.join(display="Ana", scope_id=None, peer_id="p-ana")
+    iris = room.join(display="Iris", scope_id=None, peer_id="p-iris")
+    room.join(display="Codex", scope_id=None, peer_id="p-codex")
+    ana_seed, iris_seed = guest.seat_signing_seed({}), guest.seat_signing_seed({})
+    room.ingest(guest.join_announcement("Ana", "room-mem", ana_seed, ana.peer_id), identity=ana)
+    block = guest.attest_owner("room-mem", ana_seed, ana.peer_id, iris.peer_id,
+                               guest.ed25519_public(iris_seed).hex())
+    room.ingest(guest.join_announcement("Iris", "room-mem", iris_seed, iris.peer_id, block),
+                identity=iris)
+    stored = [f.to_dict() for f in room.store.frames()]
+
+    class Line:
+        def backlog(self):
+            return list(stored)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(guest, "load_record", lambda room_id: {"room": "room-mem", "peer": "p-codex"})
+    monkeypatch.setattr(guest, "_line_for", lambda room_id, record: None)
+    monkeypatch.setattr(guest, "_open", lambda rec: Line())
+    guest.cmd_members(argparse.Namespace(room="room-mem"))
+    rows = {json.loads(line)["display"]: json.loads(line)
+            for line in capsys.readouterr().out.strip().splitlines() if line.strip()}
+    assert rows["Iris"]["kind"] == "agent" and rows["Iris"]["partner"] == ana.peer_id
+    assert rows["Iris"]["proof"] == "attested"
+    assert rows["Ana"]["kind"] == "human" and rows["Ana"]["partner_display"] == "Iris"
+    assert rows["Codex"]["kind"] == "unknown" and rows["Codex"]["proof"] == ""

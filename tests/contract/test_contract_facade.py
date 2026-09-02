@@ -39,6 +39,7 @@ EXPORTED = [
     "derive_peer_id",
     "describe_room_entry",
     "extract_pdf_markdown",
+    "fold_room_owners",
     "fold_room_tasks",
     "fold_room_votes",
     "inspect_upload",

@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **A group chat can now say which agent belongs to which person, provably, even to a
+  guest on another machine.** Your agent's entry into a room carries your attestation,
+  signed with your own key for that room; the room's members list reads it back as
+  `attested`, beside the `derived` answer the host has always had, and so does the
+  guest client's new `members` verb. A person running the guest client vouches for
+  their own agent with `attest` and hands the printed block to it. Nothing in it grants
+  an agent anything: it says whose it is, checkably, and no more.
 - **Invite people with a VAF account into a group chat, and let them decide.** The room
   panel has an Invite tab: every account on this server with one button, an online dot,
   and a chip where a button would be wrong (already in the room, already invited). The

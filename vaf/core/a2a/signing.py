@@ -318,3 +318,107 @@ def verify(payload: Mapping[str, Any], signature: Any) -> bool:
     except (InvalidSignature, ValueError):
         return False
     return True
+
+
+# ── who an agent belongs to: the owner's attestation ───────────────────────
+#
+# The room derives "which agent is whose" on the host by recomputing handles from
+# the accounts it admits, and that derivation reaches nobody who arrived on a ticket
+# and nobody reading the transcript on another machine. So the transcript can carry
+# the answer itself: an agent's `join` may hold its OWNER's attestation, a signature
+# by the owner's room key over the agent's handle and key. The shape is borrowed from
+# Nostr's owner-authorisation tag and the doctrine with it - the attestation is
+# authorisation EVIDENCE, never identity; the agent stays the author of everything it
+# signs, and nothing here grants it anything, because authority in a room is local.
+
+# Domain-separated from a frame signature's input, so neither can be mistaken for
+# the other even over identical JSON.
+OWNER_DOMAIN = b"vaf-a2a-owner/v1\n"
+OWNER_VERSION = 1
+
+
+def owner_payload(room_id: str, owner: str, agent: str, agent_key: str) -> Dict[str, Any]:
+    """What an owner attests: THIS handle, holding THIS key, in THIS room, is mine.
+
+    The KEY is covered and not only the handle, because a handle is assigned by the
+    host and a key is held by the agent: attesting a lane would vouch for whoever the
+    host lets write there, attesting a key vouches for the party that can sign with
+    it. Rotating the agent's key therefore needs a fresh attestation, which is the
+    right cost. `room` keeps it from being lifted into another room, `agent` from
+    being lifted onto another agent.
+    """
+    return {"v": OWNER_VERSION, "room": str(room_id), "owner": str(owner),
+            "agent": str(agent), "agent_key": str(agent_key)}
+
+
+def owner_bytes(payload: Mapping[str, Any]) -> bytes:
+    """The exact bytes an attestation is computed over, in the one canonical form."""
+    _check_canonical(payload, "attestation")
+    return OWNER_DOMAIN + json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def attest(room_id: str, *, owner_key: str, owner_peer: str, agent_peer: str,
+           agent_key: str) -> Dict[str, Any]:
+    """The `owner` block an agent's join carries, signed with the OWNER's room key.
+
+    `owner_key` is the owner's participant key (the `cli` lane of the account the
+    agent belongs to), so this is only ever produced for a household this machine
+    holds both halves of - the same rule that lets the host sign for its own lanes.
+    """
+    private, public = keypair(owner_key, room_id)
+    message = owner_bytes(owner_payload(room_id, owner_peer, agent_peer, agent_key))
+    return {"v": OWNER_VERSION, "peer": str(owner_peer), "key": public,
+            "sig": private.sign(message).hex()}
+
+
+def read_attestation(value: Any) -> Optional[Dict[str, Any]]:
+    """An `owner` block as something that could be checked, or None.
+
+    Read the way a signature is read: a shape this reader cannot use is not a
+    forgery, and a version other than this one is nothing to check.
+    """
+    if not isinstance(value, Mapping):
+        return None
+    peer = str(value.get("peer") or "")
+    key = str(value.get("key") or "")
+    sig = str(value.get("sig") or "")
+    try:
+        version = int(value.get("v") or 1)
+    except (TypeError, ValueError):
+        return None
+    if version != OWNER_VERSION or not peer or len(key) != 64 or len(sig) != 128:
+        return None
+    try:
+        bytes.fromhex(key)
+        bytes.fromhex(sig)
+    except ValueError:
+        return None
+    return {"v": version, "peer": peer, "key": key, "sig": sig}
+
+
+def verify_attestation(room_id: str, agent_peer: str, agent_key: str, block: Any) -> bool:
+    """Whether this block really is the named owner's signature over THIS agent, HERE.
+
+    Answers only that. Whether the owner's key is the one bound to the owner's own
+    handle is the fold's second question (`fold_owners`), and keeping the two apart
+    is what stops a block made with a fresh keypair from reading as a household.
+    """
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    read = read_attestation(block)
+    if read is None:
+        return False
+    try:
+        message = owner_bytes(owner_payload(room_id, read["peer"], agent_peer, agent_key))
+    except NotCanonical:
+        return False
+    try:
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(read["key"])).verify(
+            bytes.fromhex(read["sig"]), message
+        )
+    except (InvalidSignature, ValueError):
+        return False
+    return True

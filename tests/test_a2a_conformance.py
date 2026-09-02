@@ -336,9 +336,9 @@ def test_the_items_this_file_does_not_cover_are_covered_elsewhere():
     nobody noticed.
     """
     for name in ("test_a2a_store.py", "test_a2a_room.py", "test_a2a_compose.py",
-                 "test_a2a_signed_frames.py"):
+                 "test_a2a_signed_frames.py", "test_a2a_owner_attestation.py"):
         assert (ROOT / "tests" / name).exists(), \
-            f"{name} carried C8/C9/C11/C12/C13/C14/C15 and is gone"
+            f"{name} carried C8/C9/C11/C12/C13/C14/C15/C16 and is gone"
 
     room_tests = (ROOT / "tests" / "test_a2a_room.py").read_text(encoding="utf-8")
     assert "execute_tool" in room_tests, "the C11 source guard is no longer in place"
@@ -358,3 +358,9 @@ def test_the_items_this_file_does_not_cover_are_covered_elsewhere():
         "the C15 guard is no longer in place"
     assert "test_stripping_a_signature_off_a_join_does_not_withdraw_the_key" in \
         signed_tests, "the C15 half about what an unattested key does NOT do is gone"
+
+    owner_tests = (ROOT / "tests" / "test_a2a_owner_attestation.py").read_text(encoding="utf-8")
+    assert "test_a_claim_by_a_key_nobody_has_spoken_with_binds_nothing" in owner_tests, \
+        "the C16 guard is no longer in place"
+    assert "test_rejoining_without_the_block_withdraws_and_an_unattested_rejoin_changes_nothing" \
+        in owner_tests, "the C16 half about what a later join does to a claim is gone"

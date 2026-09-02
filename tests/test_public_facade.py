@@ -54,7 +54,7 @@ def test_facade_exports_exactly_the_documented_surface():
         "__version__",
         "account_allows_tool", "build_capability_addendum", "contained_path",
         "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
-        "fold_room_tasks", "fold_room_votes", "inspect_upload",
+        "fold_room_owners", "fold_room_tasks", "fold_room_votes", "inspect_upload",
         "install_thread_excepthook", "invited_rooms", "joined_rooms", "markers",
         "participant_key", "record_threat", "room_invitation",
         "safe_entry_name", "set_account_allowlist_resolver",

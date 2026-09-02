@@ -1387,11 +1387,24 @@ def members(room_id: str = typer.Argument(...)) -> None:
                 if isinstance(card, dict):
                     cards[frame.sender] = card
             roles[frame.sender] = frame.role
+        # Who belongs to whom, as far as the transcript itself can prove: an agent
+        # whose join carries its owner's attestation. The SAME fold the host runs,
+        # so a roster read here and one read there cannot disagree about a pair.
+        from vaf.core.a2a.room import fold_owners
+        owners = fold_owners(frames, room_id)
+        owned = {owner: agent for agent, owner in owners.items()}
         for peer_id in _remote_members(frames):
+            kind, partner, proof = "unknown", "", ""
+            if peer_id in owners:
+                kind, partner, proof = "agent", owners[peer_id], "attested"
+            elif peer_id in owned:
+                kind, partner, proof = "human", owned[peer_id], "attested"
             _emit({"peer": peer_id, "display": labels.get(peer_id, peer_id),
                    "role": roles.get(peer_id, "peer"), "stale": None,
-                   "card": cards.get(peer_id, {}), "kind": "unknown",
-                   "partner": "", "partner_display": "", "remote": True})
+                   "card": cards.get(peer_id, {}), "kind": kind,
+                   "partner": partner,
+                   "partner_display": labels.get(partner, partner) if partner else "",
+                   "proof": proof, "remote": True})
         return
     _me(room)
     # Which member is a person, which is an agent, and which two are one household.
@@ -1411,7 +1424,10 @@ def members(room_id: str = typer.Argument(...)) -> None:
                # invitation named no account, so nothing here can say what it is.
                "kind": pairing.get("kind") or "unknown",
                "partner": pairing.get("partner") or "",
-               "partner_display": pairing.get("partner_label") or ""})
+               "partner_display": pairing.get("partner_label") or "",
+               # HOW the room knows: "derived" from an account it admits, or
+               # "attested" by the owner's own key in the transcript.
+               "proof": pairing.get("proof") or ""})
 
 
 @app.command()

@@ -30,7 +30,7 @@ __all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
            "account_allows_tool", "build_capability_addendum", "contained_path",
            "derive_peer_id",
            "describe_room_entry", "extract_pdf_markdown",
-           "fold_room_tasks", "fold_room_votes", "inspect_upload",
+           "fold_room_owners", "fold_room_tasks", "fold_room_votes", "inspect_upload",
            "install_thread_excepthook", "invited_rooms", "joined_rooms", "markers",
            "participant_key", "record_threat", "room_invitation",
            "safe_entry_name", "set_account_allowlist_resolver",
@@ -163,7 +163,8 @@ def __getattr__(name):
         return extract_pdf_markdown
     if name in ("BOOKKEEPING_KINDS", "Room", "RoomError", "StoreError", "UnsafeName",
                 "derive_peer_id",
-                "describe_room_entry", "fold_room_tasks", "fold_room_votes",
+                "describe_room_entry", "fold_room_owners", "fold_room_tasks",
+                "fold_room_votes",
                 "invited_rooms", "joined_rooms", "participant_key", "room_invitation",
                 "unread_counts"):
         # Rooms: several agents in one conversation, some of which may not be VAF and
@@ -211,8 +212,14 @@ def __getattr__(name):
         # rooms cannot find the one waiting for its answer. Every surface that
         # lists rooms for a person (the sidebar, the terminal app, `vaf a2a list`)
         # asks both questions, and an embedder's surface asks them too.
+        #
+        # `fold_room_owners` answers "which agent is whose" from FRAMES alone, which
+        # is the only form the answer takes off the host: `Room.pairs` derives it
+        # from the accounts a room admits, and a reader on the wire has no accounts
+        # and no store, only the transcript and the attestations inside it. The
+        # CLI's remote roster is its first consumer; an embedder's is the second.
         from .core.a2a.room import (BOOKKEEPING_KINDS, Room, RoomError,
-                                    derive_peer_id, describe,
+                                    derive_peer_id, describe, fold_owners,
                                     fold_tasks, fold_votes, invited_rooms,
                                     joined_rooms, participant_key, unread_counts)
         from .core.a2a.store import StoreError, UnsafeName
@@ -221,8 +228,8 @@ def __getattr__(name):
                 "Room": Room, "RoomError": RoomError, "StoreError": StoreError,
                 "UnsafeName": UnsafeName,
                 "derive_peer_id": derive_peer_id,
-                "describe_room_entry": describe, "fold_room_tasks": fold_tasks,
-                "fold_room_votes": fold_votes,
+                "describe_room_entry": describe, "fold_room_owners": fold_owners,
+                "fold_room_tasks": fold_tasks, "fold_room_votes": fold_votes,
                 "invited_rooms": invited_rooms, "joined_rooms": joined_rooms,
                 "participant_key": participant_key, "room_invitation": invitation,
                 "unread_counts": unread_counts}[name]

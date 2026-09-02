@@ -383,6 +383,29 @@ def _sign_content(participant_key: str, room_id: str, sender: str,
         return None
 
 
+def _owner_block(participant_key: str, room_id: str, agent_peer: str,
+                 agent_key: str) -> Optional[Dict[str, Any]]:
+    """The owner's attestation an AGENT lane's join carries, or None. NEVER raises.
+
+    An agent and its person are one account on two lanes, and the person's room key
+    is derived from that same account, so the host can produce the attestation at
+    the agent's join - before the person has ever spoken here. Only the agent lane:
+    a person attests an agent, and nothing attests a person. A machine that cannot
+    sign publishes no attestation, the same way it publishes no key.
+    """
+    try:
+        lane, _, scope = str(participant_key or "").partition(":")
+        if lane != "agent" or not scope:
+            return None
+        from vaf.core.a2a import signing
+        owner_key = globals()["participant_key"]("cli", scope)
+        return signing.attest(room_id, owner_key=owner_key,
+                              owner_peer=derive_peer_id(owner_key, room_id),
+                              agent_peer=agent_peer, agent_key=agent_key)
+    except Exception:
+        return None
+
+
 def content_signature(frame: "Frame", room_id: str) -> Tuple[str, Optional[Dict[str, Any]]]:
     """Whether a frame's own signature really covers its own content, HERE.
 
@@ -449,6 +472,84 @@ class RoomClosed(RoomError):
     something different about it: a refused directive is a mistake to correct, a closed
     room is a conversation that is over.
     """
+
+
+def fold_signing_keys(frames: Iterable["Frame"], room_id: str) -> Dict[str, str]:
+    """`Room.signing_keys`, over frames a caller already holds.
+
+    The rules are documented on the method; this is the same fold for a reader that
+    has frames and no store - a peer on the wire, or the CLI reading a remote room.
+    Sorted here rather than trusted in order, because C7 is the order and a wire
+    delivers frames as they arrive.
+    """
+    keys: Dict[str, str] = {}
+    for frame in sorted(frames, key=lambda f: (f.lamport, f.sender, f.seq)):
+        if frame.kind != "join":
+            continue
+        published = str((frame.body or {}).get("sign_key") or "")
+        if not published:
+            keys.pop(frame.sender, None)
+            continue
+        state, read = content_signature(frame, room_id)
+        if state == "signed" and read["key"] == published:
+            keys[frame.sender] = published
+    return keys
+
+
+def fold_owners(frames: Iterable["Frame"], room_id: str, *,
+                keys: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+    """Which agent belongs to which owner, from the log alone: {agent: owner}.
+
+    An agent's `join` may carry its owner's attestation in `body.owner`. It is read
+    with the same discipline the keys are, because it rests on them:
+
+    - The agent's `join` must be ATTESTED (self-signed by the key it publishes), or
+      the block is not read at all. It rides inside that signature, so a host cannot
+      swap it on a stored announcement without breaking the binding of the key.
+    - The owner's key the block names must be the one the OWNER's own attested `join`
+      bound to the owner's handle. Otherwise the block was made with a key nobody has
+      spoken with, and a fresh keypair can make one of those; a claim that cannot be
+      corroborated binds nothing.
+    - The LAST attested `join` per agent decides: one without an `owner` block
+      withdraws the claim, and an unattested one changes nothing either way, for the
+      reason C15 gives - a claim this reader cannot check must not undo one it
+      already checked.
+
+    What it proves, exactly: whoever holds the owner's key - the key that signed the
+    owner's own words in this room - vouched for this agent. Authorisation evidence,
+    never identity, and never a permission: the agent stays the author of every frame
+    it signs, and how far it may act on anything is decided locally. NEVER raises.
+    """
+    ordered = sorted(frames, key=lambda f: (f.lamport, f.sender, f.seq))
+    bound = fold_signing_keys(ordered, room_id) if keys is None else dict(keys)
+    claims: Dict[str, Optional[Mapping[str, Any]]] = {}
+    for frame in ordered:
+        if frame.kind != "join":
+            continue
+        body = frame.body or {}
+        published = str(body.get("sign_key") or "")
+        if not published:
+            claims.pop(frame.sender, None)
+            continue
+        state, read = content_signature(frame, room_id)
+        if state != "signed" or read["key"] != published:
+            continue
+        block = body.get("owner")
+        claims[frame.sender] = block if isinstance(block, Mapping) and block else None
+    out: Dict[str, str] = {}
+    for agent, block in claims.items():
+        if not block or not bound.get(agent):
+            continue
+        try:
+            from vaf.core.a2a import signing
+            read = signing.read_attestation(block)
+            if read is None or bound.get(read["peer"]) != read["key"]:
+                continue
+            if signing.verify_attestation(room_id, agent, bound[agent], block):
+                out[agent] = read["peer"]
+        except Exception:
+            continue
+    return out
 
 
 class Identity:
@@ -668,8 +769,13 @@ class Room:
             # would have retracted a binding the peer never meant to give up. So the
             # card, which is self-description and is kept in the member record either
             # way, is what gives.
-            for shape in (dict(body) | {"sign_key": published},
-                          {"display": identity.display, "sign_key": published}):
+            # WHO THIS AGENT BELONGS TO, said where a stranger can check it. The
+            # derivation `pairs` makes reaches only this machine; the attestation
+            # rides inside the signed join, so a reader anywhere folds the same pair.
+            owner = _owner_block(participant_key, self.room_id, identity.peer_id, published)
+            attested = {"sign_key": published} | ({"owner": owner} if owner else {})
+            for shape in (dict(body) | attested,
+                          {"display": identity.display} | attested):
                 try:
                     probe = {"kind": "join", "to": {"room": True}, "body": shape}
                     if _sign_content(identity.participant_key or "", self.room_id,
@@ -843,11 +949,14 @@ class Room:
         A stranger cannot produce that handle without the tenant's scope id, and the
         scope id appears in no frame.
 
-        What it therefore CANNOT answer: a guest that redeemed a ticket carries no
-        tenant at all (`scope_id=None`, a randomly minted handle), so no derivation
-        reaches it. Those pairs come from the invitation instead - one ticket that
-        seats two - and are marked `proof: "invitation"` by that path, never by this
-        one.
+        What the derivation CANNOT reach, the transcript can: a guest that redeemed a
+        ticket carries no tenant at all (`scope_id=None`, a randomly minted handle),
+        so no handle is recomputed for it - but if its `join` carries its owner's
+        ATTESTATION, the pair is read off the log (`fold_owners`) and marked
+        `proof: "attested"`. Derivation wins where both answer, and they agree by
+        construction: the host attests its own agent at the agent's join with the
+        very key its person signs with. A guest with neither stays `unknown` rather
+        than guessed at.
 
         `tenants` defaults to the accounts the ROOM admits (`Room.tenants()`), which
         is the whole list for a single-tenant room and the guest list for one across
@@ -882,6 +991,22 @@ class Room:
                                    partner_label=labels.get(agent) or agent)
                 out[agent].update(partner=person,
                                   partner_label=labels.get(person) or person)
+        try:
+            owners = fold_owners(self.store.frames(), self.room_id)
+        except Exception:
+            owners = {}
+        for agent, owner in owners.items():
+            if agent not in out or owner not in out or out[agent]["proof"] == "derived":
+                continue
+            out[agent].update(kind="agent", partner=owner,
+                              partner_label=labels.get(owner) or owner, proof="attested")
+            if out[owner]["proof"] != "derived":
+                # One `partner` per member: an owner with several attested agents is
+                # named by each of them and names the first.
+                out[owner].update(kind="human", proof="attested")
+                if not out[owner]["partner"]:
+                    out[owner].update(partner=agent,
+                                      partner_label=labels.get(agent) or agent)
         return out
 
     def is_host(self, identity: "Identity") -> bool:
@@ -1644,18 +1769,7 @@ class Room:
         The honest limit is unchanged: a reader holding only part of a transcript
         folds only what it holds.
         """
-        keys: Dict[str, str] = {}
-        for frame in self.store.frames():
-            if frame.kind != "join":
-                continue
-            published = str((frame.body or {}).get("sign_key") or "")
-            if not published:
-                keys.pop(frame.sender, None)
-                continue
-            state, read = content_signature(frame, self.room_id)
-            if state == "signed" and read["key"] == published:
-                keys[frame.sender] = published
-        return keys
+        return fold_signing_keys(self.store.frames(), self.room_id)
 
     def verdict_for(self, frame: Frame, keys: Optional[Dict[str, str]] = None) -> str:
         """What a reader may conclude about who wrote this frame's content.

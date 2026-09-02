@@ -785,8 +785,12 @@ def sign_payload(payload: dict, room_id: str, seed: bytes, sender: str = "") -> 
     return signed
 
 
-def join_announcement(display: str, room_id: str, seed: bytes, sender: str) -> dict:
+def join_announcement(display: str, room_id: str, seed: bytes, sender: str,
+                      owner: dict = None) -> dict:
     """The `join` a peer sends to publish its own signing key, SELF-SIGNED.
+
+    `owner` is the attestation this peer's OWNER made for it (`attest`), carried
+    inside the signed body so a host cannot swap it on a stored announcement.
 
     An unsigned announcement is a key anybody could have put there, and a fold that
     counted one would let a host copy somebody else's public key - which is public,
@@ -798,9 +802,111 @@ def join_announcement(display: str, room_id: str, seed: bytes, sender: str) -> d
     frame whose correctness cannot be checked by reading a transcript afterwards: get
     it wrong and everything this peer ever says reads `foreign_key`.
     """
-    return sign_payload({"kind": "join", "body": {
-        "display": display, "card": {},
-        "sign_key": ed25519_public(seed).hex()}}, room_id, seed, sender)
+    body = {"display": display, "card": {}, "sign_key": ed25519_public(seed).hex()}
+    if isinstance(owner, dict) and owner:
+        body["owner"] = dict(owner)
+    return sign_payload({"kind": "join", "body": body}, room_id, seed, sender)
+
+
+# ── who an agent belongs to: the owner's attestation ───────────────────────
+#
+# A room derives "which agent is whose" on the host from the accounts it admits,
+# which reaches nobody who arrived on a ticket and nobody reading from another
+# machine. An agent's join may therefore carry its OWNER's attestation: a signature
+# by the owner's room key over the agent's handle and key. The owner makes one with
+# `attest` from a seat of their own and hands it to their agent, which passes it to
+# `join` or `announce` as --owner; `members` reads it back.
+
+OWNER_DOMAIN = b"vaf-a2a-owner/v1\n"
+OWNER_VERSION = 1
+
+
+def owner_bytes(room_id: str, owner: str, agent: str, agent_key: str) -> bytes:
+    """The exact bytes an attestation is computed over: the same canonical form as a
+    frame signature, behind its own domain prefix."""
+    payload = {"v": OWNER_VERSION, "room": str(room_id), "owner": str(owner),
+               "agent": str(agent), "agent_key": str(agent_key)}
+    return OWNER_DOMAIN + json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def attest_owner(room_id: str, seed: bytes, owner_peer: str, agent_peer: str,
+                 agent_key: str) -> dict:
+    """The block an owner hands its agent: THIS handle, holding THIS key, is mine."""
+    return {"v": OWNER_VERSION, "peer": str(owner_peer),
+            "key": ed25519_public(seed).hex(),
+            "sig": ed25519_sign(seed, owner_bytes(room_id, owner_peer, agent_peer,
+                                                  agent_key)).hex()}
+
+
+def owners(frames, room_id: str, keys: dict = None) -> dict:
+    """Which agent belongs to which owner, folded from the `join` frames: {agent: owner}.
+
+    Read with the same discipline as the keys, because it rests on them: the agent's
+    join must be attested or the block is not read; the owner's key the block names
+    must be the one the OWNER's own attested join bound, or the claim was made with a
+    key nobody has spoken with and binds nothing; the last attested join per agent
+    decides, one without a block withdraws, an unattested one changes nothing.
+    """
+    ordered = sorted(frames, key=sort_key)
+    bound = signing_keys(ordered, room_id) if keys is None else dict(keys)
+    claims = {}
+    for frame in ordered:
+        if str(frame.get("kind") or "") != "join":
+            continue
+        sender = str(frame.get("from") or "")
+        body = frame.get("body")
+        published = str(body.get("sign_key") or "") if isinstance(body, dict) else ""
+        if not published:
+            claims.pop(sender, None)
+            continue
+        sig = frame.get("sig")
+        if not isinstance(sig, dict) or str(sig.get("key") or "") != published:
+            continue
+        if verdict_for(frame, {sender: published}, room_id) != "valid":
+            continue
+        block = body.get("owner")
+        claims[sender] = block if isinstance(block, dict) and block else None
+    out = {}
+    for agent, block in claims.items():
+        if not block or not bound.get(agent):
+            continue
+        owner = str(block.get("peer") or "")
+        key, blob = str(block.get("key") or ""), str(block.get("sig") or "")
+        try:
+            version = int(block.get("v") or 1)
+        except (TypeError, ValueError):
+            continue
+        if version != OWNER_VERSION or not owner or len(key) != 64 or len(blob) != 128:
+            continue
+        if bound.get(owner) != key:
+            continue
+        try:
+            if ed25519_verify(bytes.fromhex(key), bytes.fromhex(blob),
+                              owner_bytes(room_id, owner, agent, bound[agent])):
+                out[agent] = owner
+        except Exception:
+            continue
+    return out
+
+
+def read_owner_arg(raw: str) -> dict:
+    """The --owner argument: the JSON block `attest` printed, or a path to a file
+    holding it. Refused by name when it is neither, because a block that is silently
+    dropped is a household that silently never appears."""
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    try:
+        if not text.startswith("{") and Path(text).is_file():
+            text = Path(text).read_text(encoding="utf-8")
+        block = json.loads(text)
+    except (OSError, ValueError):
+        raise Refused("--owner takes the JSON block `attest` printed, or a file holding it")
+    if not isinstance(block, dict) or not block.get("sig"):
+        raise Refused("--owner is not an attestation block")
+    return block
 
 
 def verdict_for(frame: dict, keys: dict, room_id: str) -> str:
@@ -875,10 +981,13 @@ def cmd_join(args) -> None:
         # out of the same rule: joining again with a new key replaces the old.
         seed = seat_signing_seed(record)
         published = ed25519_public(seed).hex()
+        owner = read_owner_arg(getattr(args, "owner", ""))
+        if owner:
+            record["owner"] = owner
         try:
             connection.submit(join_announcement(
                 record.get("display") or connection.peer, connection.room, seed,
-                connection.peer))
+                connection.peer, owner or None))
             record["sign_key"] = published
         except Refused:
             # A room that will not take it is a room this peer speaks in unsigned,
@@ -922,11 +1031,17 @@ def cmd_announce(args) -> None:
     """
     record = load_record(args.room)
     seed = seat_signing_seed(record)
+    # The owner's attestation, if this peer was given one now or at its join. Sent
+    # again with every announcement, because the fold reads the LAST attested join
+    # and an announcement without the block is how the claim is withdrawn.
+    owner = read_owner_arg(getattr(args, "owner", "")) or record.get("owner") or {}
+    if owner:
+        record["owner"] = owner
     connection = _open(record)
     try:
         connection.submit(join_announcement(
             record.get("display") or connection.peer, connection.room, seed,
-            connection.peer))
+            connection.peer, owner or None))
     finally:
         connection.close()
     record["sign_key"] = ed25519_public(seed).hex()
@@ -954,6 +1069,73 @@ def cmd_read(args) -> None:
     save_record(record)
     for frame in rows:
         _print_frame(frame)
+
+
+def cmd_attest(args) -> None:
+    """Vouch, as this seat, for an agent: print the block it passes to --owner.
+
+    Run by the OWNER from a seat of their own - the agent must not do this for
+    itself, and cannot, because the block is signed with the owner's key and the
+    fold only honours it once that key has bound the owner's own handle (which the
+    owner's join does). What is attested is the agent's HANDLE and its KEY in THIS
+    room, so a rotated key needs a fresh block and none can be lifted elsewhere.
+    """
+    record = load_record(args.room)
+    seed = seat_signing_seed(record)
+    save_record(record)          # a seed minted just now must outlive this call
+    if len(str(args.agent_key or "")) != 64:
+        raise Refused("the agent's key is its 64-hex sign_key, as `members` or "
+                      "`verify` print it")
+    print(json.dumps(attest_owner(record["room"], seed, record["peer"],
+                                  str(args.agent), str(args.agent_key)),
+                     ensure_ascii=False))
+
+
+def cmd_members(args) -> None:
+    """Who is in the room, and who belongs to whom as far as the log can prove.
+
+    Folded from `join` and `leave` the way roles are, on the transcript this seat may
+    read: no liveness (that lives on the host) and no household derived from
+    accounts (this machine has none), only the pairs the attestations in the log
+    carry - marked `attested`, because that is how this reader knows.
+    """
+    record = load_record(args.room)
+    line = _line_for(args.room, record)
+    if line is not None:
+        frames = line.seen()
+    else:
+        connection = _open(record)
+        try:
+            frames = connection.backlog()
+        finally:
+            connection.close()
+    frames = [f for f in frames if str(f.get("kind") or "") not in _TRANSPORT_KINDS]
+    present, labels, roles, keys = {}, {}, {}, signing_keys(frames, record["room"])
+    for frame in sorted(frames, key=sort_key):
+        sender = str(frame.get("from") or "")
+        kind = str(frame.get("kind") or "")
+        if kind == "join":
+            present[sender] = True
+            body = frame.get("body")
+            if isinstance(body, dict) and str(body.get("display") or "").strip():
+                labels[sender] = str(body["display"]).strip()
+        elif kind == "leave":
+            present.pop(sender, None)
+        if frame.get("role"):
+            roles[sender] = str(frame["role"])
+    owned_by = owners(frames, record["room"], keys)
+    owns = {owner: agent for agent, owner in owned_by.items()}
+    for peer in sorted(present):
+        kind, partner, proof = "unknown", "", ""
+        if peer in owned_by:
+            kind, partner, proof = "agent", owned_by[peer], "attested"
+        elif peer in owns:
+            kind, partner, proof = "human", owns[peer], "attested"
+        _print_frame({"peer": peer, "display": labels.get(peer, peer),
+                      "role": roles.get(peer, "peer"), "kind": kind,
+                      "partner": partner,
+                      "partner_display": labels.get(partner, partner) if partner else "",
+                      "proof": proof, "sign_key": keys.get(peer, "")})
 
 
 def cmd_verify(args) -> None:
@@ -1628,9 +1810,13 @@ MCP_TOOLS = [
          "ticket": {"type": "string", "description": "the t-... ticket from the invitation"},
          "ca_fp": {"type": "string", "description": "the CA sha256 fingerprint from the invitation"},
          "ca_file": {"type": "string", "description": "path to a ca.pem already on disk (optional)"},
+         "owner": {"type": "string",
+                   "description": ("the attestation block your owner made with the "
+                                   "`attest` verb, as JSON (optional)")},
      }, "required": ["url", "ticket", "ca_fp"], "additionalProperties": False},
      "run": lambda a: _drive(cmd_join, url=_arg(a, "url"), ticket=_arg(a, "ticket"),
-                             ca_fp=_arg(a, "ca_fp"), ca_file=_arg(a, "ca_file"))},
+                             ca_fp=_arg(a, "ca_fp"), ca_file=_arg(a, "ca_file"),
+                             owner=_arg(a, "owner"))},
     {"name": "a2a_rooms",
      "description": "List the rooms this machine holds a seat in.",
      "inputSchema": {"type": "object", "properties": {},
@@ -1656,6 +1842,16 @@ MCP_TOOLS = [
          "room": {"type": "string", "description": "the room id"},
      }, "required": ["room"], "additionalProperties": False},
      "run": lambda a: _drive(cmd_verify, room=_arg(a, "room"))},
+    {"name": "a2a_members",
+     "description": ("Who is in the room and who belongs to whom, as far as the "
+                     "transcript proves it: one line per member with role, kind "
+                     "(human, agent or unknown), partner, and proof - `attested` "
+                     "when an owner vouched for an agent in the log. Reads without "
+                     "consuming anything."),
+     "inputSchema": {"type": "object", "properties": {
+         "room": {"type": "string", "description": "the room id"},
+     }, "required": ["room"], "additionalProperties": False},
+     "run": lambda a: _drive(cmd_members, room=_arg(a, "room"))},
     {"name": "a2a_wait",
      "description": ("Block until something is said in the room, then return it. "
                      "timeout in seconds, clamped to 1..900, default 60."),
@@ -1901,6 +2097,9 @@ def main(argv=None) -> None:
     join.add_argument("--ticket", required=True, help="the single-use ticket from the invitation")
     join.add_argument("--ca-fp", required=True, help="the CA fingerprint from the invitation")
     join.add_argument("--ca-file", default="", help="the host's ca.pem, if you already have it")
+    join.add_argument("--owner", default="",
+                      help="the attestation block your owner made with `attest` "
+                           "(JSON, or a file holding it)")
     join.set_defaults(handler=cmd_join)
 
     read = commands.add_parser("read", help="print new messages, remember the position")
@@ -1940,7 +2139,21 @@ def main(argv=None) -> None:
     announce = commands.add_parser(
         "announce", help="publish this seat's signing key, keeping the same handle")
     announce.add_argument("room")
+    announce.add_argument("--owner", default="",
+                          help="the attestation block your owner made with `attest`")
     announce.set_defaults(handler=cmd_announce)
+
+    attest = commands.add_parser(
+        "attest", help="vouch, as this seat, for an agent: print the block it joins with")
+    attest.add_argument("room")
+    attest.add_argument("agent", help="the agent's peer id in this room")
+    attest.add_argument("agent_key", help="the agent's sign_key, 64 hex")
+    attest.set_defaults(handler=cmd_attest)
+
+    members = commands.add_parser(
+        "members", help="who is in the room, and who belongs to whom as the log proves it")
+    members.add_argument("room")
+    members.set_defaults(handler=cmd_members)
 
     rooms = commands.add_parser("rooms", help="list the seats this machine holds")
     rooms.set_defaults(handler=cmd_rooms)

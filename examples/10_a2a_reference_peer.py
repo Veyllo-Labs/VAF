@@ -388,6 +388,80 @@ def verdict(frame: Mapping[str, Any], keys: Mapping[str, str],
     return "valid" if published and published == key else "foreign_key"
 
 
+# ── who an agent belongs to: the owner's attestation ───────────────────────
+
+OWNER_DOMAIN = b"vaf-a2a-owner/v1\n"
+OWNER_VERSION = 1
+
+
+def owner_bytes(room_id: str, owner: str, agent: str, agent_key: str) -> bytes:
+    """The exact bytes an owner's attestation is computed over: the same canonical
+    form as a frame signature, behind its own domain prefix."""
+    payload = {"v": OWNER_VERSION, "room": str(room_id), "owner": str(owner),
+               "agent": str(agent), "agent_key": str(agent_key)}
+    return OWNER_DOMAIN + json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def owners(frames: Iterable[Mapping[str, Any]], room_id: str,
+           verify: Any = None) -> Dict[str, str]:
+    """Which agent belongs to which owner, folded from the `join` frames: {agent: owner}.
+
+    Read with the same discipline as the keys, because it rests on them. The agent's
+    join must be attested or the block is not read; the owner's key the block names
+    must be the one the OWNER's own attested join bound, or the claim was made with a
+    key nobody has spoken with and binds nothing; the last attested join per agent
+    decides, one without a block withdraws, an unattested one changes nothing.
+
+    WITHOUT A VERIFIER nothing is attested and nothing is owned - the same refusal to
+    guess the key fold makes.
+    """
+    if verify is None:
+        return {}
+    ordered = sorted(frames, key=lambda f: (int(f.get("lamport") or 0),
+                                            str(f.get("from") or ""),
+                                            int(f.get("seq") or 0)))
+    keys = signing_keys(ordered, room_id, verify)
+    claims: Dict[str, Any] = {}
+    for frame in ordered:
+        if str(frame.get("kind") or "") != "join":
+            continue
+        sender = str(frame.get("from") or "")
+        body = frame.get("body")
+        published = str(body.get("sign_key") or "") if isinstance(body, Mapping) else ""
+        if not published:
+            claims.pop(sender, None)
+            continue
+        sig = frame.get("sig")
+        if not isinstance(sig, Mapping) or str(sig.get("key") or "") != published:
+            continue
+        if verdict(frame, {sender: published}, verify, room_id) != "valid":
+            continue
+        block = body.get("owner")
+        claims[sender] = block if isinstance(block, Mapping) and block else None
+    out: Dict[str, str] = {}
+    for agent, block in claims.items():
+        if not block or not keys.get(agent):
+            continue
+        owner = str(block.get("peer") or "")
+        key, blob = str(block.get("key") or ""), str(block.get("sig") or "")
+        try:
+            version = int(block.get("v") or 1)
+        except (TypeError, ValueError):
+            continue
+        if version != OWNER_VERSION or not owner or len(key) != 64 or len(blob) != 128:
+            continue
+        if keys.get(owner) != key:
+            continue
+        try:
+            if verify(key, blob, owner_bytes(room_id, owner, agent, keys[agent])):
+                out[agent] = owner
+        except Exception:
+            continue
+    return out
+
+
 def gaps(seqs: Iterable[int]) -> List[int]:
     """Which of a sender's sequence numbers are missing. Per-sender FIFO is gapless, so
     holding 5 and 7 is knowing that 6 has not arrived."""

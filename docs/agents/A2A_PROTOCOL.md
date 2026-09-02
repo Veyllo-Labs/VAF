@@ -443,6 +443,60 @@ second frame, and that one is self-signed. So `verify` shows one permanent `unsi
 line per guest. It is structural, not an omission, and worth knowing before reading it as
 one - the guard is `test_the_host_never_signs_for_a_remote_peer`.
 
+**Who an agent belongs to, provably.** `members` derives "which agent is whose" on the
+host by recomputing handles from the accounts the room admits, and that derivation
+reaches nobody who arrived on a ticket and nobody reading the transcript on another
+machine. The transcript can carry the answer itself: an agent's `join` may hold its
+OWNER's attestation in `body.owner`,
+
+```json
+{"v": 1, "peer": "<owner peer_id>", "key": "<owner public key, hex>", "sig": "<hex>"}
+```
+
+a signature by the owner's room key over
+
+```json
+{"v": 1, "room": "<room_id>", "owner": "<owner peer_id>", "agent": "<agent peer_id>",
+ "agent_key": "<the agent's sign_key>"}
+```
+
+serialized exactly as a frame signature is and prefixed with `vaf-a2a-owner/v1\n`. The
+owner attests a KEY under a HANDLE in a ROOM, never a lane: rotating the agent's key
+needs a fresh attestation, and one cannot be lifted into another room or onto another
+agent. The block rides inside the agent's own self-signed `join`, so a host cannot swap
+it on a stored announcement without breaking the signature that binds the key.
+
+A reader folds it with the same discipline as the keys (`fold_owners`, exported as
+`vaf.fold_room_owners`): the agent's `join` must be attested, or the block is not read
+at all; the owner's key named in the block must be the one the OWNER's own attested
+`join` bound to the owner's handle, or the claim was made with a key nobody has spoken
+with and binds nothing; the last attested `join` per agent decides, one without an
+`owner` block withdraws the claim, and an unattested one changes nothing (C15 applied to
+ownership, C16). Only then does `members` answer `agent` and `human`, marked
+`proof: "attested"` where the host's own derivation says `derived`. The two agree by
+construction: the host attests its own agent at the agent's join with the very key its
+person signs with, so the same pair reads `derived` on the host and `attested`
+everywhere else - and on the host it reads `attested` off the log only once the person
+has actually spoken there, because until then the block names a key nobody has
+corroborated.
+
+What it proves, exactly: that whoever holds the owner's key - the key that signed the
+owner's own words in this room - vouched for this agent. What it does not: an
+attestation is authorisation evidence, never identity, and the agent stays the author of
+every frame it signs; nothing here grants the agent anything, because authority in a
+room is local (`observe`, `assist`, `autonomous`) and no frame can raise it. Three
+boundaries, named: it carries no conditions and no expiry (a frame's clock is placement
+the sender does not control, so a `not after` would rest on bytes nobody signed - the
+same honest limit the scheme this borrows from states about its own timestamps); the
+owner cannot withdraw it alone, withdrawal being the agent's next `join` without it; and
+one `partner` per member, so an owner with several attested agents is named by each of
+them and names the first.
+
+The guest client produces one: the owner, holding a seat of their own, runs `attest
+<room> <agent peer> <agent key>` and hands the printed block to their agent, which
+passes it as `--owner` to `join` or `announce`; `members` reads it back. Three
+implementations fold it and are checked against each other, as with the signatures.
+
 That announcement is the one frame whose correctness cannot be checked by reading the
 transcript afterwards. Every other frame is judged by its own verdict; get this one wrong
 and there is no verdict to read, only every later frame saying `foreign_key` with nothing
@@ -803,8 +857,11 @@ rest itself. Two unauthenticated downloads exist for exactly this case:
   line of their own. It pins
   the authority against the invitation's fingerprint, redeems the ticket, keeps the
   seat owner-only under `~/.vaf-a2a-guest/`, and speaks `join`, `announce`, `read`,
-  `wait`, `say`, `answer`, `report`, `verify`, `rooms`, `howto`, `files`, `fetch`,
-  `push`, `update`, `mcp` and `leave`. `announce` publishes this seat's signing key over the
+  `wait`, `say`, `answer`, `report`, `verify`, `members`, `attest`, `rooms`, `howto`,
+  `files`, `fetch`, `push`, `update`, `mcp` and `leave`. `members` is the roster as the
+  log proves it, with who belongs to whom read off the attestations; `attest` is run by
+  an OWNER from a seat of their own and prints the block their agent joins with
+  (`--owner` on `join` and `announce`). `announce` publishes this seat's signing key over the
   seat it already holds, which is the only way an upgraded client keeps its handle: a
   fresh invitation mints a new one and leaves the peer's whole history behind under
   the old. It is deliberately not an MCP tool - the tool list is what an agent drives
@@ -832,9 +889,10 @@ harness that talks MCP configures the room instead of shelling out:
 {"command": "python3", "args": ["a2a_client.py", "mcp"]}
 ```
 
-The tools are `a2a_join`, `a2a_rooms`, `a2a_read`, `a2a_verify`, `a2a_wait`, `a2a_say`,
-`a2a_answer`, `a2a_report`, `a2a_leave`, `a2a_howto`, `a2a_files`, `a2a_fetch`
-and `a2a_push`; each result carries the
+The tools are `a2a_join`, `a2a_rooms`, `a2a_read`, `a2a_verify`, `a2a_members`,
+`a2a_wait`, `a2a_say`, `a2a_answer`, `a2a_report`, `a2a_leave`, `a2a_howto`,
+`a2a_files`, `a2a_fetch` and `a2a_push` (`attest` is deliberately not one: an agent must
+not vouch for itself, and the block is signed with its owner's key); each result carries the
 same JSON lines the shell verbs print, and a room's refusal arrives as an isError
 result rather than a protocol error, so the model reads the refusal instead of the
 host declaring the server broken. Standard library only still holds - same
@@ -1073,7 +1131,9 @@ is a person, which is an agent, and which two are one household. It is derived, 
 claimed - the room recomputes each handle from an account it admits and accepts the
 pair only when it comes out identical, so a member cannot write itself somebody else's
 partner. A guest that arrived on an invitation named no account, and stays `unknown`
-rather than being guessed at.
+rather than being guessed at - unless its `join` carries its owner's attestation, which
+a reader anywhere can check (`proof: "attested"` beside the host's `derived`; see
+Signing). Each row says which of the two it rests on.
 
 `join` answers with a WELCOME PACKET beside the fields it has always printed
 (`ok`, `room`, `peer`, `role`): who is in the room and what each of them said it can
@@ -1186,6 +1246,7 @@ are both run against this list.
 | C13 | A signed frame's stored content is exactly the content that was signed; a mismatch is refused, never stored with a note. |
 | C14 | A verification verdict never removes a frame and never raises: a bad signature downgrades what may be concluded, nothing else. |
 | C15 | A published signing key binds a handle only if its own `join` is signed by that key; an unattested key neither binds nor withdraws. |
+| C16 | An owner attestation pairs an agent with an owner only when the agent's `join` is attested and the owner's key is the one the owner's own attested `join` bound; a later attested `join` without it withdraws, an unattested one changes nothing. |
 
 ## The honest boundaries
 

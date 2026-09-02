@@ -40,10 +40,11 @@ import hashlib
 import secrets
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from vaf.core.a2a.frame import (KINDS, REPORT_STATUSES, Frame, MalformedFrame,
-                                canonical_sort_key, object_field, read_progress,
+                                canonical_sort_key, object_field, read_deadline,
+                                read_progress,
                                 required_names)
 from vaf.core.a2a.store import (
     RoomStore,
@@ -1462,6 +1463,16 @@ class Room:
 
         if kind == "vote":
             body["options"] = self._vote_choices(body.get("options"))
+            # The one wall clock in this protocol that decides something, and
+            # therefore the one value in a body two machines must be able to write
+            # down identically. Whole seconds; anything unusable is dropped rather
+            # than stored, because a stored `"bald"` would be read again by every
+            # later fold and cannot be taken back out of a write-once log.
+            deadline = read_deadline(body)
+            if deadline is None:
+                body.pop("closes_at", None)
+            else:
+                body["closes_at"] = deadline
         elif kind == "answer" and reply_to and body.get("choice"):
             # Only when a `choice` is present, so an ordinary answer never pays for
             # the lookup.
@@ -2412,7 +2423,12 @@ def fold_votes(frames: List[Frame], *, labels: Dict[str, str],
         body = frame.body or {}
         options = [str(o) for o in (body.get("options") or []) if str(o).strip()]
         ts = float(frame.ts or 0.0)
-        closes_at = float(body.get("closes_at") or 0.0)
+        # Read through the same defensive reader the door writes through. The door
+        # only protects frames written after it existed; this protects the fold from
+        # every frame already in the log, and from any peer that reaches a store
+        # without crossing a door. Without it one unusable value ends voting in that
+        # room for good, because a write-once log cannot take the frame back.
+        closes_at = float(read_deadline(body) or 0.0)
         deadline = closes_at or (ts + remind_after_s + abstain_after_s)
         opened[frame.id] = {
             "id": frame.id,

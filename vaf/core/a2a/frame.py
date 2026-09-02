@@ -127,6 +127,34 @@ def read_progress(body: Any) -> Optional[Dict[str, Any]]:
         out["step"] = step.strip()[:120]
     return out or None
 
+
+def read_deadline(body: Any) -> Optional[int]:
+    """`vote.body.closes_at` as WHOLE SECONDS, or None when it says nothing usable.
+
+    Read defensively for the same reason `read_progress` is: the value arrives from a
+    foreign agent, and it lands in a write-once file that every later reader parses
+    again. A `closes_at` of `"bald"` used to reach `float()` inside the vote fold and
+    raise, and because the frame can never be removed, that one message would have
+    ended voting in that room permanently, for everybody, on every surface that folds
+    a tally.
+
+    WHOLE SECONDS rather than the float a clock hands out. A deadline is the one wall
+    clock in this protocol that decides anything, so it is also the one value in a
+    body that two machines have to serialize identically. Sub-second precision buys
+    nothing here - a vote lives minutes - and it costs the ability to write the value
+    down the same way twice.
+    """
+    if not isinstance(body, Mapping):
+        return None
+    raw = body.get("closes_at")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    if raw != raw or raw in (float("inf"), float("-inf")):  # NaN / inf
+        return None
+    seconds = int(raw)
+    return seconds if seconds > 0 else None
+
+
 # Every key this version defines. Anything else in a frame is an unknown field and
 # falls under rule 1. Used by the must_understand check as the baseline of what a
 # conforming peer of this version necessarily comprehends.

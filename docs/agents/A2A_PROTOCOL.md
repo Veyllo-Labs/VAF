@@ -143,6 +143,13 @@ count answers "how much was said" rather than "how long has it been". The conseq
 not hidden - two machines whose clocks differ by a minute disagree by a minute about when
 a vote ends, and the machine holding the room is the one that writes the result.
 
+It is carried as WHOLE SECONDS, and an unusable value is dropped rather than stored. Being
+the one value in a body that decides anything makes it also the one two machines have to
+be able to write down identically, which no two languages manage for every float. Reading
+it is defensive on both sides of the door, because a value already in the log cannot be
+taken back: one `closes_at` a reader could not turn into a number used to end voting in
+that room permanently, for everybody.
+
 **Work that has gone quiet** is asked about the same way: an ordinary `ping` addressed
 to whoever took the task on, carrying `body.task` (the task's id) and, in `body.text`,
 what the work was and how long nothing has been said about it. The room cannot tell a
@@ -253,6 +260,7 @@ What it settles today:
 | `must_understand` | a list of names. A bare string is refused, because iterating one yields its letters. |
 | `reply_to` | empty and absent are the same answer, and that answer is "this replies to nothing". |
 | `vote.body.options` | trimmed, bounded, and never empty: yes/no when a vote names none. |
+| `vote.body.closes_at` | whole seconds. Anything else is dropped rather than written down. |
 | `answer.body.choice` | trimmed and resolved against the options of the vote it answers. |
 
 The last two are one rule, not two. A `choice` is resolved so that a shortened "ja"

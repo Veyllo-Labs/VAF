@@ -209,3 +209,56 @@ def test_a_kick_with_a_body_that_is_not_an_object_is_refused(rooms):
     leader = room.join(display="Lead", scope_id=None, peer_id="p-lead", role="leader")
     with pytest.raises(MalformedContent):
         room.ingest({"kind": "kick", "body": "p-someone"}, identity=leader)
+
+
+# ── the deadline: the one wall clock in a body, and the one that broke a fold ──
+
+@pytest.mark.parametrize("given", ["bald", None, -5, 0, True, [1], {"a": 1},
+                                  float("nan"), float("inf")])
+def test_an_unusable_deadline_is_dropped_rather_than_stored(room, given):
+    """A stored value is read again by every later fold, and a write-once log cannot
+    take it back. So the door drops what it cannot use instead of writing it down."""
+    r, alice = room
+    vote = r.ingest({"kind": "vote", "body": {"text": "q", "options": ["ja", "nein"],
+                                              "closes_at": given}}, identity=alice)
+    assert "closes_at" not in vote.body
+
+
+def test_a_deadline_is_stored_as_whole_seconds(room):
+    """A deadline is the one value in a body two machines must be able to write down
+    identically, and no two languages agree on every float."""
+    r, alice = room
+    vote = r.ingest({"kind": "vote", "body": {"text": "q", "options": ["ja", "nein"],
+                                              "closes_at": 1799999999.7}}, identity=alice)
+    assert vote.body["closes_at"] == 1799999999
+    assert isinstance(vote.body["closes_at"], int)
+
+
+def test_a_vote_with_a_deadline_composes_the_same_way_twice(room):
+    r, alice = room
+    once = r.compose({"kind": "vote", "body": {"text": "q", "options": ["ja"],
+                                               "closes_at": 1799999999.7}})
+    assert r.compose(once) == once
+
+
+def test_one_unusable_deadline_does_not_end_voting_in_the_room(room):
+    """The regression this pair of readers exists for. `float("bald")` raised inside
+    fold_votes, which every vote surface calls - Room.votes, the CLI, the browser and
+    the host's own conclusion sweep. The frame cannot be deleted, so a single message
+    from any peer would have ended voting in that room permanently."""
+    r, alice = room
+    good = r.open_vote(alice, "weiter?", options=["ja", "nein"])
+
+    # A frame that reached the store without crossing the door, the way one written
+    # by an older version or a foreign implementation would have.
+    stale = r.ingest({"kind": "vote", "body": {"text": "alt", "options": ["ja"]}},
+                     identity=alice)
+    path = r.store.lane(stale.sender) / f"{stale.seq:012d}.json"
+    from vaf.core import data_files
+    stored = data_files.read_json(path, default=None)
+    stored["body"]["closes_at"] = "bald"
+    data_files.write_json_atomic(path, stored)
+
+    entries = r.votes()
+    assert {e["id"] for e in entries} == {good.id, stale.id}
+    assert [e for e in entries if e["id"] == stale.id][0]["closes_at"] == 0.0

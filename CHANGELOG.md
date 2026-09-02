@@ -67,6 +67,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **One bad message can no longer end voting in a room.** A vote carrying a closing time
+  the room could not read as a number made every later attempt to count that room's votes
+  fail, on every surface: the room view, the command line, and the check that closes a vote
+  when its time is up. Because messages in a room are never edited or deleted, the effect
+  was permanent. The closing time is now read carefully when it arrives and again when it
+  is used, so an unusable one is simply ignored and the vote keeps working.
 - **A malformed message to a room is now answered instead of dropping the connection.**
   Sending a room a message whose `ext`, `body` or `to` was not an object raised an
   unhandled error instead of being refused, and over a live room connection that ended

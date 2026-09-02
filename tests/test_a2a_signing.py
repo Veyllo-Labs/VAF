@@ -201,10 +201,19 @@ def test_a_signature_this_peer_cannot_read_is_not_a_forgery(sig):
 
 def test_verifying_an_uncanonical_payload_refuses_rather_than_raising():
     """A verifier walks a whole transcript. One frame it cannot serialise must cost
-    that frame its verdict, never the walk."""
+    that frame its verdict, never the walk.
+
+    The `v` matters here and is not decoration: without it the signature reads as
+    version 1, `read_signature` refuses it before any serialising happens, and this
+    passed while testing nothing it names. A test that goes green for the wrong reason
+    is worse than one that is missing, because it is counted.
+    """
     private, public = _key_from_seed()
-    sig = {"alg": "ed25519", "key": public,
+    sig = {"alg": "ed25519", "v": 2, "key": public,
            "sig": private.sign(signing.canonical_bytes(PAYLOAD)).hex()}
+    assert signing.read_signature(sig) is not None, "the refusal must come from the payload"
+    with pytest.raises(signing.NotCanonical):
+        signing.canonical_bytes({**PAYLOAD, "body": {"n": 1.5}})
     assert signing.verify({**PAYLOAD, "body": {"n": 1.5}}, sig) is False
 
 

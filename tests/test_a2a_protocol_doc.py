@@ -203,10 +203,25 @@ def test_the_ordering_rule_is_stated_and_ts_is_called_advisory(text):
     assert "ts" not in key.split("return")[1], "the sort key started reading the clock"
 
 
-def test_the_conformance_list_has_every_item_the_suite_claims(text):
-    table = text.split("| C1 |")[1].split("\n\n")[0]
-    for n in range(2, 15):
-        assert f"| C{n} |" in table, f"conformance item C{n} is missing"
+def test_the_conformance_list_is_numbered_without_holes(text):
+    """Read off the table rather than counted into the test.
+
+    This asserted a hardcoded range and therefore stopped one item short the moment the
+    list grew: C15 was added and nothing here noticed, which is the exact failure a
+    guard exists to prevent - it went on passing while covering less. Numbering the
+    items 1..n with no gaps is the property that actually matters (a hole means an item
+    was written and then lost) and it needs no edit when the list grows.
+    """
+    import re
+
+    table = "| C1 |" + text.split("| C1 |")[1].split("\n\n")[0]
+    found = sorted(int(n) for n in re.findall(r"^\| C(\d+) \|", table, re.MULTILINE))
+    assert found, "the conformance table has no items at all"
+    assert found == list(range(1, len(found) + 1)), (
+        f"the conformance list is not 1..n without holes: {found}")
+    assert len(found) >= 15, (
+        f"the conformance list shrank to {len(found)} items; removing a promise is a "
+        f"decision, not a tidy-up")
 
 
 def test_the_document_is_reachable_from_the_index_and_the_rule_table():

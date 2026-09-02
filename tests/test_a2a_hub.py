@@ -438,3 +438,23 @@ def test_live_fanout_still_skips_the_sender(wired):
     to_bob = [m for p, m in delivered if p == bob.peer_id and m.get("kind") == "say"]
     assert to_alice == []
     assert [m["body"]["text"] for m in to_bob] == ["live gesprochen"]
+
+
+def test_the_conversation_view_still_leaves_out_the_askers_own_voice(wired):
+    """Two questions that look like one and are not.
+
+    `catch_up` stopped skipping the asker on purpose, so a peer can check that the room
+    still holds what it said. `conversation_since` inherited that and quietly began
+    handing an agent its own sentences back - which is the loop the wake rule exists to
+    prevent. Audit gets everything; reading-to-somebody gets what was said to them.
+    """
+    room, hub, alice, bob, _delivered = wired
+    room.say(alice, "meine eigene Stimme")
+    room.say(bob, "etwas von jemand anderem")
+
+    spoken = [f["body"]["text"] for f in hub.conversation_since(alice, 0)
+              if f["kind"] == "say"]
+    assert spoken == ["etwas von jemand anderem"]
+
+    audited = [f["body"]["text"] for f in hub.catch_up(alice, 0) if f["kind"] == "say"]
+    assert "meine eigene Stimme" in audited, "the audit lane must keep carrying it"

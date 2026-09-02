@@ -212,6 +212,14 @@ class Hub:
     def conversation_since(self, identity: Identity, lamport: int) -> List[Dict[str, Any]]:
         """What a human or an agent would want read to them: no bookkeeping, not their
         own voice. The same filter the CLI and the wake-up apply, so the three surfaces
-        cannot disagree about what counts as something being said."""
+        cannot disagree about what counts as something being said.
+
+        The own-voice half has to be dropped HERE and cannot be left to `catch_up`,
+        which stopped skipping the asker deliberately: a peer that cannot read back
+        what it wrote cannot check whether the room still holds it. Two questions, two
+        answers - audit gets everything, reading-to-somebody gets what was said TO
+        them. Collapsing them into one is how an agent ends up woken by its own voice.
+        """
         return [f for f in self.catch_up(identity, lamport)
-                if f.get("kind") not in BOOKKEEPING_KINDS]
+                if f.get("kind") not in BOOKKEEPING_KINDS
+                and str(f.get("from") or "") != identity.peer_id]

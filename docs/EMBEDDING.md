@@ -1342,15 +1342,14 @@ room.verify_frames()         # [(frame, verdict)] for the whole room, keys folde
 
 Five verdicts, and the distinctions are the point: `unsigned` (nothing was claimed,
 the ordinary case and not a complaint), `valid`, `foreign_key` (a real signature by a
-key that peer ever published here in a form a reader can check - a frame written into
+key that peer NEVER published here in a form a reader can check - a frame written into
 the wrong lane, or a peer whose client announced a key without signing the
-announcement),
-`invalid` (the only one that accuses anybody) and `unreadable` (a claim
+announcement), `invalid` (the only one that accuses anybody) and `unreadable` (a claim
 this version cannot parse, which is what a newer scheme looks like to an older
 reader). Nothing here raises, and a verdict never removes a frame: a failed signature
 downgrades what may be concluded and nothing more.
 
-Four things an embedder should know before building on it:
+Five things an embedder should know before building on it:
 
 - **Signing is optional in both directions.** A room where nobody signs behaves
   exactly as it always has, and a peer that has never heard of the field relays and

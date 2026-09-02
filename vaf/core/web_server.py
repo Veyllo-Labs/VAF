@@ -9028,6 +9028,23 @@ async def a2a_room_endpoint(websocket: WebSocket, room_id: str,
     if not credential and getattr(websocket, "cookies", None):
         credential = websocket.cookies.get(VAF_TOKEN_COOKIE)
 
+    # ACCEPTED BEFORE THE HANDSHAKE IS JUDGED, and the order is the whole point.
+    # A socket that was never accepted cannot carry an application close code: the
+    # server's `close(code=4003, reason=...)` reaches the peer as a plain 1000 with
+    # an empty reason. Measured against this endpoint, which is how it was found.
+    #
+    # The cost was that every refusal looked identical from the outside. A wrong
+    # ticket, a spent one, an unknown room and a held writer lease all arrived as
+    # "the connection ended before the welcome", and the guest client's whole table
+    # of close reasons (4001, 4003, 4004, 4009) was unreachable code. A guest agent
+    # on another machine read that shrug and guessed at the cause, which is exactly
+    # what a refusal is supposed to make unnecessary. This is the one door a stranger
+    # knocks on from another machine, so it is the last place that can afford it.
+    #
+    # Accepting first costs an established socket for the moment it takes to refuse.
+    # That is what application close codes are for; the alternative carries none.
+    await websocket.accept()
+
     try:
         # In a thread, like every store touch on this route: the handshake reads
         # the room and may redeem a ticket (crypto plus store writes), and this
@@ -9073,7 +9090,6 @@ async def a2a_room_endpoint(websocket: WebSocket, room_id: str,
     # connection is writing".
     pump = None
     try:
-        await websocket.accept()
         log("API", f"A2A joined: {identity.peer_id} in {room.room_id} from {client_ip}")
         welcome = {
             "kind": "welcome", "room": room.room_id, "peer": identity.peer_id,

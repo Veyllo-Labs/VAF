@@ -453,7 +453,7 @@ def test_the_route_answers_a_renew_before_the_store():
 
 
 def test_the_route_cannot_leak_a_lease_between_attach_and_the_loop():
-    """MUTATION: move the accept or the welcome send back above the protective try.
+    """MUTATION: move the welcome send back above the protective try.
 
     A client that vanished between attach and the welcome (a timed-out dialer
     hanging up) skipped the detach, and its dead lease refused its own
@@ -461,16 +461,34 @@ def test_the_route_cannot_leak_a_lease_between_attach_and_the_loop():
     re-arming another dead lease. Measured live as a room gone permanently
     mute behind "another connection is writing", while the endpoint printed an
     unhandled traceback for every one of them.
+
+    The anchor is the WELCOME SEND rather than the accept, because the accept
+    moved ahead of the whole handshake: a socket that was never accepted cannot
+    carry an application close code, so every refusal reached a peer as a bare
+    1000 and the guest client's table of reasons was unreachable. Nothing about
+    that touches this invariant - the lease is taken by attach, and everything
+    from there on still has to sit inside the try that detaches it. What the
+    accept must NOT do is come after a refusal, and that is pinned separately in
+    tests/test_a2a_socket_refusal.py.
     """
     source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
     start = source.index('@app.websocket("/ws/a2a/{room_id}")')
     route = source[start:start + 14000]
     attach_at = route.index("hub.attach")
-    accept_at = route.index("websocket.accept()")
+    welcome_at = route.index("send_text(_json.dumps(welcome))")
     detach_at = route.index("hub.detach")
-    guard_try = route.rindex("try:", attach_at, accept_at)
-    assert attach_at < guard_try < accept_at < detach_at, \
-        "accept and welcome must sit inside the try whose finally detaches"
+
+    # The try that MATTERS is the one whose finally detaches, found by indentation
+    # rather than by proximity. Searching backwards for any "try:" finds the inner
+    # one around room.welcome, which has no finally at all - the guard then held
+    # even with the protective block moved below the welcome, which is the exact
+    # arrangement it exists to forbid.
+    finally_at = route.rindex("finally:", 0, detach_at)
+    indent = len(route[:finally_at].rsplit("\n", 1)[-1])
+    guard_try = route.rindex("\n" + " " * indent + "try:", 0, finally_at) + 1
+
+    assert attach_at < guard_try < welcome_at < detach_at, \
+        "the welcome must sit inside the try whose finally detaches"
     # And the handshake's store work stays off the shared event loop: a remote
     # client's connect storm froze the WebUI socket beside it.
     assert "to_thread(open_room" in route

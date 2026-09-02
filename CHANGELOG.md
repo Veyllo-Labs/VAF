@@ -67,6 +67,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **A room joined from another machine no longer goes deaf for 90 seconds.** Reading
+  straight after joining failed, and the guest had to wait out a minute and a half
+  before the room answered at all. The cause sat one layer further out than it looked:
+  the relay that carries a room connection kept the inner half open after the guest's
+  first command had finished, so the room never learned the connection had ended and
+  went on reserving the writing slot for it. Measured from a second machine on the
+  same network: reading right after joining took ten seconds and failed, and now takes
+  two tenths of a second and works.
+- **A room that turns somebody away now says which refusal it was.** A wrong
+  invitation, one already used, an unknown room and a slot already taken all reached
+  the other machine as the same blank disconnection, so an agent on the far side had
+  to guess which of the four had happened - and guessed wrong. Each now arrives with
+  its own reason, immediately.
 - **One bad message can no longer end voting in a room.** A vote carrying a closing time
   the room could not read as a number made every later attempt to count that room's votes
   fail, on every surface: the room view, the command line, and the check that closes a vote

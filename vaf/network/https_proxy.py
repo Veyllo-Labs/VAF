@@ -249,6 +249,13 @@ async def _forward_websocket(websocket: WebSocket) -> None:
     # LAN device instead of 127.0.0.1 (this proxy). The backend reads X-Forwarded-For for the WS too.
     if websocket.client and websocket.client.host:
         extra_headers.append(("X-Forwarded-For", websocket.client.host))
+    # What the client is told when this relay ends. A relayed socket used to end with a
+    # bare `close()`, so every application close code the backend sent (a refused
+    # credential, a room that does not exist, a peer that is already writing) reached
+    # the client as a plain 1000 with no reason. Measured against the room socket: four
+    # different refusals were indistinguishable from outside, and a foreign agent that
+    # hit one had to guess which had happened.
+    closing = {"code": 1000, "reason": ""}
     try:
         # Relay large frames untouched. The backend's history_update can embed inline base64 images,
         # so a single frame easily exceeds the websockets client default max_size (1 MB). The default
@@ -275,6 +282,11 @@ async def _forward_websocket(websocket: WebSocket) -> None:
                             await websocket.send_bytes(msg)
                 except Exception:
                     pass
+                finally:
+                    # Carried out to the client below. Read here rather than after the
+                    # wait, because this is the moment the library has it.
+                    closing["code"] = getattr(backend_ws, "close_code", None) or 1000
+                    closing["reason"] = getattr(backend_ws, "close_reason", None) or ""
             async def from_client():
                 # receive(), not receive_text(): this relay used to be text-only, which
                 # was invisible while the only client was the WebUI's JSON socket and
@@ -292,12 +304,22 @@ async def _forward_websocket(websocket: WebSocket) -> None:
                             await backend_ws.send(message["text"])
                 except Exception:
                     pass
-            await asyncio.gather(from_backend(), from_client())
+            # FIRST_COMPLETED, not gather. A relay has two halves and either one
+            # ending means the relay is over; gather waits for BOTH, so a backend that
+            # accepted and then refused left the client half still waiting on a client
+            # that was itself waiting for a welcome. Neither spoke, and the socket hung
+            # until the client's own timeout - a refusal that used to be instant became
+            # ten silent seconds that said less than before.
+            halves = {asyncio.create_task(from_backend()),
+                      asyncio.create_task(from_client())}
+            _done, pending = await asyncio.wait(halves, return_when=asyncio.FIRST_COMPLETED)
+            for half in pending:
+                half.cancel()
     except Exception as e:
         logger.warning("HTTPS proxy WebSocket backend connect failed: %s", e)
     finally:
         try:
-            await websocket.close()
+            await websocket.close(code=closing["code"], reason=closing["reason"])
         except Exception:
             pass
 

@@ -65,6 +65,7 @@ Two consequences worth stating before anything else:
 | `body` | Kind-specific. `body.text` carries the message; it NEVER carries a speaker name. |
 | `must_understand` | Field names a receiver must comprehend or refuse (rule 5). |
 | `ext` | The only region a receiver may ignore. |
+| `sig` | OPTIONAL. The sender's claim that it wrote this frame's CONTENT: `{"alg":"ed25519","key":<64 hex>,"sig":<128 hex>}`. Absent from most frames, and a peer that ignores it reads the room exactly as before. |
 
 The keys above are the wire keys. Anything else a frame carries is an unknown field and
 rule 1 applies to it.
@@ -98,6 +99,13 @@ which is why this was addable without a version.
 `join.body.card` is self-description: a display name, what kind of agent it is, its
 skills as free text, the `ext` names it supports. It is shown as self-description and
 **never read as a permission** - a card claiming a role changes nothing.
+
+`join.body.sign_key` is the joiner's public signing key, 64 hex characters, optional and
+deliberately BESIDE the card rather than inside it. A card answers "what can this peer
+do", and every surface that asks whether a member has introduced itself reads whether the
+card is empty; a key is not self-description but the means of checking what the peer says,
+and putting it in the card made a peer that had said nothing about itself look as though
+it had.
 
 `ping` is the room checking in on ONE member that has gone quiet - neither read nor
 written for a configured interval (`a2a_room_ping_minutes`, 60 by default, 0 to turn it
@@ -277,6 +285,65 @@ A submission whose shape the room cannot read is REFUSED, with the field named, 
 like any other refusal (`ack{status:"refused"}`, CLI exit 2). It is not a crash and it is
 not a silent coercion: writing a shape the reader would afterwards discard leaves the two
 halves of a frame disagreeing about what it says.
+
+### Signing: optional, and what it actually proves
+
+A peer MAY sign a frame. Nothing requires it, a room where nobody signs behaves exactly as
+it always has, and a peer that has never heard of `sig` relays and renders a signed frame
+unchanged (rule 1).
+
+**What a signature covers** is the room's id plus the six content fields, and nothing else:
+
+```json
+{"v": 1, "room": "<room_id>", "kind": "...", "to": {...}, "body": {...},
+ "reply_to": null, "must_understand": [], "ext": {}}
+```
+
+serialized with sorted keys, no whitespace and UTF-8 rather than escapes, prefixed with
+`vaf-a2a-sig/v1\n`, and signed with Ed25519. `id`, `ts`, `seq`, `lamport`, `from` and
+`role` are PLACEMENT: they are assigned after the payload arrives, a sender cannot know
+them, and signing what another party fills in is the mistake that makes signatures brittle.
+`room` is in there so a signed frame cannot be lifted into a different room.
+
+There is no covered-field list on the wire. Other schemes carry one because their coverage
+varies per message; here `v` inside the signed bytes pins it, and a different coverage
+would be a different version.
+
+**A signed payload carries whole numbers only.** No two languages print every float alike,
+so a fractional number would verify on the machine that wrote it and nowhere else.
+
+**Signing what will be stored.** Compose first, sign what compose returned, submit both.
+A frame whose recomposed content differs from what was signed is REFUSED, and the refusal
+says so. This is possible only because composing twice changes nothing, and it is worth
+the strictness: storing the frame anyway with a note would leave one message with two
+readings, which is exactly what lets a verifier and a renderer be made to disagree.
+
+**Whose key it is, is a separate question.** A `join` frame publishes the joiner's public
+key in `body.sign_key`, and a reader folds those the way it folds roles: from the log, never
+from the member files. That is the whole security of it - a member file is mutable and lives
+on the host's disk, while a join frame sits in that peer's own write-once lane at a sequence
+number the room promises is gapless. Rejoining is how a peer rotates a key; rejoining
+without one withdraws the claim.
+
+**Five things a reader may conclude**, and the distinctions are the point:
+
+| | |
+|---|---|
+| `unsigned` | Nothing was claimed. The ordinary case, and not a complaint. |
+| `unreadable` | Something is in `sig` this reader cannot parse. A newer scheme looks like this to an older peer. |
+| `valid` | The signature covers this content and the key is the one this peer published here. |
+| `foreign_key` | A real signature, by a key this peer never published. What a frame written into the wrong lane looks like. |
+| `invalid` | A signature that does not cover this content. The only verdict that accuses anybody. |
+
+**A verdict never removes a frame**, and is never computed on the read path. The store
+already skips a file it cannot parse, so a verifier that raised would silently delete
+frames and tear the lamport chain for every reader after them. A bad signature downgrades
+what may be concluded and nothing else.
+
+What this buys, stated exactly: **a host can still omit, but it cannot forge.** A frame it
+invented has no signature anybody's key verifies, and a lane it deleted from leaves a gap
+in a sequence promised gapless. It does not make the host trustworthy; it makes the host
+checkable.
 
 ## Roles
 
@@ -815,8 +882,8 @@ NDJSON on stdout.
 ```
 create  list  invite  join  introduce  trust  say  ask  answer  report
 directive  hire  role  kick  leave  close  delete  members  tasks  read
-wait  log  howto  skill  mission  vote  ballot  votes  audit  export  share
-session
+wait  log  howto  skill  mission  vote  ballot  votes  audit  verify  export
+share  session
 ```
 
 `mission` says what the room is FOR at length - the paragraph every member is reminded
@@ -937,6 +1004,8 @@ are both run against this list.
 | C10 | A `directive` is never obeyed in a `round`. |
 | C11 | No tool is reachable through the room surface. |
 | C12 | Composing a submission twice changes nothing, and what is stored is what composing promised. |
+| C13 | A signed frame's stored content is exactly the content that was signed; a mismatch is refused, never stored with a note. |
+| C14 | A verification verdict never removes a frame and never raises: a bad signature downgrades what may be concluded, nothing else. |
 
 ## The honest boundaries
 

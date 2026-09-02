@@ -529,6 +529,11 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
              # named here is silently dropped on its way to the browser - the
              # shape that has cost this file two features already.
              "files": e.get("files") or [],
+             # What a reader may conclude about who wrote this line. Forwarded like
+             # every other field here, and deliberately the VERDICT rather than the
+             # signature: the browser has no use for the key material and this exact
+             # rebuild has silently dropped a field twice already.
+             "verdict": e.get("verdict") or "unsigned",
              "lamport": e["lamport"], "to": e.get("to") or {}}
             for e in entries
             # A check-in is the room talking to ONE agent about its own attention,
@@ -4437,7 +4442,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 display = str(resolve_caller_username(
                                     None, user_scope_id, allow_lookup=True) or "user")
                             identity = room.join(display=display, scope_id=user_scope_id,
-                                                 peer_id=derive_peer_id(key, wanted))
+                                                 peer_id=derive_peer_id(key, wanted),
+                                                 participant_key=key)
                         # A member record still carrying the lane literal as its name is
                         # healed in _send_room_transcript, which every one of these
                         # commands answers with - a second heal here would be a second

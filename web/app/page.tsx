@@ -170,6 +170,10 @@ type RoomMessage = {
     /** Files in the room's shared folder this message points at. A reference,
      *  never the bytes - the folder holds those, and the chip opens it. */
     files?: Array<{ path: string; size?: number }>;
+    /** What a reader may conclude about who wrote this: "unsigned" (nobody claimed,
+     *  the ordinary case), "valid", "foreign_key", "invalid" or "unreadable". The
+     *  verdict, never the signature - the browser has no use for key material. */
+    verdict?: string;
 };
 
 type RoomView = {

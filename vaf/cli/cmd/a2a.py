@@ -607,7 +607,7 @@ def create(
                            room_id=room_id or None, multi_scope=shared)
         me = room.join(display=display or _display(),
                        peer_id=derive_peer_id(_key(), room.room_id), scope_id=_scope(),
-                       card=_self_card(skills))
+                       card=_self_card(skills), participant_key=_key())
     except (RoomError, StoreError) as e:
         _fail(str(e), EXIT_REFUSED)
     _emit({"ok": True, "room": room.room_id, "kind": room.kind,
@@ -771,7 +771,7 @@ def join(
         else:
             identity = room.join(display=display or _display(),
                                  peer_id=derive_peer_id(_key(), room_id),
-                                 scope_id=_key(), mode=mode)
+                                 scope_id=_key(), mode=mode, participant_key=_key())
     except TicketInvalid as e:
         _fail(str(e), EXIT_REFUSED)
     except RoomError as e:
@@ -1323,7 +1323,11 @@ def _row(entry: dict) -> dict:
             "label": entry["label"],
             "role": entry["role"], "kind": entry["kind"], "text": entry["text"],
             "body": entry["body"], "lamport": entry["lamport"], "ts": entry["ts"],
-            "reply_to": entry["reply_to"], "known": entry["known"]}
+            "reply_to": entry["reply_to"], "known": entry["known"],
+            # What a reader may conclude about who wrote this. A machine peer that
+            # never asks still gets it, which is the point: `unsigned` is the answer
+            # for a room where nobody signs, and it costs one word to say so.
+            "verdict": entry.get("verdict") or "unsigned"}
 
 
 def _conversation(room, identity, *, since: int, membership: bool):
@@ -1615,6 +1619,40 @@ def audit(room_id: str = typer.Argument(...),
         if row.get("detail"):
             line += f" ({row['detail']})"
         typer.echo(line)
+
+
+@app.command()
+def verify(room_id: str = typer.Argument(...),
+           since: int = typer.Option(0, help="Only frames after this lamport."),
+           problems: bool = typer.Option(False, "--problems",
+                                         help="Only what is not plainly in order.")) -> None:
+    """Who really wrote each message, as far as the transcript can prove it.
+
+    A room RECORDS an author by assigning it, which is worth exactly as much as the
+    machine holding the room. A signed message can be checked by anybody with the
+    transcript, on any machine, later. This prints one verdict per message.
+
+    `unsigned` is the ordinary answer and not a complaint. `valid` means the signature
+    covers the message and the key is the one that peer published here. `foreign_key`
+    means a real signature by a key this peer never published, which is what a message
+    written into the wrong lane looks like. `invalid` is the only one that accuses
+    anybody. `unreadable` means a claim this version cannot parse, which is what a
+    newer scheme looks like to an older reader.
+
+    Nothing is ever removed by a verdict: a message that fails stays in the room and
+    stays counted, because taking it out would break the ordering for everything after
+    it.
+    """
+    room = _room(room_id)
+    _me(room, required=False)
+    labels = room.labels()
+    for frame, verdict in room.verify_frames(since_lamport=int(since)):
+        if problems and verdict in ("unsigned", "valid"):
+            continue
+        _emit({"id": frame.id, "peer": frame.sender,
+               "label": labels.get(frame.sender) or frame.sender,
+               "kind": frame.kind, "lamport": frame.lamport, "verdict": verdict,
+               "key": (frame.sig or {}).get("key") or ""})
 
 
 @app.command()

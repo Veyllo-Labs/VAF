@@ -205,7 +205,7 @@ def test_the_ordering_rule_is_stated_and_ts_is_called_advisory(text):
 
 def test_the_conformance_list_has_every_item_the_suite_claims(text):
     table = text.split("| C1 |")[1].split("\n\n")[0]
-    for n in range(2, 13):
+    for n in range(2, 15):
         assert f"| C{n} |" in table, f"conformance item C{n} is missing"
 
 

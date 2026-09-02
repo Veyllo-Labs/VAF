@@ -326,6 +326,38 @@ class MalformedContent(RoomError):
     """
 
 
+def _published_key(participant_key: str, room_id: str) -> Optional[str]:
+    """This participant's public signing key in this room, or None if there is none.
+
+    NEVER raises. Signing is optional in both directions, so a machine whose keyring
+    cannot be opened, or an install without the crypto library, keeps rooms working
+    exactly as before rather than failing to join one. A missing key is the status
+    quo; an exception here would be a regression for everybody who never asked for a
+    signature.
+    """
+    try:
+        from vaf.core.a2a import signing
+        return signing.public_key(participant_key, room_id)
+    except Exception:
+        return None
+
+
+def _sign_content(participant_key: str, room_id: str,
+                  content: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """A signature over what the room is about to store, or None. NEVER raises.
+
+    The content handed in is `compose`'s output, which is exactly what `ingest` goes
+    on to write. That is the whole reason compose is a fixed point: without it this
+    would be signing a draft.
+    """
+    try:
+        from vaf.core.a2a import signing
+        payload = signing.covered_payload(room_id, content)
+        return signing.sign(payload, participant_key=participant_key, room_id=room_id)
+    except Exception:
+        return None
+
+
 def content_object(value: Any, name: str) -> Dict[str, Any]:
     """A submitted field that must be an object, refused the way a room refuses.
 
@@ -356,15 +388,23 @@ class Identity:
     ``scope_id`` is the VAF tenant when the peer is one of ours, and None for a
     foreign agent that has no account here. It never travels in a frame: a scope UUID
     identifies a tenant, and every member of a room can read every frame in it.
+
+    ``participant_key`` is the lane-and-scope pair this peer was derived from, and it
+    is what lets the room SIGN on that peer's behalf: the signing key comes out of the
+    same two inputs as the handle. It is None for a guest, which has no account here
+    and therefore no key on this machine, and None is not an error - it means this
+    peer's frames go out unsigned, which is what they have always done.
     """
 
-    __slots__ = ("peer_id", "display", "scope_id", "role")
+    __slots__ = ("peer_id", "display", "scope_id", "role", "participant_key")
 
-    def __init__(self, peer_id: str, display: str, scope_id: Optional[str], role: str) -> None:
+    def __init__(self, peer_id: str, display: str, scope_id: Optional[str], role: str,
+                 participant_key: Optional[str] = None) -> None:
         self.peer_id = check_name(peer_id, what="peer id")
         self.display = str(display or peer_id)
         self.scope_id = str(scope_id) if scope_id else None
         self.role = role
+        self.participant_key = str(participant_key) if participant_key else None
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"Identity({self.peer_id!r}, {self.display!r}, role={self.role!r})"
@@ -484,6 +524,7 @@ class Room:
         card: Optional[Dict[str, Any]] = None,
         mode: str = DEFAULT_MODE,
         role: Optional[str] = None,
+        participant_key: Optional[str] = None,
     ) -> Identity:
         """Admit a peer and record the join in the log.
 
@@ -491,6 +532,14 @@ class Room:
         Whatever a ``card`` claims is displayed, never believed: the card is a self
         description for humans and for a leader choosing workers, and it has no say
         in the fold that decides roles.
+
+        ``participant_key`` is the lane-and-scope pair the handle was derived from. Given
+        one, the join PUBLISHES this peer's public signing key in its card, which is what
+        later makes its signatures checkable by anybody holding the transcript. The key is
+        self-asserted exactly like the rest of the card, and that is the honest shape: a
+        card claims, and what turns the claim into something worth anything is that every
+        later frame from this peer verifies against it. A peer with no key here simply
+        publishes none and keeps sending unsigned frames.
         """
         if self.closed:
             raise RoomError(f"room {self.room_id!r} is closed")
@@ -501,7 +550,15 @@ class Room:
         resolved = self.default_role()
         if role and role in CAPABILITIES and self.kind == "chain" and not self.roles():
             resolved = role
-        identity = Identity(peer_id or new_peer_id(), display, scope_id, resolved)
+        identity = Identity(peer_id or new_peer_id(), display, scope_id, resolved,
+                            participant_key=participant_key)
+        card = dict(card or {})
+        # BESIDE the card, never inside it. A card answers "what can this peer do",
+        # and every surface that asks whether a member has introduced itself reads
+        # "is the card empty". A key is not self-description, it is how you check
+        # what the peer says, and putting it in the card made a peer that had said
+        # nothing about itself look as though it had.
+        published = _published_key(participant_key, self.room_id) if participant_key else None
 
         # An existing member's mode is NEVER overwritten by a join. The mode is the
         # local user's standing decision about how far their own agent may act, and a
@@ -513,11 +570,12 @@ class Room:
             "display": identity.display,
             "mode": str(existing.get("mode") or mode),
             "lease": time.time(),
-            "card": dict(card) if card else {},
+            "card": dict(card),
         })
         joined = self.ingest(
             {"kind": "join", "to": {"room": True},
-             "body": {"display": identity.display, "card": dict(card) if card else {}}},
+             "body": ({"display": identity.display, "card": dict(card)}
+                      | ({"sign_key": published} if published else {}))},
             identity=identity,
         )
         # WHAT A NEW MEMBER MAY READ, honoured here rather than promised in the
@@ -1408,6 +1466,83 @@ class Room:
     def role_of(self, peer_id: str) -> Optional[str]:
         return self.roles().get(peer_id)
 
+    # ── who a signature belongs to ──────────────────────────────────────────
+
+    def signing_keys(self) -> Dict[str, str]:
+        """Which public key each peer published, folded from the log.
+
+        A FOLD over the `join` frames, for the same reason roles are one: any reader
+        recomputes it from the transcript alone and two readers cannot disagree. It
+        deliberately does NOT read the member files, and that is the whole security
+        of it. A member file is mutable and lives on the host's disk; a host that
+        could swap a key there could forge every later frame from that peer and no
+        reader would see it. A join frame cannot be swapped: it sits in that peer's
+        own write-once lane at a sequence number the room promises is gapless, so
+        removing or replacing it leaves a hole a reader can name.
+
+        The LAST key a peer published wins, so rejoining is how a peer rotates. That
+        is the same rule the roles fold uses, and it has the same honest limit: a
+        reader holding only part of a transcript folds only what it holds.
+        """
+        keys: Dict[str, str] = {}
+        for frame in self.store.frames():
+            if frame.kind != "join":
+                continue
+            published = str((frame.body or {}).get("sign_key") or "")
+            if len(published) == 64:
+                keys[frame.sender] = published
+            elif frame.sender in keys:
+                # A rejoin that published nothing withdraws the earlier claim rather
+                # than leaving a key standing that its owner no longer asserts.
+                del keys[frame.sender]
+        return keys
+
+    def verdict_for(self, frame: Frame, keys: Optional[Dict[str, str]] = None) -> str:
+        """What a reader may conclude about who wrote this frame's content.
+
+        Five answers, and the distinctions between them are the point:
+
+        - `unsigned`: nothing was claimed. The ordinary case, and not a complaint.
+        - `unreadable`: something is in `sig` that this peer cannot even parse. Not
+          an accusation - a newer scheme would look like this to an older reader.
+        - `valid`: the signature covers this content AND the key is the one this
+          peer published in the room. The full claim.
+        - `foreign_key`: the signature is real, but by a key this peer never
+          published. This is what a host moving a frame between lanes looks like.
+        - `invalid`: a signature that does not cover this content. The only verdict
+          that accuses anybody.
+
+        A verdict NEVER removes a frame and never raises. The store already skips a
+        file it cannot parse, so a verifier that threw would silently delete frames
+        and tear the logical clock for every reader after them. A bad signature
+        downgrades what may be concluded and nothing else, the way RFC 6376 treats a
+        failed DKIM signature.
+        """
+        if not frame.sig:
+            return "unsigned"
+        from vaf.core.a2a import signing
+        read = signing.read_signature(frame.sig)
+        if read is None:
+            return "unreadable"
+        content = {field: getattr(frame, field) for field in signing.COVERED}
+        try:
+            payload = signing.covered_payload(frame.room, content)
+            if not signing.verify(payload, read):
+                return "invalid"
+        except Exception:
+            return "unreadable"
+        published = (self.signing_keys() if keys is None else keys).get(frame.sender)
+        return "valid" if published and published == read["key"] else "foreign_key"
+
+    def verify_frames(self, since_lamport: int = 0) -> List[Tuple[Frame, str]]:
+        """Every frame with what a reader may conclude about its authorship.
+
+        The keys are folded ONCE for the whole walk: the fold reads the room, and
+        asking it per frame would re-read the room per frame.
+        """
+        keys = self.signing_keys()
+        return [(f, self.verdict_for(f, keys)) for f in self.store.read_since(since_lamport)]
+
     # ── the gate every frame passes ─────────────────────────────────────────
 
     def may(self, role: str, kind: str) -> bool:
@@ -1572,15 +1707,59 @@ class Room:
         # sender can be told it in advance and hand exactly it back. Everything
         # below is placement: assigned from the admitted peer and the store, and
         # never honoured as it arrived.
+        content = self.compose(data)
+        signature = self._settle_signature(data.get("sig"), content, identity)
         frame = Frame.new(
             room=self.room_id,
             sender=identity.peer_id,
             role=role,
             seq=self.store.next_seq(identity.peer_id),
             lamport=self.store.next_lamport(),
-            **self.compose(data),
+            sig=signature,
+            **content,
         )
         return self.store.append(frame)
+
+    def _settle_signature(self, presented: Any, content: Mapping[str, Any],
+                          identity: Identity) -> Optional[Dict[str, Any]]:
+        """The signature this frame will carry: the one presented, a fresh one, or none.
+
+        A PRESENTED signature is checked against the content the room is ABOUT TO
+        STORE, not against what arrived, and refused when the two disagree. That is
+        only answerable because `compose` is a fixed point: a sender can ask what will
+        be stored and sign exactly it. Storing the frame anyway with a note saying the
+        content was normalised afterwards would be the canonicalisation-divergence
+        class, where one message has two valid readings and a verifier and a renderer
+        can be made to disagree. The standards this follows are unanimous that the
+        receiving end refuses instead (RFC 9413 on why quietly accepting input outside
+        the specification entrenches the error, RFC 9421 on not signing what another
+        party fills in).
+
+        The refusal is JUDGED, which matters downstream: a held connection files a
+        judged refusal aside rather than retrying it, and re-sending a signature that
+        did not verify would repeat forever.
+
+        With nothing presented, the room signs on the peer's behalf when it holds that
+        peer's key. It never fails for want of one: an unsigned frame is what every
+        frame was until now.
+        """
+        read = None
+        if presented is not None:
+            from vaf.core.a2a import signing
+            read = signing.read_signature(presented)
+            if read is None:
+                raise MalformedContent(
+                    "'sig' is not a signature this room can read; expected "
+                    "{'alg': 'ed25519', 'key': <64 hex>, 'sig': <128 hex>}")
+            if not signing.verify(signing.covered_payload(self.room_id, content), read):
+                raise NotPermitted(
+                    "this signature does not cover the content the room would store. "
+                    "Compose the message first, then sign exactly what compose returned")
+            return read
+
+        if identity.participant_key:
+            return _sign_content(identity.participant_key, self.room_id, content)
+        return None
 
     # ── convenience, all of it routed through ingest ────────────────────────
 
@@ -1852,7 +2031,8 @@ class Room:
         if not role:
             return None
         record = self.store.member(peer_id) or {}
-        return Identity(peer_id, display or record.get("display") or peer_id, scope_id, role)
+        return Identity(peer_id, display or record.get("display") or peer_id, scope_id,
+                        role, participant_key=key)
 
     def activity(self) -> Dict[str, Dict[str, Any]]:
         """Who is engaged with the newest part of the conversation, as FACTS.
@@ -2015,6 +2195,10 @@ class Room:
         # to be decided against each other (that is what makes them unique), and doing
         # it per row would re-read the member table for every frame in the room.
         labels = self.labels()
+        # Folded ONCE for the whole transcript, like the labels above and for the same
+        # reason: the fold reads the room, so asking it per row would read the room per
+        # row.
+        keys = self.signing_keys()
         rows = []
         for frame in self.store.read_since(since_lamport):
             record = members.get(frame.sender) or {}
@@ -2043,6 +2227,13 @@ class Room:
                 # the transcript already knows.
                 "to": dict(frame.to or {}),
                 "known": frame.kind_known,
+                # What a reader may conclude about who wrote this, carried WITH the row
+                # because four surfaces render this transcript and a surface that
+                # decided for itself would be a second opinion about authorship. The
+                # verdict travels, never the signature: a renderer has no use for 128
+                # hex characters, and every projection that carried raw material it did
+                # not need has ended up leaking or dropping it.
+                "verdict": self.verdict_for(frame, keys),
             })
         return rows
 

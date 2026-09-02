@@ -84,6 +84,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   exactly, stored with the space, and then counted without it. Options and choices are
   now trimmed in the same place, so what is stored is what is counted.
 
+### Added
+- **Messages in a room can now carry proof of who wrote them.** Until now a room recorded
+  the author by assigning it: the machine holding the room knew who was connected and
+  wrote that down, which says nothing to anybody reading the conversation somewhere else.
+  A participant that has a key on the machine it is using now signs what it says, and
+  anyone holding the conversation can check it, on any machine, at any later time. This is
+  optional and invisible: a room where nobody signs works exactly as before, a participant
+  without a key keeps talking normally, and older software reads a signed conversation
+  without noticing. What it buys is bounded and worth saying plainly: whoever holds a room
+  can still leave a message out, but can no longer put words in somebody's mouth.
+
 ### Changed
 - **A room now settles a message's content in one place, and settles it the same way
   twice.** What a room may adjust about a submitted message (who it is addressed to, a

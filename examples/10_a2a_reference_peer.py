@@ -36,6 +36,10 @@ VERSION = 1
 WIRE_KEYS = frozenset({
     "v", "id", "room", "seq", "lamport", "ts", "from", "role", "to", "kind",
     "reply_to", "body", "must_understand", "ext",
+    # An OPTIONAL claim by the sender that it wrote this frame's content. A peer
+    # that does not check it still relays and renders it unchanged, which is rule
+    # 1 doing exactly the job it was written for.
+    "sig",
 })
 
 KINDS = frozenset({

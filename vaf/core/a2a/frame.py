@@ -161,6 +161,11 @@ def read_deadline(body: Any) -> Optional[int]:
 WIRE_KEYS = frozenset({
     "v", "id", "room", "seq", "lamport", "ts", "from", "role",
     "to", "kind", "reply_to", "body", "must_understand", "ext",
+    # A peer's OPTIONAL claim that it wrote this frame's content. Absent from
+    # almost every frame, and a peer that has never heard of it reads the
+    # conversation exactly as before (rule 1). See vaf/core/a2a/signing.py for
+    # what it covers and why it covers only that.
+    "sig",
 })
 
 _REQUIRED = ("id", "room", "seq", "lamport", "from", "role", "kind", "to")
@@ -264,6 +269,10 @@ class Frame:
     reply_to: Optional[str] = None
     must_understand: Tuple[str, ...] = ()
     ext: Dict[str, Any] = field(default_factory=dict)
+    # The sender's OPTIONAL claim that it wrote this frame's content, over the
+    # fields it actually controls. None is the ordinary case and means nothing was
+    # claimed, which a reader must render differently from a claim that failed.
+    sig: Optional[Dict[str, Any]] = None
     v: int = VERSION
     # Everything the source carried, so an unknown field survives a round trip
     # byte for byte (rule 1). Not part of equality-by-meaning, hence repr=False.
@@ -286,6 +295,7 @@ class Frame:
         reply_to: Optional[str] = None,
         must_understand: Iterable[str] = (),
         ext: Optional[Dict[str, Any]] = None,
+        sig: Optional[Mapping[str, Any]] = None,
         frame_id: Optional[str] = None,
         ts: Optional[float] = None,
     ) -> "Frame":
@@ -316,6 +326,7 @@ class Frame:
             reply_to=(str(reply_to) if reply_to else None),
             must_understand=required_names(must_understand),
             ext=object_field(ext, "ext"),
+            sig=(dict(sig) if isinstance(sig, Mapping) and sig else None),
         )
 
     @classmethod
@@ -390,6 +401,8 @@ class Frame:
             reply_to=(str(data["reply_to"]) if data.get("reply_to") else None),
             must_understand=tuple(str(f) for f in required_fields),
             ext=dict(ext) if isinstance(ext, Mapping) else {},
+            sig=(dict(data["sig"]) if isinstance(data.get("sig"), Mapping) and data["sig"]
+                 else None),
             v=version,
             _raw=dict(data),
         )
@@ -425,6 +438,8 @@ class Frame:
             out["must_understand"] = list(self.must_understand)
         if self.ext:
             out["ext"] = self.ext
+        if self.sig:
+            out["sig"] = self.sig
         return out
 
     # ── what a reader may conclude ──────────────────────────────────────────

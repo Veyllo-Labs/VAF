@@ -189,6 +189,7 @@ class RoomJoinTool(BaseTool):
                 display=display, peer_id=peer_id,
                 scope_id=kwargs.get("user_scope_id"), mode=mode,
                 card=_card(str(kwargs.get("skills") or "")),
+                participant_key=key,
             )
         except RoomError as e:
             return f"Could not join '{room_id}': {e}"
@@ -564,7 +565,8 @@ class RoomOpenTool(BaseTool):
             # expects it to mean.
             identity = room.join(display=display, scope_id=scope,
                                  peer_id=derive_peer_id(key, room.room_id),
-                                 card=_card(str(kwargs.get("skills") or "")))
+                                 card=_card(str(kwargs.get("skills") or "")),
+                                 participant_key=key)
         except RoomError as e:
             return f"Could not open the room: {e}"
 

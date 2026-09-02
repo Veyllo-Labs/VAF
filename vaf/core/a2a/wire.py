@@ -168,7 +168,8 @@ def admit(room: Room, credential: str, *, display: str = "") -> tuple:
                         account["user_scope_id"], existing), None
     try:
         return room.join(display=display or account["username"] or "remote",
-                         peer_id=peer_id, scope_id=account["user_scope_id"]), None
+                         peer_id=peer_id, scope_id=account["user_scope_id"],
+                         participant_key=key), None
     except RoomError as e:
         raise HandshakeRefused(str(e), code=4003) from None
 

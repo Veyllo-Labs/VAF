@@ -323,18 +323,21 @@ def test_both_implementations_answer_identically_across_the_whole_matrix():
                        vaf.may_emit(role, kind, room_kind), (room_kind, role, kind)
 
 
-# ── C8, C9, C11, C12: checked where they live, named here ──────────────────
+# ── C8, C9, C11, C12, C13, C14: checked where they live, named here ────────
 
 def test_the_items_this_file_does_not_cover_are_covered_elsewhere():
     """C8 (write only into your own lane), C9 (renew the lease), C11 (no tool through
-    the room surface) and C12 (composing twice changes nothing) are properties of a
+    the room surface), C12 (composing twice changes nothing) and C13/C14 (what a
+    signature promises and what a verdict may never do) are properties of a
     STORE and of a HOST, not of a frame receiver, so a reference peer that is neither
     cannot demonstrate them. They are asserted in their own files, and this test fails
     if those files disappear - which is the difference between a named gap and one
     nobody noticed.
     """
-    for name in ("test_a2a_store.py", "test_a2a_room.py", "test_a2a_compose.py"):
-        assert (ROOT / "tests" / name).exists(), f"{name} carried C8/C9/C11/C12 and is gone"
+    for name in ("test_a2a_store.py", "test_a2a_room.py", "test_a2a_compose.py",
+                 "test_a2a_signed_frames.py"):
+        assert (ROOT / "tests" / name).exists(), \
+            f"{name} carried C8/C9/C11/C12/C13/C14 and is gone"
 
     room_tests = (ROOT / "tests" / "test_a2a_room.py").read_text(encoding="utf-8")
     assert "execute_tool" in room_tests, "the C11 source guard is no longer in place"
@@ -344,3 +347,9 @@ def test_the_items_this_file_does_not_cover_are_covered_elsewhere():
         "the C12 fixed-point guard is no longer in place"
     assert "test_ingest_stores_exactly_what_compose_promised" in compose_tests, \
         "the C12 promise guard is no longer in place"
+
+    signed_tests = (ROOT / "tests" / "test_a2a_signed_frames.py").read_text(encoding="utf-8")
+    assert "test_a_signature_over_something_else_is_refused" in signed_tests, \
+        "the C13 guard is no longer in place"
+    assert "test_a_verdict_never_raises_and_never_drops_a_frame" in signed_tests, \
+        "the C14 guard is no longer in place"

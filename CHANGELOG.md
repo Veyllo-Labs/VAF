@@ -67,6 +67,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **A group chat's header now sits where a chat's header sits.** Opening an agent room
+  used to leave the top band of the chat empty and put the room's name, kind, mission
+  and members on a second bar underneath it. That bar now stands in the top band
+  itself, next to the browser and specialist buttons, so a room looks like the chat it
+  replaces. On a phone, where the app's own top bar carries the name, nothing changes.
 - **The agent now remembers what its background check asked you, wherever you answer.**
   A question raised while you were away (for example on Telegram) used to live only in a
   small "waiting for a reply" slot, and any activity on your account could take that slot:

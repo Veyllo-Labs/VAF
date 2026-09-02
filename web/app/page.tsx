@@ -1181,8 +1181,10 @@ const LoadingIllusion = ({ kind, label }: { kind: 'chat' | 'room'; label?: strin
 /**
  * A room's transcript, placed where a conversation's messages are placed.
  *
- * It renders CONTENT ONLY. The chat around it - sidebar, header, composer, scroll
- * area, column width - is the chat's and stays untouched, which is the whole point:
+ * It renders CONTENT ONLY. The chat around it - sidebar, header band, composer,
+ * scroll area, column width - is the chat's and stays untouched, which is the whole
+ * point (the room's identity is drawn INTO that header band by the page, see
+ * RoomIdentity):
  * a room is not a different screen, it is the same screen with several speakers in
  * it. Two earlier versions built a surface of their own (a narrow dialog, then a
  * full-screen layer that covered the sidebar) and both were wrong for the same
@@ -1612,6 +1614,91 @@ function RoomTaskHistory({ rows, loading, timeFormat }: {
         </div>
     );
 }
+/**
+ * WHICH room this is and who is in it: the avatar box, the title, the kind and
+ * the viewer's role (or the reconnecting note), the mission, the member chips
+ * and the button that opens the member panel. One component because it is drawn
+ * in two places - the desktop chat header band, and a sticky line at the top of
+ * the transcript below md - and two copies of a header are two headers.
+ *
+ * It is a ROW of flex children, not a box: the caller owns the row (its height,
+ * its padding, its gap), so the same content sits in a 64px band on a desktop
+ * and in a padded sticky line on a phone without either place restyling it.
+ */
+function RoomIdentity({ room, connected, onMembers, membersTitle }: {
+    room: RoomView;
+    connected: boolean;
+    onMembers: () => void;
+    membersTitle: string;
+}) {
+    return (
+        <>
+            <div className="w-8 h-8 rounded-xl bg-gray-900 dark:bg-[#e6e6e6] flex items-center justify-center shrink-0">
+                <Users className="w-4 h-4 text-white dark:text-[#181818]" />
+            </div>
+            <div className="min-w-0 flex-1 leading-tight">
+                <div className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6] truncate">
+                    {room.title}
+                </div>
+                <div className="text-xs text-gray-500 dark:text-[#8a8a8a] truncate">
+                    {/* A room without a live socket is a SNAPSHOT, and it must say
+                        so: its transcript, its member list and its presence all
+                        come from the last poll. The chat has said this for a long
+                        time; the room used to look identical whether it was live
+                        or frozen. */}
+                    {!connected ? (
+                        <span className="text-amber-600 dark:text-amber-400">
+                            Verbindung wird wiederhergestellt\u2026
+                        </span>
+                    ) : (<>
+                        {room.roomKind}
+                        {room.role ? ` \u00b7 you are ${room.role}` : ''}
+                        {room.closed ? ' \u00b7 closed' : ''}
+                    </>)}
+                </div>
+                {/* What this room is FOR. The agents in it have been given the
+                    mission in every single turn since it was set, and the person
+                    who set it was the only member who could not see it anywhere -
+                    it was in the payload and on no surface. One line, because the
+                    full text belongs to whoever wants it (hover), and a paragraph
+                    in a header is a paragraph nobody reads twice. */}
+                {!!room.mission && (
+                    <div className="text-[11px] text-gray-400 dark:text-[#7a7a7a] truncate mt-0.5"
+                        title={room.mission}>
+                        {room.mission}
+                    </div>
+                )}
+            </div>
+            {/* Who is in it, by the name the ROOM resolved. Join names alone would
+                show two agents called "Codex" with no way to tell them apart,
+                which is what the tag exists for. One line that clips rather than
+                wraps: in a band of fixed height a second row of chips has nowhere
+                to go. */}
+            <div className="flex flex-nowrap gap-1 justify-end overflow-hidden max-md:hidden">
+                {(room.members_list || []).map(m => (
+                    <span key={m.peer}
+                        title={m.role}
+                        className={cn(
+                            "text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap",
+                            m.peer === room.me
+                                ? "bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]"
+                                : "bg-gray-100 text-gray-600 dark:bg-[#242424] dark:text-[#c8c8c8]")}>
+                        {m.label}
+                    </span>
+                ))}
+            </div>
+            {/* Who is in here, and what each of them is. There was a close button in
+                this spot; it was the third way to leave a room that a click on any
+                conversation already does, and it crowded out the one thing a group
+                chat header is actually asked for. */}
+            <button onClick={onMembers} title={membersTitle}
+                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#242424] text-gray-400 shrink-0">
+                <Info size={16} />
+            </button>
+        </>
+    );
+}
+
 function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker, liveWorker, connected = true, pending, pendingNote, recentSends }: {
     view: { room: RoomView; messages: RoomMessage[] };
     onMembers: () => void;
@@ -1759,73 +1846,17 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
         || (!!liveWorker && !view.room.closed);
     return (
         <>
-            {/* The header stays put. It is the only thing on screen that says WHICH room
-                this is and who is in it, and it was the first thing to scroll away in a
-                conversation of any length. Frosted rather than opaque so the messages
-                sliding under it stay visible - it belongs to the conversation, it is not
-                a bar sitting on top of one. */}
-            <div className="sticky top-0 z-20 -mx-6 px-6 max-md:-mx-3 max-md:px-3 mb-2 border-b border-gray-200 dark:border-[#2a2a2a] bg-white/80 dark:bg-[#181818]/80 backdrop-blur-md supports-[backdrop-filter]:bg-white/60 dark:supports-[backdrop-filter]:bg-[#181818]/60">
+            {/* Below md only. On a desktop the room's identity stands in the chat
+                header band (the h-16 row the conversation's name lives in), because a
+                room is the same screen as a conversation and its name belongs where
+                the conversation's name is - not on a second bar below an empty one.
+                A phone has no header band (the app's own top bar carries the name),
+                so there this stays a sticky, frosted line at the top of the transcript:
+                it was the first thing to scroll away in a conversation of any length. */}
+            <div className="md:hidden sticky top-0 z-20 -mx-6 px-6 max-md:-mx-3 max-md:px-3 mb-2 border-b border-gray-200 dark:border-[#2a2a2a] bg-white/80 dark:bg-[#181818]/80 backdrop-blur-md supports-[backdrop-filter]:bg-white/60 dark:supports-[backdrop-filter]:bg-[#181818]/60">
                 <div className="flex items-center gap-3 py-3">
-                <div className="w-8 h-8 rounded-xl bg-gray-900 dark:bg-[#e6e6e6] flex items-center justify-center shrink-0">
-                    <Users className="w-4 h-4 text-white dark:text-[#181818]" />
-                </div>
-                <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6] truncate">
-                        {view.room.title}
-                    </div>
-                    <div className="text-xs text-gray-500 dark:text-[#8a8a8a] truncate">
-                        {/* A room without a live socket is a SNAPSHOT, and it must say
-                            so: its transcript, its member list and its presence all
-                            come from the last poll. The chat has said this for a long
-                            time; the room used to look identical whether it was live
-                            or frozen. */}
-                        {!connected ? (
-                            <span className="text-amber-600 dark:text-amber-400">
-                                Verbindung wird wiederhergestellt\u2026
-                            </span>
-                        ) : (<>
-                            {view.room.roomKind}
-                            {view.room.role ? ` \u00b7 you are ${view.room.role}` : ''}
-                            {view.room.closed ? ' \u00b7 closed' : ''}
-                        </>)}
-                    </div>
-                    {/* What this room is FOR. The agents in it have been given the
-                        mission in every single turn since it was set, and the person
-                        who set it was the only member who could not see it anywhere -
-                        it was in the payload and on no surface. One line, because the
-                        full text belongs to whoever wants it (hover), and a paragraph
-                        in a header is a paragraph nobody reads twice. */}
-                    {!!view.room.mission && (
-                        <div className="text-[11px] text-gray-400 dark:text-[#7a7a7a] truncate mt-0.5"
-                            title={view.room.mission}>
-                            {view.room.mission}
-                        </div>
-                    )}
-                </div>
-                {/* Who is in it, by the name the ROOM resolved. Join names alone would
-                    show two agents called "Codex" with no way to tell them apart,
-                    which is what the tag exists for. */}
-                <div className="flex flex-wrap gap-1 justify-end max-md:hidden">
-                    {(view.room.members_list || []).map(m => (
-                        <span key={m.peer}
-                            title={m.role}
-                            className={cn(
-                                "text-[10px] px-1.5 py-0.5 rounded-full",
-                                m.peer === view.room.me
-                                    ? "bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]"
-                                    : "bg-gray-100 text-gray-600 dark:bg-[#242424] dark:text-[#c8c8c8]")}>
-                            {m.label}
-                        </span>
-                    ))}
-                </div>
-                {/* Who is in here, and what each of them is. There was a close button in
-                    this spot; it was the third way to leave a room that a click on any
-                    conversation already does, and it crowded out the one thing a group
-                    chat header is actually asked for. */}
-                <button onClick={onMembers} title={membersTitle}
-                    className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#242424] text-gray-400 shrink-0">
-                    <Info size={16} />
-                </button>
+                    <RoomIdentity room={view.room} connected={connected}
+                        onMembers={onMembers} membersTitle={membersTitle} />
                 </div>
             </div>
 
@@ -8031,9 +8062,9 @@ function VAFDashboardContent() {
     // a later literal silently win over these variables.
     // The name of the chat that is open, in ONE place: the desktop header and the
     // small layout's bar both read this, so they cannot come to show different
-    // names for the same chat. Empty while a room is open, because a room carries
-    // its own header inside the transcript, with its member count and whether the
-    // view is live.
+    // names for the same chat. Empty while a room is open: the desktop band then
+    // draws the room's own identity (RoomIdentity) in this slot, and below md the
+    // transcript carries it as a sticky line.
     const currentChatTitle = useMemo(() => {
         if (roomView || !currentSessionId) return '';
         return chatLabel(sessions.find(s => s.id === currentSessionId)?.title);
@@ -8497,6 +8528,16 @@ function VAFDashboardContent() {
                             background: the separation is the fade below, not an edge. Hidden below
                             md, where the app's own top bar carries the name instead. */}
                         <div className="shrink-0 h-16 flex items-center gap-3 pl-6 pr-[12px] bg-white relative z-20 max-md:hidden">
+                            {/* A room open: its identity stands here, where the conversation's
+                                name stands, and the rail keeps its end of the row. The band's
+                                height does not change for it - the same 64px the logo and the
+                                rail already share - so the room's three lines (name, kind and
+                                role, mission) are set tight inside it. */}
+                            {roomView ? (
+                                <RoomIdentity room={roomView.room} connected={isConnected}
+                                    onMembers={() => { setRoomPanelTab('members'); setRoomMembersOpen(true); }}
+                                    membersTitle={tMain('roomMembersTitle')} />
+                            ) : (
                             <div className="min-w-0 flex-1">
                                 {editingId === currentSessionId && editingWhere === 'header' ? (
                                     <RenameInput
@@ -8522,6 +8563,7 @@ function VAFDashboardContent() {
                                     </button>
                                 ) : null}
                             </div>
+                            )}
                             {/* The rail, turned. It ran top to bottom on the column's right edge and
                                 now runs left to right at the end of this header, read in the same
                                 order: the browser globe, the picked specialists, the plus that adds
@@ -8695,11 +8737,11 @@ function VAFDashboardContent() {
                             reads as a bar with a soft edge. A SIBLING of the scroller, never a
                             child, or it would scroll away with the content. Its endpoint is
                             --chat-fog, the surface tone this column and the sidebar share, so a
-                            hardcoded white cannot glow across the top of a dark column. Not painted
-                            while a room is open (the room's own header is frosted on purpose so its
-                            messages stay readable under it) and not over an empty chat, where
-                            nothing is scrolling. */}
-                        {!roomView && messages.length > 0 && (
+                            hardcoded white cannot glow across the top of a dark column. Painted for
+                            a room too, now that the room's identity stands in the band above and
+                            its transcript scrolls under this edge like a conversation's; not over
+                            an empty chat or an empty room, where nothing is scrolling. */}
+                        {(roomView ? roomView.messages.length > 0 : messages.length > 0) && (
                             <div
                                 className="absolute top-16 left-0 right-0 h-10 pointer-events-none z-10 max-md:hidden"
                                 style={{
@@ -8717,8 +8759,9 @@ function VAFDashboardContent() {
                                 "space-y-2 transition-[padding] duration-300 ease-out",
                                 // The fade's own band, reserved so the first message can scroll
                                 // clear of it instead of sitting permanently half erased. Not
-                                // below md: there is no header there.
-                                !roomView && "pt-10 max-md:pt-0")}
+                                // below md: there is no header band there, a room's sticky line
+                                // starts the column itself.
+                                "pt-10 max-md:pt-0")}
                                 style={{ paddingBottom: `${128 + dockHeight}px` }}>
                                 {/* An agent room, rendered INSIDE the ordinary chat area. The chat's own
                                     frame stays exactly as it is - sidebar, header, composer - and only

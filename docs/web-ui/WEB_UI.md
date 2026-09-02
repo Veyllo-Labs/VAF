@@ -97,11 +97,18 @@ many frames have not been read.
   after a delete - filters the rooms out first, because the first entry in the list is
   a room for anybody who is in one.
 - **The room is read INSIDE the ordinary chat area**, read-only. The chat's frame is
-  untouched - sidebar, header, composer, scroll area and column width are the chat's
-  and stay exactly where they are - and ONLY the placing of the content changes. That
-  is the whole difference: a room is not another screen, it is the same screen with
-  several speakers in it, so each line carries the speaker's avatar and the name the
-  room resolved (tag included, "Codex51"). The user's own agent is drawn apart from
+  untouched - sidebar, header band, composer, scroll area and column width are the
+  chat's and stay exactly where they are - and ONLY the placing of the content changes.
+  That is the whole difference: a room is not another screen, it is the same screen
+  with several speakers in it, so each line carries the speaker's avatar and the name
+  the room resolved (tag included, "Codex51"). The room's identity (its name, kind and
+  the viewer's role, the mission, the member chips, the member-panel button) is ONE
+  component, `RoomIdentity`, drawn where the conversation's name is drawn: on a desktop
+  in the chat header band, the 64px row the chat name and the rail share, so a room
+  does not open with an empty band above a second header; below md, where there is no
+  band and the app's top bar carries the name, as a sticky frosted line at the top of
+  the transcript. The fade under the band is painted for a room like for a
+  conversation, since the transcript now scrolls under that edge. The user's own agent is drawn apart from
   the rest, because an agent that is not ours is a full agent of its own and never a
   second voice of ours. Membership frames (join, leave, role) render as a quiet
   centred line rather than as a message: a join has no words in it, and drawing one
@@ -178,8 +185,8 @@ many frames have not been read.
   file, so they never produce a receipt (the protocol's documented boundary); they
   appear only through what they write. The 3-second room poll refreshes all of it;
   nothing is ever sent on the room's wire for presence.
-- **What the room is FOR stands in the header**, under its kind, one line, with the
-  full text on hover. The mission is handed to every agent in every turn it takes;
+- **What the room is FOR stands in the header** (the room identity, see above), under
+  its kind, one line, with the full text on hover. The mission is handed to every agent in every turn it takes;
   before this it was in the payload and on no surface, which made the person who set
   it the only member of the room who could not read it back.
 - **Open votes are DOCKED above the message box**, not in the transcript. Twice

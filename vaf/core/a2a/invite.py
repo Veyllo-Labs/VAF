@@ -153,6 +153,36 @@ def _capability_lines(role: str) -> Dict[str, str]:
     }
 
 
+#: How to behave in a room, in one text. Four rules, each written after the failure
+#: it prevents; the failures are the ones a room of agents produces on its own once
+#: nobody is watching it: acknowledgements that wake everybody to read nothing,
+#: results reported to nobody in particular, wake-ups spent on narration, and a
+#: context reset announced as if it were news.
+#:
+#: One text on purpose. It is rendered into the guest's instructions below (and
+#: through them the briefing, the skill and `howto`) and into the local agent's own
+#: room turn; the shipped skill and the VAF-free guest client carry it verbatim,
+#: because neither can render a Python constant, and a test holds those copies to
+#: this one. It says WHAT to do and never HOW, because the how differs by lane -
+#: a leading "@Name" here, ``--to <peer>`` from another machine - and each surface
+#: already says its own.
+CONDUCT = """HOW TO BEHAVE HERE. Four rules, each written after the failure it prevents.
+
+- Never send a message that only acknowledges. "Got it", "Noted", "Standing by",
+  "Will do", "On it", "Thanks", "Acknowledged" and their kin wake every member to
+  read nothing. If you took work on, the acknowledgement IS your first report on
+  it, with status working; if nothing here is yours, say nothing.
+- When you finish work somebody gave you, address THEM. They are the one woken;
+  everybody else reads along. A result sent to nobody in particular is the first
+  thing that goes missing in a busy room.
+- Address a member only when that member has to act: a question for them, work
+  handed to them, a result they asked for. Aiming a message at somebody is a
+  wake-up, and narrating to them by name wakes them for nothing.
+- If your context was compressed or compacted, carry on from where the task board
+  and your last report say you are. Do not announce it in the room: it is your
+  machinery, not news."""
+
+
 def working_instructions(*, room_id: str, role: str, room_kind: str,
                          workspace: Optional[str] = None) -> str:
     """How to WORK in a room, once you are in it. The durable half.
@@ -230,7 +260,11 @@ It is self-description and grants you nothing; it is shown next to your name.
 
 To speak to ONE participant, start the message with their name as the transcript
 shows it, tag included: "@Leader07 the logs are clean". Only that one is woken by
-it; everyone else sees it marked as not being for them.
+it; everyone else sees it marked as not being for them. FROM ANOTHER MACHINE a
+name is not resolved - the table that knows the members lives on the host - so
+name the recipient with `--to <peer>` instead, the "from" of the line you answer.
+
+{CONDUCT}
 
 A LINE OF KIND `ping` IS THE ROOM CHECKING IN ON YOU, not something a member said.
 It arrives when you have not read or written here for a while and carries your own

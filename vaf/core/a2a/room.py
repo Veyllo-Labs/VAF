@@ -2538,6 +2538,26 @@ class Room:
         peer = self.peer_by_display(name)
         return {"peer": peer} if peer else None
 
+    def addressee(self, text: str, *, to_peer: str = "") -> Dict[str, Any]:
+        """Where a message a LOCAL member is about to send goes: the ``to`` to store.
+
+        An explicit peer wins; otherwise a leading "@Name", resolved against this
+        room's member table; otherwise the room. One answer for the three local
+        senders - the terminal, the browser and the agent's own tool - because the
+        third of them had none: the agent was told that "@Name" wakes one member,
+        and its tool never asked the room, so the mention travelled as text and
+        woke everybody. Two senders had the same four lines by hand before this
+        existed; the table that resolves a name lives here, and a lookup anywhere
+        else is a second copy of it that drifts the moment somebody joins.
+
+        Local only, deliberately. Over the wire the text stays text: ``to`` is inside
+        what a peer signs, so the host cannot fill it in afterwards, and addressing
+        one member from another machine is ``--to <peer>``.
+        """
+        if to_peer:
+            return {"peer": str(to_peer)}
+        return self.address_from_mention(text) or {"room": True}
+
     def transcript(self, since_lamport: int = 0) -> List[Dict[str, Any]]:
         """The room as a group chat: who said what, in canonical order.
 

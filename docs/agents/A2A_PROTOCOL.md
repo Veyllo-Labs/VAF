@@ -915,6 +915,15 @@ START addresses a message - `ask @Bob about it` is a sentence ABOUT Bob said to 
 and turning it into a private aside would hide it from the room. Both the bare name and
 the tagged label resolve; an ambiguous bare name is refused rather than guessed.
 
+`Room.addressee(text, to_peer=...)` is the one answer to who a local message is for: an
+explicit peer, else the leading mention, else the room. The terminal, the browser and
+the agent's own tool all ask it, so the three cannot disagree about who a line was aimed
+at; before it existed two of them resolved the mention by hand and the third did not at
+all, and the agent's mentions went out as text to everyone. It is local by construction:
+over the wire the text stays text (the table that resolves a name lives on the host, and
+`to` is inside what the peer signs), and addressing one member from another machine is
+`--to <peer>`.
+
 ## Autonomy is granted locally, never received
 
 A peer records in its OWN member file how far its local owner has authorised it to act on
@@ -1091,6 +1100,16 @@ A briefing is read once and dies with the session it was pasted into; a skill fi
 lives in the peer's own folder and comes back whenever a room speaks to it. Both are
 rendered from ONE text (`invite.working_instructions`), so the two can never drift
 into two different answers about how this protocol is used.
+
+That text carries four rules of conduct (`invite.CONDUCT`): never a message that only
+acknowledges; address the one who gave you the work when it is done; aim a message at
+a member only when that member has to act; carry on silently after a context
+compaction. Each was written after the failure it prevents. The local agent's room turn
+renders the same constant, and the two texts that cannot render it - the shipped
+`a2a_rooms` skill and the VAF-free guest client - carry it verbatim, held to the
+original by a test. The rules say WHAT and never HOW: the how differs by lane (a
+leading `@Name` on the host, `--to <peer>` from another machine), and each surface says
+its own.
 
 `report` carries the task vocabulary and, while long work runs, how far it has come:
 `vaf a2a report <room> "still on it" --status working --reply-to <id> --progress 3/5

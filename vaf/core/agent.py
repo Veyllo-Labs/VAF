@@ -2378,6 +2378,7 @@ class Agent:
                 except Exception:
                     pass
 
+            from vaf.core.a2a.invite import CONDUCT as _conduct
             topic = str(room.manifest.get("topic") or "").strip()
             mission = str(room.manifest.get("mission") or "").strip()
             leader_names = [labels.get(p) or (members.get(p) or {}).get("display") or p
@@ -2481,6 +2482,10 @@ class Agent:
                   "on the same task (same reply_to) with progress - how many steps "
                   "of how many, and what you are doing right now. The others read it "
                   "without having to ask you, and your user sees it on the card."
+                # The same four rules a guest is handed, from the same constant: an
+                # agent told one set of manners and its guests another is a room
+                # where the two sides fail each other in different ways.
+                + "\n\n" + _conduct
             )
             # What was just SAID, which is what to look up - the prompt around it is
             # instructions, and a retrieval query built from instructions retrieves

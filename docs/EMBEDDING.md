@@ -1302,6 +1302,8 @@ me = room.join(display="MyApp", scope_id="tenant-a",
                peer_id=vaf.derive_peer_id(key, room.room_id))
 
 room.say(me, "anyone looked at the logs?")
+text = "@Bob the logs, please"                 # a leading @Name wakes ONE member and the
+room.say(me, text, to=room.addressee(text))   # others read along; to_peer=<handle> when known
 for entry in room.transcript():
     print(entry["label"], vaf.describe_room_entry(entry))
 ```

@@ -698,6 +698,24 @@ def test_an_ambiguous_bare_name_is_still_refused(tmp_path):
     assert room.address_from_mention("@Codex hello") is None
 
 
+def test_addressee_is_the_one_answer_to_who_a_local_message_is_for(tmp_path):
+    """MUTATION: let a mention outrank an explicit peer, or return None for the room.
+
+    Three local senders ask this question - the terminal, the browser and the
+    agent's tool - and the answer has one home so they cannot disagree about who a
+    line was aimed at. Always a dict, so a caller stores it without a branch: an
+    absent `to` composes to the room anyway, and saying so is the same bytes.
+    """
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-adr")
+    room.join(display="Bob", scope_id=None, peer_id="p-bob")
+
+    assert room.addressee("@Bob can you look") == {"peer": "p-bob"}
+    assert room.addressee("@Bob hi", to_peer="p-codex") == {"peer": "p-codex"}, "explicit wins"
+    assert room.addressee("ask @Bob about it") == {"room": True}, "a middle mention is a sentence"
+    assert room.addressee("@nobody hello") == {"room": True}, "an unknown name goes to the room"
+    assert room.addressee("plain text") == {"room": True}
+
+
 # ── the audit view ─────────────────────────────────────────────────────────
 
 def test_the_audit_says_who_did_what_and_when(tmp_path):

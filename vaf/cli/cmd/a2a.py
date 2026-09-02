@@ -557,17 +557,10 @@ def _send(room_id: str, kind: str, text: str, *, to_peer: str = "",
         body["progress"] = progress
     if named:
         body["files"] = named
-    payload = {"kind": kind, "body": body}
-    if to_peer:
-        payload["to"] = {"peer": to_peer}
-    else:
-        # "@Name ..." addresses one member. The ROOM resolves it - a lookup here would
-        # be a second copy of the member table, and it would drift the moment somebody
-        # joins. Only a LEADING mention counts: "ask @Bob about it" is a sentence about
-        # Bob said to everyone, and turning it into a private aside would hide it.
-        mention = room.address_from_mention(text)
-        if mention:
-            payload["to"] = mention
+    # An explicit --to, else a leading "@Name", else everyone: the ROOM answers, the
+    # one place that knows who is in it. The same call the browser and the agent's
+    # tool make, so the three lanes cannot disagree about who a line was aimed at.
+    payload = {"kind": kind, "body": body, "to": room.addressee(text, to_peer=to_peer)}
     if reply_to:
         from vaf.core.a2a.frame import plausible_frame_id
         if not plausible_frame_id(reply_to):

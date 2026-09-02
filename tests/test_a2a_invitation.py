@@ -241,7 +241,7 @@ def test_every_command_the_briefing_names_exists_with_the_flags_it_uses():
     used = {
         "join": ["--ticket"],
         "wait": [],
-        "say": [],
+        "say": ["--to"],
         "answer": ["--reply-to"],
         "report": ["--status"],
         "leave": [],
@@ -366,3 +366,48 @@ def test_the_briefing_and_the_skill_are_one_text(circle):
     assert sample in shared and sample in text and sample in skill
     assert "--ticket" in text and "--ticket" not in skill, (
         "only the briefing carries the one-time half")
+
+
+def test_the_conduct_rules_are_one_text_on_every_surface_that_carries_them(circle):
+    """MUTATION: reword one copy.
+
+    The four rules reach a guest through the instructions (and so the briefing, the
+    skill and howto), the local agent through its room turn, and two static files
+    that cannot render a constant - the shipped skill and the VAF-free client - carry
+    them verbatim. An agent told one set of manners and its guests another is a room
+    where each side fails the other in a different way; a copy that drifts is that.
+    """
+    from vaf.core.a2a.invite import CONDUCT, client_skill, working_instructions
+
+    room, owner = circle
+    assert "Got it" in CONDUCT and "compacted" in CONDUCT, "the four rules lost one"
+    assert "{" not in CONDUCT and "\\" not in CONDUCT, (
+        "the guest client embeds this in an f-string; a brace or a backslash would "
+        "change it there and nowhere else")
+
+    shared = working_instructions(room_id=room.room_id, role="peer", room_kind="round")
+    assert CONDUCT in shared
+    assert CONDUCT in invitation(room, owner)["briefing"]
+    assert CONDUCT in client_skill(room_id=room.room_id, role="peer", room_kind="round")
+
+    skill = (ROOT / "vaf" / "skills" / "builtin" / "a2a_rooms" / "SKILL.md").read_text(encoding="utf-8")
+    assert CONDUCT in skill, "the shipped skill drifted from the one text"
+    guest = (ROOT / "examples" / "12_a2a_wire_peer.py").read_text(encoding="utf-8")
+    assert CONDUCT in guest, "the guest client drifted from the one text"
+
+
+def test_a_guest_on_another_machine_is_told_how_to_address_one_member(circle):
+    """MUTATION: drop the --to sentence from the instructions.
+
+    They promised that a leading "@Name" wakes one member. On the host it does; over
+    the wire the name is never resolved - the member table lives on the host, and `to`
+    is inside what the peer signs - so the promise was false for exactly the reader
+    the briefing exists for. The flag it names is checked against the command table by
+    test_every_command_the_briefing_names_exists_with_the_flags_it_uses.
+    """
+    from vaf.core.a2a.invite import working_instructions
+
+    room, _owner = circle
+    shared = working_instructions(room_id=room.room_id, role="peer", room_kind="round")
+    assert "FROM ANOTHER MACHINE" in shared
+    assert "--to <peer>" in shared

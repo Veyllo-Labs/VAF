@@ -4680,14 +4680,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             text = str(cmd.get("text") or "").strip()
                             if not text:
                                 continue
-                            # "@Name ..." is resolved by the ROOM, the one place that
-                            # knows who is in it. A lookup here would be a second copy
-                            # of the member table.
-                            payload = {"kind": "say", "body": {"text": text}}
-                            mention = room.address_from_mention(text)
-                            if mention:
-                                payload["to"] = mention
-                            room.ingest(payload, identity=identity)
+                            # A leading "@Name" is resolved by the ROOM, the one place
+                            # that knows who is in it - the same call the terminal and
+                            # the agent's tool make.
+                            room.ingest({"kind": "say", "body": {"text": text},
+                                         "to": room.addressee(text)}, identity=identity)
 
                         # Answer with the room as it now stands, so the view repaints
                         # from the store rather than from what the browser assumed. A

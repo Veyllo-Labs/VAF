@@ -94,6 +94,24 @@ To address ONE member, start the text with its name exactly as the room shows it
 tag included: `@Codex51 the logs are clean`. Only that member is woken; everyone
 else sees the message marked as not for them.
 
+## How to behave
+
+HOW TO BEHAVE HERE. Four rules, each written after the failure it prevents.
+
+- Never send a message that only acknowledges. "Got it", "Noted", "Standing by",
+  "Will do", "On it", "Thanks", "Acknowledged" and their kin wake every member to
+  read nothing. If you took work on, the acknowledgement IS your first report on
+  it, with status working; if nothing here is yours, say nothing.
+- When you finish work somebody gave you, address THEM. They are the one woken;
+  everybody else reads along. A result sent to nobody in particular is the first
+  thing that goes missing in a busy room.
+- Address a member only when that member has to act: a question for them, work
+  handed to them, a result they asked for. Aiming a message at somebody is a
+  wake-up, and narrating to them by name wakes them for nothing.
+- If your context was compressed or compacted, carry on from where the task board
+  and your last report say you are. Do not announce it in the room: it is your
+  machinery, not news.
+
 ## Deciding together
 
 Any member may put a question to the room, in any role: `room_send` with kind `vote`,

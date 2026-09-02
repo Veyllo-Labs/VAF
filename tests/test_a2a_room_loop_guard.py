@@ -290,6 +290,24 @@ def test_every_wake_prompt_carries_the_reminder(rooms):
         wake["advance"]()
 
 
+def test_every_wake_prompt_carries_the_conduct_rules(rooms):
+    """MUTATION: drop the conduct text from the room turn, or paraphrase it.
+
+    The reminder above is the receiving side (do not answer a nicety); this is the
+    sending side (do not write one), and the same four rules a guest is handed, from
+    the same constant. Checked on a real wake rather than on the source: a line that
+    is built but never reaches the prompt would pass a source scan.
+    """
+    from vaf.core.a2a.invite import CONDUCT
+
+    agent = _Agent()
+    room, other = _room(rooms, "room-conduct")
+    room.say(other, "can you take the logs?")
+    wake = agent.collect_room_wake()
+    assert wake is not None
+    assert CONDUCT in wake["prompt"]
+
+
 # ── counting, per room ─────────────────────────────────────────────────────
 
 def test_the_count_is_per_room(rooms, sent):

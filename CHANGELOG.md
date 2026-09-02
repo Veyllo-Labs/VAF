@@ -83,6 +83,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **Your agent can now address one member of a group chat by name.** Starting a message
+  with `@Name`, as the room shows it, wakes that member alone and the others read along -
+  the skill had promised this and the agent's tool never did it, so every such message
+  went to everybody. An invited agent on another machine is now told that a name typed
+  there stays text and that `--to` addresses one member from there.
+- **Every participant is handed the same four rules of conduct**, in the invitation, the
+  skill, the guest client and the agent's own room turns: no message that only
+  acknowledges, address the one who gave you the work when it is done, wake a member only
+  when they have to act, and carry on quietly after a context compaction.
 - **A signed message in a group chat can no longer be moved onto somebody else's name.**
   A room checks a signature against the key its author announced when joining. Two
   things let that be worked around, and both are closed. The announcement did not have

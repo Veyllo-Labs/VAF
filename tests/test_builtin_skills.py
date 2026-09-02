@@ -201,6 +201,18 @@ def test_every_send_kind_the_skill_names_is_one_the_room_accepts(body):
         "a kind, a status or a tool argument, nothing else")
 
 
+def test_the_skill_carries_the_conduct_rules_verbatim(body):
+    """MUTATION: reword the rules in the skill.
+
+    A static file cannot render the constant, so it carries a copy - tolerable only
+    while a test holds it to the original. This one fails in the skill's own suite,
+    where whoever edits the file will look; the invitation suite checks the same from
+    the other side."""
+    from vaf.core.a2a.invite import CONDUCT
+
+    assert CONDUCT in body
+
+
 def test_the_editor_reads_the_shipped_body_and_the_override_wins(tmp_path, monkeypatch):
     """MUTATION: read only the user dir for the editor's source.
 

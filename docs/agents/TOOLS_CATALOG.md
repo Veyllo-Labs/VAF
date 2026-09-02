@@ -207,7 +207,7 @@ peer may say, never what it may do to the machine.
 | `room_open` | write | Open a new room and join it: `round` for equals, `chain` when the agent leads the agents it invites. |
 | `room_invite` | write | Mint a single-use invitation for one more agent and return the briefing to hand over verbatim. Called again for each further agent. With `account`, invite a VAF account on this server by user name instead: the person answers in their own sidebar, the room is opened to other accounts if it was not, and the result says so. |
 | `room_join` | write | Join a room by id and set how far the agent may act on what arrives there (`observe` / `assist` / `autonomous`). |
-| `room_send` | write | Write into a room: `say`, `ask`, `answer`, `report` (with a status) or `directive`. What the role may emit is decided by the room, not by the tool. `files` names files in the room's shared folder the message is about. |
+| `room_send` | write | Write into a room: `say`, `ask`, `answer`, `report` (with a status) or `directive`. What the role may emit is decided by the room, not by the tool. A leading `@Name` in the text addresses that one member; the room resolves it. `files` names files in the room's shared folder the message is about. |
 | `room_read` | read | Read what is new in a room, or list the agent's rooms with their unread counts. Reading takes nothing away from other readers. |
 | `room_verify` | read | One verdict per message: who can be PROVEN to have written it, rather than whose name the host wrote on it. `problems_only` narrows it to what is not plainly in order. |
 

@@ -598,6 +598,46 @@ def test_a_message_for_somebody_else_does_not_wake_you(tmp_path):
     assert unread_frames(key, base=tmp_path) == [], "a note for Bob woke somebody else"
 
 
+def test_the_agents_tool_resolves_a_leading_mention_like_the_terminal_does(wired):
+    """MUTATION: build `to` from to_peer alone in RoomSendTool.
+
+    The shipped skill tells the agent that "@Name" wakes one member, and the room turn
+    shows it names and never peer ids - so a mention is the ONLY way the agent can
+    address anybody. The tool never asked the room, and every mention it wrote went
+    out as text to everyone. Measured on the stored frame, not on the tool's reply,
+    because the reply said "Sent" either way.
+    """
+    room = Room.create(kind="round", owner_scope=None, base=wired, room_id="room-mention")
+    room.join(display="Bob", scope_id=None, peer_id="p-bob")
+    RoomJoinTool().run(room_id="room-mention", user_scope_id="scope-a")
+
+    RoomSendTool().run(room_id="room-mention", text="@Bob can you look", user_scope_id="scope-a")
+    RoomSendTool().run(room_id="room-mention", text="ask @Bob about it", user_scope_id="scope-a")
+    RoomSendTool().run(room_id="room-mention", text="@Bob hi", to_peer="p-other",
+                       user_scope_id="scope-a")
+
+    said = [f.to for f in room.store.frames() if f.kind == "say"]
+    assert said == [{"peer": "p-bob"}, {"room": True}, {"peer": "p-other"}]
+
+
+def test_the_three_local_senders_ask_the_room_and_none_resolves_by_hand():
+    """MUTATION: put the four-line if/else back into any of them.
+
+    Two of the three had it by hand and the third had nothing, which is how the
+    agent's mentions came to travel as text. The resolver is the room's; a sender
+    that calls address_from_mention itself is on its way to a second copy.
+    """
+    senders = [
+        ROOT / "vaf" / "tools" / "room_tools.py",
+        ROOT / "vaf" / "cli" / "cmd" / "a2a.py",
+        ROOT / "vaf" / "core" / "web_server.py",
+    ]
+    for path in senders:
+        source = path.read_text(encoding="utf-8")
+        assert ".addressee(" in source, f"{path.name} does not ask the room"
+        assert "address_from_mention" not in source, f"{path.name} resolves by hand again"
+
+
 def _wake(room, key, base):
     """The (waking, context) pair for one participant, or (None, None)."""
     for r, _identity, waking, context in unread_frames(key, base=base):

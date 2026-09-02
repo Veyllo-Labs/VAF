@@ -229,7 +229,11 @@ class RoomSendTool(BaseTool):
                 "description": "What sort of message this is. Defaults to 'say'.",
             },
             "to_peer": {"type": "string",
-                        "description": "Optional peer id to address. Everyone can still read it."},
+                        "description": ("Optional peer id to address. Everyone can still "
+                                        "read it. Usually you do not know the id: start "
+                                        "the text with the member's name as the room shows "
+                                        "it instead (\"@Codex51 the logs are clean\") and "
+                                        "the room resolves it.")},
             "reply_to": {"type": "string", "description": "Optional id of the message you answer."},
             "status": {
                 "type": "string",
@@ -331,9 +335,12 @@ class RoomSendTool(BaseTool):
         named = attached_files({"files": kwargs.get("files")})
         if named:
             body["files"] = named
-        payload: Dict[str, Any] = {"kind": kind, "body": body}
-        if kwargs.get("to_peer"):
-            payload["to"] = {"peer": str(kwargs["to_peer"])}
+        # WHO this is for is the room's answer, not this tool's: an explicit peer,
+        # else a leading "@Name" resolved against the members, else everyone. The
+        # tool used to set only the first and the skill promised the agent the
+        # second, so every mention it wrote woke the whole room as plain text.
+        payload: Dict[str, Any] = {"kind": kind, "body": body,
+                                   "to": room.addressee(text, to_peer=str(kwargs.get("to_peer") or ""))}
         if kwargs.get("reply_to"):
             from vaf.core.a2a.frame import plausible_frame_id
             if not plausible_frame_id(kwargs["reply_to"]):

@@ -1367,7 +1367,9 @@ Four things an embedder should know before building on it:
   after speaking. So the content of a conversation is tamper-evident and its ORDER is
   not: rewriting a stored frame's `lamport` or `role` leaves the verdict at `valid`.
   If you render a verdict beside a role, do not let the pairing suggest the role was
-  signed; the authority on a role is the fold over `join`, `role` and `leave`.
+  signed; the authority on a role is the fold over `join`, `role` and `leave`. A peer
+  reading over the wire also never receives its OWN frames, so it can verify everybody
+  else and not itself - a named gap, and the half it would most want to check.
 
 The canonical byte form is specified in
 [docs/agents/A2A_PROTOCOL.md](agents/A2A_PROTOCOL.md), precisely enough to reproduce -

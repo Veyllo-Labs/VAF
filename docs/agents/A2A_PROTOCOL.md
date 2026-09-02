@@ -381,6 +381,15 @@ signature and is worth exactly as much as the disk it lives on.
 
 It does not make the host trustworthy; it makes one half of what the host says checkable.
 
+**And a peer over the wire cannot yet check its OWN half.** The hub hands a connecting
+peer everything except its own frames, which is right for waking somebody up and wrong
+for auditing: a remote peer never receives what it said, so it cannot ask whether the
+room still holds its words, and unaltered. That gap mattered less before signatures
+existed, because there was nothing to check with. It matters now, because "a host can
+omit" is precisely the half a peer would want to check on itself, and it is the one it
+cannot see. Named here rather than discovered by the next person who trusts a verdict
+further than it reaches.
+
 **Not built yet:** a remote peer has no way to publish its key through the handshake, so
 today it must present a signature on every frame rather than being recognised once. That
 is the next piece of this lane, not a property of the design.

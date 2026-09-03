@@ -1994,7 +1994,7 @@ function RoomIdentity({ room, connected, onMembers, membersTitle, invitedNote }:
                         or frozen. */}
                     {!connected ? (
                         <span className="text-amber-600 dark:text-amber-400">
-                            Verbindung wird wiederhergestellt\u2026
+                            Verbindung wird wiederhergestellt&hellip;
                         </span>
                     ) : invitedNote ? (
                         <span className="text-amber-700 dark:text-amber-400">{invitedNote}</span>
@@ -2935,16 +2935,21 @@ function VAFDashboardContent() {
     const roomInviteNow = useNowSeconds(30000);
     const roomInvitedNote = roomView?.room.invited
         ? tMain('roomInvitedFrom', { who: roomView.room.invited.by }) : undefined;
+    // Both check the socket BEFORE acting: a send on a socket that is not open
+    // either throws (still connecting) or is dropped without a word (closed), and
+    // in the second case the busy latch would hold until its timeout for nothing.
     const requestRoomInviteCandidates = () => {
         const rid = roomViewRef.current?.room.roomId;
-        if (!rid) return;
-        wsSocketRef.current?.send(JSON.stringify({ type: 'room_invite_candidates', room_id: rid }));
+        const sock = wsSocketRef.current;
+        if (!rid || !sock || sock.readyState !== WebSocket.OPEN) return;
+        sock.send(JSON.stringify({ type: 'room_invite_candidates', room_id: rid }));
     };
     const answerRoomInvite = (accept: boolean) => {
         const rid = roomViewRef.current?.room.roomId;
-        if (!rid || roomInviteBusy) return;
+        const sock = wsSocketRef.current;
+        if (!rid || roomInviteBusy || !sock || sock.readyState !== WebSocket.OPEN) return;
         setRoomInviteBusy(true);
-        wsSocketRef.current?.send(JSON.stringify({
+        sock.send(JSON.stringify({
             type: accept ? 'accept_room_invite' : 'decline_room_invite', room_id: rid }));
     };
     // The door's buttons re-arm when the view changes underneath them - the answer

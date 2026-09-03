@@ -36,7 +36,7 @@ verifies anywhere.
 
 There is no covered-field list on the wire. RFC 6376 and RFC 9421 both put the
 coverage claim inside the signed bytes so it cannot be edited afterwards, and both
-need it because coverage varies per message. Here it does not: version 1 covers
+need it because coverage varies per message. Here it does not: version 2 covers
 exactly the fields above, `v` is inside the signed bytes, and a different coverage
 would be a different version. A constant list on every frame would be the ritual
 without the reason.

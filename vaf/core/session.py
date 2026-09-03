@@ -539,7 +539,7 @@ class SessionManager:
                     session.metadata["user_scope_id"] = str(user_scope_id)
             session.add_message(role=role, content=content, kind=kind)
             self.save(session, sync_state=False)
-        note_transcript_changed(sid)
+            note_transcript_changed(sid)
         return session
     
     def save(self, session: Session = None, compress: bool = False, sync_state: bool = True) -> Path:

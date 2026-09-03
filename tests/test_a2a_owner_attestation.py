@@ -412,3 +412,35 @@ def test_the_fold_is_on_the_facade_for_a_reader_with_frames_and_no_store():
     assert "fold_room_owners" in vaf.__all__
     doc = (ROOT / "docs" / "EMBEDDING.md").read_text(encoding="utf-8")
     assert "fold_room_owners" in doc
+
+
+def test_an_owner_with_two_attested_agents_names_the_first_on_every_roster(rooms, monkeypatch):
+    """MUTATION: invert the fold with a comprehension, so the LAST agent wins.
+
+    One `partner` per member is the roster's rule, and `pairs()` keeps the first
+    agent an owner attested. The remote roster inverted the same fold by hand and
+    kept the last, so a host and a reader on the wire named a different partner for
+    the same person off the same transcript.
+    """
+    from vaf.cli.cmd import a2a as a2a_cmd
+
+    room = Room.create(kind="round", owner_scope="scope-a", base=rooms, room_id="room-two")
+    ana, iris, ana_pair, _ = _household(room)
+    second_pair = _raw_pair(bytes(range(2, 34)))
+    second = room.join(display="Second", scope_id=None, peer_id="p-second")
+    _announce(room, second, second_pair, "Second",
+              owner=_block(room.room_id, ana_pair, ana.peer_id, second.peer_id, second_pair[1]))
+
+    assert fold_owners(room.store.frames(), "room-two") == {iris.peer_id: ana.peer_id,
+                                                            second.peer_id: ana.peer_id}
+    assert room.pairs()[ana.peer_id]["partner"] == iris.peer_id
+
+    frames = room.store.frames()
+    monkeypatch.setattr(a2a_cmd, "_open_local", lambda room_id: None)
+    monkeypatch.setattr(a2a_cmd, "_remote_record", lambda room_id: {"peer": "p-me"})
+    monkeypatch.setattr(a2a_cmd, "_remote_read_frames", lambda room_id, record: frames)
+    result = CliRunner().invoke(a2a_cmd.app, ["members", "room-two"])
+    rows = {json.loads(line)["display"]: json.loads(line)
+            for line in result.stdout.strip().splitlines() if line.strip()}
+    assert rows["Ana"]["partner"] == iris.peer_id, "the wire roster names a different partner"
+    assert rows["Second"]["partner"] == ana.peer_id

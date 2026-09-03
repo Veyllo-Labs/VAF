@@ -1392,7 +1392,11 @@ def members(room_id: str = typer.Argument(...)) -> None:
         # so a roster read here and one read there cannot disagree about a pair.
         from vaf.core.a2a.room import fold_owners
         owners = fold_owners(frames, room_id)
-        owned = {owner: agent for agent, owner in owners.items()}
+        # One partner per owner, the FIRST attested agent: the tie-break `pairs()`
+        # applies on the host, so the two rosters name the same partner.
+        owned = {}
+        for agent, owner in owners.items():
+            owned.setdefault(owner, agent)
         for peer_id in _remote_members(frames):
             kind, partner, proof = "unknown", "", ""
             if peer_id in owners:

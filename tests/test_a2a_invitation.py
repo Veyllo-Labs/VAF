@@ -380,7 +380,9 @@ def test_the_conduct_rules_are_one_text_on_every_surface_that_carries_them(circl
     from vaf.core.a2a.invite import CONDUCT, client_skill, working_instructions
 
     room, owner = circle
-    assert "Got it" in CONDUCT and "compacted" in CONDUCT, "the four rules lost one"
+    for rule in ("only acknowledges", "address THEM",
+                 "only when that member has to act", "compressed or compacted"):
+        assert rule in CONDUCT, f"the four rules lost one: {rule}"
     assert "{" not in CONDUCT and "\\" not in CONDUCT, (
         "the guest client embeds this in an f-string; a brace or a backslash would "
         "change it there and nowhere else")

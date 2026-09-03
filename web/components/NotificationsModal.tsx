@@ -33,7 +33,7 @@ import UpdateRepairModal, { healthOf, type ServiceRow } from './settings/UpdateR
 
 export type NotificationItem = {
   id: string;
-  kind: 'thinking' | 'automation' | 'channel_reply' | 'system';
+  kind: 'thinking' | 'automation' | 'channel_reply' | 'system' | 'room_invite';
   title: string;
   status: 'success' | 'skipped' | 'error';
   timestamp: string;

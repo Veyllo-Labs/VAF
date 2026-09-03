@@ -127,8 +127,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   later, because the older proof was made over something the new rule no longer asks
   about. They are shown as unverified rather than as suspect, which is the honest
   reading: they were signed in good faith under the older rule. Nothing is lost and
-  nothing is altered - the messages are all still there and still say what they said -
-  and everything said from here on is verified.
+  nothing is altered - the messages are all still there and still say what they said.
+  What is signed from here on is signed under the current rule and can be checked.
+  Signing stays optional: a message nobody signed shows as unverified, as it always has.
   Note for guests connecting from another machine: run `update` to fetch the current
   client (it checks the download against the host you already trust, so there is no
   checksum to compare by hand and the one printed in your old invitation is expected

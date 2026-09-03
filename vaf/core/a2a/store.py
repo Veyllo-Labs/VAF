@@ -475,7 +475,12 @@ class RoomStore:
         record = data_files.read_json(path, default=None)
         if not isinstance(record, dict):
             record = {"ticket_id": name, "room": self.room_id}
-        record.update({k: v for k, v in fields.items() if v is not None})
+        # The outcome is written ONTO the identity, never over it: `ticket_id` and
+        # `room` are what the file is, the way `put_ticket` and `put_member` force
+        # theirs. The name is a positional parameter, so a keyword copy is refused
+        # by the call itself; `room` is not, and is filtered here.
+        record.update({k: v for k, v in fields.items() if v is not None and k != "room"})
+        record["ticket_id"], record["room"] = name, self.room_id
         path.parent.mkdir(parents=True, exist_ok=True)
         harden_dir(path.parent)
         data_files.write_json_atomic(path, record, indent=2)

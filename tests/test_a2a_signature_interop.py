@@ -252,7 +252,7 @@ def test_the_guest_client_names_its_own_generation():
     AttributeError on somebody else's machine."""
     guest = (ROOT / "examples" / "12_a2a_wire_peer.py").read_text(encoding="utf-8")
     assert "CLIENT_VERSION" in guest
-    assert "VERSION = 1" in guest, "the protocol version is a different number"
+    assert "\nVERSION = 1\n" in guest, "the protocol version is a different number"
 
 
 # ── the direction that was missing ──────────────────────────────────────────
@@ -700,3 +700,41 @@ def test_the_members_verb_reads_the_household_back(peers, rooms, monkeypatch, ca
     assert rows["Iris"]["proof"] == "attested"
     assert rows["Ana"]["kind"] == "human" and rows["Ana"]["partner_display"] == "Iris"
     assert rows["Codex"]["kind"] == "unknown" and rows["Codex"]["proof"] == ""
+
+
+def test_the_guest_roster_names_the_same_first_agent_as_the_host(peers, rooms, monkeypatch, capsys):
+    """MUTATION: invert the fold with a comprehension in the guest, so the LAST wins.
+    Three rosters read one transcript; a person with two attested agents must be
+    shown with the same partner on all of them."""
+    from vaf.core.a2a.room import Room
+
+    _reference, guest = peers
+    room = Room.create(kind="round", owner_scope="s", base=rooms, room_id="room-mem2")
+    ana = room.join(display="Ana", scope_id=None, peer_id="p-ana")
+    ana_seed = guest.seat_signing_seed({})
+    room.ingest(guest.join_announcement("Ana", "room-mem2", ana_seed, ana.peer_id), identity=ana)
+    for display, peer_id in (("Iris", "p-iris"), ("Second", "p-second")):
+        agent = room.join(display=display, scope_id=None, peer_id=peer_id)
+        seed = guest.seat_signing_seed({})
+        block = guest.attest_owner("room-mem2", ana_seed, ana.peer_id, agent.peer_id,
+                                   guest.ed25519_public(seed).hex())
+        room.ingest(guest.join_announcement(display, "room-mem2", seed, agent.peer_id, block),
+                    identity=agent)
+    assert room.pairs()[ana.peer_id]["partner"] == "p-iris"
+    stored = [f.to_dict() for f in room.store.frames()]
+
+    class Line:
+        def backlog(self):
+            return list(stored)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(guest, "load_record", lambda room_id: {"room": "room-mem2", "peer": "p-x"})
+    monkeypatch.setattr(guest, "_line_for", lambda room_id, record: None)
+    monkeypatch.setattr(guest, "_open", lambda rec: Line())
+    guest.cmd_members(argparse.Namespace(room="room-mem2"))
+    rows = {json.loads(line)["display"]: json.loads(line)
+            for line in capsys.readouterr().out.strip().splitlines() if line.strip()}
+    assert rows["Ana"]["partner"] == "p-iris", "the guest roster names a different partner"
+    assert rows["Second"]["partner"] == ana.peer_id

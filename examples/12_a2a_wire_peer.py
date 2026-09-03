@@ -1124,7 +1124,11 @@ def cmd_members(args) -> None:
         if frame.get("role"):
             roles[sender] = str(frame["role"])
     owned_by = owners(frames, record["room"], keys)
-    owns = {owner: agent for agent, owner in owned_by.items()}
+    # One partner per owner: an owner with several attested agents is named by each
+    # of them and names the FIRST, the same tie-break the host's roster applies.
+    owns = {}
+    for agent, owner in owned_by.items():
+        owns.setdefault(owner, agent)
     for peer in sorted(present):
         kind, partner, proof = "unknown", "", ""
         if peer in owned_by:

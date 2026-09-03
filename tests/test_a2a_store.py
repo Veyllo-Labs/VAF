@@ -374,3 +374,26 @@ def test_cursors_reports_every_readers_position_and_when_it_moved(tmp_path):
     assert positions["p-b"]["lamport"] == 3
     assert positions["p-a"]["updated_at"] >= before, (
         "the moment the cursor moved is missing - no engagement signal can exist")
+
+
+# ── the outcome of a ticket is written onto its identity, never over it ─────
+
+def test_an_outcome_cannot_rename_a_ticket_or_move_it_to_another_room(store):
+    """MUTATION: let `settle_ticket` apply every field it is handed.
+
+    `ticket_id` and `room` are what a spent record IS, the way `put_ticket` and
+    `put_member` force theirs. An outcome carrying `room` would file one
+    invitation's fate under another room's name, and a listing would answer "was
+    this invitation used" about the wrong room. (`ticket_id` is the positional
+    parameter, so a keyword copy is a TypeError before the store sees it.)
+    """
+    store.put_ticket("tk-1", {"room": store.room_id, "display": "Codex"})
+    assert store.claim_ticket("tk-1")["display"] == "Codex"
+
+    record = store.settle_ticket("tk-1", status="accepted", redeemed_by="p-x",
+                                 room="room-other")
+
+    assert record["ticket_id"] == "tk-1" and record["room"] == store.room_id
+    assert record["status"] == "accepted" and record["redeemed_by"] == "p-x"
+    spent = [t for t in store.tickets() if t.get("status")]
+    assert [t["ticket_id"] for t in spent] == ["tk-1"]

@@ -303,7 +303,7 @@
     "roomInviteCopy": "Kopyala",
     "roomInviteCopied": "Kopyalandı",
     "roomInviteClose": "Kapat",
-    "roomInviteTextFoot": "Ajan katılır katılmaz aşağıdaki satırı Kabul edildi olur ve odadaki adını gösterir.",
+    "roomInviteTextFoot": "Ajan katılır katılmaz aşağıdaki satırı Kabul edildi durumuna geçer ve odadaki adını gösterir.",
     "roomInviteListTitle": "Açık ve geçmiş davetler",
     "roomInviteListEmpty": "Henüz kimse davet edilmedi.",
     "roomInviteKindAccount": "VAF hesabı",

@@ -11,17 +11,23 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+
+## [0.1.0a27] - 2026-09-03
+
 ### Added
+
 - **An automation that waits for an emoji can now wait for the RIGHT one.** A reaction
   trigger can name the person whose reaction counts and the exact message it has to land
   on. Without that it ran on any reaction by anyone in the room, which is a signal rather
   than an approval.
+
 - **After the conversation history is compressed, an application built on VAF can put
   state back.** `Agent.on_compaction(cb)` runs right after a compaction and may return
   one note that is added to the history: the place for what a summary loses, such as
   a task board or a running job. A slow or broken hook never holds or fails a turn. The
   hook object the agent's own tool pipeline uses (`ToolCallHooks`) is public now too,
   so a planner or job queue of your own gets its gates in the same places.
+
 - **An automation can now run when something happens in an agent room, not only by
   the clock.** "When a message containing X arrives in room R" or "when somebody
   reacts to a message there" runs the automation with what triggered it. The person's
@@ -30,6 +36,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `create_automation`, the terminal with `vaf automation create --on-room`; the list
   shows the rule where a clock task shows its time. The owner's own agent can never
   trigger its own automation, and a trigger never fires on messages older than itself.
+
 - **A reaction: an emoji on one message, and nobody is woken by it.** The cheapest
   thing anyone in an agent room can say. Until now 'seen' or 'agreed' had to be a
   message, and every message wakes every agent it is aimed at to read nothing. A
@@ -37,6 +44,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and in the guest client, counts as unread for nobody, and starts no turn. The
   agent has `room_react`, the terminal has `vaf a2a react`, a guest has `react`, and
   a person hovers a message in the browser to add one.
+
 - **A group chat can now say which agent belongs to which person, provably, even to a
   guest on another machine.** Your agent's entry into a room carries your attestation,
   signed with your own key for that room; the room's members list reads it back as
@@ -44,6 +52,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   guest client's new `members` verb. A person running the guest client vouches for
   their own agent with `attest` and hands the printed block to it. Nothing in it grants
   an agent anything: it says whose it is, checkably, and no more.
+
 - **Invite people with a VAF account into a group chat, and let them decide.** The room
   panel has an Invite tab: every account on this server with one button, an online dot,
   and a chip where a button would be wrong (already in the room, already invited). The
@@ -54,12 +63,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   belonged to one account alone makes it a shared room, and the tab says so before the
   click. Your agent can do the same when asked ("invite bob"), and the terminal has
   `vaf a2a invite --account`, `invitations`, `accept`, `decline` and `revoke`.
+
 - **Invitations for other AI agents are generated and tracked in the same tab.** A name
   and a validity make the invitation text; underneath, every invitation the room ever
   handed out - accounts and agents in one list - shows who invited, how long it still
   stands, and what became of it: accepted with the name the guest has in the room,
   declined, withdrawn, or expired and never used. An open text can be shown again without
   minting a second one.
+
 - **When you already have automations, VAF now offers to improve them instead of suggesting more.**
   Once there are three or more, a background check looks at the ones you have and raises one
   concrete, checked observation: an automation that has never completed, one that has recorded no
@@ -68,6 +79,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   cannot edit an automation itself. Automations now also
   keep a short record of their last runs, so "its last three runs ended with an error" becomes
   something VAF can actually tell you apart from "the machine was switched off".
+
 - **VAF can now notice when something in the world affects a plan you told it about.** When there is
   nothing else to raise, a background check builds a short list from what it knows about your plans,
   deadlines and interests, looks up ONE of them, and gets in touch only if what it finds genuinely
@@ -76,11 +88,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   sent as information rather than a question, so it is never followed up or nudged, there is a
   three-day gap between notices, and the whole feature switches itself off if you turn down two of
   its last ten notices. Health is deliberately not one of the things it looks up.
+
 - **A server install can now be chosen without a keyboard.** `./install.sh --server`
   (and `--desktop`) select the installation mode non-interactively, and the hosted
   one-liner forwards flags (`... | bash -s -- --server`), so provisioning scripts and
   remote installs can produce a server setup. Previously the choice existed only as an
   interactive prompt, which a piped install never saw.
+
 - **Server installs now finish reachable.** A server install opens the OS firewall for
   the LAN port itself (scoped to the local subnet), enables Docker at boot so the memory
   system survives a restart, disables sleep/suspend so a repurposed desktop or laptop
@@ -88,13 +102,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   LAN address comes from DHCP (with the advice to give it a static IP or a router
   reservation). The provisioning lives in the new `vaf server provision` command and can
   be re-run at any time, for example after moving the server to another network.
+
 - **Headless credential encryption can be set up during installation.** The server
   installer offers to set a master passphrase (Enter skips it); it is stored owner-only
   in `~/.vaf/service.env` and the service loads it automatically at start.
+
 - **Immutable distributions are detected early.** On openSUSE MicroOS or Leap Micro the
   installer now stops at the very beginning with a clear message instead of failing
   halfway through the run. Support for these systems is planned; this only makes the
   current limitation honest.
+
 - **`vaf top`: a live server dashboard in the terminal.** One self-refreshing view,
   headed by the Veyllo mark and hostname, with version, mode, the active provider and
   its actual model, the LAN addresses (hostname and IP URLs), host OS and uptime, the
@@ -102,146 +119,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   network section with total up/down rates and the connected clients per IP, and the
   health of every Docker service - what an admin over SSH needs to see what the
   server is doing. `vaf top --once` prints a single snapshot for scripts.
+
 - **The dashboard carries the live service log below it.** `vaf top` follows the
   service's output (the systemd journal in server mode, otherwise the newest known log
   file) in a pane that fills the rest of the terminal and resizes with the window. A
   tray started in a terminal or from the desktop entry now tees its own output into
   the service log so the pane can follow it; leftovers from earlier runs are not shown
   at all.
+
 - **`vaf tray` and `vaf start` open the dashboard themselves in a terminal.** `vaf tray`
   runs the tray in the background and takes over the terminal with the live dashboard
   (Ctrl+C stops VAF, exactly like the old foreground run; `--no-top` restores the raw
   output), and `vaf start` opens the dashboard after starting (`--no-watch` suppresses
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
-### Fixed
-- **One growing block of the agent's own briefing no longer crowds out everything else.**
-  A summary of facts about you is added to the agent's instructions on every single
-  message. Nothing limited how long it could get, and it had grown to more than a third
-  of those instructions. It now stops at a sensible length, keeps the newest facts, and
-  says when it left older ones out.
-- **Scheduled tasks, reminders and logs are now readable only by their owner.** They sat
-  in folders any other account on the same computer could open and read, while the
-  conversations beside them were closed. An automation's text says what you asked for
-  and when it runs, which is nobody else's business.
-- **Opening a Word document in the viewer no longer runs an XML parser with known
-  denial-of-service bugs.** The parser behind the .docx viewer was two patch versions
-  behind, on a release its own authors had marked as having critical issues; several of
-  those let a specially built document keep the browser tab busy indefinitely. Five other
-  packages that ship with the interface were on versions with published advisories and
-  are updated in the same pass. Nothing changes in how anything looks or works.
-- **A tool hidden from the model was hidden from one place and named in five others.**
-  Hiding a tool kept it out of the model's tool list but it still appeared in
-  `list_tools`, `search_tools`, the router's own prompt, the system prompt and the
-  sandbox's tool bridge. One answer now serves all six.
-- **One automation with an unreadable time no longer hides all the others.** A record
-  whose time could not be read as `HH:MM` (a word instead of a clock time, for example)
-  made the automations list fail everywhere it is shown: in the browser, in the terminal,
-  and in the background planner's own check of what is due next. Such a record now shows
-  no next run, sorts last, and leaves the rest of the list alone.
-- **Your agent can now address one member of a group chat by name.** Starting a message
-  with `@Name`, as the room shows it, wakes that member alone and the others read along -
-  the skill had promised this and the agent's tool never did it, so every such message
-  went to everybody. An invited agent on another machine is now told that a name typed
-  there stays text and that `--to` addresses one member from there.
-- **Every participant is handed the same four rules of conduct**, in the invitation, the
-  skill, the guest client and the agent's own room turns: no message that only
-  acknowledges, address the one who gave you the work when it is done, wake a member only
-  when they have to act, and carry on quietly after a context compaction.
-- **A signed message in a group chat can no longer be moved onto somebody else's name.**
-  A room checks a signature against the key its author announced when joining. Two
-  things let that be worked around, and both are closed. The announcement did not have
-  to be signed itself, and a public key is public, so whoever runs the room could copy
-  one member's key onto another member's name. And a signature did not cover the name
-  it was said under, so even a properly signed announcement could simply be carried to
-  a different member and taken along with everything that member had said. Either way
-  the room went on showing the messages as verified, under the wrong person. Now an
-  announcement counts only if it is signed by the key it announces, and the name is part
-  of what every signature covers.
-- **Two background messages arriving at one chat at the same time no longer lose one.**
-  A thinking-mode question, a room wake-up and an automation result all write into a
-  chat the same way, and two of them landing together meant one line was written over
-  the other and gone. They are now written one after the other.
-- **A message the agent could not save is no longer reported as sent.** When the chat a
-  background message was meant for had been deleted, it was still shown as delivered
-  and marked unread, and a question nobody was ever shown was waited on for an answer.
-- **The agent can now check who really wrote a message in a group chat.** Asked in
-  plain words to verify a room, it could not: the terminal command existed, the browser
-  received the answer, and the agent itself had no way to ask, so it did the nearest
-  thing it could instead. It now has `room_verify`, which gives one verdict per message
-  and can be narrowed to only what looks wrong. A message whose signature does not
-  hold up is also marked in the ordinary transcript now, wherever a room is read.
-- **Messages signed before this release show as unverified, and stay that way.** What a
-  signature covers changed, so older ones cannot be checked any more - not now and not
-  later, because the older proof was made over something the new rule no longer asks
-  about. They are shown as unverified rather than as suspect, which is the honest
-  reading: they were signed in good faith under the older rule. Nothing is lost and
-  nothing is altered - the messages are all still there and still say what they said.
-  What is signed from here on is signed under the current rule and can be checked.
-  Signing stays optional: a message nobody signed shows as unverified, as it always has.
-  Note for guests connecting from another machine: run `update` to fetch the current
-  client (it checks the download against the host you already trust, so there is no
-  checksum to compare by hand and the one printed in your old invitation is expected
-  to differ now), then run `announce` once for each room you are in. Until you do,
-  your messages show as unverified. Nothing is lost by waiting: `announce` keeps the
-  name you already have, and everything you said before is verified again the moment
-  it lands. Do not ask for a new invitation for this. A new invitation gives you a new
-  name and leaves your earlier messages behind under the old one.
-- **Asking for a group chat twice in a row no longer leaves you with two.** When the
-  same topic was opened again within a few minutes, a second room appeared beside the
-  first, with the same messages sent into both and an invitation for each. VAF now
-  answers with the room that already exists and says how to carry on in it. Opening a
-  second room under the same topic on purpose still works: give it a topic of its own.
-  This is not a rule against rooms with the same name, only against the same person
-  opening one twice in the space of minutes.
-- **A group chat's header now sits where a chat's header sits.** Opening an agent room
-  used to leave the top band of the chat empty and put the room's name, kind, mission
-  and members on a second bar underneath it. That bar now stands in the top band
-  itself, next to the browser and specialist buttons, so a room looks like the chat it
-  replaces. On a phone, where the app's own top bar carries the name, nothing changes.
-- **The agent now remembers what its background check asked you, wherever you answer.**
-  A question raised while you were away (for example on Telegram) used to live only in a
-  small "waiting for a reply" slot, and any activity on your account could take that slot:
-  a message you sent in an agent room was filed as your answer, and when you then actually
-  replied on Telegram an hour later, the agent had no trace of ever asking and asked you
-  what you meant. Two things changed. Only a message you send in your own chat counts as
-  the answer now - not an agent-room message, a timer, a scheduled automation or the
-  background check's own work. And every message a background check or an automation
-  sends you is written into the transcript of the chat it was sent to, so the agent
-  answering there has asked the question in its own history, even when you reply much
-  later. An agent that was already on that chat picks the new message up on your next
-  message instead of after the next chat switch.
-- **A room joined from another machine no longer goes deaf for 90 seconds.** Reading
-  straight after joining failed, and the guest had to wait out a minute and a half
-  before the room answered at all. The cause sat one layer further out than it looked:
-  the relay that carries a room connection kept the inner half open after the guest's
-  first command had finished, so the room never learned the connection had ended and
-  went on reserving the writing slot for it. Measured from a second machine on the
-  same network: reading right after joining took ten seconds and failed, and now takes
-  two tenths of a second and works.
-- **A room that turns somebody away now says which refusal it was.** A wrong
-  invitation, one already used, an unknown room and a slot already taken all reached
-  the other machine as the same blank disconnection, so an agent on the far side had
-  to guess which of the four had happened - and guessed wrong. Each now arrives with
-  its own reason, immediately.
-- **One bad message can no longer end voting in a room.** A vote carrying a closing time
-  the room could not read as a number made every later attempt to count that room's votes
-  fail, on every surface: the room view, the command line, and the check that closes a vote
-  when its time is up. Because messages in a room are never edited or deleted, the effect
-  was permanent. The closing time is now read carefully when it arrives and again when it
-  is used, so an unusable one is simply ignored and the vote keeps working.
-- **A malformed message to a room is now answered instead of dropping the connection.**
-  Sending a room a message whose `ext`, `body` or `to` was not an object raised an
-  unhandled error instead of being refused, and over a live room connection that ended
-  the connection: the sender lost its line and never learned what had happened to the
-  message. The room now names the field and refuses the message the way it refuses any
-  other, so the sender gets an answer it can act on and stays connected.
-- **A vote whose options were typed with a stray space could be counted under an answer
-  nobody was offered.** The choice a member picked was matched against the options
-  exactly, stored with the space, and then counted without it. Options and choices are
-  now trimmed in the same place, so what is stored is what is counted.
-
-### Added
 - **Messages in a room can now carry proof of who wrote them.** Until now a room recorded
   the author by assigning it: the machine holding the room knew who was connected and
   wrote that down, which says nothing to anybody reading the conversation somewhere else.
@@ -264,7 +155,114 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   hosting the room never signs on its behalf, because a proof produced by the very machine
   it is meant to hold to account would prove nothing.
 
+- **Embedders can keep the memory lane and the grounded capability answer under their
+  own persona.** A `system_prompt` override replaces the built-in persona wholesale and
+  by design drops the two code-owned addenda that ride it. Both are now part of the
+  public facade (`SOUL_CONTINUITY_ADDENDUM`, `build_capability_addendum`), so a support
+  bot with its own voice and a trimmed tool set can re-add either one, with the
+  capability text generated truthfully for exactly the tools it ships.
+
+- **"What can you do?" now gets a real answer instead of a brochure.** Asked about its
+  abilities, the agent used to be told only what NOT to say (no generic assistant
+  self-description), so it often undersold itself. It now turns the question around:
+  it asks what YOU want, says plainly that it adapts to you, and backs that up with
+  what is actually true in the running session - the real number of tools it holds,
+  that it can build a missing tool or skill itself, put a team of agents on one
+  problem, and take standing orders that keep working without being asked again.
+  Each of those claims is only made when the ability is really registered, so the
+  answer never promises what the system would refuse.
+
+- **Signing in and first-run setup now speak your language too.** The onboarding wizard was
+  translated, but the screens around it were not: the boot screen, the unreachable-backend
+  notice, the whole login form and the two-factor step were fixed English, and so were the
+  error messages that appear during setup. A reader who had just picked their language in
+  step one was thrown back to English the moment anything went wrong. All of it now comes
+  from the catalogue in every one of the seven languages, and the boot screen follows the
+  browser's language since no choice has been made yet. The password eye buttons also had no
+  name at all for a screen reader, and now do. The build refuses new untranslated text on
+  this path, and holds the rest of the interface to the amount it already has, both for text
+  on screen and for the error messages a handler builds when something goes wrong.
+
+- **The interface now speaks Thai.** All 1747 message keys carry a Thai value, and ไทย can be
+  picked in the onboarding language step and under Settings, Interface, Language. Thai needed
+  the opposite of the rule Japanese needed: Thai is written without spaces between words, so a
+  space is punctuation there rather than a word boundary, and it is required around anything
+  written in another script. The build now checks that boundary, along with the politeness
+  register, because Thai marks politeness structurally and the particles that usually carry it
+  would make the app pick a gender for whoever is typing.
+
+- **The Thai wording says where it is not certain.** As with the other language packs the
+  terms are sourced per term from vendors that ship them, but Thai has far less of that to
+  draw on: Microsoft does not translate its documentation into Thai at all, its Thai support
+  pages were machine translated in every case checked, and there is no Thai language pack for
+  the editor the other rounds used as evidence. The companion document therefore names six
+  security terms and six counting words as coinages rather than presenting them as vendor
+  practice, so a native reviewer knows exactly where to look first. One thing is left for you
+  to decide: Thai defaults to the Buddhist era, so dates render as 2569 rather than 2026 until
+  that is pinned deliberately.
+
+- **The interface now speaks Korean.** All 1747 message keys carry a Korean value, and 한국어
+  can be picked in the onboarding language step and under Settings, Interface, Language. Korean
+  needed a rule the other languages did not: its particles are chosen by the last sound of the
+  word in front of them, so a particle after a name or a count that is only known while the app
+  is running cannot be picked in advance. Those places now carry both forms the way Korean
+  products write them, and everywhere the word IS known, the single correct form is used
+  instead. The build checks this, because it is invisible to anyone who does not read Korean.
+
+- **The interface now speaks Japanese.** All 1747 message keys carry a Japanese value, and
+  日本語 can be picked in the onboarding language step and under Settings, Interface,
+  Language. As with Chinese, the wording is sourced per term from vendors that ship it, and
+  the contested calls are written down with their reasons. Japanese needed its own typography
+  rules rather than an adaptation of the Chinese ones, because on the rule that matters most
+  the two are opposites: Chinese puts a space at every Latin boundary and Japanese forbids it.
+  The one long-vowel policy that decides サーバー against サーバ is applied to every katakana
+  term and checked by the build.
+
+- **The interface now speaks Simplified Chinese.** All 1747 message keys carry a Chinese
+  value, and 简体中文 can be picked in the onboarding language step and under Settings,
+  Interface, Language; a browser set to Chinese selects it on its own. The wording is not a
+  literal translation: every recurring term was taken from a vendor that actually ships it,
+  weighting Chinese-native AI products over translated enterprise documentation, and the
+  contested calls are written down with their reasons in a companion document. One of them
+  is worth stating here: the audit chain is described as detecting tampering, not preventing
+  it, because the standard Chinese term claims prevention and would have overstated what the
+  chain does.
+
+- **The interface now speaks Turkish.** Chat, settings, the security dashboard, mail and
+  the first-run setup were available in German and English only. All 1747 message keys now
+  carry a Turkish value as well, and Turkish can be picked in the onboarding language step
+  and under Settings, Interface, Language; a browser set to Turkish selects it on its own.
+  A guard fails the build if a key or a placeholder ever exists in one language and not the
+  others, so the three catalogues cannot drift apart again.
+
+- **The browser now keeps itself up to date.** The browser engine comes from Debian and
+  was only ever as new as the day its image was first built; nothing afterwards would
+  refresh it, so it silently aged, security fixes included. The stack start now rebuilds
+  the browser image from a fresh base once it is older than a set number of days
+  (Settings, Advanced, Browser pool: "Refresh the browser after", default 14), and the
+  security dashboard's firewall card shows the engine version and the image age, turning
+  amber when the refresh is overdue. A failed refresh never blocks the start; it lands in
+  the security event log and the old browser keeps serving.
+
+- **The browser pool can now be strict, and its fallbacks are visible.** When everyone's
+  own browser is taken, the next person used to be handed the shared one without a word,
+  and nothing anywhere recorded that two people had just started sharing a browser. Every
+  such fallback now lands in the security event log, and a new admin setting (Settings,
+  Advanced, Browser pool: "Never share a browser") turns the fallback into an honest
+  "try again later" on every lane - for setups where sessions must never meet, such as
+  company logins.
+
+- **The usage log now says when a reply was cut short.** A model that runs out of output
+  budget stops mid-thought, and until now nothing anywhere recorded that it had: the one
+  place that saw it printed a line to the terminal, which nobody using the web interface
+  ever sees. Every line in `logs/usage_*.log` now carries `cut=` with the provider's own
+  reason whenever the output limit ended the response, and is left exactly as it was
+  otherwise, so a line only changes when something really was cut off. Nothing acts on
+  this yet, deliberately: it is recorded first so that how often it happens is a number
+  rather than a guess.
+
 ### Changed
+
 - **A room now settles a message's content in one place, and settles it the same way
   twice.** What a room may adjust about a submitted message (who it is addressed to, a
   ballot's choice, a vote's options) was spread over the room, the agent's room tool, the
@@ -279,6 +277,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   already kept out for 30 days, and a reworded repeat is caught before it is sent. So the gap
   was only ever about frequency, and three days is too long for something that concerns
   tomorrow. It is six hours now, and everything that prevents repeats is unchanged.
+
 - **When VAF tells you something on its own and you reply, it now knows what you are replying
   to.** A background notice was deliberately marked "no answer expected" so it would not nag
   you about it - but that also removed the only note saying what had been sent, so a reply
@@ -286,11 +285,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   called it "just internal system info, nothing to do" and disowned it. Such a notice is now
   remembered like any other message it sends you, while still never being chased or repeated,
   and it is described to the answering agent as something it sent rather than as a question.
+
 - **Answering "what's up?" to one of VAF's own questions now gets the question back, not a
   status report.** When VAF asked something in the background and the reply was "sorry, I'm
   here, what's up?", it read that as a request for a situation report and answered "all quiet,
   no open tasks" - dropping the question it had just asked. It now simply repeats what it
   asked and waits.
+
 - **What VAF remembers about YOU is no longer buried under the documents it has read.** Every
   place that asks "what do I know about this person" - the profile block in every reply, and
   the background check that decides whether to raise something - searched one pile in which a
@@ -301,6 +302,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   you. **Nothing else changed:** asking about a document still answers from the document, and
   every other lookup - chat memory, the search tool, the file and research agents, voice, mail,
   attachments - searches the whole store exactly as before.
+
 - **When VAF reminds you about something and you ask "what?", it now knows what it meant.** A
   reminder is deliberately short ("shall we carry on with the commit - yes or no?"), and it used
   to REPLACE the actual question in VAF's own record. After one reminder nothing said what the
@@ -308,12 +310,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   message you meant, instead of simply saying what it was about. The subject is now kept
   alongside the reminder, a reminder has to carry what it is about, and the agent that picks up
   your reply is told the subject rather than only the last thing it sent you.
+
 - **The server dashboard's log pane no longer garbles every line on Windows.** `vaf top`
   followed an appended log by splitting on the line feed alone, so on Windows - where a log
   written in text mode ends each line with a carriage return as well - every line it drew
   carried a stray carriage return. In a terminal that is not cosmetic: it sends the cursor
   back to the start of the line and overwrites what was just drawn. The backfill path was
   always correct; the two line splitters in the same component simply disagreed.
+
 - **When you answer a question VAF asked a while ago, it now knows what you are answering.**
   If VAF asked something in the background (on your messenger, or in the chat) and you replied later
   than ten minutes, it had already forgotten the question and greeted you as if it had never asked -
@@ -322,6 +326,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   before (no more nudges, no repeated escalation), but keeps the question itself for up to twelve
   hours, so a late answer is understood, replied to properly, and recorded against the question that
   prompted it.
+
 - **A message VAF sends on its own no longer overwrites the answer above it in the chat.**
   When VAF asked something on Telegram, got no reply and followed up in the web chat, its
   "are you there?" appeared glued to the end of the previous turn while the reply you had
@@ -331,6 +336,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   of the turn before it. Such messages - a thinking-run question, its follow-up, a fired timer
   and an automation result - now always stand on their own, in the live chat and after a
   reload, with their own time and their own avatar animation.
+
 - **A background thinking run can no longer get stuck asking the same question.** When the
   agent had nothing concrete to suggest and fell back to a friendly get-to-know question,
   every attempt could be rejected as "too similar to one you already asked" - and the
@@ -343,6 +349,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   when the tool selection is narrowed; and a background run that is told it cannot look
   things up now gets an instruction it can actually follow instead of being asked to resolve
   an item that does not exist.
+
 - **Web search no longer answers a background run with the user's own memory, and no longer
   carries a private chat line to the search engine.** Three things that were live whenever no
   Brave or Google API key is configured: the provider chain quietly fell back to VAF's own
@@ -353,6 +360,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   searches for its own query only. And the shared search cache, which stores queries and
   results in clear text, is now separated per user - on a multi-user server one person's
   searches could previously be served to another.
+
 - **Screenshots reached the browser agent's model as the words "Image[...]", not as
   pictures.** Every screenshot the browser agent ever obtained was passed on as a
   placeholder line describing an image instead of the image itself, so a model that was
@@ -360,6 +368,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   same placeholder to the vision model and billed it as a look. Pictures now arrive as
   pictures, and an image the agent cannot read is dropped instead of being described in
   words to something that was asked to look at it.
+
 - **The browser agent now actually looks at the page when it gets stuck.** With a
   vision-capable model it was handed a screenshot tool and left to ask for a picture
   itself, which is exactly what a model that has started to loop stops doing: it could
@@ -369,6 +378,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   text-only browser model gets that page described to it instead. Runs are also told the
   rule that caused this: a value typed into an autocomplete is not committed until its
   suggestion is clicked.
+
 - **The browser agent sees whenever anything else in VAF can see.** Its page
   descriptions and CAPTCHA reads used to require the optional Vision Model in
   Settings to be filled in explicitly, and answered "vision is not configured"
@@ -378,6 +388,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   provider's error text into what the agent believes it saw on the page. Browser
   screenshot descriptions are billed to the `vision` usage lane from now on, not to
   `browser`.
+
 - **A background-started VAF no longer kills itself one second after starting.** The
   service's pid file shared its name with the local model backend's pid file, and the
   backend's orphan cleanup kills whatever pid it finds there when the model server does
@@ -385,71 +396,33 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   files are separate now, a guard test keeps them that way, and the model backend refuses
   to kill a recorded process that is not actually a model server - which also protects
   installs that still carry an old, wrongly written record.
+
 - **`vaf stop` and the dashboard now recognize the real service.** They identify it by the
   singleton port it holds instead of by its command line, so a dashboard watching VAF, an
   interactive `vaf run` session, or an unrelated shell that merely quotes the words can no
   longer be mistaken for the service (and killed). Leaving a dashboard also no longer
   deletes the record of a service that was restarted from another terminal meanwhile.
+
 - **Terminal logging can no longer hang the tray.** If the log-mirroring thread failed to
   start, standard output stayed redirected into a pipe nobody read, and the tray plus all
   its children would block forever once that pipe filled. Output is only redirected once
   the reader is running, and an explicit `2>file` redirect is left alone.
+
 - **A damaged activity record can no longer switch off proactive thinking for good.**
   If `last_interaction.json` was ever left truncated (for example by an interrupted
   write), every later attempt to record user activity silently failed and thinking
   mode stopped seeing idle users entirely, on every platform. The store now treats
   a corrupt file as empty and heals it with the next recorded interaction.
+
 - **Windows: a failed firewall setup no longer retries into repeated error dialogs.**
   The guard meant to skip further `netsh` attempts after the first failure never
   actually engaged.
 
-### Security
-- **The browser's live picture is no longer open to any page on your machine.** The port
-  that carries the browser's screen accepted a connection from anything on the computer,
-  and unlike the browser's control port it did not even check where that connection came
-  from, so a web page open in your ordinary browser could have watched along and typed
-  into the sandbox browser's session. It now requires a password that only VAF knows,
-  minted once and kept in the same protected store as the database password. The same
-  attack was reproduced before and after: it connected before, and is refused now.
-  Takes effect after a rebuild of the browser image; an existing container keeps running
-  without the password until it is recreated, and the log says which of the two it is.
-- **The browser's launch line now has its own alarm, and its crashes leave no
-  residue.** The flag that hides Chromium's warning bar would also hide it for a
-  genuinely dangerous flag, so a CI guard now forbids the dangerous ones outright;
-  and both browser container lanes run under docker-init, so a crashing Chromium can
-  no longer accumulate zombie processes in a long-lived container.
-- **Saved browser logins are now encrypted on disk.** The per-user cookie store held
-  live login tokens for every site a session was saved for, online banking included, in
-  readable files. Those files now use the same encryption as chats and memories; stores
-  written before the change are encrypted automatically at the next start, and a run
-  that needs the file in the clear works on a short-lived, owner-only staging copy that
-  is folded back encrypted when the run ends.
-- **A browser user change now wipes the whole profile, provably, or refuses.** On the
-  shared browser a change of hands used to run a quick cookie sweep whose deeper half
-  silently fails on current Chromium, and any failure was only logged - the next person
-  could inherit the previous person's live logins, history, saved passwords and autofill.
-  Now every change of hands wipes the whole Chromium profile, VAF confirms the wipe
-  actually happened before anyone gets the browser, and a wipe that cannot be confirmed
-  refuses the handover outright and records a security event instead of proceeding. Two
-  people asking for the browser at the same moment can no longer interleave their
-  handovers either; the second one simply waits its turn.
-- **The sandbox browser now runs Chromium with its own sandbox switched on.** It never
-  was: the container could not create the namespaces Chromium's sandbox needs, so the
-  browser ran with `--no-sandbox` and a malicious page that broke out of a renderer had
-  the whole container. The blocker turned out to be Docker's default seccomp profile,
-  nothing else, so the browser now starts with a profile that is Docker's default plus
-  exactly the namespace calls the sandbox needs, and with all container capabilities
-  dropped except the one Chromium's process broker requires. This applies to the shared
-  browser and to every per-user browser alike, and needs one image rebuild plus a
-  container recreate to take effect. On a runtime that does not apply the profile the
-  browser falls back to the old behaviour and says so loudly in its log instead of
-  refusing to start.
-
-### Changed
 - **The agent's own style sheet no longer teaches it the long dash.** The system prompt
   carried dozens of em and en dashes, and a model mirrors the typography it reads, so
   replies inherited them. The prompt is now dash-free, and a mangled umlaut in one of
   its German example sentences is repaired along the way.
+
 - **Picking the interface language is now a search, not a scroll.** The language control
   under Settings, Interface used to be the browser's plain dropdown, which stops being
   comfortable the moment the list grows past a handful of entries. It now opens a popup
@@ -459,6 +432,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and dark theme like every other control, and arrow keys, Enter and Escape work as they
   do in a menu. The timezone under Date & time opens in the same popup, where searching
   earns its keep against the long list of zone names.
+
 - **A reply may now be twice as long, and the limit is a setting.** How many tokens one
   answer could use was fixed at 8192, written into the code in three places, and no
   setting could reach it. That figure was sized for an answer, but a model that reasons
@@ -469,103 +443,153 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   immediately at a value known to work everywhere, and the lower figure is kept for the
   rest of the session, so no model can be broken by the setting.
 
-### Added
-- **Embedders can keep the memory lane and the grounded capability answer under their
-  own persona.** A `system_prompt` override replaces the built-in persona wholesale and
-  by design drops the two code-owned addenda that ride it. Both are now part of the
-  public facade (`SOUL_CONTINUITY_ADDENDUM`, `build_capability_addendum`), so a support
-  bot with its own voice and a trimmed tool set can re-add either one, with the
-  capability text generated truthfully for exactly the tools it ships.
-- **"What can you do?" now gets a real answer instead of a brochure.** Asked about its
-  abilities, the agent used to be told only what NOT to say (no generic assistant
-  self-description), so it often undersold itself. It now turns the question around:
-  it asks what YOU want, says plainly that it adapts to you, and backs that up with
-  what is actually true in the running session - the real number of tools it holds,
-  that it can build a missing tool or skill itself, put a team of agents on one
-  problem, and take standing orders that keep working without being asked again.
-  Each of those claims is only made when the ability is really registered, so the
-  answer never promises what the system would refuse.
-- **Signing in and first-run setup now speak your language too.** The onboarding wizard was
-  translated, but the screens around it were not: the boot screen, the unreachable-backend
-  notice, the whole login form and the two-factor step were fixed English, and so were the
-  error messages that appear during setup. A reader who had just picked their language in
-  step one was thrown back to English the moment anything went wrong. All of it now comes
-  from the catalogue in every one of the seven languages, and the boot screen follows the
-  browser's language since no choice has been made yet. The password eye buttons also had no
-  name at all for a screen reader, and now do. The build refuses new untranslated text on
-  this path, and holds the rest of the interface to the amount it already has, both for text
-  on screen and for the error messages a handler builds when something goes wrong.
-- **The interface now speaks Thai.** All 1747 message keys carry a Thai value, and ไทย can be
-  picked in the onboarding language step and under Settings, Interface, Language. Thai needed
-  the opposite of the rule Japanese needed: Thai is written without spaces between words, so a
-  space is punctuation there rather than a word boundary, and it is required around anything
-  written in another script. The build now checks that boundary, along with the politeness
-  register, because Thai marks politeness structurally and the particles that usually carry it
-  would make the app pick a gender for whoever is typing.
-- **The Thai wording says where it is not certain.** As with the other language packs the
-  terms are sourced per term from vendors that ship them, but Thai has far less of that to
-  draw on: Microsoft does not translate its documentation into Thai at all, its Thai support
-  pages were machine translated in every case checked, and there is no Thai language pack for
-  the editor the other rounds used as evidence. The companion document therefore names six
-  security terms and six counting words as coinages rather than presenting them as vendor
-  practice, so a native reviewer knows exactly where to look first. One thing is left for you
-  to decide: Thai defaults to the Buddhist era, so dates render as 2569 rather than 2026 until
-  that is pinned deliberately.
-- **The interface now speaks Korean.** All 1747 message keys carry a Korean value, and 한국어
-  can be picked in the onboarding language step and under Settings, Interface, Language. Korean
-  needed a rule the other languages did not: its particles are chosen by the last sound of the
-  word in front of them, so a particle after a name or a count that is only known while the app
-  is running cannot be picked in advance. Those places now carry both forms the way Korean
-  products write them, and everywhere the word IS known, the single correct form is used
-  instead. The build checks this, because it is invisible to anyone who does not read Korean.
-- **The interface now speaks Japanese.** All 1747 message keys carry a Japanese value, and
-  日本語 can be picked in the onboarding language step and under Settings, Interface,
-  Language. As with Chinese, the wording is sourced per term from vendors that ship it, and
-  the contested calls are written down with their reasons. Japanese needed its own typography
-  rules rather than an adaptation of the Chinese ones, because on the rule that matters most
-  the two are opposites: Chinese puts a space at every Latin boundary and Japanese forbids it.
-  The one long-vowel policy that decides サーバー against サーバ is applied to every katakana
-  term and checked by the build.
-- **The interface now speaks Simplified Chinese.** All 1747 message keys carry a Chinese
-  value, and 简体中文 can be picked in the onboarding language step and under Settings,
-  Interface, Language; a browser set to Chinese selects it on its own. The wording is not a
-  literal translation: every recurring term was taken from a vendor that actually ships it,
-  weighting Chinese-native AI products over translated enterprise documentation, and the
-  contested calls are written down with their reasons in a companion document. One of them
-  is worth stating here: the audit chain is described as detecting tampering, not preventing
-  it, because the standard Chinese term claims prevention and would have overstated what the
-  chain does.
-- **The interface now speaks Turkish.** Chat, settings, the security dashboard, mail and
-  the first-run setup were available in German and English only. All 1747 message keys now
-  carry a Turkish value as well, and Turkish can be picked in the onboarding language step
-  and under Settings, Interface, Language; a browser set to Turkish selects it on its own.
-  A guard fails the build if a key or a placeholder ever exists in one language and not the
-  others, so the three catalogues cannot drift apart again.
-- **The browser now keeps itself up to date.** The browser engine comes from Debian and
-  was only ever as new as the day its image was first built; nothing afterwards would
-  refresh it, so it silently aged, security fixes included. The stack start now rebuilds
-  the browser image from a fresh base once it is older than a set number of days
-  (Settings, Advanced, Browser pool: "Refresh the browser after", default 14), and the
-  security dashboard's firewall card shows the engine version and the image age, turning
-  amber when the refresh is overdue. A failed refresh never blocks the start; it lands in
-  the security event log and the old browser keeps serving.
-- **The browser pool can now be strict, and its fallbacks are visible.** When everyone's
-  own browser is taken, the next person used to be handed the shared one without a word,
-  and nothing anywhere recorded that two people had just started sharing a browser. Every
-  such fallback now lands in the security event log, and a new admin setting (Settings,
-  Advanced, Browser pool: "Never share a browser") turns the fallback into an honest
-  "try again later" on every lane - for setups where sessions must never meet, such as
-  company logins.
-- **The usage log now says when a reply was cut short.** A model that runs out of output
-  budget stops mid-thought, and until now nothing anywhere recorded that it had: the one
-  place that saw it printed a line to the terminal, which nobody using the web interface
-  ever sees. Every line in `logs/usage_*.log` now carries `cut=` with the provider's own
-  reason whenever the output limit ended the response, and is left exactly as it was
-  otherwise, so a line only changes when something really was cut off. Nothing acts on
-  this yet, deliberately: it is recorded first so that how often it happens is a number
-  rather than a guess.
-
 ### Fixed
+
+- **One growing block of the agent's own briefing no longer crowds out everything else.**
+  A summary of facts about you is added to the agent's instructions on every single
+  message. Nothing limited how long it could get, and it had grown to more than a third
+  of those instructions. It now stops at a sensible length, keeps the newest facts, and
+  says when it left older ones out.
+
+- **Scheduled tasks, reminders and logs are now readable only by their owner.** They sat
+  in folders any other account on the same computer could open and read, while the
+  conversations beside them were closed. An automation's text says what you asked for
+  and when it runs, which is nobody else's business.
+
+- **Opening a Word document in the viewer no longer runs an XML parser with known
+  denial-of-service bugs.** The parser behind the .docx viewer was two patch versions
+  behind, on a release its own authors had marked as having critical issues; several of
+  those let a specially built document keep the browser tab busy indefinitely. Five other
+  packages that ship with the interface were on versions with published advisories and
+  are updated in the same pass. Nothing changes in how anything looks or works.
+
+- **A tool hidden from the model was hidden from one place and named in five others.**
+  Hiding a tool kept it out of the model's tool list but it still appeared in
+  `list_tools`, `search_tools`, the router's own prompt, the system prompt and the
+  sandbox's tool bridge. One answer now serves all six.
+
+- **One automation with an unreadable time no longer hides all the others.** A record
+  whose time could not be read as `HH:MM` (a word instead of a clock time, for example)
+  made the automations list fail everywhere it is shown: in the browser, in the terminal,
+  and in the background planner's own check of what is due next. Such a record now shows
+  no next run, sorts last, and leaves the rest of the list alone.
+
+- **Your agent can now address one member of a group chat by name.** Starting a message
+  with `@Name`, as the room shows it, wakes that member alone and the others read along -
+  the skill had promised this and the agent's tool never did it, so every such message
+  went to everybody. An invited agent on another machine is now told that a name typed
+  there stays text and that `--to` addresses one member from there.
+
+- **Every participant is handed the same four rules of conduct**, in the invitation, the
+  skill, the guest client and the agent's own room turns: no message that only
+  acknowledges, address the one who gave you the work when it is done, wake a member only
+  when they have to act, and carry on quietly after a context compaction.
+
+- **A signed message in a group chat can no longer be moved onto somebody else's name.**
+  A room checks a signature against the key its author announced when joining. Two
+  things let that be worked around, and both are closed. The announcement did not have
+  to be signed itself, and a public key is public, so whoever runs the room could copy
+  one member's key onto another member's name. And a signature did not cover the name
+  it was said under, so even a properly signed announcement could simply be carried to
+  a different member and taken along with everything that member had said. Either way
+  the room went on showing the messages as verified, under the wrong person. Now an
+  announcement counts only if it is signed by the key it announces, and the name is part
+  of what every signature covers.
+
+- **Two background messages arriving at one chat at the same time no longer lose one.**
+  A thinking-mode question, a room wake-up and an automation result all write into a
+  chat the same way, and two of them landing together meant one line was written over
+  the other and gone. They are now written one after the other.
+
+- **A message the agent could not save is no longer reported as sent.** When the chat a
+  background message was meant for had been deleted, it was still shown as delivered
+  and marked unread, and a question nobody was ever shown was waited on for an answer.
+
+- **The agent can now check who really wrote a message in a group chat.** Asked in
+  plain words to verify a room, it could not: the terminal command existed, the browser
+  received the answer, and the agent itself had no way to ask, so it did the nearest
+  thing it could instead. It now has `room_verify`, which gives one verdict per message
+  and can be narrowed to only what looks wrong. A message whose signature does not
+  hold up is also marked in the ordinary transcript now, wherever a room is read.
+
+- **Messages signed before this release show as unverified, and stay that way.** What a
+  signature covers changed, so older ones cannot be checked any more - not now and not
+  later, because the older proof was made over something the new rule no longer asks
+  about. They are shown as unverified rather than as suspect, which is the honest
+  reading: they were signed in good faith under the older rule. Nothing is lost and
+  nothing is altered - the messages are all still there and still say what they said.
+  What is signed from here on is signed under the current rule and can be checked.
+  Signing stays optional: a message nobody signed shows as unverified, as it always has.
+  Note for guests connecting from another machine: run `update` to fetch the current
+  client (it checks the download against the host you already trust, so there is no
+  checksum to compare by hand and the one printed in your old invitation is expected
+  to differ now), then run `announce` once for each room you are in. Until you do,
+  your messages show as unverified. Nothing is lost by waiting: `announce` keeps the
+  name you already have, and everything you said before is verified again the moment
+  it lands. Do not ask for a new invitation for this. A new invitation gives you a new
+  name and leaves your earlier messages behind under the old one.
+
+- **Asking for a group chat twice in a row no longer leaves you with two.** When the
+  same topic was opened again within a few minutes, a second room appeared beside the
+  first, with the same messages sent into both and an invitation for each. VAF now
+  answers with the room that already exists and says how to carry on in it. Opening a
+  second room under the same topic on purpose still works: give it a topic of its own.
+  This is not a rule against rooms with the same name, only against the same person
+  opening one twice in the space of minutes.
+
+- **A group chat's header now sits where a chat's header sits.** Opening an agent room
+  used to leave the top band of the chat empty and put the room's name, kind, mission
+  and members on a second bar underneath it. That bar now stands in the top band
+  itself, next to the browser and specialist buttons, so a room looks like the chat it
+  replaces. On a phone, where the app's own top bar carries the name, nothing changes.
+
+- **The agent now remembers what its background check asked you, wherever you answer.**
+  A question raised while you were away (for example on Telegram) used to live only in a
+  small "waiting for a reply" slot, and any activity on your account could take that slot:
+  a message you sent in an agent room was filed as your answer, and when you then actually
+  replied on Telegram an hour later, the agent had no trace of ever asking and asked you
+  what you meant. Two things changed. Only a message you send in your own chat counts as
+  the answer now - not an agent-room message, a timer, a scheduled automation or the
+  background check's own work. And every message a background check or an automation
+  sends you is written into the transcript of the chat it was sent to, so the agent
+  answering there has asked the question in its own history, even when you reply much
+  later. An agent that was already on that chat picks the new message up on your next
+  message instead of after the next chat switch.
+
+- **A room joined from another machine no longer goes deaf for 90 seconds.** Reading
+  straight after joining failed, and the guest had to wait out a minute and a half
+  before the room answered at all. The cause sat one layer further out than it looked:
+  the relay that carries a room connection kept the inner half open after the guest's
+  first command had finished, so the room never learned the connection had ended and
+  went on reserving the writing slot for it. Measured from a second machine on the
+  same network: reading right after joining took ten seconds and failed, and now takes
+  two tenths of a second and works.
+
+- **A room that turns somebody away now says which refusal it was.** A wrong
+  invitation, one already used, an unknown room and a slot already taken all reached
+  the other machine as the same blank disconnection, so an agent on the far side had
+  to guess which of the four had happened - and guessed wrong. Each now arrives with
+  its own reason, immediately.
+
+- **One bad message can no longer end voting in a room.** A vote carrying a closing time
+  the room could not read as a number made every later attempt to count that room's votes
+  fail, on every surface: the room view, the command line, and the check that closes a vote
+  when its time is up. Because messages in a room are never edited or deleted, the effect
+  was permanent. The closing time is now read carefully when it arrives and again when it
+  is used, so an unusable one is simply ignored and the vote keeps working.
+
+- **A malformed message to a room is now answered instead of dropping the connection.**
+  Sending a room a message whose `ext`, `body` or `to` was not an object raised an
+  unhandled error instead of being refused, and over a live room connection that ended
+  the connection: the sender lost its line and never learned what had happened to the
+  message. The room now names the field and refuses the message the way it refuses any
+  other, so the sender gets an answer it can act on and stays connected.
+
+- **A vote whose options were typed with a stray space could be counted under an answer
+  nobody was offered.** The choice a member picked was matched against the options
+  exactly, stored with the space, and then counted without it. Options and choices are
+  now trimmed in the same place, so what is stored is what is counted.
+
 - **The agent now understands "yes" and "no" in the languages it is set to.** When the agent
   asks whether it was really you speaking, it matches the answer against a word list per
   language. Thai, Chinese and Korean had no list of affirmations at all, Japanese had no list
@@ -575,16 +599,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   stayed open. All four are filled in and checked against the live parser, including that an
   ordinary sentence merely starting with the same syllables is still not taken as an answer.
   The build now refuses a shipped interface language that can say only one of the two.
+
 - **Japanese and Chinese kanji are drawn in the right shapes from the first frame.** The page
   declared German until the interface finished loading, and because the same character can be
   drawn differently in Japanese, Chinese and Korean, a machine carrying a Chinese font painted
   Japanese text in Chinese letterforms for that moment. The page now states its language before
   it paints, alongside the theme it already restored there.
+
 - **A label's colon now follows the language it is written in.** Seven places built a line by
   gluing an ASCII colon onto a translated label, so a Chinese screen read `最近出现: ` with the
   Western colon and spacing that Chinese typography does not use. The separator now comes from
   the message catalogue like any other string, and a guard fails the build if a component ever
   hardcodes one beside a translated string again.
+
 - **A file path that names a root is refused everywhere now, not just where the host
   happens to notice.** A path handed in from outside - an upload, a folder to browse, a
   peer's file push - was checked for being absolute with the rule of the machine VAF runs
@@ -595,11 +622,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the folder it was allowed to touch, so no file was exposed, but the caller was handed a
   different target than the one they named. Both spellings are now refused on every
   platform and Python version.
+
 - **A browser container that cannot start now says why.** Setting the stream password
   to something shorter than six characters made the container stop with an entirely
   empty log: the tool that writes the password file refused, and its complaint went
   nowhere. It now names the problem and the minimum before it tries, and any other
   failure of that step is printed instead of discarded.
+
 - **Saved logins survive again, so an agent can carry a session on.** Whether the
   browser offers to remember a password was a setting inside the browser, and that
   turned out to be no place for it: a single stray toggle had switched it off in the
@@ -611,6 +640,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   data into whatever form it opens. Note where saved passwords belong: on a personal
   browser, whose profile is that one person's - on the shared browser they are erased
   at every change of hands, by design.
+
 - **The browser's phishing protection is switched on, and says when it cannot work.**
   Safe Browsing was dead three times over: the launch line disabled both the list
   updates and the background fetches they ride on, and Chromium's API keys never
@@ -622,11 +652,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   container log says on every start which of the two states it is in. Until then
   phishing protection comes, as before, from the filtering DNS and the content
   blocker. Removing those flags also restored certificate-revocation updates.
+
 - **A personal browser no longer keeps an outdated engine forever.** Each per-user
   browser was pinned for life to the image it was first created from, so the browsers
   people actually work in were the last to receive a security fix, while the shared
   one was rebuilt. A personal browser whose image has moved on is now replaced on next
   use; the saved logins and history live in a separate volume and come back with it.
+
 - **A browser user change now also erases the cache and the certificate store.** The
   cleanup between two people wiped the browser profile but left two neighbouring
   folders untouched: the page cache, which still held the previous person's browsed
@@ -634,6 +666,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   where a client certificate and its private key live - the one leftover worse than a
   cookie. Both are wiped with the profile now, and the documentation that already
   claimed the cache was erased is true for the first time.
+
 - **The desktop window can no longer lock itself out with an old login.** A login is
   valid for 24 hours, and a window that stayed connected past that point kept working
   until the next restart, then hammered the server with its expired token forever: the
@@ -644,6 +677,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   desktop window reconnects under the same local-admin policy every other request from
   the machine already got. Remote devices still log in freshly, and a forged token is
   still refused everywhere.
+
 - **A hard stop can no longer brick a personal browser.** Chromium writes a lock file
   into its profile naming the machine and process that own it. A personal browser's
   profile lives on so its logins survive, and after a hard stop (a force-removed
@@ -653,6 +687,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   full health deadline before falling back to the shared browser, minutes instead of
   seconds. The launcher now clears the stale lock before each start; nothing is lost,
   because the supervisor already guarantees only one Chromium ever runs per container.
+
 - **The browser cleanup works inside the hardened container.** The new hardening drops
   every container capability, which took down the very tools the user-change cleanup
   and the workspace mirror relied on: a root exec could no longer create the wipe
@@ -661,6 +696,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   file, and the mirror arrives as a tar stream unpacked inside the container - so no
   capability had to be given back. Found live: the very first browser open after the
   hardening was refused by the new fail-closed handover, exactly as designed.
+
 - **The terminal no longer fills with a memory warning that could never resolve.** The
   headless runner warned and ran a cleanup every thirty seconds once the process passed
   2 GB, but with the embedding model deliberately kept loaded the process idles above
@@ -668,6 +704,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the same warning repeated forever at a constant figure. The warning threshold now sits
   at 4 GB, above the normal footprint, and the aggressive cleanup that unloads models
   moved from 4 GB to 6 GB accordingly. A process that actually grows still gets both.
+
 - **An answer is no longer displaced by the rounds that come after it.** When the agent
   finished answering while its task list still held open steps, it quietly continued
   working, and each continuation replaced the reply, on screen and in the returned text.
@@ -676,6 +713,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Every answer that passed validation now stays part of the reply: later rounds add to
   it instead of replacing it, and the chat bubble keeps showing it while the agent works
   on. Turns with a single answer are byte-for-byte unchanged.
+
 - **OpenAI's newest models can use tools again.** On `gpt-5.6` (luna, terra and sol) every
   turn in which the agent wanted to use a tool came back as an error and nothing happened.
   Those models only accept tools when the request says the model should not reason first,
@@ -687,6 +725,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   repeated immediately instead of being lost. The trade-off is stated rather than hidden:
   on `gpt-5.6`, a turn that uses tools now runs without the model's internal reasoning
   step, which is what this endpoint allows.
+
 - **The coding agent offered itself 130 tools and was refused for it.** It collected its
   tools by scanning the whole product and leaving out three by name, so everything VAF
   ever gained landed in front of it: 11 mail tools, 20 messenger tools, 9 for calendars
@@ -698,6 +737,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   by mistake. The same change closed a quieter gap beside it: a tool an account was not
   allowed to use was still being shown to the model, and only refused at the moment it was
   called.
+
 - **Hitting the provider's rate limit no longer loses the turn.** OpenAI allows this
   account 200,000 tokens per minute per model, and with the chat and the coding agent
   sharing that window it runs full. The refusal names its own remedy - down to "please
@@ -708,6 +748,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   budget is a setting) before an error is ever shown. The coding agent honors the same
   budget: it used to abort the entire run on the first rate-limit response, however
   short the requested wait.
+
 - **A rejected request no longer loops.** When the provider refused, the coding agent read
   the refusal as "too much history", threw the conversation away in three steps and asked
   again with the same request - one live run repeated an identical, hopeless request 64
@@ -715,11 +756,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   three compression steps and reports what the provider actually said. Which it can do
   because the provider's answer is finally written down: the log recorded only that
   something failed, never the reason.
+
 - **The coding agent could not start at all on any `gpt-5` model.** It builds its own
   request instead of going through the shared one, and asked for a reply length in a way
   that whole generation of models rejects, so an OpenAI coder run ended on an error before
   it wrote a line. Both now read the same rules from one place, which is also what gave the
   coder the fix above for free.
+
 - **A provider that has gone down is no longer waited for on every single message.** When
   failover is switched on and the main provider stops answering, VAF moves the request to
   the next provider in the chain. Until now it went back and knocked on the dead one first
@@ -732,6 +775,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   is polled in the background, so this costs no extra requests and no tokens. A rejected
   request, as opposed to an outage, never sets a provider aside, and nothing is skipped in
   the middle of a tool call, where changing provider would break the exchange.
+
 - **The prompt list on the right edge of the chat jumps again.** Clicking one of your
   earlier messages there did nothing at all. The chat column had just been taught to
   hold the position it was put in, because the window engine moves the view on its own
@@ -743,10 +787,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   conversation as it opens and closes. Reaching a message from further back than the
   chat currently shows also loads exactly the part of the history it needs, rather than
   all of it, and waits for it to be on screen instead of guessing at a delay.
+
 - **A reply that hit the output limit no longer claims it is continuing.** The message
   shown in that case announced that it was carrying on automatically, next to a switch
   no code ever read. Nothing carried on. The message now says what actually happened,
   and the reply still ends there.
+
 - **The archive no longer shows a strip of the chat above its own toolbar.** Opening
   an archived conversation and scrolling left a narrow band directly under the
   window's title in which the conversation slid past, above the row holding *All
@@ -754,6 +800,53 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   area, and the way browsers pin such a row put it 24 pixels lower than intended,
   leaving the band above it uncovered. It is now an ordinary header row above the
   list, so only the conversation scrolls and nothing passes over it.
+
+### Security
+
+- **The browser's live picture is no longer open to any page on your machine.** The port
+  that carries the browser's screen accepted a connection from anything on the computer,
+  and unlike the browser's control port it did not even check where that connection came
+  from, so a web page open in your ordinary browser could have watched along and typed
+  into the sandbox browser's session. It now requires a password that only VAF knows,
+  minted once and kept in the same protected store as the database password. The same
+  attack was reproduced before and after: it connected before, and is refused now.
+  Takes effect after a rebuild of the browser image; an existing container keeps running
+  without the password until it is recreated, and the log says which of the two it is.
+
+- **The browser's launch line now has its own alarm, and its crashes leave no
+  residue.** The flag that hides Chromium's warning bar would also hide it for a
+  genuinely dangerous flag, so a CI guard now forbids the dangerous ones outright;
+  and both browser container lanes run under docker-init, so a crashing Chromium can
+  no longer accumulate zombie processes in a long-lived container.
+
+- **Saved browser logins are now encrypted on disk.** The per-user cookie store held
+  live login tokens for every site a session was saved for, online banking included, in
+  readable files. Those files now use the same encryption as chats and memories; stores
+  written before the change are encrypted automatically at the next start, and a run
+  that needs the file in the clear works on a short-lived, owner-only staging copy that
+  is folded back encrypted when the run ends.
+
+- **A browser user change now wipes the whole profile, provably, or refuses.** On the
+  shared browser a change of hands used to run a quick cookie sweep whose deeper half
+  silently fails on current Chromium, and any failure was only logged - the next person
+  could inherit the previous person's live logins, history, saved passwords and autofill.
+  Now every change of hands wipes the whole Chromium profile, VAF confirms the wipe
+  actually happened before anyone gets the browser, and a wipe that cannot be confirmed
+  refuses the handover outright and records a security event instead of proceeding. Two
+  people asking for the browser at the same moment can no longer interleave their
+  handovers either; the second one simply waits its turn.
+
+- **The sandbox browser now runs Chromium with its own sandbox switched on.** It never
+  was: the container could not create the namespaces Chromium's sandbox needs, so the
+  browser ran with `--no-sandbox` and a malicious page that broke out of a renderer had
+  the whole container. The blocker turned out to be Docker's default seccomp profile,
+  nothing else, so the browser now starts with a profile that is Docker's default plus
+  exactly the namespace calls the sandbox needs, and with all container capabilities
+  dropped except the one Chromium's process broker requires. This applies to the shared
+  browser and to every per-user browser alike, and needs one image rebuild plus a
+  container recreate to take effect. On a runtime that does not apply the profile the
+  browser falls back to the old behaviour and says so loudly in its log instead of
+  refusing to start.
 
 ## [0.1.0a26] - 2026-08-25
 

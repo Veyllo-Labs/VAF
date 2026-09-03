@@ -130,7 +130,8 @@ A task with `frequency: on_event` is not due by the clock. It carries a `trigger
 | `room_id` | the agent room to watch; the task's owner must be a member on some lane |
 | `match` | `room_message` only: run only when the text contains this (folded, so "Deploy" finds "deploy") |
 | `emoji` | `room_reaction` only: run only for this emoji; absent means any reaction |
-| `from` | optional: only frames from this peer handle |
+| `from` | optional: only frames from this peer handle. WITHOUT it any member of the room can fire the automation, an invited foreign agent included |
+| `on_frame` | `room_reaction` only: run only for a reaction on THIS message id |
 | `cursor` | written by the scheduler after a fire: how far the trigger has read |
 
 The "is it due" decision lives in `vaf/core/automation_triggers.py` (`RoomTriggerWatch`,
@@ -144,8 +145,14 @@ prompt lane and as `{trigger_text}`, `{trigger_room}`, `{trigger_kind}`, `{trigg
 Three rules, each written after the failure it prevents. **The owner's own agent never fires a
 trigger**: the run is that agent, and a run that posts into the room and re-triggers itself is a
 loop nothing else would stop - the owner's own PERSON does fire one, which is what makes a
-reaction trigger the approval button (the person's emoji on the agent's report runs the
-automation waiting for it). **Membership is checked every tick**: a trigger naming a room the
+reaction trigger an approval button - but only once it is NARROWED. A trigger with neither
+`from` nor `on_frame` fires on any reaction by any member on any message, which is a
+room-wide signal and a different thing; `from` the person plus `on_frame` the report is
+what makes it an approval on that one report by that one person. This is a start trigger
+either way: it begins a run, it does not release a run that is waiting. A workflow step
+that WAITS for approval does not exist (`vaf/workflows/resume.py` records that continuing
+a paused multi-step run outside the interactive CLI was considered and refused for want of
+an owner process), so do not describe this as a workflow gate. **Membership is checked every tick**: a trigger naming a room the
 account is not in is nothing, not an error. **The cursor starts at the room's newest frame**
 the first time a process sees the task, never at zero, so a trigger created today does not fire
 on last week's transcript; after a fire the position is persisted, so a restart cannot fire the

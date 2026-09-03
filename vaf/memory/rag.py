@@ -1654,6 +1654,41 @@ def run_session_compaction_sync(
             _notify_ui("completed", "Memory Learning finished.")
 
 
+def profile_cache_ceiling() -> int:
+    """How many characters of the profile summary may reach a prompt. 0 means no ceiling.
+
+    One function because the ceiling is applied twice on purpose: at the WRITER, so the
+    file stops growing, and at the READER, so a cache written before the ceiling existed
+    is bounded on the very next turn instead of on the next refresh. A door alone only
+    protects what is written after it - the same reason the room's deadline reader is
+    defensive as well as its door.
+    """
+    try:
+        return max(0, int(Config.get("memory_profile_cache_chars", 4000) or 0))
+    except (TypeError, ValueError):
+        return 4000
+
+
+def trim_profile_summary(text: str, limit: Optional[int] = None) -> str:
+    """The summary, cut to the ceiling at a LINE boundary.
+
+    Line-wise because the content is one retrieved fact per line: cutting mid-line would
+    hand the model half a sentence and no way to tell that anything was removed. The note
+    is part of the budget, so the result never exceeds the ceiling.
+    """
+    ceiling = profile_cache_ceiling() if limit is None else max(0, int(limit))
+    body = (text or "").strip()
+    if not ceiling or len(body) <= ceiling:
+        return body
+    note = "\n[older facts left out - the profile summary is capped]"
+    room = max(0, ceiling - len(note))
+    cut = body[:room]
+    edge = cut.rfind("\n")
+    if edge > room // 2:
+        cut = cut[:edge]
+    return cut.rstrip() + note
+
+
 def refresh_user_profile_summary(user_scope_id: Optional[UUID]) -> None:
     """
     After compaction: run RAG search for user profile facts and write result to cache.
@@ -1680,7 +1715,7 @@ def refresh_user_profile_summary(user_scope_id: Optional[UUID]) -> None:
         # Encrypted on disk: this cache is a plaintext copy of retrieved
         # memory content in the user's home otherwise. Legacy plaintext
         # files are still readable and get rewritten here on refresh.
-        cache_file.write_bytes(encrypt_file_bytes(summary or ""))
+        cache_file.write_bytes(encrypt_file_bytes(trim_profile_summary(summary or "")))
         try:
             os.chmod(cache_file, 0o600)
         except Exception:

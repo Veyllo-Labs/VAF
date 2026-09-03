@@ -584,6 +584,7 @@ class Config:
         # the clamp ceiling in rag.py; per-query cost is decrypt+score, a few
         # ms per thousand rows.
         "memory_hybrid_lexical_scan_limit": 2000,
+        "memory_profile_cache_chars": 4000,                        # Admin-only. Ceiling on the `known_facts` block, the retrieved user-profile summary that is injected into EVERY system prompt. Measured 2026-09-03: it stood at 9,471 characters and had grown 38% in 20 days with nothing bounding it, more than a third of the whole system message. Cut at a line boundary at the writer AND at the reader, so an oversized cache from before the ceiling is bounded on the next turn rather than on the next refresh. 0 = no ceiling (vaf/memory/rag.py, vaf/core/system_prompt.py)
         "memory_hybrid_lexical_min_score": 0.05,                   # Min lexical score (0.0-1.0) before fusion; 0.05 filters zero-overlap noise conservatively
         "memory_auto_capture": False,                               # DISABLED: Auto-capture causes memory spikes (investigating)
         "memory_compaction_enabled": True,                          # Session compaction: prompt to store durable memories every N turns
@@ -1007,6 +1008,10 @@ class Config:
         # key. There is one config file, so a non-admin write would not even be
         # "their own" budget - it would move everybody's.
         "context_compress_tokens",
+        # The same decision measured in characters, on the other half of what is sent:
+        # `known_facts` rides in EVERY system prompt, so its ceiling moves every user's
+        # per-turn cost on the instance's key, out of the one config file.
+        "memory_profile_cache_chars",
         # Concurrency + rate-limit resilience: system-wide, admin-only (a LAN user must not change them).
         "parallel_main_workers", "queue_policy", "max_parallel_api_workers", "max_parallel_local_workers",
         "api_retry_attempts", "api_retry_after_max", "api_rate_limit_wait_max",

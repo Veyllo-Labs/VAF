@@ -1253,7 +1253,9 @@ Then use the results to answer. Do NOT guess from your training data!
                         # Encrypted-at-rest cache; legacy plaintext files
                         # pass through the helper unchanged.
                         from vaf.memory.crypto import decrypt_file_bytes
-                        known_facts = decrypt_file_bytes(cache_file.read_bytes()).strip()
+                        from vaf.memory.rag import trim_profile_summary
+                        known_facts = trim_profile_summary(
+                            decrypt_file_bytes(cache_file.read_bytes()))
                 except Exception:
                     pass
 

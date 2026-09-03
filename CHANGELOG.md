@@ -12,6 +12,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **An automation that waits for an emoji can now wait for the RIGHT one.** A reaction
+  trigger can name the person whose reaction counts and the exact message it has to land
+  on. Without that it ran on any reaction by anyone in the room, which is a signal rather
+  than an approval.
 - **After the conversation history is compressed, an application built on VAF can put
   state back.** `Agent.on_compaction(cb)` runs right after a compaction and may return
   one note that is added to the history: the place for what a summary loses, such as
@@ -111,6 +115,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **One growing block of the agent's own briefing no longer crowds out everything else.**
+  A summary of facts about you is added to the agent's instructions on every single
+  message. Nothing limited how long it could get, and it had grown to more than a third
+  of those instructions. It now stops at a sensible length, keeps the newest facts, and
+  says when it left older ones out.
+- **Scheduled tasks, reminders and logs are now readable only by their owner.** They sat
+  in folders any other account on the same computer could open and read, while the
+  conversations beside them were closed. An automation's text says what you asked for
+  and when it runs, which is nobody else's business.
 - **Opening a Word document in the viewer no longer runs an XML parser with known
   denial-of-service bugs.** The parser behind the .docx viewer was two patch versions
   behind, on a release its own authors had marked as having critical issues; several of

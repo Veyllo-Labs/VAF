@@ -202,6 +202,18 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
                                 "room instead of on a message - this emoji, or 'any'. The user's own "
                                 "emoji on the agent's report is the approval button.")
             },
+            "trigger_from": {
+                "type": "string",
+                "description": ("For frequency 'on_event': only react to frames from THIS peer handle "
+                                "(room_read shows the handles). Without it any member of the room can "
+                                "fire the automation, including an invited foreign agent.")
+            },
+            "trigger_on_frame": {
+                "type": "string",
+                "description": ("For frequency 'on_event' with trigger_emoji: only a reaction on THIS "
+                                "message id fires it. This is what turns a reaction trigger into an "
+                                "approval on one specific report rather than any reaction in the room.")
+            },
             "weekday": {
                 "type": "string",
                 "description": "For frequency 'weekly': which weekday (e.g. 'monday', 'tuesday'). Use English lowercase."
@@ -254,6 +266,8 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
                 "room_id": trigger_room,
                 "match": kwargs.get("trigger_match") or "",
                 "emoji": "" if wanted_emoji.lower() in ("any", "*") else wanted_emoji,
+                "from": kwargs.get("trigger_from") or "",
+                "on_frame": kwargs.get("trigger_on_frame") or "",
             })
             if trigger is None:
                 return ("Error: an event trigger needs trigger_room, the id of an agent room the "
@@ -1141,6 +1155,14 @@ When changing **time**, the new time must be at least 10 minutes apart from all 
                 "description": ("With trigger_room: run when a REACTION lands on a message there "
                                 "instead of on a message - this emoji, or 'any'.")
             },
+            "trigger_from": {
+                "type": "string",
+                "description": "With trigger_room: only frames from THIS peer handle fire it."
+            },
+            "trigger_on_frame": {
+                "type": "string",
+                "description": "With trigger_emoji: only a reaction on THIS message id fires it."
+            },
             "weekday": {
                 "type": "string",
                 "description": "For frequency 'weekly': weekday in English lowercase (e.g. 'monday')"
@@ -1200,6 +1222,8 @@ When changing **time**, the new time must be at least 10 minutes apart from all 
                     "room_id": trigger_room,
                     "match": kwargs.get("trigger_match") or "",
                     "emoji": "" if wanted_emoji.lower() in ("any", "*") else wanted_emoji,
+                    "from": kwargs.get("trigger_from") or "",
+                    "on_frame": kwargs.get("trigger_on_frame") or "",
                 }) if trigger_room else None
                 if trigger is None and not (task.frequency == "on_event" and task.trigger):
                     return ("Error: frequency 'on_event' needs trigger_room, the id of an agent room "

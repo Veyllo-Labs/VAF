@@ -2742,6 +2742,8 @@ def create_automation(
     on_room: str = typer.Option("", "--on-room", help="Run when something happens in this agent room (its id) instead of by the clock"),
     on_match: str = typer.Option("", "--on-match", help="With --on-room: only a message containing this text"),
     on_reaction: str = typer.Option("", "--on-reaction", help="With --on-room: a reaction instead of a message; an emoji, or 'any'"),
+    on_from: str = typer.Option("", "--on-from", help="With --on-room: only frames from this peer handle"),
+    on_frame: str = typer.Option("", "--on-frame", help="With --on-reaction: only a reaction on this message id"),
 ):
     """Create a new automation task."""
     from rich.console import Console
@@ -2770,7 +2772,8 @@ def create_automation(
         from vaf.core.automation_triggers import read_trigger
         trigger = read_trigger({"kind": "room_reaction" if on_reaction else "room_message",
                                 "room_id": on_room, "match": on_match,
-                                "emoji": "" if on_reaction.strip().lower() in ("any", "*") else on_reaction})
+                                "emoji": "" if on_reaction.strip().lower() in ("any", "*") else on_reaction,
+                                "from": on_from, "on_frame": on_frame})
         if trigger is None:
             console.print("[red]--on-room needs a room id that could be one (letters, digits, - _ .)[/red]")
             raise typer.Exit(1)

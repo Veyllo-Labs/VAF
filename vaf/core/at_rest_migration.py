@@ -79,7 +79,7 @@ def run_once(*, force: bool = False) -> Dict[str, object]:
     from vaf.core.config import Config
     from vaf.core.data_files import encryption_enabled
     from vaf.core.platform import Platform
-    from vaf.core.secure_store import harden_dir
+    from vaf.core.secure_store import harden_dir, harden_path
 
     report: Dict[str, object] = {}
     vaf_dir = Path(Platform.vaf_dir())
@@ -103,6 +103,30 @@ def run_once(*, force: bool = False) -> Dict[str, object]:
     for name, (root, _patterns) in trees.items():
         if root.is_dir():
             harden_dir(root)
+
+    # And the stores that are NOT in `trees`, for a reason worth writing down: their
+    # writers do not read through the encrypted seam (automations, reminders and the
+    # planner use plain json.load/json.dump), so encrypting them would lock their own
+    # loaders out. Modes are the half that can be applied today, and they are not
+    # cosmetic here: an automation's prompt is user-authored natural language, the same
+    # content class as a chat message, and it sat world-readable in a world-listable
+    # directory while the sessions beside it were owner-only ciphertext. Bringing them
+    # under encryption means converting those writers to data_files first; that is its
+    # own change, and until it happens this is the honest half.
+    for name in ("automations", "automation_planner", "reminders", "logs",
+                 "user_profile_cache", "thinking_workspace"):
+        root = vaf_dir / name
+        if root.is_dir():
+            harden_dir(root)
+            report.setdefault("hardened", []).append(name)
+            for child in root.rglob("*"):
+                try:
+                    if child.is_dir():
+                        harden_dir(child)
+                    elif child.is_file():
+                        harden_path(child)
+                except OSError:
+                    continue
 
     if encryption_enabled():
         for name, (root, patterns) in trees.items():

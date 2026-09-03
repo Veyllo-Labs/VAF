@@ -14,9 +14,11 @@ Two trigger kinds, both over an A2A room the automation's owner is a member of:
 
 - ``room_message``: a conversational frame arrives, optionally containing a text (folded
   the way every match in this tree is folded, so "Deploy" finds "deploy").
-- ``room_reaction``: an emoji lands on a message, optionally a specific emoji. With point 4
-  this is the approval button: the person's emoji on the agent's report runs the automation
-  that was waiting for it.
+- ``room_reaction``: an emoji lands on a message - optionally a specific emoji, optionally
+  on one named message (``on_frame``), optionally from one named peer (``from``). Narrowed
+  to a peer and a message it is an approval button: the person's emoji on the agent's own
+  report, and nobody else's on anything else. Left wide it is a room-wide signal, which is
+  a different thing and worth choosing deliberately.
 
 Three rules, each written after the failure it prevents:
 
@@ -79,6 +81,9 @@ def read_trigger(value: Any) -> Optional[Dict[str, Any]]:
     except UnsafeName:
         return None
     out: Dict[str, Any] = {"kind": kind, "room_id": room_id}
+    on_frame = str(value.get("on_frame") or "").strip()
+    if on_frame and kind == "room_reaction":
+        out["on_frame"] = on_frame
     match = str(value.get("match") or "").strip()[:MATCH_WIDTH]
     if match and kind == "room_message":
         out["match"] = match
@@ -104,6 +109,8 @@ def trigger_label(trigger: Any) -> str:
         return "on an event (no room)"
     if read["kind"] == "room_reaction":
         what = f"reaction {read['emoji']}" if read.get("emoji") else "any reaction"
+        if read.get("on_frame"):
+            what += f" on message {read['on_frame']}"
     else:
         what = f"message containing '{read['match']}'" if read.get("match") else "any message"
     who = f" from {read['from']}" if read.get("from") else ""
@@ -132,6 +139,11 @@ def matching_frames(trigger: Any, frames: Iterable[Any], *,
             if frame.kind != "reaction":
                 continue
             if read.get("emoji") and str(body.get("emoji") or "") != read["emoji"]:
+                continue
+            # WHICH message it landed on. Without this a trigger fires on any reaction
+            # anywhere in the room, which is the difference between "somebody approved
+            # THIS" and "somebody reacted to something".
+            if read.get("on_frame") and str(frame.reply_to or "") != read["on_frame"]:
                 continue
         else:
             # Something SAID: not bookkeeping, not a check-in, not a reaction, and not

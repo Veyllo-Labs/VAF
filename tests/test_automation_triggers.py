@@ -33,10 +33,19 @@ SCOPE = "scope-a"
 
 @pytest.fixture()
 def world(tmp_path, monkeypatch):
-    """A scratch home, a scratch room store, and the clock scheduler's registry empty."""
+    """A scratch home, a scratch room store, and the clock scheduler's registry empty.
+
+    The manager cache is cleared too, and that is not belt-and-braces: `get_manager()`
+    holds a module-global AutomationManager (vaf/core/automation.py), so the FIRST test
+    to reach the CLI binds it to that test's directory and every later CLI test writes
+    into a home that has since been thrown away. Passing alone and failing in the file
+    is what that looks like from the outside.
+    """
+    import vaf.core.automation as automation_mod
     monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path))
     monkeypatch.setattr(store_mod, "rooms_root",
                         lambda base=None: Path(base) if base else tmp_path / "rooms")
+    monkeypatch.setattr(automation_mod, "_manager", None)
     (tmp_path / "rooms").mkdir()
     schedule.clear()
     return tmp_path
@@ -402,3 +411,91 @@ def test_the_browser_applies_a_trigger_after_the_clock_fields():
     loop = update.index('for key in ("name", "description", "prompt", "frequency", "time", "weekday", "day", "enabled")')
     trigger = update.index('update_params.update(trigger=_trigger, frequency="on_event", time="")')
     assert loop < trigger
+
+
+# ── whose reaction, and on which message ───────────────────────────────────
+
+def test_a_reaction_trigger_can_name_the_message_it_waits_on(world):
+    """MUTATION: ignore on_frame.
+
+    Without it a trigger fires on ANY reaction anywhere in the room, which is the
+    difference between "somebody approved THIS report" and "somebody reacted to
+    something". An approval that any thumbs-up in the room can grant is not one.
+    """
+    room, person, _agent, guest = _room()
+    report = room.say(guest, "the deployment checklist is done")
+    other = room.say(guest, "unrelated")
+    task = _task(trigger={"kind": "room_reaction", "room_id": "room-t", "on_frame": report.id})
+    assert read_trigger(task.trigger)["on_frame"] == report.id
+    watch = RoomTriggerWatch()
+    watch.tick([task])
+
+    room.react(person, other.id, "+1")
+    assert watch.tick([task]) == [], "a reaction on another message fired it"
+
+    room.react(person, report.id, "+1")
+    hits = watch.tick([task])
+    assert len(hits) == 1 and hits[0].frames[0].reply_to == report.id
+
+
+def test_on_frame_is_only_read_for_a_reaction_trigger():
+    """A message trigger has no target to land on, so the field would be a promise
+    nothing keeps."""
+    assert "on_frame" not in read_trigger(
+        {"kind": "room_message", "room_id": "room-t", "on_frame": "f-1"})
+    assert read_trigger({"kind": "room_reaction", "room_id": "room-t", "on_frame": " "}) == \
+        {"kind": "room_reaction", "room_id": "room-t"}
+
+
+def test_the_label_says_which_message_is_being_waited_on():
+    """It is the line a person reads in the automations list; "any reaction in room X"
+    and "a thumbs-up on THIS report" must not read the same."""
+    assert trigger_label({"kind": "room_reaction", "room_id": "room-t", "emoji": "+1",
+                          "on_frame": "f-9"}) == \
+        "on reaction +1 on message f-9 in room room-t"
+
+
+def test_both_creation_lanes_can_narrow_a_trigger_to_a_peer_and_a_message(world, monkeypatch):
+    """MUTATION: drop trigger_from / trigger_on_frame from the tool's payload.
+
+    read_trigger has supported a `from` restriction since it was written and NO creation
+    lane exposed it, so every event automation could be fired by any member of the room
+    including an invited foreign agent. A field the reader honours and no writer can set
+    is a ghost, and Rule 0d says finish it rather than build beside it.
+    """
+    import vaf.core.automation as automation_mod
+    from vaf.core.automation import automation_app
+    from vaf.tools.automation import AutomationTool
+    from typer.testing import CliRunner
+
+    monkeypatch.setattr(automation_mod, "ensure_scheduler_started", lambda origin="": (None, False))
+    out = AutomationTool().run(name="Approval", prompt="Ship it once approved.",
+                               frequency="on_event", time="", trigger_room="room-t",
+                               trigger_emoji="+1", trigger_from="p-ana",
+                               trigger_on_frame="f-report", user_scope_id=SCOPE)
+    assert "Error" not in out, out
+    task = next(t for t in AutomationManager(user_scope_id=SCOPE).list() if t.name == "Approval")
+    assert task.trigger == {"kind": "room_reaction", "room_id": "room-t", "emoji": "+1",
+                            "from": "p-ana", "on_frame": "f-report"}
+
+    result = CliRunner().invoke(automation_app, [
+        "create", "--name", "CliApproval", "--prompt", "act", "--on-room", "room-t",
+        "--on-reaction", "+1", "--on-from", "p-ana", "--on-frame", "f-report"])
+    assert result.exit_code == 0, result.output
+    cli_task = next(t for t in AutomationManager(storage_dir=str(world / "automations")).list()
+                    if t.name == "CliApproval")
+    assert cli_task.trigger["from"] == "p-ana" and cli_task.trigger["on_frame"] == "f-report"
+
+
+def test_a_narrowed_trigger_refuses_the_wrong_peer(world):
+    """The security half: with `from` set, another member's emoji is not an approval."""
+    room, person, _agent, guest = _room()
+    report = room.say(guest, "done")
+    task = _task(trigger={"kind": "room_reaction", "room_id": "room-t", "from": person.peer_id})
+    watch = RoomTriggerWatch()
+    watch.tick([task])
+
+    room.react(guest, report.id, "+1")
+    assert watch.tick([task]) == [], "a stranger's reaction fired the automation"
+    room.react(person, report.id, "+1")
+    assert len(watch.tick([task])) == 1

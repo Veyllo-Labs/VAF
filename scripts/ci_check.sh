@@ -165,6 +165,35 @@ for (const [name, meta] of Object.entries(installed)) {
         problems.push(`${name}: installed ${meta.version}, lock wants ${want.version}`);
     }
 }
+// And the manifest can LIE. `npm ci --dry-run` rewrites node_modules/.package-lock.json
+// without unpacking a single package, so the two files agree while the tree on disk is
+// months old - measured, self-inflicted, during a security bump whose whole point was
+// getting new bytes onto the disk. So spot-check what is actually THERE: read the real
+// package.json of every locked package this manifest claims, capped so the stage stays
+// under a second. A mismatch here is the only proof that bytes moved.
+// Optional and platform-gated entries are skipped, for the same reason the set
+// difference above is not used: the lock legitimately names packages this platform
+// never unpacks, and a guard that reports those is a false-positive machine nobody
+// reads twice.
+const claimed = Object.keys(installed).filter(n => {
+    if (!n.startsWith('node_modules/')) return false;
+    const e = lock[n] || {};
+    return !e.optional && !e.os && !e.cpu && !e.libc;
+});
+const step = Math.max(1, Math.floor(claimed.length / 120));
+for (let i = 0; i < claimed.length; i += step) {
+    const name = claimed[i];
+    const want = (lock[name] || {}).version;
+    if (!want) continue;
+    let real;
+    try {
+        real = JSON.parse(fs.readFileSync(`web/${name}/package.json`, 'utf8')).version;
+    } catch {
+        problems.push(`${name}: locked ${want}, NOT UNPACKED on disk`);
+        continue;
+    }
+    if (real && real !== want) problems.push(`${name}: on disk ${real}, lock wants ${want}`);
+}
 if (problems.length) {
     console.error('ERROR: web/node_modules disagrees with web/package-lock.json:');
     for (const p of problems.slice(0, 20)) console.error('  ' + p);

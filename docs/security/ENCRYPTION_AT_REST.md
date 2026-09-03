@@ -359,3 +359,24 @@ created: a database dump under `~/.vaf/vm-backups/`, and old config backups.
 **Downgrade:** `~/.vaf/config.json.pre-keyring.bak` is written once, before the
 first key is removed from config.json. Restoring it puts the keys back where an
 older release looks for them.
+
+## Owner-only modes on the stores that are not encrypted
+
+Encryption is one half of at-rest protection and file modes are the other, and the second
+half applies whether or not the first is on. `at_rest_migration.run_once` hardens six
+stores that hold user-authored content or a record of when somebody was active, and that
+are NOT in the encrypting table: `automations`, `automation_planner`, `reminders`, `logs`,
+`user_profile_cache` and `thinking_workspace`. Directories become 0700 and files 0600, on
+POSIX; on Windows this is the documented no-op.
+
+They are hardened and not encrypted for a reason worth stating rather than leaving to be
+inferred: their writers use plain `json.load` and `json.dump` instead of the `data_files`
+seam, so encrypting them would lock their own loaders out - an automation the scheduler
+could no longer read is a feature that breaks silently on the next start. Bringing them
+under encryption means converting those writers first, which is its own change.
+
+Measured before this existed: `~/.vaf/sessions` was 0700 with 0600 files while
+`~/.vaf/automations` beside it was 0755 with 0644 files. An automation's prompt is
+user-authored natural language, the same content class as a chat message, so a second
+local account could read what the first had asked its agent to do, and when.
+

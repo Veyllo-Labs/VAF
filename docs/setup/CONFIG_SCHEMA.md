@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (342 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (343 keys).
 
 ## How configuration is set
 
@@ -250,6 +250,7 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `memory_hybrid_lexical_k` | `20` | Lexical candidates. |
 | `memory_hybrid_lexical_min_score` | `0.05` | Min lexical score. |
 | `memory_hybrid_lexical_scan_limit` | `2000` | Lexical scan cap (clamped to 2000). Rows are scanned unordered, so a store larger than this cap gets an arbitrary partial lexical lane; the cap is a per-query decrypt+score cost ceiling. |
+| `memory_profile_cache_chars` | `4000` | Admin-only. Ceiling on the `known_facts` block, the retrieved user-profile summary injected into EVERY system prompt. Measured before it existed: 9,471 characters, more than a third of the whole system message, growing 38% in 20 days with nothing bounding it. Cut at a line boundary and marked as cut, at the writer AND at the reader, so a cache from before the ceiling is bounded on the next turn rather than the next refresh. `0` turns the ceiling off. |
 | `memory_hybrid_rrf_k` | `60` | Reciprocal-rank-fusion constant. |
 | `memory_compaction_enabled` | `True` | Compact long histories. |
 | `memory_compaction_interval` | `15` | Turns between compaction checks. |

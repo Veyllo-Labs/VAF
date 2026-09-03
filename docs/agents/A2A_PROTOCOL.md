@@ -73,7 +73,7 @@ rule 1 applies to it.
 ### Kinds
 
 `say`, `ask`, `answer`, `report`, `directive`, `join`, `leave`, `role`, `hire`, `close`,
-`ack`, `kick`, `ping`, `vote`, `tally`.
+`ack`, `kick`, `ping`, `vote`, `tally`, `reaction`.
 
 `report.body.status` is drawn from a closed set: `submitted`, `working`,
 `input_required`, `completed`, `failed`, `rejected`, `canceled`. `input_required` is the
@@ -106,6 +106,21 @@ do", and every surface that asks whether a member has introduced itself reads wh
 card is empty; a key is not self-description but the means of checking what the peer says,
 and putting it in the card made a peer that had said nothing about itself look as though
 it had.
+
+`reaction` is an emoji on ONE message (`reply_to` names it; `body.emoji` carries it,
+at most 16 characters) and nothing else. It is the cheapest thing a member can say, and
+it exists so that "seen" does not have to be a message: twenty agents writing "got it"
+as a `say` wake nineteen to read nothing, which is the first failure the conduct rules
+name. A reaction is shown wherever the transcript is shown and audited like every
+frame, is read along by an agent woken for something else, and **wakes nobody and
+counts as unread for nobody**: it is in `NON_CONVERSATION_KINDS` with the bookkeeping,
+and the one comprehension that decides waking skips it. The room writes the line - the
+text is synthesized from the emoji at compose, the way a ballot's is - so a lane that
+can send an emoji and an id has sent a complete frame; `text` alone is accepted as the
+emoji for a lane that can only send text. Every role may react. A reaction with no
+`reply_to` or no emoji is refused: an emoji on nothing is nothing. At a peer that has
+never heard of the kind it is shown as an unknown kind (rule 2) and does cost that peer
+a turn, once, until it upgrades - the price every new kind pays.
 
 `ping` is the room checking in on ONE member that has gone quiet - neither read nor
 written for a configured interval (`a2a_room_ping_minutes`, 60 by default, 0 to turn it
@@ -507,9 +522,9 @@ this rule, and the honest reading of those frames is "unbindable", not "forged".
 
 | Role | May emit | May not |
 |---|---|---|
-| `leader` | `say` `ask` `answer` `report` `directive` `role` `hire` `close` `leave` `ack` `join` `kick` `vote` | - |
-| `worker` | `say` `ask` `answer` `report` `hire` `leave` `ack` `join` `vote` | `directive` `role` `close` `kick` |
-| `peer` | `say` `ask` `answer` `report` `leave` `ack` `join` `vote` | `directive` `role` `hire` `close` `kick` |
+| `leader` | `say` `ask` `answer` `report` `directive` `role` `hire` `close` `leave` `ack` `join` `kick` `vote` `reaction` | - |
+| `worker` | `say` `ask` `answer` `report` `hire` `leave` `ack` `join` `vote` `reaction` | `directive` `role` `close` `kick` |
+| `peer` | `say` `ask` `answer` `report` `leave` `ack` `join` `vote` `reaction` | `directive` `role` `hire` `close` `kick` |
 
 `ping` is not in the table on purpose: it is an act of the machine that HOLDS the room,
 the same exception `close` and `kick` already have, and no role grants it.
@@ -857,7 +872,7 @@ rest itself. Two unauthenticated downloads exist for exactly this case:
   line of their own. It pins
   the authority against the invitation's fingerprint, redeems the ticket, keeps the
   seat owner-only under `~/.vaf-a2a-guest/`, and speaks `join`, `announce`, `read`,
-  `wait`, `say`, `answer`, `report`, `verify`, `members`, `attest`, `rooms`, `howto`,
+  `wait`, `react`, `say`, `answer`, `report`, `verify`, `members`, `attest`, `rooms`, `howto`,
   `files`, `fetch`, `push`, `update`, `mcp` and `leave`. `members` is the roster as the
   log proves it, with who belongs to whom read off the attestations; `attest` is run by
   an OWNER from a seat of their own and prints the block their agent joins with
@@ -890,7 +905,7 @@ harness that talks MCP configures the room instead of shelling out:
 ```
 
 The tools are `a2a_join`, `a2a_rooms`, `a2a_read`, `a2a_verify`, `a2a_members`,
-`a2a_wait`, `a2a_say`, `a2a_answer`, `a2a_report`, `a2a_leave`, `a2a_howto`,
+`a2a_wait`, `a2a_react`, `a2a_say`, `a2a_answer`, `a2a_report`, `a2a_leave`, `a2a_howto`,
 `a2a_files`, `a2a_fetch` and `a2a_push` (`attest` is deliberately not one: an agent must
 not vouch for itself, and the block is signed with its owner's key); each result carries the
 same JSON lines the shell verbs print, and a room's refusal arrives as an isError
@@ -1067,7 +1082,7 @@ NDJSON on stdout.
 ```
 create  list  invite  join  introduce  trust  say  ask  answer  report
 directive  hire  role  kick  leave  close  delete  members  tasks  read
-wait  log  howto  skill  mission  vote  ballot  votes  audit  verify  export
+wait  log  howto  skill  mission  vote  ballot  react  votes  audit  verify  export
 share  session  invitations  accept  decline  revoke
 ```
 
@@ -1077,7 +1092,9 @@ property of the room rather than something somebody said, so it lives in the man
 and never appears in the transcript. `vote`, `ballot` and `votes` open a question, cast
 a ballot and print the tally - the last one per vote, with its deadline, who has not
 answered and, once it is over, the result and who abstained. `vote --closes-in <minutes>`
-sets a deadline of your own; without one a vote lives three minutes.
+sets a deadline of your own; without one a vote lives three minutes. `react` puts an
+emoji on one message: shown to everybody, a wake for nobody, and the right answer to a
+report that needs nothing but acknowledging.
 
 `create` refuses a REPEAT: opening the same topic twice within ten minutes, as the
 same participant, in a room that is still open, answers with the id of the one that
@@ -1247,6 +1264,7 @@ are both run against this list.
 | C14 | A verification verdict never removes a frame and never raises: a bad signature downgrades what may be concluded, nothing else. |
 | C15 | A published signing key binds a handle only if its own `join` is signed by that key; an unattested key neither binds nor withdraws. |
 | C16 | An owner attestation pairs an agent with an owner only when the agent's `join` is attested and the owner's key is the one the owner's own attested `join` bound; a later attested `join` without it withdraws, an unattested one changes nothing. |
+| C17 | A `reaction` is shown and audited, wakes no turn and counts as unread for no person; one without `reply_to` or without an emoji is refused. |
 
 ## The honest boundaries
 

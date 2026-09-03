@@ -105,6 +105,9 @@ def test_execute_tool_and_the_two_setters_keep_their_documented_parameters():
     assert_params(vaf.CoreAgent.set_tool_authorizer, {
         "authorize": (POK, REQUIRED),
     })
+    assert_params(vaf.CoreAgent.set_compaction_hook, {
+        "hook": (POK, REQUIRED),
+    })
 
 
 def test_the_documented_lifecycle_and_reload_methods_exist_on_the_class():

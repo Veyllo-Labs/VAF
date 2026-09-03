@@ -59,6 +59,9 @@ KINDS = frozenset({
     # or the deadline passed, answering the vote (reply_to) and carrying the
     # counts plus whoever let it run out. A peer never sends one.
     "tally",
+    # An emoji on ONE message (reply_to), and nothing else. Shown, audited, and never
+    # a reason to wake anybody - the one kind a receiver reads and does not answer.
+    "reaction",
 })
 
 REPORT_STATUSES = frozenset({
@@ -70,11 +73,11 @@ REPORT_STATUSES = frozenset({
 CAPABILITIES: Dict[str, frozenset] = {
     "leader": frozenset({"say", "ask", "answer", "report", "directive",
                          "role", "hire", "close", "leave", "ack", "join", "kick",
-                         "vote"}),
+                         "vote", "reaction"}),
     "worker": frozenset({"say", "ask", "answer", "report",
-                         "hire", "leave", "ack", "join", "vote"}),
+                         "hire", "leave", "ack", "join", "vote", "reaction"}),
     "peer": frozenset({"say", "ask", "answer", "report", "leave", "ack", "join",
-                       "vote"}),
+                       "vote", "reaction"}),
 }
 
 ROOM_KINDS = ("chain", "round")

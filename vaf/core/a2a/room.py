@@ -66,11 +66,11 @@ ROOM_KINDS = ("chain", "round")
 CAPABILITIES: Dict[str, frozenset] = {
     "leader": frozenset({"say", "ask", "answer", "report", "directive",
                          "role", "hire", "close", "leave", "ack", "join", "kick",
-                         "vote"}),
+                         "vote", "reaction"}),
     "worker": frozenset({"say", "ask", "answer", "report",
-                         "hire", "leave", "ack", "join", "vote"}),
+                         "hire", "leave", "ack", "join", "vote", "reaction"}),
     "peer": frozenset({"say", "ask", "answer", "report", "leave", "ack", "join",
-                       "vote"}),
+                       "vote", "reaction"}),
 }
 
 # How much of a room's traffic the LOCAL user has authorised their agent to act on.
@@ -1146,6 +1146,17 @@ class Room:
             "body": {"text": comment or f"votes: {resolved}", "choice": resolved},
         }, identity=identity)
 
+    def react(self, identity: Identity, frame_id: str, emoji: str) -> Frame:
+        """An emoji on ONE message: the cheapest thing a member can say.
+
+        Shown to everybody, a wake for nobody, and the answer to a report that needs
+        nothing but acknowledging - the case CONDUCT forbids a message for. The room
+        writes the line (`compose` synthesizes the text from the emoji), so a lane
+        that can only send an emoji and an id has sent a complete frame.
+        """
+        return self.ingest({"kind": "reaction", "reply_to": frame_id,
+                            "body": {"emoji": emoji}}, identity=identity)
+
     def _vote_options(self, vote_id: str) -> List[str]:
         """The options of the vote this ballot answers, or [] when the id names
         something else - a ballot on a message that is not a vote is a mistake the
@@ -1823,6 +1834,9 @@ class Room:
     # The one member of a vote's body a reader counts on, and the width every lane
     # already trimmed it to by hand before `compose` became the single place.
     CHOICE_WIDTH = 60
+    # An emoji, or a short token like "+1". A "reaction" long enough to hold a
+    # sentence is a message wearing a costume, and it would wake nobody.
+    REACTION_WIDTH = 16
 
     def compose(self, payload: Any) -> Dict[str, Any]:
         """What this room will actually STORE as a frame's content, normalised.
@@ -1883,6 +1897,21 @@ class Room:
             options = self._vote_options(reply_to)
             trimmed = str(body["choice"]).strip()[:self.CHOICE_WIDTH]
             body["choice"] = self._resolve_choice(trimmed, options) if options else trimmed
+        elif kind == "reaction":
+            # An emoji on ONE message, and nothing else. The text is SYNTHESIZED here
+            # the way a ballot's is, so no sending lane has to carry one and every
+            # reader that prints body.text - the wake prompt, the remote log, export -
+            # shows the reaction rather than a bare label. `text` is accepted as the
+            # emoji for a lane that only knows how to send text; after one pass the
+            # two are equal, which is what keeps the fixed point.
+            raw = body.get("emoji") if body.get("emoji") is not None else body.get("text")
+            emoji = str(raw or "").strip()[:self.REACTION_WIDTH]
+            if not emoji or not reply_to:
+                raise MalformedContent(
+                    "a reaction is an emoji on one message: body.emoji and reply_to "
+                    "are both required")
+            body["emoji"] = emoji
+            body["text"] = emoji
 
         return {"kind": kind, "to": to, "body": body, "reply_to": reply_to,
                 "must_understand": demanded, "ext": ext}
@@ -2868,6 +2897,10 @@ def describe(entry: Dict[str, Any]) -> str:
         # ended - a renderer that summarised it again would be a second opinion
         # about an outcome that is meant to read the same everywhere.
         return text
+    # No branch for `reaction`: compose writes the emoji INTO body.text, so the
+    # generic line below already renders it - measured, a branch here changed
+    # nothing. Which message it landed on is `reply_to`, which every surface
+    # drawing this carries.
     if kind == "ack":
         return f"ack: {body.get('status') or 'ok'}"
     if kind == "report" and body.get("status"):
@@ -2897,6 +2930,7 @@ AUDIT_EVENTS = {
     "ping": "checked in on a member",
     "vote": "vote opened",
     "tally": "vote closed",
+    "reaction": "reacted",
 }
 
 
@@ -3052,6 +3086,15 @@ def just_opened(key: str, topic: str, *, within_s: float = JUST_OPENED_S,
 # deliberately absent from this set, so a newer peer's message still wakes an older one.
 BOOKKEEPING_KINDS = frozenset({"join", "leave", "ack", "role"})
 
+# Kinds that are READ ALONG and never cost a turn. A reaction exists so that "seen"
+# does not have to be a message: written as one, it wakes every member to read
+# nothing, which is the failure CONDUCT names first. It stays in a woken agent's
+# CONTEXT, so a peer woken by something else sees what its report earned, and it is
+# not bookkeeping: that set is dropped from context as well. Consulted by the one
+# comprehension that decides waking (`unread_frames`); a second reader of it would be
+# a second wake rule.
+SILENT_KINDS = frozenset({"reaction"})
+
 # What counts as NOTHING WAS SAID on a surface built for people: the bookkeeping above
 # plus the room's own check-in lane (`ping` carries idle check-ins, vote reminders and
 # task nudges - the room talking to one member about its own attention). Three surfaces
@@ -3060,7 +3103,10 @@ BOOKKEEPING_KINDS = frozenset({"join", "leave", "ack", "role"})
 # is how a person got a notification for a frame no view would ever show them.
 # Deliberately NOT folded into BOOKKEEPING_KINDS itself: the wake computation reads
 # that one, and a ping MUST keep waking the member it is addressed to.
-NON_CONVERSATION_KINDS = frozenset(BOOKKEEPING_KINDS | {"ping"})
+# A reaction joins them for the same reason a ping does: the sidebar badge, the
+# learning transcript and the corpus all ask "was anything SAID", and an emoji on a
+# message is not a thing that was said.
+NON_CONVERSATION_KINDS = frozenset(BOOKKEEPING_KINDS | {"ping"} | SILENT_KINDS)
 
 
 def local_room_tenants(*, base: Optional[Path] = None) -> List[str]:
@@ -3131,7 +3177,12 @@ def unread_frames(key, *, base: Optional[Path] = None) -> List[Tuple[Room, Ident
             # Bob. CONTEXT: everything unread, so a peer that IS woken sees the
             # conversation it is joining rather than one line out of it - a reply
             # written blind to what the others were just told is worse than no reply.
-            waking = [f for f in unread if f.addresses(identity.peer_id, identity.role)]
+            # And never a SILENT kind: a reaction is read along (it is in `unread`,
+            # so a woken agent sees it) and costs no turn of its own, which is the
+            # whole reason the kind exists.
+            waking = [f for f in unread
+                      if f.kind not in SILENT_KINDS
+                      and f.addresses(identity.peer_id, identity.role)]
             if waking:
                 pending.append((room, identity, waking, unread))
     return pending

@@ -158,6 +158,19 @@ Range: 1–100. Raise it if agents report missing tools; lower it to reduce toke
 
 **Reasoning model compatibility:** When the router uses a reasoning model (DeepSeek Reasoner, R1) the tool selection often lands inside `<think>…</think>` blocks rather than in the response content. The parser strips think-tags first, then falls back to scanning the full raw response (including reasoning) for tool name substrings, so routing works correctly regardless of model type.
 
+### Hidden from the model: `visible_tools()`
+
+Scoping (`_active_tools`) is what the router chose for this turn. Hiding (`_excluded_tools`)
+is a harder thing: a tool the model must not be offered at all, whatever the router says,
+the way the editor-write tools are hidden while no editor document is open. The one answer
+to "may the model see this tool" is `Agent.visible_tools()`, the registry minus the hidden
+set, and every model-facing surface reads it: the schema (`TOOLS`), `list_tools`,
+`search_tools` (both handed the agent by the dispatcher), the router's own tool prompt, the
+system prompt's tool documentation and the `python_sandbox` tool bridge. Measured before
+it existed: the schema hid a tool while the other five still named it. Hidden is not
+forbidden: `execute_tool` still runs a hidden tool, which is what lets code call a tool the
+model is not offered.
+
 ### `_active_tools` state machine
 
 | Value | Meaning |

@@ -185,7 +185,7 @@ export interface SettingsModalProps {
     onRequestTrustedSources?: () => void;
     onCreateTrustedCategory?: (name: string) => void;
     trustedSourcesError?: string | null;
-    automations?: Array<{ id: string; name: string; description: string; prompt?: string; frequency: string; time: string; weekday?: string | null; day?: number | null; enabled: boolean }>;
+    automations?: Array<{ id: string; name: string; description: string; prompt?: string; frequency: string; time: string; weekday?: string | null; day?: number | null; enabled: boolean; schedule?: string }>;
     currentUser?: { id: string; username: string; role: string };
     onLogout?: () => void;
     apiBase?: string;
@@ -5309,7 +5309,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 </div>
                                                                 <div className="flex items-center gap-1">
                                                                     <span className="font-medium">{tAutomations('time')}:</span>
-                                                                    <span>{auto.time}</span>
+                                                                    {/* An event-driven task has no clock; its rule stands where the time would. */}
+                                                                    <span>{auto.time || auto.schedule || ''}</span>
                                                                 </div>
                                                             </div>
                                                         </div>

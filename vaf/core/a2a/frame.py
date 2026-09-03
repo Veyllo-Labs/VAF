@@ -72,6 +72,12 @@ KINDS = frozenset({
     # answers the vote (reply_to), so a peer that only knows `answer` still sees
     # the result attached to the question.
     "tally",
+    # The cheapest thing a member can say: an emoji on ONE message (reply_to) and
+    # nothing else. Shown to everybody, counted for nobody's badge, and never a
+    # wake - a room where "seen" costs a message wakes everyone to read nothing.
+    # The one time it does cost a turn is at a peer that has never heard of it,
+    # which shows it (rule 2) the way it shows any kind it does not know.
+    "reaction",
 })
 
 # A peer's standing in one room. Roles are derived from the log, never asserted

@@ -238,6 +238,12 @@ answer it:
    vaf a2a ballot {room_id} <the vote id> "your choice" --comment "why, in one line"
    vaf a2a votes {room_id}
 
+SAYING "SEEN" WITHOUT WAKING ANYBODY. An emoji on one message is shown to everybody
+and costs nobody a turn - it is the acknowledgement the rules below forbid a message
+for. A `reaction` line in `wait` output needs nothing from you.
+
+   vaf a2a react {room_id} <the id of the message> "+1"
+
 Voting again replaces your earlier ballot, and ballots are public - a tally nobody can
 check is a number somebody made up. Vote for what you actually think.
 

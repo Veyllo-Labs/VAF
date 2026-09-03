@@ -28,7 +28,7 @@ from vaf.version import __version__
 from vaf.core.log_helper import append_domain_log, get_dated_log_path, is_debug_logging_enabled
 from pathlib import Path
 from vaf.core.path_jail import PathEscape, contained_path, safe_entry_name
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 import logging
 from vaf.core.tray_context import TrayContext
 log("WebServer", "VAF imports done")
@@ -435,6 +435,28 @@ async def _send_room_door(websocket, room, row: dict) -> None:
     })
 
 
+def _automation_wire(task) -> Dict[str, Any]:
+    """An automation as the browser reads it. ONE projection: it was three hand copies
+    (the list, the create reply, the update reply), which is how a field added to one
+    of them silently never reached the other two. `schedule` is the rule a person
+    reads; an event-driven task has no `time` and shows this instead."""
+    return {
+        "id": task.id,
+        "name": task.name,
+        "description": task.description,
+        "prompt": getattr(task, "prompt", "") or task.description,
+        "frequency": task.frequency,
+        "time": task.time,
+        "weekday": task.weekday,
+        "day": task.day,
+        "enabled": task.enabled,
+        "next_run": task.next_run_iso,
+        "last_run": task.last_run,
+        "schedule": task.schedule_label,
+        "trigger": task.trigger,
+    }
+
+
 async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -> None:
     """The room as the browser reads it, from the store, every time.
 
@@ -684,6 +706,7 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
              # signature: the browser has no use for the key material and this exact
              # rebuild has silently dropped a field twice already.
              "verdict": e.get("verdict") or "unsigned",
+             "reply_to": e.get("reply_to") or "",   # a reaction is drawn under its target
              "lamport": e["lamport"], "to": e.get("to") or {}}
             for e in entries
             # A check-in is the room talking to ONE agent about its own attention,
@@ -4553,7 +4576,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         pass
                 elif type in ("room_say", "close_room", "delete_room", "kick_peer",
                               "rename_room", "set_room_agent_mode",
-                              "cast_room_vote"):
+                              "cast_room_vote", "room_react"):
                     # The person at the browser acting in a room themselves, rather
                     # than their agent doing it for them. They act on the CLI lane and
                     # not on a lane of their own, deliberately: the lanes separate the
@@ -4660,6 +4683,23 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 await websocket.send_json({
                                     "type": "error",
                                     "message": f"Could not cast that vote: {_vote_err}"})
+                                continue
+
+                        elif type == "room_react":
+                            # The person reacting as themselves, on the same lane their
+                            # words and ballots travel. Shown to everybody and a wake for
+                            # nobody; the room writes the line, so the browser sends the
+                            # emoji and the id and nothing else.
+                            target = str(cmd.get("reply_to") or "").strip()
+                            emoji = str(cmd.get("emoji") or "").strip()
+                            if not target or not emoji:
+                                continue
+                            try:
+                                room.react(identity, target, emoji)
+                            except Exception as _react_err:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": f"Could not react: {_react_err}"})
                                 continue
 
                         elif type == "rename_room":
@@ -7566,19 +7606,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
                             tasks = list(mgr.list())
                         automations_list = [
-                            {
-                                "id": task.id,
-                                "name": task.name,
-                                "description": task.description,
-                                "prompt": getattr(task, "prompt", "") or task.description,
-                                "frequency": task.frequency,
-                                "time": task.time,
-                                "weekday": task.weekday,
-                                "day": task.day,
-                                "enabled": task.enabled,
-                                "next_run": task.next_run_iso,
-                                "last_run": task.last_run
-                            }
+                            _automation_wire(task)
                             for task in tasks
                         ]
                         await websocket.send_json({
@@ -7627,6 +7655,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 weekday = None
                             if frequency == "monthly":
                                 day = None
+                        # An event trigger replaces the clock: read at the boundary,
+                        # and from here on the task has no time and no clock job.
+                        from vaf.core.automation_triggers import read_trigger
+                        trigger = read_trigger(cmd.get("trigger"))
+                        if trigger is not None:
+                            frequency, time_str = "on_event", ""
                         task = AutomationTask(
                             name=name,
                             description=description,
@@ -7637,6 +7671,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             day=day if frequency == "monthly" else None,
                             enabled=True,
                             user_scope_id=user_scope_id,
+                            trigger=trigger,
                         )
                         can_create, err_msg = mgr.check_can_create_automation(new_time=time_str, new_frequency=frequency)
                         if not can_create and err_msg:
@@ -7650,16 +7685,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         await websocket.send_json({
                             "type": "create_automation_result",
                             "ok": True,
-                            "automation": {
-                                "id": task.id,
-                                "name": task.name,
-                                "description": task.description,
-                                "frequency": task.frequency,
-                                "time": task.time,
-                                "enabled": task.enabled,
-                                "next_run": task.next_run_iso,
-                                "last_run": task.last_run,
-                            }
+                            "automation": _automation_wire(task),
                         })
                     except Exception as e:
                         await websocket.send_json({
@@ -7704,6 +7730,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "Automation not found"})
                             continue
                         update_params = {}
+                        if isinstance(cmd.get("trigger"), dict):
+                            from vaf.core.automation_triggers import read_trigger
+                            _trigger = read_trigger(cmd.get("trigger"))
+                            if _trigger is not None:
+                                update_params.update(trigger=_trigger, frequency="on_event", time="")
                         for key in ("name", "description", "prompt", "frequency", "time", "weekday", "day", "enabled"):
                             if key in cmd and cmd[key] is not None:
                                 if key == "enabled":
@@ -7744,16 +7775,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         await websocket.send_json({
                             "type": "update_automation_result",
                             "ok": True,
-                            "automation": {
-                                "id": updated.id,
-                                "name": updated.name,
-                                "description": updated.description,
-                                "frequency": updated.frequency,
-                                "time": updated.time,
-                                "enabled": updated.enabled,
-                                "next_run": updated.next_run_iso,
-                                "last_run": updated.last_run,
-                            }
+                            "automation": _automation_wire(updated),
                         })
                     except Exception as e:
                         await websocket.send_json({"type": "update_automation_result", "ok": False, "error": str(e)})

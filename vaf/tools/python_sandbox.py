@@ -287,7 +287,8 @@ class PythonSandboxTool(BaseTool):
                     return str(agent.execute_tool(tool_name, args))
                 except Exception as exc:
                     return f"[ERROR] {exc}"
-            return _call_via_agent, list(agent.tools.keys())
+            names = agent.visible_tools() if hasattr(agent, "visible_tools") else agent.tools
+            return _call_via_agent, list(names.keys())
 
         # No agent, no bridge - deliberately. There used to be a fallback here that looked up
         # `self.available_tools` and called `tool.run(**args)` directly, which skipped the whole

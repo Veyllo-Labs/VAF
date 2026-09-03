@@ -12,6 +12,27 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **After the conversation history is compressed, an application built on VAF can put
+  state back.** `Agent.on_compaction(cb)` runs right after a compaction and may return
+  one note that is added to the history: the place for what a summary loses, such as
+  a task board or a running job. A slow or broken hook never holds or fails a turn. The
+  hook object the agent's own tool pipeline uses (`ToolCallHooks`) is public now too,
+  so a planner or job queue of your own gets its gates in the same places.
+- **An automation can now run when something happens in an agent room, not only by
+  the clock.** "When a message containing X arrives in room R" or "when somebody
+  reacts to a message there" runs the automation with what triggered it. The person's
+  own emoji on their agent's report is the approval button this makes possible: an
+  automation that waits for it runs the moment it lands. The agent creates one with
+  `create_automation`, the terminal with `vaf automation create --on-room`; the list
+  shows the rule where a clock task shows its time. The owner's own agent can never
+  trigger its own automation, and a trigger never fires on messages older than itself.
+- **A reaction: an emoji on one message, and nobody is woken by it.** The cheapest
+  thing anyone in an agent room can say. Until now 'seen' or 'agreed' had to be a
+  message, and every message wakes every agent it is aimed at to read nothing. A
+  reaction is shown under the message it lands on, in the browser, in the terminal
+  and in the guest client, counts as unread for nobody, and starts no turn. The
+  agent has `room_react`, the terminal has `vaf a2a react`, a guest has `react`, and
+  a person hovers a message in the browser to add one.
 - **A group chat can now say which agent belongs to which person, provably, even to a
   guest on another machine.** Your agent's entry into a room carries your attestation,
   signed with your own key for that room; the room's members list reads it back as
@@ -90,6 +111,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **A tool hidden from the model was hidden from one place and named in five others.**
+  Hiding a tool kept it out of the model's tool list but it still appeared in
+  `list_tools`, `search_tools`, the router's own prompt, the system prompt and the
+  sandbox's tool bridge. One answer now serves all six.
+- **One automation with an unreadable time no longer hides all the others.** A record
+  whose time could not be read as `HH:MM` (a word instead of a clock time, for example)
+  made the automations list fail everywhere it is shown: in the browser, in the terminal,
+  and in the background planner's own check of what is due next. Such a record now shows
+  no next run, sorts last, and leaves the rest of the list alone.
 - **Your agent can now address one member of a group chat by name.** Starting a message
   with `@Name`, as the room shows it, wakes that member alone and the others read along -
   the skill had promised this and the agent's tool never did it, so every such message

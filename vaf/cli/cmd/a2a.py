@@ -1137,6 +1137,33 @@ def ballot(room_id: str = typer.Argument(...),
 
 
 @app.command()
+def react(room_id: str = typer.Argument(...),
+          frame_id: str = typer.Argument(..., help="The id of the message, as `wait` or `log` printed it."),
+          emoji: str = typer.Argument(..., help="One emoji, or a short token like +1."),
+          as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
+    """Put an emoji on one message. Everybody sees it; nobody is woken by it."""
+    from vaf.core.a2a.frame import plausible_frame_id
+    from vaf.core.a2a.room import RoomError
+    if not plausible_frame_id(frame_id):
+        _fail("the second argument is the message's ID, the `id` field of the line "
+              "you read - never its text.", EXIT_REFUSED)
+    room = _open_local(room_id)
+    if room is None:
+        record = _remote_record(room_id)
+        if record is None:
+            _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
+        return _remote_submit(record, room_id, {
+            "kind": "reaction", "reply_to": frame_id, "body": {"emoji": emoji}})
+    identity = _me(room, as_peer=as_peer)
+    try:
+        frame = room.react(identity, frame_id, emoji)
+    except RoomError as e:
+        _fail(str(e), EXIT_REFUSED)
+    _emit({"ok": True, "room": room_id, "on": frame_id,
+           "emoji": (frame.body or {}).get("emoji") or emoji, "id": frame.id})
+
+
+@app.command()
 def votes(room_id: str = typer.Argument(...)) -> None:
     """Every vote in this room with its tally, its deadline, and who has not answered."""
     room = _open_local(room_id)

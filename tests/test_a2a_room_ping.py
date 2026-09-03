@@ -208,7 +208,8 @@ def test_a_check_in_is_not_drawn_as_a_message():
     # Anchored on the transcript BUILDER: the invitee's door answers with the same
     # message type and an empty list, and sits above it in the file.
     builder = src.split("async def _send_room_transcript", 1)[1]
-    block = builder.split('"messages": [', 1)[1][:1400]
+    # The window grew with the row: `reply_to` joined the projection for reactions.
+    block = builder.split('"messages": [', 1)[1][:1500]
     assert 'if e["kind"] != "ping"' in block, (
         "the room transcript draws check-ins as messages")
 

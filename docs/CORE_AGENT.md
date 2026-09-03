@@ -8,7 +8,7 @@ control. Design map of the turn loop: [AGENT_LOOP.md](agents/AGENT_LOOP.md).
 
 Stability: `CoreAgent` is part of the declared stable surface at the level
 documented HERE (constructor, lifecycle, `chat_step`, `complete`, `execute_tool`,
-`set_tool_authorizer`, `set_event_sink`, the accessors below). Underscore-prefixed attributes are
+`set_tool_authorizer`, `set_event_sink`, `set_compaction_hook`, the accessors below). Underscore-prefixed attributes are
 internal; the ones listed at the end are known extension points that may
 change with a changelog note.
 
@@ -199,6 +199,23 @@ refusal - the opposite polarity from the event sink, deliberately: a broken
 observer must not fail a run, a broken guard must not become no guard. In-process
 only; it does not cross into the coder sub-agent. Semantics and the full request
 shape: [EMBEDDING.md](EMBEDDING.md).
+
+## Putting state back after a compaction
+
+```python
+set_compaction_hook(hook: Callable[[dict], str | None] | None) -> None
+```
+
+Fired right after a structural compaction, on both paths that compact (the check at the
+top of a turn and the session-load pass), with `info = {"before", "after", "tokens",
+"session_id"}`. A returned non-empty string is appended to the history as one system
+note: the seam for what a summary loses. The hook cannot edit the history and runs outside
+the tool loop. Bounded by `COMPACTION_HOOK_SECONDS` (a timeout is "nothing to add") and
+forgiving: an exception is swallowed and logged, the event sink's polarity, because a
+broken observer must not fail a run. `visible_tools()` beside it is the one answer to
+"may the model see this tool": the registry minus `_excluded_tools`, read by the schema,
+`list_tools`, `search_tools`, the router prompt, the system prompt's tool documentation
+and the sandbox's tool bridge alike; `execute_tool` still runs a hidden tool.
 
 ## Observability and accessors
 

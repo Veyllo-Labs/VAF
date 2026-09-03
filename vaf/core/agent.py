@@ -2271,6 +2271,9 @@ class Agent:
                 label = f"{who} [{frame.role}]"
                 if frame.kind not in ("say",):
                     label += f" ({frame.kind})"
+                if frame.kind == "reaction" and frame.reply_to:
+                    # WHICH message was seen; the emoji alone says only that one was.
+                    label += f" on {frame.reply_to}"
                 # The id travels WITH the message it names: reply_to takes it,
                 # and an agent that has to leave this prompt to find it will go
                 # hunting with the CLI - measured live as a twenty-turn search
@@ -6571,6 +6574,7 @@ class Agent:
             except Exception:
                 working_memory = None
         self.history = cm.compress(self.history, working_memory=working_memory)
+        self._after_compaction(old_count)
         try:
             from vaf.core.web_interface import get_web_interface
             new_tokens = cm.estimate_tokens(self.history)
@@ -8070,7 +8074,7 @@ class Agent:
 
         # 1. Create a simplified list of tools
         tool_info = []
-        for name, tool_instance in self.tools.items():
+        for name, tool_instance in self.visible_tools().items():
             description = getattr(tool_instance, 'description', 'No description available.')
             tool_info.append(f"- {name}: {description}")
         
@@ -9204,7 +9208,7 @@ class Agent:
         # ------------------------------------------------------------------
         # Context Compression: Check threshold and compress if needed
         # ------------------------------------------------------------------
-        compression_happened = self._compress_history_if_needed()
+        self._compress_history_if_needed()
             
         # Apply updated system prompt + context glue + project context
         if new_prompt is not None and len(self.history) > 0 and self.history[0].get("role") == "system":
@@ -12651,6 +12655,11 @@ class Agent:
         if name in ("set_timer", "list_timers", "cancel_timer"):
             # Timer tools read the live session/source/identity off the agent.
             tool_args["_agent"] = self
+        if name in ("list_tools", "search_tools"):
+            # The discovery tools answer from the registry as the MODEL may see it
+            # (visible_tools), which only the live agent knows: their static
+            # reference to the registry cannot tell a hidden tool from an offered one.
+            tool_args["_agent"] = self
         if name == "learn_document":
             tool_args["_agent"] = self
         if name == "learn_attached_knowledge":
@@ -12975,6 +12984,73 @@ class Agent:
         backend = getattr(self, "api_backend", None)
         if backend is not None:
             backend.event_sink = sink
+
+    # How long a compaction hook may take before its answer counts as "nothing to add".
+    COMPACTION_HOOK_SECONDS = 5.0
+
+    def set_compaction_hook(self, hook):
+        """Let the application put something back after the history was compacted. ``None``
+        detaches.
+
+        ``hook(info)`` runs right after a structural compaction, on BOTH paths that compact
+        (the check at the top of a turn and the session-load pass), with ``info =
+        {"before": messages, "after": messages, "tokens": estimate, "session_id": ...}``.
+        A returned non-empty string is appended to the history as ONE system note: the
+        place for what a summary loses - a task board, a room's standing, a running job.
+        Nothing else is touched. The hook cannot edit the history, never sees a reply, and
+        runs OUTSIDE the tool loop, on the compaction's own side of Rule 4.1.
+
+        Bounded and forgiving, the way the event sink is and the authorizer is not: it
+        runs under ``run_bounded`` with ``COMPACTION_HOOK_SECONDS``, a timeout is "nothing
+        to add", and an exception is swallowed and logged. A broken observer must not fail
+        a run, and a slow one must not hold it.
+
+        The signal this exposes was computed and thrown away before it existed:
+        ``_compress_history_if_needed`` returned whether it ran, and its one caller in the
+        turn bound the answer to a name nothing read.
+        """
+        self._compaction_hook = hook
+
+    def _after_compaction(self, old_count: int) -> None:
+        """Fire the compaction hook, if one is attached, and append what it returns."""
+        hook = getattr(self, "_compaction_hook", None)
+        if hook is None:
+            return
+        cm = getattr(self, "context_manager", None)
+        try:
+            tokens = int(cm.estimate_tokens(self.history)) if cm is not None else 0
+        except Exception:
+            tokens = 0
+        info = {"before": int(old_count), "after": len(self.history), "tokens": tokens,
+                "session_id": getattr(self, "current_session_id", None)}
+        try:
+            from vaf.core.bounded_run import STOPPED_PREFIX, TIMEOUT_PREFIX, run_bounded
+            note = run_bounded(lambda: hook(info), timeout=self.COMPACTION_HOOK_SECONDS,
+                               label="compaction_hook")
+        except Exception as exc:
+            append_domain_log("backend", f"[COMPACTION_HOOK] swallowed: {exc!r}")
+            return
+        if not isinstance(note, str) or not note.strip():
+            return
+        if note.startswith(TIMEOUT_PREFIX) or note.startswith(STOPPED_PREFIX):
+            return
+        self.history.append({"role": "system", "content": note.strip()})
+
+    def visible_tools(self) -> Dict[str, Any]:
+        """The registry as the MODEL may see it: every registered tool minus the ones
+        hidden by ``_excluded_tools``. Hidden is not forbidden: ``execute_tool`` still runs
+        a hidden tool, which is what lets code call a tool the model is not offered.
+
+        The one answer to "may the model see this tool". It used to be asked at six
+        surfaces and answered at one: the schema hid a tool while ``list_tools``,
+        ``search_tools``, the router's own prompt, the system prompt's tool documentation
+        and the sandbox's tool bridge all still named it - measured with one exclusion set
+        and all six surfaces read back.
+        """
+        excluded = getattr(self, "_excluded_tools", None) or set()
+        if not excluded:
+            return dict(self.tools)
+        return {name: tool for name, tool in self.tools.items() if name not in excluded}
 
     # --- Tool Implementations ---
 
@@ -13777,7 +13853,7 @@ class Agent:
         is_small_context = n_ctx < 32000
 
         # Use active tools if available, otherwise all tools
-        tools_to_use = self._active_tools if self._active_tools is not None else self.tools.keys()
+        tools_to_use = self._active_tools if self._active_tools is not None else self.visible_tools().keys()
         excluded = getattr(self, "_excluded_tools", None) or set()
 
         # Cache the built schema. This property sits on the HOT PATH of every LLM call and was rebuilt --

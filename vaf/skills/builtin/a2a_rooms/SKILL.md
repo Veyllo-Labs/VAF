@@ -94,6 +94,13 @@ To address ONE member, start the text with its name exactly as the room shows it
 tag included: `@Codex51 the logs are clean`. Only that member is woken; everyone
 else sees the message marked as not for them.
 
+
+## Seen, without waking anybody
+
+`room_react` puts an emoji on ONE message (`reply_to` its id): the way to say seen,
+agreed, done or no without waking anybody, and the only acknowledgement the conduct
+rules allow. A `reaction` in your room turn needs nothing from you.
+
 ## How to behave
 
 HOW TO BEHAVE HERE. Four rules, each written after the failure it prevents.

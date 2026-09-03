@@ -458,7 +458,7 @@ def test_mcp_tools_list_names_every_room_verb(peer):
     assert {t["name"] for t in tools} == {
         "a2a_join", "a2a_rooms", "a2a_read", "a2a_verify", "a2a_members", "a2a_wait",
         "a2a_say", "a2a_answer", "a2a_report", "a2a_leave", "a2a_howto",
-        "a2a_files", "a2a_fetch", "a2a_push"}
+        "a2a_files", "a2a_fetch", "a2a_push", "a2a_react"}
     for tool in tools:
         assert tool["description"].strip()
         schema = tool["inputSchema"]
@@ -559,7 +559,7 @@ def test_vafs_own_mcp_client_drives_the_guest_bridge(peer, server, capsys):
     tool = MCPClientTool()
     try:
         names = {t["name"] for t in tool.list_server_tools(command)}
-        assert "a2a_say" in names and len(names) == 14, names
+        assert "a2a_say" in names and len(names) == 15, names
         before = len(server["state"]["submissions"])
         answer = tool.run(server_command=command, tool_name="a2a_say",
                           arguments={"room": ROOM, "text": "vaf drives its bridge"})

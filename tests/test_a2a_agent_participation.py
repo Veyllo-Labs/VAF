@@ -905,7 +905,7 @@ def test_the_agent_can_actually_reach_the_room_tools():
                     seen.add(declared)
 
     assert seen == {"room_open", "room_invite", "room_join", "room_send", "room_read",
-                    "room_verify"}, (
+                    "room_verify", "room_react"}, (
         f"the agent's way into a room changed: {sorted(seen)}")
 
 

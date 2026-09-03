@@ -11,10 +11,12 @@ if TYPE_CHECKING:
     # No runtime import here — `import vaf` stays cheap (the real loading is in
     # __getattr__ below). Paired with the vaf/py.typed marker (PEP 561).
     from .core.log_helper import install_thread_excepthook
+    from .core.automation_triggers import RoomTriggerWatch
     from .core.pdf_extract import extract_pdf_markdown
     from .core.system_prompt import SOUL_CONTINUITY_ADDENDUM, build_capability_addendum
     from .core.threat_db import UploadVerdict, inspect_upload, record_threat
-    from .core.tool_dispatch import (ToolCaller, ToolRequest, set_account_allowlist_resolver,
+    from .core.tool_dispatch import (ToolCallHooks, ToolCaller, ToolRequest,
+                                     set_account_allowlist_resolver,
                                      set_account_directory_resolver,
                                      set_confirmation_bypass_resolver)
     from .framework import Agent, CoreAgent
@@ -22,10 +24,12 @@ if TYPE_CHECKING:
     from .tools.filesystem import user_jail
 
 __all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
+           "NON_CONVERSATION_KINDS",
            "PathEscape", "RemoteRefused",
-           "RemoteRoom", "Room", "RoomError",
+           "RemoteRoom", "Room", "RoomError", "RoomTriggerWatch",
            "SOUL_CONTINUITY_ADDENDUM",
-           "StoreError", "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName",
+           "StoreError", "ToolCallHooks", "ToolCaller", "ToolRequest", "TurnOutcome",
+           "UnsafeName",
            "UploadVerdict", "VoiceTurnEngine",
            "account_allows_tool", "build_capability_addendum", "contained_path",
            "derive_peer_id",
@@ -103,6 +107,15 @@ def __getattr__(name):
         # unaffected. See docs/EMBEDDING.md.
         from .core.tool_dispatch import ToolCaller, ToolRequest
         return ToolCaller
+    if name == "ToolCallHooks":
+        # The four measured positions inside one tool call - after policy, before
+        # dispatch, after dispatch, after emit - as one object `ToolCaller(hooks=...)`
+        # takes. The chat lane's own gates ride them; a scheduler or a planner of your
+        # own puts its gates and guardrails in the same places without patching the
+        # loop. The parameter was public and its type was not, which is the shape of a
+        # facade gap. See docs/EMBEDDING.md.
+        from .core.tool_dispatch import ToolCallHooks
+        return ToolCallHooks
     if name == "account_allows_tool":
         # The allowlist resolver's read side: would this account be allowed to run
         # this tool? The funnel asks it before every call; a UI that LISTS tools asks
@@ -161,7 +174,8 @@ def __getattr__(name):
         # See docs/EMBEDDING.md.
         from .core.pdf_extract import extract_pdf_markdown
         return extract_pdf_markdown
-    if name in ("BOOKKEEPING_KINDS", "Room", "RoomError", "StoreError", "UnsafeName",
+    if name in ("BOOKKEEPING_KINDS", "NON_CONVERSATION_KINDS", "Room", "RoomError",
+                "StoreError", "UnsafeName",
                 "derive_peer_id",
                 "describe_room_entry", "fold_room_owners", "fold_room_tasks",
                 "fold_room_votes",
@@ -218,13 +232,19 @@ def __getattr__(name):
         # from the accounts a room admits, and a reader on the wire has no accounts
         # and no store, only the transcript and the attestations inside it. The
         # CLI's remote roster is its first consumer; an embedder's is the second.
-        from .core.a2a.room import (BOOKKEEPING_KINDS, Room, RoomError,
-                                    derive_peer_id, describe, fold_owners,
+        from .core.a2a.room import (BOOKKEEPING_KINDS, NON_CONVERSATION_KINDS, Room,
+                                    RoomError, derive_peer_id, describe, fold_owners,
                                     fold_tasks, fold_votes, invited_rooms,
                                     joined_rooms, participant_key, unread_counts)
         from .core.a2a.store import StoreError, UnsafeName
         from .core.a2a.invite import invitation
         return {"BOOKKEEPING_KINDS": BOOKKEEPING_KINDS,
+                # What counts as NOTHING WAS SAID on a surface built for people: the
+                # bookkeeping plus check-ins and reactions. Its third in-tree consumer
+                # (the event triggers, beside the sidebar badge and the corpus) put it
+                # here: three surfaces asking one question through a private import
+                # is the measured shape of a missing export.
+                "NON_CONVERSATION_KINDS": NON_CONVERSATION_KINDS,
                 "Room": Room, "RoomError": RoomError, "StoreError": StoreError,
                 "UnsafeName": UnsafeName,
                 "derive_peer_id": derive_peer_id,
@@ -256,6 +276,16 @@ def __getattr__(name):
         from .core.system_prompt import SOUL_CONTINUITY_ADDENDUM, build_capability_addendum
         return {"SOUL_CONTINUITY_ADDENDUM": SOUL_CONTINUITY_ADDENDUM,
                 "build_capability_addendum": build_capability_addendum}[name]
+    if name == "RoomTriggerWatch":
+        # The "is it due" decision for an automation that runs on a room EVENT (a
+        # message containing a text, a reaction on a message), pure over the room
+        # store: tick(tasks) -> the tasks that are due and the frames that made them
+        # so. VAF's scheduler loop is its first consumer; an embedder running a
+        # scheduler of their own (see docs/EMBEDDING.md, "run_kind") is the second,
+        # and without this they would hand-roll the cursor, the loop guard and the
+        # membership guard - the three rules the module docstring names.
+        from .core.automation_triggers import RoomTriggerWatch
+        return RoomTriggerWatch
     if name == "markers":
         # importlib, not `from . import`: the latter re-enters this
         # __getattr__ while the submodule is being set and recurses.

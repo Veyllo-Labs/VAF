@@ -97,6 +97,7 @@ class Agent:
         self._event_cb: Optional[Callable[[dict], None]] = None
         # Same, for the tool authorizer.
         self._authorize_cb: Optional[Callable[[Any], None]] = None
+        self._compaction_cb: Optional[Callable[[dict], Optional[str]]] = None
         # Multi-tenant identity (docs/EMBEDDING.md "Multi-tenant embedding"):
         # user_scope is an ASSERTION by the embedder - the library performs no
         # authentication (the process boundary is the trust boundary, same as
@@ -241,6 +242,8 @@ class Agent:
                 agent.set_event_sink(self._event_cb)
             if self._authorize_cb is not None:
                 agent.set_tool_authorizer(self._authorize_cb)
+            if self._compaction_cb is not None:
+                agent.set_compaction_hook(self._compaction_cb)
             # Local mode has no lazy load inside chat_step: without a backend
             # the turn aborts ("Agent not initialized") and run() would return
             # an empty string. Mirror chat_step's own guard and load here, so
@@ -282,6 +285,20 @@ class Agent:
         self._event_cb = callback
         if self._agent is not None:
             self._agent.set_event_sink(callback)
+
+    def on_compaction(self, callback: Optional[Callable[[dict], Optional[str]]]) -> None:
+        """Put something back after the history was compacted (or None to detach).
+
+        ``callback(info)`` runs right after a structural compaction with
+        ``{"before", "after", "tokens", "session_id"}``; a returned string is appended
+        as one system note, the seam for state a summary loses (a task board, a
+        running job). Bounded and forgiving: a timeout is "nothing to add", an
+        exception is swallowed. Shortcut for ``.core.set_compaction_hook(...)``; safe
+        before or after the first run. Full contract: ``CoreAgent.set_compaction_hook``.
+        """
+        self._compaction_cb = callback
+        if self._agent is not None:
+            self._agent.set_compaction_hook(callback)
 
     def save_session(self) -> str:
         """Persist the current conversation; returns the session id.

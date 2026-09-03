@@ -295,7 +295,7 @@ class RoomSendTool(BaseTool):
             return "Error: room_id and text are required."
         if kind not in KINDS:
             return (f"Error: '{kind}' is not a kind of message. Use say, ask, answer, "
-                "report, directive or vote.")
+                "report, directive or vote; for an emoji on one message use room_react.")
 
         try:
             room = _open(room_id)
@@ -356,6 +356,69 @@ class RoomSendTool(BaseTool):
             # second explanation of the same rule.
             return f"Refused by the room: {e}"
         return f"Sent to '{room_id}' as {identity.display} ({identity.role}). Message id {frame.id}."
+
+
+class RoomReactTool(BaseTool):
+    """An emoji on ONE message: the cheapest thing the agent can say in a room.
+
+    The acknowledgement the conduct rules forbid a message for. Twenty agents that
+    write "seen" as a `say` wake nineteen to read nothing; a reaction is shown to all
+    of them and wakes none. The room writes the line, so this tool sends an emoji and
+    an id and nothing else.
+    """
+    name = "room_react"
+    category    = "rooms"
+    description = (
+        "Put an emoji on ONE message in an A2A chat (agent room): the way to say seen, "
+        "agreed, done or no. Everybody sees it and NOBODY is woken by it, so use it "
+        "instead of a message that only acknowledges. reply_to is the id of the message "
+        "(the [id ...] shown with each line of the room turn)."
+    )
+    identity_kwargs = ("user_scope_id", "user_role")
+    permission_level = "write"
+    parameters: Dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "room_id": {"type": "string", "description": "Id of the room."},
+            "reply_to": {"type": "string",
+                         "description": "Id of the message the emoji goes on."},
+            "emoji": {"type": "string",
+                      "description": "One emoji, or a short token like +1."},
+        },
+        "required": ["room_id", "reply_to", "emoji"],
+    }
+    input_aliases = {"room_id": ["room", "id"],
+                     "reply_to": ["message_id", "frame_id", "on"],
+                     "emoji": ["reaction", "text"]}
+
+    def run(self, **kwargs) -> str:
+        from vaf.core.a2a.frame import plausible_frame_id
+        from vaf.core.a2a.room import RoomError
+        from vaf.core.a2a.store import StoreError
+
+        room_id = str(kwargs.get("room_id") or "").strip()
+        target = str(kwargs.get("reply_to") or "").strip()
+        emoji = str(kwargs.get("emoji") or "").strip()
+        if not room_id or not target or not emoji:
+            return "Error: room_id, reply_to and emoji are required."
+        if not plausible_frame_id(target):
+            return ("Error: reply_to takes the ID of the message (the 'id' field of the "
+                    "line you read), never its text.")
+        try:
+            room = _open(room_id)
+        except StoreError:
+            return f"Error: there is no room called '{room_id}' on this machine."
+        identity = room.identity_for(_acting_key(kwargs.get("user_scope_id")))
+        if identity is None:
+            return f"Error: you have not joined '{room_id}'. Use room_join first."
+        if room.closed:
+            return f"Room '{room_id}' is closed; nothing more can be written to it."
+        try:
+            frame = room.react(identity, target, emoji)
+        except RoomError as e:
+            return f"Refused by the room: {e}"
+        return (f"Reacted {(frame.body or {}).get('emoji') or emoji} on {target} in "
+                f"'{room_id}' as {identity.display}. Nobody was woken.")
 
 
 class RoomReadTool(BaseTool):

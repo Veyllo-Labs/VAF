@@ -1259,10 +1259,22 @@ def _send(args, kind: str) -> None:
         payload["reply_to"] = args.reply_to
     if getattr(args, "to", ""):
         payload["to"] = {"peer": args.to}
+    _submit(args.room, record, payload)
+
+
+def cmd_react(args) -> None:
+    """An emoji on one message. The room writes the line; this sends the emoji and
+    the id, and nobody is woken by it."""
+    _submit(args.room, load_record(args.room),
+            {"kind": "reaction", "reply_to": args.frame_id, "body": {"emoji": args.emoji}})
+
+
+def _submit(room: str, record: dict, payload: dict) -> None:
+    """Sign if the seat can, send over the held line or a fresh one, print the ack."""
     if record.get("sign_seed"):
         payload = sign_payload(payload, record["room"], seat_signing_seed(record),
                                str(record.get("peer") or ""))
-    line = _line_for(args.room, record)
+    line = _line_for(room, record)
     if line is not None:
         ack = line.submit(payload)
     else:
@@ -1341,6 +1353,9 @@ _HOWTO = f"""How to work in this room, from this client:
 - `--to <peer>` on `say`, `answer` and `report` addresses ONE member - the
   "from" of the line you answer - and only that one is woken. A leading @Name
   typed from here stays text: the table that resolves names lives on the host.
+- `react <room> <id> <emoji>` puts an emoji on ONE message: the way to say seen,
+  agreed or done, and the one that wakes nobody. A `reaction` line in `wait`
+  output needs nothing from you.
 - `leave` gives up your seat for good.
 
 HOW TO BEHAVE HERE. Four rules, each written after the failure it prevents.
@@ -1865,6 +1880,16 @@ MCP_TOOLS = [
      }, "required": ["room"], "additionalProperties": False},
      "run": lambda a: _drive(cmd_wait, room=_arg(a, "room"),
                              timeout=_wait_timeout(a))},
+    {"name": "a2a_react",
+     "description": ("Put an emoji on ONE message: the way to say seen, agreed, done "
+                     "or no. Everybody sees it and nobody is woken by it."),
+     "inputSchema": {"type": "object", "properties": {
+         "room": {"type": "string", "description": "the room id"},
+         "frame_id": {"type": "string", "description": "the id of the message"},
+         "emoji": {"type": "string", "description": "one emoji, or a short token like +1"},
+     }, "required": ["room", "frame_id", "emoji"], "additionalProperties": False},
+     "run": lambda a: _drive(cmd_react, room=_arg(a, "room"),
+                             frame_id=_arg(a, "frame_id"), emoji=_arg(a, "emoji"))},
     {"name": "a2a_say",
      "description": "Tell the room something.",
      "inputSchema": {"type": "object", "properties": {
@@ -2134,6 +2159,12 @@ def main(argv=None) -> None:
                              help="submitted, working, input_required, completed, "
                                   "failed, rejected, canceled")
         sub.set_defaults(handler=_send, kind=kind)
+
+    react = commands.add_parser("react", help="put an emoji on one message; wakes nobody")
+    react.add_argument("room")
+    react.add_argument("frame_id", help="the id of the message, as wait or read printed it")
+    react.add_argument("emoji", help="one emoji, or a short token like +1")
+    react.set_defaults(handler=cmd_react)
 
     verify = commands.add_parser(
         "verify", help="who really wrote each message, checked here rather than trusted")

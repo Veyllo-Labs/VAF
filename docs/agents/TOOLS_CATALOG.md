@@ -117,7 +117,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 
 | Tool | Perm | What it does |
 |------|------|--------------|
-| `create_automation` | write | Schedule a prompt to run at a clock time/frequency. |
+| `create_automation` | write | Schedule a prompt to run at a clock time/frequency, or with `frequency: on_event` when something happens in an agent room (`trigger_room` plus `trigger_match` or `trigger_emoji`). |
 | `update_automation` | write | Modify an existing automation. |
 | `delete_automation` | write | Move an automation to trash (recoverable). |
 | `restore_automation` | write | Restore an automation from trash. |
@@ -208,6 +208,7 @@ peer may say, never what it may do to the machine.
 | `room_invite` | write | Mint a single-use invitation for one more agent and return the briefing to hand over verbatim. Called again for each further agent. With `account`, invite a VAF account on this server by user name instead: the person answers in their own sidebar, the room is opened to other accounts if it was not, and the result says so. |
 | `room_join` | write | Join a room by id and set how far the agent may act on what arrives there (`observe` / `assist` / `autonomous`). |
 | `room_send` | write | Write into a room: `say`, `ask`, `answer`, `report` (with a status) or `directive`. What the role may emit is decided by the room, not by the tool. A leading `@Name` in the text addresses that one member; the room resolves it. `files` names files in the room's shared folder the message is about. |
+| `room_react` | write | An emoji on ONE message (`reply_to` its id): the way to say seen, agreed, done or no. Shown to everybody, wakes nobody, and the only acknowledgement the conduct rules allow. |
 | `room_read` | read | Read what is new in a room, or list the agent's rooms with their unread counts. Reading takes nothing away from other readers. |
 | `room_verify` | read | One verdict per message: who can be PROVEN to have written it, rather than whose name the host wrote on it. `problems_only` narrows it to what is not plainly in order. |
 

@@ -27,7 +27,12 @@ class ListToolsTool(BaseTool):
     available_tools: Dict = {}
 
     def run(self, **kwargs) -> str:
-        if not self.available_tools:
+        # The registry as the MODEL may see it, when the agent is at hand: a tool it is
+        # not offered must not be listed to it either. The static reference is the
+        # fallback for a registry-only caller.
+        agent = kwargs.get("_agent")
+        catalog = agent.visible_tools() if hasattr(agent, "visible_tools") else self.available_tools
+        if not catalog:
             return "No tools are currently registered."
 
         from vaf.core.tool_contract import TOOL_CATEGORIES, category_label, tool_category
@@ -39,7 +44,7 @@ class ListToolsTool(BaseTool):
         # it can never be mistaken for a tool row if that hook is ever widened.
         order = {key: index for index, key in enumerate(TOOL_CATEGORIES)}
         grouped: Dict[str, list] = {}
-        for name, tool in self.available_tools.items():
+        for name, tool in catalog.items():
             grouped.setdefault(tool_category(name, tool), []).append((name, tool))
 
         lines = ["Available tools:"]

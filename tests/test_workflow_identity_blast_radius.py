@@ -168,6 +168,7 @@ NEWLY_IDENTIFIED = {
     "room_join": ('user_role', 'user_scope_id', 'username'),
     "room_invite": ('user_role', 'user_scope_id'),
     "room_open": ('user_role', 'user_scope_id', 'username'),
+    "room_react": ('user_role', 'user_scope_id'),
     "room_read": ('user_role', 'user_scope_id'),
     "room_send": ('user_role', 'user_scope_id'),
     "room_verify": ('user_role', 'user_scope_id'),

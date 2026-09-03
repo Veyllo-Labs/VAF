@@ -184,7 +184,7 @@ Key rules:
   `visibilitychange` - a timer alone is not enough, because browsers freeze timers in
   hidden tabs. The server answers only for the session the connection is subscribed to.
 - **MCP servers (admin):** `get_mcp_servers` (no payload) lists configured servers with live status; `create_mcp_server` / `update_mcp_server` (`name`, `command`, `transport?`, `url?`, `enabled?`, `permission_level?`, `env?` - a `{ key: value }` map merged onto the server process) upsert a server in `mcp_servers.json` and hot-reload the tools; `delete_mcp_server` (`name`) removes one; `test_mcp_server` (`command`, `transport?`, `url?`, `env?`) probes a config without saving. See [MCP_INTEGRATION.md](../agents/MCP_INTEGRATION.md).
-- **Automations:** `get_automations` (no payload). Server responds with `automations_list` (`automations: []`). Admins see root + own scope + local_admin_scope tasks; regular users see only their scope. Same scoping applies to `create_automation`, `update_automation`, `delete_automation`.
+- **Automations:** `get_automations` (no payload). Server responds with `automations_list` (`automations: []`). Admins see root + own scope + local_admin_scope tasks; regular users see only their scope. Same scoping applies to `create_automation`, `update_automation`, `delete_automation`. Both `create_automation` and `update_automation` accept an optional `trigger` object (`{ kind: "room_message" | "room_reaction", room_id, match?, emoji?, from? }`); when present the task becomes event-driven (`frequency: "on_event"`, no `time`) and runs when the named room says something matching (see [AUTOMATIONS.md](../platform/AUTOMATIONS.md), "Event triggers").
 - **Thinking workspace handoffs (per-user):** `get_thinking_workspace_handoffs` (no payload) to list pending handoffs for review. Actions: `approve_thinking_workspace_handoff` (`task_id`, `handoff_id`) and `reject_thinking_workspace_handoff` (`task_id`, `handoff_id`, `reason?`). All operations use the connection's `user_scope_id`.
 - **Automation planner (per-user):** `get_automation_notes`, `get_automation_todos` (no payload). Create/update/delete: `create_automation_note` (`title?`, `content`), `create_automation_todo` (`text`, `due_at?`), `update_automation_todo` (`id`, `text?`, `done?`, `due_at?`), `delete_automation_note` (`id`), `delete_automation_todo` (`id`). Server uses `user_scope_id` from the connection (same as `get_automations`).
 - `get_notifications`: optional. Payload: `{ limit?: number }` (default 50). Server responds with `notifications_list` for the connection’s user.
@@ -296,6 +296,11 @@ Key rules:
   the room at ingest, not here - a shortened answer lands on the option it means, and one
   that matches nothing is refused with the options named. Answers with a fresh
   `room_transcript`, so the card redraws from the store rather than from the click.
+- `room_react` (`{ room_id, reply_to, emoji }`): the person putting an emoji on one
+  message, on the same CLI lane. The room writes the line (the text is synthesized from
+  the emoji at compose), so the browser sends the emoji and the id and nothing else;
+  a reaction wakes nobody and counts as unread for nobody. Answers with a fresh
+  `room_transcript`, where the chip appears under its message.
 
 ### Server → Client
 
@@ -327,7 +332,9 @@ Key rules:
   carries `{ id, roomId, title, topic, mission, roomKind, role, closed, createdAt,
   members, members_list, me, agentPeer, agentMode, agentWorkers, canManage, canInvite,
   shared, invitations, typing, readPositions, tasks, votes }` and each message
-  is `{ id, peer, label, role, kind, text, ts, lamport, to, files, verdict }`.
+  is `{ id, peer, label, role, kind, text, ts, lamport, to, files, verdict, reply_to }`.
+  `reply_to` is the message a line answers or reacts to; a `reaction` frame is never
+  drawn as a line of its own but as an emoji chip under that message.
   `files` names entries in the room's shared folder the message points at, a
   reference and never the bytes. `verdict` is what a reader may conclude about who
   WROTE the message: `unsigned` (nobody claimed, the ordinary case and not a
@@ -457,7 +464,7 @@ These endpoints are used only for the native DOCX editor path. The legacy HTML e
 - **Console fragment merging:** Rich-TUI redraws of streaming text arrive as progressively longer versions of the same line. `appendSubAgentLine` (`web/app/page.tsx`) replaces the previous console line in place when the new content extends it (prefix match, min. 4 chars), instead of stacking fragments. The console also stays pinned to the bottom during the typewriter animation (per-tick scroll unless the user scrolled up).
 - `model_state`: status of the local model (`loaded`, `persistent`, `provider`)
 - `config_saved`: confirmation that the settings were saved; on a provider change the response includes `requires_refresh: true`, after which the Web UI shows the "Changing model" overlay and reloads after 5 seconds (see [MODEL_AND_PROVIDER_SWITCHING.md](../llm/MODEL_AND_PROVIDER_SWITCHING.md)).
-- **Automations:** `automations_list` - response to `get_automations`. Payload: `{ automations: [] }`. Each item has `id`, `name`, `description`, `prompt`, `frequency`, `time`, `weekday?`, `day?`, `enabled`, `next_run`, `last_run`.
+- **Automations:** `automations_list` - response to `get_automations`. Payload: `{ automations: [] }`. Each item has `id`, `name`, `description`, `prompt`, `frequency`, `time`, `weekday?`, `day?`, `enabled`, `next_run`, `last_run`, `schedule` (the rule as a person reads it, `daily at 07:15` or `on message containing 'deploy' in room ...`) and `trigger?`. One projection serves the list and the create/update replies.
 - **Thinking workspace handoffs:** `thinking_workspace_handoffs_list` - response to `get_thinking_workspace_handoffs`. Payload: `{ handoffs: [] }` (pending items for current user). `thinking_workspace_handoff_result` - response to approve/reject actions. Payload: `{ ok, action: "approve" | "reject", task_id?, handoff_id?, automation_action_result?, error? }`. For approve, `automation_action_result` contains the optional bridge result (`{ ok, operation, task_id?, error? }`) when the handoff requested an automation create/update action.
 - **Automation planner responses:** `automation_notes_list` (`notes: []`), `automation_todos_list` (`todos: []`); `create_automation_note_result` (`ok`, `note?`), `create_automation_todo_result` (`ok`, `todo?`), `update_automation_todo_result` (`ok`, `todo?`), `delete_automation_note_result` (`ok`, `id?`), `delete_automation_todo_result` (`ok`, `id?`). The frontend updates lists optimistically using returned `note`/`todo`/`id` when present.
 - **Notifications:** `notification` - live push of a single notification (thinking run, automation result, workspace handoff decision, or channel reply). Payload: `{ notification: { id, kind, title, status, timestamp, summary?, sessionId?, channel?, task_name?, run_id?, action?, task_id?, handoff_id?, automation_action_result? } }`. For workspace handoff notifications, `action` is typically `approve`/`reject`, and `automation_action_result` may include `{ ok, operation, task_id?, error? }` when approval triggered automation create/update. `notifications_list` - response to `get_notifications`. Payload: `{ notifications: [] }`. Items are scoped to the user; the Notifications popup loads via `GET /api/notifications` or `get_notifications` and appends on `notification`.

@@ -46,6 +46,16 @@ class Frequency(str, Enum):
     DAILY = "daily"
     WEEKLY = "weekly"
     MONTHLY = "monthly"
+    # Not a clock at all: the task runs when something happens in a room it names
+    # (`AutomationTask.trigger`, vaf/core/automation_triggers.py). It has no next
+    # clock run, and the scheduler registers no job for it.
+    ON_EVENT = "on_event"
+
+
+# On-disk format tag of a task file. Written on every save; the loader keeps reading
+# untagged files, which is what every task written before the tag existed is. Pinned
+# as a literal in tests/test_persisted_format_tags.py.
+AUTOMATION_FORMAT = "automation-1-4e9b27"
 
 
 @dataclass
@@ -77,6 +87,11 @@ class AutomationTask:
 
     # User isolation: scope automations to specific users
     user_scope_id: Optional[str] = None
+
+    # What makes an ON_EVENT task due: {"kind": "room_message" | "room_reaction",
+    # "room_id": ..., "match"?: ..., "emoji"?: ..., "from"?: ..., "cursor"?: lamport}.
+    # Read only through vaf.core.automation_triggers.read_trigger, never trusted raw.
+    trigger: Optional[Dict[str, Any]] = None
     
     def to_dict(self) -> Dict:
         """Convert to dict, excluding next_run (calculated dynamically)."""
@@ -84,35 +99,81 @@ class AutomationTask:
         # Don't save next_run - it's calculated dynamically
         if "next_run" in data:
             del data["next_run"]
+        data["format"] = AUTOMATION_FORMAT
         return data
     
     @property
-    def next_run_datetime(self) -> datetime:
-        """Get the next run time (calculated dynamically)."""
+    def next_run_datetime(self) -> Optional[datetime]:
+        """The next clock run, or None when the record carries no clock rule this code
+        can read. Never raises: see calculate_next_run."""
         return self.calculate_next_run()
     
     @property
     def next_run_iso(self) -> str:
-        """Get the next run time as ISO string (calculated dynamically)."""
-        return self.calculate_next_run().isoformat()
+        """The next clock run as an ISO string, empty when there is none. The browser
+        already treats an absent value as "no date", so empty is the honest wire form."""
+        when = self.calculate_next_run()
+        return when.isoformat() if when else ""
+
+    @property
+    def next_run_label(self) -> str:
+        """`YYYY-MM-DD HH:MM` for a line a person reads, or "-" when there is no next
+        clock run. The one place the format lives: it used to be spelled out at eight
+        call sites, and every one of them would have raised on a record with no clock."""
+        when = self.calculate_next_run()
+        return when.strftime("%Y-%m-%d %H:%M") if when else "-"
+
+    @property
+    def schedule_label(self) -> str:
+        """WHEN this task runs, as a person reads it: `daily at 07:15`, or for an
+        event-driven task what has to happen where. The one place the phrase lives;
+        it used to be `{frequency} at {time}` at five call sites, every one of which
+        would have printed `on_event at ` for a task that has no clock."""
+        if self.frequency == Frequency.ON_EVENT:
+            from vaf.core.automation_triggers import trigger_label
+            return trigger_label(self.trigger)
+        return f"{self.frequency} at {self.time}"
     
     @classmethod
     def from_dict(cls, data: Dict) -> "AutomationTask":
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
     
-    def calculate_next_run(self) -> datetime:
+    def calculate_next_run(self) -> Optional[datetime]:
         """Next execution time, interpreted in the OWNER's timezone, returned as a SERVER-local
         naive datetime.
 
         Wall-clock times (self.time) are the user's local times, so "now" is taken in the owner's
-        timezone (user_identity.timezone — single source of truth; server-local when unset). The
+        timezone (user_identity.timezone, the single source of truth; server-local when unset). The
         result is converted back to a naive server-local datetime so sort/min over tasks and
         comparisons with naive datetime.now() never mix aware+naive (which would raise).
+
+        None when the record carries no clock rule this code can read: an empty or malformed
+        `time`, an hour or minute out of range, a day the month does not have, or a frequency
+        this version does not know. NEVER an exception. A record is data that arrived from a
+        file or a caller, and the boundary coerces rather than trusts it: one record with an
+        unreadable time used to make list() raise, and list() is what the Web UI automations
+        list, the CLI listing and the thinking-mode start gate all read, so a single bad file
+        took every automation surface down for every user. The create path admits exactly
+        such a record, because the interval check steps aside whenever the time has no colon.
         """
         from vaf.core.user_time import user_now
+        try:
+            hour, minute = (int(part) for part in str(self.time or "").split(":"))
+        except (TypeError, ValueError):
+            return None
         now = user_now(_resolve_username(self.user_scope_id))
-        hour, minute = map(int, self.time.split(":"))
+        try:
+            next_time = self._next_clock_time(now, hour, minute)
+        except (ValueError, OverflowError):
+            return None
+        return _to_server_local_naive(next_time) if next_time else None
 
+    def _next_clock_time(self, now: datetime, hour: int, minute: int) -> Optional[datetime]:
+        """The clock rule itself, one branch per frequency; None for a frequency with no
+        clock rule. May raise on values a calendar refuses; the caller turns that into None."""
+        if self.frequency == Frequency.ON_EVENT:
+            # Due when something happens, never by the clock.
+            return None
         if self.frequency == Frequency.ONCE:
             # Run once: today at the specified time. If already passed, schedule for tomorrow.
             next_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -147,8 +208,11 @@ class AutomationTask:
                 else:
                     next_time = next_time.replace(month=now.month + 1)
         else:
-            next_time = now
-        return _to_server_local_naive(next_time)
+            # Not "now": a frequency with no clock rule has no next clock run. Answering
+            # "now" sorted such a record first and told the thinking-mode gate that
+            # something was due this instant, every time it asked.
+            return None
+        return next_time
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -736,7 +800,7 @@ def format_daily_calendar_status(task: AutomationTask) -> str:
         today_d = _now.date()
         if done_d == today_d:
             return "Done (today)"
-        return f"Next: {task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}"
+        return f"Next: {task.next_run_label}"
 
     today_d = _now.date()
     done_d = _last_effective_completion_local_date(task)
@@ -852,7 +916,8 @@ class AutomationManager:
         """Write scheduler diagnostics only when debug logging is enabled."""
         append_domain_log("backend", f"[AUTOMATION_SCHEDULER] {message}")
 
-    def _run_scheduled_task(self, task: AutomationTask) -> str:
+    def _run_scheduled_task(self, task: AutomationTask, *,
+                            trigger: Optional[Dict[str, Any]] = None) -> str:
         """Wrapper for scheduled executions: runs in a background thread (no terminal).
 
         Running without a terminal (new_terminal=False) keeps the automation in the
@@ -874,7 +939,11 @@ class AutomationManager:
             # correct for something nobody is watching.
             set_current_session_id(None)
             try:
-                result = self.run_task(task, new_terminal=False)
+                # A clock run passes exactly what it always passed: the trigger is
+                # named only when there is one, so a stand-in for run_task that
+                # predates the parameter keeps working on the lane it stands in for.
+                extra = {"trigger": trigger} if trigger is not None else {}
+                result = self.run_task(task, new_terminal=False, **extra)
                 preview = (result or "").replace("\n", " ")[:200]
                 self._log_scheduler_event(
                     f"COMPLETED task_id={task.id} result_preview={preview!r}"
@@ -888,6 +957,37 @@ class AutomationManager:
         _threading.Thread(target=_execute, daemon=True, name=f"automation-{task.id}").start()
         return f"Automation '{task.name}' started in background"
     
+    def _fire_room_triggers(self) -> int:
+        """Run every event-driven task whose room said something matching since the
+        last tick. Returns how many were started.
+
+        The cursor is persisted BEFORE the run, so a restart in the middle of one
+        cannot fire the same frames twice; a run that then fails is a run that
+        failed, recorded in the run log like any other. The per-task run lock in
+        run_task keeps a trigger that fires again while the previous run is still
+        going from overlapping it.
+        """
+        from vaf.core.automation_triggers import RoomTriggerWatch, trigger_context
+
+        watch = getattr(self, "_trigger_watch", None)
+        if watch is None:
+            watch = self._trigger_watch = RoomTriggerWatch()
+        fired = 0
+        for hit in watch.tick(self.list(enabled_only=True)):
+            task = hit.task
+            task.trigger = dict(task.trigger or {}, cursor=int(hit.newest))
+            try:
+                self._save_task(task)
+            except Exception:
+                pass
+            self._log_scheduler_event(
+                f"TRIGGER_EVENT task_id={task.id} name={task.name!r} frames={len(hit.frames)}"
+            )
+            self._run_scheduled_task(task, trigger=trigger_context(task.trigger, hit.frames,
+                                                                   hit.labels))
+            fired += 1
+        return fired
+
     def _create_readme(self):
         """Create README in automations folder if it doesn't exist."""
         readme_path = self.storage_dir / "README.md"
@@ -1362,7 +1462,12 @@ vaf automation delete <id>   # Delete task
         tasks = list(self.tasks.values())
         if enabled_only:
             tasks = [t for t in tasks if t.enabled]
-        return sorted(tasks, key=lambda t: t.next_run_datetime)
+        # A record with no readable clock sorts LAST and raises nothing: every surface
+        # reads this listing, so one bad file must not take them all down.
+        def _key(task: AutomationTask):
+            when = task.next_run_datetime
+            return (when is None, when or datetime.min)
+        return sorted(tasks, key=_key)
     
     def _get_last_run_time(self) -> Optional[datetime]:
         """Get the timestamp of the last automation run."""
@@ -1496,7 +1601,8 @@ vaf automation delete <id>   # Delete task
             seconds_remaining = MIN_COOLDOWN_SECONDS - seconds_passed
             return (False, seconds_remaining)
     
-    def run_task(self, task: AutomationTask, callback: Callable = None, new_terminal: bool = True) -> str:
+    def run_task(self, task: AutomationTask, callback: Callable = None, new_terminal: bool = True,
+                 trigger: Optional[Dict[str, Any]] = None) -> str:
         """
         Execute an automation task.
         
@@ -1504,7 +1610,13 @@ vaf automation delete <id>   # Delete task
             task: The automation task to run
             callback: Optional callback for progress updates
             new_terminal: If True, run in a new terminal window (default: True)
+            trigger: For an event-driven run, what triggered it (automation_triggers.trigger_context):
+                appended to the prompt on the prompt lane, offered as template variables on the
+                workflow lane. Never stored on the task. Forces the in-process lane, because a
+                spawned terminal would run the task without it.
         """
+        if trigger is not None:
+            new_terminal = False
         from vaf.cli.ui import UI
         from vaf.core.platform import Platform
         from vaf.core.lock_manager import LockManager
@@ -1687,7 +1799,11 @@ vaf automation delete <id>   # Delete task
                 # Add 'date' to workflow defaults so {date} can be resolved in templates
                 engine._workflow_defaults = {"date": date_str}
                 engine._workflow_name = task.name
-                workflow_result = engine.execute(steps, variables=task.parameters)
+                variables = dict(task.parameters)
+                if trigger is not None:
+                    from vaf.core.automation_triggers import trigger_variables
+                    variables.update(trigger_variables(trigger))
+                workflow_result = engine.execute(steps, variables=variables)
 
                 if getattr(workflow_result, "paused", False):
                     # PAUSED, NOT FAILED: a step handed off to an async sub-agent, so the run
@@ -1795,6 +1911,9 @@ vaf automation delete <id>   # Delete task
                 prompt = task.prompt
                 for key, value in task.parameters.items():
                     prompt = prompt.replace(f"{{{key}}}", str(value))
+                if trigger is not None:
+                    from vaf.core.automation_triggers import prompt_with_trigger
+                    prompt = prompt_with_trigger(prompt, trigger)
                 
                 # Import agent and run
                 from vaf.core.agent import Agent
@@ -2231,6 +2350,13 @@ vaf automation delete <id>   # Delete task
                     fire_due_reminders()
                 except Exception:
                     pass
+                # Event-driven automations: the "is it due" decision for a room event,
+                # asked on the same tick the reminders ride, so only the process
+                # singleton ever fires one (vaf/core/automation_triggers.py).
+                try:
+                    self._fire_room_triggers()
+                except Exception:
+                    pass
                 time.sleep(30)  # Check every 30 seconds
             self._log_scheduler_event("LOOP_STOPPED")
         
@@ -2255,6 +2381,14 @@ vaf automation delete <id>   # Delete task
             )
             return
         
+        if task.frequency == Frequency.ON_EVENT:
+            # No clock job. The "is it due" question for an event is asked on every
+            # tick of the scheduler loop (_fire_room_triggers), not registered here.
+            self._log_scheduler_event(
+                f"REGISTERED_EVENT task_id={task.id} name={task.name!r} when={task.schedule_label!r}"
+            )
+            return
+
         # Owner timezone (IANA name) so wall-clock times fire in the USER's zone, not the server's.
         # schedule's Job.at(time, tz) handles DST; tz=None -> server-local (unchanged behavior).
         from vaf.core.user_time import resolve_user_timezone_name, user_now
@@ -2347,9 +2481,8 @@ def get_next_automation_run_utc(user_scope_id: Optional[str]) -> Optional[dateti
             if t.id not in seen:
                 tasks.append(t)
                 seen.add(t.id)
-    if not tasks:
-        return None
-    return min(t.next_run_datetime for t in tasks)
+    upcoming = [when for when in (t.next_run_datetime for t in tasks) if when is not None]
+    return min(upcoming) if upcoming else None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2585,13 +2718,13 @@ def list_automations():
     
     for task in tasks:
         status = "[green]●[/green] Active" if task.enabled else "[red]○[/red] Disabled"
-        next_run = task.next_run_datetime.strftime("%Y-%m-%d %H:%M")
+        next_run = task.next_run_label
         
         table.add_row(
             task.id,
             task.name[:20],
             task.frequency,
-            task.time,
+            task.time or task.schedule_label,
             next_run,
             status
         )
@@ -2605,7 +2738,10 @@ def create_automation(
     prompt: str = typer.Option(..., "--prompt", "-p", prompt="What should VAF do?"),
     frequency: str = typer.Option("daily", "--frequency", "-f", help="daily, weekly, hourly, monthly"),
     time: str = typer.Option("06:00", "--time", "-t", help="Execution time (HH:MM)"),
-    output: str = typer.Option(None, "--output", "-o", help="Output directory")
+    output: str = typer.Option(None, "--output", "-o", help="Output directory"),
+    on_room: str = typer.Option("", "--on-room", help="Run when something happens in this agent room (its id) instead of by the clock"),
+    on_match: str = typer.Option("", "--on-match", help="With --on-room: only a message containing this text"),
+    on_reaction: str = typer.Option("", "--on-reaction", help="With --on-room: a reaction instead of a message; an emoji, or 'any'"),
 ):
     """Create a new automation task."""
     from rich.console import Console
@@ -2628,6 +2764,18 @@ def create_automation(
                 value = typer.prompt(question)
                 params[param] = value
     
+    # An event trigger replaces the clock: no time, no clock job, due when the room says so.
+    trigger = None
+    if on_room:
+        from vaf.core.automation_triggers import read_trigger
+        trigger = read_trigger({"kind": "room_reaction" if on_reaction else "room_message",
+                                "room_id": on_room, "match": on_match,
+                                "emoji": "" if on_reaction.strip().lower() in ("any", "*") else on_reaction})
+        if trigger is None:
+            console.print("[red]--on-room needs a room id that could be one (letters, digits, - _ .)[/red]")
+            raise typer.Exit(1)
+        frequency, time = Frequency.ON_EVENT.value, ""
+
     # Create task
     task = AutomationTask(
         name=name,
@@ -2635,14 +2783,16 @@ def create_automation(
         frequency=frequency,
         time=time,
         output_path=output or str(Path.home() / "Desktop"),
-        parameters=params
+        parameters=params,
+        trigger=trigger,
     )
     
     task = manager.create(task)
     
     console.print(f"\n[green]✓ Automation created![/green]")
     console.print(f"  [dim]ID:[/dim] {task.id}")
-    console.print(f"  [dim]Next run:[/dim] {task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}")
+    console.print(f"  [dim]When:[/dim] {task.schedule_label}")
+    console.print(f"  [dim]Next run:[/dim] {task.next_run_label}")
     console.print(f"\n[dim]Start scheduler with: vaf automation start[/dim]")
 
 

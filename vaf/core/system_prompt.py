@@ -1382,6 +1382,11 @@ Then use the results to answer. Do NOT guess from your training data!
         if self.agent and getattr(self.agent, "_active_tools", None) is not None:
             active = set(self.agent._active_tools)
             tools_to_doc = [t for t in self.tools if getattr(t, "name", None) in active]
+        if self.agent and hasattr(self.agent, "visible_tools"):
+            # The same answer the schema gives: a tool hidden from the model is not
+            # documented to it either.
+            visible = set(self.agent.visible_tools())
+            tools_to_doc = [t for t in tools_to_doc if getattr(t, "name", None) in visible]
         
         for tool in tools_to_doc:
             name = None

@@ -143,7 +143,7 @@ def test_complete_pins_its_keyword_only_knobs_and_defaults():
 
 
 def test_the_documented_methods_exist_and_core_is_a_property():
-    for name in ("add_tool", "on_event", "set_tool_authorizer", "save_session"):
+    for name in ("add_tool", "on_event", "on_compaction", "set_tool_authorizer", "save_session"):
         assert callable(getattr(vaf.Agent, name)), f"Agent lost {name}()"
     assert isinstance(vaf.Agent.core, property)
 

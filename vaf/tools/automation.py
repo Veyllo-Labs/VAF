@@ -162,7 +162,7 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
             },
             "frequency": {
                 "type": "string",
-                "enum": ["once", "hourly", "daily", "weekly", "monthly"],
+                "enum": ["once", "hourly", "daily", "weekly", "monthly", "on_event"],
                 "description": (
                     "How often to run. REQUIRED — you MUST ask the user explicitly if not stated.\n"
                     "- 'once': ONE-TIME scheduled task — runs exactly once at the given clock time, then automatically deleted. "
@@ -172,6 +172,9 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
                     "- 'weekly': every week on weekday (requires weekday param)\n"
                     "- 'monthly': every month on day (requires day param)\n"
                     "- 'hourly': every hour at :MM\n"
+                    "- 'on_event': runs when something happens in an agent room the user is in - "
+                    "give trigger_room (the room id) plus trigger_match (a text) or trigger_emoji "
+                    "(a reaction). No clock time then: pass time as an empty string.\n"
                     "NEVER default to 'daily'. If unclear, ask the user."
                 )
             },
@@ -182,6 +185,22 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
                     "REQUIRED — ask the user what time they want if not stated. "
                     "Must be at least 10 minutes apart from existing automations."
                 )
+            },
+            "trigger_room": {
+                "type": "string",
+                "description": ("For frequency 'on_event': the id of the agent room to watch. The user "
+                                "must be a member. room_read lists the rooms and their ids.")
+            },
+            "trigger_match": {
+                "type": "string",
+                "description": ("For frequency 'on_event': run only when a message in that room contains "
+                                "this text (case-insensitive). Omit for any message.")
+            },
+            "trigger_emoji": {
+                "type": "string",
+                "description": ("For frequency 'on_event': run when a REACTION lands on a message in that "
+                                "room instead of on a message - this emoji, or 'any'. The user's own "
+                                "emoji on the agent's report is the approval button.")
             },
             "weekday": {
                 "type": "string",
@@ -223,6 +242,23 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
         prompt = kwargs.get("prompt", "")
         frequency = (kwargs.get("frequency") or "").lower().strip()
         schedule_time = kwargs.get("time", "06:00")
+        # An event trigger replaces the clock. Read at the boundary, refused with the
+        # reason, and from here on `trigger is None` means "a clock task".
+        trigger = None
+        trigger_room = str(kwargs.get("trigger_room") or "").strip()
+        if trigger_room or frequency == "on_event":
+            from vaf.core.automation_triggers import read_trigger
+            wanted_emoji = str(kwargs.get("trigger_emoji") or "").strip()
+            trigger = read_trigger({
+                "kind": "room_reaction" if wanted_emoji else "room_message",
+                "room_id": trigger_room,
+                "match": kwargs.get("trigger_match") or "",
+                "emoji": "" if wanted_emoji.lower() in ("any", "*") else wanted_emoji,
+            })
+            if trigger is None:
+                return ("Error: an event trigger needs trigger_room, the id of an agent room the "
+                        "user is in (room_read lists them), plus trigger_match or trigger_emoji.")
+            frequency, schedule_time = "on_event", ""
         # Explicit user confirmation to create a SECOND near-identical automation at a different time.
         # When False (default), a near-duplicate at a different time is NOT created — the tool returns a
         # truthful "nothing created, ask the user" prompt instead of silently creating (and lying about it).
@@ -382,7 +418,7 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
         
         # Validate frequency - must be one of the valid values
         # IMPORTANT: "once" is a valid frequency for one-time tasks — do NOT override it!
-        valid_frequencies = ["once", "hourly", "daily", "weekly", "monthly"]
+        valid_frequencies = ["once", "hourly", "daily", "weekly", "monthly", "on_event"]
         if frequency not in valid_frequencies:
             # Try to infer from common patterns
             frequency_lower = str(frequency).lower()
@@ -403,13 +439,14 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
                     "Ask the user which frequency they want — NEVER assume daily."
                 )
         
-        # Validate time format (HH:MM)
-        if not isinstance(schedule_time, str) or ":" not in schedule_time:
+        # Validate time format (HH:MM) - a clock task only; an event task has no clock.
+        if trigger is None and (not isinstance(schedule_time, str) or ":" not in schedule_time):
             return f"Error: Invalid time format '{schedule_time}'. Expected HH:MM format (e.g., '22:46')."
         
         try:
             from datetime import datetime
-            datetime.strptime(schedule_time, "%H:%M")
+            if trigger is None:
+                datetime.strptime(schedule_time, "%H:%M")
         except ValueError:
             return f"Error: Invalid time format '{schedule_time}'. Expected HH:MM format (e.g., '22:46')."
         
@@ -557,6 +594,7 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
                 output_format=format_type,  # IMPORTANT: Set the output format!
                 parameters=params,
                 user_scope_id=use_scope,
+                trigger=trigger,
             )
             
             task = manager.create(task)
@@ -613,8 +651,8 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
 
 **Name:** {task.name}
 **ID:** {task.id}
-**Schedule:** {task.frequency} at {task.time}
-**Next Run:** {task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}
+**Schedule:** {task.schedule_label}
+**Next Run:** {task.next_run_label}
 **Output:** {task.output_path}"""
             
             if catchup_skipped_note:
@@ -956,8 +994,8 @@ class ListAutomationsTool(BaseTool):
                 status = "✅ Active" if task.enabled else "⏸️ Disabled"
                 today_line = format_daily_calendar_status(task)
                 result += f"• **{task.name}** ({task.id}) - {status}\n"
-                result += f"  Schedule: {task.frequency} at {task.time}\n"
-                result += f"  Next: {task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}\n"
+                result += f"  Schedule: {task.schedule_label}\n"
+                result += f"  Next: {task.next_run_label}\n"
                 result += f"  Today (local): **{today_line}**\n"
                 result += f"  Status: {status}\n"
                 result += f"  **Prompt:** {task.prompt[:100]}{'...' if len(task.prompt) > 100 else ''}\n"
@@ -1013,8 +1051,8 @@ class ReadAutomationTool(BaseTool):
 
 **ID:** {task.id}
 **Status:** {'✅ Active' if task.enabled else '⏸️ Disabled'}
-**Schedule:** {task.frequency} at {task.time}
-**Next Run:** {task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}
+**Schedule:** {task.schedule_label}
+**Next Run:** {task.next_run_label}
 **Last Run:** {task.last_run or 'Never'}
 **Last completed (local date):** {task.last_completed_local_date or '(legacy: infer from Last Run)'}
 **Today (local calendar):** {format_daily_calendar_status(task)}
@@ -1074,7 +1112,7 @@ When changing **time**, the new time must be at least 10 minutes apart from all 
             },
             "frequency": {
                 "type": "string",
-                "enum": ["once", "hourly", "daily", "weekly", "monthly"],
+                "enum": ["once", "hourly", "daily", "weekly", "monthly", "on_event"],
                 "description": "New frequency (optional): once, hourly, daily, weekly, monthly"
             },
             "time": {
@@ -1180,8 +1218,8 @@ When changing **time**, the new time must be at least 10 minutes apart from all 
 
 **Name:** {updated_task.name}
 **ID:** {updated_task.id}
-**Schedule:** {updated_task.frequency} at {updated_task.time}
-**Next Run:** {updated_task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}
+**Schedule:** {updated_task.schedule_label}
+**Next Run:** {updated_task.next_run_label}
 **Output:** {updated_task.output_path}
 
 **Updated fields:** {', '.join(update_params.keys())}"""
@@ -1307,8 +1345,8 @@ Use this when user wants to recover a previously deleted automation."""
 
 **Name:** {task.name}
 **ID:** {task_id}
-**Schedule:** {task.frequency} at {task.time}
-**Next Run:** {task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}
+**Schedule:** {task.schedule_label}
+**Next Run:** {task.next_run_label}
 
 The automation has been restored and is now active again."""
             else:
@@ -1347,7 +1385,7 @@ class ListTrashTool(BaseTool):
             
             for task in tasks:
                 result += f"• **{task.name}** ({task.id})\n"
-                result += f"  Schedule: {task.frequency} at {task.time}\n"
+                result += f"  Schedule: {task.schedule_label}\n"
                 result += f"  Use `restore_automation` with ID '{task.id}' to restore\n\n"
             
             return result

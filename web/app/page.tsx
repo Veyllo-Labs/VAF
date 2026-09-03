@@ -174,6 +174,8 @@ type RoomMessage = {
     id: string; peer: string; label: string; role: string;
     kind: string; text: string; ts?: number; lamport?: number;
     to?: { peer?: string; role?: string; room?: boolean };
+    /** The message this one answers or reacts to. A reaction is drawn under it. */
+    reply_to?: string;
     /** Files in the room's shared folder this message points at. A reference,
      *  never the bytes - the folder holds those, and the chip opens it. */
     files?: Array<{ path: string; size?: number }>;
@@ -2047,7 +2049,7 @@ function RoomIdentity({ room, connected, onMembers, membersTitle, invitedNote }:
     );
 }
 
-function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker, liveWorker, connected = true, pending, pendingNote, recentSends }: {
+function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker, liveWorker, connected = true, pending, pendingNote, recentSends, onReact }: {
     view: { room: RoomView; messages: RoomMessage[] };
     onMembers: () => void;
     closedNote: string;
@@ -2063,6 +2065,10 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
      *  pending copy a moment ago, so it blends up from that dimness instead of
      *  drifting in like a message the person has never seen. */
     recentSends?: Map<string, number>;
+    /** The person putting an emoji on one message. Absent when they hold no seat
+     *  here: a reaction is a frame in the person's own lane, and a viewer that is
+     *  only invited has none. */
+    onReact?: (frameId: string, emoji: string) => void;
     timeFormat?: '24h' | '12h';
     /** Open the sub-agent window for a live worker - the mobile preview-pill
      *  gesture, applied to the room's worker cards. */
@@ -2091,6 +2097,8 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
         for (const r of view.room.readPositions ?? []) {
             let target: RoomMessage | null = null;
             for (const m of view.messages) {
+                // A reaction is not drawn as a line, so a face cannot sit under it.
+                if (m.kind === 'reaction') continue;
                 if ((m.lamport ?? 0) <= r.readTo) target = m; else break;
             }
             if (!target || target.peer === r.peer) continue;
@@ -2107,8 +2115,25 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
     // presence surface for the same fact was the clutter it took a screenshot
     // to name.
     const lastAgentMsgId = view.room.agentPeer
-        ? view.messages.filter(m => m.peer === view.room.agentPeer).slice(-1)[0]?.id
+        ? view.messages.filter(m => m.peer === view.room.agentPeer && m.kind !== 'reaction').slice(-1)[0]?.id
         : undefined;
+    // Reactions sit UNDER the message they landed on, grouped by emoji, one entry
+    // per person and emoji: a stack of faces under a message says "read this
+    // far", a row of emojis says what people made of it, and the two must never
+    // be confused. Computed per render from the transcript, and the frame that
+    // carries a reaction is never drawn as a line - a reaction is not a thing
+    // somebody said.
+    const reactionsFor = new Map<string, Array<{ emoji: string; peer: string; label: string }>>();
+    for (const m of view.messages) {
+        if (m.kind !== 'reaction' || !m.reply_to) continue;
+        const emoji = (m.text || '').trim();
+        if (!emoji) continue;
+        const stack = reactionsFor.get(m.reply_to) ?? [];
+        if (!stack.some(r => r.peer === m.peer && r.emoji === emoji)) {
+            stack.push({ emoji, peer: m.peer, label: m.label });
+        }
+        reactionsFor.set(m.reply_to, stack);
+    }
     // The worker cards live UNDER the agent's latest message, the way the owner's
     // reference app draws them - work belongs to the words that announced it, not
     // to a toolbar. Falls back to the end of the transcript when the agent has
@@ -2282,14 +2307,22 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                 </div>
             )}
 
-            {view.messages.map((m, idx) => {
+            {view.messages.map((m, idx, all) => {
+                // A reaction is never a line of its own: it is drawn under the message
+                // it landed on (reactionsFor above). Skipped here, and the day rule
+                // below looks past it, so a reaction between two days cannot swallow
+                // the separator.
+                if (m.kind === 'reaction') return null;
                 // Our own agent against everybody else. A stranger's agent is a full
                 // agent of its own and is shown as one, never as a second voice of ours.
                 const mine = !!view.room.me && m.peer === view.room.me;
                 // The SAME day rule the ordinary chat applies (DaySeparator): a room
                 // frame's ts is epoch SECONDS on the wire, the chat's helpers speak
                 // milliseconds, so the conversion happens once, here.
-                const prev = idx > 0 ? view.messages[idx - 1] : null;
+                let prev: RoomMessage | null = null;
+                for (let j = idx - 1; j >= 0; j--) {
+                    if (all[j].kind !== 'reaction') { prev = all[j]; break; }
+                }
                 const daySeparator = prev && m.ts && prev.ts
                     && !isSameDay(prev.ts * 1000, m.ts * 1000)
                     ? <DaySeparator endDate={prev.ts * 1000} startDate={m.ts * 1000} />
@@ -2347,7 +2380,7 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                         here as its pending copy a second ago blends up from that
                         dimness (room-msg-confirm) - drifting in would move something
                         that never left the screen. */}
-                    <div className={cn("flex gap-3 py-2",
+                    <div className={cn("group flex gap-3 py-2",
                         mine && recentSends?.has((m.text || '').trim())
                             ? "room-msg-confirm" : "room-msg-enter")}>
                         {isOwnAgent ? (
@@ -2399,6 +2432,40 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                                             <Paperclip size={11} className="shrink-0" />
                                             <span className="truncate">{f.path}</span>
                                         </span>
+                                    ))}
+                                </div>
+                            )}
+                            {/* What people made of this message: one chip per emoji,
+                                the count when more than one person chose it, and who
+                                in the tooltip. Under it, on hover, four to add your
+                                own - only with a seat in the room. Emoji-only, so the
+                                row needs no words in any language. */}
+                            {(reactionsFor.get(m.id)?.length ?? 0) > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-1.5">
+                                    {Array.from(reactionsFor.get(m.id)!.reduce((acc, r) => {
+                                        const g = acc.get(r.emoji) ?? { emoji: r.emoji, labels: [] as string[] };
+                                        g.labels.push(r.label);
+                                        acc.set(r.emoji, g);
+                                        return acc;
+                                    }, new Map<string, { emoji: string; labels: string[] }>()).values()).map(g => (
+                                        <span key={g.emoji} title={g.labels.join(', ')}
+                                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[12px] border border-gray-200 bg-gray-50 text-gray-700 dark:border-[#3a3a3a] dark:bg-[#202020] dark:text-[#c8c8c8]">
+                                            <span>{g.emoji}</span>
+                                            {g.labels.length > 1 && (
+                                                <span className="text-[10px] text-gray-500 dark:text-[#9a9a9a]">{g.labels.length}</span>
+                                            )}
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+                            {onReact && (
+                                <div className="flex gap-0.5 mt-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                                    {['\u{1F44D}', '\u2705', '\u274C', '\u{1F440}'].map(e => (
+                                        <button key={e} type="button" title={e} aria-label={e}
+                                            onClick={() => onReact(m.id, e)}
+                                            className="h-6 w-6 rounded-md text-[13px] leading-none hover:bg-gray-100 dark:hover:bg-[#2a2a2a]">
+                                            {e}
+                                        </button>
                                     ))}
                                 </div>
                             )}
@@ -3170,7 +3237,7 @@ function VAFDashboardContent() {
     const [skillSavedTick, setSkillSavedTick]           = useState(0);
     const [trustedSources, setTrustedSources] = useState<{ categories: Array<{ id: string; name: string; description: string; sources: Array<{ name: string; url: string; domains: string[]; trust_score: number; is_custom: boolean }> }> }>({ categories: [] });
     const [trustedSourcesError, setTrustedSourcesError] = useState<string | null>(null);
-    const [automations, setAutomations] = useState<Array<{ id: string; name: string; description: string; prompt?: string; frequency: string; time: string; weekday?: string | null; day?: number | null; enabled: boolean; next_run?: string }>>([]);
+    const [automations, setAutomations] = useState<Array<{ id: string; name: string; description: string; prompt?: string; frequency: string; time: string; weekday?: string | null; day?: number | null; enabled: boolean; next_run?: string; schedule?: string }>>([]);
     const [deletingAutomationId, setDeletingAutomationId] = useState<string | null>(null);
     type AutomationNote = { id: string; title?: string | null; content: string; created_at: string };
     type AutomationTodo = { id: string; text: string; created_at: string; due_at?: string | null; done: boolean };
@@ -9207,6 +9274,11 @@ function VAFDashboardContent() {
                                         onOpenWorker={() => { subAgentUserClosedRef.current = false; setSubAgentState(prev => ({ ...prev, isOpen: true })); }}
                                         liveWorker={roomLiveWorker}
                                         connected={isConnected}
+                                        onReact={roomView.room.me ? (frameId, emoji) => {
+                                            const sock = wsSocketRef.current;
+                                            if (!sock || sock.readyState !== WebSocket.OPEN) return;
+                                            sock.send(JSON.stringify({ type: 'room_react', room_id: roomView.room.roomId, reply_to: frameId, emoji }));
+                                        } : undefined}
                                         pending={pendingRoomSays.filter(p => p.roomId === roomView.room.roomId)}
                                         pendingNote={tMain('roomSending')}
                                         recentSends={recentRoomSendsRef.current} />

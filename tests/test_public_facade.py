@@ -46,10 +46,11 @@ def test_facade_exports_exactly_the_documented_surface():
     none of them. Unique N for a new engine method: zero."""
     assert vaf.__version__
     assert sorted(vaf.__all__) == [
-        "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
+        "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent", "NON_CONVERSATION_KINDS",
         "PathEscape", "RemoteRefused", "RemoteRoom",
-        "Room", "RoomError", "SOUL_CONTINUITY_ADDENDUM", "StoreError",
-        "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName", "UploadVerdict",
+        "Room", "RoomError", "RoomTriggerWatch", "SOUL_CONTINUITY_ADDENDUM", "StoreError",
+        "ToolCallHooks", "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName",
+        "UploadVerdict",
         "VoiceTurnEngine",
         "__version__",
         "account_allows_tool", "build_capability_addendum", "contained_path",

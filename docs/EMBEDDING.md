@@ -953,6 +953,8 @@ The supported arguments:
 | `authorize` | Your per-call decision hook, exactly as in the next section. `ToolCaller(..., authorize=fn)` is the same thing `Agent.set_tool_authorizer(fn)` installs. An account-level ban (the allowlist section below) is checked before it and cannot be lifted by an `allow()`. |
 | `on_event` | `f(dict)` for `tool_start` / `tool_end` / gate events. Same schema as `Agent.on_event` (`CoreAgent.set_event_sink`), documented in [OBSERVABILITY.md](OBSERVABILITY.md). A raising sink is swallowed: a broken observer must not fail a run. |
 
+| `hooks` | `vaf.ToolCallHooks(after_policy=, before_dispatch=, after_dispatch=, after_emit=)`: the four measured positions inside one call, the same ones the agent's chat lane rides. `after_policy(name, tool, args) -> str | None` ends the call with the string (a gate); `before_dispatch(name, tool_args) -> str | None` may edit the arguments or refuse; `after_dispatch(name, tool_args, result) -> str` may replace the result; `after_emit(name, result)` sees the untruncated result on paths that dispatched. Runs after the hard policy block and the allowlist, so none of them can lift a ban. This is how a planner or a job queue of your own gets its gates and guardrails without patching the loop. |
+
 **It writes an audit line per call.** Every `execute()` appends one line to
 `tool_use_<date>.log` - timestamp, tool, `session_id`, `user_scope_id`, and a
 sanitized 200-character argument preview - before anything else happens, so a
@@ -1304,6 +1306,7 @@ me = room.join(display="MyApp", scope_id="tenant-a",
 room.say(me, "anyone looked at the logs?")
 text = "@Bob the logs, please"                 # a leading @Name wakes ONE member and the
 room.say(me, text, to=room.addressee(text))   # others read along; to_peer=<handle> when known
+room.react(me, frame.id, "+1")                # an emoji on one message; wakes nobody
 for entry in room.transcript():
     print(entry["label"], vaf.describe_room_entry(entry))
 ```
@@ -1332,6 +1335,7 @@ the questions a room decides together. When you render or scan a transcript your
 `vaf.BOOKKEEPING_KINDS` names the frames that are the room talking about itself (joins,
 acks, role changes) - filter on it rather than hand-writing the set, or the next
 bookkeeping kind silently lands in your output as if somebody had said it.
+`vaf.NON_CONVERSATION_KINDS` is the wider set a surface built for PEOPLE asks about: the bookkeeping plus the room's check-ins (`ping`) and reactions, meaning "nothing was said" for a badge, a learning transcript or a corpus. The event triggers ask it too, which is what put it here: three in-tree surfaces asking one question through a private import.
 
 Runnable end to end in [examples/11_a2a_room.py](../examples/11_a2a_room.py), which needs
 no provider, no key and no network.
@@ -1697,7 +1701,7 @@ server is not supported today. See
 
 Stable public surface (safe to build on):
 
-- `from vaf import Agent` - the façade: `Agent(config=..., system_prompt=..., user_scope=..., session=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.complete(prompt, ...)`, `.add_tool(tool)`, `.on_event(cb)`, `.save_session()`, `.core`.
+- `from vaf import Agent` - the façade: `Agent(config=..., system_prompt=..., user_scope=..., session=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.complete(prompt, ...)`, `.add_tool(tool)`, `.on_event(cb)`, `.on_compaction(cb)`, `.save_session()`, `.core`.
 - `vaf.markers` - the special-return-value constants.
 - `vaf.CoreAgent` - the engine, for advanced embedding.
 - `CoreAgent.chat_step(user_input, ..., memory_context=...)` - the documented turn
@@ -1713,6 +1717,25 @@ Stable public surface (safe to build on):
   user's answers. A per-call origin parameter does not exist yet; that is a named
   boundary, not an oversight - VAF's own runner marks its synthetic turns with two
   attributes on the agent, and one public value replacing them is a facade decision.
+- `Agent.on_compaction(cb)` / `CoreAgent.set_compaction_hook(hook)` - the seam after a
+  structural compaction, on both paths that compact. `hook(info)` gets `{"before",
+  "after", "tokens", "session_id"}` and may return one string, appended as one system
+  note: the place for what a summary loses, such as a task board or a running job. It
+  cannot edit the history and never sees a reply. Bounded by
+  `CoreAgent.COMPACTION_HOOK_SECONDS` (a timeout is "nothing to add") and forgiving (an
+  exception is swallowed and logged), like the event sink and unlike the authorizer.
+  What it does NOT offer, said plainly: a hook at the END of a turn. `chat_step` has
+  27 exits and no single one, so a turn-end seam would first need a single exit; the
+  measurement that earns it is a second consumer wanting the same place.
+- `vaf.RoomTriggerWatch` - for a scheduler of your own: the "is it due" decision for an
+  automation that runs on a room EVENT. `watch.tick(tasks)` takes objects with `id`,
+  `frequency == "on_event"`, `user_scope_id` and a `trigger` dict (`kind`: `room_message`
+  or `room_reaction`, `room_id`, optional `match`, `emoji`, `from`, `cursor`) and returns
+  the ones that are due with the frames that made them so; persist `hit.newest` back as
+  `trigger["cursor"]` before running. The loop guard (the owner's own agent never fires
+  a trigger), the membership guard and the start-at-newest cursor are inside it, so a
+  scheduler built on it does not have to know them. See
+  [AUTOMATIONS.md](platform/AUTOMATIONS.md), "Event triggers".
 - `file_encryption_enabled` as the switch between the two at-rest modes, and the
   promise that turning it off leaves the whole store readable: encrypted files
   still decrypt, and plaintext is tolerated on read again. A store that is

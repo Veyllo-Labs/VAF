@@ -17,7 +17,7 @@ Order within `chat_step()`:
    - Detect the language, call `analyze_context(user_input)`, and build `new_prompt = build_prompt(...)`.
    - `new_prompt` is set **only within this block**; it is **not** written into the history.
 3. **Context Compression:**
-   - **Condition:** `context_manager.should_compress(self.history)` must be `True`. The check and the `compress()` call live in `Agent._compress_history_if_needed`, which is shared with the session-load path (section 7b) and reports the result to the Web UI system log (message count and remaining tokens).
+   - **Condition:** `context_manager.should_compress(self.history)` must be `True`. The check and the `compress()` call live in `Agent._compress_history_if_needed`, which is shared with the session-load path (section 7b) and reports the result to the Web UI system log (message count and remaining tokens). Right after a compaction it fires the attached compaction hook (`CoreAgent.set_compaction_hook`, `Agent.on_compaction`), whose returned string is appended as one system note: the seam for state a summary loses.
    - If **yes:** call `compress()`, then append the context glue to `new_prompt` and overwrite the system prompt in `history[0]` with this `new_prompt` (including the glue and, if present, PROJECT CONTEXT).
    - If **no:** nothing happens to the history; a `new_prompt` built earlier is **not** written into `history[0]` (it is applied only when compression runs this turn).
 

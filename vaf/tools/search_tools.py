@@ -98,13 +98,15 @@ class SearchToolsTool(BaseTool):
         query = (kwargs.get("query") or "").strip().lower()
         if not query:
             return "Provide a query, e.g. search_tools(query='calendar event')."
-        if not self.available_tools:
+        agent = kwargs.get("_agent")
+        catalog = agent.visible_tools() if hasattr(agent, "visible_tools") else self.available_tools
+        if not catalog:
             return "No tools are currently registered."
 
         tokens = [t for t in query.split() if len(t) >= 2]
 
         matches = []
-        for tool_name, tool in sorted(self.available_tools.items()):
+        for tool_name, tool in sorted(catalog.items()):
             desc = (getattr(tool, "description", "") or "").lower()
             name_lower = tool_name.lower()
             # Score: +2 per token hit in name, +1 per hit in description

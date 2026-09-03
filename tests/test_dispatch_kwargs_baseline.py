@@ -133,7 +133,11 @@ KWARGS_BASELINE = {
     "list_files":                ("chat", ["user_role", "user_scope_id"]),
     "list_skills":               ("chat", ["user_scope_id", "username"]),
     "list_timers":               ("chat", ["_agent"]),
-    "list_tools":                ("chat", []),
+    # DELIBERATE change: the discovery tools answer from the registry as the MODEL
+    # may see it (Agent.visible_tools), which only the live agent knows. Their static
+    # registry reference could not tell a hidden tool from an offered one, so a
+    # hidden tool was hidden from the schema and named by both of them.
+    "list_tools":                ("chat", ["_agent"]),
     "list_trash":                ("chat", ["user_role", "user_scope_id"]),
     "list_workflows":            ("chat", []),
     "mail_inbox":                ("chat", ["user_scope_id", "username"]),
@@ -157,6 +161,7 @@ KWARGS_BASELINE = {
     "room_join":                 ("chat", ["user_role", "user_scope_id", "username"]),
     "room_invite":               ("chat", ["user_role", "user_scope_id"]),
     "room_open":                 ("chat", ["user_role", "user_scope_id", "username"]),
+    "room_react":                ("chat", ["user_role", "user_scope_id"]),
     "room_read":                 ("chat", ["user_role", "user_scope_id"]),
     "room_send":                 ("chat", ["user_role", "user_scope_id"]),
     "room_verify":               ("chat", ["user_role", "user_scope_id"]),
@@ -185,7 +190,11 @@ KWARGS_BASELINE = {
     "run_tests":                 ("chat", []),
     "save_thinking_suggestion":  ("chat", []),
     "schedule_reminder":         ("chat", ["user_scope_id", "username"]),
-    "search_tools":              ("chat", []),
+    # DELIBERATE change: the discovery tools answer from the registry as the MODEL
+    # may see it (Agent.visible_tools), which only the live agent knows. Their static
+    # registry reference could not tell a hidden tool from an offered one, so a
+    # hidden tool was hidden from the schema and named by both of them.
+    "search_tools":              ("chat", ["_agent"]),
     # The four messenger senders gained user_role on 2026-08-02 with their file_access
     # declaration (attachment containment); send_slack has no path parameter and stays.
     "send_discord":              ("chat", ["_agent", "user_role", "user_scope_id", "username"]),

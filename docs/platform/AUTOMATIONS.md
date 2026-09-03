@@ -4,7 +4,7 @@ VAF supports **scheduled automations**: the agent runs a prompt on a schedule (o
 
 ## Overview
 
-- **Scheduled tasks:** Create automations with a repeat rule, time, and a detailed prompt. The agent executes the prompt at the scheduled time. Run times use HH:MM; the system enforces a minimum 10-minute interval between any two automations and returns an error if a new or updated time is too close to an existing one.
+- **Scheduled tasks:** Create automations with a repeat rule, time, and a detailed prompt. The agent executes the prompt at the scheduled time. Run times use HH:MM; the system enforces a minimum 10-minute interval between any two automations and returns an error if a new or updated time is too close to an existing one. A stored record whose time cannot be read as HH:MM, or whose frequency this version does not know, has **no next run**: it lists last, shows `-` where a next run would be, and never raises, so one such record cannot take the listing down for the others (the interval check steps aside for a time without a colon, so the create path can admit exactly such a record).
 - **Per-user:** Automations are scoped by `user_scope_id`; each user sees and runs only their own tasks. Tasks are stored under `Platform.vaf_dir() / "automations" / <user_scope_id> /` (one `.json` file per task). 
 - **Admin Access:** Users with the `admin` role (including the local admin) have an **aggregated view**: they see their own scoped tasks, legacy "root" tasks in `automations/`, and tasks under `local_admin_scope` (e.g. Daily calendar check). Admin detection uses `role == "admin"` or scope match to `local_admin_scope`; this ensures system automations appear even when the admin's JWT has a different `user_scope_id`. Regular users see only their own scoped directory.
 - **Tools and Manager:** The agent's automation tools (`create_automation`, `list_automations`, etc.) use a scoped `AutomationManager`. When an admin lists tasks, the backend merges scoped and root tasks automatically.
@@ -119,6 +119,48 @@ flags a relative alias that works and an absolute path the next run would simply
 create. The one case that is a real problem - a path VAF cannot create - makes
 the run fail, and a failed run is now in the log, where it is reported from
 evidence rather than from a guess.
+
+## Event triggers: an automation that runs when a room says something
+
+A task with `frequency: on_event` is not due by the clock. It carries a `trigger`:
+
+| Field | Meaning |
+|---|---|
+| `kind` | `room_message` (something is SAID in the room) or `room_reaction` (an emoji lands on a message) |
+| `room_id` | the agent room to watch; the task's owner must be a member on some lane |
+| `match` | `room_message` only: run only when the text contains this (folded, so "Deploy" finds "deploy") |
+| `emoji` | `room_reaction` only: run only for this emoji; absent means any reaction |
+| `from` | optional: only frames from this peer handle |
+| `cursor` | written by the scheduler after a fire: how far the trigger has read |
+
+The "is it due" decision lives in `vaf/core/automation_triggers.py` (`RoomTriggerWatch`,
+exported on the facade), and the scheduler loop asks it on the same 30-second tick the
+reminders ride, so only the process singleton ever fires one. The run itself is the
+ordinary scheduled run (`_run_scheduled_task`): in-process, background, `set_current_session_id(None)`,
+the owner's scope. What triggered it reaches the run as text appended to the prompt on the
+prompt lane and as `{trigger_text}`, `{trigger_room}`, `{trigger_kind}`, `{trigger_frame_id}` and
+`{trigger_from}` on the workflow lane; it is never stored on the task.
+
+Three rules, each written after the failure it prevents. **The owner's own agent never fires a
+trigger**: the run is that agent, and a run that posts into the room and re-triggers itself is a
+loop nothing else would stop - the owner's own PERSON does fire one, which is what makes a
+reaction trigger the approval button (the person's emoji on the agent's report runs the
+automation waiting for it). **Membership is checked every tick**: a trigger naming a room the
+account is not in is nothing, not an error. **The cursor starts at the room's newest frame**
+the first time a process sees the task, never at zero, so a trigger created today does not fire
+on last week's transcript; after a fire the position is persisted, so a restart cannot fire the
+same frames twice and frames that arrived while the process was down are caught up in one run.
+The per-task run lock keeps a trigger that fires again mid-run from overlapping it.
+
+Creating one: the agent's `create_automation` with `frequency: on_event`, `trigger_room` and
+`trigger_match` or `trigger_emoji`; the terminal's `vaf automation create --on-room <id>
+[--on-match <text> | --on-reaction <emoji|any>]`; the browser accepts a `trigger` object on
+`create_automation` and `update_automation` and shows the rule where a clock task shows its
+time. The browser's create form is clock-only for now: the first creation lane is the agent,
+the way `create_automation` itself started, and a form field for a room, a text and an emoji
+in seven languages is its own round. Task files carry the format tag `automation-1-4e9b27`;
+untagged files from before it are read as before, and a version that does not know the field
+keeps such a task with no next run and never fires it.
 
 ## Related
 

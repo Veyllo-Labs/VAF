@@ -8082,7 +8082,7 @@ class Agent:
 
         # 2. Build the prompt for the router WITH CONTEXT
         # CRITICAL: Router must NEVER chat - only output tool names or nothing. No greeting, no explanation.
-        tool_names_list = ", ".join(sorted(self.tools.keys()))
+        tool_names_list = ", ".join(sorted(self.visible_tools().keys()))
         prompt = (
             f"You are a tool router. Your ONLY output must be a comma-separated list of tool names from this exact list, or nothing.\n"
             f"Allowed names: {tool_names_list}\n\n"

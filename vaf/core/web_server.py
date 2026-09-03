@@ -4693,6 +4693,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             target = str(cmd.get("reply_to") or "").strip()
                             emoji = str(cmd.get("emoji") or "").strip()
                             if not target or not emoji:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "A reaction needs the message id and an emoji"})
                                 continue
                             try:
                                 room.react(identity, target, emoji)
@@ -7730,11 +7733,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "Automation not found"})
                             continue
                         update_params = {}
-                        if isinstance(cmd.get("trigger"), dict):
-                            from vaf.core.automation_triggers import read_trigger
-                            _trigger = read_trigger(cmd.get("trigger"))
-                            if _trigger is not None:
-                                update_params.update(trigger=_trigger, frequency="on_event", time="")
                         for key in ("name", "description", "prompt", "frequency", "time", "weekday", "day", "enabled"):
                             if key in cmd and cmd[key] is not None:
                                 if key == "enabled":
@@ -7748,6 +7746,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     update_params[key] = (cmd[key] or "").strip().lower() or None
                                 else:
                                     update_params[key] = cmd[key]
+                        if isinstance(cmd.get("trigger"), dict):
+                            # Applied AFTER the ordinary fields: an event trigger replaces
+                            # the clock, and a frequency or time sent beside it must not
+                            # put a clock back on the task.
+                            from vaf.core.automation_triggers import read_trigger
+                            _trigger = read_trigger(cmd.get("trigger"))
+                            if _trigger is not None:
+                                update_params.update(trigger=_trigger, frequency="on_event", time="")
                         if not update_params:
                             await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "No fields to update"})
                             continue

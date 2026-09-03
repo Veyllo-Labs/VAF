@@ -190,6 +190,8 @@ def test_list_tools_and_search_tools_read_the_agents_answer():
     assert "hidden_one" in search.run(query="mail")
     found = search.run(query="mail", _agent=agent)
     assert "visible_one" in found and "hidden_one" not in found
+    browse = search.run(query="zzzz", _agent=agent)
+    assert "No close matches" in browse and "hidden_one" not in browse, "the fallback browses the registry"
 
 
 def test_the_system_prompt_documents_only_what_the_model_may_see():
@@ -221,6 +223,8 @@ def test_every_model_facing_surface_reads_visible_tools():
     schema = agent.split("    def TOOLS(self)", 1)[1].split("\n    def ", 1)[0]
     assert "self.visible_tools().keys()" in schema, "the schema fell back to the whole registry"
     assert "for name, tool_instance in self.visible_tools().items():" in agent, "the router prompt"
+    assert 'tool_names_list = ", ".join(sorted(self.visible_tools().keys()))' in agent, (
+        "the router's allowed-names list names a hidden tool")
     prompt = (ROOT / "vaf" / "core" / "system_prompt.py").read_text(encoding="utf-8")
     assert "self.agent.visible_tools()" in prompt, "the system prompt's tool documentation"
     sandbox = (ROOT / "vaf" / "tools" / "python_sandbox.py").read_text(encoding="utf-8")

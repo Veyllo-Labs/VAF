@@ -259,6 +259,41 @@ def test_the_guest_client_reacts_over_its_seat(monkeypatch, capsys):
     monkeypatch.setattr(guest, "_line_for", lambda room, record: Line())
     guest.cmd_react(argparse.Namespace(room="room-g", frame_id="f-target", emoji="+1"))
 
-    assert sent == [{"kind": "reaction", "reply_to": "f-target", "body": {"emoji": "+1"}}]
+    assert sent == [{"kind": "reaction", "reply_to": "f-target",
+                     "body": {"emoji": "+1", "text": "+1"}}]
     assert json.loads(capsys.readouterr().out.strip())["status"] == "committed"
     assert "react <room> <id> <emoji>" in guest._HOWTO
+
+
+def test_a_signed_guest_reaction_is_exactly_what_the_room_stores(rooms, monkeypatch, capsys):
+    """MUTATION: send the emoji without the text.
+
+    A signed seat signs what will be stored, and the room stores `text` beside the
+    emoji at compose. A payload that arrived without it would be a signature over
+    something else, and the room refuses those at the door.
+    """
+    guest = _guest()
+    room = Room.create(kind="round", owner_scope="s", base=rooms, room_id="room-sig-r")
+    host = room.join(display="Host", scope_id="s", peer_id="p-host")
+    stranger = room.join(display="Gast", scope_id=None, peer_id="p-gast")
+    said = room.say(host, "done, please check")
+    record = {"room": "room-sig-r", "peer": stranger.peer_id, "display": "Gast"}
+    seed = guest.seat_signing_seed(record)
+    room.ingest(guest.join_announcement("Gast", "room-sig-r", seed, stranger.peer_id),
+                identity=stranger)
+    sent = []
+
+    class Line:
+        def submit(self, payload):
+            sent.append(payload)
+            return {"kind": "ack", "status": "committed", "id": "f-1"}
+
+    monkeypatch.setattr(guest, "load_record", lambda room_id: dict(record))
+    monkeypatch.setattr(guest, "_line_for", lambda room_id, rec: Line())
+    guest.cmd_react(argparse.Namespace(room="room-sig-r", frame_id=said.id, emoji=" +1 "))
+    capsys.readouterr()
+
+    payload = sent[0]
+    assert payload["body"] == {"emoji": "+1", "text": "+1"} and payload["sig"]
+    frame = room.ingest(payload, identity=stranger)
+    assert frame.kind == "reaction" and room.verdict_for(frame) == "valid"

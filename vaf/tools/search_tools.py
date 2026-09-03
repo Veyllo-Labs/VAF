@@ -123,7 +123,7 @@ class SearchToolsTool(BaseTool):
             # Fallback: return a capped list so the model can browse without
             # flooding context (50+ tools would be too much).
             _CAP = 20
-            all_tools = sorted(self.available_tools.items())
+            all_tools = sorted(catalog.items())
             lines = [f"No close matches for '{query}'. Showing first {min(_CAP, len(all_tools))} of {len(all_tools)} tools:"]
             for tool_name, tool in all_tools[:_CAP]:
                 short = (getattr(tool, "description", "") or "").split("\n")[0][:100]

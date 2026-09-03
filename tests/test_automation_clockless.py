@@ -41,7 +41,7 @@ def _write(root, task):
 
 
 @pytest.mark.parametrize("time", ["", "morgens", "25:00", "07", "7:60", None])
-def test_a_record_with_no_readable_clock_has_no_next_run(time):
+def test_a_record_with_no_readable_clock_has_no_next_run(store, time):
     """MUTATION: parse the time without the guard, or let the calendar's refusal escape.
 
     Each value is a different way of not being a clock: absent, a word, an hour that does
@@ -53,7 +53,7 @@ def test_a_record_with_no_readable_clock_has_no_next_run(time):
     assert task.next_run_label == "-"
 
 
-def test_a_frequency_this_version_does_not_know_has_no_next_run():
+def test_a_frequency_this_version_does_not_know_has_no_next_run(store):
     """MUTATION: answer `now` for an unknown frequency.
 
     "Now" sorted such a record first and told the thinking-mode gate that something was
@@ -63,7 +63,7 @@ def test_a_frequency_this_version_does_not_know_has_no_next_run():
     assert _task(frequency="on_message").next_run_datetime is None
 
 
-def test_a_readable_clock_still_answers():
+def test_a_readable_clock_still_answers(store):
     task = _task(time="07:15")
     when = task.next_run_datetime
     assert isinstance(when, datetime) and (when.hour, when.minute) == (7, 15)

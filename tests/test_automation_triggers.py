@@ -343,3 +343,62 @@ def test_the_browser_lane_accepts_a_trigger_and_shows_the_rule():
     assert 'read_trigger(cmd.get("trigger"))' in server
     settings = (ROOT / "web" / "components" / "SettingsModal.tsx").read_text(encoding="utf-8")
     assert "auto.schedule" in settings, "the list shows a clock where an event task has a rule"
+
+
+def test_two_event_tasks_do_not_share_an_empty_time_slot(world, monkeypatch):
+    """MUTATION: compare times for an event task.
+
+    Two event tasks both have no clock; treating the empty time as a shared slot
+    refused the second one as a duplicate of the first. The slot of an event task is
+    its trigger, and only the same room with the same rule is one.
+    """
+    import vaf.core.automation as automation_mod
+    from vaf.tools.automation import AutomationTool
+
+    monkeypatch.setattr(automation_mod, "ensure_scheduler_started", lambda origin="": (None, False))
+    first = AutomationTool().run(name="Deploy watch", prompt="Run the deployment checklist.",
+                                 frequency="on_event", time="", trigger_room="room-t",
+                                 trigger_match="deploy", user_scope_id=SCOPE)
+    assert "Created Successfully" in first, first
+    # A different rule in the same room, with a prompt that shares no words: the only
+    # thing the two have in common is the empty time.
+    second = AutomationTool().run(name="Rollback watch", prompt="Revert yesterday's release notes.",
+                                  frequency="on_event", time="", trigger_room="room-t",
+                                  trigger_match="rollback", user_scope_id=SCOPE)
+    assert "Created Successfully" in second, second
+    # The same rule twice IS a duplicate, and the slot named in the refusal is the trigger.
+    twin = AutomationTool().run(name="Deploy twin", prompt="Compile the deployment checklist again.",
+                                frequency="on_event", time="", trigger_room="room-t",
+                                trigger_match="deploy", user_scope_id=SCOPE)
+    assert "Created Successfully" not in twin and "already" in twin.lower(), twin
+
+
+def test_update_carries_a_trigger_and_refuses_an_event_task_with_none(world, monkeypatch):
+    """MUTATION: accept frequency on_event on update without a room to watch."""
+    import vaf.core.automation as automation_mod
+    from vaf.tools.automation import UpdateAutomationTool
+
+    monkeypatch.setattr(automation_mod, "ensure_scheduler_started", lambda origin="": (None, False))
+    manager = AutomationManager(user_scope_id=SCOPE)
+    manager.create(_task(id="clock", frequency="daily", time="07:15", trigger=None, user_scope_id=SCOPE))
+
+    inert = UpdateAutomationTool().run(task_id="clock", frequency="on_event", user_scope_id=SCOPE)
+    assert inert.startswith("Error") and "trigger_room" in inert
+    assert AutomationManager(user_scope_id=SCOPE).get("clock").frequency == "daily"
+
+    out = UpdateAutomationTool().run(task_id="clock", trigger_room="room-t", trigger_emoji="+1",
+                                     time="09:00", user_scope_id=SCOPE)
+    assert "Error" not in out, out
+    task = AutomationManager(user_scope_id=SCOPE).get("clock")
+    assert task.frequency == "on_event" and task.time == "", "a time sent beside the trigger put a clock back"
+    assert task.trigger == {"kind": "room_reaction", "room_id": "room-t", "emoji": "+1"}
+
+
+def test_the_browser_applies_a_trigger_after_the_clock_fields():
+    """Source guard: the trigger block sits after the field loop, so a frequency or
+    time sent beside it cannot put a clock back on the task."""
+    server = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    update = server.split('"type": "update_automation_result", "ok": False, "error": "Automation not found"', 1)[1]
+    loop = update.index('for key in ("name", "description", "prompt", "frequency", "time", "weekday", "day", "enabled")')
+    trigger = update.index('update_params.update(trigger=_trigger, frequency="on_event", time="")')
+    assert loop < trigger

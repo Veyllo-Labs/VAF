@@ -2459,7 +2459,7 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                                 </div>
                             )}
                             {onReact && (
-                                <div className="flex gap-0.5 mt-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                                <div className="flex gap-0.5 mt-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 max-md:opacity-100 transition-opacity">
                                     {['\u{1F44D}', '\u2705', '\u274C', '\u{1F440}'].map(e => (
                                         <button key={e} type="button" title={e} aria-label={e}
                                             onClick={() => onReact(m.id, e)}
@@ -9274,7 +9274,7 @@ function VAFDashboardContent() {
                                         onOpenWorker={() => { subAgentUserClosedRef.current = false; setSubAgentState(prev => ({ ...prev, isOpen: true })); }}
                                         liveWorker={roomLiveWorker}
                                         connected={isConnected}
-                                        onReact={roomView.room.me ? (frameId, emoji) => {
+                                        onReact={roomView.room.me && !roomView.room.closed ? (frameId, emoji) => {
                                             const sock = wsSocketRef.current;
                                             if (!sock || sock.readyState !== WebSocket.OPEN) return;
                                             sock.send(JSON.stringify({ type: 'room_react', room_id: roomView.room.roomId, reply_to: frameId, emoji }));

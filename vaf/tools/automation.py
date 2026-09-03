@@ -476,10 +476,15 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
                                 existing_task = task
                                 break
             
-            # Check for automations at the same time
+            # Check for automations at the same time. An event task has no time, so two
+            # of them "share" the empty slot: for those the slot is the trigger itself,
+            # and only the same room with the same rule is a duplicate.
             conflicting_task = None
             for task in existing_tasks:
-                if task.time == schedule_time and task.frequency == frequency and task.enabled:
+                if not task.enabled or task.frequency != frequency:
+                    continue
+                same_slot = (task.trigger == trigger) if trigger is not None else (task.time == schedule_time)
+                if same_slot:
                     conflicting_task = task
                     break
             
@@ -497,7 +502,9 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
             
             # If existing task found, check if it's at the same time or different time
             if existing_task:
-                same_time = existing_task.time == schedule_time and existing_task.frequency == frequency
+                same_time = existing_task.frequency == frequency and (
+                    existing_task.trigger == trigger if trigger is not None
+                    else existing_task.time == schedule_time)
                 
                 if same_time:
                     # Same time - suggest updating
@@ -1113,11 +1120,26 @@ When changing **time**, the new time must be at least 10 minutes apart from all 
             "frequency": {
                 "type": "string",
                 "enum": ["once", "hourly", "daily", "weekly", "monthly", "on_event"],
-                "description": "New frequency (optional): once, hourly, daily, weekly, monthly"
+                "description": ("New frequency (optional): once, hourly, daily, weekly, monthly, "
+                                "or on_event together with trigger_room")
             },
             "time": {
                 "type": "string",
                 "description": "New time in HH:MM format (optional). Must be at least 10 minutes apart from other automations."
+            },
+            "trigger_room": {
+                "type": "string",
+                "description": ("Turn the task into an event-driven one, or change its room: the id of "
+                                "the agent room to watch (the user must be a member).")
+            },
+            "trigger_match": {
+                "type": "string",
+                "description": "With trigger_room: run only when a message there contains this text."
+            },
+            "trigger_emoji": {
+                "type": "string",
+                "description": ("With trigger_room: run when a REACTION lands on a message there "
+                                "instead of on a message - this emoji, or 'any'.")
             },
             "weekday": {
                 "type": "string",
@@ -1165,15 +1187,35 @@ When changing **time**, the new time must be at least 10 minutes apart from all 
                 if not can_update and err_msg:
                     return err_msg
             
+            # An event trigger replaces the clock, at update as at create. Read at the
+            # boundary; `on_event` without a room to watch is a task that would never run.
+            trigger = None
+            trigger_room = str(kwargs.get("trigger_room") or "").strip()
+            wants_event = trigger_room or str(kwargs.get("frequency") or "").lower().strip() == "on_event"
+            if wants_event:
+                from vaf.core.automation_triggers import read_trigger
+                wanted_emoji = str(kwargs.get("trigger_emoji") or "").strip()
+                trigger = read_trigger({
+                    "kind": "room_reaction" if wanted_emoji else "room_message",
+                    "room_id": trigger_room,
+                    "match": kwargs.get("trigger_match") or "",
+                    "emoji": "" if wanted_emoji.lower() in ("any", "*") else wanted_emoji,
+                }) if trigger_room else None
+                if trigger is None and not (task.frequency == "on_event" and task.trigger):
+                    return ("Error: frequency 'on_event' needs trigger_room, the id of an agent room "
+                            "the user is in, plus trigger_match or trigger_emoji.")
+
             # Prepare update parameters (only include non-None values)
             update_params = {}
+            if trigger is not None:
+                update_params.update(trigger=trigger, frequency="on_event", time="")
             if "name" in kwargs and kwargs["name"]:
                 update_params["name"] = kwargs["name"]
             if "prompt" in kwargs and kwargs["prompt"]:
                 update_params["prompt"] = kwargs["prompt"]
-            if "frequency" in kwargs and kwargs["frequency"]:
+            if "frequency" in kwargs and kwargs["frequency"] and trigger is None:
                 update_params["frequency"] = kwargs["frequency"]
-            if "time" in kwargs and kwargs["time"]:
+            if "time" in kwargs and kwargs["time"] and trigger is None:
                 update_params["time"] = kwargs["time"]
             if "weekday" in kwargs:
                 w = kwargs.get("weekday")

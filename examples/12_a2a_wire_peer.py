@@ -1263,10 +1263,19 @@ def _send(args, kind: str) -> None:
 
 
 def cmd_react(args) -> None:
-    """An emoji on one message. The room writes the line; this sends the emoji and
-    the id, and nobody is woken by it."""
+    """An emoji on one message. Nobody is woken by it.
+
+    The body carries the emoji AND the text, both already in the room's form (trimmed,
+    at most 16 characters): the room stores `text` beside `emoji` at compose, and a
+    signed seat signs what will be stored, so a payload that arrived without the text
+    would be refused as a signature over something else.
+    """
+    emoji = str(args.emoji or "").strip()[:16]
+    if not emoji:
+        raise Refused("a reaction needs an emoji, or a short token like +1")
     _submit(args.room, load_record(args.room),
-            {"kind": "reaction", "reply_to": args.frame_id, "body": {"emoji": args.emoji}})
+            {"kind": "reaction", "reply_to": args.frame_id,
+             "body": {"emoji": emoji, "text": emoji}})
 
 
 def _submit(room: str, record: dict, payload: dict) -> None:

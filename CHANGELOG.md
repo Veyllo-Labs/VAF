@@ -111,6 +111,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **Opening a Word document in the viewer no longer runs an XML parser with known
+  denial-of-service bugs.** The parser behind the .docx viewer was two patch versions
+  behind, on a release its own authors had marked as having critical issues; several of
+  those let a specially built document keep the browser tab busy indefinitely. Five other
+  packages that ship with the interface were on versions with published advisories and
+  are updated in the same pass. Nothing changes in how anything looks or works.
 - **A tool hidden from the model was hidden from one place and named in five others.**
   Hiding a tool kept it out of the model's tool list but it still appeared in
   `list_tools`, `search_tools`, the router's own prompt, the system prompt and the

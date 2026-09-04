@@ -33,7 +33,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 - **A connection card opens on click.** In Settings, Connections, clicking the name or
   icon of a connection opens what its gear opened: the dashboard when it is set up, the
-  setup when it is not. The gear stays for those used to it.
+  setup when it is not. The gear stays for those used to it. On hover the card's edge
+  darkens instead of a box lighting up in its middle.
 
 - **Telegram and Discord get the same window.** One shared channel shell now carries all
   three messenger dashboards: chats on the left with a badge (Telegram: Full access,

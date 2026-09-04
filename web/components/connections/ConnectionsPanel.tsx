@@ -928,10 +928,13 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                 <div
                                     key={app.id}
                                     className={cn(
+                                        // The hover lives on the card's edge (border), not on a box in
+                                        // the middle: the whole card is one thing you open.
                                         "p-4 rounded-xl border transition-all",
                                         configured
                                             ? "bg-white border-gray-200 shadow-sm"
                                             : "bg-gray-50 border-gray-200",
+                                        !app.comingSoon && app.available && "hover:border-gray-400",
                                         app.comingSoon && "opacity-60"
                                     )}
                                 >
@@ -940,7 +943,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                             type="button"
                                             onClick={openApp}
                                             disabled={app.comingSoon || !app.available}
-                                            className="flex items-center gap-3 text-left min-w-0 flex-1 rounded-lg -m-1 p-1 transition-colors hover:bg-gray-50 disabled:cursor-default disabled:hover:bg-transparent"
+                                            className="flex items-center gap-3 text-left min-w-0 flex-1 disabled:cursor-default"
                                         >
                                             <div className={cn(
                                                 "w-10 h-10 rounded-xl flex items-center justify-center shrink-0",

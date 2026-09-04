@@ -629,6 +629,9 @@ async function connect(authDir) {
         continue; // skip own msgs except in self-chat
       }
       if (isGroup) continue; // Phase 1: DMs only
+      // Status updates, newsletter posts and broadcast lists are not people writing to the
+      // agent; handed to Python they would only be refused and logged as rejected senders.
+      if (remoteJid === "status@broadcast" || remoteJid.endsWith("@newsletter") || remoteJid.endsWith("@broadcast")) continue;
       const senderJid = msg.key.participant ?? msg.key.remoteJid;
       if (msg.pushName && !msg.key?.fromMe) rememberContact({ id: remoteJid, notify: msg.pushName });
       const contentType = getContentType(msg);

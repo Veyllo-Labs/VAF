@@ -1355,6 +1355,17 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             except Exception:
                 pass
             return
+        # A status update, a newsletter post or a broadcast list is not a sender that could
+        # ever be paired; dropping it here keeps it out of the store, the activity and the
+        # security log (live: "channel_rejected user=status@broadcast" every few minutes).
+        _fj = str(from_jid or "")
+        if _fj == "status@broadcast" or _fj.endswith("@newsletter") or _fj.endswith("@broadcast") or _fj.endswith("@g.us"):
+            try:
+                from vaf.core.log_helper import log_whatsapp_inbound
+                log_whatsapp_inbound(f"SKIP not_a_person from={_fj}")
+            except Exception:
+                pass
+            return
         if not allowed_phones:
             logger.debug("WhatsApp: no allowFrom for user %s, rejecting inbound from %s", username, obj.get("from"))
         from_e164 = obj.get("fromE164")  # Resolved via Baileys lidMapping when @lid

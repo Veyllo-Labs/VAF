@@ -501,6 +501,21 @@ def test_named_numbers_from_the_node_name_the_chats_and_fill_the_contact_book(is
     assert wa.get_contact_names("alice")["491700000042"]["source"] == "addressbook"
 
 
+def test_status_updates_and_newsletters_are_not_rejected_senders(isolated, monkeypatch):
+    """They are not people who could be paired, so they never reach the ingress decision:
+    no security event, no activity row, no stored message."""
+    monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
+    events = []
+    monkeypatch.setattr("vaf.core.security_events.log_security_event", lambda *a, **k: events.append((a, k)))
+    for jid in ("status@broadcast", "120363195908196684@newsletter", "123@broadcast"):
+        assert _dispatch("alice", jid, body="post") is None
+    assert events == []
+    assert store.list_chats_from_store("alice", user_scope_id=SCOPE) == []
+    # A real stranger is still rejected and recorded.
+    assert _dispatch("alice", "491700000099@s.whatsapp.net", body="hi") is None
+    assert len(events) == 1 and events[0][1].get("username") == "491700000099@s.whatsapp.net"
+
+
 def test_whitelist_add_refuses_the_agents_own_number(isolated, monkeypatch):
     import asyncio
     from fastapi import HTTPException

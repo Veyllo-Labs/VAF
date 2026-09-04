@@ -317,7 +317,7 @@ Whisper returns the detected language in the STT response. VAF uses it to:
 ### Incoming Messages
 
 1. **Node** emits a JSON line: `{ "type": "message", "from": "<jid>", "body": "...", "voice_path": "<path or omit>", "fromE164": "+49...", "selfChat": false, ... }`.
-2. **Python** (`_dispatch_bridge_event`): Drops `selfChat` messages first (the linked account is the agent). Then resolves the sender against the registered main-user number (`explicit_pair`), the reply window (`open_conversation`: the store holds an outbound message to this number inside `reply_window_hours`) and Front Office contacts (`contact_fallback`), through `channel_ingress_policy.evaluate_ingress`. A rejected sender is logged and mirrored as a security event; nothing is stored.
+2. **Python** (`_dispatch_bridge_event`): Drops `selfChat` messages first (the linked account is the agent), then anything that is not a person (`status@broadcast`, `@newsletter`, `@broadcast`, groups; the Node already filters these, Python once more) before the ingress decision, so such posts never become rejected-sender security events. Then resolves the sender against the registered main-user number (`explicit_pair`), the reply window (`open_conversation`: the store holds an outbound message to this number inside `reply_window_hours`) and Front Office contacts (`contact_fallback`), through `channel_ingress_policy.evaluate_ingress`. A rejected sender is logged and mirrored as a security event; nothing is stored.
 3. **Voice**: If `voice_path` is set and `body === "<voice>"`, Python transcribes the file and replaces `body` with the transcript (or `<media:audio>` on failure); stores language in `_voice_reply_pending` for TTS reply.
 
 #### LID (Linked ID)

@@ -72,6 +72,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   WhatsApp, one chat per second, for each stored conversation again, which is where the
   names travel (the account's contact collection itself carries none).
 
+- **Status updates and newsletters are no longer "rejected senders".** A status post or a
+  newsletter message used to run through the pairing check like a stranger's message and
+  land in the security log as `channel_rejected` every few minutes. They are dropped
+  before that check now, on both sides of the bridge.
+
 - **WhatsApp fills the contact book.** A direct chat with a phone number and a name
   WhatsApp shows becomes a contact: matched by number when the person is already there
   (the link is recorded, a contact named after its number gets the real name), created

@@ -133,10 +133,10 @@ Key options (in `config.json` or via Web UI **Settings → AI & Model → Thinke
 | `thinking_check_interval_seconds` | `60` | How often to check for idle users |
 | `thinking_cooldown_minutes` | `110` | Minutes to wait after a run before starting another |
 | `thinking_max_duration_minutes` | `30` | Max duration per run (then release lock) |
-| `thinking_wait_nudge_minutes` | `3` | If user does not reply: send nudge after this many minutes |
+| `thinking_wait_nudge_minutes` | `30` | If user does not reply: send nudge after this many minutes |
 | `thinking_followup_max` | `3` | When a proactive question is unanswered, re-ask the SAME one (pointed follow-up) up to N times, then let the topic rest (no question, no nudge) until the user reacts. |
-| `thinking_wait_skip_minutes` | `10` | If still no reply: stop CHASING after this many minutes (no more nudges/escalation). The question record itself is kept for the main agent's reply pickup until `thinking_reply_wait_ttl_hours`. |
-| `thinking_reply_wait_ttl_hours` | `12` | How long a question stays understandable: a waiting latch older than this is expired at READ time (`get_waiting_for_reply`), so a stale question can never claim the user's next message as its "reply". This is the real lifetime of the record - the 10-minute skip above only ends the chasing - and it also covers a latch left behind when thinking mode is disabled/crashed/restarted. `0` disables. |
+| `thinking_wait_skip_minutes` | `40` | If still no reply: stop CHASING after this many minutes (no more nudges/escalation). The question record itself is kept for the main agent's reply pickup until `thinking_reply_wait_ttl_hours`. |
+| `thinking_reply_wait_ttl_hours` | `12` | How long a question stays understandable: a waiting latch older than this is expired at READ time (`get_waiting_for_reply`), so a stale question can never claim the user's next message as its "reply". This is the real lifetime of the record - the skip above only ends the chasing - and it also covers a latch left behind when thinking mode is disabled/crashed/restarted. `0` disables. |
 | `thinking_nudge_activity_minutes` | `5` | Do not nudge if user was active on any channel in the last N minutes |
 | `thinking_provider` | `"inherit"` | AI provider for thinking mode (`inherit` = same as main chat, or `openai`, `anthropic`, `deepseek`, `local`) |
 | `thinking_model` | `null` | Specific model for thinking mode (empty = use provider default) |
@@ -264,7 +264,7 @@ that silences a run; a REPEAT is prevented by the recent/declined dedup prompts,
 
    - **It is an FYI, not a question - but it is still RECORDED.** The request carries
      `kind="relevance"` and is excluded from `get_open_proactive_request`, and its waiting record is
-     written and then immediately closed with `end_reply_chase`. So nobody chases it: no 3-minute
+     written and then immediately closed with `end_reply_chase`. So nobody chases it: no
      nudge, no re-ask (a notice nobody answers would otherwise become up to eight touches). What it
      does keep is the record itself, which is the ONLY thing that tells the main agent what a later
      reply refers to.

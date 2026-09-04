@@ -467,10 +467,10 @@ class Config:
         "thinking_check_interval_seconds": 60,                 # How often to check for idle users
         "thinking_automation_buffer_minutes": 10,              # Do not start if automation runs within this many minutes
         "thinking_max_duration_minutes": 30,                  # Max duration per thinking run (then release lock)
-        "thinking_wait_nudge_minutes": 3,                     # If user does not reply to a question: send nudge after this many minutes
+        "thinking_wait_nudge_minutes": 30,                     # If user does not reply to a question: send nudge after this many minutes
         "thinking_followup_max": 3,                            # Re-ask an unanswered proactive question up to N times (pointed follow-up), then let the topic rest
         "default_language": "",                                # Fallback language for backend canned phrases (vocab book) when the user has no preferred_language; empty -> 'en'
-        "thinking_wait_skip_minutes": 10,                     # If still no reply after this many minutes: stop CHASING (no more nudges/escalation). The question record is kept for the main agent until thinking_reply_wait_ttl_hours
+        "thinking_wait_skip_minutes": 40,                     # If still no reply after this many minutes: stop CHASING (no more nudges/escalation). The question record is kept for the main agent until thinking_reply_wait_ttl_hours
         "thinking_reply_wait_ttl_hours": 12,                  # How long a background question stays understandable: a waiting-for-reply latch older than this is expired at read time, so a stale one cannot claim a later message as its reply; 0 disables
         "workflow_agent_step_timeout_seconds": 1800,          # Worst-case hard cap for a heavy agent step (coder/research/document) INSIDE a workflow; dead children are caught much earlier by heartbeat liveness
         "workflow_identity_injection": "declared",           # Who a workflow's tools think is calling. 'declared' (default) = they pass the real one, distributed by each tool's identity_kwargs; 'legacy' = the four consumers that never passed an identity keep passing none, i.e. a saved workflow runs as the machine owner whoever started it. Only 'legacy' and 'off' count as a rollback - any other value means 'declared', because 'as before' is the leaky state. NOT a boolean: the three lanes that always passed an identity are unaffected either way

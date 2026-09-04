@@ -11,6 +11,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Changed
+
+- **The agent waits far longer before it asks again.** When a proactive question stays
+  unanswered, the short "are you there?" reminder now goes out after 30 minutes instead
+  of 3, and the agent stops chasing the question after 40 minutes instead of 10. The
+  question itself is still remembered for 12 hours, so a late answer is understood the
+  same way as before. Both timings remain configurable (`thinking_wait_nudge_minutes`,
+  `thinking_wait_skip_minutes`).
+
 ### Fixed
 
 - **A chat that finishes while you are in another chat now gets its red dot.** The

@@ -63,6 +63,12 @@ def _ask(channel="web", escalated=False):
     )
 
 
+def _past_skip():
+    """Minutes to elapse so the give-up window has passed, whatever `thinking_wait_skip_minutes` is."""
+    from vaf.core.config import Config
+    return float(Config.get("thinking_wait_skip_minutes", 40) or 40) + 1
+
+
 def _elapse(minutes):
     """Move the question back in time so the given number of minutes has 'passed'."""
     data = tm._load_waiting()
@@ -72,13 +78,13 @@ def _elapse(minutes):
 
 
 def test_the_question_survives_the_give_up(store):
-    """The incident itself: chase ends at 10 minutes, the user answers at 42."""
+    """The incident itself: the chase ends at the skip window, the user answers long after."""
     _ask(channel="web")
-    _elapse(11)
+    _elapse(_past_skip())
 
     assert tm._process_waiting_reply(SCOPE) == "allow_run"      # chase over
 
-    _elapse(42)                                                  # the user comes back much later
+    _elapse(_past_skip() + 30)                                   # the user comes back much later
     w = tm.get_waiting_for_reply(SCOPE)
     assert w is not None, "the question was deleted - the main agent cannot frame the reply"
     assert w["question_text"] == QUESTION
@@ -92,12 +98,12 @@ def test_the_kept_question_stops_the_chase(store, monkeypatch):
     monkeypatch.setattr(tm, "_send_nudge",
                         lambda *a, **k: (nudges.append(a), True)[1])
     _ask(channel="web")
-    _elapse(11)
+    _elapse(_past_skip())
     assert tm._process_waiting_reply(SCOPE) == "allow_run"
     assert tm.chase_is_active(tm.get_waiting_for_reply(SCOPE)) is False
 
     for _ in range(3):        # every later run passes through the same lane
-        _elapse(60)
+        _elapse(_past_skip() + 20)
         assert tm._process_waiting_reply(SCOPE) == "allow_run"
     assert nudges == [], "a question we gave up chasing must never nudge again"
 
@@ -106,7 +112,7 @@ def test_a_kept_question_still_expires_with_the_ttl(store):
     """Kept is not immortal: past the TTL the latch is gone, so a fresh message days later
     is never framed as the answer to a forgotten question (the hijack this TTL exists for)."""
     _ask(channel="web")
-    _elapse(11)
+    _elapse(_past_skip())
     assert tm._process_waiting_reply(SCOPE) == "allow_run"
 
     _elapse(13 * 60)          # default thinking_reply_wait_ttl_hours = 12
@@ -117,7 +123,7 @@ def test_a_kept_question_still_expires_with_the_ttl(store):
 def test_a_new_question_re_opens_the_chase(store):
     """The next question is chased normally - the ended chase must not stick to the slot."""
     _ask(channel="web")
-    _elapse(11)
+    _elapse(_past_skip())
     assert tm._process_waiting_reply(SCOPE) == "allow_run"
 
     tm.set_waiting_for_reply(SCOPE, username="admin", question_text="Neue Frage?")
@@ -131,7 +137,7 @@ def test_a_legacy_latch_without_the_field_is_chased_then_ended(store):
     read as an ACTIVE chase (else the nudge/escalation lane skips it silently on upgrade)."""
     key = tm._key(SCOPE)
     tm._save_waiting({key: {
-        "question_sent_at_ts": time.time() - 11 * 60,
+        "question_sent_at_ts": time.time() - _past_skip() * 60,
         "nudge_sent_at_ts": None,
         "username": "admin", "display_name": "admin",
         "question_text": QUESTION, "request_id": "req-old", "session_id": "sid-old",
@@ -148,7 +154,7 @@ def test_the_dashboard_stops_saying_waiting_when_the_chase_ends(store):
     _ask(channel="web")
     assert (tm.thinking_status_snapshot().get(tm._key(SCOPE)) or {}).get("waiting") is not None
 
-    _elapse(11)
+    _elapse(_past_skip())
     assert tm._process_waiting_reply(SCOPE) == "allow_run"
     snap = tm.thinking_status_snapshot().get(tm._key(SCOPE)) or {}
     assert snap.get("waiting") is None, "the panel would claim a wait that has ended"

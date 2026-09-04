@@ -89,7 +89,7 @@ def add_request(
     `bundle_id` links the request to a handoff bundle (a background automation's full working context),
     so the main agent loads that context when the user replies (None for thinking-mode requests).
     `kind` marks a request that is NOT a question awaiting a decision - currently only "relevance",
-    an FYI. Everything downstream that chases an unanswered question (the 3-minute nudge, the
+    an FYI. Everything downstream that chases an unanswered question (the nudge, the
     follow-up re-asks) keys on a question being open, and an FYI that never gets a reply would
     otherwise be nudged and re-asked up to three times: one warning, up to eight touches.
     Returns the created entry (with id)."""

@@ -419,7 +419,8 @@ def set_waiting_for_reply(
     channel: str = "web",
     escalated_to_web: bool = False,
 ) -> None:
-    """Record that we sent a question to the user; we will wait for reply, then nudge at 3 min, skip at 10 min.
+    """Record that we sent a question to the user; we will wait for reply, then nudge after
+    thinking_wait_nudge_minutes and stop chasing after thinking_wait_skip_minutes.
     request_id links to the thinking_requests entry so the main agent can pick up the proposal and update its status.
     session_id is the web session the question was delivered to (the anchor/web fallback), so the nudge/escalation
     lands in the SAME chat instead of re-picking the 'latest' session.
@@ -472,7 +473,7 @@ def clear_waiting_for_reply(
     user_scope_id: Optional[str],
     user_reply_text: Optional[str] = None,
 ) -> None:
-    """User replied or we skipped after 10 min; clear waiting state. If user_reply_text is given, save it for the next thinking run and for the thinking-session UI."""
+    """User replied or we stopped chasing (thinking_wait_skip_minutes); clear waiting state. If user_reply_text is given, save it for the next thinking run and for the thinking-session UI."""
     key = _key(user_scope_id)
     if user_reply_text is not None and (user_reply_text or "").strip():
         preview = (user_reply_text or "").strip()
@@ -503,7 +504,7 @@ def clear_waiting_for_reply(
 def _end_chase_for_fyi(user_scope_id: Optional[str]) -> None:
     """Record an FYI the way a given-up question is recorded: kept, but never chased.
 
-    An FYI (a relevance notice) is not awaiting a decision, so it must not arm the 3-minute nudge
+    An FYI (a relevance notice) is not awaiting a decision, so it must not arm the nudge
     or be re-asked. The first version achieved that by writing NO waiting record at all - and that
     re-created, one step earlier in the lifecycle, exactly the defect `end_reply_chase` below was
     built to fix: with no record, a user who DOES reply reaches a main agent that has no idea what
@@ -528,10 +529,10 @@ def end_reply_chase(user_scope_id: Optional[str]) -> None:
 
     Two different things were one thing here, and conflating them is what made the agent blind:
 
-    - chasing (nudge at 3 min, escalate once, then stop) is about not pestering the user;
+    - chasing (one nudge, one escalation, then stop) is about not pestering the user;
     - remembering WHAT was asked is about understanding their answer whenever it comes.
 
-    Deleting the record at the 10-minute give-up ended both at once, so a reply that arrived half an
+    Deleting the record at the give-up ended both at once, so a reply that arrived half an
     hour later reached a main agent with no idea a question was ever asked - it answered as if nothing
     had been raised (live incident: question escalated to the web chat at 11:49:50, given up at
     11:59:51, the user answered at 12:31 and got a blank "nothing much going on"). The record now
@@ -563,7 +564,7 @@ def get_waiting_for_reply(user_scope_id: Optional[str]) -> Optional[Dict[str, An
     agent understand a late reply. Use `chase_is_active()` to ask the other question.
 
     TTL safety net: the normal lifecycle skips an unanswered question after
-    ~10 minutes (_process_waiting_reply) - but only when a thinking run
+    thinking_wait_skip_minutes (_process_waiting_reply) - but only when a thinking run
     actually fires. If thinking mode is disabled, crashed, or the app was
     restarted, a stale wait could otherwise latch onto the user's NEXT
     message hours or days later and reframe a fresh request as "the reply to
@@ -790,7 +791,8 @@ def _escalate_question_to_web(user_scope_id: Optional[str], w: Dict[str, Any], c
 
 def _process_waiting_reply(user_scope_id: Optional[str]) -> str:
     """
-    If user is in 'waiting for reply' state: send nudge at 3 min, stop chasing at 10 min.
+    If user is in 'waiting for reply' state: nudge after thinking_wait_nudge_minutes,
+    stop chasing after thinking_wait_skip_minutes.
     Returns: 'allow_run' (nothing to chase any more), 'skip' (still waiting or nudge sent).
 
     "Stop chasing" is not "forget": the question record stays readable for the main agent until the
@@ -814,8 +816,8 @@ def _process_waiting_reply(user_scope_id: Optional[str]) -> str:
         return "allow_run"
     now = time.time()
     elapsed_min = (now - question_ts) / 60.0
-    nudge_min = float(Config.get("thinking_wait_nudge_minutes", 3) or 3)
-    skip_min = float(Config.get("thinking_wait_skip_minutes", 10) or 10)
+    nudge_min = float(Config.get("thinking_wait_nudge_minutes", 30) or 30)
+    skip_min = float(Config.get("thinking_wait_skip_minutes", 40) or 40)
     # If elapsed_min is very small (user just active), don't even think about nudging
     if elapsed_min < nudge_min:
         return "skip"
@@ -834,7 +836,7 @@ def _process_waiting_reply(user_scope_id: Optional[str]) -> str:
     if elapsed_min >= skip_min:
         # Unanswered. If the question went to a messenger and we haven't escalated yet, re-ask ONCE in
         # the Web UI (with a note that we already asked on that channel), then give the web its own
-        # 3-/10-min window. Otherwise (web, or already escalated) give up and clear.
+        # nudge/skip window. Otherwise (web, or already escalated) give up and clear.
         ch = (w.get("channel") or "web").strip().lower()
         if ch in ("telegram", "whatsapp", "discord") and not w.get("escalated_to_web"):
             esc_sid = _escalate_question_to_web(user_scope_id, w, ch)
@@ -3570,7 +3572,7 @@ def thinking_loop_iteration() -> None:
             logger.debug("Thinking mode skipped for %s: quiet hours", scope)
             continue
         if _process_waiting_reply(scope) == "skip":
-            continue  # Waiting for reply: nudge at 3 min, allow run after 10 min
+            continue  # Waiting for reply: nudge, then allow a run once the chase ends
         if maybe_start_thinking_for_user(scope):
             break  # Start one at a time per iteration to avoid thundering herd
 

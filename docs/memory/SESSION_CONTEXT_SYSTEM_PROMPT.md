@@ -202,7 +202,7 @@ Earlier versions prepended `[Context: ...]` to `user_input` itself. This caused 
 
 **Scope:** works across all channels (WebUI, Telegram, WhatsApp, Discord) - the state is keyed by `user_scope_id`, not by channel or session.
 
-**How long it survives:** the injection only happens while the question record still exists, so its lifetime IS this feature's reach. Chasing the user (nudge, one escalation) stops after `thinking_wait_skip_minutes`, but the record itself is kept until `thinking_reply_wait_ttl_hours` (default 12h) - the two used to end together, and a user who answered later than ten minutes reached an agent that behaved as if it had never asked. See [Thinking-Mode.md](../agents/Thinking-Mode.md) → "Waiting for user reply".
+**How long it survives:** the injection only happens while the question record still exists, so its lifetime IS this feature's reach. Chasing the user (nudge, one escalation) stops after `thinking_wait_skip_minutes`, but the record itself is kept until `thinking_reply_wait_ttl_hours` (default 12h) - the two used to end together, and a user who answered after the chase had ended reached an agent that behaved as if it had never asked. See [Thinking-Mode.md](../agents/Thinking-Mode.md) → "Waiting for user reply".
 
 **Code locations:**
 

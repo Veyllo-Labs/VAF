@@ -28,8 +28,28 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
 
 
+def _nudge_minutes():
+    from vaf.core.config import Config
+    return float(Config.get("thinking_wait_nudge_minutes", 30) or 30)
+
+
+def _skip_minutes():
+    from vaf.core.config import Config
+    return float(Config.get("thinking_wait_skip_minutes", 40) or 40)
+
+
+def _past_skip():
+    """Minutes to backdate a question by so the skip window has elapsed, whatever the window is."""
+    return _skip_minutes() + 1
+
+
+def _between_nudge_and_skip():
+    """Minutes to backdate a question by so the nudge is due but the give-up is not."""
+    return (_nudge_minutes() + _skip_minutes()) / 2
+
+
 def _backdate_waiting(scope, minutes_ago):
-    """Move the waiting state's question timestamp into the past so the skip window has elapsed."""
+    """Move the waiting state's question timestamp into the past so the given window has elapsed."""
     data = tm._load_waiting()
     key = tm._key(scope)
     data[key]["question_sent_at_ts"] = time.time() - minutes_ago * 60
@@ -124,7 +144,7 @@ def test_unanswered_messenger_question_escalates_once_to_web(monkeypatch, tmp_pa
     )
 
     # 1) Past the skip window, still on the messenger and not yet escalated -> escalate ONCE, keep waiting.
-    _backdate_waiting(scope, minutes_ago=11)
+    _backdate_waiting(scope, minutes_ago=_past_skip())
     assert tm._process_waiting_reply(scope) == "skip"
     assert len(web_emits) == 1
     note_text = web_emits[0][0]
@@ -135,12 +155,12 @@ def test_unanswered_messenger_question_escalates_once_to_web(monkeypatch, tmp_pa
     assert w.get("channel") == "web"
 
     # 2) Still unanswered after the one-time web escalation -> stop chasing, no second escalation.
-    _backdate_waiting(scope, minutes_ago=11)
+    _backdate_waiting(scope, minutes_ago=_past_skip())
     assert tm._process_waiting_reply(scope) == "allow_run"
     _assert_chase_over_question_kept(scope, "Soll ich das Meeting verschieben?")
     assert len(web_emits) == 1
     # ...and a further pass must stay quiet: the kept record is for the main agent, not a second round.
-    _backdate_waiting(scope, minutes_ago=11)
+    _backdate_waiting(scope, minutes_ago=_past_skip())
     assert tm._process_waiting_reply(scope) == "allow_run"
     assert len(web_emits) == 1
 
@@ -158,7 +178,7 @@ def test_escalation_gives_up_when_no_reachable_web_session(monkeypatch, tmp_path
         scope, username="admin", question_text="Q?", request_id="r1",
         session_id="sid-anchor", channel="telegram",
     )
-    _backdate_waiting(scope, minutes_ago=11)
+    _backdate_waiting(scope, minutes_ago=_past_skip())
     assert tm._process_waiting_reply(scope) == "allow_run"
     _assert_chase_over_question_kept(scope, "Q?")
 
@@ -177,7 +197,7 @@ def test_escalated_flag_alone_blocks_re_escalation(monkeypatch, tmp_path):
         scope, username="admin", question_text="Q?", request_id="r1",
         session_id="sid", channel="telegram", escalated_to_web=True,
     )
-    _backdate_waiting(scope, minutes_ago=11)
+    _backdate_waiting(scope, minutes_ago=_past_skip())
     assert tm._process_waiting_reply(scope) == "allow_run"
     assert web_emits == []
     _assert_chase_over_question_kept(scope, "Q?")
@@ -195,7 +215,7 @@ def test_legacy_waiting_entry_without_channel_treated_as_web(monkeypatch, tmp_pa
     scope = "user-legacy"
     key = tm._key(scope)
     tm._save_waiting({key: {
-        "question_sent_at_ts": time.time() - 11 * 60,
+        "question_sent_at_ts": time.time() - _past_skip() * 60,
         "nudge_sent_at_ts": None,
         "username": "admin", "display_name": "admin",
         "question_text": "Legacy Q?", "request_id": "r-old", "session_id": "sid-old",
@@ -221,7 +241,7 @@ def test_nudge_routes_to_messenger_for_messenger_channel(monkeypatch, tmp_path):
         scope, username="admin", question_text="Q?", request_id="r1",
         session_id="sid", channel="telegram",
     )
-    _backdate_waiting(scope, minutes_ago=4)  # >= nudge_min (3), < skip_min (10)
+    _backdate_waiting(scope, minutes_ago=_between_nudge_and_skip())  # nudge due, give-up not
     assert tm._process_waiting_reply(scope) == "skip"
     assert len(nudges) == 1
     # Recorded in the channel session like the question it chases, tagged as a nudge.
@@ -247,6 +267,6 @@ def test_nudge_after_escalation_goes_to_web_not_messenger(monkeypatch, tmp_path)
         scope, username="admin", question_text="Q?", request_id="r1",
         session_id="sid", channel="web", escalated_to_web=True,
     )
-    _backdate_waiting(scope, minutes_ago=4)
+    _backdate_waiting(scope, minutes_ago=_between_nudge_and_skip())
     tm._process_waiting_reply(scope)
     assert messenger_calls == []  # channel='web' -> messenger send skipped

@@ -884,7 +884,13 @@ async function main() {
             return;
           }
           try {
-            await currentAuth.keys.set({ "app-state-sync-version": { critical_unblock_low: null } });
+            // Through the SOCKET's key store, not the file store underneath: the socket
+            // wraps the files in a cache, and resyncAppState reads the collection version
+            // from that cache. Clearing only the file left the old version in memory, the
+            // snapshot then counted as "already known" and not one contact was emitted
+            // (live 2026-09-04: "re-synced (store 0)").
+            const keys = currentSock.authState?.keys ?? currentAuth.keys;
+            await keys.set({ "app-state-sync-version": { critical_unblock_low: null } });
             await currentSock.resyncAppState(["critical_unblock_low"], true);
             try { fs.writeSync(2, `${LOG_PREFIX} resyncContacts: contact collection re-synced (store ${contactStore.size})\n`); } catch (_) {}
             emitChats();

@@ -213,11 +213,22 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
     const historyUrlRef = useRef(historyUrl);
     historyUrlRef.current = historyUrl;
     const historyRequest = useRef(0);
+    const historyLoadedKey = useRef<string | null>(null);
     useEffect(() => {
         if (!historyKey || !isOpen) {
             setSessionHistory([]);
             setHistoryCompaction(null);
+            historyLoadedKey.current = null;
             return;
+        }
+        // Another chat: drop the previous chat's messages before the fetch, or they show
+        // under the new header until the answer lands and then vanish (which reads as
+        // "the chat loaded and disappeared"). A reload of the SAME chat (load older) keeps
+        // what is on screen while it waits.
+        if (historyLoadedKey.current !== historyKey) {
+            setSessionHistory([]);
+            setHistoryCompaction(null);
+            historyLoadedKey.current = historyKey;
         }
         const requestNo = ++historyRequest.current;
         setHistoryLoading(true);
@@ -371,13 +382,13 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                     {conversationNote && <p className="w-full text-xs text-[#e08c8c]">{conversationNote}</p>}
                                 </div>
                                 <div ref={inlineChatRef} className="flex-1 min-h-0 overflow-y-auto bg-[#151515] p-5 flex flex-col gap-2.5">
-                                    {conversationTop && chatMessages.length > 0 && (
+                                    {conversationTop && !(historyLoading && sessionHistory.length === 0) && (
                                         <div className="self-center">{conversationTop(selected)}</div>
                                     )}
                                     {historyLoading && sessionHistory.length === 0 ? (
                                         <p className="text-sm text-[#9a9a9a]">{t('loadingHistory')}</p>
                                     ) : chatMessages.length === 0 ? (
-                                        <p className="text-sm text-[#9a9a9a]">{t('noMessagesInChat')}</p>
+                                        <p className="text-sm text-[#9a9a9a] self-center">{t('noMessagesInChat')}</p>
                                     ) : chatMessages.map((msg, i) => {
                                         const isBot = msg.role === 'assistant';
                                         const isCurrentMatch = searchMatches.length > 0 && searchMatches[Math.min(chatSearchIdx, searchMatches.length - 1)] === i;

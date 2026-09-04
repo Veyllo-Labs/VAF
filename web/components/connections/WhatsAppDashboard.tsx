@@ -424,8 +424,9 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                         <label className="flex items-center gap-2 text-xs text-[#d0d0d0] cursor-pointer select-none">
                             <button type="button" role="switch" aria-checked={reachOn} disabled={addingContact}
                                 onClick={() => reachOn ? handleAllowReach(s, false) : setReachConfirm(s)}
-                                className={cn('relative w-9 h-5 rounded-full transition-colors border', reachOn ? 'bg-[#25a244] border-[#25a244]' : 'bg-[#262626] border-[#444]')}>
-                                <span className={cn('absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform', reachOn ? 'translate-x-4' : 'translate-x-0.5')} />
+                                // The house switch in its dark form (ConnectionsPanel, ContactsDashboard): light track and dark knob when on, dark track and light knob when off. The shell is dark-only, so the dark pair is used outright.
+                                className={cn('relative w-11 h-6 rounded-full transition-colors', reachOn ? 'bg-[#d9d9d9]' : 'bg-[#333333]')}>
+                                <span className={cn('absolute top-1 w-4 h-4 rounded-full shadow transition-transform', reachOn ? 'translate-x-6 bg-[#1a1a1a]' : 'translate-x-1 bg-[#e8e8e8]')} />
                             </button>
                             {t('allowReach')}
                         </label>

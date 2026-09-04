@@ -77,6 +77,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   land in the security log as `channel_rejected` every few minutes. They are dropped
   before that check now, on both sides of the bridge.
 
+- **A chat no longer shows the previous chat's messages for a moment, and an empty
+  chat can still load its history.** Switching chats in a channel dashboard kept the
+  old messages on screen until the new answer landed and then swapped them out, which
+  read as "the chat loaded and vanished"; the pane clears on the switch now. The "load
+  older messages" pill is there for a chat with nothing stored yet too, which is exactly
+  the chat that needs it. The "let the agent reply" switch uses the same dark form as
+  the other switches, where it was invisible before.
+
 - **The channel dashboards search from the chat list, and the search fields no longer
   hide their own text.** The search over chats and contacts now sits at the top of the
   chat list, where a reader looks for it, instead of in the window header. Both search

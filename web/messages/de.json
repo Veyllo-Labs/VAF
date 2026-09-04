@@ -966,7 +966,11 @@
       "loadingOlder": "Frage WhatsApp…",
       "loadedOlder": "{count} ältere Nachrichten geladen",
       "noOlder": "Nichts Älteres gekommen. WhatsApp gibt nur heraus, was das Telefon noch hat.",
-      "loadOlderFailed": "Ältere Nachrichten konnten nicht geladen werden."
+      "loadOlderFailed": "Ältere Nachrichten konnten nicht geladen werden.",
+      "reloadNames": "Namen vom Telefon neu laden",
+      "reloadingNames": "Namen werden geholt…",
+      "reloadNamesDone": "Namen angefordert. Sie erscheinen in der Liste, sobald WhatsApp sie liefert.",
+      "reloadNamesFailed": "Die Namen konnten nicht angefordert werden."
     },
     "telegramDashboard": {
       "title": "Telegram",

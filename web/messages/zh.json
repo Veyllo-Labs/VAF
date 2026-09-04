@@ -966,7 +966,11 @@
       "loadingOlder": "正在向 WhatsApp 请求…",
       "loadedOlder": "已加载 {count} 条更早的消息",
       "noOlder": "没有更早的消息。WhatsApp 只会交出手机上还保留的内容。",
-      "loadOlderFailed": "无法加载更早的消息。"
+      "loadOlderFailed": "无法加载更早的消息。",
+      "reloadNames": "从手机重新加载姓名",
+      "reloadingNames": "正在获取姓名…",
+      "reloadNamesDone": "已请求姓名。WhatsApp 送达后会出现在列表中。",
+      "reloadNamesFailed": "无法请求姓名。"
     },
     "telegramDashboard": {
       "title": "Telegram",

@@ -1229,7 +1229,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                 q.put(obj)
             except Exception:
                 pass
-    elif typ in ("send_result", "fetch_history_result"):
+    elif typ in ("send_result", "fetch_history_result", "resync_contacts_result"):
         # Both are "the command you queued under req_id has left (or not)": the same
         # per-request queue hands the answer to the waiting caller.
         req_id = obj.get("req_id")
@@ -2024,8 +2024,14 @@ def get_avatar(username: str, chat_jid: str, wait_timeout: float = 8.0) -> Optio
     "asked, nothing there", so a private profile is not queried on every render. One
     Node query runs at a time (see _avatar_query_lock)."""
     uname = (username or "").strip() or "admin"
+    jid = (chat_jid or "").strip()
+    # Only people have a profile picture worth asking for: newsletters, groups and the
+    # status broadcast either time out or answer with nothing, and each such query
+    # would hold the one-at-a-time lock for the whole timeout.
+    if not (jid.endswith("@s.whatsapp.net") or jid.endswith("@lid")):
+        return None
     cache = avatar_cache_dir(uname)
-    key = _avatar_key(chat_jid)
+    key = _avatar_key(jid)
     hit = cache / f"{key}.jpg"
     none = cache / f"{key}.none"
     now = time.time()
@@ -2056,6 +2062,15 @@ def get_avatar(username: str, chat_jid: str, wait_timeout: float = 8.0) -> Optio
                 _avatar_results.pop(req_id, None)
             return None
     if not obj.get("success"):
+        err = str(obj.get("error") or "").lower()
+        if any(s in err for s in ("item-not-found", "not-authorized", "forbidden", "not-allowed")):
+            # WhatsApp's own "no picture for you": remember it like an empty answer.
+            try:
+                cache.mkdir(parents=True, exist_ok=True)
+                none.write_text(str(int(now)), encoding="utf-8")
+            except OSError:
+                pass
+            return None
         # A transport failure is not "no picture": leave the cache alone so the next
         # render asks again once the bridge is back.
         return None
@@ -2074,6 +2089,39 @@ def get_avatar(username: str, chat_jid: str, wait_timeout: float = 8.0) -> Optio
     except OSError:
         pass
     return None
+
+
+def resync_contacts(username: str, wait_timeout: float = 60.0) -> Tuple[bool, str]:
+    """Ask the Node to fetch the phone's contact names again (a full snapshot of the
+    app-state contact collection; see `resyncContacts` in wa-bridge.js). Returns
+    (ok, error). Slow by nature: WhatsApp streams the whole collection."""
+    uname = (username or "").strip() or "admin"
+    with _process_lock:
+        proc = _processes.get(uname)
+        if (not proc or proc.poll() is not None or not proc.stdin) and len(_processes) == 1:
+            proc = next(iter(_processes.values()))
+    if not proc or proc.poll() is not None or not proc.stdin:
+        return False, "WhatsApp bridge is not running."
+    req_id = str(uuid.uuid4())
+    result_queue: queue.Queue = queue.Queue()
+    with _pending_sends_lock:
+        _pending_sends[req_id] = result_queue
+    try:
+        proc.stdin.write(json.dumps({"cmd": "resyncContacts", "req_id": req_id}) + "\n")
+        proc.stdin.flush()
+        success, error = result_queue.get(timeout=wait_timeout)
+    except queue.Empty:
+        with _pending_sends_lock:
+            _pending_sends.pop(req_id, None)
+        return False, "No answer from the bridge."
+    except Exception as e:
+        with _pending_sends_lock:
+            _pending_sends.pop(req_id, None)
+        return False, f"Could not reach the bridge: {e}"
+    if success:
+        _contact_sync_last.pop(uname, None)   # the next chat list may feed the contact book at once
+        return True, ""
+    return False, error or "WhatsApp refused the contact sync."
 
 
 def _request_lid_mappings(username: str) -> Optional[str]:

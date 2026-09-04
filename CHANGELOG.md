@@ -61,6 +61,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   profile picture; a hidden picture falls back to the initials, and the bridge remembers
   both answers for a day so a private profile is not asked again on every render.
 
+- **The WhatsApp conversation no longer flickers, and names survive a restart.** The
+  pane fetched its messages in a loop (a fresh URL builder on every render re-armed the
+  fetch), and pictures for newsletters and the status broadcast held the one-at-a-time
+  picture lookup for its whole timeout, so a chat's messages appeared and vanished until
+  the queue drained. Now the fetch runs once per chat, a late answer for a chat no longer
+  selected is dropped, only people are asked for a picture, and WhatsApp's own "no
+  picture" answers are remembered. The bridge keeps the names it learned in a cache
+  beside the credentials, and "Reload names from the phone" in the settings asks
+  WhatsApp for the address-book names again when a bridge missed the first sync.
+
 - **WhatsApp fills the contact book.** A direct chat with a phone number and a name
   WhatsApp shows becomes a contact: matched by number when the person is already there
   (the link is recorded, a contact named after its number gets the real name), created

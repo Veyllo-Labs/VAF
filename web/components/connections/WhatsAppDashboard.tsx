@@ -75,6 +75,8 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const [windowInput, setWindowInput] = useState('');
     const [windowMsg, setWindowMsg] = useState<string | null>(null);
     const [olderBusy, setOlderBusy] = useState(false);
+    const [namesBusy, setNamesBusy] = useState(false);
+    const [namesMsg, setNamesMsg] = useState<string | null>(null);
     const [historyVersion, setHistoryVersion] = useState(0);
 
     const fetchDashboard = useCallback(async () => {
@@ -280,6 +282,21 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         }
     };
 
+    const handleReloadNames = async () => {
+        setNamesBusy(true);
+        setNamesMsg(null);
+        try {
+            const res = await fetch(api('api/whatsapp/contacts/resync'), { method: 'POST', credentials: 'include' });
+            const json = await res.json().catch(() => ({}));
+            setNamesMsg(res.ok ? t('reloadNamesDone') : (json?.detail || t('reloadNamesFailed')));
+            if (res.ok) setTimeout(() => fetchDashboard(), 3000);
+        } catch {
+            setNamesMsg(t('reloadNamesFailed'));
+        } finally {
+            setNamesBusy(false);
+        }
+    };
+
     const handleSaveWindow = async () => {
         const hours = Number(windowInput);
         if (!Number.isFinite(hours) || hours < 0) { setWindowMsg(t('saveFailed')); return; }
@@ -332,7 +349,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         id: s.chat_id,
         historyKey: s.chat_id,
         label: s.display_name || s.name || s.phone_number || t('unknownChat'),
-        avatarUrl: s.needs_assign ? null : api(`api/whatsapp/avatar?chat_id=${encodeURIComponent(s.chat_id)}`),
+        avatarUrl: (s.resolved_e164 || s.chat_id).startsWith('+') ? api(`api/whatsapp/avatar?chat_id=${encodeURIComponent(s.resolved_e164 || s.chat_id)}`) : null,
         preview: s.last_preview || '',
         ts: s.last_ts,
         badge: badgeFor(s),
@@ -391,8 +408,10 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 <div className="flex gap-2 flex-wrap">
                     <button type="button" onClick={handleRestartBridge} disabled={restarting} className={BTN}>{restarting ? t('restarting') : t('restartBridge')}</button>
                     <button type="button" onClick={handleRelink} className={BTN}>{t('relink')}</button>
+                    <button type="button" onClick={handleReloadNames} disabled={namesBusy || !data?.connected} className={BTN}>{namesBusy ? t('reloadingNames') : t('reloadNames')}</button>
                 </div>
                 {restartError && <p className="mt-2 text-xs text-[#e08c8c]">{restartError}</p>}
+                {namesMsg && <p className="mt-2 text-xs text-[#9a9a9a]">{namesMsg}</p>}
             </SettingsCard>
 
             <SettingsCard title={t('cardOwnerTitle')} desc={t('cardOwnerDesc')}>

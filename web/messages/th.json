@@ -966,7 +966,11 @@
       "loadingOlder": "กำลังขอจาก WhatsApp…",
       "loadedOlder": "โหลดข้อความเก่าแล้ว {count} ข้อความ",
       "noOlder": "ไม่มีข้อความเก่ากว่านี้ส่งมา WhatsApp ให้เฉพาะสิ่งที่ยังอยู่ในโทรศัพท์เท่านั้น",
-      "loadOlderFailed": "โหลดข้อความเก่าไม่ได้"
+      "loadOlderFailed": "โหลดข้อความเก่าไม่ได้",
+      "reloadNames": "โหลดชื่อจากโทรศัพท์ใหม่",
+      "reloadingNames": "กำลังดึงชื่อ…",
+      "reloadNamesDone": "ขอชื่อแล้ว ชื่อจะปรากฏในรายการเมื่อ WhatsApp ส่งมา",
+      "reloadNamesFailed": "ขอชื่อไม่ได้"
     },
     "telegramDashboard": {
       "title": "Telegram",

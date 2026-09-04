@@ -204,16 +204,25 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
     useEscapeLayer({ active: isOpen && !settingsOpen && chatSearch !== '', level: 51, onEscape: () => setChatSearch('') });
     useEscapeLayer({ active: isOpen && !settingsOpen && chatSearch === '', level: 50, onEscape: onClose });
 
+    // The URL builder is an inline arrow in every dashboard, so it is a new function on
+    // each render; depending on it re-ran this effect after every response and the
+    // conversation fetched itself in a loop (and flickered whenever one of the piled-up
+    // requests failed). Read it through a ref; only the key and the version trigger.
+    const historyUrlRef = useRef(historyUrl);
+    historyUrlRef.current = historyUrl;
+    const historyRequest = useRef(0);
     useEffect(() => {
         if (!historyKey || !isOpen) {
             setSessionHistory([]);
             setHistoryCompaction(null);
             return;
         }
+        const requestNo = ++historyRequest.current;
         setHistoryLoading(true);
-        fetch(api(historyUrl(historyKey)), { credentials: 'include' })
+        fetch(api(historyUrlRef.current(historyKey)), { credentials: 'include' })
             .then((r) => r.json())
             .then((json) => {
+                if (requestNo !== historyRequest.current) return;   // a newer chat was selected meanwhile
                 setSessionHistory(Array.isArray(json.messages) ? json.messages : []);
                 setHistoryCompaction(
                     typeof json.user_turn_count === 'number' && typeof json.compaction_interval === 'number' && typeof json.last_compaction_at_turn === 'number'
@@ -221,9 +230,13 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                         : null
                 );
             })
-            .catch(() => { setSessionHistory([]); setHistoryCompaction(null); })
-            .finally(() => setHistoryLoading(false));
-    }, [historyKey, isOpen, historyUrl, historyVersion]);
+            .catch(() => {
+                if (requestNo !== historyRequest.current) return;
+                setSessionHistory([]);
+                setHistoryCompaction(null);
+            })
+            .finally(() => { if (requestNo === historyRequest.current) setHistoryLoading(false); });
+    }, [historyKey, isOpen, historyVersion]);
 
     const filtered = useMemo(() => {
         const q = listFilter.trim().toLowerCase();

@@ -441,6 +441,51 @@ def test_chat_list_feeds_the_contact_book_but_groups_newsletters_and_bare_number
     assert calls == []
 
 
+def test_avatar_lookups_skip_newsletters_and_remember_whatsapps_refusals(isolated, monkeypatch):
+    import io
+    written = io.StringIO()
+    fake_proc = SimpleNamespace(stdin=written, poll=lambda: None)
+    monkeypatch.setattr(wa, "_processes", {"alice": fake_proc})
+    asked = []
+    orig = written.write
+    def _w(s):
+        r = orig(s)
+        cmd = json.loads(s)
+        asked.append(cmd["jid"])
+        wa._dispatch_bridge_event("alice", SCOPE, "avatar", {"req_id": cmd["req_id"], "success": False, "error": "item-not-found"})
+        return r
+    written.write = _w
+    # Newsletters, groups and the status broadcast are never asked: each such query would
+    # hold the one-at-a-time lock for the whole timeout (live: minutes of queue).
+    for jid in ("120363000000000001@newsletter", "120363000000000000@g.us", "status@broadcast"):
+        assert wa.get_avatar("alice", jid, wait_timeout=1.0) is None
+    assert asked == []
+    # WhatsApp's own refusal (item-not-found / not-authorized) is a "no picture", cached
+    # like an empty answer, not a transport error to retry on every render.
+    assert wa.get_avatar("alice", "491700000009@s.whatsapp.net", wait_timeout=1.0) is None
+    assert wa.get_avatar("alice", "491700000009@s.whatsapp.net", wait_timeout=1.0) is None
+    assert asked == ["491700000009@s.whatsapp.net"]
+    assert (wa.avatar_cache_dir("alice") / "491700000009.none").is_file()
+
+
+def test_resync_contacts_asks_the_node_and_clears_the_sync_throttle(isolated, monkeypatch):
+    import io
+    written = io.StringIO()
+    fake_proc = SimpleNamespace(stdin=written, poll=lambda: None)
+    monkeypatch.setattr(wa, "_processes", {"alice": fake_proc})
+    monkeypatch.setattr(wa, "_contact_sync_last", {"alice": time.time()})
+    orig = written.write
+    def _w(s):
+        r = orig(s)
+        cmd = json.loads(s)
+        assert cmd["cmd"] == "resyncContacts"
+        wa._dispatch_bridge_event("alice", SCOPE, "resync_contacts_result", {"req_id": cmd["req_id"], "success": True, "names": 12})
+        return r
+    written.write = _w
+    assert wa.resync_contacts("alice", wait_timeout=2.0) == (True, "")
+    assert "alice" not in wa._contact_sync_last
+
+
 def test_whitelist_add_refuses_the_agents_own_number(isolated, monkeypatch):
     import asyncio
     from fastapi import HTTPException

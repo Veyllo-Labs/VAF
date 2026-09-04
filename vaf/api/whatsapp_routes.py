@@ -994,6 +994,22 @@ async def get_whatsapp_avatar(request: Request, chat_id: str):
                     headers={"Cache-Control": "private, max-age=3600"})
 
 
+@router.post("/contacts/resync")
+async def resync_whatsapp_contacts(request: Request):
+    """Fetch the phone's contact names again (full app-state contact snapshot), for a
+    bridge that missed the first sync. Names then reach the chat list and the contact
+    book through the ordinary events."""
+    import asyncio
+    from vaf.api.whatsapp_bridge import is_bridge_running, resync_contacts
+    if not is_bridge_running():
+        raise HTTPException(status_code=503, detail="WhatsApp bridge not running.")
+    user_info = get_current_vaf_user(request)
+    ok, error = await asyncio.to_thread(resync_contacts, user_info["username"])
+    if not ok:
+        raise HTTPException(status_code=502, detail=error or "Contact sync failed.")
+    return {"status": "ok"}
+
+
 class OlderMessagesRequest(BaseModel):
     chat_id: str
     count: int = 50

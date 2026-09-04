@@ -966,7 +966,11 @@
       "loadingOlder": "WhatsApp'a soruluyor…",
       "loadedOlder": "{count} eski mesaj yüklendi",
       "noOlder": "Daha eski bir şey gelmedi. WhatsApp yalnızca telefonda hâlâ olanı verir.",
-      "loadOlderFailed": "Eski mesajlar yüklenemedi."
+      "loadOlderFailed": "Eski mesajlar yüklenemedi.",
+      "reloadNames": "İsimleri telefondan yeniden yükle",
+      "reloadingNames": "İsimler alınıyor…",
+      "reloadNamesDone": "İsimler istendi. WhatsApp gönderdikçe listede görünecekler.",
+      "reloadNamesFailed": "İsimler istenemedi."
     },
     "telegramDashboard": {
       "title": "Telegram",

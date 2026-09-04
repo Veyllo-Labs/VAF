@@ -966,7 +966,11 @@
       "loadingOlder": "WhatsAppに問い合わせ中…",
       "loadedOlder": "以前のメッセージを{count}件読み込みました",
       "noOlder": "それ以前のメッセージは届きませんでした。WhatsAppは電話にまだ残っているものだけを渡します。",
-      "loadOlderFailed": "以前のメッセージを読み込めませんでした。"
+      "loadOlderFailed": "以前のメッセージを読み込めませんでした。",
+      "reloadNames": "電話から名前を再読み込み",
+      "reloadingNames": "名前を取得中…",
+      "reloadNamesDone": "名前をリクエストしました。WhatsAppから届き次第、一覧に表示されます。",
+      "reloadNamesFailed": "名前をリクエストできませんでした。"
     },
     "telegramDashboard": {
       "title": "Telegram",

@@ -144,6 +144,42 @@ const lidToE164Map = new Map();
  * msg.pushName). Keyed by JID; a LID and its phone JID both point at the same entry.
  */
 const contactStore = new Map(); // jid -> { name?, notify?, verifiedName? }
+let currentAuthDir = null;
+let currentAuth = null;
+let contactsSaveTimer = null;
+
+/** The contact store outlives a restart: WhatsApp sends address-book names only with a
+ *  full sync (first link) and app-state deltas, so without a cache every restart would
+ *  show numbers until each person writes again. */
+function contactsCachePath() {
+  return currentAuthDir ? path.join(currentAuthDir, "contacts-cache.json") : null;
+}
+function loadContactCache() {
+  const p = contactsCachePath();
+  if (!p || !fs.existsSync(p)) return;
+  try {
+    const data = JSON.parse(fs.readFileSync(p, "utf-8"));
+    for (const [jid, c] of Object.entries(data?.contacts || {})) contactStore.set(jid, c);
+    for (const [lid, e164] of Object.entries(data?.lids || {})) if (!lidToE164Map.has(lid)) lidToE164Map.set(lid, e164);
+    try { fs.writeSync(2, `${LOG_PREFIX} contact cache loaded: ${contactStore.size} names, ${lidToE164Map.size} lid mappings\n`); } catch (_) {}
+  } catch (err) {
+    try { fs.writeSync(2, `${LOG_PREFIX} contact cache unreadable: ${err?.message ?? err}\n`); } catch (_) {}
+  }
+}
+function scheduleSaveContacts() {
+  if (contactsSaveTimer) return;
+  contactsSaveTimer = setTimeout(() => {
+    contactsSaveTimer = null;
+    const p = contactsCachePath();
+    if (!p) return;
+    try {
+      const data = { contacts: Object.fromEntries(contactStore), lids: Object.fromEntries(lidToE164Map) };
+      fs.writeFileSync(p, JSON.stringify(data), { mode: 0o600 });
+    } catch (err) {
+      try { fs.writeSync(2, `${LOG_PREFIX} contact cache not saved: ${err?.message ?? err}\n`); } catch (_) {}
+    }
+  }, 2000);
+}
 
 function rememberContact(c) {
   if (!c) return;
@@ -162,6 +198,7 @@ function rememberContact(c) {
     const e164 = toE164(c.jid);
     if (lidJid && e164 && !lidToE164Map.has(lidJid)) lidToE164Map.set(lidJid, e164);
   }
+  scheduleSaveContacts();
 }
 
 /** Display name for a chat JID from the contact store; empty when nothing is known. */
@@ -342,6 +379,9 @@ function emitChats() {
 
 async function connect(authDir) {
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
+  currentAuthDir = authDir;
+  currentAuth = state;
+  if (contactStore.size === 0) loadContactCache();
   const { version } = await fetchLatestBaileysVersion();
   const logger = { fatal: () => {}, error: () => {}, warn: () => {}, info: () => {}, debug: () => {}, trace: () => {}, child: () => logger };
 
@@ -807,10 +847,11 @@ async function main() {
           try {
             let url = null;
             try {
-              url = await currentSock.profilePictureUrl(obj.jid, obj.full ? "image" : "preview", 8000);
+              url = await currentSock.profilePictureUrl(obj.jid, obj.full ? "image" : "preview", 4000);
             } catch (err) {
               const code = err?.output?.statusCode ?? err?.data?.statusCode;
-              if (code === 401 || code === 404 || code === 403) url = null;
+              const text = String(err?.message ?? err ?? "").toLowerCase();
+              if (code === 401 || code === 404 || code === 403 || /item-not-found|not-authorized|forbidden|not-allowed/.test(text)) url = null;
               else throw err;
             }
             if (!url) {
@@ -829,6 +870,29 @@ async function main() {
             const msg = err?.message ?? String(err);
             try { fs.writeSync(2, `${LOG_PREFIX} getAvatar failed for ${obj.jid}: ${msg}\n`); } catch (_) {}
             if (reqId) emit({ type: "avatar", req_id: reqId, success: false, error: msg });
+          }
+        })();
+      } else if (obj?.cmd === "resyncContacts") {
+        // Names come from the app-state "contact" collection (critical_unblock_low). A
+        // reconnect only fetches deltas since the stored version, so a bridge that missed
+        // the first sync never learns the existing names. Forgetting the local version of
+        // that one collection makes the next resync a full snapshot: every contactAction
+        // again, which is exactly what a fresh link receives.
+        (async () => {
+          if (connectionState !== "open" || !currentSock || !currentAuth) {
+            if (reqId) emit({ type: "resync_contacts_result", req_id: reqId, success: false, error: "WhatsApp not connected" });
+            return;
+          }
+          try {
+            await currentAuth.keys.set({ "app-state-sync-version": { critical_unblock_low: null } });
+            await currentSock.resyncAppState(["critical_unblock_low"], true);
+            try { fs.writeSync(2, `${LOG_PREFIX} resyncContacts: contact collection re-synced (store ${contactStore.size})\n`); } catch (_) {}
+            emitChats();
+            if (reqId) emit({ type: "resync_contacts_result", req_id: reqId, success: true, names: contactStore.size });
+          } catch (err) {
+            const msg = err?.message ?? String(err);
+            try { fs.writeSync(2, `${LOG_PREFIX} resyncContacts failed: ${msg}\n`); } catch (_) {}
+            if (reqId) emit({ type: "resync_contacts_result", req_id: reqId, success: false, error: msg });
           }
         })();
       } else if (obj?.cmd === "ping") {

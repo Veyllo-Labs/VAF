@@ -582,6 +582,21 @@ async def get_whatsapp_dashboard(request: Request):
         if not disp:
             disp = (rec.get("phone_number") or cid or "").strip() or "Unknown chat"
         rec["display_name"] = disp
+        # The contact-book record for this number, Front Office flag or not, so the
+        # dashboard offers "add as contact" only to a number the book does not know yet
+        # (the WhatsApp sync creates records without the flag; those must not look new).
+        rec["contact_id"] = None
+        rec["contact_name"] = None
+        phone_for_book = resolved or (None if is_lid else (rec.get("phone_number") or cid))
+        if phone_for_book and "@" not in str(phone_for_book):
+            try:
+                from vaf.core.contacts_store import find_contact_by_phone
+                book = find_contact_by_phone(str(phone_for_book), username, user_info.get("user_scope_id"))
+                if book:
+                    rec["contact_id"] = book.get("id")
+                    rec["contact_name"] = (book.get("name") or "").strip() or None
+            except Exception:
+                pass
 
     bucket_seconds = 4 * 3600
     cutoff = now_ts - 7 * 24 * 3600

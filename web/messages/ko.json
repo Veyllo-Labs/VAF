@@ -880,7 +880,7 @@
       "serverError": "서버 오류 ({status})"
     },
     "channelDashboard": {
-      "searchChats": "채팅 검색",
+      "searchChats": "채팅 및 연락처 검색",
       "refresh": "새로 고침",
       "settings": "설정",
       "close": "닫기",
@@ -921,6 +921,8 @@
       "assignFailed": "번호를 지정하지 못했어요.",
       "addAsContact": "연락처로 추가",
       "addContactFailed": "연락처를 만들지 못했어요.",
+      "inContacts": "이미 연락처에 있음",
+      "allowReach": "에이전트 답장 허용",
       "footOwner": "에이전트 전체: 등록된 내 번호예요.",
       "footFrontOffice": "프런트 오피스: 에이전트가 제한된 도구로 여기에 답하고, 주 메신저로 알려 드려요.",
       "footReadOnly": "읽기 전용: 여기서는 아무것도 답하지 않아요.",

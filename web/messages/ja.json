@@ -880,7 +880,7 @@
       "serverError": "サーバーエラー（{status}）"
     },
     "channelDashboard": {
-      "searchChats": "チャットを検索",
+      "searchChats": "チャットと連絡先を検索",
       "refresh": "更新",
       "settings": "設定",
       "close": "閉じる",
@@ -921,6 +921,8 @@
       "assignFailed": "番号を割り当てできませんでした。",
       "addAsContact": "連絡先に追加",
       "addContactFailed": "連絡先を作成できませんでした。",
+      "inContacts": "すでに連絡先にあります",
+      "allowReach": "エージェントの返信を許可",
       "footOwner": "フルエージェント：これは登録済みの自分の番号です。",
       "footFrontOffice": "フロントオフィス：エージェントは制限付きのツールでここに応答し、メインのメッセンジャーで通知します。",
       "footReadOnly": "読み取り専用：ここでは何にも応答しません。",

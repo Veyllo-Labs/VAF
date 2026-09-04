@@ -272,12 +272,7 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                         <span className={cn('w-2 h-2 rounded-full shrink-0', dotCls)} title={dotTitle} />
                         <span className="truncate">{subtitle}</span>
                     </span>
-                    <div className="flex-1 max-w-xl ml-auto flex gap-2 min-w-0">
-                        <div className="flex-1 relative min-w-0">
-                            <Search className="w-4 h-4 absolute left-3 top-2.5 text-[#9a9a9a]" />
-                            <input value={listFilter} onChange={e => setListFilter(e.target.value)} placeholder={t('searchChats')}
-                                className={cn('w-full pl-9', INPUT)} />
-                        </div>
+                    <div className="ml-auto flex gap-2 min-w-0">
                         <button type="button" onClick={onRefresh} disabled={loading} className={cn('flex items-center gap-1.5', BTN)}>
                             <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} /><span className="max-md:hidden">{t('refresh')}</span>
                         </button>
@@ -293,9 +288,17 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
 
                 <main className="flex-1 grid min-h-0 max-md:grid-cols-1 max-md:grid-rows-[38vh_1fr]" style={{ gridTemplateColumns: '320px 1fr' }}>
                     <nav className="border-r border-[#2e2e2e] bg-[#1f1f1f] overflow-y-auto max-md:border-r-0 max-md:border-b">
-                        <div className="sticky top-0 z-10 px-4 py-2 bg-[#1f1f1f] border-b border-[#2e2e2e] text-xs text-[#9a9a9a] flex items-center justify-between">
-                            <span>{t('chatsHeader', { count: filtered.length })}</span>
-                            <span>{t('newestFirst')}</span>
+                        <div className="sticky top-0 z-10 bg-[#1f1f1f] border-b border-[#2e2e2e]">
+                            <div className="relative px-3 pt-3 pb-2">
+                                {/* Deliberate: cn() is tailwind-merge, so the padding override must come AFTER the shared INPUT classes or px-3 silently wins and the icon sits on the text. */}
+                                <Search className="w-4 h-4 absolute left-6 top-1/2 -translate-y-0.5 text-[#9a9a9a] pointer-events-none" />
+                                <input value={listFilter} onChange={e => setListFilter(e.target.value)} placeholder={t('searchChats')}
+                                    className={cn(INPUT, 'w-full pl-9')} />
+                            </div>
+                            <div className="px-4 pb-2 text-xs text-[#9a9a9a] flex items-center justify-between">
+                                <span>{t('chatsHeader', { count: filtered.length })}</span>
+                                <span>{t('newestFirst')}</span>
+                            </div>
                         </div>
                         {loading && chats.length === 0 ? (
                             <div className="p-4 text-sm text-[#9a9a9a]">{t('loading')}</div>
@@ -360,7 +363,7 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                                     }
                                                 }}
                                                 placeholder={t('searchChat')}
-                                                className={cn('w-48 pl-8 pr-2', INPUT)} />
+                                                className={cn(INPUT, 'w-48 pl-8 pr-2')} />
                                         </div>
                                     </div>
                                     {conversationNote && <p className="w-full text-xs text-[#e08c8c]">{conversationNote}</p>}

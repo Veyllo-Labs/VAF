@@ -77,6 +77,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   land in the security log as `channel_rejected` every few minutes. They are dropped
   before that check now, on both sides of the bridge.
 
+- **The channel dashboards search from the chat list, and the search fields no longer
+  hide their own text.** The search over chats and contacts now sits at the top of the
+  chat list, where a reader looks for it, instead of in the window header. Both search
+  fields (the list and the in-chat search) drew the magnifier over the first letters,
+  because the shared input style's padding was applied after the field's own; the
+  order is fixed. The WhatsApp dashboard also knows the contact book: a chat whose
+  number is already a contact no longer offers "add as contact" but says so and offers
+  "let the agent reply" instead, which sets the Front Office flag on the existing
+  record.
+
 - **A contact has a status, dated notes and upcoming events.** The contact book grows
   into a small CRM: a free status label (lead, in contact, customer, archived, or your own
   word; the list filters by it), dated notes with their author (you or the agent), events

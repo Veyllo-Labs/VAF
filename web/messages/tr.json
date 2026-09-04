@@ -880,7 +880,7 @@
       "serverError": "Sunucu hatası ({status})"
     },
     "channelDashboard": {
-      "searchChats": "Sohbetlerde ara",
+      "searchChats": "Sohbetlerde ve kişilerde ara",
       "refresh": "Yenile",
       "settings": "Ayarlar",
       "close": "Kapat",
@@ -921,6 +921,8 @@
       "assignFailed": "Numara atanamadı.",
       "addAsContact": "Kişi olarak ekle",
       "addContactFailed": "Kişi oluşturulamadı.",
+      "inContacts": "Zaten kişilerinizde",
+      "allowReach": "Ajan yanıt verebilsin",
       "footOwner": "Tam ajan: bu senin kayıtlı numaran.",
       "footFrontOffice": "Ön büro: ajan burada kısıtlı araçlarla yanıt verir ve seni ana mesajlaşma uygulaman üzerinden bilgilendirir.",
       "footReadOnly": "Salt okunur: burada hiçbir şey yanıtlanmaz.",

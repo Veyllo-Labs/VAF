@@ -880,7 +880,7 @@
       "serverError": "Server error ({status})"
     },
     "channelDashboard": {
-      "searchChats": "Search chats",
+      "searchChats": "Search chats and contacts",
       "refresh": "Refresh",
       "settings": "Settings",
       "close": "Close",
@@ -921,6 +921,8 @@
       "assignFailed": "The number could not be assigned.",
       "addAsContact": "Add as contact",
       "addContactFailed": "The contact could not be created.",
+      "inContacts": "Already in your contacts",
+      "allowReach": "Let the agent reply",
       "footOwner": "Full agent: this is your registered number.",
       "footFrontOffice": "Front Office: the agent answers here with restricted tools and informs you through your main messenger.",
       "footReadOnly": "Read-only: nothing is answered here.",

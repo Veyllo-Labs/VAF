@@ -530,3 +530,29 @@ def test_whitelist_add_refuses_the_agents_own_number(isolated, monkeypatch):
     # The number the user chats from is accepted.
     out = asyncio.run(routes.add_whitelist_entry(request, routes.WhitelistAddRequest(phone_number="+491700000009")))
     assert out["status"] in ("added", "updated")
+
+
+def test_dashboard_marks_a_number_the_contact_book_already_knows(isolated, monkeypatch):
+    """A chat whose number is in the contact book (Front Office flag or not) carries the
+    contact id, so the dashboard offers "add as contact" only to a number the book does
+    not know yet; the WhatsApp sync creates records without the flag, and those must
+    not look new."""
+    import asyncio
+    from vaf.api import whatsapp_routes as routes
+    from vaf.core import contacts_store as cs
+    _creds("alice", "491700000001")
+    cs.create_contact("Dana New", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000042")
+    monkeypatch.setattr(routes, "_is_whatsapp_admin", lambda req: False)
+    monkeypatch.setattr(wa, "get_whatsapp_chats", lambda *a, **k: [
+        {"jid": "491700000042@s.whatsapp.net", "phone": "+491700000042", "name": "Dana", "last_ts": 10},
+        {"jid": "491700000077@s.whatsapp.net", "phone": "+491700000077", "name": "Stranger", "last_ts": 9},
+    ])
+    monkeypatch.setattr(wa, "is_bridge_running", lambda: False)
+    monkeypatch.setattr(wa, "get_connection_status", lambda *a, **k: False)
+    monkeypatch.setattr(wa, "get_lid_mappings", lambda *a, **k: [])
+    request = SimpleNamespace(state=SimpleNamespace(user={"user_scope_id": SCOPE, "username": "alice"}))
+    out = asyncio.run(routes.get_whatsapp_dashboard(request))
+    by_id = {s["chat_id"]: s for s in out["sessions"]}
+    known, unknown = by_id["+491700000042"], by_id["+491700000077"]
+    assert known["contact_id"] and known["contact_name"] == "Dana New" and known["type"] == "unknown"
+    assert unknown["contact_id"] is None and unknown["contact_name"] is None

@@ -11,7 +11,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslations } from 'next-intl';
-import { Phone, UserPlus, Trash2, AlertTriangle } from 'lucide-react';
+import { Phone, UserPlus, Trash2, AlertTriangle, BookUser } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import MessagesChart from './MessagesChart';
 import ChannelDashboardShell, { BADGE_CLS, BTN, BTN_PRIMARY, INPUT, KvRow, SettingsCard, ShellChat, fmtUntil } from './ChannelDashboardShell';
@@ -38,6 +38,8 @@ interface WhatsAppSession {
     needs_assign?: boolean;
     display_name?: string | null;
     resolved_e164?: string | null;
+    contact_id?: string | null;
+    contact_name?: string | null;
     reply_window_until?: number | null;
     last_preview?: string;
 }
@@ -260,6 +262,26 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         }
     };
 
+    const handleAllowReach = async (s: WhatsAppSession) => {
+        if (!s.contact_id) return;
+        setAddingContact(true);
+        setNote(null);
+        try {
+            const res = await fetch(api(`api/contacts/${encodeURIComponent(s.contact_id)}`), {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ allow_as_assistant_user: true }),
+            });
+            if (!res.ok) { setNote(t('addContactFailed')); return; }
+            fetchDashboard();
+        } catch {
+            setNote(t('addContactFailed'));
+        } finally {
+            setAddingContact(false);
+        }
+    };
+
     const handleLoadOlder = async (chatId: string) => {
         setOlderBusy(true);
         setNote(null);
@@ -375,7 +397,8 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         const s = sessionsById.get(chat.id);
         if (!s) return null;
         const phone = s.resolved_e164 || s.phone_number || '';
-        const canAddContact = !s.needs_assign && (s.type === 'conversation' || s.type === 'unknown') && !!phone && !phone.includes('@');
+        const canAddContact = !s.needs_assign && !s.contact_id && (s.type === 'conversation' || s.type === 'unknown') && !!phone && !phone.includes('@');
+        const knownButSilent = !s.needs_assign && !!s.contact_id && (s.type === 'conversation' || s.type === 'unknown');
         return (
             <>
                 {s.needs_assign && (
@@ -393,6 +416,16 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                     <button type="button" onClick={() => handleAddAsContact(s)} disabled={addingContact} className={cn('flex items-center gap-1.5', BTN)}>
                         <UserPlus className="w-4 h-4" />{t('addAsContact')}
                     </button>
+                )}
+                {knownButSilent && (
+                    <>
+                        <span className="text-xs text-[#9a9a9a] flex items-center gap-1.5" title={s.contact_name || undefined}>
+                            <BookUser className="w-4 h-4" />{t('inContacts')}
+                        </span>
+                        <button type="button" onClick={() => handleAllowReach(s)} disabled={addingContact} className={cn('flex items-center gap-1.5', BTN)}>
+                            <UserPlus className="w-4 h-4" />{t('allowReach')}
+                        </button>
+                    </>
                 )}
             </>
         );

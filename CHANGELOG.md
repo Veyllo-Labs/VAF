@@ -28,6 +28,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Four German strings read as if a stranger had written them.** The security
+  overview said "Isolierte Skill gelöscht", which is the wrong gender, and the two
+  sentences beside the blocked-file list addressed the reader as "Sie" while the
+  whole rest of the interface says "du". The cross-chat hint description broke off
+  before its noun. They now read "Isolierter Skill gelöscht", "deinen 2FA-Code",
+  "Wenn du einen isolierten Skill löschst" and "nie ein gelöschter Chat".
+
 - **The German interface spells its umlauts.** Around a hundred strings still carried the
   keyboard forms (`ae`, `oe`, `ue`, `ss`) next to strings that did not, so the delete
   buttons read "loeschen" while the dialog beside them read "schließen". They now read

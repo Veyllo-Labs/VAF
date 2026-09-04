@@ -187,3 +187,68 @@ def test_the_rail_positions_come_from_one_rhythm():
 # message box, and now it OPENS that sub-agent's window while the turn carries
 # which window is open. Pinned in tests/test_subagent_window_context.py, which is
 # where the whole lane (chip, payload field, prompt block) is guarded together.
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The explanation card: shows itself once, leaves on time, comes back on request
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_the_card_and_its_bar_keep_one_clock():
+    """The timer that closes the card and the bar that shows the time running
+    out must read the SAME constant: the stylesheet must not carry a duration
+    of its own for the bar, and the markup must set it inline from the timer's
+    value. MUTATION: write `animation: vafHbHelpBar 10s` into the CSS, or a
+    literal into setTimeout, and this goes red."""
+    page = _PAGE.read_text(encoding="utf-8")
+    assert re.search(r"setTimeout\(\(\) => \{[^}]*?\}, HOTBAR_HELP_AUTO_MS\)", page, re.S), (
+        "the auto-close timer no longer takes its delay from HOTBAR_HELP_AUTO_MS")
+    assert "animationDuration: `${HOTBAR_HELP_AUTO_MS}ms`" in page, (
+        "the countdown bar no longer takes its duration from HOTBAR_HELP_AUTO_MS")
+    section = _section()
+    assert not re.search(r"animation:\s*vafHbHelpBar", section), (
+        "the stylesheet carries a duration for the bar; the timer and the bar can now disagree")
+    assert "animation-name: vafHbHelpBar" in section
+
+
+def test_running_out_or_dismissing_marks_it_seen_and_closing_the_palette_does_not():
+    """Seen means read: the timer's expiry and the hand dismissal both write
+    the flag; the effect's palette-closed branch must not, or a card cut short
+    would never show again."""
+    page = _PAGE.read_text(encoding="utf-8")
+    expiry = re.search(r"setTimeout\(\(\) => \{(.*?)\}, HOTBAR_HELP_AUTO_MS\)", page, re.S).group(1)
+    assert "markSubAgentHelpSeen()" in expiry, "running out no longer marks the card seen"
+    close_fn = re.search(r"const closeSubAgentHelp = \(\) => \{(.*?)\n    \};", page, re.S).group(1)
+    assert "markSubAgentHelpSeen()" in close_fn, "dismissing no longer marks the card seen"
+    closed_branch = re.search(r"if \(!subAgentPaletteOpen\) \{(.*?)return;", page, re.S).group(1)
+    assert "markSubAgentHelpSeen" not in closed_branch and "setItem" not in closed_branch, (
+        "closing the palette marks the card seen; a card nobody could read is lost")
+    # The flag lives in browser storage, which may be unavailable: guarded reads and writes.
+    assert "try { localStorage.setItem(HOTBAR_HELP_SEEN_KEY, '1'); } catch" in page
+    assert "try { seen = localStorage.getItem(HOTBAR_HELP_SEEN_KEY) === '1'; } catch" in page
+
+
+def test_the_card_answers_escape_above_the_palette():
+    """Escape while the card is up closes the card, not the palette under it:
+    the card registers one level above the palette's own layer."""
+    page = _PAGE.read_text(encoding="utf-8")
+    palette = re.search(r"useEscapeLayer\(\{ active: subAgentPaletteOpen, level: (\d+)", page)
+    card = re.search(r"useEscapeLayer\(\{ active: subAgentPaletteOpen && subAgentHelpOpen, level: (\d+), onEscape: closeSubAgentHelp", page)
+    assert palette and card, "one of the two escape layers is gone"
+    assert int(card.group(1)) > int(palette.group(1))
+
+
+def test_the_card_has_wording_in_every_locale():
+    for path in sorted((_REPO / "web" / "messages").glob("*.json")):
+        catalogue = json.loads(path.read_bytes())["main"]
+        for key in ("subAgentPaletteHelp", "subAgentPaletteHelpClose"):
+            assert key in catalogue, f"{path.name} is missing {key}"
+
+
+def test_the_tiles_keep_one_width_and_wrap():
+    """A tile has a fixed track, never a share of the row: a column count
+    (`grid-cols-N`) hands a 5120px window four 1200px tiles."""
+    page = _PAGE.read_text(encoding="utf-8")
+    i = page.index("shown.map(({ kind, name, desc, Icon })")
+    grid = page[page.rfind("<div className=\"grid", 0, i):i]
+    assert "repeat(auto-fill," in grid, "the tile grid stretches again: no fixed track"
+    assert not re.search(r"\bgrid-cols-\d", grid), "a column count is back on the tile grid"

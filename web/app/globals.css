@@ -1379,10 +1379,26 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   78.33%, 100%    { transform: translateX(0); }
 }
 
+/* The card's countdown: a hairline that shrinks from the left over the time the
+   card gives itself. No duration here on purpose - the markup sets it inline
+   from HOTBAR_HELP_AUTO_MS, the same constant the timer keeps, so the bar can
+   never promise a different moment. Transform only, like everything above. */
+.vaf-hb-help-bar {
+  position: absolute; left: 24px; right: 24px; bottom: 10px; height: 2px;
+  border-radius: 1px; background: rgb(var(--txt-gray-400));
+  transform-origin: left center;
+  animation-name: vafHbHelpBar; animation-timing-function: linear; animation-fill-mode: forwards;
+}
+@keyframes vafHbHelpBar {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
 /* Anyone who asked their system not to animate gets the end state, still. */
 @media (prefers-reduced-motion: reduce) {
   .vaf-hb-cursor, .vaf-hb-ring, .vaf-hb-popup,
   .vaf-hb-pick, .vaf-hb-slot, .vaf-hb-globe { animation: none; }
+  /* A bar that cannot move says nothing; the card still leaves on time. */
+  .vaf-hb-help-bar { animation: none; opacity: 0; }
   .vaf-hb-popup { opacity: 1; transform: scale(1); }
   .vaf-hb-pick { opacity: 1; }
   .vaf-hb-slot { opacity: 1; transform: scale(1); }

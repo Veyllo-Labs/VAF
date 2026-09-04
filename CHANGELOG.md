@@ -13,6 +13,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **The sub-agent hotbar explains itself once, then gets out of the way.** The drawing
+  that shows what picking a specialist does no longer takes a fixed third of the palette.
+  It is a card floating over the tiles that appears by itself on the first visit, counts
+  ten seconds down and leaves; the info button in the palette header brings it back.
+  The tiles keep one fixed width and wrap, so a very wide window no longer stretches them.
+
 - **The agent waits far longer before it asks again.** When a proactive question stays
   unanswered, the short "are you there?" reminder now goes out after 30 minutes instead
   of 3, and the agent stops chasing the question after 40 minutes instead of 10. The

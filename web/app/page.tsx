@@ -635,6 +635,14 @@ const SUBAGENT_KINDS: SubAgentKind[] = SUBAGENT_KIND_BY_TOOL.map(([, kind]) => k
 // (the globe), so listing it would let someone "add" a thing that is never
 // absent and then wonder why removing it changes nothing.
 const HOTBAR_KINDS: SubAgentKind[] = SUBAGENT_KINDS.filter(k => k !== 'browser');
+// The hotbar's explanation card shows itself on the first visit and leaves again
+// after this long; the countdown bar under it takes its duration from the SAME
+// value (inline animation-duration), so the bar cannot promise a different
+// moment than the timer keeps. Dismissing it by hand, or letting it run out,
+// marks it seen; closing the whole palette early does not - a card nobody had
+// the time to read is not a card that was read.
+const HOTBAR_HELP_AUTO_MS = 10000;
+const HOTBAR_HELP_SEEN_KEY = 'vaf_hotbar_help_seen';
 // The rail's rhythm, in one place: the explainer drawing spaces its icons at
 // 1.67x the globe's width, which is 33px for the real 20px globe. The rail runs
 // left to right in the chat header, so this is a CELL WIDTH rather than an
@@ -8425,6 +8433,55 @@ function VAFDashboardContent() {
     // tiles carry an avatar and an explanation, and the same size as the memory
     // graph modal keeps the app's two "browse everything" surfaces consistent.
     const [subAgentPaletteOpen, setSubAgentPaletteOpen] = useState(false);
+    // The explanation card over the palette: `auto` says it opened itself (and
+    // will leave on its own), a hand-opened one stays until dismissed.
+    const [subAgentHelpOpen, setSubAgentHelpOpen] = useState(false);
+    const [subAgentHelpAuto, setSubAgentHelpAuto] = useState(false);
+    const subAgentHelpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const clearSubAgentHelpTimer = () => {
+        if (subAgentHelpTimerRef.current) { clearTimeout(subAgentHelpTimerRef.current); subAgentHelpTimerRef.current = null; }
+    };
+    const markSubAgentHelpSeen = () => {
+        try { localStorage.setItem(HOTBAR_HELP_SEEN_KEY, '1'); } catch { /* private mode */ }
+    };
+    // Dismissed on purpose, or ran its course: seen either way.
+    const closeSubAgentHelp = () => {
+        clearSubAgentHelpTimer();
+        setSubAgentHelpOpen(false);
+        setSubAgentHelpAuto(false);
+        markSubAgentHelpSeen();
+    };
+    const openSubAgentHelpByHand = () => {
+        clearSubAgentHelpTimer();
+        setSubAgentHelpAuto(false);
+        setSubAgentHelpOpen(true);
+    };
+    useEffect(() => {
+        if (!subAgentPaletteOpen) {
+            // Palette gone: the card goes with it, and an auto card that was
+            // cut short is NOT marked seen - it shows again next time.
+            clearSubAgentHelpTimer();
+            setSubAgentHelpOpen(false);
+            setSubAgentHelpAuto(false);
+            return;
+        }
+        let seen = false;
+        try { seen = localStorage.getItem(HOTBAR_HELP_SEEN_KEY) === '1'; } catch { seen = false; }
+        // Small screens carry the sentence inline (the drawing needs its own
+        // width and the rail it explains is hidden there), so no card.
+        const wide = typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches;
+        if (seen || !wide) return;
+        setSubAgentHelpOpen(true);
+        setSubAgentHelpAuto(true);
+        subAgentHelpTimerRef.current = setTimeout(() => {
+            subAgentHelpTimerRef.current = null;
+            setSubAgentHelpOpen(false);
+            setSubAgentHelpAuto(false);
+            markSubAgentHelpSeen();
+        }, HOTBAR_HELP_AUTO_MS);
+        return () => clearSubAgentHelpTimer();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [subAgentPaletteOpen]);
     const [subAgentQuery, setSubAgentQuery] = useState('');
     // What the user put in the hotbar. Stored PER USER in user_identity.json (the
     // same blob the boot fetch already loads), not in browser storage: the rail is
@@ -8459,6 +8516,8 @@ function VAFDashboardContent() {
     }, []);
     // Level 85 is the palette's own z-[85].
     useEscapeLayer({ active: subAgentPaletteOpen, level: 85, onEscape: () => setSubAgentPaletteOpen(false) });
+    // The card covers the palette, so it answers Escape first (one level up).
+    useEscapeLayer({ active: subAgentPaletteOpen && subAgentHelpOpen, level: 86, onEscape: closeSubAgentHelp });
     const sendBrowserInteractive = useCallback((msg: Record<string, unknown>) => {
         if (ws?.readyState === WebSocket.OPEN && currentSessionId) {
             ws.send(JSON.stringify({ ...msg, sessionId: currentSessionId }));
@@ -11896,18 +11955,42 @@ function VAFDashboardContent() {
                                     <p className="text-sm text-gray-500 truncate">{tMain('subAgentPaletteSubtitle')}</p>
                                 </div>
                             </div>
-                            <button
-                                onClick={() => setSubAgentPaletteOpen(false)}
-                                className="p-2 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors shrink-0"
-                                aria-label={tMain('subAgentPaletteClose')}
-                            >
-                                <X size={20} />
-                            </button>
+                            <div className="flex items-center gap-1 shrink-0">
+                                {/* The explanation, on demand: the card shows itself once
+                                    and this brings it back. Hidden where the card is. */}
+                                <button
+                                    type="button"
+                                    onClick={() => (subAgentHelpOpen ? closeSubAgentHelp() : openSubAgentHelpByHand())}
+                                    aria-pressed={subAgentHelpOpen}
+                                    aria-label={tMain('subAgentPaletteHelp')}
+                                    title={tMain('subAgentPaletteHelp')}
+                                    className={cn(
+                                        'p-2 rounded-lg transition-colors max-md:hidden',
+                                        subAgentHelpOpen
+                                            ? 'bg-gray-100 text-gray-700'
+                                            : 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'
+                                    )}
+                                >
+                                    <Info size={20} />
+                                </button>
+                                <button
+                                    onClick={() => setSubAgentPaletteOpen(false)}
+                                    className="p-2 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors shrink-0"
+                                    aria-label={tMain('subAgentPaletteClose')}
+                                >
+                                    <X size={20} />
+                                </button>
+                            </div>
                         </div>
 
-                        <div className="flex min-h-0 flex-1">
-                            {/* Left: search, then the specialists as tiles */}
-                            <div className="flex min-h-0 flex-1 flex-col p-6 max-md:p-4">
+                        <div className="relative flex min-h-0 flex-1">
+                            {/* Search, then the specialists as tiles - the whole width now,
+                                the explanation floats over it as a card. A click anywhere
+                                on this side puts a visible card away. */}
+                            <div
+                                className="flex min-h-0 flex-1 flex-col p-6 max-md:p-4"
+                                onClick={() => { if (subAgentHelpOpen) closeSubAgentHelp(); }}
+                            >
                                 {/* Small screens lose the drawing (it needs its own width, and
                                     the rail it explains is hidden there), so the sentence has
                                     to carry the explanation alone. */}
@@ -11971,7 +12054,11 @@ function VAFDashboardContent() {
                                     }
                                     return (
                                         <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
-                                            <div className="grid grid-cols-4 gap-3 max-[1500px]:grid-cols-3 max-[1200px]:grid-cols-2 max-[1050px]:grid-cols-1">
+                                            {/* Fixed tracks, not a column count: a tile is 352px wide on every
+                                                screen and the row simply holds as many as fit, so a wide
+                                                window shows more tiles instead of wider ones. Phones get
+                                                the one full-width column. */}
+                                            <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,352px)] max-md:[grid-template-columns:1fr]">
                                                 {shown.map(({ kind, name, desc, Icon }) => {
                                                     const picked = hotbarPicks.includes(kind);
                                                     return (
@@ -12041,21 +12128,38 @@ function VAFDashboardContent() {
                                 })()}
                             </div>
 
-                            {/* Right: a recessed panel - one step darker than the surface it
-                                sits in, on both themes (gray-50 folds BELOW white in dark),
-                                with an inner shadow so it reads as depth rather than as a
-                                second surface. What picking one does, drawn rather than
-                                listed: the pointer opens the hotbar, picks a tile, and the
-                                pick takes its seat in the rail beside the globe - then the
-                                same in reverse. Styles and the shared 12s timeline: globals.css. */}
-                            <div className="w-[36%] min-w-[420px] max-w-[620px] flex-none border-l border-gray-200 bg-gray-50 shadow-inner flex flex-col gap-5 px-6 pt-6 pb-8 max-md:hidden">
+                            {/* The explanation as a CARD over the tiles, top right, where the
+                                rail it explains sits in the real window - one step darker
+                                than the surface under it (gray-50 folds BELOW white in dark).
+                                It shows itself on the first visit and leaves after
+                                HOTBAR_HELP_AUTO_MS, the thin bar under it counting that
+                                down; the info button in the header brings it back. What
+                                picking one does, drawn rather than listed: the pointer opens
+                                the hotbar, picks a tile, and the pick takes its seat in the
+                                rail beside the globe - then the same in reverse. Styles and
+                                the shared 12s timeline: globals.css. */}
+                            {subAgentHelpOpen && (
+                            <div
+                                className="absolute right-6 top-6 z-20 w-[520px] max-w-[calc(100%-3rem)] rounded-2xl border border-gray-200 bg-gray-50 shadow-2xl flex flex-col gap-4 px-6 pt-4 pb-6 animate-in fade-in zoom-in-95 duration-200 max-md:hidden"
+                                role="note"
+                                aria-label={tMain('subAgentPaletteHelp')}
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                <div className="flex items-center justify-between">
+                                    <span className="text-sm font-semibold text-gray-900">{tMain('subAgentPaletteHelp')}</span>
+                                    <button
+                                        type="button"
+                                        onClick={closeSubAgentHelp}
+                                        aria-label={tMain('subAgentPaletteHelpClose')}
+                                        className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                                    >
+                                        <X size={16} />
+                                    </button>
+                                </div>
                                 {/* Order matters: the window and its rail icons first, the
                                     panel last, so the panel that opens sits OVER the icons
                                     the way the real one does. */}
-                                {/* flex-1: the drawing takes the room that is there rather
-                                    than a fixed box - no dead space below it, and no need
-                                    to widen the column at the content side's expense. */}
-                                <div className="vaf-hb-demo flex-1" aria-hidden="true">
+                                <div className="vaf-hb-demo h-[380px] flex-none" aria-hidden="true">
                                     <div className="vaf-hb-window-blur" />
                                     <div className="vaf-hb-window" />
                                     <div className="vaf-hb-dot vaf-hb-globe"><Globe size={24} strokeWidth={2.2} /></div>
@@ -12077,7 +12181,18 @@ function VAFDashboardContent() {
                                 <p className="mx-auto max-w-[380px] flex-none text-center text-xs leading-relaxed text-gray-500">
                                     {tMain('subAgentPaletteExplain')}
                                 </p>
+                                {/* The time the card gives itself, as a bar running out. Its
+                                    duration is the timer's own constant, set inline, so the
+                                    stylesheet cannot hold a second number. */}
+                                {subAgentHelpAuto && (
+                                    <div
+                                        className="vaf-hb-help-bar"
+                                        style={{ animationDuration: `${HOTBAR_HELP_AUTO_MS}ms` }}
+                                        aria-hidden="true"
+                                    />
+                                )}
                             </div>
+                            )}
                         </div>
                     </div>
                 </div>

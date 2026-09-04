@@ -63,6 +63,8 @@ export interface ChannelDashboardShellProps {
     /** Extra controls in the conversation header for the selected chat (assign a number, add as contact). */
     conversationExtra?: (chat: ShellChat) => React.ReactNode;
     conversationNote?: string | null;
+    /** Rendered as the first element of the message list, so it is what a reader sees when scrolling up (load older messages). */
+    conversationTop?: (chat: ShellChat) => React.ReactNode;
     settingsTitle: string;
     settingsContent: React.ReactNode;
     settingsOpen: boolean;
@@ -147,7 +149,7 @@ export const INPUT = 'bg-[#262626] border border-[#2e2e2e] rounded-lg px-3 py-1.
 export default function ChannelDashboardShell(props: ChannelDashboardShellProps) {
     const {
         isOpen, onClose, icon, iconClass, title, subtitle, dot, dotTitle, chats, loading, loadFailed, onRefresh,
-        historyUrl, historyVersion, selectedId, onSelect, banner, conversationExtra, conversationNote,
+        historyUrl, historyVersion, selectedId, onSelect, banner, conversationExtra, conversationNote, conversationTop,
         settingsTitle, settingsContent, settingsOpen, onSettingsOpenChange,
     } = props;
     const t = useTranslations('settings.channelDashboard');
@@ -369,6 +371,9 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                     {conversationNote && <p className="w-full text-xs text-[#e08c8c]">{conversationNote}</p>}
                                 </div>
                                 <div ref={inlineChatRef} className="flex-1 min-h-0 overflow-y-auto bg-[#151515] p-5 flex flex-col gap-2.5">
+                                    {conversationTop && chatMessages.length > 0 && (
+                                        <div className="self-center">{conversationTop(selected)}</div>
+                                    )}
                                     {historyLoading && sessionHistory.length === 0 ? (
                                         <p className="text-sm text-[#9a9a9a]">{t('loadingHistory')}</p>
                                     ) : chatMessages.length === 0 ? (

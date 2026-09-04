@@ -84,8 +84,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   because the shared input style's padding was applied after the field's own; the
   order is fixed. The WhatsApp dashboard also knows the contact book: a chat whose
   number is already a contact no longer offers "add as contact" but says so and offers
-  "let the agent reply" instead, which sets the Front Office flag on the existing
-  record.
+  "let the agent reply" instead: a switch that asks once, in a dialog, whether the
+  agent may talk to this person in Front Office mode, and that clears the flag again
+  without a question. "Load older messages" moved from the conversation header into
+  the message list itself, as a small pill where scrolling up lands, so the header
+  keeps only what belongs to the person.
 
 - **A contact has a status, dated notes and upcoming events.** The contact book grows
   into a small CRM: a free status label (lead, in contact, customer, archived, or your own

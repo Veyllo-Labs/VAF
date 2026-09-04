@@ -12,6 +12,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslations } from 'next-intl';
 import { Phone, UserPlus, Trash2, AlertTriangle, BookUser } from 'lucide-react';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { cn } from '@/lib/utils';
 import MessagesChart from './MessagesChart';
 import ChannelDashboardShell, { BADGE_CLS, BTN, BTN_PRIMARY, INPUT, KvRow, SettingsCard, ShellChat, fmtUntil } from './ChannelDashboardShell';
@@ -74,6 +75,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const [assignPhone, setAssignPhone] = useState('');
     const [note, setNote] = useState<string | null>(null);
     const [addingContact, setAddingContact] = useState(false);
+    const [reachConfirm, setReachConfirm] = useState<WhatsAppSession | null>(null);
     const [windowInput, setWindowInput] = useState('');
     const [windowMsg, setWindowMsg] = useState<string | null>(null);
     const [olderBusy, setOlderBusy] = useState(false);
@@ -262,7 +264,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         }
     };
 
-    const handleAllowReach = async (s: WhatsAppSession) => {
+    const handleAllowReach = async (s: WhatsAppSession, allow: boolean) => {
         if (!s.contact_id) return;
         setAddingContact(true);
         setNote(null);
@@ -271,7 +273,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
-                body: JSON.stringify({ allow_as_assistant_user: true }),
+                body: JSON.stringify({ allow_as_assistant_user: allow }),
             });
             if (!res.ok) { setNote(t('addContactFailed')); return; }
             fetchDashboard();
@@ -398,7 +400,9 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         if (!s) return null;
         const phone = s.resolved_e164 || s.phone_number || '';
         const canAddContact = !s.needs_assign && !s.contact_id && (s.type === 'conversation' || s.type === 'unknown') && !!phone && !phone.includes('@');
-        const knownButSilent = !s.needs_assign && !!s.contact_id && (s.type === 'conversation' || s.type === 'unknown');
+        // A contact-book record (Front Office flag on or off) gets a switch; the owner's own number never does.
+        const hasBookRecord = !s.needs_assign && !!s.contact_id && s.type !== 'owner';
+        const reachOn = s.type === 'contact';
         return (
             <>
                 {s.needs_assign && (
@@ -407,27 +411,38 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                         <button type="button" onClick={() => handleAssign(s.chat_id)} disabled={!assignPhone.trim()} className={BTN_PRIMARY}>{t('assign')}</button>
                     </div>
                 )}
-                {!s.needs_assign && (
-                    <button type="button" onClick={() => handleLoadOlder(s.chat_id)} disabled={olderBusy} className={BTN}>
-                        {olderBusy ? t('loadingOlder') : t('loadOlder')}
-                    </button>
-                )}
                 {canAddContact && (
                     <button type="button" onClick={() => handleAddAsContact(s)} disabled={addingContact} className={cn('flex items-center gap-1.5', BTN)}>
                         <UserPlus className="w-4 h-4" />{t('addAsContact')}
                     </button>
                 )}
-                {knownButSilent && (
+                {hasBookRecord && (
                     <>
                         <span className="text-xs text-[#9a9a9a] flex items-center gap-1.5" title={s.contact_name || undefined}>
                             <BookUser className="w-4 h-4" />{t('inContacts')}
                         </span>
-                        <button type="button" onClick={() => handleAllowReach(s)} disabled={addingContact} className={cn('flex items-center gap-1.5', BTN)}>
-                            <UserPlus className="w-4 h-4" />{t('allowReach')}
-                        </button>
+                        <label className="flex items-center gap-2 text-xs text-[#d0d0d0] cursor-pointer select-none">
+                            <button type="button" role="switch" aria-checked={reachOn} disabled={addingContact}
+                                onClick={() => reachOn ? handleAllowReach(s, false) : setReachConfirm(s)}
+                                className={cn('relative w-9 h-5 rounded-full transition-colors border', reachOn ? 'bg-[#25a244] border-[#25a244]' : 'bg-[#262626] border-[#444]')}>
+                                <span className={cn('absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform', reachOn ? 'translate-x-4' : 'translate-x-0.5')} />
+                            </button>
+                            {t('allowReach')}
+                        </label>
                     </>
                 )}
             </>
+        );
+    };
+
+    const conversationTop = (chat: ShellChat) => {
+        const s = sessionsById.get(chat.id);
+        if (!s || s.needs_assign) return null;
+        return (
+            <button type="button" onClick={() => handleLoadOlder(s.chat_id)} disabled={olderBusy}
+                className="text-[11px] text-[#9a9a9a] bg-[#1f1f1f] hover:text-[#e8e8e8] px-2.5 py-0.5 rounded-full disabled:opacity-50">
+                {olderBusy ? t('loadingOlder') : t('loadOlder')}
+            </button>
         );
     };
 
@@ -493,6 +508,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     );
 
     return (
+        <>
         <ChannelDashboardShell
             isOpen={isOpen}
             onClose={onClose}
@@ -512,11 +528,24 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             onSelect={(id) => { setSelectedChatId(id); setNote(null); }}
             banner={banner}
             conversationExtra={conversationExtra}
+            conversationTop={conversationTop}
             conversationNote={note}
             settingsTitle={t('settingsTitle')}
             settingsContent={settingsContent}
             settingsOpen={showSettings}
             onSettingsOpenChange={setShowSettings}
         />
+        <ConfirmDialog
+            open={reachConfirm !== null}
+            title={t('allowReachConfirmTitle')}
+            body={t('allowReachConfirmBody', { name: reachConfirm?.contact_name || reachConfirm?.display_name || reachConfirm?.phone_number || '' })}
+            confirmLabel={t('allowReachConfirmYes')}
+            cancelLabel={t('allowReachConfirmNo')}
+            onConfirm={() => { const s = reachConfirm; setReachConfirm(null); if (s) handleAllowReach(s, true); }}
+            onCancel={() => setReachConfirm(null)}
+            zIndexClass="z-[60]"
+            escapeLevel={53}
+        />
+        </>
     );
 }

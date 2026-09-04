@@ -11,6 +11,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+
+- **A chat that finishes while you are in another chat now gets its red dot.** The
+  completion event of a chat travelled only to the browser subscribed to that chat,
+  and switching chats moves the subscription, so the sidebar mark for a finished
+  background chat never arrived. The completion now also reaches the owner's other
+  connections; the live stream of a chat still stays with the chat that is open.
+
+- **Returning to a finished chat no longer shows the model's reasoning of every step
+  as plain text inside the answer.** The stream buffer that becomes the stored answer
+  is cleared before each round that follows a tool round; that clear was keyed on the
+  last history entry being a tool result, which a nudge or a compaction after the
+  results defeats, so the stored answer accumulated every round's think block and the
+  reload rendered them as text. The clear is now keyed on the finished round itself.
+
 
 ## [0.1.0a27] - 2026-09-03
 

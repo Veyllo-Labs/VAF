@@ -9624,6 +9624,14 @@ class Agent:
         # re-enters after an answer was already validated and committed - this
         # list is what keeps those answers part of the reply (_join_turn_answers).
         kept_turn_answers: list = []
+        # True from the moment a tool round finished until the next round starts
+        # streaming. The post-tool buffer clear below keys on THIS, not on the
+        # shape of the history tail: a deferred error nudge, an anti-spin or
+        # no-progress note, a limit reminder, or a compaction that trims the
+        # history below the turn snapshot all leave something other than a tool
+        # result last, and every one of them silently kept the buffer growing -
+        # measured live: one stored answer holding seven rounds' think blocks.
+        _tool_round_completed = False
         streaming_tools = {}
         tool_calls_detected = []
         
@@ -9689,7 +9697,12 @@ class Agent:
             # When we're about to stream the next assistant turn after tool execution,
             # clear the Web UI stream buffer so only the final reply is shown (not the
             # pre-tool text like "Ich werde get_contact nutzen..." plus tool blocks).
-            if len(self.history) > history_snapshot_len + 1 and self.history[-1].get("role") == "tool":
+            # The buffer is what the web bubble shows AND what the session stores as
+            # the turn's answer; the rounds before it are persisted as the tool-call
+            # messages they belong to. Keyed on the completed round (see the flag's
+            # note above), never on `history[-1]` being a tool result.
+            if _tool_round_completed:
+                _tool_round_completed = False
                 if stream_callback and hasattr(stream_callback, "clear"):
                     try:
                         stream_callback.clear()
@@ -11774,6 +11787,7 @@ class Agent:
                         pass
 
                 UI.event("Debug", f"Summarizing intel (turn {tool_turn_count}/{SOFT_LIMIT_TOOL_TURNS} soft / {MAX_TOOL_TURNS_PER_STEP} hard)...", style="dim")
+                _tool_round_completed = True   # the next stream is a new round: clear the buffer first
                 continue
             
             # 2. Handle Empty / Think-Only Responses

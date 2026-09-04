@@ -72,6 +72,7 @@ Singleton pattern manager that:
 
 - **Create Sessions**: New chat sessions via sidebar
 - **Load Sessions**: Switch between existing conversations
+- **Unread mark**: a chat that finishes a turn, or receives a proactive message, while another chat is open shows a pulsing red dot on its sidebar row until it is opened. The turn's completion reaches the browser even though its subscription moved with the switch - see the terminal-event rule in [WEBUI_WEBSOCKET_FLOW.md](WEBUI_WEBSOCKET_FLOW.md). The completion sound belongs to the open chat only.
 - **Delete Sessions**: Remove unwanted sessions
 - **Auto-Save**: Sessions persist automatically
 - **Session List**: Displays recent sessions for the current user only (filtered by `user_scope_id`). Every session command (load, chat, delete, rename, hide, artifact edit) verifies ownership before acting; other users' sessions are not accessible. Legacy sessions with no recorded scope are admin-only when acting on them.

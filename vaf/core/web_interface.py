@@ -11,6 +11,14 @@ from typing import List, Dict, Any, Optional
 
 # Throttle log pushes to WebUI so typing and UI stay responsive (max ~3 log updates/sec)
 LOG_PUSH_THROTTLE_SEC = 0.35
+
+# Session-scoped events that must ALSO reach the session's owner when no
+# connection is subscribed to the session any more. The live stream of a chat
+# is display isolation and stays per subscription; the event that says "this
+# chat's turn is over" is bookkeeping the owner's other views need - the sidebar
+# unread mark and the per-chat loader state - and a person who switched chats
+# mid-turn has, by definition, no subscription left to receive it on.
+TERMINAL_SESSION_EVENTS = frozenset({"message_complete"})
 from fastapi import WebSocket
 from vaf.core.platform import Platform
 from vaf.core.log_helper import append_domain_log
@@ -288,6 +296,54 @@ class WebInterfaceManager:
                 f"subs={list(self.connection_sessions.values())} disconnected={len(disconnected)} "
                 f"loop={loop_id}"
             )
+
+    async def broadcast_to_session_and_owner(self, session_id: str,
+                                             owner_scope: Optional[str],
+                                             message: dict):
+        """Deliver one event to the session's subscribers AND to every other
+        connection of the session's owner, each connection at most once.
+
+        The subscriber half is `broadcast_to_session` unchanged (an admin
+        watching another account's chat is a subscriber and keeps receiving).
+        The owner half is what a terminal event needs: the browser that
+        switched away from this chat mid-turn is subscribed elsewhere, so the
+        subscriber lane alone can never tell it the turn ended - measured live:
+        the completion of a backgrounded chat reached nobody, and the sidebar
+        never marked it unread. No owner (unprovable ownership) means the
+        subscriber lane alone, never a wider one.
+        """
+        if not session_id:
+            return await self.broadcast(message)
+        message['sessionId'] = session_id
+        owner = str(owner_scope).strip() if owner_scope else ""
+        disconnected = []
+        for connection in self.active_connections:
+            subscribed = self.connection_sessions.get(connection) == session_id
+            conn_user = self.connection_users.get(connection)
+            is_owner = bool(owner) and conn_user is not None and str(conn_user).strip() == owner
+            if not (subscribed or is_owner):
+                continue
+            try:
+                await connection.send_text(json.dumps(message))
+            except Exception as send_err:
+                disconnected.append(connection)
+                _diag_log(f"[SEND_FAIL] broadcast_to_session_and_owner({session_id}) "
+                          f"type={message.get('type')} err={send_err}")
+        for conn in disconnected:
+            self.disconnect(conn)
+
+    def session_event_coroutine(self, session_id: str, data: dict):
+        """The coroutine that delivers one session-scoped event.
+
+        ONE decision for both producers of the session lane - the in-process
+        push and the HTTP fallback endpoint: a type in TERMINAL_SESSION_EVENTS
+        reaches the owner as well (`broadcast_to_session_and_owner`), every
+        other type stays per subscription (`broadcast_to_session`).
+        """
+        if data.get('type') in TERMINAL_SESSION_EVENTS:
+            return self.broadcast_to_session_and_owner(
+                session_id, self._session_owner_scope(str(session_id)), data)
+        return self.broadcast_to_session(session_id, data)
 
     async def broadcast_to_user(self, user_id: str, message: dict):
         """
@@ -807,7 +863,7 @@ class WebInterfaceManager:
             loop = self._get_dispatch_loop()
             if loop:
                 asyncio.run_coroutine_threadsafe(
-                    self.broadcast_to_session(session_id, data),
+                    self.session_event_coroutine(session_id, data),
                     loop
                 )
                 msg_type = data.get('type', '')

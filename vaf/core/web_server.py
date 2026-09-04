@@ -2254,7 +2254,9 @@ async def receive_subagent_stream(update: SubAgentStreamUpdate):
                 data["roomId"] = route[0]
                 await manager.broadcast_to_user(route[1], data)
             else:
-                await manager.broadcast_to_session(update.sessionId, data)
+                # Same decision as the in-process push: a terminal event
+                # reaches the owner too, everything else stays per subscription.
+                await manager.session_event_coroutine(update.sessionId, data)
         else:
             await manager.broadcast(data)
     except Exception as e:

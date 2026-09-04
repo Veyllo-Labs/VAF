@@ -129,3 +129,44 @@ def test_every_buffer_clear_restores_the_kept_answers():
             "a stream_callback.clear() is not followed by the restream; the web "
             f"bubble loses validated answers there. Context: {src[pos-200:pos+120]!r}"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The post-tool buffer clear (static, same house style)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The web stream buffer is what the bubble shows AND what the session stores as
+# the turn's answer. It is cleared before the round that follows a tool round,
+# so the rounds before it live only in the tool-call messages they belong to.
+# That clear used to be keyed on the history tail being a tool result, and the
+# tail is not that whenever a deferred error nudge, an anti-spin or no-progress
+# note, a limit reminder or a compaction trim lands after the results - every
+# such round kept the buffer growing. Measured live: one stored answer carrying
+# seven rounds' think blocks, rendered as plain text after a reload because only
+# a LEADING think block is a thinking panel.
+
+def test_the_buffer_clear_is_keyed_on_the_completed_round_not_the_history_tail():
+    """MUTATION: restore the `history[-1].get("role") == "tool"` probe and this
+    goes red, and the concatenated-rounds defect is back."""
+    src = _agent_source()
+    assert 'history[-1].get("role") == "tool"' not in src, (
+        "the post-tool buffer clear probes the history tail again; a system "
+        "note or a compaction after the tool results disables the clear")
+    i = src.index("if _tool_round_completed:")
+    window = src[i:i + 400]
+    assert "_tool_round_completed = False" in window, "the flag is not consumed"
+    assert "stream_callback.clear()" in window, "the flag no longer clears the buffer"
+
+
+def test_the_flag_is_raised_where_the_tool_round_ends():
+    """The one `continue` that re-enters the loop after tool execution must
+    raise the flag right before it; a tool round that does not raise it is a
+    round whose text stacks into the answer."""
+    src = _agent_source()
+    i = src.index("Summarizing intel (turn {tool_turn_count}")
+    following = src[i:i + 300]
+    assert "_tool_round_completed = True" in following, (
+        "the post-tool continue no longer announces the finished round")
+    assert following.index("_tool_round_completed = True") < following.index("continue"), (
+        "the flag must be raised BEFORE the continue, or the next round streams "
+        "into the old buffer")

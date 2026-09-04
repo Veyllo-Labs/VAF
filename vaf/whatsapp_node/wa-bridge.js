@@ -161,6 +161,9 @@ function loadContactCache() {
     const data = JSON.parse(fs.readFileSync(p, "utf-8"));
     for (const [jid, c] of Object.entries(data?.contacts || {})) contactStore.set(jid, c);
     for (const [lid, e164] of Object.entries(data?.lids || {})) if (!lidToE164Map.has(lid)) lidToE164Map.set(lid, e164);
+    // Chats (with their names and last activity) come only with a full history sync,
+    // which WhatsApp sends once per link; without the cache a restart shows none.
+    for (const [jid, c] of Object.entries(data?.chats || {})) if (!chatStore.has(jid) && c && c.jid) chatStore.set(jid, c);
     try { fs.writeSync(2, `${LOG_PREFIX} contact cache loaded: ${contactStore.size} names, ${lidToE164Map.size} lid mappings\n`); } catch (_) {}
   } catch (err) {
     try { fs.writeSync(2, `${LOG_PREFIX} contact cache unreadable: ${err?.message ?? err}\n`); } catch (_) {}
@@ -173,7 +176,7 @@ function scheduleSaveContacts() {
     const p = contactsCachePath();
     if (!p) return;
     try {
-      const data = { contacts: Object.fromEntries(contactStore), lids: Object.fromEntries(lidToE164Map) };
+      const data = { contacts: Object.fromEntries(contactStore), lids: Object.fromEntries(lidToE164Map), chats: Object.fromEntries(chatStore) };
       fs.writeFileSync(p, JSON.stringify(data), { mode: 0o600 });
     } catch (err) {
       try { fs.writeSync(2, `${LOG_PREFIX} contact cache not saved: ${err?.message ?? err}\n`); } catch (_) {}
@@ -374,6 +377,7 @@ function emitChatsNow() {
 /** Event-driven chat-list update: coalesced (see scheduleEmitChats). An explicit getChats
  *  command answers immediately through emitChatsNow. */
 function emitChats() {
+  scheduleSaveContacts();
   scheduleEmitChats();
 }
 
@@ -383,7 +387,17 @@ async function connect(authDir) {
   currentAuth = state;
   if (contactStore.size === 0) loadContactCache();
   const { version } = await fetchLatestBaileysVersion();
-  const logger = { fatal: () => {}, error: () => {}, warn: () => {}, info: () => {}, debug: () => {}, trace: () => {}, child: () => logger };
+  // Baileys' own log lines about the app-state sync go to stderr (Python mirrors it into
+  // whatsapp_qr.log); everything else stays silent. Those lines are the only way to see
+  // whether a contact resync fetched a snapshot, how many mutations it carried, or why
+  // it gave up, and that question came up live.
+  const forward = (level) => (...args) => {
+    try {
+      const text = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+      if (/sync|mutation|snapshot|contact|app.?state/i.test(text)) fs.writeSync(2, `${LOG_PREFIX} baileys.${level}: ${text.slice(0, 600)}\n`);
+    } catch (_) {}
+  };
+  const logger = { fatal: forward("fatal"), error: forward("error"), warn: forward("warn"), info: forward("info"), debug: forward("debug"), trace: () => {}, child: () => logger };
 
   const sock = makeWASocket({
     auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
@@ -477,6 +491,15 @@ async function connect(authDir) {
   });
 
   sock.ev.on("messaging-history.set", (evt) => {
+    // The sync carries the people too: address-book names (or push names) plus the
+    // LID/phone pair of every conversation. That, not the app-state contact
+    // collection, is where WhatsApp hands over names (live: the app-state records
+    // carry only timestamps).
+    const syncContacts = evt?.contacts;
+    if (Array.isArray(syncContacts)) {
+      for (const c of syncContacts) rememberContact(c);
+      try { fs.writeSync(2, `${LOG_PREFIX} messaging-history.set: ${syncContacts.length} contacts (store ${contactStore.size})\n`); } catch (_) {}
+    }
     const newChats = evt?.chats || evt?.conversations;
     const count = Array.isArray(newChats) ? newChats.length : 0;
     try {
@@ -872,6 +895,23 @@ async function main() {
             if (reqId) emit({ type: "avatar", req_id: reqId, success: false, error: msg });
           }
         })();
+      } else if (obj?.cmd === "getContacts") {
+        // Everything the contact store knows, as phone -> name, so Python can name the
+        // chats it lists from the message store and fill the contact book even when
+        // the Node's own chat list is empty (it is, after every restart without a sync).
+        const out = [];
+        const seen = new Set();
+        for (const [jid, c] of contactStore) {
+          const name = (c?.name || c?.verifiedName || c?.notify || "").toString().trim();
+          if (!name) continue;
+          let e164 = jidToPhone(jid);
+          if (!e164 && jid.endsWith("@lid")) e164 = lidToE164Map.get(jid) || "";
+          if (!e164 || seen.has(e164)) continue;
+          seen.add(e164);
+          out.push({ jid, e164, name, source: c?.name ? "addressbook" : c?.verifiedName ? "business" : "push" });
+        }
+        try { fs.writeSync(2, `${LOG_PREFIX} getContacts: ${out.length} named numbers (store ${contactStore.size})\n`); } catch (_) {}
+        emit({ type: "contacts", contacts: out });
       } else if (obj?.cmd === "resyncContacts") {
         // Names come from the app-state "contact" collection (critical_unblock_low). A
         // reconnect only fetches deltas since the stored version, so a bridge that missed

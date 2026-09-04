@@ -59,6 +59,12 @@ _lid_mappings: Dict[str, List[Dict[str, str]]] = {}
 _lid_mappings_events: Dict[str, threading.Event] = {}
 _lid_mappings_lock = threading.Lock()
 
+# Named numbers from the Node's contact store (phone digits -> {name, source, e164}), the
+# names WhatsApp shows; asked for like the LID mappings.
+_contact_names: Dict[str, Dict[str, Dict[str, str]]] = {}
+_contact_names_events: Dict[str, threading.Event] = {}
+_contact_names_lock = threading.Lock()
+
 # Connection check: ping/pong from Node to verify socket is connected
 _connection_status: Dict[str, bool] = {}
 _connection_events: Dict[str, threading.Event] = {}
@@ -1625,6 +1631,32 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             if ev:
                 ev.set()
             _sync_contacts_from_chats(username, user_scope_id, chats)
+    elif typ == "contacts":
+        contacts = obj.get("contacts")
+        if isinstance(contacts, list):
+            names: Dict[str, Dict[str, str]] = {}
+            for c in contacts:
+                if not isinstance(c, dict):
+                    continue
+                digits = _phone_digits_canonical(str(c.get("e164") or ""))
+                name = str(c.get("name") or "").strip()
+                if digits and name:
+                    names[digits] = {"name": name, "source": str(c.get("source") or ""), "e164": _to_e164_display(str(c.get("e164") or ""))}
+            with _contact_names_lock:
+                _contact_names[username] = names
+                ev = _contact_names_events.get(username)
+                if ev:
+                    ev.set()
+            # The same names feed the contact book: a named number is a person, chat or no chat.
+            try:
+                from vaf.core.contacts_store import sync_channel_contacts
+                entries = [{"endpoint": v["e164"], "display_name": v["name"]} for v in names.values() if v.get("e164")]
+                if entries:
+                    result = sync_channel_contacts("whatsapp", entries, username, user_scope_id=user_scope_id)
+                    if result.get("created") or result.get("linked"):
+                        logger.info("WhatsApp: contact book synced from names for %s: %s", username, result)
+            except Exception as e:
+                logger.warning("WhatsApp: contact sync from names failed for %s: %s", username, e)
     elif typ == "lid_mappings":
         mappings = obj.get("mappings")
         if isinstance(mappings, list):
@@ -2091,7 +2123,7 @@ def get_avatar(username: str, chat_jid: str, wait_timeout: float = 8.0) -> Optio
     return None
 
 
-def resync_contacts(username: str, wait_timeout: float = 60.0) -> Tuple[bool, str]:
+def resync_contacts(username: str, wait_timeout: float = 60.0, user_scope_id: Optional[str] = None) -> Tuple[bool, str]:
     """Ask the Node to fetch the phone's contact names again (a full snapshot of the
     app-state contact collection; see `resyncContacts` in wa-bridge.js). Returns
     (ok, error). Slow by nature: WhatsApp streams the whole collection."""
@@ -2120,8 +2152,66 @@ def resync_contacts(username: str, wait_timeout: float = 60.0) -> Tuple[bool, st
         return False, f"Could not reach the bridge: {e}"
     if success:
         _contact_sync_last.pop(uname, None)   # the next chat list may feed the contact book at once
+        threading.Thread(target=_fetch_names_per_chat, args=(uname, user_scope_id), daemon=True).start()
         return True, ""
     return False, error or "WhatsApp refused the contact sync."
+
+
+NAMES_PASS_MAX_CHATS = 120
+NAMES_PASS_INTERVAL = 1.0
+
+
+def _fetch_names_per_chat(username: str, user_scope_id: Optional[str]) -> int:
+    """Second half of "reload names": the app-state contact collection carries no names
+    (verified live: its records hold a timestamp and nothing else), so the names have to
+    come the way the first sync delivered them, inside a history batch. One on-demand
+    history request per stored chat (count 1) makes WhatsApp answer with that
+    conversation, name included; the Node folds it into its stores and the chat list
+    re-emits with names. One request per second, capped, in the background."""
+    from vaf.core.channel_message_store import get_chat_messages, list_chats_from_store
+    uname = (username or "").strip() or "admin"
+    try:
+        rows = list_chats_from_store(uname, limit=NAMES_PASS_MAX_CHATS, user_scope_id=user_scope_id)
+    except Exception:
+        return 0
+    sent = 0
+    for row in rows:
+        chat_id = str(row.get("chat_id") or "").strip()
+        if not chat_id:
+            continue
+        jid = chat_id if "@" in chat_id else _e164_to_jid(chat_id)
+        if not jid or not (jid.endswith("@s.whatsapp.net") or jid.endswith("@lid")):
+            continue
+        try:
+            newest = get_chat_messages(uname, chat_id, limit=1, user_scope_id=user_scope_id)
+        except Exception:
+            newest = []
+        if not newest or not newest[0].get("message_id") or str(newest[0]["message_id"]).startswith("_"):
+            continue
+        with _process_lock:
+            proc = _processes.get(uname)
+            if (not proc or proc.poll() is not None or not proc.stdin) and len(_processes) == 1:
+                proc = next(iter(_processes.values()))
+        if not proc or proc.poll() is not None or not proc.stdin:
+            break
+        cmd = {
+            "cmd": "fetchHistory", "jid": jid, "count": 1,
+            "oldestId": newest[0]["message_id"], "oldestFromMe": newest[0].get("direction") == "out",
+            "oldestTs": float(newest[0].get("ts") or time.time()),
+        }
+        try:
+            proc.stdin.write(json.dumps(cmd) + "\n")
+            proc.stdin.flush()
+        except Exception:
+            break
+        sent += 1
+        time.sleep(NAMES_PASS_INTERVAL)
+    try:
+        from vaf.core.log_helper import log_whatsapp_qr
+        log_whatsapp_qr(f"[contacts] names pass: asked WhatsApp for {sent} conversations")
+    except Exception:
+        pass
+    return sent
 
 
 def _request_lid_mappings(username: str) -> Optional[str]:
@@ -2143,6 +2233,48 @@ def _request_lid_mappings(username: str) -> Optional[str]:
         except Exception as e:
             logger.warning("WhatsApp getLidMappings failed for %s: %s", username, e)
     return None
+
+
+def _request_contacts(username: str) -> Optional[str]:
+    """Ask the Node for its named numbers. Returns the username whose process answered, or None."""
+    with _process_lock:
+        proc = _processes.get(username)
+        target_username = username
+        if not proc or proc.poll() is not None or not proc.stdin:
+            if len(_processes) == 1:
+                target_username = next(iter(_processes.keys()))
+                proc = _processes.get(target_username)
+            else:
+                proc = None
+    if proc and proc.poll() is None and proc.stdin:
+        try:
+            proc.stdin.write(json.dumps({"cmd": "getContacts"}) + "\n")
+            proc.stdin.flush()
+            return target_username
+        except Exception as e:
+            logger.warning("WhatsApp getContacts failed for %s: %s", username, e)
+    return None
+
+
+def get_contact_names(username: str, wait_timeout: float = 2.5) -> Dict[str, Dict[str, str]]:
+    """Phone digits -> {name, source, e164} as WhatsApp shows them (address book, business
+    name or push name), from the Node's contact store. The last answer when the bridge is
+    down or slow; empty when it never answered."""
+    if not is_bridge_running():
+        with _contact_names_lock:
+            return dict(_contact_names.get(username, {}))
+    used = _request_contacts(username)
+    if not used:
+        with _contact_names_lock:
+            return dict(_contact_names.get(username, {}))
+    with _contact_names_lock:
+        if used not in _contact_names_events:
+            _contact_names_events[used] = threading.Event()
+        ev = _contact_names_events[used]
+        ev.clear()
+    ev.wait(timeout=wait_timeout)
+    with _contact_names_lock:
+        return dict(_contact_names.get(used, {}))
 
 
 def get_lid_mappings(username: str, wait_timeout: float = 2.5) -> List[Dict[str, str]]:

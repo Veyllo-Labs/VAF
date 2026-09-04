@@ -370,6 +370,21 @@ async def get_whatsapp_dashboard(request: Request):
                         break
     except Exception:
         pass
+    # Names WhatsApp shows (address book, business, push name) for the numbers still unnamed.
+    try:
+        from vaf.api.whatsapp_bridge import get_contact_names, _phone_digits_canonical as _canon
+        wa_names = get_contact_names(username, wait_timeout=2.0)
+        if wa_names:
+            for rec in sessions_by_chat.values():
+                if (rec.get("name") or "").strip():
+                    continue
+                for cand in (rec.get("resolved_e164"), rec.get("phone_number"), rec.get("chat_id")):
+                    d = _canon(str(cand or "")) if cand and "@lid" not in str(cand) else ""
+                    if d and d in wa_names:
+                        rec["name"] = wa_names[d]["name"]
+                        break
+    except Exception:
+        pass
     for rec in sessions_by_chat.values():
         rec.setdefault("last_ts", 0)
         rec.setdefault("message_count", 0)
@@ -1004,7 +1019,7 @@ async def resync_whatsapp_contacts(request: Request):
     if not is_bridge_running():
         raise HTTPException(status_code=503, detail="WhatsApp bridge not running.")
     user_info = get_current_vaf_user(request)
-    ok, error = await asyncio.to_thread(resync_contacts, user_info["username"])
+    ok, error = await asyncio.to_thread(resync_contacts, user_info["username"], 60.0, user_info.get("user_scope_id"))
     if not ok:
         raise HTTPException(status_code=502, detail=error or "Contact sync failed.")
     return {"status": "ok"}

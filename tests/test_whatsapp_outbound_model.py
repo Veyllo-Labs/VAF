@@ -486,6 +486,21 @@ def test_resync_contacts_asks_the_node_and_clears_the_sync_throttle(isolated, mo
     assert "alice" not in wa._contact_sync_last
 
 
+def test_named_numbers_from_the_node_name_the_chats_and_fill_the_contact_book(isolated, monkeypatch):
+    from vaf.core import contacts_store as cs
+    monkeypatch.setattr(wa, "_contact_names", {})
+    wa._dispatch_bridge_event("alice", SCOPE, "contacts", {"contacts": [
+        {"jid": "491700000042@s.whatsapp.net", "e164": "+491700000042", "name": "Dana New", "source": "addressbook"},
+        {"jid": "491700000043@s.whatsapp.net", "e164": "+491700000043", "name": "", "source": "push"},
+    ]})
+    assert wa._contact_names["alice"]["491700000042"]["name"] == "Dana New"
+    assert "491700000043" not in wa._contact_names["alice"]
+    assert [c["name"] for c in cs.list_contacts("alice", user_scope_id=SCOPE)] == ["Dana New"]
+    # Without a running bridge the getter answers from the last event.
+    monkeypatch.setattr(wa, "is_bridge_running", lambda: False)
+    assert wa.get_contact_names("alice")["491700000042"]["source"] == "addressbook"
+
+
 def test_whitelist_add_refuses_the_agents_own_number(isolated, monkeypatch):
     import asyncio
     from fastapi import HTTPException

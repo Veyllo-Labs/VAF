@@ -67,9 +67,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   picture lookup for its whole timeout, so a chat's messages appeared and vanished until
   the queue drained. Now the fetch runs once per chat, a late answer for a chat no longer
   selected is dropped, only people are asked for a picture, and WhatsApp's own "no
-  picture" answers are remembered. The bridge keeps the names it learned in a cache
-  beside the credentials, and "Reload names from the phone" in the settings asks
-  WhatsApp for the address-book names again when a bridge missed the first sync.
+  picture" answers are remembered. The bridge keeps the names and the chat list it learned in a
+  cache beside the credentials, and "Reload names from the phone" in the settings asks
+  WhatsApp, one chat per second, for each stored conversation again, which is where the
+  names travel (the account's contact collection itself carries none).
 
 - **WhatsApp fills the contact book.** A direct chat with a phone number and a name
   WhatsApp shows becomes a contact: matched by number when the person is already there

@@ -71,6 +71,12 @@ _voice_reply_lock = threading.Lock()
 # Send confirmation: req_id -> queue that receives (success, error)
 _pending_sends: Dict[str, queue.Queue] = {}
 _pending_sends_lock = threading.Lock()
+# Profile pictures: req_id -> queue that receives the Node's `avatar` event; one Node query
+# at a time so a dashboard with a hundred rows does not fire a hundred profile lookups at once.
+_avatar_results: Dict[str, queue.Queue] = {}
+_avatar_results_lock = threading.Lock()
+_avatar_query_lock = threading.Lock()
+AVATAR_TTL_SECONDS = 24 * 3600
 _external_pending_results: Dict[str, Path] = {}
 _external_pending_results_lock = threading.Lock()
 
@@ -1168,6 +1174,15 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                 log_whatsapp_qr(f"[Python] pong connected=false → UI shows orange (bridge running, WhatsApp not connected)")
             except Exception:
                 pass
+    elif typ == "avatar":
+        req_id = obj.get("req_id")
+        with _avatar_results_lock:
+            q = _avatar_results.pop(str(req_id), None) if req_id else None
+        if q is not None:
+            try:
+                q.put(obj)
+            except Exception:
+                pass
     elif typ in ("send_result", "fetch_history_result"):
         # Both are "the command you queued under req_id has left (or not)": the same
         # per-request queue hands the answer to the waiting caller.
@@ -1456,8 +1471,11 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
         _append_chat_activity(chat_id, user_scope_id, "in")
         try:
             from vaf.core.channel_message_store import append_message
+            # chat_name: the name WhatsApp shows for this person (phone contact, business
+            # name or their own push name), so the list can show it like WhatsApp Web.
             append_message(
                 username, chat_id, body, direction="in", sender_jid=from_jid,
+                chat_name=(str(obj.get("pushName") or "").strip() or None),
                 message_id=obj.get("messageId") or obj.get("message_id"),
                 content_type="voice" if was_voice else "text",
                 user_scope_id=user_scope_id,
@@ -1929,6 +1947,78 @@ def fetch_older_messages(
     out["stored_after"] = after
     out["ok"] = True
     return out
+
+
+def avatar_cache_dir(username: str) -> Path:
+    """Per-user cache of profile pictures, beside that user's WhatsApp credentials (never
+    shared between users: the pictures belong to the people this user's agent talks to)."""
+    return get_whatsapp_auth_dir(username).parent / "whatsapp_avatars"
+
+
+def _avatar_key(chat_jid: str) -> str:
+    part = (chat_jid or "").split("@", 1)[0].split(":", 1)[0]
+    digits = "".join(c for c in part if c.isdigit())
+    return (digits or "x") + ("_lid" if (chat_jid or "").endswith("@lid") else "")
+
+
+def get_avatar(username: str, chat_jid: str, wait_timeout: float = 8.0) -> Optional[Tuple[bytes, str]]:
+    """The profile picture of a chat as (bytes, mime), or None when the person shows none
+    (privacy setting, no picture, or the bridge is down).
+
+    Cached on disk for AVATAR_TTL_SECONDS in both directions: a `.none` marker records
+    "asked, nothing there", so a private profile is not queried on every render. One
+    Node query runs at a time (see _avatar_query_lock)."""
+    uname = (username or "").strip() or "admin"
+    cache = avatar_cache_dir(uname)
+    key = _avatar_key(chat_jid)
+    hit = cache / f"{key}.jpg"
+    none = cache / f"{key}.none"
+    now = time.time()
+    try:
+        if hit.is_file() and now - hit.stat().st_mtime < AVATAR_TTL_SECONDS:
+            return hit.read_bytes(), "image/jpeg"
+        if none.is_file() and now - none.stat().st_mtime < AVATAR_TTL_SECONDS:
+            return None
+    except OSError:
+        pass
+    with _process_lock:
+        proc = _processes.get(uname)
+        if (not proc or proc.poll() is not None or not proc.stdin) and len(_processes) == 1:
+            proc = next(iter(_processes.values()))
+    if not proc or proc.poll() is not None or not proc.stdin:
+        return None
+    with _avatar_query_lock:
+        req_id = str(uuid.uuid4())
+        result_queue: queue.Queue = queue.Queue()
+        with _avatar_results_lock:
+            _avatar_results[req_id] = result_queue
+        try:
+            proc.stdin.write(json.dumps({"cmd": "getAvatar", "jid": chat_jid, "req_id": req_id}) + "\n")
+            proc.stdin.flush()
+            obj = result_queue.get(timeout=wait_timeout)
+        except Exception:
+            with _avatar_results_lock:
+                _avatar_results.pop(req_id, None)
+            return None
+    if not obj.get("success"):
+        # A transport failure is not "no picture": leave the cache alone so the next
+        # render asks again once the bridge is back.
+        return None
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+        if obj.get("found") and obj.get("b64"):
+            import base64
+            data = base64.b64decode(obj["b64"])
+            hit.write_bytes(data)
+            try:
+                none.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return data, str(obj.get("mime") or "image/jpeg")
+        none.write_text(str(int(now)), encoding="utf-8")
+    except OSError:
+        pass
+    return None
 
 
 def _request_lid_mappings(username: str) -> Optional[str]:

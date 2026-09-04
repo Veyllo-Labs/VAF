@@ -56,7 +56,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   so a freshly linked account listed 97 chats and showed none of their messages. A
   chat's header offers "Load older messages": one click asks the phone for up to 50
   messages older than the oldest one stored (WhatsApp's per-chat history request) and
-  shows them once they arrived.
+  shows them once they arrived. Chats carry the names WhatsApp Web shows (the phone's
+  contact name, a business name, or the name the person set for themselves) and their
+  profile picture; a hidden picture falls back to the initials, and the bridge remembers
+  both answers for a day so a private profile is not asked again on every render.
 
 - **The WhatsApp bridge survives the history sync after linking.** Right after a link,
   WhatsApp pushes hundreds of chat-list updates; the bridge wrote each one to its pipe

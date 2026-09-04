@@ -359,6 +359,40 @@ def test_fetch_older_messages_reports_a_refusal_instead_of_waiting(isolated, mon
     assert not out["ok"] and "not connected" in out["error"]
 
 
+def test_inbound_message_stores_the_name_whatsapp_shows(isolated, monkeypatch):
+    monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: (["+491700000009"], ["+491700000009"]))
+    monkeypatch.setattr(wa, "save_whatsapp_chat_jid", lambda *a: None)
+    _dispatch("alice", "491700000009@s.whatsapp.net", body="hi", pushName="Alice Example")
+    rows = store.list_chats_from_store("alice", user_scope_id=SCOPE)
+    assert rows and rows[0]["chat_id"] == "+491700000009" and rows[0]["chat_name"] == "Alice Example"
+
+
+def test_avatar_is_fetched_once_and_cached_in_both_directions(isolated, monkeypatch):
+    import base64, io
+    written = io.StringIO()
+    fake_proc = SimpleNamespace(stdin=written, poll=lambda: None)
+    monkeypatch.setattr(wa, "_processes", {"alice": fake_proc})
+    answers = {"491700000009@s.whatsapp.net": {"success": True, "found": True, "mime": "image/jpeg", "b64": base64.b64encode(b"JPEGDATA").decode()},
+               "491700000005@s.whatsapp.net": {"success": True, "found": False}}
+    asked = []
+    orig = written.write
+    def _w(s):
+        r = orig(s)
+        cmd = json.loads(s)
+        asked.append(cmd["jid"])
+        wa._dispatch_bridge_event("alice", SCOPE, "avatar", {"req_id": cmd["req_id"], **answers[cmd["jid"]]})
+        return r
+    written.write = _w
+    assert wa.get_avatar("alice", "491700000009@s.whatsapp.net", wait_timeout=2.0) == (b"JPEGDATA", "image/jpeg")
+    assert wa.get_avatar("alice", "491700000009@s.whatsapp.net", wait_timeout=2.0) == (b"JPEGDATA", "image/jpeg")   # disk cache
+    assert wa.get_avatar("alice", "491700000005@s.whatsapp.net", wait_timeout=2.0) is None
+    assert wa.get_avatar("alice", "491700000005@s.whatsapp.net", wait_timeout=2.0) is None                          # negative cache
+    assert asked == ["491700000009@s.whatsapp.net", "491700000005@s.whatsapp.net"]
+    cache = wa.avatar_cache_dir("alice")
+    assert (cache / "491700000009.jpg").is_file() and (cache / "491700000005.none").is_file()
+    assert cache.parent == Config.APP_DIR / "users" / "alice"                        # per user, beside the credentials
+
+
 def test_whitelist_add_refuses_the_agents_own_number(isolated, monkeypatch):
     import asyncio
     from fastapi import HTTPException

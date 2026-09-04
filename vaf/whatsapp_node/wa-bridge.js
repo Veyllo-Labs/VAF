@@ -137,6 +137,50 @@ const chatStore = new Map();
 /** LID → E.164 from events (senderPn, chats.phoneNumberShare). Used when Baileys lidMapping has no entry. */
 const lidToE164Map = new Map();
 
+/**
+ * Names the way WhatsApp Web shows them: the address-book name the phone synced
+ * (contacts.upsert from the history sync and app-state contactAction), the verified
+ * business name, or the push name the person set for themselves (contacts.update,
+ * msg.pushName). Keyed by JID; a LID and its phone JID both point at the same entry.
+ */
+const contactStore = new Map(); // jid -> { name?, notify?, verifiedName? }
+
+function rememberContact(c) {
+  if (!c) return;
+  const ids = [c.id, c.jid, c.lid].filter((v) => typeof v === "string" && v.includes("@"));
+  if (ids.length === 0) return;
+  const patch = {};
+  if (c.name) patch.name = c.name;
+  if (c.notify) patch.notify = c.notify;
+  if (c.verifiedName) patch.verifiedName = c.verifiedName;
+  for (const id of ids) {
+    const key = id.split(":")[0].includes("@") ? id.replace(/:\d+@/, "@") : id;
+    contactStore.set(key, { ...(contactStore.get(key) || {}), ...patch });
+  }
+  if (c.lid && c.jid) {
+    const lidJid = toLidJid(c.lid);
+    const e164 = toE164(c.jid);
+    if (lidJid && e164 && !lidToE164Map.has(lidJid)) lidToE164Map.set(lidJid, e164);
+  }
+}
+
+/** Display name for a chat JID from the contact store; empty when nothing is known. */
+function displayNameFor(jid) {
+  if (!jid || typeof jid !== "string") return "";
+  const candidates = [jid];
+  if (jid.endsWith("@lid")) {
+    const e164 = lidToE164Map.get(jid);
+    if (e164) candidates.push(`${digitsOnly(e164)}@s.whatsapp.net`);
+  }
+  for (const key of candidates) {
+    const c = contactStore.get(key);
+    if (!c) continue;
+    const name = c.name || c.verifiedName || c.notify;
+    if (name) return String(name).trim();
+  }
+  return "";
+}
+
 /** Recently sent text (self-chat echo prevention). Bot’s own replies must be ignored. */
 const echoSent = new Map(); // text -> timestamp
 const ECHO_TTL_MS = 90_000;
@@ -279,7 +323,7 @@ function normalizeChat(chat) {
   if (!id) return null;
   const isGroup = id.includes("@g.us");
   const phone = isGroup ? "" : jidToPhone(id);
-  const name = chat?.name || chat?.pushName || chat?.notify || (phone || id);
+  const name = displayNameFor(id) || chat?.name || chat?.pushName || chat?.notify || (phone || id);
   const rawTs = chat?.conversationTimestamp ?? chat?.lastMessageRecvTimestamp;
   const ts = rawTs ? (Number(rawTs) > 1e12 ? Math.floor(Number(rawTs) / 1000) : Number(rawTs)) : 0;
   return { jid: id, name: name || (phone || id), phone: phone || id, is_group: isGroup, last_ts: ts };
@@ -433,6 +477,19 @@ async function connect(authDir) {
     }
   });
 
+  sock.ev.on("contacts.upsert", (contacts) => {
+    if (!Array.isArray(contacts)) return;
+    for (const c of contacts) rememberContact(c);
+    try { fs.writeSync(2, `${LOG_PREFIX} contacts.upsert: ${contacts.length} (store ${contactStore.size})\n`); } catch (_) {}
+    emitChats();
+  });
+
+  sock.ev.on("contacts.update", (updates) => {
+    if (!Array.isArray(updates)) return;
+    for (const c of updates) rememberContact(c);
+    emitChats();
+  });
+
   sock.ev.on("chats.upsert", (chats) => {
     if (Array.isArray(chats)) {
       for (const c of chats) {
@@ -510,6 +567,7 @@ async function connect(authDir) {
       }
       if (isGroup) continue; // Phase 1: DMs only
       const senderJid = msg.key.participant ?? msg.key.remoteJid;
+      if (msg.pushName && !msg.key?.fromMe) rememberContact({ id: remoteJid, notify: msg.pushName });
       const contentType = getContentType(msg);
       let body = extractText(msg);
       let voicePath = null;
@@ -564,6 +622,7 @@ async function connect(authDir) {
           chatType: "dm",
           messageId: msg.key?.id,
           selfChat: selfChat,
+          pushName: displayNameFor(remoteJid) || msg.pushName || "",
         };
         if (fromE164) payload.fromE164 = fromE164;
         if (voicePath) payload.voice_path = voicePath;
@@ -733,6 +792,43 @@ async function main() {
             const msg = err?.message ?? String(err);
             try { fs.writeSync(2, `${LOG_PREFIX} fetchHistory failed: ${msg}\n`); } catch (_) {}
             if (reqId) emit({ type: "fetch_history_result", req_id: reqId, success: false, error: msg });
+          }
+        })();
+      } else if (obj?.cmd === "getAvatar" && obj?.jid) {
+        // Profile picture the way WhatsApp Web shows it: a short-lived CDN URL from the
+        // profile-picture query, downloaded here so Python only ever sees bytes. A
+        // person who hides their picture answers with no URL (or 401/404); that is a
+        // normal "found: false", not an error.
+        (async () => {
+          if (connectionState !== "open" || !currentSock) {
+            if (reqId) emit({ type: "avatar", req_id: reqId, success: false, error: "WhatsApp not connected" });
+            return;
+          }
+          try {
+            let url = null;
+            try {
+              url = await currentSock.profilePictureUrl(obj.jid, obj.full ? "image" : "preview", 8000);
+            } catch (err) {
+              const code = err?.output?.statusCode ?? err?.data?.statusCode;
+              if (code === 401 || code === 404 || code === 403) url = null;
+              else throw err;
+            }
+            if (!url) {
+              if (reqId) emit({ type: "avatar", req_id: reqId, success: true, found: false });
+              return;
+            }
+            const res = await fetch(url);
+            if (!res.ok) {
+              if (reqId) emit({ type: "avatar", req_id: reqId, success: true, found: false });
+              return;
+            }
+            const buf = Buffer.from(await res.arrayBuffer());
+            const mime = res.headers.get("content-type") || "image/jpeg";
+            if (reqId) emit({ type: "avatar", req_id: reqId, success: true, found: true, mime, b64: buf.toString("base64") });
+          } catch (err) {
+            const msg = err?.message ?? String(err);
+            try { fs.writeSync(2, `${LOG_PREFIX} getAvatar failed for ${obj.jid}: ${msg}\n`); } catch (_) {}
+            if (reqId) emit({ type: "avatar", req_id: reqId, success: false, error: msg });
           }
         })();
       } else if (obj?.cmd === "ping") {

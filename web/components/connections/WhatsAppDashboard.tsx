@@ -332,6 +332,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         id: s.chat_id,
         historyKey: s.chat_id,
         label: s.display_name || s.name || s.phone_number || t('unknownChat'),
+        avatarUrl: s.needs_assign ? null : api(`api/whatsapp/avatar?chat_id=${encodeURIComponent(s.chat_id)}`),
         preview: s.last_preview || '',
         ts: s.last_ts,
         badge: badgeFor(s),

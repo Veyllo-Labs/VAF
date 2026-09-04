@@ -969,6 +969,31 @@ async def get_whatsapp_chat_messages(request: Request, chat_id: str, limit: int 
     }
 
 
+@router.get("/avatar")
+async def get_whatsapp_avatar(request: Request, chat_id: str):
+    """The profile picture of a chat, as WhatsApp Web shows it. 404 when the person shows
+    none (privacy setting) or the bridge is down; the bridge caches both answers for a day."""
+    import asyncio
+    from fastapi.responses import Response
+    from vaf.api.whatsapp_bridge import _e164_to_jid, get_avatar, is_bridge_running
+
+    cid = (chat_id or "").strip()
+    if not cid:
+        raise HTTPException(status_code=400, detail="chat_id required")
+    user_info = get_current_vaf_user(request)
+    username = user_info["username"]
+    chat_jid = cid if "@" in cid else _e164_to_jid(cid)
+    if not chat_jid:
+        raise HTTPException(status_code=404, detail="no picture")
+    # A cached answer needs no bridge; only a first lookup does.
+    result = await asyncio.to_thread(get_avatar, username, chat_jid, 8.0 if is_bridge_running() else 0.1)
+    if not result:
+        raise HTTPException(status_code=404, detail="no picture")
+    data, mime = result
+    return Response(content=data, media_type=mime or "image/jpeg",
+                    headers={"Cache-Control": "private, max-age=3600"})
+
+
 class OlderMessagesRequest(BaseModel):
     chat_id: str
     count: int = 50

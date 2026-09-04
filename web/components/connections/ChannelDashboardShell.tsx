@@ -15,6 +15,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTranslations } from 'next-intl';
 import { X, Search, RefreshCw, Settings, ChevronUp, ChevronDown, Bot, User } from 'lucide-react';
 import { cn, stripThinkBlocks } from '@/lib/utils';
+import { useEscapeLayer } from '@/hooks/useEscapeLayer';
 import HighlightedText from './HighlightedText';
 
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
@@ -29,6 +30,8 @@ export interface ShellChat {
     /** What the conversation pane loads through `historyUrl` (a session id, a chat id); null when there is nothing to show. */
     historyKey?: string | null;
     label: string;
+    /** Profile picture, when the channel can show one; the initials stay as the fallback. */
+    avatarUrl?: string | null;
     preview?: string;
     ts?: number;
     badge: ShellBadge;
@@ -91,6 +94,23 @@ export function fmtUntil(ts?: number | null): string {
     if (!ts) return '';
     const d = new Date(ts * 1000);
     return d.toLocaleDateString([], { weekday: 'short' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Round picture with the initials behind it: the image covers them when it loads and
+ *  hides itself when the URL answers 404 (private profile, bridge down). */
+function Avatar({ label, url, size }: { label: string; url?: string | null; size: 'sm' | 'md' }) {
+    const [failed, setFailed] = useState(false);
+    useEffect(() => { setFailed(false); }, [url]);
+    const cls = size === 'sm' ? 'w-9 h-9 text-xs' : 'w-8 h-8 text-xs';
+    return (
+        <div className={cn('relative rounded-full bg-[#2e2e2e] grid place-items-center text-[#c8c8c8] shrink-0 overflow-hidden', cls)}>
+            <span>{initials(label)}</span>
+            {url && !failed && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={url} alt="" className="absolute inset-0 w-full h-full object-cover" onError={() => setFailed(true)} />
+            )}
+        </div>
+    );
 }
 
 function initials(label: string): string {
@@ -176,19 +196,13 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
         inlineChatRef.current?.querySelector(`[data-msg-idx="${target}"]`)?.scrollIntoView({ block: 'center' });
     }, [chatSearch, chatSearchIdx, searchMatches]);
 
-    useEffect(() => {
-        if (!isOpen) return;
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key !== 'Escape') return;
-            e.preventDefault();
-            e.stopPropagation();
-            if (settingsOpen) onSettingsOpenChange(false);
-            else if (chatSearch) setChatSearch('');
-            else onClose();
-        };
-        window.addEventListener('keydown', handleKeyDown, true);
-        return () => window.removeEventListener('keydown', handleKeyDown, true);
-    }, [isOpen, onClose, chatSearch, settingsOpen, onSettingsOpenChange]);
+    // Escape, one layer at a time, through the shared registry: the settings overlay
+    // covers the window (52), a running in-chat search is the next thing to clear (51),
+    // and the window itself closes last (50, its z-index). Each rung is active only
+    // while its UI is really on screen.
+    useEscapeLayer({ active: isOpen && settingsOpen, level: 52, onEscape: () => onSettingsOpenChange(false) });
+    useEscapeLayer({ active: isOpen && !settingsOpen && chatSearch !== '', level: 51, onEscape: () => setChatSearch('') });
+    useEscapeLayer({ active: isOpen && !settingsOpen && chatSearch === '', level: 50, onEscape: onClose });
 
     useEffect(() => {
         if (!historyKey || !isOpen) {
@@ -280,11 +294,16 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                             <button key={c.id} type="button" onClick={() => onSelect(c.id)}
                                 className={cn('relative w-full text-left px-4 py-2.5 border-b border-[#2e2e2e]',
                                     selectedId === c.id ? 'bg-[#2a2a2a]' : 'hover:bg-[#262626]')}>
-                                <div className="flex justify-between gap-2 text-[13px]">
-                                    <span className="font-semibold truncate" title={c.id}>{c.label}</span>
-                                    <span className="text-[#9a9a9a] flex-shrink-0">{fmtWhen(c.ts)}</span>
+                                <div className="flex items-center gap-3">
+                                    <Avatar label={c.label} url={c.avatarUrl} size="sm" />
+                                    <div className="min-w-0 flex-1">
+                                        <div className="flex justify-between gap-2 text-[13px]">
+                                            <span className="font-semibold truncate" title={c.id}>{c.label}</span>
+                                            <span className="text-[#9a9a9a] flex-shrink-0">{fmtWhen(c.ts)}</span>
+                                        </div>
+                                        <div className="text-xs text-[#9a9a9a] truncate pr-20 min-h-[1rem]">{c.preview || ''}</div>
+                                    </div>
                                 </div>
-                                <div className="text-xs text-[#9a9a9a] truncate pr-24 min-h-[1rem]">{c.preview || ''}</div>
                                 <span className={cn('absolute right-3 bottom-2 text-[11px] px-1.5 rounded-md', c.badge.cls)}>{c.badge.label}</span>
                             </button>
                         ))}
@@ -297,7 +316,7 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                         ) : (
                             <>
                                 <div className="flex items-center gap-3 px-5 py-2.5 border-b border-[#2e2e2e] shrink-0 flex-wrap">
-                                    <div className="w-8 h-8 rounded-full bg-[#2e2e2e] grid place-items-center text-xs text-[#c8c8c8] shrink-0">{initials(selected.label)}</div>
+                                    <Avatar label={selected.label} url={selected.avatarUrl} size="md" />
                                     <div className="min-w-0 flex-1">
                                         <div className="font-semibold flex items-center gap-2 min-w-0">
                                             <span className="truncate">{selected.label}</span>

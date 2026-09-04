@@ -144,7 +144,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
         const foot = s.type === 'admin' ? t('footFull') : s.type === 'relay' ? t('footRelay') : t('footReadOnly');
         return {
             id: s.chat_id,
-            sessionId: `telegram_${s.chat_id}`,
+            historyKey: `telegram_${s.chat_id}`,
             label: label(s),
             preview: s.vaf_username ? `${s.telegram_user_id} · ${s.vaf_username}` : s.telegram_user_id,
             ts: s.last_ts,

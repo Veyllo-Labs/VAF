@@ -306,7 +306,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
 
     const chats: ShellChat[] = useMemo(() => (data?.sessions || []).map(s => ({
         id: s.chat_id,
-        sessionId: s.session_id || null,
+        historyKey: s.chat_id,
         label: s.display_name || s.name || s.phone_number || t('unknownChat'),
         preview: s.last_preview || '',
         ts: s.last_ts,
@@ -424,7 +424,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             loading={loading}
             loadFailed={loadFailed}
             onRefresh={handleRefresh}
-            historyUrl={(sid) => `api/whatsapp/session/${encodeURIComponent(sid)}/history`}
+            historyUrl={(cid) => `api/whatsapp/chat-messages?chat_id=${encodeURIComponent(cid)}`}
             selectedId={selectedChatId}
             onSelect={(id) => { setSelectedChatId(id); setNote(null); }}
             banner={banner}

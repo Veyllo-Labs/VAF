@@ -294,6 +294,20 @@ def test_bridge_deps_without_npm_say_so(tmp_path, monkeypatch):
     assert not ok and "npm not found" in msg
 
 
+def test_conversation_pane_reads_the_message_store_not_the_agent_session(isolated):
+    """A chat that came in through the history sync has messages in the store and no
+    agent session at all; the pane must show the store, oldest first, both directions."""
+    import asyncio
+    from vaf.api import whatsapp_routes as routes
+    store.append_message("alice", "+491700000042", "hello there", direction="in", user_scope_id=SCOPE, ts=100.0)
+    store.append_message("alice", "+491700000042", "hi, how can I help?", direction="out", user_scope_id=SCOPE, ts=200.0)
+    request = SimpleNamespace(state=SimpleNamespace(user={"user_scope_id": SCOPE, "username": "alice"}))
+    out = asyncio.run(routes.get_whatsapp_chat_messages(request, chat_id="+491700000042"))
+    assert [(m["role"], m["content"]) for m in out["messages"]] == [("user", "hello there"), ("assistant", "hi, how can I help?")]
+    assert out["session_id"] == "whatsapp_alice_491700000042" and out["user_turn_count"] == 0
+    assert asyncio.run(routes.get_whatsapp_chat_messages(request, chat_id="+491700000099"))["messages"] == []
+
+
 def test_whitelist_add_refuses_the_agents_own_number(isolated, monkeypatch):
     import asyncio
     from fastapi import HTTPException

@@ -26,8 +26,8 @@ export interface ShellBadge {
 
 export interface ShellChat {
     id: string;
-    /** Session whose transcript is the conversation; null when there is none to show. */
-    sessionId?: string | null;
+    /** What the conversation pane loads through `historyUrl` (a session id, a chat id); null when there is nothing to show. */
+    historyKey?: string | null;
     label: string;
     preview?: string;
     ts?: number;
@@ -138,7 +138,7 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
     const inlineChatRef = useRef<HTMLDivElement | null>(null);
 
     const selected = selectedId ? chats.find(c => c.id === selectedId) ?? null : null;
-    const sessionId = selected?.sessionId ?? null;
+    const historyKey = selected?.historyKey ?? null;
 
     const chatMessages = useMemo(
         () => sessionHistory
@@ -189,13 +189,13 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
     }, [isOpen, onClose, chatSearch, settingsOpen, onSettingsOpenChange]);
 
     useEffect(() => {
-        if (!sessionId || !isOpen) {
+        if (!historyKey || !isOpen) {
             setSessionHistory([]);
             setHistoryCompaction(null);
             return;
         }
         setHistoryLoading(true);
-        fetch(api(historyUrl(sessionId)), { credentials: 'include' })
+        fetch(api(historyUrl(historyKey)), { credentials: 'include' })
             .then((r) => r.json())
             .then((json) => {
                 setSessionHistory(Array.isArray(json.messages) ? json.messages : []);
@@ -207,7 +207,7 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
             })
             .catch(() => { setSessionHistory([]); setHistoryCompaction(null); })
             .finally(() => setHistoryLoading(false));
-    }, [sessionId, isOpen, historyUrl]);
+    }, [historyKey, isOpen, historyUrl]);
 
     const filtered = useMemo(() => {
         const q = listFilter.trim().toLowerCase();

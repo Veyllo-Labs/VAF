@@ -50,7 +50,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the send-only switch, activity. A chat WhatsApp has not resolved to a number yet gets
   an "Assign number" input instead of a config hint, and a conversation can be turned into
   a contact with one button. The whole window is translated into the seven interface
-  languages.
+  languages. The conversation shows the WhatsApp messages themselves, from the message
+  store the bridge fills (history sync, incoming, sent); it used to show the agent's own
+  session transcript, which is empty for every chat the agent has not answered in yet,
+  so a freshly linked account listed 97 chats and showed none of their messages.
 
 - **The WhatsApp bridge survives the history sync after linking.** Right after a link,
   WhatsApp pushes hundreds of chat-list updates; the bridge wrote each one to its pipe

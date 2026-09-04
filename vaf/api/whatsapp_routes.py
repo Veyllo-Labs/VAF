@@ -917,6 +917,58 @@ def _run_qr_login(username: str) -> None:
             _qr_procs.pop(username, None)
 
 
+@router.get("/chat-messages")
+async def get_whatsapp_chat_messages(request: Request, chat_id: str, limit: int = 200):
+    """The WhatsApp messages of one chat, oldest first, in the shape the dashboard's
+    conversation pane reads (role/content/timestamp).
+
+    Source is the per-user message store, not the agent session: the store holds every
+    message that passed through the bridge (history sync, inbound, the agent's sends),
+    while the session transcript only exists once the agent itself answered in that chat.
+    A chat listed from a history sync therefore has a full conversation here and an
+    empty session, which is what the pane used to show. Direction maps to the pane's
+    roles: "in" is the other side (user bubble), "out" is what left our number
+    (assistant bubble), whether the agent or a person on the agent's phone sent it."""
+    from datetime import datetime
+    from vaf.core.channel_message_store import get_chat_messages
+
+    cid = (chat_id or "").strip()
+    if not cid:
+        raise HTTPException(status_code=400, detail="chat_id required")
+    user_info = get_current_vaf_user(request)
+    username = user_info["username"]
+    user_scope_id = user_info.get("user_scope_id")
+    rows = get_chat_messages(username, cid, limit=min(max(int(limit or 200), 1), 200), user_scope_id=user_scope_id)
+    messages = []
+    for r in sorted(rows, key=lambda r: float(r.get("ts") or 0)):
+        ts = float(r.get("ts") or 0)
+        messages.append({
+            "role": "assistant" if (r.get("direction") or "in") == "out" else "user",
+            "content": (r.get("body") or "")[:2000],
+            "timestamp": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else None,
+            "content_type": r.get("content_type") or "text",
+        })
+    digits = "".join(c for c in cid.split("@", 1)[0] if c.isdigit())
+    session_id = f"whatsapp_{username}_{digits}" if digits else ""
+    user_turns = 0
+    if session_id:
+        try:
+            from vaf.core.session import SessionManager
+            _session = SessionManager().load(session_id)
+            user_turns = sum(1 for m in (_session.messages or []) if getattr(m, "role", "") == "user")
+        except Exception:
+            user_turns = 0
+    last_turn, interval = _get_whatsapp_compaction_info(session_id) if session_id else (0, 15)
+    return {
+        "chat_id": cid,
+        "session_id": session_id,
+        "messages": messages,
+        "user_turn_count": user_turns,
+        "compaction_interval": interval,
+        "last_compaction_at_turn": last_turn,
+    }
+
+
 @router.get("/qr/log-path")
 async def get_qr_log_path(request: Request):
     """Return path to whatsapp_qr_YYYY-MM-DD.log for debugging."""

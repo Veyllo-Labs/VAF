@@ -90,7 +90,7 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
         const newest = data.activity.length ? data.activity[data.activity.length - 1] : null;
         return [{
             id: String(data.admin_user_id),
-            sessionId: `discord_${data.admin_user_id}`,
+            historyKey: `discord_${data.admin_user_id}`,
             label: data.admin_username ? `@${data.admin_username}` : String(data.admin_user_id),
             preview: newest ? (newest.direction === 'in' ? t('incoming') : t('outgoing')) : '',
             ts: newest?.ts,

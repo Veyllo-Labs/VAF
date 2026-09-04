@@ -783,7 +783,7 @@ def test_the_confirmation_says_it_cannot_be_undone():
     sentence in front of it has to say what it costs and where to keep a copy."""
     import json
 
-    for name, phrase in (("en", "cannot be undone"), ("de", "rueckgaengig")):
+    for name, phrase in (("en", "cannot be undone"), ("de", "rückgängig")):
         catalogue = json.loads((ROOT / "web" / "messages" / f"{name}.json").read_text(encoding="utf-8"))
         body = catalogue["main"]["roomCloseBody"]
         assert phrase in body, f"{name}: the warning does not say it is permanent"

@@ -295,18 +295,40 @@ _TH_SPACE_INSIDE_PARENS = re.compile(r"\(\s|\s\)")
 # "loeschen" on the delete buttons). Only stems that German never spells with
 # the digraph are listed: "neue", "Quelle", "aktuell", "Steuert" and "genauen"
 # carry a real e and stay out of it.
+#
+# A stem matches anywhere inside a word, because the word boundary in front of
+# it is precisely what a prefix or a compound head takes away. Anchoring the
+# stems caught "prueft" but not "geprueft", "Schaetzung" but not
+# "Kostenschaetzung", "schliessen" but not "abschliessen", and "raeume" but
+# none of its inflections: five of the 79 spellings the sweep had just
+# corrected could have come back unnoticed. Each stem is one German never
+# writes any other way, so the only shape that can misfire is a foreign word
+# carrying the same letters ("blueberry" holds "ueber"), and the catalogue has
+# none.
 _DE_DIGRAPH = re.compile(
-    r"\b(?:fuer|ueber\w*|loesch\w*|geloesch\w*|koenn\w*|zurueck\w*|rueck\w*|waehl\w*|gewaehlt"
-    r"|waehrend|schliess\w*|ausschliess\w*|heiss\w*|laesst|moeglich\w*|naechst\w*|aender\w*"
-    r"|veraender\w*|unveraender\w*|oeffn\w*|eroeffn\w*|oeffentlich\w*|veroeffentlich\w*"
-    r"|pruef\w*|neupruef\w*|anhaeng\w*|angehaeng\w*|gefaehr\w*|groess\w*|schaetz\w*"
-    r"|zaehl\w*|gezaehlt|raeume|spaeter\w*|aelter\w*|kuerz\w*|gekuerzt|gueltig|endgueltig"
-    r"|guenst\w*|waehrung\w*|betraeg\w*|auffaell\w*|tatsaech\w*|zulaess\w*|zusaetz\w*"
-    r"|vollstaend\w*|staerk\w*|saetze|gespraech\w*|europaeisch\w*|bestaetig\w*|ausfuehr\w*"
-    r"|auszufuehr\w*|aktivitaet\w*|verdaecht\w*|wuerde\w*|eingefuegt|aufschluessel\w*"
-    r"|gedaechtnis|langzeitgedaechtnis|hoer\w*|menue|groesse|schluessel\w*|taeglich|woechentlich"
-    r"|stuendlich|jaehrlich|ueberfaellig|ueberall|uebergangen|uebernommen)\b",
+    r"\w*(?:fuer|fuehr|fueg|ueber|loesch|koenn|rueck|waehl|waehr|schliess|heiss|laess"
+    r"|moeglich|naechst|aender|oeffn|oeffentlich|pruef|haeng|gefaehr|groess|schaetz"
+    r"|zaehl|raeum|spaet|aelt|kuerz|gueltig|guenst|traeg|faell|tatsaech|staend|staerk"
+    r"|saetz|gespraech|europaeisch|bestaetig|aktivitaet|verdaecht|wuerd|gedaechtnis"
+    r"|hoer|menue|schluessel|taeglich|woechentlich|stuendlich|jaehrlich|aussen|aeusser)\w*",
     re.IGNORECASE,
+)
+
+# The catalogue is clean, so the guard above passes whether or not it works.
+# These two tables are what proves it still does: the left column is the shape
+# an anchored pattern let through, the right one the genuine spelling that must
+# never be reported. A stem added without checking the second table turns the
+# guard into a source of false reports, which is how a guard stops being read.
+_DE_DIGRAPH_CAUGHT = (
+    "geprueft", "ueberprueft", "geschaetzte", "kostenschaetzung", "abschliessen",
+    "einschliesslich", "unmoeglich", "erloeschen", "vergroessern", "angehaengt",
+    "hinzufuegen", "aufraeumen", "raeumen", "gewuerdigt", "aussen", "draussen",
+    "umstaende", "zufaellig", "auftraege", "verlaesslich",
+)
+_DE_DIGRAPH_SPARED = (
+    "neue", "neuen", "Quelle", "aktuell", "Steuert", "Steuerung", "genauen", "Feuer",
+    "Abenteuer", "Museum", "Statue", "Individuum", "Aussage", "Ausschnitt", "Passwort",
+    "Adresse", "Klasse", "Prozess", "Standard", "Strategie", "Kalender",
 )
 
 _LOCALE_RULES = {
@@ -388,6 +410,17 @@ def test_locale_typography(locale, label, pattern):
         if match:
             offenders.append(f"{path}: {ascii(match.group(0))} in {ascii(text[:60])}")
     assert not offenders, f"{locale}.json, {label}:\n" + "\n".join(offenders[:10])
+
+
+@pytest.mark.parametrize("word", _DE_DIGRAPH_CAUGHT)
+def test_the_german_digraph_guard_sees_prefixes_and_compounds(word):
+    assert _DE_DIGRAPH.search(word), f"{word!r} would pass the digraph guard"
+
+
+@pytest.mark.parametrize("word", _DE_DIGRAPH_SPARED)
+def test_the_german_digraph_guard_leaves_genuine_spellings_alone(word):
+    hit = _DE_DIGRAPH.search(word)
+    assert not hit, f"{word!r} is spelt correctly, but the guard reports {hit.group(0)!r}"
 
 
 # --------------------------------------------------------------------------

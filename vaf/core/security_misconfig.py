@@ -102,14 +102,21 @@ def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict
 
     whatsapp_cfg = cfg.get("whatsapp_config") if isinstance(cfg.get("whatsapp_config"), dict) else {}
     if whatsapp_cfg.get("enabled"):
-        entries = list(whatsapp_cfg.get("whitelist") or [])
-        valid_entries = [e for e in entries if isinstance(e, dict) and str(e.get("phone_number") or "").strip()]
-        if not valid_entries:
+        # An enabled WhatsApp connection with NO registered main-user number is the normal
+        # outbound-only state (the linked account is the agent's own number; inbound stays
+        # paired_only), so the whitelist is not the pairing to check. What is worth a
+        # finding is a switched-on connection with nothing linked behind it.
+        try:
+            from vaf.core.whatsapp_auth import linked_usernames
+            linked = linked_usernames()
+        except Exception:
+            linked = []
+        if not linked:
             findings.append(
                 _finding(
-                    "high",
-                    "whatsapp_enabled_without_pairing",
-                    "WhatsApp is enabled but no explicit paired phone numbers are configured.",
+                    "medium",
+                    "whatsapp_enabled_without_link",
+                    "WhatsApp is enabled but no account is linked (no agent number).",
                 )
             )
 

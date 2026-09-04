@@ -8089,6 +8089,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     setShowWhatsAppDashboard(false);
                     setShowWhatsAppWizard(true);
                 }}
+                onOpenContacts={() => {
+                    setShowWhatsAppDashboard(false);
+                    setShowContactsDashboard(true);
+                }}
             />
 
             {/* Telegram Dashboard (when configured, Settings opens this) */}

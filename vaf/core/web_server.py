@@ -1821,12 +1821,14 @@ async def startup_event():
     except Exception as e:
         log("WebServer", f"Discord bridge auto-start skipped or failed: {e}")
 
-    # Auto-start WhatsApp bridge when configured and enabled
+    # Auto-start WhatsApp bridge when switched on and at least one account is linked. The
+    # linked account is the agent's own number; a registered main-user number is not
+    # required to run it (an outbound-only agent is a complete configuration).
     try:
         whatsapp_config = Config.get("whatsapp_config") or {}
         if isinstance(whatsapp_config, dict) and whatsapp_config.get("enabled"):
-            whitelist = whatsapp_config.get("whitelist") or []
-            if any(isinstance(e, dict) and e.get("phone_number") for e in whitelist):
+            from vaf.core.whatsapp_auth import linked_usernames
+            if linked_usernames():
                 from vaf.api.whatsapp_bridge import start_bridge, is_bridge_running
                 if not is_bridge_running() and start_bridge():
                     log("WebServer", "WhatsApp bridge auto-started (configured and enabled)")
@@ -1843,7 +1845,8 @@ async def _whatsapp_reconnect_worker():
     Periodically check WhatsApp connection; if bridge is running but disconnected,
     restart the bridge so it reconnects with stored credentials (no user action needed).
     """
-    from vaf.api.whatsapp_bridge import is_bridge_running, get_connection_status, restart_bridge
+    from vaf.api.whatsapp_bridge import is_bridge_running, any_process_connected, restart_bridge
+    from vaf.core.whatsapp_auth import linked_usernames
     loop = asyncio.get_running_loop()
     last_restart_at = 0.0
     check_interval = 120.0   # check every 2 minutes
@@ -1858,8 +1861,7 @@ async def _whatsapp_reconnect_worker():
             if not isinstance(whatsapp_config, dict) or not whatsapp_config.get("enabled"):
                 disconnected_since = None
                 continue
-            whitelist = whatsapp_config.get("whitelist") or []
-            if not any(isinstance(e, dict) and e.get("phone_number") for e in whitelist):
+            if not linked_usernames():
                 disconnected_since = None
                 continue
             if not is_bridge_running():
@@ -1869,9 +1871,10 @@ async def _whatsapp_reconnect_worker():
             now = loop.time()
             if now - last_restart_at < cooldown:
                 continue
-            # Sync call in executor to avoid blocking
+            # Sync call in executor to avoid blocking; asks every running per-user
+            # process, not a hardcoded account name.
             connected = await loop.run_in_executor(
-                None, lambda: get_connection_status("admin", wait_timeout=2.0)
+                None, lambda: any_process_connected(wait_timeout=2.0)
             )
             if connected:
                 disconnected_since = None

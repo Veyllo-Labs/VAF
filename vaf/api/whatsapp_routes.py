@@ -114,15 +114,44 @@ def _is_whatsapp_admin(request: Request) -> bool:
 
 def _whatsapp_enabled_for_request(request: Request, whatsapp_config: Dict[str, Any], user_scope_id: Optional[str]) -> bool:
     """Return effective WhatsApp enabled flag for current user (admin=global, non-admin=scope toggle)."""
+    from vaf.core.messaging_connections import whatsapp_enabled_for_scope
     if _is_whatsapp_admin(request):
         return bool((whatsapp_config or {}).get("enabled", False))
-    by_scope = Config.get("connection_enabled_by_scope") or {}
-    if not isinstance(by_scope, dict):
-        return False
-    toggles = by_scope.get(str(user_scope_id or "").strip(), {})
-    if not isinstance(toggles, dict):
-        return False
-    return bool(toggles.get("whatsapp", False))
+    return whatsapp_enabled_for_scope(user_scope_id)
+
+
+def _reply_window_hours() -> float:
+    from vaf.api.whatsapp_bridge import reply_window_hours
+    return reply_window_hours()
+
+
+def _conversation_open_until(username: str, chat_id: str, user_scope_id: Optional[str]) -> Optional[float]:
+    """Unix ts until which the agent may keep answering this number (reply window), or None."""
+    from vaf.api.whatsapp_bridge import conversation_open_until
+    try:
+        return conversation_open_until(username, chat_id, user_scope_id)
+    except Exception:
+        return None
+
+
+def _conversation_open(username: str, chat_id: str, user_scope_id: Optional[str]) -> bool:
+    import time as _t
+    until = _conversation_open_until(username, chat_id, user_scope_id)
+    return until is not None and until > _t.time()
+
+
+def _owner_number_for(whitelist: list, username: str, user_scope_id: Optional[str]) -> Optional[str]:
+    """The registered main-user number of this account (E.164) from the whitelist, or None."""
+    scope_str = str(user_scope_id or "").strip()
+    for e in whitelist:
+        if not isinstance(e, dict) or not str(e.get("phone_number") or "").strip():
+            continue
+        if (scope_str and str(e.get("user_scope_id") or "").strip() == scope_str) or (
+            (e.get("vaf_username") or "").strip().lower() == (username or "").strip().lower()
+        ):
+            phone = str(e.get("phone_number")).strip()
+            return phone if phone.startswith("+") else "+" + phone
+    return None
 
 
 @router.get("/dashboard")
@@ -213,7 +242,7 @@ async def get_whatsapp_dashboard(request: Request):
         wl_entry = whitelist_by_phone.get(key) or whitelist_by_phone.get(chat_id)
         if wl_entry:
             vaf_username = (wl_entry.get("vaf_username") or "admin").strip()
-        stype = "admin" if key in whitelist_by_phone or chat_id in whitelist_by_phone else "contact"
+        stype = "owner" if key in whitelist_by_phone or chat_id in whitelist_by_phone else "contact"
         if key in sessions_by_chat:
             rec = sessions_by_chat[key]
             rec["last_ts"] = max(rec.get("last_ts") or 0, int(c.get("last_ts") or 0))
@@ -265,7 +294,7 @@ async def get_whatsapp_dashboard(request: Request):
                 "phone_number": phone,
                 "vaf_username": vaf_username,
                 "session_id": _phone_to_session_id(phone, vaf_username),
-                "type": "admin",
+                "type": "owner",
                 "name": None,
                 "last_ts": 0,
                 "message_count": 0,
@@ -307,6 +336,9 @@ async def get_whatsapp_dashboard(request: Request):
                 rec["message_count"] = max(rec.get("message_count") or 0, msg_count)
                 if not (rec.get("name") or "").strip() and (row.get("chat_name") or "").strip():
                     rec["name"] = (row.get("chat_name") or "").strip()
+                if row.get("last_body"):
+                    rec["last_preview"] = row.get("last_body")
+                    rec["last_direction"] = row.get("last_direction") or ""
             else:
                 sessions_by_chat[key] = {
                     "chat_id": key,
@@ -317,6 +349,8 @@ async def get_whatsapp_dashboard(request: Request):
                     "name": (row.get("chat_name") or "").strip() or None,
                     "last_ts": last_ts,
                     "message_count": msg_count,
+                    "last_preview": row.get("last_body") or "",
+                    "last_direction": row.get("last_direction") or "",
                 }
     except Exception:
         pass
@@ -498,12 +532,22 @@ async def get_whatsapp_dashboard(request: Request):
             rec["answerable"] = False
             rec["needs_assign"] = True
         else:
-            # Only whitelist and Front Office contacts get Agent; others are read-only
+            # owner = registered main-user number (full chat); contact = Front Office
+            # contact; conversation = the agent wrote to this number inside the reply
+            # window (Front Office); everything else is read-only.
             cid_norm = _normalize_chat_id(cid) or cid
             in_whitelist = cid in whitelist_by_phone or cid_norm in whitelist_by_phone
             in_fo = cid_norm in fo_phones or cid in fo_phones
-            rec["type"] = "admin" if in_whitelist else ("contact" if in_fo else "unknown")
-            rec["answerable"] = rec.get("type") in ("admin", "relay", "contact")
+            if in_whitelist:
+                rec["type"] = "owner"
+            elif in_fo:
+                rec["type"] = "contact"
+            elif _conversation_open(username, cid_norm, user_info.get("user_scope_id")):
+                rec["type"] = "conversation"
+                rec["reply_window_until"] = _conversation_open_until(username, cid_norm, user_info.get("user_scope_id"))
+            else:
+                rec["type"] = "unknown"
+            rec["answerable"] = rec.get("type") in ("owner", "contact", "conversation")
             rec["needs_assign"] = False
         # display_name: prefer name, then contact name for resolved/phone, then "Unknown chat" for LID, else phone
         disp = (rec.get("name") or "").strip() or None
@@ -588,9 +632,14 @@ async def get_whatsapp_dashboard(request: Request):
     except Exception:
         pass
 
+    from vaf.core.whatsapp_auth import get_linked_phone
     return {
-        "configured": bool(whitelist) and linked,
+        "configured": linked,
         "linked": linked,
+        "linked_phone": get_linked_phone(username) if current_linked else None,
+        "owner_number": _owner_number_for(whitelist, username, user_info.get("user_scope_id")),
+        "reply_window_hours": _reply_window_hours(),
+        "inbound_to_agent": bool(whatsapp_config.get("inbound_to_agent", True)) if isinstance(whatsapp_config, dict) else True,
         "running": running,
         "connected": connected,
         "enabled": enabled_effective,
@@ -599,7 +648,7 @@ async def get_whatsapp_dashboard(request: Request):
         "stats_4h": stats_4h,
         "activity": activity,
         "log_path": log_path,
-        "whitelist": [
+        "owner_numbers": [
             {"phone_number": e.get("phone_number", ""), "vaf_username": e.get("vaf_username")}
             for e in whitelist
         ],
@@ -632,12 +681,17 @@ async def get_whatsapp_status(request: Request):
     enabled_effective = _whatsapp_enabled_for_request(request, whatsapp_config, user_scope_id)
     linked = whatsapp_auth_exists(username)
     running = is_bridge_running()
+    from vaf.core.whatsapp_auth import get_linked_phone
 
+    # "configured" is "an account is linked": that account is the agent's own number and
+    # a complete outbound setup. The registered main-user number is reported separately.
     return {
         "enabled": enabled_effective,
         "running": bool(running and enabled_effective),
         "linked": linked,
-        "configured": bool(whitelist) and linked,
+        "linked_phone": get_linked_phone(username) if linked else None,
+        "owner_number": _owner_number_for(whitelist, username, user_scope_id),
+        "configured": linked,
         "connected": bool(running and enabled_effective and linked),
         "whitelist_count": len(whitelist),
         "username": username,
@@ -774,7 +828,18 @@ def _run_qr_login(username: str) -> None:
     wa_js = Path(__file__).resolve().parents[1] / "whatsapp_node" / "wa-bridge.js"
     if not node or not wa_js.exists():
         with _qr_lock:
-            _qr_state[username] = {"error": "Node or wa-bridge.js not found. Install Node.js 18+ and run 'npm install' in vaf/whatsapp_node/.", "ts": 0}
+            _qr_state[username] = {"error": "Node.js not found. Install Node.js 18+ (with npm) and open WhatsApp setup again.", "ts": 0}
+        return
+    # The bridge's node_modules are installed here, not by hand: first link on a fresh
+    # install, or a lockfile bump after `vaf update`, both land on this path.
+    from vaf.api.whatsapp_bridge import ensure_bridge_deps
+    with _qr_lock:
+        _qr_state[username] = {"message": "Preparing the WhatsApp bridge (installing its dependencies)...", "ts": 0}
+    deps_ok, deps_msg = ensure_bridge_deps()
+    if not deps_ok:
+        log_whatsapp_qr(f"[VAF] {deps_msg}")
+        with _qr_lock:
+            _qr_state[username] = {"error": deps_msg, "ts": 0}
         return
     kwargs = {
         "stdin": subprocess.PIPE,
@@ -876,7 +941,7 @@ async def get_qr_code(request: Request):
             return {"status": "error", "error": state["error"]}
         if state.get("qr"):
             return {"status": "qr", "qr": state["qr"]}
-        return {"status": "waiting", "message": "Start QR flow from Settings -> Connections."}
+        return {"status": "waiting", "message": state.get("message") or "Start QR flow from Settings -> Connections."}
     except Exception as e:
         logger.exception("WhatsApp QR endpoint error: %s", e)
         return {"status": "error", "error": f"Internal error: {e}"}
@@ -968,6 +1033,16 @@ async def add_whitelist_entry(request: Request, body: WhitelistAddRequest):
         # Non-admin users may only create/update their own whitelist entry.
         vaf_username = (user_info["username"] or "admin").strip()
         user_scope_id = user_info["user_scope_id"]
+
+    # The linked account is the agent's own number. Registering it as the main-user
+    # number would recreate the "chat with yourself" model this bridge no longer supports.
+    from vaf.core.whatsapp_auth import get_linked_phone
+    linked_phone = get_linked_phone(vaf_username)
+    if linked_phone and _normalize_phone(phone) == _normalize_phone(linked_phone):
+        raise HTTPException(
+            status_code=400,
+            detail="This is the agent's own linked number. Register the number you chat from, not the one you scanned the QR code with.",
+        )
 
     config = Config.load()
     wc = config.get("whatsapp_config") or {}

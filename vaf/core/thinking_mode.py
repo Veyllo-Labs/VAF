@@ -2818,7 +2818,9 @@ def _run_thinking_for_user(
             elif main_messenger == "whatsapp":
                 jid = get_whatsapp_chat_jid(user_scope_id, uname)
                 if jid:
-                    chat_session_id = f"whatsapp_{jid}"
+                    # The bridge names the owner's chat session by user and number digits
+                    # (whatsapp_<username>_<digits>), the same way _record_outbound does.
+                    chat_session_id = f"whatsapp_{uname}_{jid.split('@', 1)[0].split(':', 1)[0] or 'self'}"
             # Fallback: user-scoped default session
             if not chat_session_id:
                 safe_scope = scope_key.replace("-", "")[:8]

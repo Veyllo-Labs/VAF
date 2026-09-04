@@ -6,6 +6,13 @@ Long-lived WhatsApp bridge: one Node (Baileys) subprocess per user with linked a
 Receives messages via Node stdout, enqueues tasks, sends replies via stdin to Node.
 User isolation: each user's credentials and session are strictly separate.
 Voice messages from WhatsApp are downloaded by Node, transcribed via Whisper STT, and passed as text.
+
+Roles. The linked account is the AGENT's own number: the agent writes to contacts and
+third parties from it, and nobody chats with the agent from that phone (its "message
+yourself" chat is dropped). Who may write IN is decided per message: the registered
+main-user number (whitelist entry: full chat as the owner), a contact with "Can reach your
+assistant" (Front Office), or a number the agent itself wrote to inside the reply window
+(Front Office, `open_conversation`). Everyone else is rejected.
 """
 import json
 import logging
@@ -22,10 +29,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from vaf.core.config import Config, get_local_admin_scope_id
 from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
-from vaf.core.messaging_connections import save_whatsapp_chat_jid
+from vaf.core.messaging_connections import save_whatsapp_chat_jid, whatsapp_enabled_for_scope
 from vaf.core.platform import Platform
 from vaf.core.task_queue import TaskQueue
-from vaf.core.whatsapp_auth import get_whatsapp_auth_dir, whatsapp_auth_exists
+from vaf.core.whatsapp_auth import get_linked_phone, get_whatsapp_auth_dir, linked_usernames
 from vaf.core.whatsapp_reply import set_whatsapp_reply_callback
 from vaf.core.whatsapp_send import chunk_whatsapp_text
 
@@ -38,6 +45,11 @@ _bridge_stop = threading.Event()
 _processes: Dict[str, subprocess.Popen] = {}
 _process_lock = threading.Lock()
 _outgoing_queue: Optional[queue.Queue] = None
+# username -> user_scope_id of every running process, so the sender loop stores outbound
+# rows in the same per-scope store the inbound lane writes to.
+_scope_by_user: Dict[str, str] = {}
+# username -> E.164 of the linked account (the agent's own number), refreshed on `connected`.
+_self_phone: Dict[str, str] = {}
 _chat_lists: Dict[str, List[Dict[str, Any]]] = {}
 _chat_list_events: Dict[str, threading.Event] = {}
 _chat_lists_lock = threading.Lock()
@@ -68,6 +80,54 @@ _external_pending_results_lock = threading.Lock()
 _wa_pending: Dict[str, Dict[str, Any]] = {}
 _wa_pending_lock = threading.Lock()
 WA_DEBOUNCE_SECONDS = 7
+
+# Reply window: a number the agent wrote to may answer for this long without being a
+# contact. `whatsapp_config.reply_window_hours` overrides; 0 switches the window off.
+WA_REPLY_WINDOW_HOURS_DEFAULT = 72.0
+
+
+def reply_window_hours() -> float:
+    """Configured reply window in hours (never negative; 0 = off)."""
+    wc = Config.get("whatsapp_config") or {}
+    raw = wc.get("reply_window_hours", WA_REPLY_WINDOW_HOURS_DEFAULT) if isinstance(wc, dict) else WA_REPLY_WINDOW_HOURS_DEFAULT
+    try:
+        hours = float(raw)
+    except (TypeError, ValueError):
+        hours = WA_REPLY_WINDOW_HOURS_DEFAULT
+    return max(0.0, hours)
+
+
+def conversation_open_until(
+    username: str,
+    chat_id: str,
+    user_scope_id: Optional[str] = None,
+    direction: Optional[str] = None,
+) -> Optional[float]:
+    """Unix timestamp until which `chat_id` (E.164 display form, the store's key) counts as an
+    open conversation, or None when there is no message inside the window. `direction="out"`
+    asks whether the AGENT wrote last-ish (the inbound acceptance rule: the door is opened by
+    the agent's own message); None counts either side (the reply rule: an accepted message
+    may always be answered)."""
+    window = reply_window_hours() * 3600.0
+    if window <= 0 or not chat_id:
+        return None
+    from vaf.core.channel_message_store import last_message_ts
+    ts = last_message_ts((username or "").strip() or "admin", chat_id, direction=direction, user_scope_id=user_scope_id)
+    return (ts + window) if ts is not None else None
+
+
+def _conversation_is_open(
+    username: str,
+    chat_id: str,
+    user_scope_id: Optional[str] = None,
+    direction: Optional[str] = None,
+) -> bool:
+    try:
+        until = conversation_open_until(username, chat_id, user_scope_id, direction)
+    except Exception as e:
+        logger.debug("WhatsApp: reply-window lookup failed for %s: %s", chat_id, e)
+        return False
+    return until is not None and until > time.time()
 
 
 def _ipc_base_dir() -> Path:
@@ -256,6 +316,90 @@ def _wa_bridge_path() -> Path:
 def _node_path() -> Optional[str]:
     """Resolve Node executable."""
     return shutil.which("node")
+
+
+_deps_lock = threading.Lock()
+
+
+def _locked_baileys_version(node_dir: Path) -> str:
+    """The Baileys version the lockfile pins (the version this checkout was tested with)."""
+    try:
+        lock = json.loads((node_dir / "package-lock.json").read_text(encoding="utf-8"))
+        return str(((lock.get("packages") or {}).get("node_modules/@whiskeysockets/baileys") or {}).get("version") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+def _installed_baileys_version(node_dir: Path) -> str:
+    try:
+        pkg = json.loads((node_dir / "node_modules" / "@whiskeysockets" / "baileys" / "package.json").read_text(encoding="utf-8"))
+        return str(pkg.get("version") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+def ensure_bridge_deps(timeout: float = 600.0) -> Tuple[bool, str]:
+    """Install the Node bridge's dependencies when they are missing or behind the lockfile.
+
+    `vaf/whatsapp_node` ships `package.json`, `package-lock.json` and `wa-bridge.js`; the
+    `node_modules` behind them were a manual `npm install` nobody ran (no installer, no
+    `vaf update` step, no start path did it). This is the one place that does: every
+    path that spawns the Node (bridge start, QR login, `vaf update`) calls it first.
+    `npm ci` installs exactly the lockfile and never rewrites it; `npm install` is the
+    fallback for a lockfile npm refuses. Returns (ok, message); never raises."""
+    node_dir = _wa_bridge_path().parent
+    if not (node_dir / "package.json").is_file():
+        return False, f"WhatsApp bridge sources not found at {node_dir}"
+    with _deps_lock:
+        wanted = _locked_baileys_version(node_dir)
+        have = _installed_baileys_version(node_dir)
+        if have and (not wanted or have == wanted):
+            return True, f"WhatsApp bridge dependencies present (Baileys {have})"
+        npm = shutil.which("npm")
+        if not npm:
+            return False, (
+                "npm not found. Install Node.js 18+ (with npm), then start WhatsApp again; "
+                f"or run `npm install` in {node_dir} by hand."
+            )
+        if not os.access(node_dir, os.W_OK):
+            return False, f"{node_dir} is not writable; run `npm install` there with the right permissions."
+        kwargs: dict = {"cwd": str(node_dir), "capture_output": True, "text": True, "timeout": timeout}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        try:
+            from vaf.core.log_helper import log_whatsapp_qr
+            log_whatsapp_qr(f"[deps] installing bridge dependencies (have={have or 'none'} want={wanted or '?'})")
+        except Exception:
+            pass
+        logger.info("WhatsApp: installing bridge dependencies in %s (have=%s want=%s)", node_dir, have or "none", wanted or "?")
+        use_ci = (node_dir / "package-lock.json").is_file()
+        cmds = [[npm, "ci", "--omit=dev", "--no-audit", "--no-fund"]] if use_ci else []
+        cmds.append([npm, "install", "--omit=dev", "--no-audit", "--no-fund"])
+        last_err = ""
+        for cmd in cmds:
+            try:
+                r = subprocess.run(cmd, **kwargs)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                last_err = str(e)
+                continue
+            if r.returncode == 0 and _installed_baileys_version(node_dir):
+                msg = f"WhatsApp bridge dependencies installed (Baileys {_installed_baileys_version(node_dir)})"
+                logger.info(msg)
+                try:
+                    from vaf.core.log_helper import log_whatsapp_qr
+                    log_whatsapp_qr(f"[deps] {msg}")
+                except Exception:
+                    pass
+                return True, msg
+            last_err = (r.stderr or r.stdout or "").strip()[-600:] or f"exit {r.returncode}"
+        msg = f"WhatsApp bridge dependency install failed: {last_err}. Run `npm install` in {node_dir} by hand."
+        logger.error(msg)
+        try:
+            from vaf.core.log_helper import log_whatsapp_qr
+            log_whatsapp_qr(f"[deps] FAILED {last_err}")
+        except Exception:
+            pass
+        return False, msg
 
 
 def _jid_to_e164(jid: str) -> str:
@@ -457,40 +601,21 @@ def _get_allowed_phones_for_user(username: str, user_scope_id: str) -> Tuple[Lis
 
 
 def _get_users_to_run() -> List[Tuple[str, str, Path]]:
-    """Return list of (user_scope_id, username, auth_dir) for users with linked WhatsApp and whitelist entry."""
+    """(user_scope_id, username, auth_dir) for every account that linked a WhatsApp number
+    and has the connection switched on. The linked account is that user's agent number, so
+    no whitelist entry is needed to run it (a registered main-user number only decides
+    whether the OWNER is reachable), and there is no fallback to another user's credentials:
+    two Baileys sockets on one credential set evict each other."""
+    from vaf.core.config import scope_id_for_username
     result: List[Tuple[str, str, Path]] = []
-    whatsapp_config = Config.get("whatsapp_config") or {}
-    if not isinstance(whatsapp_config, dict):
-        return result
-    whitelist = whatsapp_config.get("whitelist") or []
-
-    local_admin = (Config.get("local_admin_username") or "admin").strip().lower()
-    admin_auth_exists = whatsapp_auth_exists(local_admin)
-
-    processed_usernames = set()
-
-    for entry in whitelist:
-        if not isinstance(entry, dict):
+    for username in linked_usernames():
+        scope = scope_id_for_username(username)
+        if not scope:
+            logger.warning("WhatsApp: linked credentials for unknown account %r ignored", username)
             continue
-        if not entry.get("phone_number"):
+        if not whatsapp_enabled_for_scope(scope):
             continue
-        username = (entry.get("vaf_username") or "admin").strip()
-        if username in processed_usernames:
-            continue
-            
-        scope = entry.get("user_scope_id") or get_local_admin_scope_id()
-        auth_dir = get_whatsapp_auth_dir(username)
-        
-        # Check if auth exists for this user OR we can fallback to admin
-        if (auth_dir / "creds.json").exists():
-            result.append((str(scope), username, auth_dir))
-            processed_usernames.add(username)
-        elif admin_auth_exists and username.lower() != local_admin:
-            # Fallback to local admin auth for this user
-            admin_auth_dir = Config.APP_DIR / "users" / local_admin / "whatsapp"
-            result.append((str(scope), username, admin_auth_dir))
-            processed_usernames.add(username)
-
+        result.append((str(scope), username, get_whatsapp_auth_dir(username)))
     return result
 
 
@@ -703,23 +828,55 @@ def _sender_loop() -> None:
                 else:
                     body = text
                     ctype = "text"
-                append_message(username, chat_id or chat_jid, body, direction="out", content_type=ctype)
+                # Same per-scope store as the inbound lane, so the reply window and the
+                # read tools see both directions of one conversation.
+                _scope = _scope_by_user.get(username)
+                append_message(username, chat_id or chat_jid, body, direction="out", content_type=ctype, user_scope_id=_scope)
                 if chat_id:
-                    _append_chat_activity(chat_id, None, "out")
+                    _append_chat_activity(chat_id, _scope, "out")
             except Exception:
                 pass
         except Exception as e:
             logger.exception("WhatsApp sender error: %s", e)
 
 
-def _is_jid_whitelisted(username: str, chat_jid: str, user_scope_id: Optional[str] = None) -> bool:
-    """Verify chat_jid is in whitelist for this user (config whitelist or contact with allow_as_assistant_user). @lid = self-chat, always allowed. Pass user_scope_id when replying to a contact so FO contacts in scoped storage are found."""
-    if (chat_jid or "").strip().endswith("@lid"):
-        return True  # Self-chat: reply to own saved messages
+def _jid_to_chat_id(username: str, chat_jid: str) -> str:
+    """The store key (E.164 display form) for a JID. An @lid resolves through the persisted
+    lid_to_e164 map or the Node's mapping; an unresolved @lid has no key, because a LID is
+    not a number and must not be matched against one."""
+    jid = (chat_jid or "").strip()
+    if not jid:
+        return ""
+    if jid.endswith("@lid"):
+        try:
+            wc = Config.get("whatsapp_config") or {}
+            lid_map = (wc.get("lid_to_e164") or {}) if isinstance(wc, dict) else {}
+            mapped = str(lid_map.get(jid) or "").strip()
+        except Exception:
+            mapped = ""
+        if not mapped:
+            with _lid_mappings_lock:
+                for m in _lid_mappings.get((username or "").strip() or "admin", []):
+                    if m.get("lid") == jid and (m.get("e164") or "").strip():
+                        mapped = m["e164"].strip()
+                        break
+        return _to_e164_display(mapped) if mapped else ""
+    return _to_e164_display(_jid_to_e164(jid)) if _jid_to_e164(jid) else ""
+
+
+def _is_reply_allowed(username: str, chat_jid: str, user_scope_id: Optional[str] = None) -> bool:
+    """May the agent send to this JID on a REPLY lane (headless reply, owner delivery)?
+    Yes for the registered main-user number, a Front Office contact, or an open
+    conversation (a stored message with that number inside the reply window: the agent
+    wrote to them, or their message was accepted). An unresolved @lid matches nothing.
+    Explicit recipients (`send_whatsapp(to_phone=...)`) do not pass through here."""
     uname = (username or "").strip() or "admin"
     scope = str(user_scope_id).strip() if user_scope_id else None
+    chat_id = _jid_to_chat_id(uname, chat_jid)
     _, allowed_phones = _get_allowed_phones_for_user(uname, scope or get_local_admin_scope_id())
-    return _allow_from_match(chat_jid, allowed_phones)
+    if chat_id and _allow_from_match(chat_id, allowed_phones):
+        return True
+    return bool(chat_id) and _conversation_is_open(uname, chat_id, scope)
 
 
 def _enqueue_reply(username: str, chat_jid: str, text: str, voice_path: Optional[str] = None, user_scope_id: Optional[str] = None) -> bool:
@@ -727,10 +884,10 @@ def _enqueue_reply(username: str, chat_jid: str, text: str, voice_path: Optional
     When user sent a voice message, auto-reply with voice (TTS) when possible. user_scope_id helps resolve FO contacts (scoped storage).
 
     Returns True only if the reply was actually placed on the outgoing queue for the Node bridge, False if
-    it was dropped (non-whitelisted recipient, no outgoing queue, or a queue error). Callers that need a real
+    it was dropped (recipient not allowed, no outgoing queue, or a queue error). Callers that need a real
     delivery signal (e.g. send_to_main_messenger's fallback decision) rely on this."""
-    if not _is_jid_whitelisted(username, chat_jid, user_scope_id=user_scope_id):
-        logger.warning("WhatsApp: blocked reply to non-whitelisted JID %s for user %s", chat_jid, username)
+    if not _is_reply_allowed(username, chat_jid, user_scope_id=user_scope_id):
+        logger.warning("WhatsApp: blocked reply to JID %s for user %s (not owner, contact or open conversation)", chat_jid, username)
         return False
     # If no voice_path but user sent voice, try to synthesize TTS (like Telegram)
     if not voice_path and text:
@@ -781,10 +938,11 @@ def send_whatsapp_with_confirmation(
     Returns a success message or an error string for the agent to report.
     When allow_contact_send is True, the recipient may be any phone/JID (e.g. a contact); otherwise only whitelisted.
     """
-    if not allow_contact_send and not _is_jid_whitelisted(username, chat_jid):
+    if not allow_contact_send and not _is_reply_allowed(username, chat_jid):
         return (
-            "WhatsApp: Cannot send – chat/phone number is not in the whitelist. "
-            "Add your number in Settings → Connections → WhatsApp."
+            "WhatsApp: Cannot send - this number is neither the registered main-user number, "
+            "a contact who can reach the assistant, nor an open conversation. "
+            "Register the number in Settings → Connections → WhatsApp, or address a contact with to_phone."
         )
     use_external_ipc = _outgoing_queue is None
     with _process_lock:
@@ -949,6 +1107,52 @@ def _wa_flush(pending_key: str) -> None:
     logger.info("WhatsApp debounce flush: %s parts → session %s user %s", rec.get("parts", 1), session_id, username)
 
 
+def _drop_self_number_from_whitelist(username: str, user_scope_id: str, self_phone: str) -> None:
+    """Installs from the old model registered the linked number itself as the user's own
+    number (the wizard did it automatically). That entry can never be right now: the linked
+    account is the agent, and a message from it is dropped. Remove it once, say so."""
+    try:
+        cfg = Config.load()
+        wc = cfg.get("whatsapp_config") or {}
+        if not isinstance(wc, dict):
+            return
+        whitelist = list(wc.get("whitelist") or [])
+        self_digits = _phone_digits_canonical(self_phone)
+        keep = [
+            e for e in whitelist
+            if not (isinstance(e, dict) and _phone_digits_canonical(str(e.get("phone_number") or "")) == self_digits)
+        ]
+        if len(keep) == len(whitelist):
+            return
+        wc = dict(wc)
+        wc["whitelist"] = keep
+        cfg["whatsapp_config"] = wc
+        Config.save(cfg)
+        logger.warning("WhatsApp: removed the agent's own number %s from the whitelist for %s", self_phone, username)
+        try:
+            from vaf.core.log_helper import log_whatsapp_inbound
+            log_whatsapp_inbound(f"WHITELIST removed agent's own number {self_phone} user={username}")
+        except Exception:
+            pass
+        try:
+            from vaf.core.user_notifications import append_notification
+            append_notification(
+                user_scope_id,
+                kind="channel_reply",
+                title="WhatsApp: your own number was removed from the whitelist",
+                status="warning",
+                summary=(
+                    f"{self_phone} is the linked account, so it is the agent's number now. Register the "
+                    "number you chat from in Settings → Connections → WhatsApp."
+                ),
+                channel="WhatsApp",
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        logger.warning("WhatsApp: whitelist cleanup failed for %s: %s", username, e)
+
+
 def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dict[str, Any]) -> None:
     """Handle one JSON event from the bridge (pong, message, chats, etc.)."""
     if typ == "pong":
@@ -984,12 +1188,16 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
     elif typ == "connected":
         with _connection_lock:
             _connection_status[username] = True
+        self_phone = _to_e164_display(_jid_to_e164(str(obj.get("selfJid") or ""))) or (get_linked_phone(username) or "")
+        if self_phone:
+            _self_phone[username] = self_phone
+            _drop_self_number_from_whitelist(username, user_scope_id, self_phone)
         try:
             from vaf.core.log_helper import log_whatsapp_qr
-            log_whatsapp_qr(f"[Python] connected → status=open for {username}")
+            log_whatsapp_qr(f"[Python] connected → status=open for {username} agent_number={self_phone or '?'}")
         except Exception:
             pass
-        logger.info("WhatsApp connected for user %s", username)
+        logger.info("WhatsApp connected for user %s (agent number %s)", username, self_phone or "?")
     elif typ == "connection_closed":
         with _connection_lock:
             _connection_status[username] = False
@@ -1083,6 +1291,22 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
         from_e164 = obj.get("fromE164")  # Resolved via Baileys lidMapping when @lid
         body = (obj.get("body") or "").strip()
         voice_path = obj.get("voice_path")
+        # The linked account is the agent's own number. A message in its "message
+        # yourself" chat is somebody typing on the agent's phone, not the owner talking
+        # to the agent: dropped before it reaches the store, the activity or the queue.
+        if obj.get("selfChat") is True:
+            if voice_path:
+                try:
+                    Path(str(voice_path)).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            try:
+                from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
+                log_whatsapp_inbound(f"SELF_CHAT dropped from={from_jid} (linked account is the agent's number)")
+                log_whatsapp_qr(f"[inbound] SELF_CHAT dropped from={from_jid}")
+            except Exception:
+                pass
+            return
         voice_lang: Optional[str] = None
         was_voice = bool(voice_path)
         if voice_path and body == "<voice>":
@@ -1104,8 +1328,6 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             except Exception:
                 pass
             return
-        # Self-chat: trust Node's selfChat (Node resolves @lid to E.164 and compares to self; do NOT treat all @lid as self – LID is used for other 1:1 chats too, e.g. baba)
-        is_self_chat = obj.get("selfChat") is True
         # Resolve unresolved @lid via manual config (lid_to_e164) so known contacts like Bob can still be accepted when Node doesn't send fromE164
         resolved_e164_from_config: Optional[str] = None
         if (from_jid or "").endswith("@lid") and not from_e164:
@@ -1119,6 +1341,12 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                             resolved_e164_from_config = "+" + resolved_e164_from_config
             except Exception:
                 pass
+        # Store key: fromE164 when available (resolved @lid from Node); else manual lid_to_e164
+        # mapping; else derived from the JID. An unresolved @lid keeps the JID as chat_id.
+        raw = from_e164 or resolved_e164_from_config or _jid_to_e164(from_jid) or ""
+        chat_id = _to_e164_display(raw) if raw else str(from_jid or "")
+        if not chat_id:
+            chat_id = str(from_jid or "")
         # Allow when: JID or fromE164 matches whitelist/FO, or unresolved @lid is manually mapped (lid_to_e164) to an allowed number
         allow_match = bool(allowed_phones) and (
             _allow_from_match(from_jid or "", allowed_phones)
@@ -1131,12 +1359,18 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             or (resolved_e164_from_config and _allow_from_match(resolved_e164_from_config, config_phones))
         )
         contact_allow = bool(allow_match and not explicit_allow)
+        # Reply window: the agent wrote to this number recently (an outbound row in the
+        # store), so its answer is expected. Only checked when the sender is not the owner.
+        conversation_allow = (not explicit_allow) and bool(raw) and _conversation_is_open(
+            username, chat_id, user_scope_id, direction="out"
+        )
         ingress_policy = Config.get("channel_ingress_policy")
         policy_allowed, policy_reason = evaluate_ingress(
             "whatsapp",
             ingress_policy,
             explicit_match=explicit_allow,
             contact_match=contact_allow,
+            conversation_match=conversation_allow,
         )
         if (from_jid or "").endswith("@lid") and not from_e164 and not resolved_e164_from_config and not policy_allowed:
             try:
@@ -1181,18 +1415,16 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             return
         try:
             from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
-            log_whatsapp_inbound(f"ACCEPT from={from_jid} self_chat={is_self_chat} body_len={len(body)}")
-            log_whatsapp_qr(f"[inbound] ACCEPT from={from_jid} body_len={len(body)}")
+            log_whatsapp_inbound(f"ACCEPT from={from_jid} reason={policy_reason} body_len={len(body)}")
+            log_whatsapp_qr(f"[inbound] ACCEPT from={from_jid} reason={policy_reason} body_len={len(body)}")
             if (from_jid or "").endswith("@lid") and not from_e164:
                 log_whatsapp_qr(f"[inbound] ACCEPT unresolved @lid (LID→E.164 not available); reply will go to this chat")
         except Exception:
             pass
-        save_whatsapp_chat_jid(user_scope_id, username, from_jid)
-        # Use fromE164 when available (resolved @lid from Node); else manual lid_to_e164 mapping; else derive from JID. For unresolved @lid without mapping use JID as chat_id and LID part for session.
-        raw = from_e164 or resolved_e164_from_config or _jid_to_e164(from_jid) or ""
-        chat_id = _to_e164_display(raw) if raw else str(from_jid or "")
-        if not chat_id:
-            chat_id = str(from_jid or "")
+        if explicit_allow:
+            # The owner's endpoint for proactive sends is the registered main-user number
+            # only; a contact's message must never become "where the owner is".
+            save_whatsapp_chat_jid(user_scope_id, username, from_jid)
         if raw:
             resolved_digits = _normalize_phone(raw)
         elif (from_jid or "").endswith("@lid"):
@@ -1200,7 +1432,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
         else:
             resolved_digits = ""
         # Persist LID→E.164 so dashboard can show this chat under the contact's phone (Web UI session/history).
-        # GUARD: only store genuine LIDs — a real LID has different digits than the phone number.
+        # GUARD: only store genuine LIDs - a real LID has different digits than the phone number.
         # If lid_digits == e164_digits it means Node sent phone@lid (not a real privacy LID) → skip.
         if from_e164 and (from_jid or "").endswith("@lid"):
             try:
@@ -1232,16 +1464,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             pass
         whatsapp_config = Config.get("whatsapp_config") or {}
         inbound_to_agent = whatsapp_config.get("inbound_to_agent", True) if isinstance(whatsapp_config, dict) else True
-        # Self-chat (admin number = bridge/linked number): do not reply; store as note/backlog only so the agent doesn't talk to itself
-        if is_self_chat:
-            try:
-                from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
-                log_whatsapp_inbound(f"SELF_CHAT note from={from_jid} body_len={len(body)} (stored, no reply)")
-                log_whatsapp_qr(f"[inbound] SELF_CHAT stored as note from={from_jid} (admin=bridge number, no agent reply)")
-            except Exception:
-                pass
-            logger.info("WhatsApp self-chat from %s stored as note (no agent reply); user %s", from_jid, username)
-        elif inbound_to_agent:
+        if inbound_to_agent:
             owner_control = (whatsapp_config.get("owner_control") or {}) if isinstance(whatsapp_config, dict) else {}
             last_owner_ts = owner_control.get(from_jid) if from_jid else None
             if last_owner_ts is not None and (time.time() - last_owner_ts) < 600:
@@ -1253,13 +1476,15 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                     pass
                 logger.info("WhatsApp: skip agent reply for %s (owner has control, 10 min not elapsed)", from_jid)
             else:
-                session_id = f"whatsapp_{username}_{resolved_digits or 'self'}"
-                in_config = explicit_allow
-                from_contact = contact_allow and not in_config
+                session_id = f"whatsapp_{username}_{resolved_digits or 'unknown'}"
+                # Only the registered main-user number is the owner; a contact and a
+                # reply-window sender both land in Front Office.
+                from_contact = policy_reason != "explicit_pair"
                 metadata: Dict[str, Any] = {
                     "user_scope_id": user_scope_id,
                     "username": username,
                     "whatsapp_chat_jid": from_jid,
+                    "ingress_reason": policy_reason,
                 }
                 if from_contact:
                     metadata["from_contact"] = True
@@ -1414,6 +1639,7 @@ def _run_bridge() -> None:
         if proc:
             with _process_lock:
                 _processes[username] = proc
+                _scope_by_user[username] = str(user_scope_id)
             _write_bridge_state(True)
             threading.Thread(
                 target=_read_user_process,
@@ -1439,6 +1665,7 @@ def _run_bridge() -> None:
                 except Exception:
                     pass
         _processes.clear()
+        _scope_by_user.clear()
     _write_bridge_state(False)
 
 
@@ -1453,11 +1680,16 @@ def start_bridge() -> bool:
         logger.error("Node.js not found. Install Node >= 18 for WhatsApp.")
         return False
     if not _wa_bridge_path().exists():
-        logger.error("wa-bridge.js not found. Run: cd vaf/whatsapp_node && npm install")
+        logger.error("wa-bridge.js not found at %s", _wa_bridge_path())
         return False
 
     if _bridge_thread is not None and _bridge_thread.is_alive():
         return True
+
+    deps_ok, deps_msg = ensure_bridge_deps()
+    if not deps_ok:
+        logger.error("WhatsApp bridge not started: %s", deps_msg)
+        return False
 
     _bridge_stop.clear()
     _ensure_ipc_dirs()
@@ -1508,6 +1740,14 @@ def restart_bridge() -> bool:
 
 def is_bridge_running() -> bool:
     return _bridge_thread is not None and _bridge_thread.is_alive()
+
+
+def any_process_connected(wait_timeout: float = 2.0) -> bool:
+    """True when at least one running per-user process reports an open WhatsApp socket.
+    The reconnect worker asks this instead of naming an account."""
+    with _process_lock:
+        names = [u for u, p in _processes.items() if p.poll() is None]
+    return any(get_connection_status(u, wait_timeout=wait_timeout) for u in names)
 
 
 def has_process_for_user(username: str) -> bool:

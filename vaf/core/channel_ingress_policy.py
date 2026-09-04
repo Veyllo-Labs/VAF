@@ -81,17 +81,29 @@ def resolve_channel_policy(channel: str, raw_policy: Any) -> Dict[str, Any]:
     }
 
 
-def evaluate_ingress(channel: str, raw_policy: Any, explicit_match: bool, contact_match: bool) -> Tuple[bool, str]:
+def evaluate_ingress(
+    channel: str,
+    raw_policy: Any,
+    explicit_match: bool,
+    contact_match: bool,
+    conversation_match: bool = False,
+) -> Tuple[bool, str]:
     """
     Evaluate whether inbound sender is allowed.
 
     explicit_match: sender matched explicit pairing (e.g. whitelist / verified admin).
     contact_match: sender matched contact-based fallback.
+    conversation_match: the agent itself wrote to this sender recently (the bridge
+        decides the window). Accepted in every mode, because the door was opened by
+        the agent's own outbound message, not by a stranger; the reply lands in Front
+        Office (restricted tools), never as the owner. Reason: "open_conversation".
     """
     resolved = resolve_channel_policy(channel, raw_policy)
     mode = resolved["mode"]
     if explicit_match:
         return True, "explicit_pair"
+    if conversation_match:
+        return True, "open_conversation"
     if mode == "permissive" and contact_match:
         return True, "contact_fallback"
     if mode == "paired_only" and resolved["allow_contact_fallback"] and contact_match:

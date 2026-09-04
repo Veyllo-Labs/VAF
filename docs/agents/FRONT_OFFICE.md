@@ -4,8 +4,8 @@ When a **contact** (someone in your contact list with **Can reach your assistant
 
 ## When Front Office activates
 
-- The message must come from a **contact** whose channel (WhatsApp number or Telegram user ID) is in your contact list with **Can reach your assistant** turned on.
-- The bridge (WhatsApp or Telegram) sets `from_contact: true` in the task metadata when the sender is matched to such a contact (and not to the legacy whitelist-only entry).
+- The message must come from a **contact** whose channel (WhatsApp number or Telegram user ID) is in your contact list with **Can reach your assistant** turned on, or (WhatsApp) from a number **your agent wrote to inside the reply window** (`whatsapp_config.reply_window_hours`, default 72; ingress reason `open_conversation`). In the second case there is no contact record: the prefixed message says so, names the number, and reminds the agent that its own outbound message started the conversation and that the sender is a third party, not the owner.
+- The bridge (WhatsApp or Telegram) sets `from_contact: true` in the task metadata for every accepted sender that is not the owner's own paired endpoint (WhatsApp additionally stores the reason in `ingress_reason`).
 - The headless runner sees `from_contact` and enables Front Office for that turn only: it sets `agent._front_office_mode = True` and restricts tools to the Front Office allow-list. After the turn (success or error), it clears these so the next task is normal.
 
 See [CONNECTIONS.md](../integrations/CONNECTIONS.md) for how to configure contacts and the "Can reach your assistant" toggle.

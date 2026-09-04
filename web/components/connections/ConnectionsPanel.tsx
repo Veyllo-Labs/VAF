@@ -132,10 +132,10 @@ export const CONNECTION_APPS: ConnectionApp[] = [
         name: 'WhatsApp',
         icon: Phone,
         category: 'communication',
-        description: 'Chat with your agent on WhatsApp',
+        description: 'Your agent gets its own WhatsApp number to reach contacts and, if you register yours, you',
         configKey: 'whatsapp_config',
-        available: false,
-        comingSoon: true,
+        available: true,
+        comingSoon: false,
         iconColor: 'bg-green-600',
     },
     {
@@ -438,6 +438,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
     const t = useTranslations('settings.connectionsPanel');
     const [connectionSearchQuery, setConnectionSearchQuery] = useState('');
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'linked' | 'disconnected' | 'checking'>>({});
+    const [whatsappInfo, setWhatsappInfo] = useState<{ linked_phone: string | null; owner_number: string | null }>({ linked_phone: null, owner_number: null });
     /** Cloud accounts from API (source of truth; config can be stale after OAuth) */
     const [cloudAccountsFromApi, setCloudAccountsFromApi] = useState<any[]>([]);
     /** Email accounts from API (source of truth; config only has legacy email_config, not email_config_by_user) */
@@ -538,19 +539,18 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         } else {
             setConnectionStatus(prev => ({ ...prev, telegram: 'disconnected' }));
         }
-        if (config.whatsapp_config?.enabled) {
-            setConnectionStatus(prev => ({ ...prev, whatsapp: 'checking' }));
-            try {
-                const res = await fetch(api('api/whatsapp/status'), { credentials: 'include' });
-                const status = await res.json();
-                setConnectionStatus(prev => ({
-                    ...prev,
-                    whatsapp: status.linked && status.running ? 'connected' : status.linked ? 'linked' : 'disconnected',
-                }));
-            } catch {
-                setConnectionStatus(prev => ({ ...prev, whatsapp: 'disconnected' }));
-            }
-        } else {
+        // Asked regardless of the on/off toggle: "configured" means an account is linked
+        // (the agent's own number), and that is known only to the backend.
+        setConnectionStatus(prev => ({ ...prev, whatsapp: 'checking' }));
+        try {
+            const res = await fetch(api('api/whatsapp/status'), { credentials: 'include' });
+            const status = await res.json();
+            setWhatsappInfo({ linked_phone: status.linked_phone || null, owner_number: status.owner_number || null });
+            setConnectionStatus(prev => ({
+                ...prev,
+                whatsapp: status.linked && status.running ? 'connected' : status.linked ? 'linked' : 'disconnected',
+            }));
+        } catch {
             setConnectionStatus(prev => ({ ...prev, whatsapp: 'disconnected' }));
         }
         await fetchEmailAccounts();
@@ -800,10 +800,9 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             return emailAccountsFromApi.some((a: any) => (a.provider || '').toLowerCase() === 'microsoft' && a.enabled !== false);
         }
         if (app.id === 'whatsapp') {
-            const wc = config?.whatsapp_config;
-            if (!wc) return false;
-            const whitelist = wc.whitelist || [];
-            return whitelist.some((e: any) => e?.phone_number);
+            // Linked account = the agent's own number = configured. A registered main-user
+            // number is optional on top (outbound-only is a complete setup).
+            return connectionStatus.whatsapp === 'connected' || connectionStatus.whatsapp === 'linked';
         }
         if (isCloudApp(app.id)) {
             const fromApi = cloudAccountsFromApi.some((a: any) => a.provider === app.id);
@@ -896,6 +895,34 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                         ? (configured ? 'connected' : 'disconnected')
                                         : connectionStatus[app.id];
                             const Icon = app.icon;
+                            // One entry point per connection: the card itself and its gear open the
+                            // same thing (the dashboard when configured, the wizard when not).
+                            const openApp = () => {
+                                if (app.comingSoon) return;
+                                if (app.id === 'contacts') onOpenContactsDashboard?.();
+                                if (app.id === 'discord') {
+                                    if (onOpenDiscordDashboard && configured) onOpenDiscordDashboard();
+                                    else onOpenDiscordWizard();
+                                }
+                                if (app.id === 'telegram') {
+                                    if (onOpenTelegramDashboard && configured) onOpenTelegramDashboard();
+                                    else onOpenTelegramWizard();
+                                }
+                                if (app.id === 'whatsapp') (onOpenWhatsAppDashboard && configured ? onOpenWhatsAppDashboard() : onOpenWhatsAppWizard?.());
+                                if (app.id === 'email') onOpenEmailDashboard?.();
+                                if (app.id === 'google_calendar' || app.id === 'outlook_calendar') {
+                                    if (onOpenCalendarDashboard && configured) onOpenCalendarDashboard();
+                                    else onOpenCalendarWizard?.(app.id);
+                                }
+                                if (isCloudApp(app.id)) {
+                                    if (onOpenCloudDashboard && configured) onOpenCloudDashboard();
+                                    else if (onOpenCloudWizard) onOpenCloudWizard(app.id);
+                                }
+                                if (app.id === 'github') {
+                                    if (onOpenGitHubDashboard && configured) onOpenGitHubDashboard();
+                                    else fetchGitHubStatus();
+                                }
+                            };
 
                             return (
                                 <div
@@ -908,8 +935,13 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                         app.comingSoon && "opacity-60"
                                     )}
                                 >
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex items-center gap-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <button
+                                            type="button"
+                                            onClick={openApp}
+                                            disabled={app.comingSoon || !app.available}
+                                            className="flex items-center gap-3 text-left min-w-0 flex-1 rounded-lg -m-1 p-1 transition-colors hover:bg-gray-50 disabled:cursor-default disabled:hover:bg-transparent"
+                                        >
                                             <div className={cn(
                                                 "w-10 h-10 rounded-xl flex items-center justify-center shrink-0",
                                                 app.id === 'github'
@@ -960,7 +992,10 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                 )}
                                                 {configured && app.id === 'whatsapp' && (
                                                     <p className="text-xs text-gray-600 mt-1">
-                                                        You can message from WhatsApp; VAF can reach you there.
+                                                        {whatsappInfo.linked_phone ? `Agent number ${whatsappInfo.linked_phone}. ` : ''}
+                                                        {whatsappInfo.owner_number
+                                                            ? `VAF reaches you at ${whatsappInfo.owner_number}, and you can chat with it from there.`
+                                                            : 'Outbound only: register your own number in the dashboard to be reachable.'}
                                                     </p>
                                                 )}
                                                 {configured && app.id === 'email' && (
@@ -979,12 +1014,12 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                     </p>
                                                 )}
                                             </div>
-                                        </div>
+                                        </button>
 
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-2 shrink-0">
                                             {app.id === 'contacts' ? (
                                                 <button
-                                                    onClick={() => onOpenContactsDashboard?.()}
+                                                    onClick={openApp}
                                                     className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                                                     title="Open contacts"
                                                 >
@@ -1010,30 +1045,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
 
                                                     {/* Settings */}
                                                     <button
-                                                        onClick={() => {
-                                                            if (app.id === 'discord') {
-                                                                if (onOpenDiscordDashboard && configured) onOpenDiscordDashboard();
-                                                                else onOpenDiscordWizard();
-                                                            }
-                                                            if (app.id === 'telegram') {
-                                                                if (onOpenTelegramDashboard && configured) onOpenTelegramDashboard();
-                                                                else onOpenTelegramWizard();
-                                                            }
-                                                            if (app.id === 'whatsapp') (onOpenWhatsAppDashboard && configured ? onOpenWhatsAppDashboard() : onOpenWhatsAppWizard?.());
-                                                            if (app.id === 'email') onOpenEmailDashboard?.();
-                                                            if (app.id === 'google_calendar' || app.id === 'outlook_calendar') {
-                                                                if (onOpenCalendarDashboard && configured) onOpenCalendarDashboard();
-                                                                else onOpenCalendarWizard?.(app.id);
-                                                            }
-                                                            if (isCloudApp(app.id)) {
-                                                                if (onOpenCloudDashboard && configured) onOpenCloudDashboard();
-                                                                else if (onOpenCloudWizard) onOpenCloudWizard(app.id);
-                                                            }
-                                                            if (app.id === 'github') {
-                                                                if (onOpenGitHubDashboard && configured) onOpenGitHubDashboard();
-                                                                else fetchGitHubStatus();
-                                                            }
-                                                        }}
+                                                        onClick={openApp}
                                                         className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                                                         title={
                                                             (app.id === 'google_calendar' || app.id === 'outlook_calendar') && configured

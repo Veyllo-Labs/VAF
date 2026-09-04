@@ -200,6 +200,22 @@ def _install_web_deps(root: Path, prev_sha: str = "", force: bool = False) -> No
         pass
 
 
+def _install_bridge_deps() -> None:
+    """The WhatsApp bridge's node_modules follow its lockfile the same way web/ does; the
+    bridge owns the install (it also runs it on first start), the update only triggers it
+    so a Baileys bump in the release is live before the bridge next starts. Non-fatal:
+    a failure is a warning, the bridge repeats the attempt on its next start."""
+    try:
+        from vaf.api.whatsapp_bridge import ensure_bridge_deps
+        ok, msg = ensure_bridge_deps()
+    except Exception as e:
+        ok, msg = False, str(e)
+    if ok:
+        UI.info(msg)
+    else:
+        UI.warning(f"WhatsApp bridge dependencies not updated: {msg}")
+
+
 def _invalidate_web_build(root: Path) -> None:
     # The frontend rebuilds lazily when web/.next/BUILD_ID is missing
     # (frontend_manager.py), so invalidating is enough — no build here.
@@ -282,6 +298,7 @@ def _rollback(root: Path, anchor: str) -> bool:
     except Exception:
         UI.error("Rollback dependency reinstall failed; you may need `pip install -e .` manually.")
     _install_web_deps(root, force=True)
+    _install_bridge_deps()
     _invalidate_web_build(root)
     try:
         _start_service()
@@ -506,6 +523,7 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
 
         _install_python_deps(root)
         _install_web_deps(root, cur_sha)
+        _install_bridge_deps()
         _invalidate_web_build(root)
         _run_migrations()
 

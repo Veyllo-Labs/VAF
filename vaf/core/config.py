@@ -677,8 +677,11 @@ class Config:
 
         # Connections: Telegram (bot token, whitelist per user_scope_id)
         "telegram_config": None,                                   # { bot_token, enabled, verified?, whitelist: [...] }
-        # Connections: WhatsApp (Baileys via Node, per-user auth, whitelist with phone_number)
-        "whatsapp_config": None,                                   # { enabled, whitelist: [{ phone_number, user_scope_id, vaf_username }] }
+        # Connections: WhatsApp (Baileys via Node, per-user auth). The linked account is the
+        # AGENT's number; `whitelist` holds the numbers users chat FROM (main user per VAF
+        # account), never the linked number itself. `reply_window_hours`: a number the agent
+        # wrote to may answer for this long without being a contact (0 = off).
+        "whatsapp_config": None,                                   # { enabled, inbound_to_agent, reply_window_hours (72), chat_sync_interval_sec (600), whitelist: [{ phone_number, user_scope_id, vaf_username }], lid_to_e164: {}, owner_control: {}, chat_activity: [] }
         # Per-user connection toggles (sliders). Only non-admins use this; admin uses global telegram/whatsapp/discord_config.enabled.
         "connection_enabled_by_scope": None,                       # { "<user_scope_id>": { "telegram": bool, "whatsapp": bool, "discord": bool } }
         # Channel ingress policy (default-deny / explicit pairing).

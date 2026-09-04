@@ -28,7 +28,7 @@ _DEFAULT_RETENTION_DAYS = 90
 
 __all__ = [
     "init_store", "append_message", "search_messages",
-    "list_chats_from_store", "get_chat_messages",
+    "list_chats_from_store", "get_chat_messages", "last_message_ts",
     "delete_message", "mark_deleted", "replace_chat_rows",
 ]
 
@@ -254,7 +254,7 @@ def replace_chat_rows(
 ) -> int:
     """Atomically make the store mirror `rows` for one (username, chat_id, channel): in a single
     transaction, delete every existing row for that chat+channel, then bulk-insert `rows`. This is
-    the derived-index re-sync primitive — the store becomes an exact projection of the authoritative
+    the derived-index re-sync primitive - the store becomes an exact projection of the authoritative
     session, so stale rows vanish and re-syncs never accumulate duplicates.
 
     Each row is a dict with keys: body, direction ('in'/'out'), ts (Unix float), message_id,
@@ -372,7 +372,8 @@ def list_chats_from_store(
             (u, *chan_param, limit),
         )
         rows = [dict(row) for row in cur.fetchall()]
-        # Optionally attach latest chat_name per chat
+        # Attach the latest chat_name and the newest message per chat (the list's preview
+        # line, like a mail client's snippet).
         for r in rows:
             cid = r.get("chat_id") or ""
             cur2 = conn.execute(
@@ -385,6 +386,17 @@ def list_chats_from_store(
             )
             row2 = cur2.fetchone()
             r["chat_name"] = (dict(row2).get("chat_name") or "").strip() if row2 else ""
+            cur3 = conn.execute(
+                f"""
+                SELECT body, direction FROM channel_messages
+                WHERE username = ? AND chat_id = ?{chan_clause}
+                ORDER BY ts DESC LIMIT 1
+                """,
+                (u, cid, *chan_param),
+            )
+            row3 = cur3.fetchone()
+            r["last_body"] = (dict(row3).get("body") or "").strip()[:160] if row3 else ""
+            r["last_direction"] = (dict(row3).get("direction") or "") if row3 else ""
         return rows
     finally:
         conn.close()
@@ -439,5 +451,42 @@ def get_chat_messages(
             all_rows.extend([dict(row) for row in cur.fetchall()])
         all_rows.sort(key=lambda r: -(r.get("ts") or 0))
         return all_rows[: min(max(limit, 1), 200)]
+    finally:
+        conn.close()
+
+
+def last_message_ts(
+    username: str,
+    chat_id: str,
+    direction: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+    channel: Optional[str] = "whatsapp",
+) -> Optional[float]:
+    """Unix timestamp of the newest stored message in a chat, or None when the chat has none.
+
+    direction: "out" = newest message the agent SENT, "in" = newest accepted inbound,
+    None = either. This is the one query behind a channel's reply window: "did the
+    agent write to this number within the last N hours" is answered by the store that
+    already records every outbound send, so no bridge keeps a second ledger of open
+    conversations. Rejected inbound is never stored, so an "in" row always means the
+    sender was accepted once."""
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        clauses = ["username = ?", "chat_id = ?"]
+        params: List[Any] = [(username or "").strip() or "", chat_id or ""]
+        if channel:
+            clauses.append("channel = ?")
+            params.append(channel)
+        if direction:
+            clauses.append("direction = ?")
+            params.append(direction)
+        cur = conn.execute(
+            f"SELECT MAX(ts) AS ts FROM channel_messages WHERE {' AND '.join(clauses)}",
+            tuple(params),
+        )
+        row = cur.fetchone()
+        ts = dict(row).get("ts") if row else None
+        return float(ts) if ts is not None else None
     finally:
         conn.close()

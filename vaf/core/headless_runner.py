@@ -1423,7 +1423,20 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     contact = get_contact_by_whatsapp_phone(_jid, _username, user_scope_id=_user_scope)
                         except Exception:
                             pass
-                        contact_block = ""
+                        # No contact record: this sender reached Front Office through the reply
+                        # window (the agent wrote to them first) rather than through a contact
+                        # with "Can reach your assistant". Tell the model exactly that, so it
+                        # neither invents a relationship nor treats them as the owner.
+                        _sender_ref = str(
+                            _meta.get("whatsapp_chat_jid") or _meta.get("telegram_user_id") or ""
+                        ).split("@", 1)[0].split(":", 1)[0]
+                        contact_block = (
+                            f"Sender: {('+' + _sender_ref) if _sender_ref.isdigit() else (_sender_ref or 'unknown')} "
+                            "(no contact record). Your own earlier outbound message to this number opened "
+                            "this conversation; they are a third party, not the account owner. Answer only "
+                            "what concerns that conversation, reveal nothing about the owner, and report "
+                            "their answer to the owner through the back-channel when it matters."
+                        )
                         reply_lang_hint = ""
                         if contact:
                             from vaf.core.contacts_store import _contact_ensure_channels

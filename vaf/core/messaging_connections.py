@@ -269,6 +269,21 @@ def get_discord_user_id(
     return (discord_config.get("admin_user_id") or "").strip() or None
 
 
+def whatsapp_enabled_for_scope(user_scope_id: Optional[Any]) -> bool:
+    """Effective WhatsApp on/off switch for one user: the local admin owns the global
+    `whatsapp_config.enabled`; everybody else has a slider stored under
+    `connection_enabled_by_scope[<scope>]["whatsapp"]`. One rule for the bridge (which
+    users get a Node process), the availability check below and the API routes."""
+    from vaf.core.config import get_local_admin_scope_id
+    whatsapp_config = Config.get("whatsapp_config") or {}
+    scope_str = str(user_scope_id).strip() if user_scope_id is not None else ""
+    if not scope_str or scope_str == str(get_local_admin_scope_id() or "").strip():
+        return bool(isinstance(whatsapp_config, dict) and whatsapp_config.get("enabled", False))
+    by_scope = Config.get("connection_enabled_by_scope") or {}
+    toggles = by_scope.get(scope_str, {}) if isinstance(by_scope, dict) else {}
+    return bool(isinstance(toggles, dict) and toggles.get("whatsapp", False))
+
+
 def get_messaging_connections(
     username: Optional[str] = None,
     user_scope_id: Optional[Any] = None,
@@ -282,11 +297,19 @@ def get_messaging_connections(
 
     Returns:
         {
-            "available": ["telegram", "discord"],  # lowercase, ordered
+            "available": ["telegram", "discord"],  # channels on which the OWNER is reachable
+            "outbound": ["whatsapp"],              # channels on which the agent reaches THIRD PARTIES
             "main_messenger": "telegram" | None     # from user_identity.main_messenger if valid
         }
+
+    "available" feeds main_messenger / send_to_user: the user has an endpoint of their own
+    there. "outbound" is wider: WhatsApp counts as soon as the user linked an account (that
+    account is the agent's own number), whether or not they registered a number to be
+    reached on; the per-channel send tool is offered for both, the owner lane only for
+    "available".
     """
     available: List[str] = []
+    outbound: List[str] = []
     main_messenger: Optional[str] = None
 
     # Telegram: enabled + verified + user has a whitelist entry
@@ -312,13 +335,15 @@ def get_messaging_connections(
         if discord_config.get("enabled") and discord_config.get("verified"):
             available.append("discord")
 
-    # WhatsApp: enabled + user has linked auth (creds exist) + whitelist entry
+    # WhatsApp: switched on + the user linked an account (the agent's number) -> outbound;
+    # additionally a registered main-user number (whitelist entry) -> the owner is reachable.
     whatsapp_config = Config.get("whatsapp_config") or {}
-    if isinstance(whatsapp_config, dict) and whatsapp_config.get("enabled"):
+    if isinstance(whatsapp_config, dict) and whatsapp_enabled_for_scope(user_scope_id):
         try:
             from vaf.core.whatsapp_auth import whatsapp_auth_exists
             vaf_username = (username or "").strip() or "admin"
             if whatsapp_auth_exists(vaf_username):
+                outbound.append("whatsapp")
                 whitelist = whatsapp_config.get("whitelist") or []
                 scope_str = str(user_scope_id) if user_scope_id is not None else None
                 for entry in whitelist:
@@ -357,7 +382,7 @@ def get_messaging_connections(
         except Exception:
             pass
 
-    return {"available": available, "main_messenger": main_messenger}
+    return {"available": available, "outbound": outbound, "main_messenger": main_messenger}
 
 
 def _record_outbound(

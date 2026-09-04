@@ -23,7 +23,7 @@ def test_send_whatsapp_uses_external_ipc_when_local_bridge_state_is_missing(monk
     monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path))
     monkeypatch.setattr(wa, "_outgoing_queue", None)
     monkeypatch.setattr(wa, "_processes", {})
-    monkeypatch.setattr(wa, "_is_jid_whitelisted", lambda *args, **kwargs: True)
+    monkeypatch.setattr(wa, "_is_reply_allowed", lambda *args, **kwargs: True)
 
     wa._write_json_atomic(
         wa._ipc_state_path(),

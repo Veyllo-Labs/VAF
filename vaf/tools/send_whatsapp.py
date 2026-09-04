@@ -15,7 +15,8 @@ from vaf.tools.send_telegram import _resolve_path
 
 class SendWhatsAppTool(BaseTool):
     """
-    Send content via WhatsApp: to the account owner (default) or to a contact (to_phone).
+    Send content via WhatsApp from the agent's own linked number: to a contact or any number
+    (to_phone), or to the account owner's registered main-user number (default, no to_phone).
     Use to_phone when the user asks to send a message to someone (e.g. Alice); get the number from get_contact(name='Alice').
     """
     name = "send_whatsapp"
@@ -27,8 +28,8 @@ class SendWhatsAppTool(BaseTool):
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (
-        "Send content via WhatsApp: text, voice message (voice_lang), or document (file_path). "
-        "Default: sends to the account owner. To send to a contact (e.g. Alice), use to_phone with the contact's WhatsApp number from get_contact(name='...'). "
+        "Send content via WhatsApp from the agent's own linked number: text, voice message (voice_lang), or document (file_path). "
+        "Default (no to_phone): sends to the account owner's registered main-user number. To send to a contact (e.g. Alice) or any number, use to_phone with the contact's WhatsApp number from get_contact(name='...'). "
         "When sending a voice message to a contact, use the contact's preferred_language for voice_lang (get_contact returns 'Preferred language: xx'); e.g. Alice speaks Turkish → voice_lang='tr'. "
         "Example: get_contact(name='Alice') then send_whatsapp(message='...', to_phone='+491761234567', voice_lang='tr')."
     )
@@ -64,14 +65,14 @@ class SendWhatsAppTool(BaseTool):
         user_scope_id = kwargs.get("user_scope_id")
 
         # GUARD: When the current task is an inbound WhatsApp message from a contact,
-        # the reply is delivered automatically by the headless runner — the agent must
+        # the reply is delivered automatically by the headless runner - the agent must
         # NOT call send_whatsapp in addition (would cause duplicate / wrong-JID sends).
         # Block the tool when there is no explicit to_phone recipient AND the agent is
         # currently handling a front-office (from_contact) inbound session.
         to_phone = (kwargs.get("to_phone") or kwargs.get("phone_number") or "").strip()
         if not to_phone:
             # No explicit recipient → sending to the owner's own stored JID.
-            # During an inbound contact session this is redundant — the headless reply
+            # During an inbound contact session this is redundant - the headless reply
             # path already delivers the response.  Block to prevent duplicates.
             try:
                 # The agent exposes _front_office_mode when handling a contact message.
@@ -81,7 +82,7 @@ class SendWhatsAppTool(BaseTool):
                 if _agent is not None and getattr(_agent, "_front_office_mode", False):
                     return (
                         "[TOOL BLOCKED] You are replying to an inbound WhatsApp message from a contact. "
-                        "Do NOT call send_whatsapp — your reply is delivered automatically. "
+                        "Do NOT call send_whatsapp - your reply is delivered automatically. "
                         "Just write your answer as plain text."
                     )
             except Exception:
@@ -110,9 +111,9 @@ class SendWhatsAppTool(BaseTool):
             chat_jid = get_whatsapp_chat_jid(user_scope_id, username)
             if not chat_jid:
                 return (
-                    "No WhatsApp contact found for this user. "
-                    "The user must link WhatsApp in Settings → Connections → WhatsApp (scan QR) and add their phone number to the whitelist. "
-                    "Once linked, you can send proactive messages."
+                    "No main-user WhatsApp number is registered for this user, so there is no default recipient. "
+                    "Pass to_phone (E.164) to message a contact or any number from the agent's own linked number, "
+                    "or ask the user to register the number they chat from in Settings → Connections → WhatsApp."
                 )
 
         # Strip <think>...</think> and internal system phrases for clean delivery

@@ -23,9 +23,42 @@ import readline from "node:readline";
 
 const LOG_PREFIX = "[wa-bridge]";
 
-/** Emit JSON line to stdout. Uses sync write to avoid pipe buffering (Python must receive "connected" immediately). */
+/**
+ * Emit JSON line to stdout. Uses sync write to avoid pipe buffering (Python must receive
+ * "connected" immediately). stdout is a pipe Node opens non-blocking, so when Python has
+ * not drained it yet (the history sync right after linking pushes hundreds of chat lists
+ * of several KB each) writeSync raises EAGAIN. Uncaught, that killed the whole bridge one
+ * second after "connected" (live 2026-09-04). Retry the remaining bytes until the pipe
+ * accepts them; a short spin is fine here because the reader is a dedicated thread.
+ */
 function emit(obj) {
-  fs.writeSync(1, JSON.stringify(obj) + "\n");
+  const buf = Buffer.from(JSON.stringify(obj) + "\n", "utf8");
+  let off = 0;
+  let spins = 0;
+  while (off < buf.length) {
+    try {
+      off += fs.writeSync(1, buf, off, buf.length - off);
+    } catch (err) {
+      if (err && err.code === "EAGAIN" && spins < 20000) {
+        spins += 1;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+/** Chat-list emits are coalesced: the history sync fires chats.update per batch, and each
+ *  emit serialises the WHOLE store. One line 300 ms after the last change is what Python
+ *  needs; hundreds of near-identical multi-KB lines are what filled the pipe. */
+let chatsEmitTimer = null;
+function scheduleEmitChats() {
+  if (chatsEmitTimer) return;
+  chatsEmitTimer = setTimeout(() => {
+    chatsEmitTimer = null;
+    emitChatsNow();
+  }, 300);
 }
 
 function parseArgs() {
@@ -252,9 +285,15 @@ function normalizeChat(chat) {
   return { jid: id, name: name || (phone || id), phone: phone || id, is_group: isGroup, last_ts: ts };
 }
 
-function emitChats() {
+function emitChatsNow() {
   const list = Array.from(chatStore.values()).sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
   emit({ type: "chats", chats: list });
+}
+
+/** Event-driven chat-list update: coalesced (see scheduleEmitChats). An explicit getChats
+ *  command answers immediately through emitChatsNow. */
+function emitChats() {
+  scheduleEmitChats();
 }
 
 async function connect(authDir) {
@@ -642,14 +681,14 @@ async function main() {
         try {
           fs.writeSync(2, `${LOG_PREFIX} getChats: emitting ${chatStore.size} chats\n`);
         } catch (_) {}
-        emitChats();
+        emitChatsNow();
       } else if (obj?.cmd === "syncChats") {
         // Note: Baileys fetchMessageHistory(count, oldestMsgKey, oldestMsgTimestamp) is per-chat (more messages), not "full chat list".
         // The full chat list only comes from messaging-history.set (on connect). We just re-emit current chatStore so the dashboard refreshes.
         try {
           fs.writeSync(2, `${LOG_PREFIX} syncChats: emitting ${chatStore.size} chats (full list comes from WhatsApp on connect)\n`);
         } catch (_) {}
-        emitChats();
+        emitChatsNow();
       } else if (obj?.cmd === "getLidMappings") {
         (async () => {
           const out = [];

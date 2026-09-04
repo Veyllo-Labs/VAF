@@ -432,7 +432,7 @@ Most of these are populated by the setup wizard / Connections UI, not hand-edite
 | `telegram_config` | `None` | Telegram bot config (set via UI). |
 | `telegram_debounce_seconds` | `5` | Telegram message debounce. |
 | `telegram_idle_timeout` | `120` | Telegram session idle timeout. |
-| `whatsapp_config` | `None` | WhatsApp bridge config. |
+| `whatsapp_config` | `None` | WhatsApp bridge config (set via UI). Sub-keys: `enabled`; `inbound_to_agent` (`True`); `reply_window_hours` (`72`, `0` = off: how long a number the agent wrote to may reply without being a contact); `chat_sync_interval_sec` (`600`); `whitelist` (registered main-user numbers, one per VAF account: `phone_number`, `user_scope_id`, `vaf_username`; the linked account itself is the agent's number and is refused here); managed: `lid_to_e164`, `owner_control`, `chat_activity`. See [WHATSAPP_INTEGRATION.md](../integrations/WHATSAPP_INTEGRATION.md). |
 | `email_config*` | `None` | Email account config (by scope/user). |
 | `email_oauth_*_client_id` | `""` | Email OAuth client IDs (Google/Microsoft). |
 | `email_oauth_*_client_secret` | `""` | Email OAuth client secrets (Google/Microsoft). Read-redacted for non-admins. |

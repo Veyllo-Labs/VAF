@@ -13,7 +13,7 @@ Connect external apps and services to interact with your VAF agent.
 | **Email** | Available | OAuth2 (Google, Microsoft, Apple) or IMAP/SMTP; read and send email via agent |
 | Slack | Coming Soon | Integrate VAF into your Slack workspace |
 | Signal | Coming Soon | Chat with your agent via Signal |
-| **WhatsApp** | Available | Chat with your agent on WhatsApp (QR link, per-user isolation) |
+| **WhatsApp** | Available | Your agent's own WhatsApp number: it reaches contacts and, if you register yours, you (QR link, per-user isolation) |
 | Microsoft Teams | Coming Soon | Bot Framework for Teams integration |
 | Matrix (Element) | Coming Soon | Open-source chat protocol |
 | IRC | Coming Soon | Classic IRC for communities |
@@ -121,6 +121,10 @@ For security, only verified admins can control the bot:
 3. Once verified, your Discord user becomes the authorized admin
 4. The bot will only respond to messages from the verified admin
 
+### Dashboard
+
+The Discord window (Settings → Connections → Discord) uses the shared channel layout (`web/components/connections/ChannelDashboardShell.tsx`, the same shell as WhatsApp and Telegram): the paired admin's direct message as the one chat on the left, the conversation in the middle, and a gear that opens the settings (Developer Portal link, bridge state with the start/stop switch, the admin, the recent activity). Strings live in `settings.discordDashboard` and `settings.channelDashboard`.
+
 ### Configuration
 
 The Discord configuration is stored locally in your VAF config:
@@ -202,6 +206,7 @@ The Discord configuration is stored locally in your VAF config:
 ### Session storage and memory compaction (15-message rule)
 
 - **History:** Telegram chat history is stored in the same place as Web UI sessions: `~/.vaf/sessions/`. Each Telegram user has one session file: `telegram_<user_id>.json`. The dashboard conversation view reads from this.
+- **Dashboard:** The Telegram window uses the shared channel layout (`web/components/connections/ChannelDashboardShell.tsx`, the same shell as WhatsApp and Discord): chats on the left with a badge (Full access for a paired VAF user, Relay for a relay contact, Read-only otherwise), the conversation in the middle, and a gear that opens the settings (bot and bridge state, the paired users, the relay list with add/remove, the activity chart). Strings live in `settings.telegramDashboard` and `settings.channelDashboard`.
 - **Conversation view:** Selecting a chat in the dashboard sidebar shows the conversation inline (user and bot bubbles, oldest first, auto-scrolled to the newest message; `<think>` blocks are stripped since they are never sent to the channel). A search field on the conversation header works like Ctrl+F over the chat: matches are highlighted, Enter / Shift+Enter (or the arrow buttons) jump between them, Escape clears the search. The Memory Learning progress line is shown in the conversation header next to the title.
 - **After-15-messages rule:** The same **session compaction** as in the Web UI applies: every N **main-user** turns (default 15, configurable via `memory_compaction_interval`), the model is prompted to write durable memories into RAG. The prompt includes only **user and assistant messages** (no system or tool content). The count is **cumulative** (e.g. 4 today + 5 tomorrow = 9; at 15 total, compaction runs). Only role **user** (main user of that session) is counted; other participants (relay contacts, other bot users) have separate sessions. Memories are stored under the whitelist user’s `user_scope_id`, so they appear in the same Memory graph and are used in later Web and Telegram chats. Reply length: `memory_compaction_max_tokens` (default 4000). See [MEMORY_SYSTEM.md](../memory/MEMORY_SYSTEM.md#session-compaction-background).
 - **Bounded history after compaction:** After each Telegram Memory Learning run, session history is trimmed to keep only the most recent user-turn window (aligned with `memory_compaction_interval`, default 15). This keeps dashboard history bounded and avoids unbounded growth of Telegram session files.
@@ -254,11 +259,13 @@ For full technical documentation (architecture, voice flow, configuration, troub
 
 ### Features
 
-- **Per-user isolation**: Each VAF user has their own WhatsApp session. Credentials are stored in `~/.vaf/users/<username>/whatsapp/`. Other users cannot see or use your WhatsApp.
+- **The linked account is the agent's number**: The account you scan the QR code with becomes your agent's own WhatsApp number. The agent writes to contacts and other people from it; nobody chats with the agent from that phone (its own chat is dropped). Link a spare phone or the company number, not the phone you chat from.
+- **Your own number is optional**: Register the number you chat from (wizard step two, or the dashboard) and the agent can reach you on WhatsApp; messages from it get the full agent, like Telegram. Without it the agent is outbound only.
+- **Per-user isolation**: Each VAF user links their own account. Credentials are stored in `~/.vaf/users/<username>/whatsapp/`. Other users cannot see or use your WhatsApp; there is no shared credential set.
 - **QR link**: Scan a QR code with WhatsApp (Linked Devices) to link your phone.
-- **Whitelist**: Only configured phone numbers (E.164) can send messages **and** receive replies. Each whitelist entry maps a phone number to a VAF user. In strict pairing mode (`channel_ingress_policy.mode = paired_only`, default), contact-based fallback is disabled for WhatsApp, so contacts must be explicitly paired in WhatsApp whitelist.
-- **Read-only for everyone else**: The bot replies only to numbers in your whitelist (config or contact whitelist). It does not message other contacts or react to messages from non-whitelisted numbers.
-- **Node.js required**: Uses Baileys via a Node subprocess. Run `npm install` in `vaf/whatsapp_node/` before first use.
+- **Who is answered**: the registered main-user number (full chat), contacts with "Can reach your assistant" (Front Office; in strict pairing mode, `channel_ingress_policy.mode = paired_only`, only with `allow_contact_fallback`), and anyone your agent wrote to inside the reply window (`whatsapp_config.reply_window_hours`, default 72; Front Office, reason `open_conversation`). See [WHATSAPP_INTEGRATION.md](WHATSAPP_INTEGRATION.md#roles-the-linked-account-is-the-agent).
+- **Read-only for everyone else**: Messages from other numbers are rejected and logged as security events; the agent never answers them.
+- **Node.js required**: Uses Baileys via a Node subprocess. Its dependencies are installed from the lockfile automatically on the first start (and by `vaf update`); nothing to run by hand.
 - **Agent tools**: `whatsapp_inbox`, `find_whatsapp_messages`, `read_whatsapp_chat` list/search/read chats. **`send_whatsapp`** sends text, voice messages, or **documents (PDF, etc.)** to the user – WhatsApp as a channel where the bot can send the user content. `whatsapp_call` is a placeholder (not implemented).
 - **Voice (TTS/STT)**: Incoming voice messages are downloaded, transcribed via Whisper STT (speech_stt_docker_url, default localhost:5003), and passed as text to the agent. When the user sends a voice message, replies can automatically be sent as voice (TTS) in the detected language. The agent can also explicitly send voice via `send_whatsapp(voice_lang="de")` or `send_telegram(voice_lang="de")`.
 
@@ -277,19 +284,19 @@ If you want WhatsApp only as a place **where the bot can send you things** (audi
 
 ### Setup
 
-1. Install Node.js (>= 18) and run `npm install` in `vaf/whatsapp_node/`.
+1. Install Node.js (>= 18, with npm); the installers do this. The bridge installs its own dependencies on first start.
 2. Go to **Settings → Connections**
 3. Click **Connect** on WhatsApp
 4. Scan the QR code with WhatsApp on your phone (Linked Devices)
-5. Your phone number is automatically added to the whitelist from the linked WhatsApp account.
+5. The wizard shows the linked account as your agent's number. Optionally register **your own** number (the one you chat from); the agent's own number is refused there.
 6. Turn the connection **on**; the bridge starts automatically when enabled.
 
 ### WhatsApp Dashboard
 
-The WhatsApp dashboard (Settings → Connections → Dashboard) shows:
+The WhatsApp window (Settings → Connections → WhatsApp) is laid out like the mail client: chats on the left with a badge saying who each one is to the agent (Owner, Contact, Conversation, Assign number, Read-only), the active conversation in the middle, and a gear that opens the settings (agent number, your own number, who else may write, reply window, activity). Details in [WHATSAPP_INTEGRATION.md](WHATSAPP_INTEGRATION.md#dashboard).
 
-- **Connection status** (indicator next to "Chats"): Green = WhatsApp connected, amber = bridge running but not connected, gray = bridge not started.
-- **Refresh (↻)**: Refreshes chat list and re-checks connection status (ping/pong with the Node bridge).
+- **Connection status** (dot next to the agent number): Green = WhatsApp connected, amber = bridge running but not connected, gray = bridge not started.
+- **Refresh**: Refreshes the chat list and re-checks the connection (ping/pong with the Node bridge); starts the bridge when it is enabled but not running.
 - **Reconnection**: If the bridge is running but WhatsApp is not connected (amber), VAF automatically restarts the bridge periodically so it reconnects with stored credentials; no action required in most cases. If it stays disconnected, use "Restart bridge" in the dashboard or Settings → Connections → Stop then Start; wait 20–30 seconds, then refresh.
 - **send_whatsapp** now verifies delivery: The tool waits for confirmation from the Node bridge. If the message fails (e.g. "WhatsApp not connected"), the agent receives an error instead of a fake success.
 
@@ -317,9 +324,9 @@ The WhatsApp dashboard (Settings → Connections → Dashboard) shows:
 
 - **QR/Link debugging**: Wa-bridge stderr (including all `connection.update` events) is logged to `logs/whatsapp_qr.log`. After QR scan: WhatsApp disconnects with 515/516 → wa-bridge creates a new socket with stored credentials → `open`. If "logging in" stays stuck on the phone, it's often the computer (network/firewall).
 - **"Node.js not found"**: Install Node.js 18+ and ensure it is in your PATH.
-- **"wa-bridge.js not found"**: Run `npm install` in `vaf/whatsapp_node/`.
-- **Black terminal / no QR code**: Install Node.js 18+, run `npm install` in `vaf/whatsapp_node/`, restart VAF.
-- **No reply**: Ensure the bridge is running (Settings → Connections, WhatsApp toggle on) and your phone number is in the whitelist.
+- **"WhatsApp bridge dependency install failed"**: npm is missing, offline, or `vaf/whatsapp_node/` is not writable; `logs/whatsapp_qr.log` (`[deps] ...`) has the npm output. Fallback: run `npm install` there by hand.
+- **Black terminal / no QR code**: Install Node.js 18+ (with npm) and restart VAF; the bridge installs its dependencies itself.
+- **No reply**: Ensure the bridge is running (Settings → Connections, WhatsApp toggle on) and that you are writing from your registered number, not from the agent's phone (its own chat is dropped: `SELF_CHAT dropped` in `logs/whatsapp_inbound.log`).
 - **Bridge running, WhatsApp not connected** (amber): Node is running but Baileys socket is not `open`. **Causes:** (1) Still connecting – wait 10–30 s and Refresh. (2) Session invalid (401/device_removed) – **Reset & get new QR**, scan again. (3) 515/516 – wait or **Restart bridge**. (4) Network/firewall – test [web.whatsapp.com](https://web.whatsapp.com), disable VPN. **Diagnosis:** Open `logs/whatsapp_qr.log`. If you see **`Bad MAC`** or **`Failed to decrypt message with any known session`**, the session keys are broken → **Reset & new QR**. Otherwise search for `connection=close status=<code>`: 401 → Reset; 515/516 → wait or restart. VAF also auto-restarts the bridge periodically.
 - **Auto-disconnect on session expiry**: When the bridge needs a new QR (session invalid) but cannot display it, VAF stops the bridge and sets the toggle to OFF. Message: "Session expired. Log in again: Reset, scan QR, turn ON." OpenClaw has the same constraint (Baileys session can expire); they use `clawdbot channels login` to re-pair. We use Reset in the UI.
 - **Restart doesn't help**: If "Restart bridge" keeps showing amber (not connected) after 20–30 seconds:
@@ -331,9 +338,8 @@ The WhatsApp dashboard (Settings → Connections → Dashboard) shows:
   - Check `logs/whatsapp_reply.log`: Look for `SENDER ok` (message was sent to Node) or `DROPPED process_not_running` / `ERROR` (send failed).
   - **Phone number format**: Whitelist must use E.164 (e.g. `+491761234567`), not `0176...`. Wrong format → wrong JID → message may not reach you.
   - **Bridge/Process**: Settings → Connections → WhatsApp → Stop, then Start. Ensure "Linked" and QR was scanned successfully.
-- **Self-chat (messaging yourself): Bot doesn't respond**:
-  - Check `logs/whatsapp_inbound.log`: Look for `ACCEPT`, `ENQUEUED`, `HEADLESS processing` (message was received and processed) or `SKIP`, `REJECT` (message was filtered).
-  - Bridge must be running; your number in whitelist. If using a newer WhatsApp account with LID format, the bridge resolves it automatically.
+- **Messaging the agent's own number from its own phone does nothing**: by design. The linked account is the agent; write from your registered number instead. `logs/whatsapp_inbound.log` shows `ACCEPT reason=explicit_pair`, `DEBOUNCE_FLUSH`, `HEADLESS processing` for a processed message and `SELF_CHAT dropped` or `REJECT` for a filtered one.
+- **A reply from someone the agent wrote to is not answered**: the reply window (`whatsapp_config.reply_window_hours`, default 72) has passed or is `0`. Add the person as a contact with "Can reach your assistant", or write to them again to reopen the window.
 - **Contact with Front Office doesn't get a reply**:
   - The contact must have their **WhatsApp number** in the contact's **Channels** (phone/WhatsApp, E.164 e.g. +491701234567). Add it in Settings → Connections → Contacts → edit contact → Channels.
   - **Diagnose:** Check `logs/whatsapp_qr.log` for `[inbound] MESSAGE`, `[inbound] REJECT` (with `allowed_count`), or `[inbound] ACCEPT` / `[inbound] ENQUEUED`. Python also logs received event types (`[Python] got type='message'`) and JSON decode or read-loop errors in the same file. If you see "voice downloaded" but no `[inbound]` or `[Python] got type='message'` lines, restart the **full VAF application** (not only the bridge), then try again. See [WHATSAPP_INTEGRATION.md](WHATSAPP_INTEGRATION.md#diagnostic-logs-logswhatsapp_qrlog) for a full list of diagnostic lines.
@@ -453,7 +459,13 @@ Checklist of the real registry copies (each has drifted before):
    and `FRONT_OFFICE_ALLOWED_TOOLS` (deliberate decision, default deny).
 6. `channel_restrictions` tuples on restricted tools and the ingress policy's
    supported-channel list - these fail OPEN for an unknown channel source and must
-   be extended consciously.
+   be extended consciously. The ingress decision itself lives once, in
+   `channel_ingress_policy.evaluate_ingress`, with three match kinds a bridge may
+   report: `explicit_match` (the owner's paired endpoint), `contact_match` (a contact
+   with "Can reach your assistant") and `conversation_match` (the agent wrote to this
+   sender inside the channel's reply window, answered by
+   `channel_message_store.last_message_ts`). WhatsApp reports all three; Telegram and
+   Discord report the first two today.
 
 ## Architecture
 

@@ -9456,7 +9456,10 @@ class Agent:
                         username=getattr(self, "_current_username", None),
                         user_scope_id=getattr(self, "_current_user_scope_id", None),
                     )
-                    for ch in conn.get("available") or []:
+                    # "available" = the OWNER is reachable there; "outbound" = the agent can
+                    # reach third parties there (WhatsApp linked as the agent's own number
+                    # without a registered main-user number). Either earns the send tool.
+                    for ch in list(conn.get("available") or []) + list(conn.get("outbound") or []):
                         tool_name = {"telegram": "send_telegram", "discord": "send_discord", "slack": "send_slack", "whatsapp": "send_whatsapp"}.get(ch)
                         if tool_name and tool_name in self.tools:
                             tools_set.add(tool_name)

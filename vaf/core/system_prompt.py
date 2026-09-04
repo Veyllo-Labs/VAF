@@ -1285,6 +1285,18 @@ Then use the results to answer. Do NOT guess from your training data!
                 conn = get_messaging_connections(username=username, user_scope_id=user_scope_id)
                 avail = conn.get("available") or []
                 main = conn.get("main_messenger")
+                # A channel the agent can only use OUTWARDS: WhatsApp linked as the agent's
+                # own number, no main-user number registered. The send tool exists, but it
+                # has no owner endpoint, so it is neither a main_messenger candidate nor a
+                # place to "send the result to the user".
+                outbound_only = [c for c in (conn.get("outbound") or []) if c not in avail]
+                if outbound_only:
+                    identity_block += (
+                        f"\noutbound_only_channels: {', '.join(c.capitalize() for c in outbound_only)} "
+                        "(linked as your own agent number; the user has NOT registered a number to be "
+                        "reached on, so send_* there needs an explicit recipient such as to_phone and it "
+                        "can never be the user's main_messenger).\n"
+                    )
                 if avail:
                     channel_names = [c.capitalize() for c in avail]
                     identity_block += f"\nmessaging_channels: {', '.join(channel_names)}\n"

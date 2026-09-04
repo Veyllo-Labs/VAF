@@ -13,6 +13,58 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **WhatsApp is the agent's own number now.** The account you link by QR code is your
+  agent's WhatsApp number: the agent writes to contacts and other people from it, and
+  nobody chats with the agent from that phone (its own "message yourself" chat is
+  dropped). The setup wizard no longer registers the linked number as yours; instead it
+  offers, optionally, to register the number you chat from. With that number registered
+  the agent can reach you on WhatsApp and you get the full agent from it, like on
+  Telegram; without it the agent is outbound only. Anyone the agent wrote to may reply
+  for 72 hours (`whatsapp_config.reply_window_hours`, `0` switches it off) and is
+  answered in Front Office mode, with the owner informed as before. The dashboard shows
+  the agent number, your registered number and a badge per chat (Owner, Contact,
+  Conversation, Read-only). Installs from the old model lose the linked number from the
+  whitelist on the next connect and get a notification saying so. The connection is no
+  longer marked "Coming Soon". The wizard's first step is translated into all seven
+  interface languages and carries a warning that WhatsApp's terms of service do not allow
+  automated use of a regular account and that the linked number can be restricted or
+  banned, so only a number one can afford to lose should be linked. The fallback that let one user's WhatsApp process run on
+  another user's credentials is gone.
+
+- **A connection card opens on click.** In Settings, Connections, clicking the name or
+  icon of a connection opens what its gear opened: the dashboard when it is set up, the
+  setup when it is not. The gear stays for those used to it.
+
+- **Telegram and Discord get the same window.** One shared channel shell now carries all
+  three messenger dashboards: chats on the left with a badge (Telegram: Full access,
+  Relay, Read-only; Discord: the paired admin), the conversation in the middle, a gear
+  with the settings (bot and bridge state, paired users and relay contacts for Telegram;
+  Developer Portal, bridge switch, admin and recent activity for Discord). Both windows
+  are translated into the seven interface languages.
+
+- **The WhatsApp window is laid out like the mail client.** Chats on the left with the
+  newest message as preview, the active conversation in the middle as bubbles with day
+  separators and an in-chat search, and a gear that opens the settings: agent number
+  with restart and re-link, your own number, who else may write, the reply window and
+  the send-only switch, activity. A chat WhatsApp has not resolved to a number yet gets
+  an "Assign number" input instead of a config hint, and a conversation can be turned into
+  a contact with one button. The whole window is translated into the seven interface
+  languages.
+
+- **The WhatsApp bridge survives the history sync after linking.** Right after a link,
+  WhatsApp pushes hundreds of chat-list updates; the bridge wrote each one to its pipe
+  synchronously, and when the reader had not drained the pipe yet the write failed with
+  `EAGAIN` and took the whole Node process down one second after "connected" (the
+  dashboard then showed "bridge running, WhatsApp not connected"). Writes now wait for
+  the pipe instead of dying, and chat-list updates are coalesced into one line 300 ms
+  after the last change.
+
+- **The WhatsApp bridge installs its own Node dependencies.** Nobody has to run
+  `npm install` in `vaf/whatsapp_node` any more: the first bridge start or QR login
+  installs them from the lockfile, and `vaf update` refreshes them when a release moves
+  the lockfile. The wizard shows "Preparing the WhatsApp bridge" while that runs and the
+  npm error if it fails; the manual command stays the fallback for a machine without npm.
+
 - **The sub-agent hotbar explains itself once, then gets out of the way.** The drawing
   that shows what picking a specialist does no longer takes a fixed third of the palette.
   It is a card floating over the tiles that appears by itself on the first visit, counts

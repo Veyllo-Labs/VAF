@@ -28,7 +28,9 @@ class ListContactsTool(BaseTool):
     )
     parameters = {
         "type": "object",
-        "properties": {},
+        "properties": {
+            "status": {"type": "string", "description": "Optional. Only contacts with this status (e.g. lead, in_contact, customer, archived)."},
+        },
         "required": [],
     }
 
@@ -43,10 +45,17 @@ class ListContactsTool(BaseTool):
         contacts = list_contacts(username, user_scope_id=user_scope_id)
         if not contacts:
             return "No contacts yet. Add contacts in Settings → Connections → Contacts."
+        status_filter = (kwargs.get("status") or "").strip().lower() if isinstance(kwargs.get("status"), str) else ""
+        if status_filter:
+            contacts = [c for c in contacts if (c.get("status") or "").strip().lower() == status_filter]
+            if not contacts:
+                return f"No contacts with status '{status_filter}'."
 
         lines = []
         for i, c in enumerate(contacts, 1):
             name = (c.get("name") or "").strip() or "(no name)"
+            if (c.get("status") or "").strip():
+                name = f"{name} [{c['status'].strip()}]"
             cid = c.get("id") or ""
             if c.get("channels"):
                 types = sorted({ch["type"].capitalize() for ch in c["channels"] if ch.get("type")})

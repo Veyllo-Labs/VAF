@@ -54,6 +54,7 @@ class CreateContactTool(BaseTool):
         contact = create_contact(
             name,
             username,
+            user_scope_id=kwargs.get("user_scope_id"),
             email=(kwargs.get("email") or "").strip() or None,
             whatsapp_phone=(kwargs.get("whatsapp_phone") or "").strip() or None,
             telegram_username=(kwargs.get("telegram_username") or "").strip() or None,

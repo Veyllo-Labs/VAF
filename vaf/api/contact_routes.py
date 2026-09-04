@@ -58,6 +58,7 @@ class ContactCreate(BaseModel):
 
 class ContactUpdate(BaseModel):
     name: Optional[str] = None
+    status: Optional[str] = None
     channels: Optional[List[Dict[str, str]]] = None
     whatsapp_phone: Optional[str] = None
     telegram_username: Optional[str] = None
@@ -133,6 +134,106 @@ async def patch_contact(contact_id: str, request: Request, body: ContactUpdate) 
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     return contact
+
+
+class NoteCreate(BaseModel):
+    text: str
+
+
+class EventCreate(BaseModel):
+    title: str
+    when: str          # ISO 8601 or "YYYY-MM-DD HH:MM" in the user's timezone
+    note: Optional[str] = None
+
+
+def _parse_when(when: str, username: str) -> float:
+    """User-entered date/time -> unix time, in the user's configured timezone (vaf.core.user_time)."""
+    from datetime import datetime
+    from vaf.core.user_time import resolve_user_timezone
+    raw = (when or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="when is required")
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            dt = datetime.strptime(raw, "%Y-%m-%d %H:%M")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="when must be ISO 8601 or YYYY-MM-DD HH:MM")
+    if dt.tzinfo is None:
+        tz = resolve_user_timezone(username)
+        if tz is not None:
+            dt = dt.replace(tzinfo=tz)
+    return dt.timestamp()
+
+
+@router.get("/statuses/values")
+async def get_status_values(request: Request) -> Dict[str, Any]:
+    """The suggestions for the status field: the defaults plus every status in use."""
+    from vaf.core.contacts_store import contact_status_values
+    user_info = get_current_vaf_user(request)
+    return {"values": contact_status_values(user_info["username"], user_scope_id=user_info.get("user_scope_id"))}
+
+
+@router.post("/{contact_id}/notes")
+async def post_contact_note(contact_id: str, request: Request, body: NoteCreate) -> Dict[str, Any]:
+    from vaf.core.contacts_store import add_contact_note
+    user_info = get_current_vaf_user(request)
+    note = add_contact_note(contact_id, body.text, user_info["username"], user_scope_id=user_info.get("user_scope_id"), source="user")
+    if not note:
+        raise HTTPException(status_code=404, detail="Contact not found or empty note")
+    return note
+
+
+@router.delete("/{contact_id}/notes/{note_id}")
+async def remove_contact_note(contact_id: str, note_id: str, request: Request) -> Dict[str, str]:
+    from vaf.core.contacts_store import delete_contact_note
+    user_info = get_current_vaf_user(request)
+    if delete_contact_note(contact_id, note_id, user_info["username"], user_scope_id=user_info.get("user_scope_id")):
+        return {"status": "deleted"}
+    raise HTTPException(status_code=404, detail="Note not found")
+
+
+@router.post("/{contact_id}/events")
+async def post_contact_event(contact_id: str, request: Request, body: EventCreate) -> Dict[str, Any]:
+    from vaf.core.contacts_store import add_contact_event
+    user_info = get_current_vaf_user(request)
+    when_ts = _parse_when(body.when, user_info["username"])
+    event = add_contact_event(contact_id, body.title, when_ts, user_info["username"], user_scope_id=user_info.get("user_scope_id"),
+                              source="user", note=body.note)
+    if not event:
+        raise HTTPException(status_code=404, detail="Contact not found or empty title")
+    return event
+
+
+@router.delete("/{contact_id}/events/{event_id}")
+async def remove_contact_event(contact_id: str, event_id: str, request: Request) -> Dict[str, str]:
+    from vaf.core.contacts_store import delete_contact_event
+    user_info = get_current_vaf_user(request)
+    if delete_contact_event(contact_id, event_id, user_info["username"], user_scope_id=user_info.get("user_scope_id")):
+        return {"status": "deleted"}
+    raise HTTPException(status_code=404, detail="Event not found")
+
+
+@router.get("/{contact_id}/overview")
+async def get_contact_overview(contact_id: str, request: Request) -> Dict[str, Any]:
+    """Status, last contact, upcoming stored events, recent notes, plus the calendar events
+    that mention this contact (live, best-effort)."""
+    import asyncio
+    from vaf.core.contacts_store import contact_calendar_events, contact_summary
+    user_info = get_current_vaf_user(request)
+    username = user_info["username"]
+    user_scope_id = user_info.get("user_scope_id")
+    contact = get_contact_by_id(contact_id, username, user_scope_id=user_scope_id)
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    summary = contact_summary(contact)
+    try:
+        summary["calendar_events"] = await asyncio.wait_for(
+            asyncio.to_thread(contact_calendar_events, contact, username, user_scope_id, 30), timeout=6.0)
+    except Exception:
+        summary["calendar_events"] = []
+    return summary
 
 
 @router.delete("/{contact_id}")

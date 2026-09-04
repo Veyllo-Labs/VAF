@@ -367,11 +367,11 @@ The contact book is the one place the agent finds a person, so a messaging chann
 - No match **creates the contact** with the WhatsApp name and the number as a `whatsapp` channel.
 - **"Can reach your assistant" is never set by the sync.** A person the agent may answer for is a decision the user takes in the contact book, not something a chat list decides.
 
-The link is stored as `links.whatsapp = {endpoint, display_name, last_seen_ts, linked_at}`. The Contacts dashboard shows a WhatsApp mark next to a linked name and, in the detail pane, "Linked with WhatsApp, last contact via WhatsApp: <date>, shown there as <name>" when the names differ; `get_contact` reports the same line to the agent. Further channels (mail, Telegram) hang their own key under `links` the same way.
+The link is stored as `links.whatsapp = {endpoint, display_name, last_seen_ts, linked_at}`. The Contacts dashboard shows a WhatsApp mark next to a linked name and, in the detail pane, "Last contact <date> via WhatsApp" (the newest `last_seen_ts` over every link) plus "shown there as <name>" when the names differ; `get_contact` reports the same to the agent. Further channels hang their own key under `links` the same way, but only a real one-to-one conversation may create a contact: mail and Telegram are deliberately not synced automatically, because a mailbox or a bot list would import newsletters, notification senders and bots as people.
 
 ### Personal file fields
 
-All optional; labels in the UI are in English.
+All optional. The labels of the older fields in the UI are English; status, the notes log and events follow the UI language.
 
 | Field | Description |
 |-------|-------------|
@@ -380,10 +380,15 @@ All optional; labels in the UI are in English.
 | **Birthday** | MM-DD or ISO date |
 | **Notes** | Free-form text |
 | **Can reach your assistant (front office)** | When enabled, this contact can send messages to your assistant via their channel IDs (WhatsApp, Telegram). The assistant processes them in your context (like a front office for you), not as a separate user. |
+| **Status** | A free label for the relationship (`lead`, `in_contact`, `customer`, `archived` are the suggestions; anything typed once is offered afterwards). The list can be filtered by it, `list_contacts(status=...)` too. |
+| **Notes log** | `notes_log`: dated entries with their author (`user` from the dashboard, `agent` from `update_contact(add_note=...)`), e.g. "interested in feature X", "follow up next week". The free-form `notes` field stays for the standing description. |
+| **Events** | `events`: dated events attached to the contact ("Meeting 10 Sep 15:00"), from the dashboard or `update_contact(add_event_title=..., add_event_when=...)`; times are read in the user's timezone (`vaf.core.user_time`). Upcoming calendar events that mention the contact's name or address are shown next to them, read live from the connected calendar and never stored. |
+
+Status, notes and events live inside the contact record, so they are isolated exactly like the record: one `contacts.json` per username or scope (see [USER_ISOLATION.md](../security/USER_ISOLATION.md)), and no query reads across files. The overview the dashboard shows (`GET /api/contacts/{id}/overview`: status, last contact over every channel link, next event, newest notes, matching calendar events) comes from `contacts_store.contact_summary` and `contact_calendar_events`; notes and events are added and removed through `POST/DELETE /api/contacts/{id}/notes[/{note_id}]` and `.../events[/{event_id}]`, the status through `PATCH /api/contacts/{id}`.
 
 ### Where to manage contacts
 
-- **Settings → Connections → Contacts** (gear icon): open the Contacts dashboard to list, add, edit, and delete contacts. Each contact has a **Channels** section (WhatsApp number, Telegram username/ID, Email) and a **Personal file** section (language, how to address, birthday, notes, and the “Can reach your assistant (front office)” toggle).
+- **Settings → Connections → Contacts** (gear icon): open the Contacts dashboard to list, add, edit, and delete contacts. Each contact has a **Channels** section (WhatsApp number, Telegram username/ID, Email) and a **Personal file** section (language, how to address, birthday, notes, and the “Can reach your assistant (front office)” toggle). The detail pane also carries the **status** (typed freely, with the known values as suggestions), the **events** section (own events with date and time, calendar events that mention the person, past events folded away) and the **notes log** (newest first, with author and date). The list can be filtered by status above the search box.
 
 ### Front Office behaviour
 
@@ -392,10 +397,10 @@ When a contact with **Can reach your assistant** enabled sends a message (e.g. v
 ### Agent tools and user identity
 
 - Contact tools (`list_contacts`, `get_contact`, `create_contact`, `update_contact`, `delete_contact`) use the same user identity (username and user_scope_id) as the current Web UI or bridge session. Storage and lookup use scope and username with fallback paths, so contacts are found whether they were saved by scope (e.g. JWT user) or by username (e.g. local admin). Scope/UUID format is normalized so different string representations of the same user resolve to the same contact list.
-- **`list_contacts`**: Returns all contacts with name, **contact_id**, and channels. Use when the user asks who is in their contact list. The **contact_id** is required for `update_contact` and `delete_contact`.
-- **`get_contact(name="...")`**: Returns one contact’s **contact_id**, channel IDs, and personal file. If multiple contacts share the same name, the tool returns all of them with their contact_ids and instructs the agent to ask the user which one they mean before any update or delete.
+- **`list_contacts(status=...)`**: Returns all contacts with name (status in brackets when set), **contact_id**, and channels; `status` narrows the list to one label. Use when the user asks who is in their contact list. The **contact_id** is required for `update_contact` and `delete_contact`.
+- **`get_contact(name="...")`**: Returns one contact’s **contact_id**, channel IDs, personal file, status, last contact over any channel link, upcoming events and the newest notes. If multiple contacts share the same name, the tool returns all of them with their contact_ids and instructs the agent to ask the user which one they mean before any update or delete.
 - **`create_contact`**: Create a contact (required: name; optional: email, whatsapp_phone, telegram_username, preferred_language, how_to_address, birthday, notes, allow_as_assistant_user). Returns the new contact with contact_id.
-- **`update_contact(contact_id, ...)`**: Update a contact by **contact_id** (from list_contacts or get_contact). Optional fields: name, email, whatsapp_phone, telegram_username, preferred_language, how_to_address, birthday, notes, allow_as_assistant_user.
+- **`update_contact(contact_id, ...)`**: Update a contact by **contact_id** (from list_contacts or get_contact). Optional fields: name, email, whatsapp_phone, telegram_username, preferred_language, how_to_address, birthday, notes, allow_as_assistant_user, status; `add_note` appends a dated note (author `agent`), `add_event_title` + `add_event_when` attach a dated event. `get_contact` reports status, last contact, upcoming events and the newest notes, so the agent finds everything about a person in one place.
 - **`delete_contact(contact_id)`**: Delete a contact by **contact_id**.
 
 **Same name (disambiguation):** Multiple contacts can have the same display name (e.g. two “Max”). The agent must never guess which one the user means for update or delete. When `get_contact(name)` returns multiple matches, the agent tells the user “There are multiple contacts named [X]”, lists them (contact_id and a short label such as phone or email), and asks which one to update or delete. Only after the user confirms should the agent call `update_contact` or `delete_contact` with that contact_id. This behaviour is enforced in the system prompt and in the tool responses.

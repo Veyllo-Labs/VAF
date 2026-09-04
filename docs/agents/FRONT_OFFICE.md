@@ -39,6 +39,7 @@ In Front Office, only an **allow-list** of tools is available. All other tools (
 
 - **Memory:** `memory_search`, `memory_save`
 - **Contacts:** `list_contacts`, `get_contact`
+  (`get_contact` returns the whole file, including the status and the dated notes log, so a note written about a person is readable by the agent while it talks to that person; keep remarks that must stay private out of the contact's file or off the Front Office allow-list.)
 - **Reply/send:** `send_whatsapp`, `send_telegram`, `send_discord`, `send_slack`
 - **WhatsApp read:** `read_whatsapp_chat`, `find_whatsapp_messages`, `whatsapp_inbox`
 - **Telegram read:** `read_telegram_chat`, `find_telegram_messages`, `telegram_inbox`

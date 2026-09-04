@@ -346,6 +346,7 @@ def update_contact(
                 allowed = {
                     "name", "channels", "whatsapp_phone", "telegram_username", "telegram_user_id", "email",
                     "preferred_language", "how_to_address", "birthday", "notes", "allow_as_assistant_user",
+                    "status",
                 }
                 for k, v in updates.items():
                     if k not in allowed:
@@ -375,6 +376,195 @@ def delete_contact(contact_id: str, username: Optional[str] = None, user_scope_i
             return False
         _save_all(new_list, username, user_scope_id)
         return True
+
+
+# ── status, notes, events: the personal file grows into a small CRM ─────────────
+#
+# Everything below lives INSIDE the contact record, so it inherits the store's
+# isolation for free: the record sits in the file of one username or one scope
+# (see _contacts_path), and no query here crosses files.
+
+# The status is a free label; these are the suggestions a fresh contact book offers.
+CONTACT_STATUS_DEFAULTS = ("lead", "in_contact", "customer", "archived")
+
+
+def _find_index(contacts: List[Dict[str, Any]], contact_id: str) -> int:
+    for i, c in enumerate(contacts):
+        if c.get("id") == contact_id:
+            return i
+    return -1
+
+
+def contact_status_values(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[str]:
+    """The suggestions for the status field: the defaults plus every status in use."""
+    out = list(CONTACT_STATUS_DEFAULTS)
+    with _LOCK:
+        for c in _load_all(username, user_scope_id):
+            s = (c.get("status") or "").strip()
+            if s and s not in out:
+                out.append(s)
+    return out
+
+
+def add_contact_note(
+    contact_id: str,
+    text: str,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+    *,
+    source: str = "user",
+) -> Optional[Dict[str, Any]]:
+    """Append a dated note to a contact ("interested in feature X", "follow up next week").
+    `source` says who wrote it, "user" or "agent". Returns the note, None for an unknown contact."""
+    import time as _time
+    body = (text or "").strip()
+    if not body:
+        return None
+    note = {"id": str(uuid.uuid4()), "ts": _time.time(), "text": body[:4000], "source": (source or "user").strip() or "user"}
+    with _LOCK:
+        contacts = _load_all(username, user_scope_id)
+        i = _find_index(contacts, contact_id)
+        if i < 0:
+            return None
+        log = contacts[i].get("notes_log") if isinstance(contacts[i].get("notes_log"), list) else []
+        log.append(note)
+        contacts[i]["notes_log"] = log[-500:]
+        _save_all(contacts, username, user_scope_id)
+    return note
+
+
+def delete_contact_note(contact_id: str, note_id: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> bool:
+    with _LOCK:
+        contacts = _load_all(username, user_scope_id)
+        i = _find_index(contacts, contact_id)
+        if i < 0:
+            return False
+        log = contacts[i].get("notes_log") if isinstance(contacts[i].get("notes_log"), list) else []
+        kept = [n for n in log if n.get("id") != note_id]
+        if len(kept) == len(log):
+            return False
+        contacts[i]["notes_log"] = kept
+        _save_all(contacts, username, user_scope_id)
+        return True
+
+
+def add_contact_event(
+    contact_id: str,
+    title: str,
+    when_ts: float,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+    *,
+    source: str = "user",
+    note: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Attach a dated event to a contact ("meeting 10 Sep 15:00"). `when_ts` is unix time;
+    the caller resolves the user's timezone (see vaf.core.user_time). Calendar events matched
+    by name or address are NOT stored here, they are read live (contact_calendar_events)."""
+    import time as _time
+    label = (title or "").strip()
+    try:
+        when = float(when_ts)
+    except (TypeError, ValueError):
+        return None
+    if not label or when <= 0:
+        return None
+    event = {"id": str(uuid.uuid4()), "ts": _time.time(), "when_ts": when, "title": label[:500],
+             "source": (source or "user").strip() or "user", "note": (note or "").strip()[:2000] or None}
+    with _LOCK:
+        contacts = _load_all(username, user_scope_id)
+        i = _find_index(contacts, contact_id)
+        if i < 0:
+            return None
+        events = contacts[i].get("events") if isinstance(contacts[i].get("events"), list) else []
+        events.append(event)
+        events.sort(key=lambda e: float(e.get("when_ts") or 0))
+        contacts[i]["events"] = events[-500:]
+        _save_all(contacts, username, user_scope_id)
+    return event
+
+
+def delete_contact_event(contact_id: str, event_id: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> bool:
+    with _LOCK:
+        contacts = _load_all(username, user_scope_id)
+        i = _find_index(contacts, contact_id)
+        if i < 0:
+            return False
+        events = contacts[i].get("events") if isinstance(contacts[i].get("events"), list) else []
+        kept = [e for e in events if e.get("id") != event_id]
+        if len(kept) == len(events):
+            return False
+        contacts[i]["events"] = kept
+        _save_all(contacts, username, user_scope_id)
+        return True
+
+
+def contact_summary(contact: Dict[str, Any], now_ts: Optional[float] = None) -> Dict[str, Any]:
+    """What the agent and the dashboard want at a glance: status, when and where the last
+    contact happened (the newest of all channel links), the next stored event, the
+    newest notes. Pure: reads the record, touches nothing."""
+    import time as _time
+    now = float(now_ts if now_ts is not None else _time.time())
+    last: Optional[Dict[str, Any]] = None
+    for chan, link in (contact.get("links") or {}).items():
+        if not isinstance(link, dict):
+            continue
+        try:
+            ts = float(link.get("last_seen_ts") or 0)
+        except (TypeError, ValueError):
+            ts = 0.0
+        if ts and (last is None or ts > last["ts"]):
+            last = {"channel": chan, "ts": ts}
+    events = [e for e in (contact.get("events") or []) if isinstance(e, dict)]
+    upcoming = sorted((e for e in events if float(e.get("when_ts") or 0) >= now), key=lambda e: float(e.get("when_ts") or 0))
+    notes = [n for n in (contact.get("notes_log") or []) if isinstance(n, dict)]
+    return {
+        "status": (contact.get("status") or "").strip() or None,
+        "last_contact": last,
+        "next_event": upcoming[0] if upcoming else None,
+        "upcoming_events": upcoming[:10],
+        "recent_notes": sorted(notes, key=lambda n: float(n.get("ts") or 0), reverse=True)[:5],
+        "notes_count": len(notes),
+    }
+
+
+def contact_calendar_events(
+    contact: Dict[str, Any],
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+    days: int = 30,
+) -> List[Dict[str, Any]]:
+    """Upcoming calendar events that mention this contact (name or one of its addresses in
+    the title or description), from the user's connected calendar. Read live, never stored;
+    empty when no calendar is connected or the lookup fails. Best-effort by design: the
+    calendar API is a network call and this is a glance, not a sync."""
+    try:
+        from datetime import datetime, timedelta, timezone
+        from vaf.core.calendar_client import list_events, resolve_calendar_account
+        account = resolve_calendar_account(username=username or "admin", user_scope_id=user_scope_id)
+        if not account:
+            return []
+        now = datetime.now(timezone.utc)
+        events = list_events(
+            provider=(account.get("provider") or "gmail").strip().lower(),
+            account_id=account.get("account_id") or account.get("email") or "",
+            user_scope_id=user_scope_id,
+            time_min=now.isoformat().replace("+00:00", "Z"),
+            time_max=(now + timedelta(days=max(1, int(days)))).isoformat().replace("+00:00", "Z"),
+            username=username,
+            max_results=100,
+        )
+    except Exception:
+        return []
+    needles = [s.lower() for s in [contact.get("name") or ""] + _contact_email_values(contact) if (s or "").strip()]
+    if not needles:
+        return []
+    out = []
+    for e in events or []:
+        hay = f"{e.get('summary') or ''} {e.get('description') or ''}".lower()
+        if any(n in hay for n in needles):
+            out.append(e)
+    return out
 
 
 def find_contact_by_phone(phone: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Optional[Dict[str, Any]]:

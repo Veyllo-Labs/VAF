@@ -42,6 +42,6 @@ class DeleteContactTool(BaseTool):
         except ImportError as e:
             return f"Contacts unavailable: {e}"
 
-        if delete_contact(contact_id, username):
+        if delete_contact(contact_id, username, user_scope_id=kwargs.get("user_scope_id")):
             return f"Contact deleted (contact_id: {contact_id})."
         return f"No contact found with contact_id '{contact_id}'. Use list_contacts to see contact_ids."

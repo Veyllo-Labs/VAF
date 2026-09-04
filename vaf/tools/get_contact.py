@@ -108,6 +108,23 @@ class GetContactTool(BaseTool):
             parts.append(f"Notes: {contact['notes']}")
         if contact.get("allow_as_assistant_user"):
             parts.append("Allowed as assistant user: yes")
+        try:
+            from datetime import datetime
+            from vaf.core.contacts_store import contact_summary
+            summary = contact_summary(contact)
+            if summary.get("status"):
+                parts.append(f"Status: {summary['status']}")
+            lc = summary.get("last_contact")
+            if lc:
+                parts.append(f"Last contact: {datetime.fromtimestamp(float(lc['ts'])).strftime('%Y-%m-%d')} via {lc['channel']}")
+            for ev in summary.get("upcoming_events") or []:
+                parts.append(f"Upcoming: {datetime.fromtimestamp(float(ev['when_ts'])).strftime('%Y-%m-%d %H:%M')} {ev.get('title', '')}" + (f" ({ev['note']})" if ev.get("note") else ""))
+            for n in summary.get("recent_notes") or []:
+                parts.append(f"Note ({datetime.fromtimestamp(float(n['ts'])).strftime('%Y-%m-%d')}, {n.get('source', 'user')}): {n.get('text', '')}")
+            if summary.get("notes_count", 0) > len(summary.get("recent_notes") or []):
+                parts.append(f"({summary['notes_count']} notes in total; the newest five are shown)")
+        except Exception:
+            pass
         links = contact.get("links") if isinstance(contact.get("links"), dict) else {}
         for chan, link in links.items():
             if not isinstance(link, dict):

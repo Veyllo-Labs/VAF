@@ -77,6 +77,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   land in the security log as `channel_rejected` every few minutes. They are dropped
   before that check now, on both sides of the bridge.
 
+- **A contact has a status, dated notes and upcoming events.** The contact book grows
+  into a small CRM: a free status label (lead, in contact, customer, archived, or your own
+  word; the list filters by it), dated notes with their author (you or the agent), events
+  attached to the person, and, when a calendar is connected, the calendar events that
+  mention the person's name or address. The detail pane shows the last contact over any
+  linked channel, the next event and the newest notes; `get_contact` tells the agent the
+  same, `update_contact` can set the status and add a note or an event, and
+  `list_contacts` filters by status. All of it lives inside the contact record, so it is
+  isolated per user like the record itself. The contact tools also pass the caller's
+  scope to the store now, where two of them wrote under the username alone.
+
 - **WhatsApp fills the contact book.** A direct chat with a phone number and a name
   WhatsApp shows becomes a contact: matched by number when the person is already there
   (the link is recorded, a contact named after its number gets the real name), created

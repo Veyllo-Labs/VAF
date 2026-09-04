@@ -28,6 +28,9 @@ export interface Contact {
     birthday?: string | null;
     notes?: string | null;
     allow_as_assistant_user?: boolean;
+    status?: string | null;
+    notes_log?: Array<{ id: string; ts: number; text: string; source?: string }>;
+    events?: Array<{ id: string; ts: number; when_ts: number; title: string; source?: string; note?: string | null }>;
     /** Per-channel link written by the channel sync (WhatsApp today): the name shown there and the newest message time. */
     links?: Record<string, { endpoint?: string; display_name?: string; last_seen_ts?: number | null }>;
 }
@@ -56,6 +59,13 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
     const [deleteId, setDeleteId] = useState<string | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
+    const [statusFilter, setStatusFilter] = useState('');
+    const [statusValues, setStatusValues] = useState<string[]>([]);
+    const [overview, setOverview] = useState<{ last_contact?: { channel: string; ts: number } | null; calendar_events?: Array<{ id?: string; summary?: string; start?: string; htmlLink?: string; webLink?: string }> } | null>(null);
+    const [noteText, setNoteText] = useState('');
+    const [eventTitle, setEventTitle] = useState('');
+    const [eventWhen, setEventWhen] = useState('');
+    const [fileError, setFileError] = useState<string | null>(null);
 
     const fetchContacts = async () => {
         setLoading(true);
@@ -71,7 +81,7 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
     };
 
     useEffect(() => {
-        if (isOpen) fetchContacts();
+        if (isOpen) { fetchContacts(); fetchStatusValues(); }
     }, [isOpen]);
 
     useEffect(() => {
@@ -211,6 +221,90 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
         }
     };
 
+    const fetchStatusValues = async () => {
+        try {
+            const res = await fetch(api('api/contacts/statuses/values'), { credentials: 'include' });
+            const json = await res.json();
+            if (res.ok && Array.isArray(json?.values)) setStatusValues(json.values);
+        } catch { /* suggestions only */ }
+    };
+
+    useEffect(() => {
+        if (!selectedContactId) { setOverview(null); return; }
+        let cancelled = false;
+        fetch(api(`api/contacts/${encodeURIComponent(selectedContactId)}/overview`), { credentials: 'include' })
+            .then(r => r.ok ? r.json() : null)
+            .then(json => { if (!cancelled) setOverview(json); })
+            .catch(() => { if (!cancelled) setOverview(null); });
+        return () => { cancelled = true; };
+    }, [selectedContactId, contacts]);
+
+    const patchContact = async (id: string, body: Record<string, unknown>) => {
+        setFileError(null);
+        try {
+            const res = await fetch(api(`api/contacts/${encodeURIComponent(id)}`), {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body),
+            });
+            if (!res.ok) { setFileError(tc('saveFailed')); return; }
+            await fetchContacts();
+            fetchStatusValues();
+        } catch { setFileError(tc('saveFailed')); }
+    };
+
+    const handleAddNote = async (id: string) => {
+        const text = noteText.trim();
+        if (!text) return;
+        setFileError(null);
+        try {
+            const res = await fetch(api(`api/contacts/${encodeURIComponent(id)}/notes`), {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ text }),
+            });
+            if (!res.ok) { setFileError(tc('saveFailed')); return; }
+            setNoteText('');
+            await fetchContacts();
+        } catch { setFileError(tc('saveFailed')); }
+    };
+
+    const handleRemoveNote = async (id: string, noteId: string) => {
+        if (!confirm(tc('removeNoteConfirm'))) return;
+        try {
+            await fetch(api(`api/contacts/${encodeURIComponent(id)}/notes/${encodeURIComponent(noteId)}`), { method: 'DELETE', credentials: 'include' });
+            await fetchContacts();
+        } catch { setFileError(tc('saveFailed')); }
+    };
+
+    const handleAddEvent = async (id: string) => {
+        const title = eventTitle.trim();
+        if (!title || !eventWhen) return;
+        setFileError(null);
+        try {
+            const res = await fetch(api(`api/contacts/${encodeURIComponent(id)}/events`), {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+                body: JSON.stringify({ title, when: eventWhen.replace('T', ' ') }),
+            });
+            if (!res.ok) { setFileError(tc('saveFailed')); return; }
+            setEventTitle('');
+            setEventWhen('');
+            await fetchContacts();
+        } catch { setFileError(tc('saveFailed')); }
+    };
+
+    const handleRemoveEvent = async (id: string, eventId: string) => {
+        if (!confirm(tc('removeEventConfirm'))) return;
+        try {
+            await fetch(api(`api/contacts/${encodeURIComponent(id)}/events/${encodeURIComponent(eventId)}`), { method: 'DELETE', credentials: 'include' });
+            await fetchContacts();
+        } catch { setFileError(tc('saveFailed')); }
+    };
+
+    const fmtTs = (ts?: number | null, withTime = false) => {
+        if (!ts) return '';
+        const d = new Date(Number(ts) * 1000);
+        return withTime
+            ? d.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : d.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: 'numeric' });
+    };
+
     const channelSummary = (c: Contact) => {
         const types = new Set<string>();
         if (c.channels && Array.isArray(c.channels)) {
@@ -228,6 +322,7 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
     const sortedAndFilteredContacts = useMemo(() => {
         const q = (searchQuery || '').trim().toLowerCase();
         let list = [...contacts];
+        if (statusFilter) list = list.filter(c => (c.status || '').trim().toLowerCase() === statusFilter.toLowerCase());
         if (q) {
             list = list.filter(
                 c =>
@@ -240,7 +335,7 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
         }
         list.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
         return list;
-    }, [contacts, searchQuery]);
+    }, [contacts, searchQuery, statusFilter]);
 
     const selectedContact = selectedContactId ? contacts.find(c => c.id === selectedContactId) : null;
 
@@ -291,6 +386,15 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                                         className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-white border border-gray-200 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-transparent text-sm"
                                     />
                                 </div>
+                                <select
+                                    value={statusFilter}
+                                    onChange={e => setStatusFilter(e.target.value)}
+                                    aria-label={tc('status')}
+                                    className="w-full px-3 py-2 rounded-xl bg-white border border-gray-200 text-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
+                                >
+                                    <option value="">{tc('allStatuses')}</option>
+                                    {statusValues.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
                                 <button
                                     type="button"
                                     onClick={openCreate}
@@ -324,7 +428,7 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                                                     )}
                                                 >
                                                     <span className="font-medium text-sm truncate flex items-center gap-1.5">{c.name}{c.links?.whatsapp && <Phone className="w-3.5 h-3.5 text-green-600 shrink-0" aria-label={tc('linkedWhatsApp')} />}</span>
-                                                    <span className="text-xs text-gray-500 truncate">{channelSummary(c)}</span>
+                                                    <span className="text-xs text-gray-500 truncate">{c.status ? `${c.status} · ` : ''}{channelSummary(c)}</span>
                                                 </button>
                                             </li>
                                         ))}
@@ -341,13 +445,27 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                                         <div>
                                             <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">{selectedContact.name}{selectedContact.links?.whatsapp && <Phone className="w-4 h-4 text-green-600" aria-label={tc('linkedWhatsApp')} />}</h3>
                                             <p className="text-sm text-gray-500">{channelSummary(selectedContact)}</p>
-                                            {selectedContact.links?.whatsapp && (
-                                                <p className="text-xs text-gray-500 mt-0.5">
-                                                    {tc('linkedWhatsApp')}
-                                                    {selectedContact.links.whatsapp.last_seen_ts ? ` · ${tc('lastContactVia', { channel: 'WhatsApp', when: new Date(Number(selectedContact.links.whatsapp.last_seen_ts) * 1000).toLocaleDateString([], { day: '2-digit', month: '2-digit', year: 'numeric' }) })}` : ''}
-                                                    {selectedContact.links.whatsapp.display_name && selectedContact.links.whatsapp.display_name !== selectedContact.name ? ` · ${tc('shownThereAs', { name: selectedContact.links.whatsapp.display_name })}` : ''}
-                                                </p>
-                                            )}
+                                            <p className="text-xs text-gray-500 mt-0.5">
+                                                {overview?.last_contact
+                                                    ? tc('lastContact', { when: fmtTs(overview.last_contact.ts), channel: overview.last_contact.channel === 'whatsapp' ? 'WhatsApp' : overview.last_contact.channel })
+                                                    : tc('noContactYet')}
+                                                {selectedContact.links?.whatsapp?.display_name && selectedContact.links.whatsapp.display_name !== selectedContact.name ? ` · ${tc('shownThereAs', { name: selectedContact.links.whatsapp.display_name })}` : ''}
+                                            </p>
+                                            <div className="mt-2 flex items-center gap-2">
+                                                <label className="text-xs text-gray-500">{tc('status')}</label>
+                                                <input
+                                                    list="contact-status-values"
+                                                    value={selectedContact.status ?? ''}
+                                                    onChange={e => patchContact(selectedContact.id, { status: e.target.value })}
+                                                    placeholder={tc('statusNone')}
+                                                    title={tc('statusPlaceholder')}
+                                                    className="px-2 py-1 rounded-lg bg-white border border-gray-200 text-sm text-gray-900 w-44"
+                                                />
+                                                <datalist id="contact-status-values">
+                                                    {statusValues.map(s => <option key={s} value={s} />)}
+                                                </datalist>
+                                            </div>
+                                            {fileError && <p className="text-xs text-red-600 mt-1">{fileError}</p>}
                                         </div>
                                         <div className="flex items-center gap-2">
                                             <button
@@ -409,6 +527,66 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                                                         <p className="text-gray-500">No personal file data</p>
                                                     )}
                                                 </dl>
+                                            </div>
+                                            <div>
+                                                <h4 className="text-xs font-medium uppercase tracking-wide text-gray-500 mb-1">{tc('events')}</h4>
+                                                {(() => {
+                                                    const now = Date.now() / 1000;
+                                                    const upcoming = (selectedContact.events || []).filter(e => Number(e.when_ts) >= now);
+                                                    const past = (selectedContact.events || []).filter(e => !upcoming.includes(e)).slice(-3);
+                                                    const cal = overview?.calendar_events || [];
+                                                    return (
+                                                        <div className="space-y-1">
+                                                            {upcoming.length === 0 && cal.length === 0 && <p className="text-gray-500">{tc('eventsEmpty')}</p>}
+                                                            {upcoming.map(e => (
+                                                                <div key={e.id} className="flex items-start justify-between gap-2 px-2 py-1.5 rounded-lg bg-gray-50">
+                                                                    <span><span className="text-gray-500">{fmtTs(e.when_ts, true)}</span> <span className="text-gray-900">{e.title}</span>{e.note ? <span className="text-gray-500"> · {e.note}</span> : null}</span>
+                                                                    <button type="button" onClick={() => handleRemoveEvent(selectedContact.id, e.id)} title={tc('remove')} className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
+                                                                </div>
+                                                            ))}
+                                                            {cal.map((e, i) => (
+                                                                <div key={e.id || i} className="px-2 py-1.5 rounded-lg bg-gray-50 text-gray-900">
+                                                                    <span className="text-gray-500">{e.start ? fmtTs(new Date(e.start).getTime() / 1000, !/^\d{4}-\d{2}-\d{2}$/.test(e.start)) : ''}</span> {e.summary}
+                                                                    <span className="text-xs text-gray-400"> · {tc('fromCalendar')}</span>
+                                                                    {(e.htmlLink || e.webLink) && <a href={e.htmlLink || e.webLink} target="_blank" rel="noopener noreferrer" className="ml-1 text-xs text-blue-600 hover:underline">↗</a>}
+                                                                </div>
+                                                            ))}
+                                                            {past.length > 0 && (
+                                                                <details className="text-xs text-gray-500">
+                                                                    <summary className="cursor-pointer">{tc('pastEvents')} ({past.length})</summary>
+                                                                    {past.map(e => <div key={e.id} className="pl-2 py-0.5">{fmtTs(e.when_ts, true)} {e.title}</div>)}
+                                                                </details>
+                                                            )}
+                                                            <div className="flex gap-2 flex-wrap pt-1">
+                                                                <input type="text" value={eventTitle} onChange={e => setEventTitle(e.target.value)} placeholder={tc('eventTitlePlaceholder')}
+                                                                    className="flex-1 min-w-[8rem] px-2 py-1.5 rounded-lg bg-white border border-gray-200 text-sm" />
+                                                                <input type="datetime-local" value={eventWhen} onChange={e => setEventWhen(e.target.value)} aria-label={tc('eventWhenPlaceholder')}
+                                                                    className="px-2 py-1.5 rounded-lg bg-white border border-gray-200 text-sm" />
+                                                                <button type="button" onClick={() => handleAddEvent(selectedContact.id)} disabled={!eventTitle.trim() || !eventWhen}
+                                                                    className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818]">{tc('addEvent')}</button>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })()}
+                                            </div>
+                                            <div>
+                                                <h4 className="text-xs font-medium uppercase tracking-wide text-gray-500 mb-1">{tc('notes')}</h4>
+                                                <div className="space-y-1">
+                                                    {(selectedContact.notes_log || []).length === 0 && <p className="text-gray-500">{tc('notesEmpty')}</p>}
+                                                    {[...(selectedContact.notes_log || [])].reverse().map(n => (
+                                                        <div key={n.id} className="flex items-start justify-between gap-2 px-2 py-1.5 rounded-lg bg-gray-50">
+                                                            <span className="min-w-0"><span className="text-gray-500">{fmtTs(n.ts)} · {tc('bySource', { source: n.source === 'agent' ? tc('sourceAgent') : tc('sourceUser') })}</span><br /><span className="text-gray-900 whitespace-pre-wrap">{n.text}</span></span>
+                                                            <button type="button" onClick={() => handleRemoveNote(selectedContact.id, n.id)} title={tc('remove')} className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-600 shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
+                                                        </div>
+                                                    ))}
+                                                    <div className="flex gap-2 pt-1">
+                                                        <input type="text" value={noteText} onChange={e => setNoteText(e.target.value)} placeholder={tc('notePlaceholder')}
+                                                            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddNote(selectedContact.id); } }}
+                                                            className="flex-1 min-w-0 px-2 py-1.5 rounded-lg bg-white border border-gray-200 text-sm" />
+                                                        <button type="button" onClick={() => handleAddNote(selectedContact.id)} disabled={!noteText.trim()}
+                                                            className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818]">{tc('addNote')}</button>
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>

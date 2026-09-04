@@ -272,7 +272,7 @@ User-scoped data stores use UUID-based directories. This is the preferred path f
 ```
 ~/.vaf/scopes/<user_scope_id>/
 ├── email_sync.db              # Synced email messages (SQLite)
-├── contacts.json              # User's contact list
+├── contacts.json              # User's contact list, including each contact's status, dated notes, events and channel links
 ├── whatsapp_messages.db       # WhatsApp message history (SQLite)
 └── ...
 ```

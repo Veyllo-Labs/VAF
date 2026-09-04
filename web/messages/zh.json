@@ -1024,6 +1024,11 @@
       "incoming": "收到",
       "outgoing": "发出"
     },
+    "contactsDashboard": {
+      "linkedWhatsApp": "已关联 WhatsApp",
+      "lastContactVia": "最近通过 {channel} 联系：{when}",
+      "shownThereAs": "在那里显示为 {name}"
+    },
     "persona": {
       "identity": "身份",
       "agentName": "智能体名称",

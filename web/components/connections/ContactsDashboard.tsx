@@ -4,7 +4,8 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, Users, Plus, Pencil, Trash2, Search } from 'lucide-react';
+import { X, Users, Plus, Pencil, Trash2, Search, Phone } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
 
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
@@ -27,6 +28,8 @@ export interface Contact {
     birthday?: string | null;
     notes?: string | null;
     allow_as_assistant_user?: boolean;
+    /** Per-channel link written by the channel sync (WhatsApp today): the name shown there and the newest message time. */
+    links?: Record<string, { endpoint?: string; display_name?: string; last_seen_ts?: number | null }>;
 }
 
 const CHANNEL_TYPES = [
@@ -43,6 +46,7 @@ export interface ContactsDashboardProps {
 }
 
 export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboardProps) {
+    const tc = useTranslations('settings.contactsDashboard');
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [loading, setLoading] = useState(false);
     const [showFormModal, setShowFormModal] = useState(false);
@@ -319,7 +323,7 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                                                             : 'border-transparent hover:bg-white/70 text-gray-700'
                                                     )}
                                                 >
-                                                    <span className="font-medium text-sm truncate">{c.name}</span>
+                                                    <span className="font-medium text-sm truncate flex items-center gap-1.5">{c.name}{c.links?.whatsapp && <Phone className="w-3.5 h-3.5 text-green-600 shrink-0" aria-label={tc('linkedWhatsApp')} />}</span>
                                                     <span className="text-xs text-gray-500 truncate">{channelSummary(c)}</span>
                                                 </button>
                                             </li>
@@ -335,8 +339,15 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                                 <>
                                     <div className="p-4 border-b border-gray-200 flex items-center justify-between shrink-0">
                                         <div>
-                                            <h3 className="text-lg font-semibold text-gray-900">{selectedContact.name}</h3>
+                                            <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">{selectedContact.name}{selectedContact.links?.whatsapp && <Phone className="w-4 h-4 text-green-600" aria-label={tc('linkedWhatsApp')} />}</h3>
                                             <p className="text-sm text-gray-500">{channelSummary(selectedContact)}</p>
+                                            {selectedContact.links?.whatsapp && (
+                                                <p className="text-xs text-gray-500 mt-0.5">
+                                                    {tc('linkedWhatsApp')}
+                                                    {selectedContact.links.whatsapp.last_seen_ts ? ` · ${tc('lastContactVia', { channel: 'WhatsApp', when: new Date(Number(selectedContact.links.whatsapp.last_seen_ts) * 1000).toLocaleDateString([], { day: '2-digit', month: '2-digit', year: 'numeric' }) })}` : ''}
+                                                    {selectedContact.links.whatsapp.display_name && selectedContact.links.whatsapp.display_name !== selectedContact.name ? ` · ${tc('shownThereAs', { name: selectedContact.links.whatsapp.display_name })}` : ''}
+                                                </p>
+                                            )}
                                         </div>
                                         <div className="flex items-center gap-2">
                                             <button

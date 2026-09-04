@@ -1024,6 +1024,11 @@
       "incoming": "受信",
       "outgoing": "送信"
     },
+    "contactsDashboard": {
+      "linkedWhatsApp": "WhatsAppとリンク済み",
+      "lastContactVia": "{channel}での最終連絡：{when}",
+      "shownThereAs": "そこでの表示名：{name}"
+    },
     "persona": {
       "identity": "基本情報",
       "agentName": "エージェント名",

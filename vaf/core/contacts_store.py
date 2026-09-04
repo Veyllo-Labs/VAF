@@ -377,6 +377,112 @@ def delete_contact(contact_id: str, username: Optional[str] = None, user_scope_i
         return True
 
 
+def find_contact_by_phone(phone: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """The contact carrying this phone number on any phone/WhatsApp channel, regardless of
+    the Front Office flag (get_contact_by_whatsapp_phone answers the ingress question and
+    only sees contacts that may reach the assistant). Canonical-digit match, so 0152...
+    and +49152... are one number."""
+    norm = _phone_digits_canonical(phone or "")
+    if not norm:
+        return None
+    with _LOCK:
+        for c in _load_all(username, user_scope_id):
+            for p in _contact_whatsapp_values(c):
+                if _phone_digits_canonical(p) == norm:
+                    return _contact_ensure_channels(dict(c))
+    return None
+
+
+def _looks_like_a_number(name: str) -> bool:
+    digits = "".join(ch for ch in (name or "") if ch.isdigit())
+    return bool(digits) and len(digits) >= 7 and len(digits) >= len((name or "").replace(" ", "").lstrip("+")) - 2
+
+
+def sync_channel_contacts(
+    channel: str,
+    entries: List[Dict[str, Any]],
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> Dict[str, int]:
+    """Fold what a messaging channel knows about people into the contact book.
+
+    One entry per person: {"endpoint": E.164 phone, "display_name": the name the channel
+    shows, "last_seen_ts": unix time of the newest message}. Rules, in this order:
+      * an entry without a name is skipped: a bare number is not a contact yet, it is a
+        chat, and the WhatsApp window already lists those;
+      * the endpoint is matched against every phone/WhatsApp channel value of every
+        contact (canonical digits); a match records the link on that contact and fills
+        its name only when the contact had none or was named after its number;
+      * no match creates the contact with the channel's name and the number as a
+        `whatsapp` channel;
+      * `allow_as_assistant_user` is never touched: whether a person may reach the
+        assistant stays a decision the user takes in the contact book.
+    The link itself is `links[channel] = {endpoint, display_name, last_seen_ts, linked_at}`,
+    the field the dashboard's channel icon and "last contact via" line read. One load,
+    one save. Returns {"created": n, "linked": n, "skipped": n}."""
+    import time as _time
+    chan = (channel or "").strip().lower()
+    out = {"created": 0, "linked": 0, "skipped": 0}
+    if chan not in CHANNEL_TYPES or not entries:
+        return out
+    with _LOCK:
+        contacts = _load_all(username, user_scope_id)
+        by_digits: Dict[str, Dict[str, Any]] = {}
+        for c in contacts:
+            for p in _contact_whatsapp_values(c):
+                key = _phone_digits_canonical(p)
+                if key and key not in by_digits:
+                    by_digits[key] = c
+        changed = False
+        for e in entries:
+            endpoint = str((e or {}).get("endpoint") or "").strip()
+            name = str((e or {}).get("display_name") or "").strip()
+            key = _phone_digits_canonical(endpoint)
+            if not key or not name or _looks_like_a_number(name):
+                out["skipped"] += 1
+                continue
+            try:
+                seen = float((e or {}).get("last_seen_ts") or 0) or None
+            except (TypeError, ValueError):
+                seen = None
+            link = {"endpoint": endpoint if endpoint.startswith("+") else "+" + key,
+                    "display_name": name, "last_seen_ts": seen}
+            existing = by_digits.get(key)
+            if existing is not None:
+                links = existing.get("links") if isinstance(existing.get("links"), dict) else {}
+                prev = links.get(chan) if isinstance(links.get(chan), dict) else {}
+                if prev.get("display_name") == name and (prev.get("last_seen_ts") or 0) >= (seen or 0):
+                    continue
+                link["linked_at"] = prev.get("linked_at") or _time.time()
+                if prev.get("last_seen_ts") and (seen or 0) < float(prev["last_seen_ts"]):
+                    link["last_seen_ts"] = prev["last_seen_ts"]
+                links[chan] = link
+                existing["links"] = links
+                if not (existing.get("name") or "").strip() or _looks_like_a_number(existing.get("name") or ""):
+                    existing["name"] = name
+                out["linked"] += 1
+                changed = True
+                continue
+            link["linked_at"] = _time.time()
+            contact: Dict[str, Any] = {
+                "id": str(uuid.uuid4()),
+                "name": name,
+                "channels": [{"type": "whatsapp" if chan == "whatsapp" else chan, "value": link["endpoint"]}],
+                "whatsapp_phone": None, "telegram_username": None, "telegram_user_id": None, "email": None,
+                "preferred_language": None, "how_to_address": None, "birthday": None, "notes": None,
+                "allow_as_assistant_user": False,
+                "links": {chan: link},
+            }
+            _sync_legacy_from_channels(contact)
+            contacts.append(contact)
+            by_digits[key] = contact
+            out["created"] += 1
+            changed = True
+        if changed:
+            _save_all(contacts, username, user_scope_id)
+    return out
+
+
 def get_contacts_allowing_assistant(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Return contacts with allow_as_assistant_user=True, for bridge whitelist checks."""
     with _LOCK:

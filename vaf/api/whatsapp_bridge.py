@@ -1113,6 +1113,52 @@ def _wa_flush(pending_key: str) -> None:
     logger.info("WhatsApp debounce flush: %s parts → session %s user %s", rec.get("parts", 1), session_id, username)
 
 
+_contact_sync_last: Dict[str, float] = {}
+CONTACT_SYNC_MIN_INTERVAL = 60.0
+
+
+def _sync_contacts_from_chats(username: str, user_scope_id: str, chats: List[Dict[str, Any]], force: bool = False) -> Dict[str, int]:
+    """Fold the chat list into the contact book (see contacts_store.sync_channel_contacts).
+
+    Only direct chats with a phone number AND a name WhatsApp shows qualify: groups,
+    newsletters, broadcasts and unresolved LIDs have no number, a number-only chat has no
+    name, and the contact book is for people the user can address, not for every
+    address that ever wrote. Throttled per user, because the Node re-emits the whole
+    list on every change during a history sync."""
+    now = time.time()
+    if not force and now - _contact_sync_last.get(username, 0.0) < CONTACT_SYNC_MIN_INTERVAL:
+        return {"created": 0, "linked": 0, "skipped": 0}
+    _contact_sync_last[username] = now
+    entries: List[Dict[str, Any]] = []
+    for c in chats or []:
+        if not isinstance(c, dict) or c.get("is_group"):
+            continue
+        jid = str(c.get("jid") or "")
+        if not jid.endswith("@s.whatsapp.net"):
+            continue
+        phone = _to_e164_display(str(c.get("phone") or _jid_to_e164(jid) or ""))
+        name = str(c.get("name") or "").strip()
+        if not phone or not name or name == phone or name == jid or name == phone.lstrip("+"):
+            continue
+        entries.append({"endpoint": phone, "display_name": name, "last_seen_ts": c.get("last_ts") or None})
+    if not entries:
+        return {"created": 0, "linked": 0, "skipped": 0}
+    try:
+        from vaf.core.contacts_store import sync_channel_contacts
+        result = sync_channel_contacts("whatsapp", entries, username, user_scope_id=user_scope_id)
+    except Exception as e:
+        logger.warning("WhatsApp: contact sync failed for %s: %s", username, e)
+        return {"created": 0, "linked": 0, "skipped": 0}
+    if result.get("created") or result.get("linked"):
+        logger.info("WhatsApp: contact book synced for %s: %s", username, result)
+        try:
+            from vaf.core.log_helper import log_whatsapp_qr
+            log_whatsapp_qr(f"[contacts] synced from chat list: {result}")
+        except Exception:
+            pass
+    return result
+
+
 def _drop_self_number_from_whitelist(username: str, user_scope_id: str, self_phone: str) -> None:
     """Installs from the old model registered the linked number itself as the user's own
     number (the wizard did it automatically). That entry can never be right now: the linked
@@ -1473,6 +1519,14 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             from vaf.core.channel_message_store import append_message
             # chat_name: the name WhatsApp shows for this person (phone contact, business
             # name or their own push name), so the list can show it like WhatsApp Web.
+            _push = str(obj.get("pushName") or "").strip()
+            if _push and raw and chat_id.startswith("+"):
+                try:
+                    from vaf.core.contacts_store import sync_channel_contacts
+                    sync_channel_contacts("whatsapp", [{"endpoint": chat_id, "display_name": _push, "last_seen_ts": time.time()}],
+                                          username, user_scope_id=user_scope_id)
+                except Exception:
+                    pass
             append_message(
                 username, chat_id, body, direction="in", sender_jid=from_jid,
                 chat_name=(str(obj.get("pushName") or "").strip() or None),
@@ -1570,6 +1624,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             ev = _chat_list_events.get(username)
             if ev:
                 ev.set()
+            _sync_contacts_from_chats(username, user_scope_id, chats)
     elif typ == "lid_mappings":
         mappings = obj.get("mappings")
         if isinstance(mappings, list):

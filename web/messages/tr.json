@@ -1024,6 +1024,11 @@
       "incoming": "Gelen",
       "outgoing": "Giden"
     },
+    "contactsDashboard": {
+      "linkedWhatsApp": "WhatsApp ile bağlı",
+      "lastContactVia": "{channel} üzerinden son iletişim: {when}",
+      "shownThereAs": "orada {name} olarak görünüyor"
+    },
     "persona": {
       "identity": "Kimlik",
       "agentName": "Ajan adı",

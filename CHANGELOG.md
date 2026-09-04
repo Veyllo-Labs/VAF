@@ -61,6 +61,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   profile picture; a hidden picture falls back to the initials, and the bridge remembers
   both answers for a day so a private profile is not asked again on every render.
 
+- **WhatsApp fills the contact book.** A direct chat with a phone number and a name
+  WhatsApp shows becomes a contact: matched by number when the person is already there
+  (the link is recorded, a contact named after its number gets the real name), created
+  with the WhatsApp name when not. Groups, newsletters, broadcasts and number-only chats
+  stay out, and "Can reach your assistant" is never switched on by the sync. The Contacts
+  window marks linked people with a WhatsApp icon and shows when the last contact was
+  and under which name the person appears there; `get_contact` tells the agent the same.
+
 - **The WhatsApp bridge survives the history sync after linking.** Right after a link,
   WhatsApp pushes hundreds of chat-list updates; the bridge wrote each one to its pipe
   synchronously, and when the reader had not drained the pipe yet the write failed with

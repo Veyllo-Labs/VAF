@@ -358,6 +358,17 @@ The WhatsApp window (Settings → Connections → WhatsApp) is laid out like the
 
 Contacts provide a **central list** of people with **channel IDs** (WhatsApp, Telegram, email) and a **personal file** per contact. The agent can resolve a name (e.g. “Max”) to that contact’s channels and then use the usual read/find tools (e.g. “Has Max written to me?” → `get_contact(name="Max")` then `read_whatsapp_chat` or `find_mail`). Contacts with **Can reach your assistant** enabled can send messages to your assistant; the assistant handles them in your context (like a front office for you), not as a separate user account.
 
+### Channel links (WhatsApp today)
+
+The contact book is the one place the agent finds a person, so a messaging channel folds what it knows about people into it (`contacts_store.sync_channel_contacts`, called by the WhatsApp bridge on every chat-list update, throttled to once a minute per user, and for each accepted inbound message that carries a name):
+
+- Only **direct chats with a phone number and a name WhatsApp shows** qualify (the phone's address-book name, a business name, or the name the person set for themselves). Groups, newsletters, broadcasts, unresolved LIDs and number-only chats are left out: a bare number is a chat, not a contact.
+- The number is matched against every phone/WhatsApp channel value of every contact (canonical digits, so `0152...` and `+49152...` are one number). A match records the link on that contact; the contact's own name is replaced only when it was empty or was itself a number.
+- No match **creates the contact** with the WhatsApp name and the number as a `whatsapp` channel.
+- **"Can reach your assistant" is never set by the sync.** A person the agent may answer for is a decision the user takes in the contact book, not something a chat list decides.
+
+The link is stored as `links.whatsapp = {endpoint, display_name, last_seen_ts, linked_at}`. The Contacts dashboard shows a WhatsApp mark next to a linked name and, in the detail pane, "Linked with WhatsApp, last contact via WhatsApp: <date>, shown there as <name>" when the names differ; `get_contact` reports the same line to the agent. Further channels (mail, Telegram) hang their own key under `links` the same way.
+
 ### Personal file fields
 
 All optional; labels in the UI are in English.

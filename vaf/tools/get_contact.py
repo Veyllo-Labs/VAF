@@ -108,4 +108,17 @@ class GetContactTool(BaseTool):
             parts.append(f"Notes: {contact['notes']}")
         if contact.get("allow_as_assistant_user"):
             parts.append("Allowed as assistant user: yes")
+        links = contact.get("links") if isinstance(contact.get("links"), dict) else {}
+        for chan, link in links.items():
+            if not isinstance(link, dict):
+                continue
+            when = ""
+            try:
+                from datetime import datetime
+                if link.get("last_seen_ts"):
+                    when = f", last contact {datetime.fromtimestamp(float(link['last_seen_ts'])).strftime('%Y-%m-%d')}"
+            except Exception:
+                when = ""
+            shown = link.get("display_name")
+            parts.append(f"Linked via {chan}{when}" + (f" (shown there as {shown})" if shown and shown != contact.get("name") else ""))
         return "\n".join(parts)

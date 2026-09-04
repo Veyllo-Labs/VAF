@@ -1024,6 +1024,11 @@
       "incoming": "받음",
       "outgoing": "보냄"
     },
+    "contactsDashboard": {
+      "linkedWhatsApp": "WhatsApp과 연결됨",
+      "lastContactVia": "{channel}(으)로 마지막 연락: {when}",
+      "shownThereAs": "그곳에서는 {name}(으)로 표시돼요"
+    },
     "persona": {
       "identity": "기본 정보",
       "agentName": "에이전트 이름",

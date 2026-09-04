@@ -393,6 +393,54 @@ def test_avatar_is_fetched_once_and_cached_in_both_directions(isolated, monkeypa
     assert cache.parent == Config.APP_DIR / "users" / "alice"                        # per user, beside the credentials
 
 
+# ── the contact book learns from the channel ─────────────────────────────────
+
+def test_channel_sync_creates_named_people_and_links_known_numbers_without_touching_trust(isolated):
+    from vaf.core import contacts_store as cs
+    bob = cs.create_contact("Bob Builder", "alice", user_scope_id=SCOPE, whatsapp_phone="0170 1234567", allow_as_assistant_user=True)
+    numbered = cs.create_contact("+49 171 7654321", "alice", user_scope_id=SCOPE, whatsapp_phone="+491717654321")
+    result = cs.sync_channel_contacts("whatsapp", [
+        {"endpoint": "+491701234567", "display_name": "Bobby (WA)", "last_seen_ts": 1000.0},   # known: Bob keeps his name
+        {"endpoint": "+491717654321", "display_name": "Carla Client", "last_seen_ts": 2000.0},  # known by number only: gets the name
+        {"endpoint": "+491700000042", "display_name": "Dana New", "last_seen_ts": 3000.0},      # unknown: created
+        {"endpoint": "+491700000043", "display_name": "", "last_seen_ts": 4000.0},              # number only: not a contact
+        {"endpoint": "+491700000044", "display_name": "+49 170 0000044"},                       # a number posing as a name
+    ], "alice", user_scope_id=SCOPE)
+    assert result == {"created": 1, "linked": 2, "skipped": 2}
+    all_contacts = {c["name"]: c for c in cs.list_contacts("alice", user_scope_id=SCOPE)}
+    assert set(all_contacts) == {"Bob Builder", "Carla Client", "Dana New"}
+    assert all_contacts["Bob Builder"]["allow_as_assistant_user"] is True            # trust untouched
+    assert all_contacts["Bob Builder"]["links"]["whatsapp"]["display_name"] == "Bobby (WA)"
+    assert all_contacts["Carla Client"]["id"] == numbered["id"]                       # renamed in place, not duplicated
+    assert all_contacts["Dana New"]["allow_as_assistant_user"] is False              # created without trust
+    assert all_contacts["Dana New"]["channels"] == [{"type": "whatsapp", "value": "+491700000042"}]
+    assert cs.find_contact_by_phone("+491700000042", "alice", user_scope_id=SCOPE)["id"] == all_contacts["Dana New"]["id"]
+    # A second round with nothing new writes nothing and creates nothing.
+    again = cs.sync_channel_contacts("whatsapp", [{"endpoint": "+491700000042", "display_name": "Dana New", "last_seen_ts": 3000.0}], "alice", user_scope_id=SCOPE)
+    assert again == {"created": 0, "linked": 0, "skipped": 0}
+    assert len(cs.list_contacts("alice", user_scope_id=SCOPE)) == 3
+
+
+def test_chat_list_feeds_the_contact_book_but_groups_newsletters_and_bare_numbers_do_not(isolated, monkeypatch):
+    from vaf.core import contacts_store as cs
+    monkeypatch.setattr(wa, "_contact_sync_last", {})
+    chats = [
+        {"jid": "491700000042@s.whatsapp.net", "name": "Dana New", "phone": "+491700000042", "is_group": False, "last_ts": 5},
+        {"jid": "491700000043@s.whatsapp.net", "name": "+491700000043", "phone": "+491700000043", "is_group": False, "last_ts": 5},
+        {"jid": "120363000000000000@g.us", "name": "Family group", "phone": "120363000000000000@g.us", "is_group": True, "last_ts": 5},
+        {"jid": "120363000000000001@newsletter", "name": "Daily news", "phone": "120363000000000001@newsletter", "is_group": False, "last_ts": 5},
+        {"jid": "225790843207825@lid", "name": "Someone", "phone": "225790843207825@lid", "is_group": False, "last_ts": 5},
+    ]
+    wa._dispatch_bridge_event("alice", SCOPE, "chats", {"chats": chats})
+    names = sorted(c["name"] for c in cs.list_contacts("alice", user_scope_id=SCOPE))
+    assert names == ["Dana New"]
+    # Throttled: the same list a second later does not even hit the store.
+    calls = []
+    monkeypatch.setattr(cs, "sync_channel_contacts", lambda *a, **k: calls.append(1) or {"created": 0, "linked": 0, "skipped": 0})
+    wa._dispatch_bridge_event("alice", SCOPE, "chats", {"chats": chats})
+    assert calls == []
+
+
 def test_whitelist_add_refuses_the_agents_own_number(isolated, monkeypatch):
     import asyncio
     from fastapi import HTTPException

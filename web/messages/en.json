@@ -1024,6 +1024,11 @@
       "incoming": "Incoming",
       "outgoing": "Outgoing"
     },
+    "contactsDashboard": {
+      "linkedWhatsApp": "Linked with WhatsApp",
+      "lastContactVia": "Last contact via {channel}: {when}",
+      "shownThereAs": "shown there as {name}"
+    },
     "persona": {
       "identity": "Identity",
       "agentName": "Agent name",

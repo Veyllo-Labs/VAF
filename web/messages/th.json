@@ -1024,6 +1024,11 @@
       "incoming": "ขาเข้า",
       "outgoing": "ขาออก"
     },
+    "contactsDashboard": {
+      "linkedWhatsApp": "เชื่อมโยงกับ WhatsApp แล้ว",
+      "lastContactVia": "ติดต่อครั้งล่าสุดผ่าน {channel}: {when}",
+      "shownThereAs": "ที่นั่นแสดงเป็น {name}"
+    },
     "persona": {
       "identity": "ข้อมูลพื้นฐาน",
       "agentName": "ชื่อเอเจนต์",

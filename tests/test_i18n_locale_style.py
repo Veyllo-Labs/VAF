@@ -288,7 +288,31 @@ _TH_SPACED_COLON = re.compile(r"\s:")
 _TH_SPACE_INSIDE_PARENS = re.compile(r"\(\s|\s\)")
 
 
+# German writes ä ö ü ß as themselves. The digraph forms (ae oe ue, ss for ß)
+# are a keyboard workaround that leaked into the catalogue over time, and they
+# sat next to strings that already spelt "schließen" and "Vertrauenswürdige",
+# so the UI showed both spellings at once (live: "Waehle" in the hotbar card,
+# "loeschen" on the delete buttons). Only stems that German never spells with
+# the digraph are listed: "neue", "Quelle", "aktuell", "Steuert" and "genauen"
+# carry a real e and stay out of it.
+_DE_DIGRAPH = re.compile(
+    r"\b(?:fuer|ueber\w*|loesch\w*|geloesch\w*|koenn\w*|zurueck\w*|rueck\w*|waehl\w*|gewaehlt"
+    r"|waehrend|schliess\w*|ausschliess\w*|heiss\w*|laesst|moeglich\w*|naechst\w*|aender\w*"
+    r"|veraender\w*|unveraender\w*|oeffn\w*|eroeffn\w*|oeffentlich\w*|veroeffentlich\w*"
+    r"|pruef\w*|neupruef\w*|anhaeng\w*|angehaeng\w*|gefaehr\w*|groess\w*|schaetz\w*"
+    r"|zaehl\w*|gezaehlt|raeume|spaeter\w*|aelter\w*|kuerz\w*|gekuerzt|gueltig|endgueltig"
+    r"|guenst\w*|waehrung\w*|betraeg\w*|auffaell\w*|tatsaech\w*|zulaess\w*|zusaetz\w*"
+    r"|vollstaend\w*|staerk\w*|saetze|gespraech\w*|europaeisch\w*|bestaetig\w*|ausfuehr\w*"
+    r"|auszufuehr\w*|aktivitaet\w*|verdaecht\w*|wuerde\w*|eingefuegt|aufschluessel\w*"
+    r"|gedaechtnis|langzeitgedaechtnis|hoer\w*|menue|groesse|schluessel\w*|taeglich|woechentlich"
+    r"|stuendlich|jaehrlich|ueberfaellig|ueberall|uebergangen|uebernommen)\b",
+    re.IGNORECASE,
+)
+
 _LOCALE_RULES = {
+    "de": (
+        ("umlaut or sharp s written as a digraph (ae, oe, ue, ss)", _DE_DIGRAPH),
+    ),
     "zh": (
         ("informal address", re.compile("您")),
         ("half-width punctuation beside a Chinese character", _HALFWIDTH_NEXT_TO_CJK),
@@ -340,7 +364,8 @@ _LOCALE_RULES = {
     ),
 }
 
-_SCRIPTS = {"zh": _CJK, "ja": _JA, "ko": _KO, "th": _TH}
+# German has no script of its own to gate on: every string is Latin, so every string is checked.
+_SCRIPTS = {"de": r"[A-Za-z]", "zh": _CJK, "ja": _JA, "ko": _KO, "th": _TH}
 
 _RULE_CASES = [(loc, label, pattern) for loc, rules in _LOCALE_RULES.items() for label, pattern in rules]
 

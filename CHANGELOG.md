@@ -28,6 +28,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The German interface spells its umlauts.** Around a hundred strings still carried the
+  keyboard forms (`ae`, `oe`, `ue`, `ss`) next to strings that did not, so the delete
+  buttons read "loeschen" while the dialog beside them read "schließen". They now read
+  "löschen", "Wähle", "für", "zurück" and so on, and a guard keeps the digraph forms out.
+
 - **A chat that finishes while you are in another chat now gets its red dot.** The
   completion event of a chat travelled only to the browser subscribed to that chat,
   and switching chats moves the subscription, so the sidebar mark for a finished

@@ -74,6 +74,8 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const [addingContact, setAddingContact] = useState(false);
     const [windowInput, setWindowInput] = useState('');
     const [windowMsg, setWindowMsg] = useState<string | null>(null);
+    const [olderBusy, setOlderBusy] = useState(false);
+    const [historyVersion, setHistoryVersion] = useState(0);
 
     const fetchDashboard = useCallback(async () => {
         setLoading(true);
@@ -256,6 +258,28 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         }
     };
 
+    const handleLoadOlder = async (chatId: string) => {
+        setOlderBusy(true);
+        setNote(null);
+        try {
+            const res = await fetch(api('api/whatsapp/chat-messages/older'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ chat_id: chatId, count: 50 }),
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) { setNote(json?.detail || t('loadOlderFailed')); return; }
+            const loaded = Number(json?.loaded || 0);
+            setNote(loaded > 0 ? t('loadedOlder', { count: loaded }) : t('noOlder'));
+            if (loaded > 0) setHistoryVersion(v => v + 1);
+        } catch {
+            setNote(t('loadOlderFailed'));
+        } finally {
+            setOlderBusy(false);
+        }
+    };
+
     const handleSaveWindow = async () => {
         const hours = Number(windowInput);
         if (!Number.isFinite(hours) || hours < 0) { setWindowMsg(t('saveFailed')); return; }
@@ -342,6 +366,11 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                         <button type="button" onClick={() => handleAssign(s.chat_id)} disabled={!assignPhone.trim()} className={BTN_PRIMARY}>{t('assign')}</button>
                     </div>
                 )}
+                {!s.needs_assign && (
+                    <button type="button" onClick={() => handleLoadOlder(s.chat_id)} disabled={olderBusy} className={BTN}>
+                        {olderBusy ? t('loadingOlder') : t('loadOlder')}
+                    </button>
+                )}
                 {canAddContact && (
                     <button type="button" onClick={() => handleAddAsContact(s)} disabled={addingContact} className={cn('flex items-center gap-1.5', BTN)}>
                         <UserPlus className="w-4 h-4" />{t('addAsContact')}
@@ -425,6 +454,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             loadFailed={loadFailed}
             onRefresh={handleRefresh}
             historyUrl={(cid) => `api/whatsapp/chat-messages?chat_id=${encodeURIComponent(cid)}`}
+            historyVersion={historyVersion}
             selectedId={selectedChatId}
             onSelect={(id) => { setSelectedChatId(id); setNote(null); }}
             banner={banner}

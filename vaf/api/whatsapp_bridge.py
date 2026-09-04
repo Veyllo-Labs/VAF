@@ -1168,7 +1168,9 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                 log_whatsapp_qr(f"[Python] pong connected=false → UI shows orange (bridge running, WhatsApp not connected)")
             except Exception:
                 pass
-    elif typ == "send_result":
+    elif typ in ("send_result", "fetch_history_result"):
+        # Both are "the command you queued under req_id has left (or not)": the same
+        # per-request queue hands the answer to the waiting caller.
         req_id = obj.get("req_id")
         if req_id:
             _complete_send_request(str(req_id), bool(obj.get("success")), obj.get("error", ""))
@@ -1843,6 +1845,90 @@ def sync_whatsapp_chats(username: str, wait_timeout: float = 25.0) -> List[Dict[
     ev.wait(timeout=wait_timeout)
     with _chat_lists_lock:
         return list(_chat_lists.get(used_username, []))
+
+
+def fetch_older_messages(
+    username: str,
+    chat_jid: str,
+    chat_id: str,
+    user_scope_id: Optional[str] = None,
+    count: int = 50,
+    wait_timeout: float = 20.0,
+) -> Dict[str, Any]:
+    """Ask WhatsApp for `count` messages of one chat older than the oldest we hold.
+
+    Two-step by nature of the protocol: the Node's `fetchHistory` command sends the
+    on-demand request (its result only says the request left), and the phone answers
+    later with a history batch that the ordinary `history_messages` path writes into
+    the store. So "done" is measured on the store: this returns once the chat's row
+    count grew, or after `wait_timeout`. Returns {ok, stored_before, stored_after,
+    error}; never raises."""
+    from vaf.core.channel_message_store import get_chat_messages, oldest_message
+
+    uname = (username or "").strip() or "admin"
+    out: Dict[str, Any] = {"ok": False, "stored_before": 0, "stored_after": 0, "error": ""}
+    try:
+        before = len(get_chat_messages(uname, chat_id, limit=200, user_scope_id=user_scope_id))
+    except Exception:
+        before = 0
+    out["stored_before"] = before
+    oldest = None
+    try:
+        oldest = oldest_message(uname, chat_id, user_scope_id=user_scope_id)
+    except Exception:
+        oldest = None
+    with _process_lock:
+        proc = _processes.get(uname)
+        if (not proc or proc.poll() is not None or not proc.stdin) and len(_processes) == 1:
+            proc = next(iter(_processes.values()))
+    if not proc or proc.poll() is not None or not proc.stdin:
+        out["error"] = "WhatsApp bridge is not running."
+        return out
+    req_id = str(uuid.uuid4())
+    result_queue: queue.Queue = queue.Queue()
+    with _pending_sends_lock:
+        _pending_sends[req_id] = result_queue
+    cmd = {
+        "cmd": "fetchHistory",
+        "jid": chat_jid,
+        "count": int(count or 50),
+        "oldestId": (oldest or {}).get("message_id") or "",
+        "oldestFromMe": ((oldest or {}).get("direction") == "out"),
+        "oldestTs": float((oldest or {}).get("ts") or time.time()),
+        "req_id": req_id,
+    }
+    try:
+        proc.stdin.write(json.dumps(cmd) + "\n")
+        proc.stdin.flush()
+    except Exception as e:
+        with _pending_sends_lock:
+            _pending_sends.pop(req_id, None)
+        out["error"] = f"Could not reach the bridge: {e}"
+        return out
+    try:
+        success, error = result_queue.get(timeout=min(10.0, wait_timeout))
+    except queue.Empty:
+        with _pending_sends_lock:
+            _pending_sends.pop(req_id, None)
+        out["error"] = "No answer from the bridge."
+        return out
+    if not success:
+        out["error"] = error or "WhatsApp refused the history request."
+        return out
+    # The batch arrives asynchronously; watch the store until it grows or time runs out.
+    deadline = time.time() + wait_timeout
+    after = before
+    while time.time() < deadline:
+        time.sleep(0.5)
+        try:
+            after = len(get_chat_messages(uname, chat_id, limit=200, user_scope_id=user_scope_id))
+        except Exception:
+            after = before
+        if after > before:
+            break
+    out["stored_after"] = after
+    out["ok"] = True
+    return out
 
 
 def _request_lid_mappings(username: str) -> Optional[str]:

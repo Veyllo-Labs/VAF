@@ -961,7 +961,12 @@
       "switchOff": "ausschalten (nur senden)",
       "switchOn": "einschalten",
       "cardActivityTitle": "Aktivität (letzte 7 Tage)",
-      "logLabel": "Log:"
+      "logLabel": "Log:",
+      "loadOlder": "Ältere Nachrichten laden",
+      "loadingOlder": "Frage WhatsApp…",
+      "loadedOlder": "{count} ältere Nachrichten geladen",
+      "noOlder": "Nichts Älteres gekommen. WhatsApp gibt nur heraus, was das Telefon noch hat.",
+      "loadOlderFailed": "Ältere Nachrichten konnten nicht geladen werden."
     },
     "telegramDashboard": {
       "title": "Telegram",

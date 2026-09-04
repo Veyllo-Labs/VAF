@@ -51,7 +51,9 @@ export interface ChannelDashboardShellProps {
     loading: boolean;
     loadFailed: boolean;
     onRefresh: () => void;
-    historyUrl: (sessionId: string) => string;
+    historyUrl: (historyKey: string) => string;
+    /** Bump to reload the conversation without changing the selected chat (older messages arrived). */
+    historyVersion?: number;
     selectedId: string | null;
     onSelect: (id: string | null) => void;
     banner?: React.ReactNode;
@@ -125,7 +127,7 @@ export const INPUT = 'bg-[#262626] border border-[#2e2e2e] rounded-lg px-3 py-1.
 export default function ChannelDashboardShell(props: ChannelDashboardShellProps) {
     const {
         isOpen, onClose, icon, iconClass, title, subtitle, dot, dotTitle, chats, loading, loadFailed, onRefresh,
-        historyUrl, selectedId, onSelect, banner, conversationExtra, conversationNote,
+        historyUrl, historyVersion, selectedId, onSelect, banner, conversationExtra, conversationNote,
         settingsTitle, settingsContent, settingsOpen, onSettingsOpenChange,
     } = props;
     const t = useTranslations('settings.channelDashboard');
@@ -207,7 +209,7 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
             })
             .catch(() => { setSessionHistory([]); setHistoryCompaction(null); })
             .finally(() => setHistoryLoading(false));
-    }, [historyKey, isOpen, historyUrl]);
+    }, [historyKey, isOpen, historyUrl, historyVersion]);
 
     const filtered = useMemo(() => {
         const q = listFilter.trim().toLowerCase();

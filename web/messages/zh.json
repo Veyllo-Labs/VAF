@@ -961,7 +961,12 @@
       "switchOff": "关闭（仅发送）",
       "switchOn": "开启",
       "cardActivityTitle": "活动（最近 7 天）",
-      "logLabel": "日志："
+      "logLabel": "日志：",
+      "loadOlder": "加载更早的消息",
+      "loadingOlder": "正在向 WhatsApp 请求…",
+      "loadedOlder": "已加载 {count} 条更早的消息",
+      "noOlder": "没有更早的消息。WhatsApp 只会交出手机上还保留的内容。",
+      "loadOlderFailed": "无法加载更早的消息。"
     },
     "telegramDashboard": {
       "title": "Telegram",

@@ -969,6 +969,38 @@ async def get_whatsapp_chat_messages(request: Request, chat_id: str, limit: int 
     }
 
 
+class OlderMessagesRequest(BaseModel):
+    chat_id: str
+    count: int = 50
+
+
+@router.post("/chat-messages/older")
+async def load_older_whatsapp_messages(request: Request, body: OlderMessagesRequest):
+    """Ask WhatsApp for older messages of one chat (on-demand history sync) and report how
+    many the store holds before and after. The pane reloads from the store afterwards."""
+    import asyncio
+    from vaf.api.whatsapp_bridge import _e164_to_jid, fetch_older_messages, is_bridge_running
+
+    cid = (body.chat_id or "").strip()
+    if not cid:
+        raise HTTPException(status_code=400, detail="chat_id required")
+    if not is_bridge_running():
+        raise HTTPException(status_code=503, detail="WhatsApp bridge not running.")
+    user_info = get_current_vaf_user(request)
+    chat_jid = cid if "@" in cid else _e164_to_jid(cid)
+    if not chat_jid:
+        raise HTTPException(status_code=400, detail="chat_id is not a phone number or chat address")
+    result = await asyncio.to_thread(
+        fetch_older_messages,
+        user_info["username"], chat_jid, cid, user_info.get("user_scope_id"),
+        min(max(int(body.count or 50), 1), 200),
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=result.get("error") or "History request failed.")
+    return {"chat_id": cid, "stored_before": result["stored_before"], "stored_after": result["stored_after"],
+            "loaded": max(0, int(result["stored_after"]) - int(result["stored_before"]))}
+
+
 @router.get("/qr/log-path")
 async def get_qr_log_path(request: Request):
     """Return path to whatsapp_qr_YYYY-MM-DD.log for debugging."""

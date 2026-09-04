@@ -961,7 +961,12 @@
       "switchOff": "switch off (send-only)",
       "switchOn": "switch on",
       "cardActivityTitle": "Activity (last 7 days)",
-      "logLabel": "Log:"
+      "logLabel": "Log:",
+      "loadOlder": "Load older messages",
+      "loadingOlder": "Asking WhatsApp…",
+      "loadedOlder": "{count} older messages loaded",
+      "noOlder": "Nothing older arrived. WhatsApp only hands over what the phone still has.",
+      "loadOlderFailed": "Older messages could not be loaded."
     },
     "telegramDashboard": {
       "title": "Telegram",

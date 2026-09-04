@@ -28,7 +28,7 @@ _DEFAULT_RETENTION_DAYS = 90
 
 __all__ = [
     "init_store", "append_message", "search_messages",
-    "list_chats_from_store", "get_chat_messages", "last_message_ts",
+    "list_chats_from_store", "get_chat_messages", "last_message_ts", "oldest_message",
     "delete_message", "mark_deleted", "replace_chat_rows",
 ]
 
@@ -451,6 +451,37 @@ def get_chat_messages(
             all_rows.extend([dict(row) for row in cur.fetchall()])
         all_rows.sort(key=lambda r: -(r.get("ts") or 0))
         return all_rows[: min(max(limit, 1), 200)]
+    finally:
+        conn.close()
+
+
+def oldest_message(
+    username: str,
+    chat_id: str,
+    user_scope_id: Optional[str] = None,
+    channel: Optional[str] = "whatsapp",
+) -> Optional[Dict[str, Any]]:
+    """The oldest stored message of a chat as {message_id, direction, ts}, or None.
+
+    This is the cursor an on-demand history fetch starts from: a channel that can ask
+    the network for "messages before X" (WhatsApp's per-chat history sync) needs the
+    key of the oldest message it already holds, and the store is where every message
+    that passed the bridge is recorded. Rows without a real id (the `_<ts>_<dir>`
+    fallback key) are skipped, because the network would not know them."""
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        clauses = ["username = ?", "chat_id = ?", "message_id IS NOT NULL", "message_id NOT LIKE '\\_%' ESCAPE '\\'"]
+        params: List[Any] = [(username or "").strip() or "", chat_id or ""]
+        if channel:
+            clauses.append("channel = ?")
+            params.append(channel)
+        cur = conn.execute(
+            f"SELECT message_id, direction, ts FROM channel_messages WHERE {' AND '.join(clauses)} ORDER BY ts ASC LIMIT 1",
+            tuple(params),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 

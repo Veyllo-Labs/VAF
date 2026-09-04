@@ -711,6 +711,30 @@ async function main() {
           try { fs.writeSync(2, `${LOG_PREFIX} getLidMappings: ${out.length} resolved (${lidToE164Map.size} from events)\n`); } catch (_) {}
           emit({ type: "lid_mappings", mappings: out });
         })();
+      } else if (obj?.cmd === "fetchHistory" && obj?.jid) {
+        // On-demand history for ONE chat: ask the phone for `count` messages older than the
+        // oldest one we hold. The messages themselves do not come back here; WhatsApp
+        // answers later with a messaging-history.set of syncType ON_DEMAND, which the
+        // handler above forwards as history_messages like any other batch. This result
+        // only says whether the request left.
+        (async () => {
+          if (connectionState !== "open" || !currentSock) {
+            if (reqId) emit({ type: "fetch_history_result", req_id: reqId, success: false, error: "WhatsApp not connected" });
+            return;
+          }
+          try {
+            const key = { remoteJid: obj.jid, fromMe: !!obj.oldestFromMe, id: obj.oldestId || "" };
+            const tsMs = Number(obj.oldestTs || 0) > 1e12 ? Number(obj.oldestTs) : Math.floor(Number(obj.oldestTs || 0) * 1000);
+            const count = Math.max(1, Math.min(Number(obj.count || 50), 200));
+            try { fs.writeSync(2, `${LOG_PREFIX} fetchHistory jid=${obj.jid} count=${count} before=${key.id || "?"}@${tsMs}\n`); } catch (_) {}
+            await currentSock.fetchMessageHistory(count, key, tsMs);
+            if (reqId) emit({ type: "fetch_history_result", req_id: reqId, success: true });
+          } catch (err) {
+            const msg = err?.message ?? String(err);
+            try { fs.writeSync(2, `${LOG_PREFIX} fetchHistory failed: ${msg}\n`); } catch (_) {}
+            if (reqId) emit({ type: "fetch_history_result", req_id: reqId, success: false, error: msg });
+          }
+        })();
       } else if (obj?.cmd === "ping") {
         emit({ type: "pong", connected: connectionState === "open", state: connectionState });
       }

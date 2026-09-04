@@ -961,7 +961,12 @@
       "switchOff": "オフにする（送信専用）",
       "switchOn": "オンにする",
       "cardActivityTitle": "アクティビティ（過去7日間）",
-      "logLabel": "ログ："
+      "logLabel": "ログ：",
+      "loadOlder": "以前のメッセージを読み込む",
+      "loadingOlder": "WhatsAppに問い合わせ中…",
+      "loadedOlder": "以前のメッセージを{count}件読み込みました",
+      "noOlder": "それ以前のメッセージは届きませんでした。WhatsAppは電話にまだ残っているものだけを渡します。",
+      "loadOlderFailed": "以前のメッセージを読み込めませんでした。"
     },
     "telegramDashboard": {
       "title": "Telegram",

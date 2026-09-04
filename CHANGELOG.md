@@ -53,7 +53,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   languages. The conversation shows the WhatsApp messages themselves, from the message
   store the bridge fills (history sync, incoming, sent); it used to show the agent's own
   session transcript, which is empty for every chat the agent has not answered in yet,
-  so a freshly linked account listed 97 chats and showed none of their messages.
+  so a freshly linked account listed 97 chats and showed none of their messages. A
+  chat's header offers "Load older messages": one click asks the phone for up to 50
+  messages older than the oldest one stored (WhatsApp's per-chat history request) and
+  shows them once they arrived.
 
 - **The WhatsApp bridge survives the history sync after linking.** Right after a link,
   WhatsApp pushes hundreds of chat-list updates; the bridge wrote each one to its pipe

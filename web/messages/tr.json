@@ -961,7 +961,12 @@
       "switchOff": "kapat (yalnızca gönderim)",
       "switchOn": "aç",
       "cardActivityTitle": "Etkinlik (son 7 gün)",
-      "logLabel": "Günlük:"
+      "logLabel": "Günlük:",
+      "loadOlder": "Eski mesajları yükle",
+      "loadingOlder": "WhatsApp'a soruluyor…",
+      "loadedOlder": "{count} eski mesaj yüklendi",
+      "noOlder": "Daha eski bir şey gelmedi. WhatsApp yalnızca telefonda hâlâ olanı verir.",
+      "loadOlderFailed": "Eski mesajlar yüklenemedi."
     },
     "telegramDashboard": {
       "title": "Telegram",

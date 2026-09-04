@@ -961,7 +961,12 @@
       "switchOff": "ปิด (ส่งออกอย่างเดียว)",
       "switchOn": "เปิด",
       "cardActivityTitle": "กิจกรรม (7 วันล่าสุด)",
-      "logLabel": "บันทึก:"
+      "logLabel": "บันทึก:",
+      "loadOlder": "โหลดข้อความเก่ากว่านี้",
+      "loadingOlder": "กำลังขอจาก WhatsApp…",
+      "loadedOlder": "โหลดข้อความเก่าแล้ว {count} ข้อความ",
+      "noOlder": "ไม่มีข้อความเก่ากว่านี้ส่งมา WhatsApp ให้เฉพาะสิ่งที่ยังอยู่ในโทรศัพท์เท่านั้น",
+      "loadOlderFailed": "โหลดข้อความเก่าไม่ได้"
     },
     "telegramDashboard": {
       "title": "Telegram",

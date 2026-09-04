@@ -308,6 +308,57 @@ def test_conversation_pane_reads_the_message_store_not_the_agent_session(isolate
     assert asyncio.run(routes.get_whatsapp_chat_messages(request, chat_id="+491700000099"))["messages"] == []
 
 
+def test_oldest_message_is_the_cursor_for_an_on_demand_history_fetch(isolated):
+    store.append_message("alice", "+491700000042", "newest", direction="in", user_scope_id=SCOPE, ts=300.0, message_id="C")
+    store.append_message("alice", "+491700000042", "oldest real", direction="out", user_scope_id=SCOPE, ts=100.0, message_id="A")
+    store.append_message("alice", "+491700000042", "no id, even older", direction="in", user_scope_id=SCOPE, ts=50.0)  # fallback key
+    row = store.oldest_message("alice", "+491700000042", user_scope_id=SCOPE)
+    assert (row["message_id"], row["direction"], row["ts"]) == ("A", "out", 100.0)   # the id-less row is skipped
+    assert store.oldest_message("alice", "+491700000099", user_scope_id=SCOPE) is None
+
+
+def test_fetch_older_messages_asks_the_node_and_waits_for_the_store_to_grow(isolated, monkeypatch):
+    """The command carries the oldest stored key; success is measured on the store, because the
+    phone answers through the ordinary history batch, not through the command's result."""
+    import io
+    store.append_message("alice", "+491700000042", "oldest", direction="out", user_scope_id=SCOPE, ts=100.0, message_id="A")
+    written = io.StringIO()
+    fake_proc = SimpleNamespace(stdin=written, poll=lambda: None)
+    monkeypatch.setattr(wa, "_processes", {"alice": fake_proc})
+
+    def on_write(orig_write):
+        def _w(s):
+            r = orig_write(s)
+            cmd = json.loads(s)
+            # The Node acknowledges, then the phone's batch lands in the store.
+            wa._dispatch_bridge_event("alice", SCOPE, "fetch_history_result", {"req_id": cmd["req_id"], "success": True})
+            store.append_message("alice", "+491700000042", "older one", direction="in", user_scope_id=SCOPE, ts=10.0, message_id="Z")
+            return r
+        return _w
+    written.write = on_write(written.write)
+
+    out = wa.fetch_older_messages("alice", "491700000042@s.whatsapp.net", "+491700000042", SCOPE, count=50, wait_timeout=3.0)
+    assert out["ok"] and out["stored_before"] == 1 and out["stored_after"] == 2
+    cmd = json.loads(written.getvalue().strip().splitlines()[-1])
+    assert cmd["cmd"] == "fetchHistory" and cmd["jid"] == "491700000042@s.whatsapp.net"
+    assert (cmd["oldestId"], cmd["oldestFromMe"], cmd["oldestTs"], cmd["count"]) == ("A", True, 100.0, 50)
+
+
+def test_fetch_older_messages_reports_a_refusal_instead_of_waiting(isolated, monkeypatch):
+    import io
+    written = io.StringIO()
+    fake_proc = SimpleNamespace(stdin=written, poll=lambda: None)
+    monkeypatch.setattr(wa, "_processes", {"alice": fake_proc})
+    orig = written.write
+    def _w(s):
+        r = orig(s)
+        wa._dispatch_bridge_event("alice", SCOPE, "fetch_history_result", {"req_id": json.loads(s)["req_id"], "success": False, "error": "WhatsApp not connected"})
+        return r
+    written.write = _w
+    out = wa.fetch_older_messages("alice", "491700000042@s.whatsapp.net", "+491700000042", SCOPE, wait_timeout=3.0)
+    assert not out["ok"] and "not connected" in out["error"]
+
+
 def test_whitelist_add_refuses_the_agents_own_number(isolated, monkeypatch):
     import asyncio
     from fastapi import HTTPException

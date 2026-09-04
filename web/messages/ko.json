@@ -961,7 +961,12 @@
       "switchOff": "끄기 (보내기만)",
       "switchOn": "켜기",
       "cardActivityTitle": "활동 (최근 7일)",
-      "logLabel": "로그:"
+      "logLabel": "로그:",
+      "loadOlder": "이전 메시지 불러오기",
+      "loadingOlder": "WhatsApp에 요청하는 중…",
+      "loadedOlder": "이전 메시지 {count}개를 불러왔어요",
+      "noOlder": "더 이전 메시지는 오지 않았어요. WhatsApp은 휴대폰에 아직 남아 있는 것만 넘겨줘요.",
+      "loadOlderFailed": "이전 메시지를 불러오지 못했어요."
     },
     "telegramDashboard": {
       "title": "Telegram",

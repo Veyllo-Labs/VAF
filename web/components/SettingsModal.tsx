@@ -218,6 +218,8 @@ export interface SettingsModalProps {
     userTimeFormat?: '24h' | '12h';
     /** Called when automation calendar is opened (e.g. to load notes/todos). */
     onOpenAutomationCalendar?: () => void;
+    /** Bumped by the page on every calendar_changed frame; the calendar window and the dashboard refetch. */
+    calendarVersion?: number;
     // Voice-profile (speaker identification)
     speakerProfile?: any;
     onStartVoiceEnrollment?: () => void;
@@ -501,7 +503,7 @@ function AccessPresetSection({
     );
 }
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, onCreateCustomTool, onUpdateCustomTool, onDeleteCustomTool, customToolUsers = [], onGetCustomToolUsers, isCustomToolSaving = false, customToolBackendError = null, workflows = [], onCreateWorkflow, onUpdateWorkflow, onDeleteWorkflow, isWorkflowSaving = false, workflowBackendError = null, skills = [], onCreateSkill, onUpdateSkill, onDeleteSkill, onUploadSkill, isSkillSaving = false, skillBackendError = null, skillSavedTick = 0, mcpServers = [], onRefreshMcpServers, onSaveMcpServer, onDeleteMcpServer, isMcpSaving = false, mcpBackendError = null, onTestMcpServer, mcpTestResult = null, isMcpTesting = false, trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar, speakerProfile = null, onStartVoiceEnrollment, onDeleteSpeakerProfile, onRefreshSpeakerProfile }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, onCreateCustomTool, onUpdateCustomTool, onDeleteCustomTool, customToolUsers = [], onGetCustomToolUsers, isCustomToolSaving = false, customToolBackendError = null, workflows = [], onCreateWorkflow, onUpdateWorkflow, onDeleteWorkflow, isWorkflowSaving = false, workflowBackendError = null, skills = [], onCreateSkill, onUpdateSkill, onDeleteSkill, onUploadSkill, isSkillSaving = false, skillBackendError = null, skillSavedTick = 0, mcpServers = [], onRefreshMcpServers, onSaveMcpServer, onDeleteMcpServer, isMcpSaving = false, mcpBackendError = null, onTestMcpServer, mcpTestResult = null, isMcpTesting = false, trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar, calendarVersion = 0, speakerProfile = null, onStartVoiceEnrollment, onDeleteSpeakerProfile, onRefreshSpeakerProfile }: SettingsModalProps) {
     const t = useTranslations();
     const tTabs = useTranslations('settings.tabs');
     const tCommon = useTranslations('common');
@@ -7091,6 +7093,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 userTimeFormat={userTimeFormat}
                 onSubmitCreateAutomation={onCreateAutomationSubmit}
                 onAutomationCreated={onAutomationCreated}
+                calendarVersion={calendarVersion}
                 onEditAutomation={(auto) => setEditingAutomation({
                     id: auto.id,
                     name: auto.name,
@@ -8177,7 +8180,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     setCalendarWizardProvider(provider);
                     setShowCalendarWizard(true);
                 }}
-                refreshTrigger={cloudDashboardRefresh}
+                refreshTrigger={cloudDashboardRefresh + calendarVersion}
+                onOpenCalendar={() => { setShowCalendarDashboard(false); setShowCreateAutomationModal(true); }}
             />
 
             {/* Cloud Storage Dashboard (Mail-style: accounts left, files middle) */}

@@ -27,7 +27,6 @@ _PAGE = _REPO / "web" / "app" / "page.tsx"
 # snapshot: converting one means deleting its line here, and a new entry is a
 # regression. The hook itself is on the list because it IS the one listener.
 _HAND_ROLLED = {
-    "web/components/AutomationCalendarModal.tsx",
     "web/components/CodeViewer.tsx",
     "web/components/CreateAutomationPopup.tsx",
     "web/components/NotificationsModal.tsx",

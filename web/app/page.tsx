@@ -3199,6 +3199,8 @@ function VAFDashboardContent() {
     }, [isEmpty, userName]);
 
     const [isAutomationPopupOpen, setIsAutomationPopupOpen] = useState(false);
+    // Bumped on every `calendar_changed` frame: both mounts of the calendar window refetch.
+    const [calendarVersion, setCalendarVersion] = useState(0);
     // When automation calendar opens (footer), load notes and todos for the current user
     useEffect(() => {
         if (!isAutomationPopupOpen || !ws || ws.readyState !== WebSocket.OPEN) return;
@@ -5759,6 +5761,12 @@ function VAFDashboardContent() {
                     // to ask. Without this a new room was invisible until the whole
                     // interface was reloaded by hand.
                     wsSocketRef.current?.send(JSON.stringify({ type: 'get_sessions' }));
+                }
+                else if (data.type === 'calendar_changed') {
+                    // The calendar changed underneath the browser (a tool, a route, a sync
+                    // sweep). A signal, not the events: the open window refetches the month
+                    // it shows, the dashboard its list.
+                    setCalendarVersion(v => v + 1);
                 }
                 else if (data.type === 'room_transcript') {
                     // Already in canonical order when it arrives: the backend sorts by
@@ -9015,12 +9023,12 @@ function VAFDashboardContent() {
                                     .catch(() => { });
                             }}
                             className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/automation transition-colors justify-start"
-                            title="Automation"
+                            title={tNav('calendar')}
                         >
                             <div className="w-6 flex justify-center shrink-0">
                                 <Calendar size={20} />
                             </div>
-                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">Automation</span>
+                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">{tNav('calendar')}</span>
                         </div>
 
                         {currentUser?.role === 'admin' && (
@@ -12404,6 +12412,7 @@ function VAFDashboardContent() {
                 automationTodos={automationTodos}
                 onSendPlannerMessage={(msg) => { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }}
                 userTimeFormat={userTimeFormat}
+                calendarVersion={calendarVersion}
                 onOpenAutomationCalendar={() => { if (ws?.readyState === WebSocket.OPEN) { ws.send(JSON.stringify({ type: 'get_automation_notes' })); ws.send(JSON.stringify({ type: 'get_automation_todos' })); } }}
             />
             <AutomationCalendarModal
@@ -12417,6 +12426,7 @@ function VAFDashboardContent() {
                 userTimeFormat={userTimeFormat}
                 onSubmitCreateAutomation={createAutomationSubmit}
                 onAutomationCreated={refreshAutomations}
+                calendarVersion={calendarVersion}
                 onEditAutomation={(auto) => setEditingAutomationFromCalendar({
                     id: auto.id,
                     name: auto.name,

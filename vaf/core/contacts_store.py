@@ -342,6 +342,35 @@ def _normalize_channels(channels: Any) -> List[Dict[str, str]]:
     return out
 
 
+TAG_MAX_COUNT = 20
+TAG_MAX_LENGTH = 40
+
+
+def _normalize_tags(value: Any) -> List[str]:
+    """A contact's tags as a clean list: a list/tuple or a comma-separated string (the agent
+    tools hand over strings, the routes lists) becomes stripped, non-empty, case-insensitively
+    deduplicated labels in first-seen spelling, at most TAG_MAX_LENGTH chars each and
+    TAG_MAX_COUNT in total. Anything else, None included, is an empty list: a record never
+    carries tags=None, so every reader may iterate the field."""
+    if isinstance(value, str):
+        parts = value.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        parts = [str(v) for v in value if v is not None]
+    else:
+        return []
+    out: List[str] = []
+    seen: set = set()
+    for raw in parts:
+        tag = " ".join(raw.split())[:TAG_MAX_LENGTH].strip()
+        if not tag or tag.lower() in seen:
+            continue
+        seen.add(tag.lower())
+        out.append(tag)
+        if len(out) >= TAG_MAX_COUNT:
+            break
+    return out
+
+
 def create_contact(
     name: str,
     username: Optional[str] = None,
@@ -357,8 +386,15 @@ def create_contact(
     birthday: Optional[str] = None,
     notes: Optional[str] = None,
     allow_as_assistant_user: bool = False,
+    company: Optional[str] = None,
+    role: Optional[str] = None,
+    tags: Any = None,
+    source: str = "manual",
 ) -> Dict[str, Any]:
-    """Create a contact and return it with id. Use channels (list of {type, value}) and/or legacy fields."""
+    """Create a contact and return it with id. Use channels (list of {type, value}) and/or legacy fields.
+    `source` records who created the record ("manual" from the window, "agent" from the tool, a
+    channel name from its sync) and `created_at` when; both feed the record's own timeline entry."""
+    import time as _time
     ch_list = _normalize_channels(channels) if channels else []
     if not ch_list:
         if (whatsapp_phone or "").strip():
@@ -382,6 +418,11 @@ def create_contact(
         "birthday": (birthday or "").strip() or None,
         "notes": (notes or "").strip() or None,
         "allow_as_assistant_user": bool(allow_as_assistant_user),
+        "company": (company or "").strip() or None,
+        "role": (role or "").strip() or None,
+        "tags": _normalize_tags(tags),
+        "source": (source or "manual").strip() or "manual",
+        "created_at": _time.time(),
     }
     _sync_legacy_from_channels(contact)
     with _LOCK:
@@ -405,7 +446,7 @@ def update_contact(
                 allowed = {
                     "name", "channels", "whatsapp_phone", "telegram_username", "telegram_user_id", "email",
                     "preferred_language", "how_to_address", "birthday", "notes", "allow_as_assistant_user",
-                    "status",
+                    "status", "company", "role", "tags",
                 }
                 for k, v in updates.items():
                     if k not in allowed:
@@ -415,6 +456,9 @@ def update_contact(
                     elif k == "channels":
                         contacts[i]["channels"] = _normalize_channels(v)
                         _sync_legacy_from_channels(contacts[i])
+                    elif k == "tags":
+                        # Before the generic None branch: a cleared tag list is [], never None.
+                        contacts[i]["tags"] = _normalize_tags(v)
                     elif v is None or (isinstance(v, str) and not v.strip()):
                         contacts[i][k] = None
                     else:
@@ -428,13 +472,85 @@ def update_contact(
 
 def delete_contact(contact_id: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> bool:
     """Delete contact by id. Returns True if deleted."""
+    return delete_contacts([contact_id], username, user_scope_id) == 1
+
+
+def delete_contacts(contact_ids: List[str], username: Optional[str] = None, user_scope_id: Optional[str] = None) -> int:
+    """Delete several contacts in one load and one save. Ids that are not in this user's
+    file are ignored, so a foreign id can neither delete nor reveal anything. Returns the
+    number removed."""
+    wanted = {str(i) for i in (contact_ids or []) if i}
+    if not wanted:
+        return 0
     with _LOCK:
         contacts = _load_all(username, user_scope_id)
-        new_list = [c for c in contacts if c.get("id") != contact_id]
-        if len(new_list) == len(contacts):
-            return False
-        _save_all(new_list, username, user_scope_id)
-        return True
+        new_list = [c for c in contacts if c.get("id") not in wanted]
+        removed = len(contacts) - len(new_list)
+        if removed:
+            _save_all(new_list, username, user_scope_id)
+        return removed
+
+
+_UNSET: Any = object()
+
+
+def update_contacts_bulk(
+    contact_ids: List[str],
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+    *,
+    status: Any = _UNSET,
+    add_tags: Any = None,
+    remove_tags: Any = None,
+) -> int:
+    """Set a status and/or add and remove tags on several contacts at once: one load, one
+    save. `status` left unset changes nothing, None or "" clears it. Ids outside this user's
+    file are ignored. Returns the number of records touched."""
+    wanted = {str(i) for i in (contact_ids or []) if i}
+    add = _normalize_tags(add_tags)
+    remove = {t.lower() for t in _normalize_tags(remove_tags)}
+    if not wanted or (status is _UNSET and not add and not remove):
+        return 0
+    touched = 0
+    with _LOCK:
+        contacts = _load_all(username, user_scope_id)
+        for c in contacts:
+            if c.get("id") not in wanted:
+                continue
+            if status is not _UNSET:
+                c["status"] = (status.strip() if isinstance(status, str) else None) or None
+            if add or remove:
+                # Removal has the last word: a tag named in both lists ends up removed.
+                merged = _normalize_tags(_normalize_tags(c.get("tags")) + add)
+                c["tags"] = [t for t in merged if t.lower() not in remove]
+            touched += 1
+        if touched:
+            _save_all(contacts, username, user_scope_id)
+    return touched
+
+
+def contact_created(contact: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """When and from where this record came: {"ts", "source"} from created_at/source when
+    the record has them, else the OLDEST channel link (its linked_at, that channel as
+    source), else None. Records made before these fields existed all carry a link, so the
+    window, the tool and the timeline show a date for every contact in the book."""
+    try:
+        ts = float(contact.get("created_at") or 0)
+    except (TypeError, ValueError):
+        ts = 0.0
+    if ts:
+        return {"ts": ts, "source": (contact.get("source") or "manual").strip() or "manual"}
+    oldest: Optional[Dict[str, Any]] = None
+    for chan, link in (contact.get("links") or {}).items():
+        if not isinstance(link, dict):
+            continue
+        try:
+            linked = float(link.get("linked_at") or 0)
+        except (TypeError, ValueError):
+            linked = 0.0
+        if linked and (oldest is None or linked < oldest["ts"]):
+            oldest = {"ts": linked, "source": str(chan)}
+    return oldest
 
 
 # ── status, notes, events: the personal file grows into a small CRM ─────────────
@@ -454,15 +570,48 @@ def _find_index(contacts: List[Dict[str, Any]], contact_id: str) -> int:
     return -1
 
 
-def contact_status_values(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[str]:
-    """The suggestions for the status field: the defaults plus every status in use."""
-    out = list(CONTACT_STATUS_DEFAULTS)
+def _field_values(
+    username: Optional[str],
+    user_scope_id: Optional[str],
+    field: str,
+    *,
+    defaults: tuple = (),
+    by_frequency: bool = False,
+) -> List[str]:
+    """The distinct values of one label field across this user's book: the defaults first,
+    then every value in use, in first-seen order or most-frequent first. A list-valued
+    field (tags) contributes each of its entries."""
+    counts: Dict[str, int] = {}
+    order: List[str] = []
     with _LOCK:
         for c in _load_all(username, user_scope_id):
-            s = (c.get("status") or "").strip()
-            if s and s not in out:
-                out.append(s)
+            raw = c.get(field)
+            values = raw if isinstance(raw, list) else [raw]
+            for v in values:
+                s = (str(v) if v is not None else "").strip()
+                if not s:
+                    continue
+                if s not in counts:
+                    order.append(s)
+                counts[s] = counts.get(s, 0) + 1
+    if by_frequency:
+        order.sort(key=lambda s: -counts[s])
+    out = list(defaults)
+    for s in order:
+        if s not in out:
+            out.append(s)
     return out
+
+
+def contact_status_values(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[str]:
+    """The suggestions for the status field: the defaults plus every status in use."""
+    return _field_values(username, user_scope_id, "status", defaults=CONTACT_STATUS_DEFAULTS)
+
+
+def contact_tag_values(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[str]:
+    """Every tag in use in this user's book, most frequent first (the suggestions behind the
+    tag input and the bulk bar)."""
+    return _field_values(username, user_scope_id, "tags", by_frequency=True)
 
 
 def add_contact_note(
@@ -720,6 +869,8 @@ def sync_channel_contacts(
                 "whatsapp_phone": None, "telegram_username": None, "telegram_user_id": None, "email": None,
                 "preferred_language": None, "how_to_address": None, "birthday": None, "notes": None,
                 "allow_as_assistant_user": False,
+                "company": None, "role": None, "tags": [],
+                "source": chan, "created_at": link["linked_at"],
                 "links": {chan: link},
             }
             _sync_legacy_from_channels(contact)

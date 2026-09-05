@@ -156,3 +156,86 @@ def test_whatsapp_read_tools_read_the_scoped_store_the_bridge_writes(scratch):
     assert "hello from the scoped store" in out
     # Another scope's file is another file.
     assert "No messages found" in ReadWhatsAppChatTool().run(chat_id="+491700000042", username="alice", user_scope_id=SCOPE_B)
+
+
+# ── fields, tags, bulk, created ──────────────────────────────────────────────────
+
+def test_new_fields_are_written_normalised_and_readable(scratch):
+    c = cs.create_contact("Lena Example", "alice", user_scope_id=SCOPE_A, company="  Studio Example GmbH ",
+                          role="Geschaeftsfuehrerin", tags="Fotografie, berlin , FOTOGRAFIE, ,angebot offen", source="agent")
+    assert c["company"] == "Studio Example GmbH" and c["role"] == "Geschaeftsfuehrerin"
+    assert c["tags"] == ["Fotografie", "berlin", "angebot offen"]          # deduped case-insensitively, first spelling kept
+    assert c["source"] == "agent" and c["created_at"] > 1_700_000_000
+    plain = cs.create_contact("Plain", "alice", user_scope_id=SCOPE_A)
+    assert plain["tags"] == [] and plain["source"] == "manual" and plain["company"] is None
+    # update: a list, a comma string, null, and an unknown key
+    up = cs.update_contact(c["id"], "alice", user_scope_id=SCOPE_A, tags=["a", "b", "A"], company="", role="CEO")
+    assert up["tags"] == ["a", "b"] and up["company"] is None and up["role"] == "CEO"
+    assert cs.update_contact(c["id"], "alice", user_scope_id=SCOPE_A, tags="x, y")["tags"] == ["x", "y"]
+    assert cs.update_contact(c["id"], "alice", user_scope_id=SCOPE_A, tags=None)["tags"] == []
+    assert "bogus" not in cs.update_contact(c["id"], "alice", user_scope_id=SCOPE_A, bogus="z")
+
+
+def test_normalize_tags_limits():
+    assert cs._normalize_tags(None) == [] and cs._normalize_tags(42) == [] and cs._normalize_tags("") == []
+    assert cs._normalize_tags("a" * 60) == ["a" * cs.TAG_MAX_LENGTH]
+    assert len(cs._normalize_tags(",".join(str(i) for i in range(50)))) == cs.TAG_MAX_COUNT
+    assert cs._normalize_tags("  spaced   out  ") == ["spaced out"]
+
+
+def test_status_and_tag_values_come_from_one_helper(scratch):
+    a = cs.create_contact("A", "alice", user_scope_id=SCOPE_A, tags="vip, berlin")
+    cs.create_contact("B", "alice", user_scope_id=SCOPE_A, tags="berlin")
+    cs.update_contact(a["id"], "alice", user_scope_id=SCOPE_A, status="warm friend")
+    assert cs.contact_tag_values("alice", user_scope_id=SCOPE_A) == ["berlin", "vip"]     # most frequent first
+    assert cs.contact_status_values("alice", user_scope_id=SCOPE_A) == list(cs.CONTACT_STATUS_DEFAULTS) + ["warm friend"]
+    assert cs.contact_tag_values("bob", user_scope_id=SCOPE_B) == []
+
+
+def test_bulk_update_and_delete_touch_only_this_users_records(scratch):
+    a = cs.create_contact("A", "alice", user_scope_id=SCOPE_A, tags="old")
+    b = cs.create_contact("B", "alice", user_scope_id=SCOPE_A)
+    other = cs.create_contact("Other", "bob", user_scope_id=SCOPE_B)
+    n = cs.update_contacts_bulk([a["id"], b["id"], other["id"], "missing"], "alice", user_scope_id=SCOPE_A,
+                                status="lead", add_tags="vip, old", remove_tags=["OLD"])
+    assert n == 2
+    back_a = cs.get_contact_by_id(a["id"], "alice", user_scope_id=SCOPE_A)
+    back_b = cs.get_contact_by_id(b["id"], "alice", user_scope_id=SCOPE_A)
+    assert back_a["status"] == "lead" and back_a["tags"] == ["vip"]                      # a tag in both lists ends up removed
+    assert back_b["status"] == "lead" and back_b["tags"] == ["vip"]
+    assert cs.get_contact_by_id(other["id"], "bob", user_scope_id=SCOPE_B).get("status") is None
+    assert cs.update_contacts_bulk([a["id"]], "alice", user_scope_id=SCOPE_A) == 0            # nothing requested
+    assert cs.update_contacts_bulk([a["id"]], "alice", user_scope_id=SCOPE_A, status=None) == 1
+    assert cs.get_contact_by_id(a["id"], "alice", user_scope_id=SCOPE_A)["status"] is None
+    # delete: foreign and unknown ids are ignored, the other scope keeps its record
+    assert cs.delete_contacts([a["id"], other["id"], "missing"], "alice", user_scope_id=SCOPE_A) == 1
+    assert cs.get_contact_by_id(a["id"], "alice", user_scope_id=SCOPE_A) is None
+    assert cs.get_contact_by_id(other["id"], "bob", user_scope_id=SCOPE_B) is not None
+    assert cs.delete_contacts([], "alice", user_scope_id=SCOPE_A) == 0
+    # A tenant without a file cannot bulk-touch the admin's book (the isolation fix, seen from here).
+    from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+    admin = cs.create_contact("Admin Friend", get_local_admin_username(), user_scope_id=get_local_admin_scope_id())
+    assert cs.update_contacts_bulk([admin["id"]], "carol", user_scope_id="77777777-8888-9999-0000-111111111111", status="x") == 0
+    assert cs.delete_contacts([admin["id"]], "carol", user_scope_id="77777777-8888-9999-0000-111111111111") == 0
+    assert not (scratch / "data" / "scopes" / "77777777-8888-9999-0000-111111111111" / "contacts.json").exists()
+
+
+def test_contact_created_falls_back_to_the_oldest_channel_link():
+    assert cs.contact_created({"id": "x"}) is None
+    assert cs.contact_created({"created_at": 1000.0, "source": "agent"}) == {"ts": 1000.0, "source": "agent"}
+    assert cs.contact_created({"created_at": 1000.0}) == {"ts": 1000.0, "source": "manual"}
+    legacy = {"links": {"telegram": {"linked_at": 3000.0}, "whatsapp": {"linked_at": 2000.0, "last_seen_ts": 9000.0}}}
+    assert cs.contact_created(legacy) == {"ts": 2000.0, "source": "whatsapp"}
+
+
+def test_sync_stamps_new_records_but_never_rewrites_existing_ones(scratch):
+    existing = cs.create_contact("Known", "alice", user_scope_id=SCOPE_A, whatsapp_phone="+491700000001", source="manual")
+    cs.sync_channel_contacts("whatsapp", [
+        {"endpoint": "+491700000001", "display_name": "Known", "last_seen_ts": 5000.0},
+        {"endpoint": "+491700000002", "display_name": "Fresh Person", "last_seen_ts": 6000.0},
+    ], "alice", user_scope_id=SCOPE_A)
+    by_name = {c["name"]: c for c in cs.list_contacts("alice", user_scope_id=SCOPE_A)}
+    assert by_name["Known"]["source"] == "manual" and by_name["Known"]["created_at"] == existing["created_at"]
+    fresh = by_name["Fresh Person"]
+    assert fresh["source"] == "whatsapp" and fresh["tags"] == [] and fresh["created_at"] == fresh["links"]["whatsapp"]["linked_at"]
+    assert cs.contact_created(fresh) == {"ts": fresh["created_at"], "source": "whatsapp"}

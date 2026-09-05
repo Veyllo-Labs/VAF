@@ -21,6 +21,9 @@
 //     `dark:text-gray-900` renders LIGHT.
 // The pair is deliberately inverted against the usual primary/secondary: here the
 // SAFE answer carries the emphasis, because the confirmed action costs real work.
+// A `destructive` question (delete, remove) paints the confirming answer red
+// instead of black: `bg-red-600` is a 600 surface and does not fold, so it reads
+// as red in both themes, and the eye lands on the button that destroys.
 
 'use client';
 
@@ -40,11 +43,13 @@ export interface ConfirmDialogProps {
     zIndexClass?: string;
     /** Escape level. Follows the stacking, so it answers before what it covers. */
     escapeLevel?: number;
+    /** The confirmed action deletes or removes something: the confirming button is red. */
+    destructive?: boolean;
 }
 
 export default function ConfirmDialog({
     open, title, body, confirmLabel, cancelLabel, onConfirm, onCancel,
-    zIndexClass = 'z-[80]', escapeLevel = 80,
+    zIndexClass = 'z-[80]', escapeLevel = 80, destructive = false,
 }: ConfirmDialogProps) {
     const cancelRef = useRef<HTMLButtonElement>(null);
     // The handler is read through a ref so the listener below can depend on
@@ -98,10 +103,12 @@ export default function ConfirmDialog({
                     <button
                         type="button"
                         onClick={onConfirm}
-                        // No dark: override on purpose - neither utility folds, so this
-                        // stays black with white text in both themes. The hairline is
-                        // what keeps it off the #181818 card.
-                        className="flex-1 py-2.5 rounded-xl font-medium bg-gray-900 hover:bg-black text-white border border-transparent dark:border-[#3a3a3a] transition-colors"
+                        // No dark: override on purpose - none of these utilities folds, so
+                        // the button stays black (or red) with white text in both themes.
+                        // The hairline is what keeps the black one off the #181818 card.
+                        className={destructive
+                            ? 'flex-1 py-2.5 rounded-xl font-medium bg-red-600 hover:bg-red-700 text-white border border-transparent transition-colors'
+                            : 'flex-1 py-2.5 rounded-xl font-medium bg-gray-900 hover:bg-black text-white border border-transparent dark:border-[#3a3a3a] transition-colors'}
                     >
                         {confirmLabel}
                     </button>

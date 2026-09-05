@@ -30,7 +30,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   message, last contact). "WhatsApp-Chat öffnen" jumps into the WhatsApp window with that
   chat selected; a contact whose number has no stored chat gets a note there instead of
   an empty pane. Every string of the window comes from the message catalogues in all seven
-  languages; every confirmation is the house dialog instead of the browser's.
+  languages; every confirmation is the house dialog instead of the browser's, and a
+  confirmation that deletes something carries a red confirming button.
 - **A contact carries company, role, tags, a source and a creation date.** The agent's
   `create_contact` and `update_contact` accept company, role and comma-separated tags,
   `list_contacts` filters by tag, and `get_contact` reports company, role, tags, since when

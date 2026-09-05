@@ -1501,6 +1501,7 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
                 onCancel={() => setConfirm(null)}
                 zIndexClass="z-[70]"
                 escapeLevel={70}
+                destructive={confirm !== null && confirm.kind !== 'reach'}
             />
         </>
     );

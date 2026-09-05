@@ -71,7 +71,7 @@ The active/emphasis system is one **light neutral** (no blue, no amber):
 | Component | Dark-mode classes |
 |---|---|
 | Primary / emphasis button (Save, Connect, CTA) | `dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none` (never `dark:hover:bg-white`: `white` is folded to the elevated-surface tone under `.dark`, so the hover would darken the button; `tests/test_dark_palette_hygiene.py` bans a bare `white` in any `dark:` variant) |
-| Confirm dialog, the emphasis INVERTED (`web/components/ui/ConfirmDialog.tsx`) | safe answer takes the emphasis fill `dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:border-transparent`; confirming answer keeps `bg-gray-900 hover:bg-black text-white` with **no `dark:` fill at all** and adds `dark:border-[#3a3a3a]` |
+| Confirm dialog, the emphasis INVERTED (`web/components/ui/ConfirmDialog.tsx`) | safe answer takes the emphasis fill `dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:border-transparent`; confirming answer keeps `bg-gray-900 hover:bg-black text-white` with **no `dark:` fill at all** and adds `dark:border-[#3a3a3a]`; with `destructive` it is `bg-red-600 hover:bg-red-700 text-white` (600/700 surfaces do not fold, so red stays red in both themes) |
 | Toggle ON track | `dark:bg-[#d9d9d9]` |
 | Toggle OFF track | `dark:bg-[#333333]` |
 | Toggle knob (state-dependent, must contrast the track) | ON `dark:bg-[#1a1a1a]`, OFF `dark:bg-[#e8e8e8]` |

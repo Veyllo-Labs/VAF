@@ -1756,7 +1756,10 @@ async def startup_event():
     try:
         from vaf.core.calendar_sync import CalendarSyncSupervisor
         from vaf.core.sync_supervisor import start_supervisor
-        if start_supervisor(CalendarSyncSupervisor()):
+        from vaf.core.web_interface import notify_calendar_changed
+        _cal_sup = CalendarSyncSupervisor()
+        _cal_sup.on_change(lambda scope, _account_id, _stats: notify_calendar_changed(scope))
+        if start_supervisor(_cal_sup):
             log("WebServer", "Calendar sync supervisor task started")
         else:
             log("WebServer", "Calendar sync supervisor already running (other server lifespan)")

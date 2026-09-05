@@ -11,8 +11,9 @@ connection tools to those existing flags and exposes one precondition check.
 
 Tools without a known connection dependency are treated as always configured
 (requires_config = False) -- they have no setup to do. Connections beyond the four
-covered here (calendar / github / cloud) currently default to configured; extend the
-map below as their checks are wired.
+covered here (github / cloud) currently default to configured; extend the map below
+as their checks are wired. The calendar tools work on the VAF calendar and need no
+connection at all (a Google or Microsoft account is a sync source, not a precondition).
 """
 
 from __future__ import annotations
@@ -77,7 +78,7 @@ def _connection_for_tool(tool: str) -> Optional[str]:
         return "whatsapp"
     if "mail" in n or "email" in n:
         return "email"
-    return None  # calendar / github / cloud / everything else: no precondition yet
+    return None  # github / cloud / everything else: no precondition yet; calendar needs none
 
 
 def tool_class(tool: str, all_tools=None) -> set:

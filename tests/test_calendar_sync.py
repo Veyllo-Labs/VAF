@@ -174,7 +174,8 @@ def test_edit_and_delete_propagate_to_the_provider(monkeypatch, data_dir):
     row2 = store.find_external(ACC["account_id"], "ext2")
     store.update_event(row1["id"], title="New", description="")
     store.delete_event(row2["id"])
-    assert store.get_event(row2["id"])["sync_state"] == "pending_delete"       # the row waits for the provider
+    assert store.get_event(row2["id"]) is None                                 # gone for readers
+    assert store.get_event(row2["id"], include_pending_delete=True)["sync_state"] == "pending_delete"   # owed to the provider
     client.listing = [_ext("ext1", NOW + DAY, title="New", updated=NOW + 1)]
     res = cs.sync_account(SCOPE, None, ACC, store=store, now_ts=NOW)
     assert res["ok"], res
@@ -435,3 +436,76 @@ def test_request_sync_is_a_noop_without_a_supervisor_and_deduplicates_with_one(m
 
     assert asyncio.run(go()) == (True, False, False)
     assert seen == [(SCOPE, ACC["account_id"])]
+
+
+# ── the default account, the write-through follow-up, the manual sync, the lock ───
+
+def test_default_account_prefers_the_push_target_then_the_first(monkeypatch, data_dir):
+    _config(monkeypatch, accounts=[ACC, {"account_id": "work@outlook.example", "provider": "microsoft"},
+                                   {"account_id": "m@x", "provider": "imap"}])
+    store = _store(data_dir)
+    assert cs.default_account_for(SCOPE, store=store)["account_id"] == ACC["account_id"]
+    store.set_settings(push_target="work@outlook.example")
+    assert cs.default_account_for(SCOPE, store=store)["account_id"] == "work@outlook.example"
+    assert cs.default_account_for(SCOPE, ACC["account_id"], store)["account_id"] == ACC["account_id"]
+    assert cs.default_account_for(SCOPE, "nobody@x", store) is None                 # named but not connected
+    assert cs.default_account_for(SCOPE, "m@x", store) is None                      # not a calendar account
+    assert cs.default_account_for(OTHER, store=store) is None
+
+
+def test_after_local_change_signals_the_browser_and_asks_for_the_push(monkeypatch, data_dir):
+    _config(monkeypatch)
+    signals, pushes = [], []
+    monkeypatch.setattr(cs, "_signal", lambda scope: signals.append(scope))
+    monkeypatch.setattr(cs, "request_sync", lambda scope, account_id=None: pushes.append((scope, account_id)) or True)
+    assert cs.after_local_change(SCOPE) is False and signals == [SCOPE] and pushes == []
+    assert cs.after_local_change(SCOPE, ACC["account_id"]) is True and pushes == [(SCOPE, ACC["account_id"])]
+
+
+def test_the_signal_is_the_web_interfaces_calendar_notifier(monkeypatch):
+    import vaf.core.web_interface as wi
+    seen = []
+    monkeypatch.setattr(wi, "notify_calendar_changed", lambda scope: seen.append(scope))
+    cs._signal(SCOPE)
+    assert seen == [SCOPE]
+    assert callable(wi.notify_user_signal) and callable(wi.notify_rooms_changed)     # rooms ride the same primitive
+
+
+def test_sync_scope_now_runs_every_account_of_the_scope_and_signals_changes(monkeypatch, data_dir):
+    _config(monkeypatch, accounts=[ACC, {"account_id": "work@outlook.example", "provider": "microsoft", "enabled": True}])
+    _install(monkeypatch, FakeClient([_ext("ext1", NOW + DAY)]))
+    signals = []
+    monkeypatch.setattr(cs, "_signal", lambda scope: signals.append(scope))
+    results = cs.sync_scope_now(SCOPE)
+    assert [r["account"] for r in results] == [ACC["account_id"], "work@outlook.example"]
+    assert all(r["ok"] for r in results) and signals == [SCOPE]
+    signals.clear()
+    results = cs.sync_scope_now(SCOPE, ACC["account_id"])                            # nothing new: no signal
+    assert len(results) == 1 and results[0]["changed"] == 0 and signals == []
+    assert cs.sync_scope_now(OTHER) == []
+
+
+def test_sync_account_is_serialised_per_account(monkeypatch, data_dir):
+    import threading
+    import time
+    _config(monkeypatch)
+    _install(monkeypatch, FakeClient())
+    running = {"now": 0, "max": 0}
+    gate = threading.Lock()
+
+    def slow_list(*a, **k):
+        with gate:
+            running["now"] += 1
+            running["max"] = max(running["max"], running["now"])
+        time.sleep(0.05)
+        with gate:
+            running["now"] -= 1
+        return []
+
+    monkeypatch.setattr(cs.cc, "list_events", slow_list)
+    threads = [threading.Thread(target=cs.sync_account, args=(SCOPE, None, ACC)) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+    assert running["max"] == 1, "two syncs of one account ran at once: a pending row could be pushed twice"

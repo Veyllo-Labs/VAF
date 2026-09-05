@@ -1071,25 +1071,19 @@ def announce_room_invitation(room, invitation: dict, *, inviter_scope: Optional[
     notify_rooms_changed(str(invitee_scope))
 
 
-def notify_rooms_changed(user_scope_id: Optional[str] = None) -> None:
-    """Tell a browser that this user's ROOM list changed, so it refetches.
+def notify_user_signal(user_scope_id: Optional[str], signal_type: str) -> None:
+    """Tell a user's browsers that something they can refetch has changed.
 
-    A SIGNAL and not the list itself, deliberately. Building the sidebar payload here
-    would mean this module - the engine's - importing the web server's projection, and
-    the dependency would point the wrong way round for the sake of saving one round
-    trip. The browser already knows how to ask (`get_sessions`); it only ever needed to
-    be told that the answer changed.
+    A SIGNAL and not the payload itself, deliberately. Building the sidebar or the
+    calendar payload here would mean this module - the engine's - importing the web
+    server's projection, and the dependency would point the wrong way round for the sake
+    of saving one round trip. The browser already knows how to ask; it only ever needed to
+    be told that the answer changed. One frame `{"type": <signal_type>}` per call.
 
-    It exists because a room appearing is the one change nothing announced. Closing,
-    renaming and deleting all happen inside a WebSocket command, which can answer on
-    the spot - but a room is OPENED by the agent, in a tool call, with no socket
-    command in flight and nothing looking at the store. The row simply was not there
-    until the whole interface was reloaded by hand.
-
-    Safe with no Web session at all (Telegram, an automation, the terminal): it
-    returns without doing anything.
+    Safe with no Web session at all (Telegram, an automation, the terminal, the scheduler
+    thread): it returns without doing anything, and it never raises into a tool result.
     """
-    if not user_scope_id:
+    if not user_scope_id or not signal_type:
         return
     try:
         wi = get_web_interface()
@@ -1097,11 +1091,29 @@ def notify_rooms_changed(user_scope_id: Optional[str] = None) -> None:
         if not loop:
             return
         asyncio.run_coroutine_threadsafe(
-            wi.broadcast_to_user(str(user_scope_id), {"type": "rooms_changed"}), loop)
+            wi.broadcast_to_user(str(user_scope_id), {"type": str(signal_type)}), loop)
     except Exception:
-        # A sidebar that did not refresh is a nuisance; an exception raised into a tool
+        # A view that did not refresh is a nuisance; an exception raised into a tool
         # result is a failed tool call for something the user never asked about.
         pass
+
+
+def notify_rooms_changed(user_scope_id: Optional[str] = None) -> None:
+    """The user's ROOM list changed, so the browser refetches it (`get_sessions`).
+
+    It exists because a room appearing is the one change nothing announced. Closing,
+    renaming and deleting all happen inside a WebSocket command, which can answer on
+    the spot - but a room is OPENED by the agent, in a tool call, with no socket
+    command in flight and nothing looking at the store. The row simply was not there
+    until the whole interface was reloaded by hand.
+    """
+    notify_user_signal(user_scope_id, "rooms_changed")
+
+
+def notify_calendar_changed(user_scope_id: Optional[str] = None) -> None:
+    """The user's calendar changed (a local write, or a sweep that changed rows), so the
+    open calendar views refetch the visible range."""
+    notify_user_signal(user_scope_id, "calendar_changed")
 
 
 def notify_file_created(session_id: Optional[str], file_path, title: Optional[str] = None,

@@ -241,9 +241,21 @@ class CalendarStore:
         d["reminder_at"] = (float(d["start_ts"]) - int(rm) * 60) if rm is not None else None
         return d
 
-    def get_event(self, event_id: str) -> Optional[Dict[str, Any]]:
+    def count_events(self, *, include_cancelled: bool = False) -> int:
+        """How many events the calendar holds (a glance for "is this calendar in use")."""
+        clause = "WHERE sync_state != 'pending_delete'" + ("" if include_cancelled else " AND status='confirmed'")
+        row = self._conn().execute(f"SELECT COUNT(*) AS n FROM events {clause}").fetchone()
+        return int(dict(row or {}).get("n") or 0)
+
+    def get_event(self, event_id: str, *, include_pending_delete: bool = False) -> Optional[Dict[str, Any]]:
+        """One event by id. A row waiting for its deletion to reach the provider is gone from
+        the user's point of view (not found), unless the sync machinery asks for it."""
         row = self._conn().execute("SELECT * FROM events WHERE id=?", (str(event_id or ""),)).fetchone()
-        return self._row(row) if row else None
+        if not row:
+            return None
+        if row["sync_state"] == "pending_delete" and not include_pending_delete:
+            return None
+        return self._row(row)
 
     def _bounds(self, start_ts: float, end_ts: Optional[float], all_day: bool, tz: Optional[str],
                 start_date: Optional[str], end_date: Optional[str]):
@@ -563,7 +575,7 @@ class CalendarStore:
     def mark_push_failed(self, event_id: str, error: str, *, cap: int = PUSH_MAX_ATTEMPTS) -> str:
         """Count a failed push; after `cap` attempts the event is parked as push_failed
         (visible, retried only after the next local edit). Returns the resulting state."""
-        cur = self.get_event(event_id)
+        cur = self.get_event(event_id, include_pending_delete=True)
         if not cur:
             return "gone"
         attempts = int(cur.get("push_attempts") or 0) + 1

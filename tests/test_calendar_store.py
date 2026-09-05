@@ -185,7 +185,8 @@ def test_pending_pushes_and_their_outcomes(data_dir):
     s.update_event(ev["id"], title="Try again")                                           # a new edit re-arms the push
     assert s.get_event(ev["id"])["sync_state"] == "pending_push"
     s.delete_event(ev["id"])
-    assert s.get_event(ev["id"])["sync_state"] == "pending_delete"
+    assert s.get_event(ev["id"]) is None                                          # gone for readers
+    assert s.get_event(ev["id"], include_pending_delete=True)["sync_state"] == "pending_delete"
     assert s.list_events(T0 - 1, T0 + 9000) == [] and [e["id"] for e in s.pending_pushes(acc)] == [ev["id"]]
     s.purge_event(ev["id"])
     assert s.get_event(ev["id"]) is None
@@ -291,3 +292,16 @@ def test_scope_helpers(monkeypatch, data_dir):
     cal.store_for("alice", SCOPE_A).close()
     assert cal.store_exists("alice", SCOPE_A) is True
     assert cal.push_enabled() is True
+
+
+def test_a_row_waiting_for_its_deletion_is_gone_for_readers(data_dir):
+    s = _store(data_dir)
+    ev = s.add_event(title="Mirrored", start_ts=T0, account_id="a@gmail.example", external_id="ext1", sync_state="synced")
+    assert s.delete_event(ev["id"])["id"] == ev["id"]
+    assert s.get_event(ev["id"]) is None                                          # readers: gone
+    assert s.get_event(ev["id"], include_pending_delete=True)["sync_state"] == "pending_delete"   # the sync: still owed
+    assert s.delete_event(ev["id"]) is None and s.update_event(ev["id"], title="x") is None
+    assert s.mark_push_failed(ev["id"], "boom") == "pending_delete"               # counted, not lost
+    assert s.count_events() == 0 and s.count_events(include_cancelled=True) == 0
+    s.add_event(title="Live", start_ts=T0)
+    assert s.count_events() == 1

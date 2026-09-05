@@ -817,11 +817,16 @@ def test_the_signal_carries_no_sidebar_payload():
     server's projection - to save one round trip. The browser already knows how to ask.
     """
     source = (ROOT / "vaf" / "core" / "web_interface.py").read_text(encoding="utf-8")
+    # The frame is built once, in the generic notify_user_signal (the calendar rides the
+    # same primitive); the room signal names its type and nothing else.
+    generic = source.split("def notify_user_signal")[1].split("\ndef ")[0]
     block = source.split("def notify_rooms_changed")[1].split("\ndef ")[0]
 
-    assert '"type": "rooms_changed"' in block
-    assert "session_list_payload" not in block and "list_ui" not in block
-    assert "web_server" not in block, "the engine is importing the harness"
+    assert 'notify_user_signal(user_scope_id, "rooms_changed")' in block
+    assert '{"type": str(signal_type)}' in generic
+    for body in (generic, block):
+        assert "session_list_payload" not in body and "list_ui" not in body
+        assert "web_server" not in body, "the engine is importing the harness"
 
 
 def test_the_browser_answers_the_signal_by_asking():

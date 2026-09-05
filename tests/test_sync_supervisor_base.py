@@ -20,11 +20,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _accounts(monkeypatch, accounts, by_scope=None):
+    # Only Config.get is faked; get_local_admin_scope_id() reads "admin-scope" from it (a fake
+    # placed on the config module leaks into every module first imported while it is active).
     store = {"email_config": {"accounts": accounts},
              "email_config_by_scope": by_scope or {},
-             "email_config_by_user": {"bob": {"accounts": [{"account_id": "legacy@x"}]}}}
+             "email_config_by_user": {"bob": {"accounts": [{"account_id": "legacy@x"}]}},
+             "local_admin_scope_id": "admin-scope"}
     monkeypatch.setattr(cfg_mod.Config, "get", staticmethod(lambda k, d=None: store.get(k, d)))
-    monkeypatch.setattr(cfg_mod, "get_local_admin_scope_id", lambda: "admin-scope")
 
 
 @pytest.fixture(autouse=True)
@@ -219,5 +221,6 @@ def test_web_server_starts_both_supervisors_through_the_guard():
     src = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
     assert "asyncio.create_task(MailSyncSupervisor().run())" not in src, "the bare start ran twice under TLS"
     assert "start_supervisor(MailSyncSupervisor())" in src
-    assert "start_supervisor(CalendarSyncSupervisor())" in src
+    assert "CalendarSyncSupervisor()" in src and "start_supervisor(_cal_sup)" in src
+    assert "_cal_sup.on_change(" in src, "a changed sweep must reach the browser (calendar_changed)"
     assert "Email auto-sync background task started" not in src, "a log line for a lane that no longer exists"

@@ -26,6 +26,7 @@ deterministically in the user's language, delivered on the main channel; no agen
 """
 import hashlib
 import logging
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -120,6 +121,46 @@ def _token_signature(account_id: str, provider: str, cred_username: Optional[str
     if material == "|":
         return None
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+
+def default_account_for(scope: str, account_id: Optional[str] = None,
+                        store: Optional[CalendarStore] = None) -> Optional[Dict[str, Any]]:
+    """The account a new event is mirrored into: the one named, else the store's push
+    target, else the first connected calendar account; None when the scope has none (the
+    event stays internal). A named account that is not connected is None as well, so the
+    caller can say so instead of silently picking another."""
+    accounts = calendar_accounts_for(scope)
+    if account_id:
+        for _s, _u, acc in accounts:
+            if account_id_of(acc) == str(account_id).strip():
+                return acc
+        return None
+    if not accounts:
+        return None
+    try:
+        target = (store or CalendarStore(scope)).settings().get("push_target")
+    except Exception:
+        target = None
+    if target:
+        for _s, _u, acc in accounts:
+            if account_id_of(acc) == target:
+                return acc
+    return accounts[0][2]
+
+
+_account_locks: Dict[str, threading.Lock] = {}
+_account_locks_gate = threading.Lock()
+
+
+def _lock_for(scope: str, account_id: str) -> threading.Lock:
+    """One lock per account: the supervisor's sweep and a user's "sync now" must never push
+    the same pending row twice (two creates at the provider for one event)."""
+    key = f"{scope}:{account_id}"
+    with _account_locks_gate:
+        lock = _account_locks.get(key)
+        if lock is None:
+            lock = _account_locks[key] = threading.Lock()
+        return lock
 
 
 def _username_for(scope: str, cred_username: Optional[str]) -> Optional[str]:
@@ -230,6 +271,14 @@ def sync_account(scope: str, cred_username: Optional[str], acc: Dict[str, Any], 
     if not account_id or provider not in CALENDAR_PROVIDERS:
         result["error"] = "not a calendar account"
         return result
+    with _lock_for(scope, account_id):
+        return _sync_account_locked(scope, cred_username, acc, account_id, provider, result,
+                                    store=store, now_ts=now_ts)
+
+
+def _sync_account_locked(scope: str, cred_username: Optional[str], acc: Dict[str, Any], account_id: str,
+                         provider: str, result: Dict[str, Any], *, store: Optional[CalendarStore],
+                         now_ts: Optional[float]) -> Dict[str, Any]:
     try:
         store = store or CalendarStore(scope)
     except Exception as e:
@@ -278,6 +327,36 @@ def sync_account(scope: str, cred_username: Optional[str], acc: Dict[str, Any], 
         store.mark_account_synced(account_id, error=str(e))
         result["error"] = str(e)
         return result
+
+
+def sync_scope_now(scope: str, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """A user's "sync now": every calendar account of the scope (or the one named), run in
+    the caller's thread, results returned. Serialised per account against the supervisor
+    by the account lock; a sweep already running for that account finishes first."""
+    results = [sync_account(s, u, acc) for s, u, acc in calendar_accounts_for(scope, account_id)]
+    if any(r.get("changed") for r in results):
+        _signal(scope)
+    return results
+
+
+def _signal(scope: str) -> None:
+    """Tell the user's open calendar views to refetch; a no-op outside the web process."""
+    try:
+        from vaf.core.web_interface import notify_calendar_changed
+        notify_calendar_changed(scope)
+    except Exception:
+        pass
+
+
+def after_local_change(scope: str, account_id: Optional[str] = None) -> bool:
+    """What every local write (route or tool) does afterwards: the browser is told to
+    refetch, and if the event is mirrored the supervisor is asked to push now. Returns
+    whether a push was scheduled (False in a process without the supervisor: the next
+    sweep pushes)."""
+    _signal(scope)
+    if not account_id:
+        return False
+    return request_sync(scope, account_id)
 
 
 def reconcile_accounts(configured_by_scope: Dict[str, set]) -> int:

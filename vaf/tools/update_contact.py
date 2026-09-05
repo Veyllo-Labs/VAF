@@ -105,20 +105,10 @@ class UpdateContactTool(BaseTool):
 
     @staticmethod
     def _parse_when(when: str, username: str):
-        from datetime import datetime
+        """The shared user-time grammar (vaf.core.user_time.parse_user_datetime), as a unix time or None."""
         try:
-            dt = datetime.fromisoformat(when.replace("Z", "+00:00"))
-        except ValueError:
-            try:
-                dt = datetime.strptime(when, "%Y-%m-%d %H:%M")
-            except ValueError:
-                return None
-        if dt.tzinfo is None:
-            try:
-                from vaf.core.user_time import resolve_user_timezone
-                tz = resolve_user_timezone(username)
-                if tz is not None:
-                    dt = dt.replace(tzinfo=tz)
-            except Exception:
-                pass
-        return dt.timestamp()
+            from vaf.core.user_time import parse_user_datetime
+            parsed = parse_user_datetime(when, username)
+        except Exception:
+            return None
+        return parsed[0].timestamp() if parsed else None

@@ -23,8 +23,9 @@ Design:
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, date
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -165,3 +166,44 @@ def format_user_datetime(
 def user_weekday_name(dt: datetime, language: Optional[str] = None) -> str:
     """Localized weekday name for `dt` (de/en), matching the system-prompt wording."""
     return (_DAYS_DE if language == "de" else _DAYS_EN)[dt.weekday()]
+
+
+_DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_TIME_ONLY_RE = re.compile(r"^\d{1,2}:\d{2}$")
+
+
+def parse_user_datetime(
+    text: str,
+    username: Optional[str] = None,
+    *,
+    identity: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+) -> Optional[Tuple[datetime, bool]]:
+    """One grammar for every time a user or the model types, read in the USER's zone.
+
+    Returns (datetime, all_day) or None when the text is not a time:
+      * "2026-03-01T14:00", "2026-03-01 14:00", with or without seconds: that wall-clock
+        time in the user's zone (aware when the user has one, naive server-local otherwise,
+        the module's contract);
+      * an ISO 8601 string with an offset or "Z": taken as given;
+      * "2026-03-01": the day itself, all_day=True, at midnight in the user's zone;
+      * "14:00": today in the user's zone (the reminder grammar).
+    This replaced three private parsers (contact routes, the update_contact tool, the
+    reminders store) that agreed on the format and disagreed on the details; the calendar
+    lane is the fourth caller and the reason they were unified."""
+    s = (text or "").strip()
+    if not s:
+        return None
+    tz = resolve_user_timezone(username, identity)
+    all_day = bool(_DATE_ONLY_RE.match(s))
+    try:
+        if _TIME_ONLY_RE.match(s):
+            hh, mm = s.split(":", 1)
+            base = now if now is not None else user_now(username, identity)
+            return base.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0), False
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None and tz is not None:
+        dt = dt.replace(tzinfo=tz)
+    return dt, all_day

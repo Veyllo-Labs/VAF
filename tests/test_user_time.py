@@ -46,3 +46,24 @@ def test_weekday_name_localized():
     dt = datetime(2026, 6, 29)  # a Monday
     assert ut.user_weekday_name(dt, "de") == "Montag"
     assert ut.user_weekday_name(dt, "en") == "Monday"
+
+
+def test_parse_user_datetime_reads_every_notation_in_the_users_zone():
+    from datetime import timezone, timedelta
+    berlin = {"timezone": "Europe/Berlin"}
+    dt, all_day = ut.parse_user_datetime("2026-03-01T14:00", identity=berlin)
+    assert not all_day and dt.tzinfo is not None and dt.utcoffset() == timedelta(hours=1) and (dt.hour, dt.minute) == (14, 0)
+    dt2, _ = ut.parse_user_datetime("2026-03-01 14:00:30", identity=berlin)
+    assert dt2.second == 30 and dt2.tzinfo is not None
+    dt3, _ = ut.parse_user_datetime("2026-03-01T13:00:00Z", identity=berlin)               # an offset is taken as given
+    assert dt3.utcoffset() == timedelta(0) and dt3 == datetime(2026, 3, 1, 13, 0, tzinfo=timezone.utc)
+    dt4, all_day4 = ut.parse_user_datetime("2026-03-05", identity=berlin)
+    assert all_day4 and (dt4.hour, dt4.minute) == (0, 0) and dt4.tzinfo is not None
+    now = datetime(2026, 3, 1, 8, 0, tzinfo=ut.ZoneInfo("Europe/Berlin"))
+    dt5, all_day5 = ut.parse_user_datetime("09:30", identity=berlin, now=now)                # the reminder grammar: today
+    assert not all_day5 and (dt5.year, dt5.month, dt5.day, dt5.hour, dt5.minute) == (2026, 3, 1, 9, 30)
+    # Server default: naive results, the module's contract.
+    dt6, _ = ut.parse_user_datetime("2026-03-01T14:00", identity={})
+    assert dt6.tzinfo is None and dt6.hour == 14
+    assert ut.parse_user_datetime("", identity=berlin) is None
+    assert ut.parse_user_datetime("next tuesday", identity=berlin) is None

@@ -78,19 +78,19 @@ def _user_now(username: Optional[str]) -> datetime:
 
 
 def _parse_fire_at(fire_at: str, username: Optional[str]) -> Optional[datetime]:
-    """Parse 'YYYY-MM-DD HH:MM' (or 'HH:MM' = today) in the OWNER's timezone.
-    Returns an aware datetime when the user has a timezone configured, else naive
-    server-local (both compare correctly against _now_like below)."""
-    s = (fire_at or "").strip().replace("T", " ")
-    now = _user_now(username)
+    """Parse 'YYYY-MM-DD HH:MM' (or 'HH:MM' = today) in the OWNER's timezone through the
+    shared grammar (vaf.core.user_time.parse_user_datetime). A bare date is not a reminder
+    time (there is no minute to fire at), so it stays rejected. Returns an aware datetime
+    when the user has a timezone configured, else naive server-local (both compare
+    correctly against _now_like below)."""
     try:
-        if len(s) <= 5 and ":" in s:  # bare HH:MM -> today
-            hh, mm = s.split(":", 1)
-            return now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
-        dt = datetime.strptime(s[:16], "%Y-%m-%d %H:%M")
-        return dt.replace(tzinfo=now.tzinfo) if now.tzinfo else dt
+        from vaf.core.user_time import parse_user_datetime
+        parsed = parse_user_datetime(fire_at, username, now=_user_now(username))
     except Exception:
         return None
+    if parsed is None or parsed[1]:
+        return None
+    return parsed[0]
 
 
 def _now_like(dt: datetime) -> datetime:

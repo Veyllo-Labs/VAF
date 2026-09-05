@@ -187,24 +187,15 @@ class EventCreate(BaseModel):
 
 
 def _parse_when(when: str, username: str) -> float:
-    """User-entered date/time -> unix time, in the user's configured timezone (vaf.core.user_time)."""
-    from datetime import datetime
-    from vaf.core.user_time import resolve_user_timezone
-    raw = (when or "").strip()
-    if not raw:
+    """User-entered date/time -> unix time, in the user's configured timezone (the shared
+    grammar in vaf.core.user_time.parse_user_datetime)."""
+    from vaf.core.user_time import parse_user_datetime
+    if not (when or "").strip():
         raise HTTPException(status_code=400, detail="when is required")
-    try:
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        try:
-            dt = datetime.strptime(raw, "%Y-%m-%d %H:%M")
-        except ValueError:
-            raise HTTPException(status_code=400, detail="when must be ISO 8601 or YYYY-MM-DD HH:MM")
-    if dt.tzinfo is None:
-        tz = resolve_user_timezone(username)
-        if tz is not None:
-            dt = dt.replace(tzinfo=tz)
-    return dt.timestamp()
+    parsed = parse_user_datetime(when, username)
+    if parsed is None:
+        raise HTTPException(status_code=400, detail="when must be ISO 8601 or YYYY-MM-DD HH:MM")
+    return parsed[0].timestamp()
 
 
 @router.get("/statuses/values")

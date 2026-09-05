@@ -314,6 +314,17 @@ Key rules:
 
 ### Server → Client
 
+- `rooms_changed` (no payload): the user's room list changed outside a socket command
+  (the agent opened or joined a room in a tool call). A signal, not the list: the browser
+  answers with `get_sessions`. Emitted by `notify_rooms_changed` in
+  `vaf/core/web_interface.py`.
+
+- `calendar_changed` (no payload): the user's calendar changed (a tool, a route, or a sync
+  sweep that changed rows). The page bumps `calendarVersion`, and the open calendar window
+  and the Calendar Dashboard refetch what they show. Emitted by `notify_calendar_changed`
+  on the same primitive (`notify_user_signal`); see
+  [CALENDAR_INTEGRATION.md](../integrations/CALENDAR_INTEGRATION.md).
+
 - `browser_interactive_state` (`{ sessionId, status, saving, reason, streamPath }`):
   the interactive-browser lease verdict and lifecycle. `status` is one of `active`
   (streamPath set, the window's iframe loads it), `stopped` (with `reason`: `user`,

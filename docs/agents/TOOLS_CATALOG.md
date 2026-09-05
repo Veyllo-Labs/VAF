@@ -124,8 +124,8 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `list_automations` | read | List scheduled automations (with today-status). |
 | `read_automation` | read | Read one automation's full details. |
 | `list_trash` | read | List automations in trash. |
-| `add_automation_note` / `list_automation_notes` / `delete_automation_note` | write/read/write | Notes shown in the automation calendar. |
-| `add_automation_todo` / `list_automation_todos` / `delete_automation_todo` | write/read/write | To-dos shown in the automation calendar. |
+| `add_automation_note` / `list_automation_notes` / `delete_automation_note` | write/read/write | Notes shown in the calendar window. |
+| `add_automation_todo` / `list_automation_todos` / `delete_automation_todo` | write/read/write | To-dos shown in the calendar window. |
 | `set_timer` | write | Schedule a short one-shot timer that fires in this chat. |
 | `schedule_reminder` | write | Persistent one-shot reminder: stored as data, delivered verbatim at fire_at on the user's main messenger by the scheduler (no agent run). |
 | `cancel_timer` | write | Cancel a pending timer. |
@@ -135,10 +135,10 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 
 | Tool | Perm | What it does |
 |------|------|--------------|
-| `create_calendar_event` | write | Create an event (Google / Outlook). |
-| `update_calendar_event` | write | Update an event. |
-| `delete_calendar_event` | write | Delete an event (irreversible). |
-| `list_calendar_events` | read | List events in a time range. |
+| `create_calendar_event` | write | Create an event in the VAF calendar; mirrored into the connected Google or Outlook account unless `internal_only`. Links a contact, sets a reminder. |
+| `update_calendar_event` | write | Update an event (title, time, location, reminder); a moved start keeps the duration. |
+| `delete_calendar_event` | write | Delete an event (irreversible; a mirrored one is removed at the provider by the next sync). |
+| `list_calendar_events` | read | List the calendar's events in a time range, offline, from the store. |
 | `create_contact` | write | Create a contact: name, channels, personal file, company, role, comma-separated tags (recorded with source `agent`). |
 | `update_contact` | write | Update a contact: fields (company, role and tags included; tags replace), status, a dated note (`add_note`), a dated event (`add_event_title` + `add_event_when`). |
 | `delete_contact` | write | Delete a contact (irreversible). |

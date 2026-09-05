@@ -356,7 +356,7 @@ The WhatsApp window (Settings → Connections → WhatsApp) is laid out like the
 
 ## Contacts
 
-Contacts provide a **central list** of people with **channel IDs** (WhatsApp, Telegram, email) and a **personal file** per contact. The agent can resolve a name (e.g. “Max”) to that contact’s channels and then use the usual read/find tools (e.g. “Has Max written to me?” → `get_contact(name="Max")` then `read_whatsapp_chat` or `find_mail`). Contacts with **Can reach your assistant** enabled can send messages to your assistant; the assistant handles them in your context (like a front office for you), not as a separate user account.
+Contacts provide a **central list** of people with **channel IDs** (WhatsApp, Telegram, email), a **personal file** per contact (language, how to address, birthday, notes, company, role, tags, status) and, in the Contacts window, one **timeline** of everything the stores hold about the person (messages, mails, notes, events). In your own chat the agent can resolve a name (e.g. “Max”) to that contact’s channels and then use the usual read/find tools (e.g. “Has Max written to me?” → `get_contact(name="Max")` then `read_whatsapp_chat` or `find_mail`); a Front Office turn has none of these tools (see [FRONT_OFFICE.md](../agents/FRONT_OFFICE.md)). Contacts with **Can reach your assistant** enabled can send messages to your assistant; the assistant handles them in your context (like a front office for you), not as a separate user account.
 
 ### Channel links (WhatsApp today)
 
@@ -405,7 +405,7 @@ When a contact with **Can reach your assistant** enabled sends a message (e.g. v
 
 **Same name (disambiguation):** Multiple contacts can have the same display name (e.g. two “Max”). The agent must never guess which one the user means for update or delete. When `get_contact(name)` returns multiple matches, the agent tells the user “There are multiple contacts named [X]”, lists them (contact_id and a short label such as phone or email), and asks which one to update or delete. Only after the user confirms should the agent call `update_contact` or `delete_contact` with that contact_id. This behaviour is enforced in the system prompt and in the tool responses.
 
-For questions like “Has [Name] written to me?”, the agent calls `get_contact(name="...")` to resolve the name to channel IDs (or to disambiguate if there are several contacts with that name), then uses the appropriate read/find tool for that channel.
+For questions like “Has [Name] written to me?” in your own chat, the agent calls `get_contact(name="...")` to resolve the name to channel IDs (or to disambiguate if there are several contacts with that name), then uses the appropriate read/find tool for that channel; `get_contact` also lists the newest interactions itself. This flow is the owner's: a Front Office turn has neither the contact tools nor the read tools.
 
 ## Proactive messaging
 

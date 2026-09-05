@@ -738,6 +738,67 @@ def contact_summary(contact: Dict[str, Any], now_ts: Optional[float] = None) -> 
     }
 
 
+def contact_self_view(contact: Dict[str, Any], now_ts: Optional[float] = None, days: int = 30) -> Dict[str, Any]:
+    """What a contact may learn about their OWN record while they talk to the agent in Front
+    Office: name, channels, preferred language, how to address, birthday, and their own
+    upcoming appointments from the file (title and time only, next `days` days). Deliberately
+    absent: the free-form notes, the dated notes log, status, tags, company and role. Those
+    are the owner's remarks and classification of the person and stay with the owner; an
+    event's note is an owner remark too and is projected away. Pure over the record."""
+    import time as _time
+    c = _contact_ensure_channels(contact)
+    now = float(now_ts if now_ts is not None else _time.time())
+    horizon = now + max(1, int(days)) * 86400
+    upcoming: List[Dict[str, Any]] = []
+    for e in contact_summary(c, now_ts=now).get("upcoming_events") or []:
+        try:
+            when = float(e.get("when_ts") or 0)
+        except (TypeError, ValueError):
+            continue
+        if when and when <= horizon:
+            upcoming.append({"title": str(e.get("title") or "").strip(), "when_ts": when})
+    channels = [{"type": (ch.get("type") or "").strip().lower(), "value": (ch.get("value") or "").strip()}
+                for ch in (c.get("channels") or []) if (ch.get("value") or "").strip()]
+    return {
+        "name": (c.get("name") or "").strip() or "Unknown",
+        "channels": channels,
+        "preferred_language": (c.get("preferred_language") or "").strip() or None,
+        "how_to_address": (c.get("how_to_address") or "").strip() or None,
+        "birthday": (c.get("birthday") or "").strip() or None,
+        "upcoming_events": upcoming,
+    }
+
+
+def format_contact_self_view(view: Dict[str, Any]) -> str:
+    """The contact block the Front Office prompt carries, from contact_self_view."""
+    from datetime import datetime
+    lines = [f"Contact: {view.get('name') or 'Unknown'}", "Channels"]
+    labels = {"whatsapp": "Phone (used as WhatsApp)", "phone": "Phone (used as WhatsApp)",
+              "telegram": "Telegram", "email": "Email", "discord": "Discord"}
+    for ch in view.get("channels") or []:
+        label = labels.get(ch.get("type") or "")
+        if label and ch.get("value"):
+            lines.append(f"  {label}: {ch['value']}")
+    lines.append("Personal file")
+    if view.get("preferred_language"):
+        lines.append(f"  Language: {view['preferred_language']}")
+    if view.get("how_to_address"):
+        lines.append(f"  How to address: {view['how_to_address']}")
+    if view.get("birthday"):
+        lines.append(f"  Birthday: {view['birthday']}")
+    lines.append("Upcoming with the owner (the contact may ask about these)")
+    events = view.get("upcoming_events") or []
+    for e in events:
+        try:
+            when = datetime.fromtimestamp(float(e.get("when_ts") or 0)).strftime("%Y-%m-%d %H:%M")
+        except (TypeError, ValueError, OSError, OverflowError):
+            continue
+        lines.append(f"  {when} {e.get('title') or ''}".rstrip())
+    if not events:
+        lines.append("  (none)")
+    return "\n".join(lines)
+
+
 # ── cross-store glances: what the user's other stores know about this person ────
 #
 # Live reads, never stored, best-effort by design: each source sits in its own try/except

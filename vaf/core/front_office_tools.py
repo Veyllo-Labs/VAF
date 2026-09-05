@@ -5,34 +5,21 @@
 Front Office tool allow-list.
 
 When the agent responds to a contact (from_contact), only these tools are available.
-Excluded: code execution, update_user_identity, file/workspace changes, coder/librarian agents.
+Deliberate: a Front Office caller is a third party, and every read tool (inboxes, chat
+readers, message search, memory search, the mailbox) reaches the owner's stores through a
+free argument, so the one enforceable rule is not to hand them out. What a contact may
+learn about their own record reaches the agent through the contact block
+(contacts_store.contact_self_view), never through a tool. The platform send tools stay for
+the owner back-channel; tests/test_channel_registry_sync.py pins that every platform send
+tool is here and send_to_user is not.
 """
 
 # Tool names that exist in agent.tools when loaded. At runtime the caller should
 # intersect with agent.tools.keys() so missing tools do not cause errors.
 FRONT_OFFICE_ALLOWED_TOOLS = frozenset({
-    "memory_search",
-    "memory_save",
-    "list_contacts",
-    "get_contact",
     "send_whatsapp",
     "send_telegram",
     "send_discord",
     "send_slack",
-    "read_whatsapp_chat",
-    "find_whatsapp_messages",
-    "whatsapp_inbox",
-    "read_telegram_chat",
-    "find_telegram_messages",
-    "telegram_inbox",
-    "read_discord_chat",
-    "find_discord_messages",
-    "discord_inbox",
-    "mail_inbox",
-    "find_mail",
-    "read_mail",
-    "send_mail",
-    "list_email_accounts",
-    "mark_mail_answered",
     "web_search",
 })

@@ -421,3 +421,52 @@ def test_contact_timeline_and_stats_stay_inside_the_callers_scope(scratch):
     stats = cs.contact_activity_stats(c, "alice", SCOPE_A)
     assert stats["messages"] == 4 and stats["from_agent"] == 2 and stats["first_ts"] == 1_700_000_000.0
     assert stats["last_ts"] == 1_700_000_180.0 and set(stats["by_channel"]) == {"whatsapp"}
+
+
+# ── Front Office: what a contact may learn about themselves ──────────────────────
+
+def test_contact_self_view_carries_own_events_and_never_the_owners_remarks(scratch):
+    import json
+    c = cs.create_contact("Bob Example", "alice", user_scope_id=SCOPE_A, whatsapp_phone="+491700000042",
+                          preferred_language="de", how_to_address="Du", birthday="14.03.",
+                          notes="OWES US 500 EUROS", company="Studio Example", role="CEO", tags="vip")
+    cs.update_contact(c["id"], "alice", user_scope_id=SCOPE_A, status="lead")
+    cs.add_contact_note(c["id"], "SECRET NOTE ABOUT BOB", "alice", user_scope_id=SCOPE_A)
+    cs.add_contact_event(c["id"], "Erstgespraech", 3_000_000_000.0 + 86400, "alice", user_scope_id=SCOPE_A, note="BRING THE CONTRACT")
+    cs.add_contact_event(c["id"], "Far away", 3_000_000_000.0 + 60 * 86400, "alice", user_scope_id=SCOPE_A)
+    cs.add_contact_event(c["id"], "Long ago", 1000.0, "alice", user_scope_id=SCOPE_A)
+    contact = cs.get_contact_by_id(c["id"], "alice", user_scope_id=SCOPE_A)
+    view = cs.contact_self_view(contact, now_ts=3_000_000_000.0)
+    assert view["name"] == "Bob Example" and view["preferred_language"] == "de" and view["how_to_address"] == "Du"
+    assert view["channels"] == [{"type": "whatsapp", "value": "+491700000042"}]
+    assert view["upcoming_events"] == [{"title": "Erstgespraech", "when_ts": 3_000_000_000.0 + 86400}]   # 30-day horizon, title and time only
+    dumped = json.dumps(view)
+    for secret in ("OWES US", "SECRET NOTE", "BRING THE CONTRACT", "lead", "vip", "Studio Example", "CEO"):
+        assert secret not in dumped, secret
+    block = cs.format_contact_self_view(view)
+    assert "Contact: Bob Example" in block and "Phone (used as WhatsApp): +491700000042" in block
+    assert "Language: de" in block and "Birthday: 14.03." in block and "Erstgespraech" in block
+    for secret in ("OWES US", "SECRET NOTE", "BRING THE CONTRACT", "Notes", "lead", "vip"):
+        assert secret not in block, secret
+    assert "(none)" in cs.format_contact_self_view(cs.contact_self_view({"name": "Nobody", "channels": []}))
+
+
+def test_front_office_allow_list_holds_only_the_send_tools_and_web_search():
+    from vaf.core.front_office_tools import FRONT_OFFICE_ALLOWED_TOOLS
+    assert FRONT_OFFICE_ALLOWED_TOOLS == frozenset({"send_whatsapp", "send_telegram", "send_discord", "send_slack", "web_search"})
+
+
+def test_front_office_doc_lists_exactly_the_allowed_tools():
+    """FRONT_OFFICE.md names the allowed tools as code spans between the 'Allowed tools' and
+    the 'Not available' lines; the code is the SSOT, the doc must not drift."""
+    import pathlib
+    import re
+    from vaf.core.front_office_tools import FRONT_OFFICE_ALLOWED_TOOLS
+    doc = (pathlib.Path(__file__).resolve().parents[1] / "docs" / "agents" / "FRONT_OFFICE.md").read_text(encoding="utf-8")
+    start = doc.index("**Allowed tools**")
+    end = doc.index("**Not available in Front Office**", start)
+    listed = set(re.findall(r"`([a-z_]+)`", doc[start:end]))
+    assert listed == set(FRONT_OFFICE_ALLOWED_TOOLS), listed ^ set(FRONT_OFFICE_ALLOWED_TOOLS)
+    not_available = doc[end:doc.index("At runtime", end)]
+    for name in ("list_contacts", "get_contact", "memory_search", "read_whatsapp_chat", "find_mail"):
+        assert f"`{name}`" in not_available, name

@@ -33,29 +33,26 @@ Implementation: [vaf/core/system_prompt.py](../../vaf/core/system_prompt.py) `bu
 
 ## Tool restriction
 
-In Front Office, only an **allow-list** of tools is available. All other tools (code execution, owner identity updates, file/workspace writes, coder/librarian agents, etc.) are not exposed for that turn.
+In Front Office, only an **allow-list** of tools is available. All other tools are not exposed for that turn. The list is deliberately short: a Front Office caller is a third party, and every read tool (inboxes, chat readers, message search, memory search, the mailbox) reaches the owner's stores through a free argument, so the one enforceable rule is not to hand them out. What a contact may learn about their own record reaches the agent through the **contact block** (below), never through a tool.
 
 **Allowed tools** (defined in [vaf/core/front_office_tools.py](../../vaf/core/front_office_tools.py)):
 
-- **Memory:** `memory_search`, `memory_save`
-- **Contacts:** `list_contacts`, `get_contact`
-  (`get_contact` returns the whole file, including the status and the dated notes log, so a note written about a person is readable by the agent while it talks to that person; keep remarks that must stay private out of the contact's file or off the Front Office allow-list.)
-- **Reply/send:** `send_whatsapp`, `send_telegram`, `send_discord`, `send_slack`
-- **WhatsApp read:** `read_whatsapp_chat`, `find_whatsapp_messages`, `whatsapp_inbox`
-- **Telegram read:** `read_telegram_chat`, `find_telegram_messages`, `telegram_inbox`
-- **Discord read:** `read_discord_chat`, `find_discord_messages`, `discord_inbox`
-- **Mail:** `mail_inbox`, `find_mail`, `read_mail`, `send_mail`, `list_email_accounts`, `mark_mail_answered`, `label_mail`
+- **Reply/send:** `send_whatsapp`, `send_telegram`, `send_discord`, `send_slack` (the reply itself is delivered automatically; these exist for the owner back-channel)
 - **Search:** `web_search`
 
-**Not available in Front Office** (among others): `update_user_identity`, `create_contact`, `update_contact`, `delete_contact`, `python` / code execution, file and workspace write tools, `replace_editor_selection`, coder/librarian agents, `update_intent`, `update_working_memory`.
+**Not available in Front Office** (among others): `memory_search`, `memory_save`, `list_contacts`, `get_contact`, `create_contact`, `update_contact`, `delete_contact`, every inbox, chat-read and message-search tool (`whatsapp_inbox`, `read_whatsapp_chat`, `find_whatsapp_messages` and their Telegram and Discord counterparts), the mail tools (`mail_inbox`, `find_mail`, `read_mail`, `send_mail`, `list_email_accounts`, `mark_mail_answered`, `label_mail`), `update_user_identity`, `python` / code execution, file and workspace write tools, `replace_editor_selection`, coder/librarian agents, `update_intent`, `update_working_memory`. A guard test keeps this list and the code in step.
 
 At runtime, the headless runner sets `agent._active_tools` to the intersection of this allow-list and `agent.tools`, so if a tool is not loaded it is simply skipped. After the turn, `_active_tools` is set back to `None` so the next task sees all tools again.
+
+### The contact block
+
+When the sender is a contact with **Can reach your assistant**, the runner prefixes the message with what the contact may know about their own record (`contacts_store.contact_self_view`, formatted by `format_contact_self_view`): name, channels, preferred language, how to address, birthday, and their own upcoming appointments from the contact's file (next 30 days, title and time only). The block never contains the free-form notes, the dated notes log, the status, tags, company or role, and never another contact's data: the notes are the owner's remarks about the person and stay with the owner. A contact asking "do I have an appointment?" is answered from this block; a question about another person cannot be answered, because no tool in Front Office reaches the contact book or the owner's stores.
 
 ## Flow summary
 
 1. Contact sends a message → bridge matches to contact with "Can reach your assistant" → task has `from_contact: true` in metadata.
 2. Headless runner sets `agent._front_office_mode = True` and `agent._active_tools = <allow-list ∩ agent.tools>`.
-3. User message is prefixed with the existing front-office hint and contact data (name, language, how to address, notes).
+3. User message is prefixed with the existing front-office hint and the contact block (name, channels, language, how to address, birthday, the contact's own upcoming appointments; never the notes).
 4. Agent runs; `build_prompt(..., front_office=True)` adds the Front Office role and Security blocks; only allow-listed tools are used.
 5. Reply is sent back to the contact (WhatsApp/Telegram) immediately by default. If you enable reply approval, replies are stored as pending until you approve (see **Reply approval** below).
 6. **Owner notification (if applicable):** If the contact had a request, answer, or important info for the owner, the agent calls `send_telegram` or `send_whatsapp` (based on the owner's `main_messenger` from User Identity) to notify the owner with a short summary. These tools always send to the owner, not the contact.

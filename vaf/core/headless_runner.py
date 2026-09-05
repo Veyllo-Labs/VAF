@@ -1439,56 +1439,26 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         )
                         reply_lang_hint = ""
                         if contact:
-                            from vaf.core.contacts_store import _contact_ensure_channels
-                            c = _contact_ensure_channels(contact)
-                            lines = []
-                            lines.append(f"Contact: {c.get('name') or 'Unknown'}")
-                            lines.append("Channels")
-                            for ch in (c.get("channels") or []):
-                                t, v = (ch.get("type") or "").strip().lower(), (ch.get("value") or "").strip()
-                                if not v:
-                                    continue
-                                if t in ("whatsapp", "phone"):
-                                    lines.append(f"  Phone (used as WhatsApp): {v}")
-                                elif t == "telegram":
-                                    lines.append(f"  Telegram: {v}")
-                                elif t == "email":
-                                    lines.append(f"  Email: {v}")
-                                elif t == "discord":
-                                    lines.append(f"  Discord: {v}")
-                            if not any("Phone" in ln or "WhatsApp" in ln for ln in lines):
-                                if c.get("whatsapp_phone"):
-                                    lines.append(f"  Phone (used as WhatsApp): {c['whatsapp_phone']}")
-                            lines.append("Personal file")
-                            if c.get("preferred_language"):
-                                lines.append(f"  Language: {c['preferred_language']}")
-                                pl_code = (c["preferred_language"] or "").strip().lower()[:2]
+                            # The block carries what the contact may know about their OWN
+                            # record (contact_self_view): channels, language, address form,
+                            # birthday, their own upcoming appointments. Never the owner's
+                            # notes about them, never another contact.
+                            from vaf.core.contacts_store import contact_self_view, format_contact_self_view
+                            view = contact_self_view(contact)
+                            contact_block = format_contact_self_view(view)
+                            if view.get("preferred_language"):
+                                pl_code = (view["preferred_language"] or "").strip().lower()[:2]
                                 _lang_names = {"de": "German", "en": "English", "tr": "Turkish", "fr": "French", "es": "Spanish", "ar": "Arabic"}
                                 pl_name = _lang_names.get(pl_code) or pl_code
                                 reply_lang_hint = f" REPLY IN: {pl_name} (contact preferred_language; use this language for your reply even if the message was in another language)."
-                            if c.get("how_to_address"):
-                                lines.append(f"  How to address: {c['how_to_address']}")
-                            if c.get("allow_as_assistant_user"):
-                                lines.append("  Can reach your assistant")
-                            if c.get("birthday"):
-                                lines.append(f"  Birthday: {c['birthday']}")
-                            lines.append("Notes")
-                            if c.get("notes"):
-                                notes = (c["notes"] or "").strip()
-                                if len(notes) > 600:
-                                    notes = notes[:597] + "..."
-                                lines.append(f"  {notes}")
-                            else:
-                                lines.append("  (none)")
-                            contact_block = "\n".join(lines)
                         effective_input = (
-                            "[FRONT OFFICE – MESSAGE FROM A CONTACT, NOT FROM THE ACCOUNT OWNER.] "
+                            "[FRONT OFFICE - MESSAGE FROM A CONTACT, NOT FROM THE ACCOUNT OWNER.] "
                             "The following message was sent by a contact to your front office. "
                             "You must respond directly TO this contact (they will receive your reply). "
-                            "CRITICAL: Do NOT call send_whatsapp, send_telegram, or any messaging tool — your reply text is automatically delivered to the contact. Just write your reply as normal text. "
+                            "CRITICAL: Do NOT call send_whatsapp, send_telegram, or any messaging tool - your reply text is automatically delivered to the contact. Just write your reply as normal text. "
                             "Do NOT report to the account owner (e.g. do not say 'I sent X to the contact' or 'I have sent Alice...'). "
                             "Do NOT repeat or echo the contact's message back; give a helpful reply.\n\n"
-                            "Contact details (use Language / How to address / Notes when replying):\n"
+                            "Contact details (use Language / How to address when replying; the contact may ask about the appointments listed, and nothing else about the owner or other people is to be shared):\n"
                             + contact_block
                             + ("\n" + reply_lang_hint if reply_lang_hint else "")
                             + "\n\nMessage from the contact:\n\n"

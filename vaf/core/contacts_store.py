@@ -658,6 +658,47 @@ def delete_contact_note(contact_id: str, note_id: str, username: Optional[str] =
         return True
 
 
+def _event_from_store(ev: Dict[str, Any]) -> Dict[str, Any]:
+    """A calendar event in the shape the contact book always handed out (id, ts, when_ts,
+    title, source, note) plus the calendar's own fields, so every reader of the old record
+    list keeps working and the newer ones can show the reminder, the mirror and the link."""
+    return {
+        "id": str(ev.get("id") or ""),
+        "ts": float(ev.get("created_at") or 0),
+        "when_ts": float(ev.get("start_ts") or 0),
+        "title": str(ev.get("title") or ""),
+        "source": "agent" if (ev.get("created_by") or "") == "agent" else "user",
+        "note": (ev.get("description") or "").strip() or None,
+        "end_ts": float(ev.get("end_ts") or ev.get("start_ts") or 0),
+        "all_day": bool(ev.get("all_day")),
+        "location": (ev.get("location") or "").strip(),
+        "reminder_minutes": ev.get("reminder_minutes"),
+        "account_id": ev.get("account_id"),
+        "sync_state": ev.get("sync_state"),
+        "link": ev.get("link"),
+    }
+
+
+def contact_events(contact: Dict[str, Any], username: Optional[str] = None,
+                   user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The contact's own appointments: the events of the user's calendar linked to this
+    contact (vaf/core/calendar_store.py), oldest first, in the record shape (see
+    _event_from_store). Reads nothing and creates nothing when the scope has no calendar
+    on disk; a record that still carries a legacy `events` list (a book that never opened a
+    calendar) answers from that list, so the pure readers work before and after the move."""
+    from vaf.core import calendar_store as cal
+    cid = str(contact.get("id") or "").strip()
+    if not cid:
+        return []
+    try:
+        if cal.store_exists(username, user_scope_id):
+            rows = cal.store_for(username, user_scope_id).events_for_contact(cid)
+            return sorted((_event_from_store(e) for e in rows), key=lambda e: e["when_ts"])
+    except Exception:
+        pass
+    return [e for e in (contact.get("events") or []) if isinstance(e, dict)]
+
+
 def add_contact_event(
     contact_id: str,
     title: str,
@@ -667,11 +708,15 @@ def add_contact_event(
     *,
     source: str = "user",
     note: Optional[str] = None,
+    reminder_minutes: Optional[int] = None,
+    mirror: bool = True,
 ) -> Optional[Dict[str, Any]]:
-    """Attach a dated event to a contact ("meeting 10 Sep 15:00"). `when_ts` is unix time;
-    the caller resolves the user's timezone (see vaf.core.user_time). Calendar events matched
-    by name or address are NOT stored here, they are read live (contact_calendar_events)."""
-    import time as _time
+    """Attach a dated appointment to a contact ("meeting 10 Sep 15:00"): an event of the
+    user's calendar linked to the contact. `when_ts` is unix time; the caller resolves the
+    user's timezone (see vaf.core.user_time). The reminder defaults to the user's calendar
+    setting; `mirror=False` keeps the event out of the connected calendar. None when the
+    contact is not in the caller's book (another scope's id is not found) or the input is
+    empty. The calendar is touched outside the book's lock: the store keeps its own."""
     label = (title or "").strip()
     try:
         when = float(when_ts)
@@ -679,40 +724,68 @@ def add_contact_event(
         return None
     if not label or when <= 0:
         return None
-    event = {"id": str(uuid.uuid4()), "ts": _time.time(), "when_ts": when, "title": label[:500],
-             "source": (source or "user").strip() or "user", "note": (note or "").strip()[:2000] or None}
-    with _LOCK:
-        contacts = _load_all(username, user_scope_id)
-        i = _find_index(contacts, contact_id)
-        if i < 0:
-            return None
-        events = contacts[i].get("events") if isinstance(contacts[i].get("events"), list) else []
-        events.append(event)
-        events.sort(key=lambda e: float(e.get("when_ts") or 0))
-        contacts[i]["events"] = events[-500:]
-        _save_all(contacts, username, user_scope_id)
-    return event
+    if get_contact_by_id(contact_id, username, user_scope_id=user_scope_id) is None:
+        return None
+    from vaf.core import calendar_store as cal
+    from vaf.core import calendar_sync
+    from vaf.core.user_time import resolve_user_timezone_name
+    scope = cal.scope_for(username, user_scope_id)
+    store = cal.CalendarStore(scope)     # the first use creates the calendar and moves the book's legacy events into it
+    extra: Dict[str, Any] = {}
+    if reminder_minutes is not None:
+        try:
+            extra["reminder_minutes"] = max(0, int(reminder_minutes))
+        except (TypeError, ValueError):
+            pass
+    account = calendar_sync.default_account_for(scope, store=store) if mirror else None
+    ev = store.add_event(
+        title=label[:500], start_ts=when, tz=resolve_user_timezone_name(username),
+        description=(note or "").strip()[:2000], contact_ids=[str(contact_id)],
+        created_by="agent" if (source or "").strip() == "agent" else "user",
+        account_id=calendar_sync.account_id_of(account) if account else None, **extra,
+    )
+    calendar_sync.after_local_change(scope, ev.get("account_id"))
+    return _event_from_store(ev)
 
 
 def delete_contact_event(contact_id: str, event_id: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> bool:
-    with _LOCK:
-        contacts = _load_all(username, user_scope_id)
-        i = _find_index(contacts, contact_id)
-        if i < 0:
-            return False
-        events = contacts[i].get("events") if isinstance(contacts[i].get("events"), list) else []
-        kept = [e for e in events if e.get("id") != event_id]
-        if len(kept) == len(events):
-            return False
-        contacts[i]["events"] = kept
-        _save_all(contacts, username, user_scope_id)
-        return True
+    """Remove one of the contact's appointments from the calendar. False when the contact is
+    not in the caller's book or the event is not one of this contact's."""
+    if get_contact_by_id(contact_id, username, user_scope_id=user_scope_id) is None:
+        return False
+    from vaf.core import calendar_store as cal
+    from vaf.core import calendar_sync
+    if not cal.store_exists(username, user_scope_id):
+        # A book that never opened a calendar still carries its events in the record.
+        with _LOCK:
+            contacts = _load_all(username, user_scope_id)
+            i = _find_index(contacts, contact_id)
+            if i < 0:
+                return False
+            events = contacts[i].get("events") if isinstance(contacts[i].get("events"), list) else []
+            kept = [e for e in events if e.get("id") != event_id]
+            if len(kept) == len(events):
+                return False
+            contacts[i]["events"] = kept
+            _save_all(contacts, username, user_scope_id)
+            return True
+    scope = cal.scope_for(username, user_scope_id)
+    store = cal.CalendarStore(scope)
+    ev = store.get_event(str(event_id or ""))
+    if not ev or str(contact_id) not in (ev.get("contact_ids") or []):
+        return False
+    store.delete_event(ev["id"])
+    mirrored = bool(ev.get("external_id") and ev.get("account_id"))
+    calendar_sync.after_local_change(scope, ev.get("account_id") if mirrored else None)
+    return True
 
 
-def contact_summary(contact: Dict[str, Any], now_ts: Optional[float] = None) -> Dict[str, Any]:
+def contact_summary(contact: Dict[str, Any], now_ts: Optional[float] = None, *,
+                    events: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """What the agent and the dashboard want at a glance: status, when and where the last
-    contact happened (the newest of all channel links), the next stored event, the
-    newest notes. Pure: reads the record, touches nothing."""
+    contact happened (the newest of all channel links), the next appointment, the newest
+    notes. Pure: reads the record and the `events` the caller hands in (contact_events,
+    the calendar's rows linked to this contact); without them the record's legacy list."""
     import time as _time
     now = float(now_ts if now_ts is not None else _time.time())
     last: Optional[Dict[str, Any]] = None
@@ -725,7 +798,8 @@ def contact_summary(contact: Dict[str, Any], now_ts: Optional[float] = None) -> 
             ts = 0.0
         if ts and (last is None or ts > last["ts"]):
             last = {"channel": chan, "ts": ts}
-    events = [e for e in (contact.get("events") or []) if isinstance(e, dict)]
+    source_events = events if events is not None else (contact.get("events") or [])
+    events = [e for e in source_events if isinstance(e, dict)]
     upcoming = sorted((e for e in events if float(e.get("when_ts") or 0) >= now), key=lambda e: float(e.get("when_ts") or 0))
     notes = [n for n in (contact.get("notes_log") or []) if isinstance(n, dict)]
     return {
@@ -738,10 +812,12 @@ def contact_summary(contact: Dict[str, Any], now_ts: Optional[float] = None) -> 
     }
 
 
-def contact_self_view(contact: Dict[str, Any], now_ts: Optional[float] = None, days: int = 30) -> Dict[str, Any]:
+def contact_self_view(contact: Dict[str, Any], now_ts: Optional[float] = None, days: int = 30, *,
+                      events: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """What a contact may learn about their OWN record while they talk to the agent in Front
     Office: name, channels, preferred language, how to address, birthday, and their own
-    upcoming appointments from the file (title and time only, next `days` days). Deliberately
+    upcoming appointments (title and time only, next `days` days; `events` from
+    contact_events, else the record's legacy list). Deliberately
     absent: the free-form notes, the dated notes log, status, tags, company and role. Those
     are the owner's remarks and classification of the person and stay with the owner; an
     event's note is an owner remark too and is projected away. Pure over the record."""
@@ -750,7 +826,7 @@ def contact_self_view(contact: Dict[str, Any], now_ts: Optional[float] = None, d
     now = float(now_ts if now_ts is not None else _time.time())
     horizon = now + max(1, int(days)) * 86400
     upcoming: List[Dict[str, Any]] = []
-    for e in contact_summary(c, now_ts=now).get("upcoming_events") or []:
+    for e in contact_summary(c, now_ts=now, events=events).get("upcoming_events") or []:
         try:
             when = float(e.get("when_ts") or 0)
         except (TypeError, ValueError):
@@ -801,10 +877,10 @@ def format_contact_self_view(view: Dict[str, Any]) -> str:
 
 # ── cross-store glances: what the user's other stores know about this person ────
 #
-# Live reads, never stored, best-effort by design: each source sits in its own try/except
-# and a missing store answers nothing instead of being created. Every read is keyed by the
-# caller's own username and user_scope_id, the same pair that picks the store FILE, so a
-# tenant sees only their own calendar, messages and mail. Two named boundaries: Discord
+# Best-effort by design: each source sits in its own try/except and a missing store
+# answers nothing instead of being created. Every read is keyed by the caller's own
+# username and user_scope_id, the same pair that picks the store FILE, so a tenant sees
+# only their own calendar, messages and mail. Two named boundaries: Discord
 # rows are written under the literal admin identity (discord_bridge stores with
 # username "admin" and no scope), so the discord lane runs for the local admin only; and a
 # legacy per-username caller (username, no scope) reaches the legacy mail store only, the
@@ -816,37 +892,47 @@ def contact_calendar_events(
     user_scope_id: Optional[str] = None,
     days: int = 30,
 ) -> List[Dict[str, Any]]:
-    """Upcoming calendar events that mention this contact (name or one of its addresses in
-    the title or description), from the user's connected calendar. Read live, never stored;
-    empty when no calendar is connected or the lookup fails. Best-effort by design: the
-    calendar API is a network call and this is a glance, not a sync."""
+    """Upcoming events of the user's calendar that mention this contact (name or one of its
+    addresses in the title or description) without being linked to it; the linked ones are
+    the contact's own (contact_events). A store query, offline; empty when the scope has no
+    calendar on disk (nothing is created), when the contact has nothing to match by, or
+    when the lookup fails. Each hit: id, summary, start and end (ISO in the user's zone, a
+    date for an all-day event), all_day, link, account_id, source."""
     try:
-        from datetime import datetime, timedelta, timezone
-        from vaf.core.calendar_client import list_events, resolve_calendar_account
-        account = resolve_calendar_account(username=username or "admin", user_scope_id=user_scope_id)
-        if not account:
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        from vaf.core import calendar_store as cal
+        from vaf.core.user_time import resolve_user_timezone_name
+        if not cal.store_exists(username, user_scope_id):
             return []
-        now = datetime.now(timezone.utc)
-        events = list_events(
-            provider=(account.get("provider") or "gmail").strip().lower(),
-            account_id=account.get("account_id") or account.get("email") or "",
-            user_scope_id=user_scope_id,
-            time_min=now.isoformat().replace("+00:00", "Z"),
-            time_max=(now + timedelta(days=max(1, int(days)))).isoformat().replace("+00:00", "Z"),
-            username=username,
-            max_results=100,
-        )
+        needles = [s.lower() for s in [contact.get("name") or ""] + _contact_email_values(contact) if (s or "").strip()]
+        if not needles:
+            return []
+        import time as _time
+        now = _time.time()
+        store = cal.store_for(username, user_scope_id)
+        hits = store.search_events(needles, now, now + max(1, int(days)) * 86400)
+        cid = str(contact.get("id") or "")
+        tz_name = resolve_user_timezone_name(username)
+        out: List[Dict[str, Any]] = []
+        for e in hits:
+            if cid and cid in (e.get("contact_ids") or []):
+                continue
+            try:
+                zone = ZoneInfo(str(e.get("tz") or tz_name or "UTC"))
+            except Exception:
+                zone = timezone.utc
+            if e.get("all_day"):
+                start, end = e.get("start_date"), e.get("end_date")
+            else:
+                start = datetime.fromtimestamp(float(e["start_ts"]), zone).isoformat()
+                end = datetime.fromtimestamp(float(e["end_ts"]), zone).isoformat()
+            out.append({"id": e.get("id"), "summary": e.get("title") or "", "start": start, "end": end,
+                        "all_day": bool(e.get("all_day")), "link": e.get("link"), "account_id": e.get("account_id"),
+                        "source": e.get("source")})
+        return out
     except Exception:
         return []
-    needles = [s.lower() for s in [contact.get("name") or ""] + _contact_email_values(contact) if (s or "").strip()]
-    if not needles:
-        return []
-    out = []
-    for e in events or []:
-        hay = f"{e.get('summary') or ''} {e.get('description') or ''}".lower()
-        if any(n in hay for n in needles):
-            out.append(e)
-    return out
 
 
 TIMELINE_KINDS = ("message", "mail", "note", "event", "created")
@@ -938,7 +1024,7 @@ def contact_timeline(
                               "direction": None, "title": None, "body": str(n.get("text") or ""),
                               "source": n.get("source") or "user", "ref": {"note_id": n.get("id")}})
     if "event" in want:
-        for e in (contact.get("events") or []):
+        for e in contact_events(contact, username, user_scope_id):
             if isinstance(e, dict) and _keep(e.get("ts")):
                 items.append({"kind": "event", "id": str(e.get("id") or ""), "ts": float(e["ts"]), "channel": None,
                               "direction": None, "title": str(e.get("title") or ""), "body": str(e.get("note") or ""),

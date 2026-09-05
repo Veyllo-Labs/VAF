@@ -11,8 +11,41 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+
+- **The VAF calendar.** Appointments live in a calendar of VAF's own (one store per user,
+  `calendar.db`), the calendar window in the sidebar footer shows them beside the
+  automations (a month grid with dots for both, a day view with an all-day row, an events
+  lane and an automations lane, an event popup with linked contacts, location, reminder and
+  a switch for the connected calendar), the agent's four calendar tools work on it offline,
+  and the reminders of its events fire from the scheduler on the main channel with a Web UI
+  notification. A connected Google Calendar or Outlook account is a sync source: pulled
+  every few minutes (window and cadence configurable), VAF-created events written back
+  unless kept internal, deletions carried both ways, cancelled instances mirrored, the
+  newer change winning a conflict, a dead token parking the account until it is renewed.
+  The Calendar Dashboard is the sync settings (accounts with their state, the switch per
+  account, which account new events go to, the default reminder, sync now). New admin-only
+  keys `calendar_sync_interval_minutes`, `calendar_sync_past_days`,
+  `calendar_sync_future_days` and `calendar_sync_push_enabled`; the event, sync and settings
+  routes under `/api/calendar`; the `calendar_changed` WebSocket frame.
+
 ### Changed
 
+- **A contact's appointments are calendar events.** "Termin hinzufügen" in the contact
+  window creates an event of the user's calendar linked to the contact, with a reminder;
+  the contact's card, `get_contact`, the Front Office block and the timeline read them
+  from the calendar, an appointment opens the calendar window on its day, and a record's
+  older event list is moved into the calendar the first time the calendar is opened.
+- **The calendar tools no longer need a connected account.** `create_calendar_event` takes
+  `location`, `contact` or `contact_id` (an ambiguous name is asked back), `internal_only`
+  and the reminder default from the user's settings; `update_calendar_event` takes
+  `location` and a reminder of 0 to remove one; a bare date books an all-day event; times
+  are read and printed in the user's timezone. The three Whare Wananga records of the
+  calendar tools are stale until retrained (Tools window, or `vaf ww retrain --pending`).
+- **The "Automation Calendar" is the calendar window** ("Kalender"); its strings come from
+  the catalogues and Escape goes through the shared layer registry.
+- **The mail sync supervisor runs on a shared supervisor base** (`vaf/core/sync_supervisor.py`)
+  and starts once per process; it started twice under TLS, once per server lifespan.
 - **The Contacts window is a small CRM now.** It opens as wide as the channel windows.
   The list on the left searches name, number, address, company and tags, filters by
   status chips that carry counts, sorts by last contact or by name, and a hover checkbox
@@ -190,6 +223,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Calendar times were forced to UTC.** Every read and write of the calendar tools sent
+  wall-clock times as UTC, so an appointment typed as 14:00 landed at a different hour;
+  they are read and written in the user's timezone now, and the provider client pages
+  through a window instead of stopping after the first page.
+- **Microsoft all-day events were dropped** from every calendar listing; they are read as
+  all-day events.
+- **The web server logged a 30-minute email auto-sync task** that no longer existed.
 - **Repair switches the host's IP forwarding back on.** With `net.ipv4.ip_forward = 0`
   (a firewall reload or a system update re-applying `/etc/sysctl.d` behind Docker's
   back) every container ran and none could reach the internet, the browser relaunched

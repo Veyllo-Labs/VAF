@@ -410,6 +410,7 @@ def test_contact_timeline_survives_a_broken_mail_lane_and_creates_no_store(scrat
     assert [it["kind"] for it in out["items"]] == ["created"]
     assert not (scratch / "data" / "scopes" / SCOPE_A / "channel_messages.db").exists()
     assert not (scratch / "data" / "scopes" / SCOPE_A / "mail.db").exists()
+    assert not (scratch / "data" / "scopes" / SCOPE_A / "calendar.db").exists()
 
 
 def test_contact_timeline_and_stats_stay_inside_the_callers_scope(scratch):
@@ -436,7 +437,7 @@ def test_contact_self_view_carries_own_events_and_never_the_owners_remarks(scrat
     cs.add_contact_event(c["id"], "Far away", 3_000_000_000.0 + 60 * 86400, "alice", user_scope_id=SCOPE_A)
     cs.add_contact_event(c["id"], "Long ago", 1000.0, "alice", user_scope_id=SCOPE_A)
     contact = cs.get_contact_by_id(c["id"], "alice", user_scope_id=SCOPE_A)
-    view = cs.contact_self_view(contact, now_ts=3_000_000_000.0)
+    view = cs.contact_self_view(contact, now_ts=3_000_000_000.0, events=cs.contact_events(contact, "alice", SCOPE_A))
     assert view["name"] == "Bob Example" and view["preferred_language"] == "de" and view["how_to_address"] == "Du"
     assert view["channels"] == [{"type": "whatsapp", "value": "+491700000042"}]
     assert view["upcoming_events"] == [{"title": "Erstgespraech", "when_ts": 3_000_000_000.0 + 86400}]   # 30-day horizon, title and time only

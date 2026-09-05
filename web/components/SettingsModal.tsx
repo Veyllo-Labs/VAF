@@ -1289,6 +1289,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [cloudWizardProvider, setCloudWizardProvider] = useState<string | undefined>(undefined);
     const [showCalendarWizard, setShowCalendarWizard] = useState(false);
     const [showCalendarDashboard, setShowCalendarDashboard] = useState(false);
+    // A jump from a contact's appointment into the calendar window lands on that day.
+    const [calendarInitialDayTs, setCalendarInitialDayTs] = useState<number | null>(null);
     const [calendarWizardProvider, setCalendarWizardProvider] = useState<'google_calendar' | 'outlook_calendar' | undefined>(undefined);
     const [showGitHubWizard, setShowGitHubWizard] = useState(false);
     const [showGitHubDashboard, setShowGitHubDashboard] = useState(false);
@@ -7084,7 +7086,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             <AutomationCalendarModal
                 isOpen={showCreateAutomationModal}
-                onClose={() => setShowCreateAutomationModal(false)}
+                onClose={() => { setShowCreateAutomationModal(false); setCalendarInitialDayTs(null); }}
                 currentUser={currentUser}
                 automations={automations}
                 automationNotes={automationNotes}
@@ -7094,6 +7096,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onSubmitCreateAutomation={onCreateAutomationSubmit}
                 onAutomationCreated={onAutomationCreated}
                 calendarVersion={calendarVersion}
+                initialDayTs={calendarInitialDayTs}
                 onEditAutomation={(auto) => setEditingAutomation({
                     id: auto.id,
                     name: auto.name,
@@ -8124,6 +8127,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     setChatJump({ channel, chatId });
                     if (channel === 'whatsapp') setShowWhatsAppDashboard(true);
                     else setShowTelegramDashboard(true);
+                }}
+                onOpenCalendar={(ts: number) => {
+                    setShowContactsDashboard(false);
+                    setCalendarInitialDayTs(ts);
+                    setShowCreateAutomationModal(true);
                 }}
             />
 

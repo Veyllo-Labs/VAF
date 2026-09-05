@@ -111,7 +111,9 @@ Deliberately deferred, listed so nobody looks for them in the code:
   bodies lazy, every other folder ON OPEN - the client issues a one-time
   `POST /api/mail/sync/{account}?folder=<name>` when an opened folder comes back
   empty.
-- Workers: a MailSyncSupervisor asyncio task in the web backend; one
+- Workers: a MailSyncSupervisor asyncio task in the web backend (a subclass of the shared
+  `vaf/core/sync_supervisor.SyncSupervisor`, which the calendar sync shares; started once per
+  process by `start_supervisor()`, although the startup hook runs once per uvicorn server); one
   crash-isolated worker per account (synchronous IMAPClient driven via
   `asyncio.to_thread`), restartable individually so one broken account never
   stalls the others. It is the ONLY sync lane. CLI-only mode runs no workers
@@ -176,7 +178,8 @@ Deliberately deferred, listed so nobody looks for them in the code:
   defaults them to a foreign host; (2) Google OAuth-IMAP via
   XOAUTH2 (`https://mail.google.com/`, a restricted scope) - the mail connect
   requests it up front as a UNION that still contains calendar, so ONE consent
-  yields a working account and the shared token keeps Calendar alive;
+  yields a working account and the shared token keeps the calendar sync alive
+  (`vaf/core/calendar_sync.py` pulls and pushes with it);
   (3) Microsoft OAuth-IMAP via XOAUTH2
   (`https://outlook.office.com/IMAP.AccessAsUser.All` + `SMTP.Send` +
   `offline_access`; basic auth is retired). Microsoft needs TWO consents by
@@ -245,7 +248,7 @@ caller (username set, NO scope) has no store of its own and serving it would
 resolve through the local admin scope and hand that caller the ADMIN's mailbox,
 reads and writes. That caller is refused, matching the two layers that already
 refuse it (`email_sync_store`'s `_legacy_user` branch and
-`MailSyncSupervisor._collect_accounts`, which never syncs `email_config_by_user`
+`sync_supervisor.collect_email_accounts` (the mail supervisor's `_collect_accounts`), which never syncs `email_config_by_user`
 accounts). Such an install heals itself: the user reconnects the account once and
 lands on a scope-keyed config. Guards: `tests/test_mail_tools_import_guard.py`
 (no tool imports the FastAPI route module) and `tests/test_mail_tools_v2.py`.
@@ -403,9 +406,9 @@ one and there is no silent fallback to the local admin. Account config resolves
 layout that is never served from the engine store. Deletion is explicit: removing
 a mail account deletes its rows, blobs, FTS entries, queued ops and mail
 credentials - but a shared gmail/microsoft OAuth token is NEVER revoked, because
-Calendar resolves accounts by that provider; the entry survives with
+the calendar sync resolves accounts by that provider; the entry survives with
 `mail_enabled=False` so it disappears from the mail list while the calendar keeps
-working. Deleting a user removes the scope directory and all credential keys.
+syncing (`calendar_sync.wants_calendar_sync` keeps such an entry on purpose). Deleting a user removes the scope directory and all credential keys.
 
 ## Remote content and tracking
 

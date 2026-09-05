@@ -16,7 +16,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
     X, Users, Plus, Pencil, Trash2, Search, Phone, Mail, Send, Hash, MessageCircle,
-    StickyNote, CalendarDays, MoreHorizontal, Copy, Check, ChevronDown, ArrowUpRight, UserPlus,
+    StickyNote, CalendarDays, MoreHorizontal, Copy, Check, ChevronDown, ArrowUpRight, UserPlus, Bell,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
@@ -30,6 +30,20 @@ const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 export interface ChannelEntry {
     type: string;
     value: string;
+}
+
+/** One of the contact's appointments: an event of the user's calendar linked to it (contacts_store.contact_events). */
+export interface ContactEvent {
+    id: string;
+    ts: number;
+    when_ts: number;
+    title: string;
+    source?: string;
+    note?: string | null;
+    reminder_minutes?: number | null;
+    account_id?: string | null;
+    link?: string | null;
+    all_day?: boolean;
 }
 
 export interface Contact {
@@ -53,7 +67,8 @@ export interface Contact {
     source?: string | null;
     created_at?: number | null;
     notes_log?: Array<{ id: string; ts: number; text: string; source?: string }>;
-    events?: Array<{ id: string; ts: number; when_ts: number; title: string; source?: string; note?: string | null }>;
+    /** Legacy: a book that never opened a calendar still carries its events here. The overview's `events` is the truth. */
+    events?: ContactEvent[];
     /** Per-channel link written by the channel sync (WhatsApp today): the name shown there and the newest message time. */
     links?: Record<string, { endpoint?: string; display_name?: string; last_seen_ts?: number | null }>;
 }
@@ -63,12 +78,18 @@ export interface ContactsDashboardProps {
     onClose: () => void;
     /** Jump into the channel dashboard with this chat selected; the id is the backend endpoint value. */
     onOpenChat?: (channel: 'whatsapp' | 'telegram', chatId: string) => void;
+    /** Open the calendar window on the day of this appointment (unix seconds). */
+    onOpenCalendar?: (ts: number) => void;
 }
 
 interface Overview {
     status?: string | null;
     last_contact?: { channel: string; ts: number } | null;
-    calendar_events?: Array<{ id?: string; summary?: string; start?: string; htmlLink?: string; webLink?: string }>;
+    /** The contact's appointments (all of them; `upcoming_events` the ones ahead), from the calendar store. */
+    events?: ContactEvent[];
+    upcoming_events?: ContactEvent[];
+    /** Calendar events that mention the contact without being linked to it. */
+    calendar_events?: Array<{ id?: string; summary?: string; start?: string; link?: string | null; all_day?: boolean; htmlLink?: string; webLink?: string }>;
     stats?: { messages: number; from_agent: number; first_ts: number | null; last_ts: number | null; by_channel?: Record<string, { count: number; out_count: number; first_ts: number | null; last_ts: number | null }> } | null;
     endpoints?: { whatsapp?: string[]; telegram?: string[]; discord?: string[]; email?: string[] };
     created?: { ts: number; source: string } | null;
@@ -134,6 +155,7 @@ const CARD_HEAD = 'flex items-center justify-between gap-2 px-3.5 py-3 border-b 
 const CARD_TITLE = 'text-xs font-semibold uppercase tracking-wide text-gray-600';
 const KV = 'flex items-center justify-between gap-2 py-1.5 border-b border-gray-200 last:border-b-0 text-[13px]';
 const EMPTY_FIGURE = '-';
+const REMINDER_CHOICES = [0, 5, 15, 30, 60, 1440];
 
 function hashIndex(s: string, n: number): number {
     let h = 0;
@@ -224,7 +246,7 @@ function ContactAvatar({ name, size }: { name: string; size: 'sm' | 'lg' }) {
     );
 }
 
-export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: ContactsDashboardProps) {
+export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenCalendar }: ContactsDashboardProps) {
     const tc = useTranslations('settings.contactsDashboard');
     const tw = useTranslations('settings.whatsappDashboard');
     const td = useTranslations('settings.channelDashboard');
@@ -257,6 +279,8 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
     const [noteText, setNoteText] = useState('');
     const [eventTitle, setEventTitle] = useState('');
     const [eventWhen, setEventWhen] = useState('');
+    // 'default' leaves the reminder to the user's calendar setting; otherwise minutes before the start.
+    const [eventReminder, setEventReminder] = useState<string>('default');
     const [showEventForm, setShowEventForm] = useState(false);
     const [statusEditing, setStatusEditing] = useState(false);
     const [statusDraft, setStatusDraft] = useState('');
@@ -439,11 +463,12 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
         try {
             const res = await fetch(api(`api/contacts/${encodeURIComponent(id)}/events`), {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-                body: JSON.stringify({ title, when: eventWhen.replace('T', ' ') }),
+                body: JSON.stringify({ title, when: eventWhen.replace('T', ' '), ...(eventReminder === 'default' ? {} : { reminder_minutes: Number(eventReminder) }) }),
             });
             if (!res.ok) { setFileError(tc('saveFailed')); return; }
             setEventTitle('');
             setEventWhen('');
+            setEventReminder('default');
             setShowEventForm(false);
             await refreshRecord();
         } catch { setFileError(tc('saveFailed')); }
@@ -606,6 +631,12 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
     // rung counts as on screen only while that record is still in the list.
     const detailShown = !!selectedContactId && contacts.some(c => c.id === selectedContactId);
     const menuShown = menuOpen && detailShown;
+    const reminderLabel = (minutes: number) => {
+        if (minutes === 0) return tc('reminderNone');
+        if (minutes === 60) return tc('reminderHour');
+        if (minutes === 1440) return tc('reminderDay');
+        return tc('reminderMinutes', { count: minutes });
+    };
     const editorShown = (statusEditing || tagEditing || showEventForm) && detailShown;
     const cancelInlineEditors = () => {
         editorCancelled.current = true;
@@ -893,8 +924,10 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
     const renderDetail = (c: Contact) => {
         const channels = contactChannels(c);
         const now = Date.now() / 1000;
-        const upcoming = (c.events || []).filter(e => Number(e.when_ts) >= now).sort((a, b) => a.when_ts - b.when_ts);
-        const past = (c.events || []).filter(e => now > Number(e.when_ts)).slice(-3);
+        // The appointments live in the calendar; the record's own list is the legacy shape of a book that never opened one.
+        const allEvents = overview?.events ?? (c.events || []);
+        const upcoming = allEvents.filter(e => Number(e.when_ts) >= now).sort((a, b) => a.when_ts - b.when_ts);
+        const past = allEvents.filter(e => now > Number(e.when_ts)).slice(-3);
         const cal = overview?.calendar_events || [];
         const stats = overview?.stats ?? null;
         const endpoints = overview?.endpoints || {};
@@ -1141,7 +1174,17 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
                                                 <div className="flex-1 min-w-0 text-[13px]">
                                                     <div className="text-gray-900 truncate">{tc('withTime', { title: e.title, time: fmtTime(e.when_ts) })}</div>
                                                     <small className="block text-[11.5px] text-gray-500 truncate">{e.note ? e.note : tc('ownEvent')}</small>
+                                                    {(e.reminder_minutes || e.account_id) && (
+                                                        <small className="flex items-center gap-2 text-[11px] text-gray-500 truncate">
+                                                            {e.reminder_minutes ? <span className="inline-flex items-center gap-1"><Bell className="w-3 h-3" />{reminderLabel(e.reminder_minutes)}</span> : null}
+                                                            {e.account_id ? <span className="truncate">{tc('mirroredInto', { account: e.account_id })}</span> : null}
+                                                        </small>
+                                                    )}
                                                 </div>
+                                                {onOpenCalendar && (
+                                                    <button type="button" onClick={() => onOpenCalendar(e.when_ts)} title={tc('openInVafCalendar')}
+                                                        className="p-1 rounded text-gray-400 hover:text-gray-900 shrink-0"><CalendarDays className="w-3.5 h-3.5" /></button>
+                                                )}
                                                 <button type="button" onClick={() => setConfirm({ kind: 'removeEvent', contactId: c.id, eventId: e.id, title: e.title })} title={tc('remove')}
                                                     className="p-1 rounded text-gray-400 hover:text-red-600 shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
                                             </div>
@@ -1163,8 +1206,8 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
                                                     </div>
                                                     <small className="block text-[11.5px] text-gray-500">{tc('fromCalendar')}</small>
                                                 </div>
-                                                {(e.htmlLink || e.webLink) && (
-                                                    <a href={e.htmlLink || e.webLink} target="_blank" rel="noopener noreferrer" className="p-1 text-gray-400 hover:text-gray-900 shrink-0">
+                                                {(e.link || e.htmlLink || e.webLink) && (
+                                                    <a href={e.link || e.htmlLink || e.webLink || undefined} target="_blank" rel="noopener noreferrer" className="p-1 text-gray-400 hover:text-gray-900 shrink-0">
                                                         <ArrowUpRight className="w-3.5 h-3.5" />
                                                     </a>
                                                 )}
@@ -1178,6 +1221,10 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
                                                 className={cn(INPUT, 'flex-1 min-w-[8rem]')} />
                                             <input type="datetime-local" value={eventWhen} onChange={e => setEventWhen(e.target.value)} aria-label={tc('eventWhenPlaceholder')}
                                                 className={cn(INPUT, 'min-w-0')} />
+                                            <select value={eventReminder} onChange={e => setEventReminder(e.target.value)} aria-label={tc('reminderDefault')} className={cn(INPUT, 'min-w-0')}>
+                                                <option value="default">{tc('reminderDefault')}</option>
+                                                {REMINDER_CHOICES.map(m => <option key={m} value={String(m)}>{reminderLabel(m)}</option>)}
+                                            </select>
                                             <button type="button" onClick={() => handleAddEvent(c.id)} disabled={!eventTitle.trim() || !eventWhen}
                                                 className={cn('px-3 py-1.5 rounded-lg text-sm disabled:opacity-50', PRIMARY)}>{tc('addEvent')}</button>
                                         </div>

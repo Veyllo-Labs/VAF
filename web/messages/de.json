@@ -1155,7 +1155,14 @@
       "emptyTitle": "Wähle einen Kontakt",
       "emptyBody": "Links steht die Liste. Ein neuer Kontakt entsteht oben über „Kontakt anlegen“.",
       "pastEventsCount": "Vergangen ({count})",
-      "withTime": "{title}, {time}"
+      "withTime": "{title}, {time}",
+      "reminderDefault": "Standard-Erinnerung",
+      "reminderNone": "Keine Erinnerung",
+      "reminderMinutes": "{count} Min. vorher",
+      "reminderHour": "1 Std. vorher",
+      "reminderDay": "1 Tag vorher",
+      "openInVafCalendar": "Im Kalender öffnen",
+      "mirroredInto": "Auch in {account}"
     },
     "persona": {
       "identity": "Identität",

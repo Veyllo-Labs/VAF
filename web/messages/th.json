@@ -1155,7 +1155,14 @@
       "emptyTitle": "เลือกผู้ติดต่อ",
       "emptyBody": "รายชื่ออยู่ทางซ้าย สร้างผู้ติดต่อใหม่ได้จาก “เพิ่มผู้ติดต่อ” ด้านบน",
       "pastEventsCount": "ผ่านไปแล้ว ({count})",
-      "withTime": "{title}, {time}"
+      "withTime": "{title}, {time}",
+      "reminderDefault": "การเตือนเริ่มต้น",
+      "reminderNone": "ไม่เตือน",
+      "reminderMinutes": "ล่วงหน้า {count} นาที",
+      "reminderHour": "ล่วงหน้า 1 ชั่วโมง",
+      "reminderDay": "ล่วงหน้า 1 วัน",
+      "openInVafCalendar": "เปิดในปฏิทิน",
+      "mirroredInto": "อยู่ใน {account} ด้วย"
     },
     "persona": {
       "identity": "ข้อมูลพื้นฐาน",

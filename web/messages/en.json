@@ -1155,7 +1155,14 @@
       "emptyTitle": "Pick a contact",
       "emptyBody": "The list is on the left. A new contact starts with “Add contact” at the top.",
       "pastEventsCount": "Past ({count})",
-      "withTime": "{title}, {time}"
+      "withTime": "{title}, {time}",
+      "reminderDefault": "Default reminder",
+      "reminderNone": "No reminder",
+      "reminderMinutes": "{count} min before",
+      "reminderHour": "1 hour before",
+      "reminderDay": "1 day before",
+      "openInVafCalendar": "Open in the calendar",
+      "mirroredInto": "Also in {account}"
     },
     "persona": {
       "identity": "Identity",

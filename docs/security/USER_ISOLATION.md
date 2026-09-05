@@ -270,9 +270,11 @@ CREATE POLICY user_isolation_memories ON memories
 User-scoped data stores use UUID-based directories. This is the preferred path for all data isolation:
 
 ```
-~/.vaf/scopes/<user_scope_id>/
+<data_dir>/scopes/<user_scope_id>/     # data_dir = Platform.data_dir(): ~/.local/share/vaf on Linux, see PLATFORM docs
 ├── email_sync.db              # Synced email messages, legacy store (SQLite)
 ├── mail.db                    # Synced email messages, v2 mail store (SQLite; MailStore, see EMAIL_CLIENT.md)
+├── calendar.db                # The user's calendar (SQLite; CalendarStore, see CALENDAR_INTEGRATION.md): events,
+│                              # the per-account sync state, the push target and default reminder
 ├── contacts.json              # User's contact list: per contact the channels, personal file, status, company, role, tags,
 │                              # source and created_at, dated notes, events and channel links. The contact timeline and
 │                              # key figures read only this same user's message and mail stores, keyed by the same scope
@@ -281,7 +283,7 @@ User-scoped data stores use UUID-based directories. This is the preferred path f
 └── ...
 ```
 
-The local admin's data remains at the legacy root paths (`~/.vaf/email_sync.db`, `~/.vaf/contacts.json`, `~/.vaf/channel_messages.db`) since `local_admin_scope_id` maps to the global location. That root file is a read candidate for the local admin ONLY: `contacts_store._contacts_path_candidates` walks a caller's own scope and username paths and appends `data_dir/contacts.json` only when the caller is the local admin (by scope when a scope is given, by username otherwise). A tenant with no or an empty contacts file therefore reads an empty book; it never falls through to the admin's, and no write copies the admin's book into the tenant's path. The bulk routes ignore ids outside the caller's own file for the same reason. The WhatsApp bridge's inbound allow list follows the same rule: `_get_allowed_phones_for_user` reads the caller's scope and legacy username file and never adds the admin's scope on top (it did, so the admin's Front Office contacts could write to every user's agent number), and the reply gate resolves a missing scope from the account name rather than defaulting to the admin's.
+The local admin's data remains at the legacy root paths (`~/.vaf/email_sync.db`, `~/.vaf/contacts.json`, `~/.vaf/channel_messages.db`) since `local_admin_scope_id` maps to the global location. The two newer stores do not follow that rule: `mail.db` and `calendar.db` give the local admin a scope directory like everyone else (`MailStore`, `CalendarStore`), so a store is always keyed by an explicit scope and fails closed without one; the calendar's sync supervisor collects accounts per scope from `email_config` and `email_config_by_scope`, never from the legacy `email_config_by_user` lane. That root file is a read candidate for the local admin ONLY: `contacts_store._contacts_path_candidates` walks a caller's own scope and username paths and appends `data_dir/contacts.json` only when the caller is the local admin (by scope when a scope is given, by username otherwise). A tenant with no or an empty contacts file therefore reads an empty book; it never falls through to the admin's, and no write copies the admin's book into the tenant's path. The bulk routes ignore ids outside the caller's own file for the same reason. The WhatsApp bridge's inbound allow list follows the same rule: `_get_allowed_phones_for_user` reads the caller's scope and legacy username file and never adds the admin's scope on top (it did, so the admin's Front Office contacts could write to every user's agent number), and the reply gate resolves a missing scope from the account name rather than defaulting to the admin's.
 
 ### User workspace (legacy)
 

@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""The contact's file grows into a small CRM: a free status, dated notes, dated events, and
-a summary (last contact over every channel link, next event, newest notes). Everything
-lives inside the contact record, so it is isolated exactly like the record: one file per
-username or scope, and nothing here reads across files."""
+"""The contact's file grows into a small CRM: a free status, dated notes, dated appointments,
+and a summary (last contact over every channel link, next event, newest notes). Status and
+notes live inside the contact record; the appointments are events of the user's calendar
+(vaf/core/calendar_store.py) linked to the contact, read back through contact_events. Both
+are isolated exactly like the record: one file or store per username or scope, and nothing
+here reads across them."""
 import asyncio
 from types import SimpleNamespace
 
@@ -40,7 +42,10 @@ def test_status_notes_events_and_summary(scratch):
     cs.sync_channel_contacts("whatsapp", [{"endpoint": "+491700000042", "display_name": "Dana New", "last_seen_ts": 2000.0}], "alice", user_scope_id=SCOPE_A)
 
     contact = cs.get_contact_by_id(cid, "alice", user_scope_id=SCOPE_A)
-    s = cs.contact_summary(contact, now_ts=3_000_000_000.0)
+    assert contact.get("events", []) == []                                            # the record holds none: the calendar does
+    events = cs.contact_events(contact, "alice", user_scope_id=SCOPE_A)
+    assert [e["title"] for e in events] == ["Kickoff", "Meeting", "Review"] and events[1]["source"] == "user"
+    s = cs.contact_summary(contact, now_ts=3_000_000_000.0, events=events)
     assert s["status"] == "warm friend"
     assert s["last_contact"] == {"channel": "whatsapp", "ts": 2000.0}
     assert s["next_event"]["id"] == ev_next["id"] and s["next_event"]["note"] == "bring the offer"
@@ -51,8 +56,13 @@ def test_status_notes_events_and_summary(scratch):
     assert cs.delete_contact_note(cid, n1["id"], "alice", user_scope_id=SCOPE_A)
     assert not cs.delete_contact_note(cid, n1["id"], "alice", user_scope_id=SCOPE_A)
     assert cs.delete_contact_event(cid, ev_past["id"], "alice", user_scope_id=SCOPE_A)
+    assert not cs.delete_contact_event(cid, ev_past["id"], "alice", user_scope_id=SCOPE_A)
     contact = cs.get_contact_by_id(cid, "alice", user_scope_id=SCOPE_A)
-    assert len(contact["notes_log"]) == 1 and len(contact["events"]) == 2
+    assert len(contact["notes_log"]) == 1 and len(cs.contact_events(contact, "alice", user_scope_id=SCOPE_A)) == 2
+    # the appointment is a calendar event linked to the contact, with the user's default reminder
+    from vaf.core import calendar_store as cal
+    row = cal.store_for("alice", SCOPE_A).get_event(ev_next["id"])
+    assert row["contact_ids"] == [cid] and row["description"] == "bring the offer" and row["reminder_minutes"] == cal.DEFAULT_REMINDER_MINUTES
 
 
 def test_notes_and_events_never_cross_a_scope_or_a_username(scratch):
@@ -68,7 +78,11 @@ def test_notes_and_events_never_cross_a_scope_or_a_username(scratch):
     assert cs.contact_status_values("bob", user_scope_id=SCOPE_B) == list(cs.CONTACT_STATUS_DEFAULTS)
     # And A still has everything.
     back = cs.get_contact_by_id(a["id"], "alice", user_scope_id=SCOPE_A)
-    assert [n["text"] for n in back["notes_log"]] == ["private to A"] and len(back["events"]) == 1
+    assert [n["text"] for n in back["notes_log"]] == ["private to A"] and len(cs.contact_events(back, "alice", SCOPE_A)) == 1
+    # and the leak attempt created no calendar for B, let alone an event in A's
+    from vaf.core import calendar_store as cal
+    assert not cal.CalendarStore.exists(SCOPE_B)
+    assert not cs.delete_contact_event(a["id"], cs.contact_events(back, "alice", SCOPE_A)[0]["id"], "bob", user_scope_id=SCOPE_B)
 
 
 def test_update_contact_tool_sets_status_and_appends_notes_and_events_in_the_callers_scope(scratch):
@@ -81,7 +95,8 @@ def test_update_contact_tool_sets_status_and_appends_notes_and_events_in_the_cal
     back = cs.get_contact_by_id(c["id"], "alice", user_scope_id=SCOPE_A)
     assert back["status"] == "customer"
     assert back["notes_log"][0]["text"] == "signed the offer" and back["notes_log"][0]["source"] == "agent"
-    assert back["events"][0]["title"] == "Onboarding call" and back["events"][0]["when_ts"] > 4_000_000_000
+    events = cs.contact_events(back, "alice", SCOPE_A)
+    assert events[0]["title"] == "Onboarding call" and events[0]["when_ts"] > 4_000_000_000 and events[0]["source"] == "agent"
     assert "add_event_when is required" in UpdateContactTool().run(contact_id=c["id"], username="alice", user_scope_id=SCOPE_A, add_event_title="x")
     # The other scope's tool call cannot touch it.
     assert "No contact found" in UpdateContactTool().run(contact_id=c["id"], username="bob", user_scope_id=SCOPE_B, status="archived")

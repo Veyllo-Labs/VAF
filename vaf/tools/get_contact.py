@@ -124,8 +124,8 @@ class GetContactTool(BaseTool):
             pass
         try:
             from datetime import datetime
-            from vaf.core.contacts_store import contact_summary
-            summary = contact_summary(contact)
+            from vaf.core.contacts_store import contact_events, contact_summary
+            summary = contact_summary(contact, events=contact_events(contact, username, user_scope_id))
             if summary.get("status"):
                 parts.append(f"Status: {summary['status']}")
             lc = summary.get("last_contact")

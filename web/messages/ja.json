@@ -1155,7 +1155,14 @@
       "emptyTitle": "連絡先を選択してください",
       "emptyBody": "左側に一覧があります。新しい連絡先は上の「連絡先を追加」から作成できます。",
       "pastEventsCount": "過去（{count}）",
-      "withTime": "{title}、{time}"
+      "withTime": "{title}、{time}",
+      "reminderDefault": "標準のリマインダー",
+      "reminderNone": "リマインダーなし",
+      "reminderMinutes": "{count}分前",
+      "reminderHour": "1時間前",
+      "reminderDay": "1日前",
+      "openInVafCalendar": "カレンダーで開く",
+      "mirroredInto": "{account}にも保存"
     },
     "persona": {
       "identity": "基本情報",

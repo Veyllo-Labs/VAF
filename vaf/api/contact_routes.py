@@ -184,6 +184,8 @@ class EventCreate(BaseModel):
     title: str
     when: str          # ISO 8601 or "YYYY-MM-DD HH:MM" in the user's timezone
     note: Optional[str] = None
+    reminder_minutes: Optional[int] = None    # None: the user's calendar default; 0: none
+    mirror: bool = True                        # False keeps the event out of the connected calendar
 
 
 def _parse_when(when: str, username: str) -> float:
@@ -239,7 +241,7 @@ async def post_contact_event(contact_id: str, request: Request, body: EventCreat
     user_info = get_current_vaf_user(request)
     when_ts = _parse_when(body.when, user_info["username"])
     event = add_contact_event(contact_id, body.title, when_ts, user_info["username"], user_scope_id=user_info.get("user_scope_id"),
-                              source="user", note=body.note)
+                              source="user", note=body.note, reminder_minutes=body.reminder_minutes, mirror=body.mirror)
     if not event:
         raise HTTPException(status_code=404, detail="Contact not found or empty title")
     return event
@@ -256,17 +258,20 @@ async def remove_contact_event(contact_id: str, event_id: str, request: Request)
 
 @router.get("/{contact_id}/overview")
 async def get_contact_overview(contact_id: str, request: Request) -> Dict[str, Any]:
-    """Status, last contact, upcoming stored events, recent notes, plus the calendar events
-    that mention this contact (live, best-effort)."""
+    """Status, last contact, the contact's appointments (the calendar's events linked to it:
+    `events` all of them, `upcoming_events` and `next_event` the ones ahead), recent notes,
+    plus the calendar events that mention this contact without being linked (best-effort)."""
     import asyncio
-    from vaf.core.contacts_store import contact_calendar_events, contact_summary
+    from vaf.core.contacts_store import contact_calendar_events, contact_events, contact_summary
     user_info = get_current_vaf_user(request)
     username = user_info["username"]
     user_scope_id = user_info.get("user_scope_id")
     contact = get_contact_by_id(contact_id, username, user_scope_id=user_scope_id)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
-    summary = contact_summary(contact)
+    events = contact_events(contact, username, user_scope_id)
+    summary = contact_summary(contact, events=events)
+    summary["events"] = events
     try:
         summary["calendar_events"] = await asyncio.wait_for(
             asyncio.to_thread(contact_calendar_events, contact, username, user_scope_id, 30), timeout=6.0)

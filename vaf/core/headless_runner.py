@@ -1443,8 +1443,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             # record (contact_self_view): channels, language, address form,
                             # birthday, their own upcoming appointments. Never the owner's
                             # notes about them, never another contact.
-                            from vaf.core.contacts_store import contact_self_view, format_contact_self_view
-                            view = contact_self_view(contact)
+                            from vaf.core.contacts_store import contact_events, contact_self_view, format_contact_self_view
+                            # contact_events reads the calendar only when one exists on disk (a
+                            # glance never creates a store for a message from a contact).
+                            view = contact_self_view(contact, events=contact_events(contact, _username, _user_scope))
                             contact_block = format_contact_self_view(view)
                             if view.get("preferred_language"):
                                 pl_code = (view["preferred_language"] or "").strip().lower()[:2]

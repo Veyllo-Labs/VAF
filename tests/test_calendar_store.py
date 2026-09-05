@@ -246,12 +246,24 @@ def test_due_reminders_and_marks(data_dir):
 
 # ── the contact-book migration ───────────────────────────────────────────────────
 
+def _seed_legacy_event(username, scope, contact_id, title, when_ts, *, note=None, source="user", event_id="legacy-1"):
+    """A record the way the contact book wrote it before the calendar existed."""
+    from vaf.core import contacts_store as cs
+    contacts = cs._load_all(username, scope)
+    for c in contacts:
+        if c["id"] == contact_id:
+            c.setdefault("events", []).append({"id": event_id, "ts": 1.0, "when_ts": when_ts, "title": title,
+                                               "source": source, "note": note})
+    cs._save_all(contacts, username, scope)
+    return {"id": event_id}
+
+
 def test_contact_events_move_into_the_calendar_once(data_dir):
     from vaf.core import contacts_store as cs
     c = cs.create_contact("Dana New", "alice", user_scope_id=SCOPE_A)
-    ev = cs.add_contact_event(c["id"], "Kickoff", T0 + 86400, "alice", user_scope_id=SCOPE_A, note="bring the deck", source="agent")
-    if not (cs.get_contact_by_id(c["id"], "alice", user_scope_id=SCOPE_A).get("events")):
-        pytest.skip("events already live in the calendar; the wrapper is in place")
+    ev = _seed_legacy_event("alice", SCOPE_A, c["id"], "Kickoff", T0 + 86400, note="bring the deck", source="agent")
+    assert len(cs.get_contact_by_id(c["id"], "alice", user_scope_id=SCOPE_A)["events"]) == 1
+    assert cs.contact_events(cs.get_contact_by_id(c["id"], "alice", user_scope_id=SCOPE_A), "alice", SCOPE_A)[0]["id"] == ev["id"]  # readable before the move
     s = _store(data_dir)
     moved = s.events_for_contact(c["id"])
     assert len(moved) == 1 and moved[0]["title"] == "Kickoff" and moved[0]["description"] == "bring the deck"
@@ -275,9 +287,7 @@ def test_the_local_admins_book_is_migrated_from_the_root_path(data_dir):
     from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
     admin_user, admin_scope = get_local_admin_username(), get_local_admin_scope_id()
     c = cs.create_contact("Admin Friend", admin_user, user_scope_id=admin_scope)
-    cs.add_contact_event(c["id"], "Admin meeting", T0 + 3600, admin_user, user_scope_id=admin_scope)
-    if not (cs.get_contact_by_id(c["id"], admin_user, user_scope_id=admin_scope).get("events")):
-        pytest.skip("events already live in the calendar; the wrapper is in place")
+    _seed_legacy_event(admin_user, admin_scope, c["id"], "Admin meeting", T0 + 3600)
     assert (data_dir / "contacts.json").exists()
     s = _store(data_dir, admin_scope)
     assert [e["title"] for e in s.events_for_contact(c["id"])] == ["Admin meeting"]
@@ -305,3 +315,30 @@ def test_a_row_waiting_for_its_deletion_is_gone_for_readers(data_dir):
     assert s.count_events() == 0 and s.count_events(include_cancelled=True) == 0
     s.add_event(title="Live", start_ts=T0)
     assert s.count_events() == 1
+
+
+def test_a_contact_event_added_after_the_move_is_a_calendar_event(data_dir, monkeypatch):
+    """The wrapper: add_contact_event writes the calendar (creating it on first use, which
+    moves the book's legacy events), links the contact, takes the user's default reminder,
+    and asks for the mirror push; delete_contact_event removes it again."""
+    import vaf.core.calendar_sync as sync
+    from vaf.core import contacts_store as cs
+    pushes = []
+    monkeypatch.setattr(sync, "after_local_change", lambda scope, account_id=None: pushes.append((scope, account_id)) or False)
+    c = cs.create_contact("Dana New", "alice", user_scope_id=SCOPE_A)
+    _seed_legacy_event("alice", SCOPE_A, c["id"], "Old", T0 - 86400)
+    ev = cs.add_contact_event(c["id"], "Kickoff", T0 + 86400, "alice", user_scope_id=SCOPE_A, note="bring the deck", source="agent")
+    assert ev and ev["when_ts"] == T0 + 86400 and ev["source"] == "agent" and ev["note"] == "bring the deck"
+    assert ev["reminder_minutes"] == cal.DEFAULT_REMINDER_MINUTES and ev["account_id"] is None      # no account configured here
+    assert pushes == [(SCOPE_A, None)]
+    s = _store(data_dir)
+    assert [e["title"] for e in s.events_for_contact(c["id"])] == ["Old", "Kickoff"]                # the legacy one moved first
+    assert cs.get_contact_by_id(c["id"], "alice", user_scope_id=SCOPE_A)["events"] == []
+    assert cs.add_contact_event(c["id"], "x", T0, "bob", user_scope_id=SCOPE_B) is None             # not bob's contact
+    assert cs.delete_contact_event(c["id"], ev["id"], "alice", user_scope_id=SCOPE_A) is True
+    assert cs.delete_contact_event(c["id"], ev["id"], "alice", user_scope_id=SCOPE_A) is False
+    assert [e["title"] for e in s.events_for_contact(c["id"])] == ["Old"]
+    # an event of the same calendar that is not this contact's cannot be removed through the contact
+    other = s.add_event(title="Not linked", start_ts=T0)
+    assert cs.delete_contact_event(c["id"], other["id"], "alice", user_scope_id=SCOPE_A) is False
+    assert s.get_event(other["id"]) is not None

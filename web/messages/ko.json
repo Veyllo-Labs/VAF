@@ -1155,7 +1155,14 @@
       "emptyTitle": "연락처를 선택하세요",
       "emptyBody": "왼쪽에 목록이 있어요. 새 연락처는 위의 “연락처 추가”로 만들어요.",
       "pastEventsCount": "지난 일정 ({count})",
-      "withTime": "{title}, {time}"
+      "withTime": "{title}, {time}",
+      "reminderDefault": "기본 알림",
+      "reminderNone": "알림 없음",
+      "reminderMinutes": "{count}분 전",
+      "reminderHour": "1시간 전",
+      "reminderDay": "1일 전",
+      "openInVafCalendar": "캘린더에서 열기",
+      "mirroredInto": "{account}에도 저장"
     },
     "persona": {
       "identity": "기본 정보",

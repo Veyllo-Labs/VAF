@@ -1155,7 +1155,14 @@
       "emptyTitle": "Bir kişi seç",
       "emptyBody": "Liste solda. Yeni bir kişi üstteki “Kişi ekle” ile oluşturulur.",
       "pastEventsCount": "Geçmiş ({count})",
-      "withTime": "{title}, {time}"
+      "withTime": "{title}, {time}",
+      "reminderDefault": "Varsayılan hatırlatma",
+      "reminderNone": "Hatırlatma yok",
+      "reminderMinutes": "{count} dk önce",
+      "reminderHour": "1 saat önce",
+      "reminderDay": "1 gün önce",
+      "openInVafCalendar": "Takvimde aç",
+      "mirroredInto": "Ayrıca {account} içinde"
     },
     "persona": {
       "identity": "Kimlik",

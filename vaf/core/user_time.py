@@ -149,18 +149,37 @@ def format_user_datetime(
     username: Optional[str] = None,
     identity: Optional[Dict[str, Any]] = None,
     language: Optional[str] = None,
+    seconds: bool = True,
 ) -> str:
     """Format `dt` (default: now in the user's tz) per the user's date/time preferences.
 
-    Returns just the "<date> <time>" string (no weekday/sentence wrapper — callers add that).
+    Returns just the "<date> <time>" string (no weekday/sentence wrapper; callers add that).
+    `seconds=False` drops the seconds field, the shape appointments and reminders read in.
     """
     ui = _load_identity(username, identity)
     if dt is None:
         dt = user_now(username, ui)
-    out = dt.strftime(user_date_time_format(ui, language))
+    pattern = user_date_time_format(ui, language)
+    if not seconds:
+        pattern = pattern.replace(":%S", "")
+    out = dt.strftime(pattern)
     if "{ampm}" in out:  # locale-independent AM/PM (see user_date_time_format)
         out = out.replace("{ampm}", "AM" if dt.hour < 12 else "PM")
     return out
+
+
+def format_user_date(
+    dt: Optional[datetime] = None,
+    *,
+    username: Optional[str] = None,
+    identity: Optional[Dict[str, Any]] = None,
+    language: Optional[str] = None,
+) -> str:
+    """The date half of format_user_datetime, for all-day events and day headings."""
+    ui = _load_identity(username, identity)
+    if dt is None:
+        dt = user_now(username, ui)
+    return dt.strftime(user_date_time_format(ui, language).split(" ", 1)[0])
 
 
 def user_weekday_name(dt: datetime, language: Optional[str] = None) -> str:

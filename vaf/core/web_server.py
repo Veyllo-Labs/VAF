@@ -1740,13 +1740,28 @@ async def startup_event():
     
     # Mail sync (EMAIL_CLIENT.md): the engine supervisor is the ONLY mail sync
     # lane. The 30-minute legacy auto-sync loop that used to run beside it was
-    # removed with the legacy stack.
+    # removed with the legacy stack. Calendar sync (CALENDAR_INTEGRATION.md) is
+    # the second supervisor on the same base. Both start once per process:
+    # start_supervisor() finds the live task when this startup event runs again
+    # for the second uvicorn server (8001 + 8005 in TLS mode).
     try:
+        from vaf.core.sync_supervisor import start_supervisor
         from vaf.mail.supervisor import MailSyncSupervisor
-        asyncio.create_task(MailSyncSupervisor().run())
-        log("WebServer", "Mail v2 sync supervisor task started (flag-gated)")
+        if start_supervisor(MailSyncSupervisor()):
+            log("WebServer", "Mail v2 sync supervisor task started")
+        else:
+            log("WebServer", "Mail v2 sync supervisor already running (other server lifespan)")
     except Exception as e:
         log("WebServer", f"Mail v2 supervisor start warning: {e}")
+    try:
+        from vaf.core.calendar_sync import CalendarSyncSupervisor
+        from vaf.core.sync_supervisor import start_supervisor
+        if start_supervisor(CalendarSyncSupervisor()):
+            log("WebServer", "Calendar sync supervisor task started")
+        else:
+            log("WebServer", "Calendar sync supervisor already running (other server lifespan)")
+    except Exception as e:
+        log("WebServer", f"Calendar sync supervisor start warning: {e}")
 
     # Cloud storage background sync
     if Config.get("cloud_sync_enabled", False):
@@ -1765,7 +1780,6 @@ async def startup_event():
             log("WebServer", "Thinking mode background loop started")
         except Exception as e:
             log("WebServer", f"Thinking mode start error: {e}")
-    log("WebServer", "Email auto-sync background task started (every 30 min)")
 
     # Start the process-wide automation scheduler for existing timed automations.
     try:

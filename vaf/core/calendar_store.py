@@ -120,6 +120,18 @@ class CalendarStore:
             base_dir = Platform.data_dir()
         return (Path(base_dir) / "scopes" / scope / DB_NAME).exists()
 
+    @staticmethod
+    def scopes_with_store(base_dir: Optional[Path] = None) -> List[str]:
+        """Every scope that has a calendar on disk, for the process-wide passes (the reminder
+        tick, the account reconciliation) that must not create one anywhere."""
+        if base_dir is None:
+            from vaf.core.platform import Platform
+            base_dir = Platform.data_dir()
+        root = Path(base_dir) / "scopes"
+        if not root.is_dir():
+            return []
+        return sorted(p.parent.name for p in root.glob(f"*/{DB_NAME}") if p.is_file())
+
     # ── connection / schema ─────────────────────────────────────────────────
 
     def _conn(self) -> sqlite3.Connection:

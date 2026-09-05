@@ -44,6 +44,13 @@ class AuthError(Exception):
     """The provider answered 401: the token is dead and a refresh did not help."""
 
 
+class ProviderError(Exception):
+    """A page or a write failed for a reason other than authentication (status, transport).
+    Raised only in strict mode (the sync engine): a caller that is about to treat "not
+    returned" as "deleted" must know the listing was complete. The tools keep the quiet
+    default and get the items that arrived."""
+
+
 def _check_auth(response: Any, what: str) -> None:
     if getattr(response, "status_code", None) == 401:
         raise AuthError(f"{what}: 401 unauthorized")
@@ -170,10 +177,12 @@ def _google_list_events(
     time_max: str,
     calendar_id: str = GOOGLE_PRIMARY_CALENDAR,
     max_results: int = 250,
+    strict: bool = False,
 ) -> List[Dict[str, Any]]:
     """Every instance in the window, across pages. Instances of a series come as single
     events (singleEvents) and cancelled ones are included (showDeleted) so a pull can mirror
-    a deletion instead of silently keeping the row."""
+    a deletion instead of silently keeping the row. `strict` raises ProviderError on a
+    failed page instead of returning the partial list."""
     url = f"{GOOGLE_CALENDAR_BASE}/calendars/{calendar_id}/events"
     params: Dict[str, Any] = {
         "timeMin": _ensure_rfc3339(time_min),
@@ -191,6 +200,8 @@ def _google_list_events(
             _check_auth(r, "Google Calendar list")
             if r.status_code != 200:
                 logger.warning("Google Calendar list events failed: %s %s", r.status_code, r.text[:300])
+                if strict:
+                    raise ProviderError(f"Google Calendar list failed: {r.status_code}")
                 break
             data = r.json()
             items.extend(data.get("items") or [])
@@ -198,10 +209,15 @@ def _google_list_events(
             if not token:
                 break
             params["pageToken"] = token
-    except AuthError:
+        else:
+            if strict:
+                raise ProviderError(f"Google Calendar list exceeded {_MAX_PAGES} pages")
+    except (AuthError, ProviderError):
         raise
     except Exception as e:
         logger.warning("Google Calendar list error: %s", e)
+        if strict:
+            raise ProviderError(f"Google Calendar list error: {e}") from e
     return items
 
 
@@ -318,9 +334,11 @@ def _ms_list_events(
     time_max: str,
     calendar_id: Optional[str] = None,
     max_results: int = 250,
+    strict: bool = False,
 ) -> List[Dict[str, Any]]:
     """Every instance in the window (calendarView expands series), across pages via
-    @odata.nextLink. Times are requested in UTC so the wall clock is unambiguous."""
+    @odata.nextLink. Times are requested in UTC so the wall clock is unambiguous.
+    `strict` raises ProviderError on a failed page instead of returning the partial list."""
     if calendar_id:
         path = f"{MS_GRAPH_BASE}/calendars/{calendar_id}/calendarView"
     else:
@@ -339,6 +357,8 @@ def _ms_list_events(
             _check_auth(r, "Microsoft Calendar list")
             if r.status_code != 200:
                 logger.warning("Microsoft Calendar list events failed: %s %s", r.status_code, r.text[:300])
+                if strict:
+                    raise ProviderError(f"Microsoft Calendar list failed: {r.status_code}")
                 break
             data = r.json()
             items.extend(data.get("value") or [])
@@ -346,10 +366,15 @@ def _ms_list_events(
             if not nxt:
                 break
             url, params = nxt, None       # the next link carries its own query
-    except AuthError:
+        else:
+            if strict:
+                raise ProviderError(f"Microsoft Calendar list exceeded {_MAX_PAGES} pages")
+    except (AuthError, ProviderError):
         raise
     except Exception as e:
         logger.warning("Microsoft Calendar list error: %s", e)
+        if strict:
+            raise ProviderError(f"Microsoft Calendar list error: {e}") from e
     return items
 
 
@@ -537,21 +562,28 @@ def list_events(
     calendar_id: Optional[str] = None,
     username: Optional[str] = None,
     max_results: int = 250,
+    strict: bool = False,
 ) -> List[Dict[str, Any]]:
     """Every instance in the window as normalized dicts (see the shape above), across the
     provider's pages; max_results is the page size. [] without a token or for an unknown
-    provider; AuthError on a dead token."""
-    token = get_valid_access_token(account_id, provider, username=username, user_scope_id=user_scope_id)
+    provider; AuthError on a dead token. `strict` (the sync engine) turns the quiet cases
+    into exceptions: no token is an AuthError, a failed page or an unknown provider a
+    ProviderError, so "not returned" can be read as "deleted" only after a complete list."""
+    prov = (provider or "").strip().lower()
+    token = get_valid_access_token(account_id, prov, username=username, user_scope_id=user_scope_id)
     if not token:
+        if strict:
+            raise AuthError(f"no valid access token for {prov} account")
         return []
-    prov = provider.strip().lower()
     cal = calendar_id or (GOOGLE_PRIMARY_CALENDAR if prov == "gmail" else None)
     if prov == "gmail":
-        raw = _google_list_events(token, time_min, time_max, cal, max_results)
+        raw = _google_list_events(token, time_min, time_max, cal, max_results, strict=strict)
         return [_normalize_google_event(e) for e in raw]
     if prov == "microsoft":
-        raw = _ms_list_events(token, time_min, time_max, cal, max_results)
+        raw = _ms_list_events(token, time_min, time_max, cal, max_results, strict=strict)
         return [_normalize_ms_event(e) for e in raw]
+    if strict:
+        raise ProviderError(f"unknown calendar provider {prov!r}")
     return []
 
 

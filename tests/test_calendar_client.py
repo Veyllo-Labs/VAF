@@ -197,3 +197,43 @@ def test_iso_helpers_read_provider_timestamps():
     assert cc._ensure_rfc3339("2026-03-02T13:00:00", "Europe/Berlin") == "2026-03-02T13:00:00"
     assert cc._ensure_rfc3339("2026-03-02T13:00:00") == "2026-03-02T13:00:00Z"
     assert cc._ensure_rfc3339("2026-03-02") == "2026-03-02T00:00:00Z"
+
+
+# ── strict mode for the sync engine ───────────────────────────────────────────────
+
+def test_strict_listing_raises_on_a_failed_page_and_on_a_missing_token(monkeypatch, token):
+    """The sync engine reads "not returned" as "deleted", so it must know a list was
+    complete: a failed page is a ProviderError, no token an AuthError. The tools keep the
+    quiet default and get the items that arrived."""
+    def handler(method, url, params, body):
+        if params and params.get("pageToken") == "p2":
+            return _Resp(503, {}, "unavailable")
+        return _Resp(200, {"items": [{"id": "g1", "summary": "A", "status": "confirmed",
+                                      "start": {"dateTime": "2026-03-02T09:00:00Z"},
+                                      "end": {"dateTime": "2026-03-02T10:00:00Z"}}],
+                           "nextPageToken": "p2"})
+    _fake_requests(monkeypatch, handler)
+    quiet = cc.list_events("gmail", "a@gmail.example", "scope", "2026-03-01T00:00:00Z", "2026-03-31T00:00:00Z")
+    assert [e["id"] for e in quiet] == ["g1"]                                    # partial, as before
+    with pytest.raises(cc.ProviderError):
+        cc.list_events("gmail", "a@gmail.example", "scope", "2026-03-01T00:00:00Z", "2026-03-31T00:00:00Z", strict=True)
+
+    def ms_handler(method, url, params, body):
+        if url.endswith("next"):
+            raise ConnectionError("reset")
+        return _Resp(200, {"value": [{"id": "m1", "subject": "B", "isAllDay": False,
+                                      "start": {"dateTime": "2026-03-02T09:00:00.0000000", "timeZone": "UTC"},
+                                      "end": {"dateTime": "2026-03-02T10:00:00.0000000", "timeZone": "UTC"}}],
+                           "@odata.nextLink": "https://graph.example/next"})
+    _fake_requests(monkeypatch, ms_handler)
+    assert [e["id"] for e in cc.list_events("microsoft", "m@x", "scope", "2026-03-01T00:00:00Z", "2026-03-31T00:00:00Z")] == ["m1"]
+    with pytest.raises(cc.ProviderError):
+        cc.list_events("microsoft", "m@x", "scope", "2026-03-01T00:00:00Z", "2026-03-31T00:00:00Z", strict=True)
+
+    monkeypatch.setattr(cc, "get_valid_access_token", lambda *a, **k: None)
+    assert cc.list_events("gmail", "a@gmail.example", "scope", "2026-03-01T00:00:00Z", "2026-03-31T00:00:00Z") == []
+    with pytest.raises(cc.AuthError):
+        cc.list_events("gmail", "a@gmail.example", "scope", "2026-03-01T00:00:00Z", "2026-03-31T00:00:00Z", strict=True)
+    monkeypatch.setattr(cc, "get_valid_access_token", lambda *a, **k: "tok")
+    with pytest.raises(cc.ProviderError):
+        cc.list_events("caldav", "c@x", "scope", "2026-03-01T00:00:00Z", "2026-03-31T00:00:00Z", strict=True)

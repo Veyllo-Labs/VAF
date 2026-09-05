@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (343 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (347 keys).
 
 ## How configuration is set
 
@@ -443,6 +443,10 @@ Most of these are populated by the setup wizard / Connections UI, not hand-edite
 | `mail_engine_write_enabled` | `False` | Allow the mail engine to perform server-side writes (flags/move/append). The standalone safety valve for mailbox writes: the engine stays read-only against mailboxes until this is set. Admin-only. |
 | `mail_body_retention_days` | `365` | How long cached message bodies are kept in the per-user mail store. Headers/envelopes are kept forever. Admin-only. |
 | `mail_store_encryption_key` | `""` | AES key (Base64) for encrypting cached mail bodies at rest; held in the data keyring and auto-generated there on first use, with a value left here by an older install adopted once and the plaintext entry then blanked. Protected (never overwritten from the UI) and redacted for non-admins. |
+| `calendar_sync_interval_minutes` | `5` | Minutes between two sweeps of the calendar sync supervisor over every connected Google or Microsoft calendar account. Read per sweep, so a change needs no restart. Admin-only: the cadence is the instance's request volume against the providers. |
+| `calendar_sync_past_days` | `30` | The pull window's reach into the past, in days from now. Events outside the window are neither pulled nor treated as deleted. Admin-only. |
+| `calendar_sync_future_days` | `365` | The pull window's reach into the future, in days from now. Admin-only. |
+| `calendar_sync_push_enabled` | `True` | Write VAF-created events, edits and deletions into the connected calendar (the account's primary calendar). When false the changes stay in the VAF calendar as pending and are pushed once the flag is on again. The kill switch for outbound calendar writes: admin-only. |
 | `mail_composer_enabled` | `True` | Offer the Mail Composer (draft / rewrite buttons) in the mail window's compose box. The lane is inert until a user clicks it, makes exactly one model call with NO tools, and only ever fills the textarea - it can never send. Admin-only. |
 | `mail_composer_max_context_chars` | `12000` | Total budget for thread text handed to the Mail Composer, in characters (clamped to 2000-40000). Characters rather than tokens because no real tokenizer exists on this path; at the repo's 2.5-3.6 chars-per-token estimates this is roughly 3.5-4.5k tokens, well inside the 32768 `n_ctx` floor. Bounds how much attacker-controlled mail text reaches a prompt, so admin-only. |
 | `mail_composer_max_message_chars` | `4000` | Per-message cap inside that budget; the message being replied to keeps at least 2000 characters regardless. Admin-only. |

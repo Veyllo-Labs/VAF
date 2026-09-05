@@ -2350,6 +2350,14 @@ vaf automation delete <id>   # Delete task
                     fire_due_reminders()
                 except Exception:
                     pass
+                # Calendar reminders (vaf/core/calendar_sync.py): the same narrow lane for
+                # the events in the VAF calendar - stored data, composed deterministically,
+                # delivered on the main channel; no agent run, no tools.
+                try:
+                    from vaf.core.calendar_sync import fire_due_calendar_reminders
+                    fire_due_calendar_reminders()
+                except Exception:
+                    pass
                 # Event-driven automations: the "is it due" decision for a room event,
                 # asked on the same tick the reminders ride, so only the process
                 # singleton ever fires one (vaf/core/automation_triggers.py).

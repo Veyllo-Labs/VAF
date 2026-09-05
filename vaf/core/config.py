@@ -750,6 +750,14 @@ class Config:
         "mail_engine_write_enabled": False,  # allow server-side writes (flags/move/append) - separate switch by design
         "mail_body_retention_days": 365,  # cached-body retention (headers are kept forever)
         "mail_store_encryption_key": "",  # AES key (Base64) for mail.db body blobs; auto-generated (PROTECTED)
+        # Calendar sync (vaf/core/calendar_sync.py, docs/integrations/CALENDAR_INTEGRATION.md):
+        # the sweep cadence and window decide the provider request volume for the whole
+        # instance and the push flag whether VAF writes into connected calendars at all,
+        # so all four are instance policy: admin-only via GLOBAL_CONFIG_KEYS.
+        "calendar_sync_interval_minutes": 5,   # minutes between two sweeps of the calendar accounts
+        "calendar_sync_past_days": 30,         # pull window: this many days back from now
+        "calendar_sync_future_days": 365,      # pull window: this many days ahead
+        "calendar_sync_push_enabled": True,    # write VAF-created changes into the connected calendar
         # Mail Composer (vaf/mail/composer.py): drafts and rewrites text in the mail
         # window's compose box. Draft only - it never sends. The budget keys bound how
         # much attacker-controlled thread text reaches a prompt, so they are policy,
@@ -1044,6 +1052,12 @@ class Config:
         # Mail engine write flag + retention: instance-wide policy.
         "mail_engine_write_enabled",
         "mail_body_retention_days",
+        # Calendar sync: cadence and window are the instance's request volume against the
+        # providers, the push flag is the kill switch for outbound calendar writes.
+        "calendar_sync_interval_minutes",
+        "calendar_sync_past_days",
+        "calendar_sync_future_days",
+        "calendar_sync_push_enabled",
         # Mail Composer: the budget keys decide how much untrusted mail text reaches
         # a model prompt, and the enable flag decides whether that happens at all -
         # a per-user write would let a LAN user raise both for the instance.

@@ -19,11 +19,14 @@ import vaf.mail.supervisor as sup
 
 
 def _accounts(monkeypatch, accounts, by_scope=None):
+    # Only Config.get is faked; get_local_admin_scope_id() reads "admin-scope" from it. The
+    # function itself is left alone: a module imported for the first time while a fake sat
+    # on the config module would bind the fake for the rest of the process.
     store = {"email_config": {"accounts": accounts},
-             "email_config_by_scope": by_scope or {}}
+             "email_config_by_scope": by_scope or {},
+             "local_admin_scope_id": "admin-scope"}
     monkeypatch.setattr(cfg_mod.Config, "get",
                         staticmethod(lambda k, d=None: store.get(k, d)))
-    monkeypatch.setattr(cfg_mod, "get_local_admin_scope_id", lambda: "admin-scope")
 
 
 def test_wants_sync_honors_all_three_intents():

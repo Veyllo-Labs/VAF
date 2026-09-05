@@ -3,18 +3,17 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """MailSyncSupervisor: background sync for the v2 engine (EMAIL_CLIENT.md).
 
-Runs as one asyncio task inside the web backend. Every cycle it re-reads
-the configured accounts every cycle, collects every
-configured account across all user scopes, and syncs each account in a worker
-thread with per-account crash isolation - one broken account never stalls the
-others. One IDLE watcher thread per eager account gives near-instant new-mail
-pickup on INBOX (re-issued before the 29-minute server limit; a dead IDLE
-socket means "sync now", per RFC 2177 practice); folders beyond INBOX ride the
-periodic sweep. The sync lane covers every account reachable over IMAP - the
-password lane plus OAuth accounts once they are imap_ready (re-consented). After
-each sweep a provider-agnostic send drain delivers queued outbox sends for EVERY
-account (including non-imap_ready Gmail/Microsoft, or accounts whose IMAP was
-down), so a queued send is never stranded behind IMAP availability.
+Runs as one asyncio task inside the web backend on the shared supervisor base
+(vaf/core/sync_supervisor.py): every sweep collects every configured account across
+all user scopes and syncs each IMAP-reachable one in a worker thread with per-account
+crash isolation - one broken account never stalls the others. One IDLE watcher thread
+per eager account gives near-instant new-mail pickup on INBOX (re-issued before the
+29-minute server limit; a dead IDLE socket means "sync now", per RFC 2177 practice);
+folders beyond INBOX ride the periodic sweep. The sync lane covers every account
+reachable over IMAP - the password lane plus OAuth accounts once they are imap_ready
+(re-consented). After each sweep a provider-agnostic send drain delivers queued outbox
+sends for EVERY account (including non-imap_ready Gmail/Microsoft, or accounts whose
+IMAP was down), so a queued send is never stranded behind IMAP availability.
 
 New-mail hook (decision E3): observers registered via on_new_mail() are called
 with (user_scope_id, account_id, stats) after any sync that ingested mail -
@@ -24,15 +23,15 @@ import asyncio
 import logging
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
+
+from vaf.core.sync_supervisor import Account, SyncSupervisor, account_key, collect_email_accounts
 
 logger = logging.getLogger("vaf.mail.supervisor")
 
 SWEEP_INTERVAL_SEC = 300          # periodic full-tier sweep per account
 IDLE_REISSUE_SEC = 25 * 60        # re-issue IDLE before the 29-min server cap
 IDLE_CHECK_SEC = 30               # idle_check poll granularity
-_MAX_PARALLEL_SYNCS = 2
-
 _new_mail_observers: List[Callable[[str, str, Dict[str, Any]], None]] = []
 
 
@@ -70,33 +69,11 @@ def _wants_sync(acc: Dict[str, Any]) -> bool:
             and acc.get("auto_sync_enabled", True))
 
 
-def _collect_accounts() -> List[Tuple[str, Optional[str], Dict[str, Any]]]:
-    """(user_scope_id, cred_username, account) for every enabled account in
-    every config lane. Scope-explicit by construction: the admin lane uses the
-    admin's real scope UUID. This is the SEND-DRAIN set - deliberately wider than
-    the sync set (see _wants_sync), so a queued mail still leaves even for an
-    account whose mailbox is no longer polled."""
-    from vaf.core.config import Config, get_local_admin_scope_id
-    out: List[Tuple[str, Optional[str], Dict[str, Any]]] = []
-    admin_scope = get_local_admin_scope_id()
-    ec = Config.get("email_config") or {}
-    for acc in (ec.get("accounts") or []):
-        if acc.get("enabled", True):
-            out.append((admin_scope, None, acc))
-    by_scope = Config.get("email_config_by_scope") or {}
-    if isinstance(by_scope, dict):
-        for scope, cfg in by_scope.items():
-            if str(scope) == str(admin_scope):
-                continue
-            for acc in ((cfg or {}).get("accounts") or []):
-                if acc.get("enabled", True):
-                    out.append((str(scope), None, acc))
-    # Legacy email_config_by_user accounts are deliberately NOT synced into
-    # v2: the v2 store is scope-keyed with no username dimension, so mapping
-    # them to the admin scope would commingle different users' mail (isolation
-    # violation caught in review). They stay fully on the legacy lane until
-    # their install migrates to scope-keyed config.
-    return out
+# The account collection lives in vaf/core/sync_supervisor.collect_email_accounts (the
+# calendar supervisor reads the same lanes); this is the SEND-DRAIN set, deliberately
+# wider than the sync set (see _wants_sync), so a queued mail still leaves even for an
+# account whose mailbox is no longer polled.
+_collect_accounts = collect_email_accounts
 
 
 def _sync_one(scope: str, cred_username: Optional[str], acc: Dict[str, Any]) -> Dict[str, Any]:
@@ -228,83 +205,47 @@ class _IdleWatcher(threading.Thread):
             _safe_logout(client)
 
 
-class MailSyncSupervisor:
+class MailSyncSupervisor(SyncSupervisor):
+    name = "mail"
+
     def __init__(self):
+        super().__init__()
         self._watchers: Dict[str, _IdleWatcher] = {}
-        self._pending: set = set()
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._sem = asyncio.Semaphore(_MAX_PARALLEL_SYNCS)
 
-    def _request_sync(self, key: str, scope: str, cred_username: Optional[str],
-                      acc: Dict[str, Any]) -> None:
-        """Thread-safe: schedule an immediate account sync on the loop."""
-        loop = self._loop
-        if loop is None or key in self._pending:
-            return
-        self._pending.add(key)
+    def sweep_interval(self) -> float:
+        return SWEEP_INTERVAL_SEC
 
-        async def _go():
-            try:
-                async with self._sem:  # same cap as the sweep (review finding)
-                    await asyncio.to_thread(_sync_one, scope, cred_username, acc)
-            finally:
-                self._pending.discard(key)
+    def wants(self, acc: Dict[str, Any]) -> bool:
+        return bool(_wants_sync(acc)
+                    and ((acc.get("provider") or "imap").lower() == "imap" or acc.get("imap_ready")))
 
-        fut = asyncio.run_coroutine_threadsafe(_go(), loop)
-        # if scheduling itself failed, never strand the dedup key
-        if fut.cancelled():
-            self._pending.discard(key)
+    def sync_one(self, scope: str, cred_username: Optional[str], acc: Dict[str, Any]) -> Dict[str, Any]:
+        return _sync_one(scope, cred_username, acc)
 
-    async def run(self) -> None:
-        self._loop = asyncio.get_running_loop()
-        await asyncio.sleep(90)  # let the server settle before first sweep
-        sem = self._sem
-        while True:
-            try:
-                accounts = _collect_accounts()
-                imap_accounts = [(s, u, a) for s, u, a in accounts
-                                 if _wants_sync(a)
-                                 and ((a.get("provider") or "imap").lower() == "imap"
-                                      or a.get("imap_ready"))]
+    async def after_sweep(self, accounts: List[Account], wanted: List[Account], results: List[Any]) -> None:
+        # Provider-agnostic send drain AFTER the sync: delivers queued sends for EVERY
+        # account (incl. non-imap_ready gmail/microsoft and accounts whose IMAP was
+        # down), so a queued send is never stranded. imap accounts already drained
+        # their sends in _sync_one, so this is a cheap no-op for them (guarded by a
+        # pending-send check).
+        async def _bounded_drain(s, u, a):
+            async with self._sem:
+                return await asyncio.to_thread(_drain_sends, s, u, a)
 
-                async def _bounded(s, u, a):
-                    async with sem:
-                        return await asyncio.to_thread(_sync_one, s, u, a)
-
-                results = await asyncio.gather(
-                    *[_bounded(s, u, a) for s, u, a in imap_accounts],
-                    return_exceptions=True)
-                ok = sum(1 for r in results if isinstance(r, dict) and r.get("ok"))
-                if imap_accounts:
-                    logger.info("mail v2 sweep: %d/%d accounts ok", ok, len(imap_accounts))
-
-                # Provider-agnostic send drain AFTER the sync: delivers queued
-                # sends for EVERY account (incl. non-imap_ready gmail/microsoft
-                # and accounts whose IMAP was down), so a queued send is never
-                # stranded. imap accounts already drained their sends above, so
-                # this is a cheap no-op for them (guarded by a pending-send check).
-                async def _bounded_drain(s, u, a):
-                    async with sem:
-                        return await asyncio.to_thread(_drain_sends, s, u, a)
-
-                await asyncio.gather(*[_bounded_drain(s, u, a) for s, u, a in accounts],
-                                     return_exceptions=True)
-
-                self._ensure_idle_watchers(imap_accounts)
-            except Exception as e:
-                logger.warning("mail v2 supervisor cycle error: %s", e)
-            await asyncio.sleep(SWEEP_INTERVAL_SEC)
+        await asyncio.gather(*[_bounded_drain(s, u, a) for s, u, a in accounts],
+                             return_exceptions=True)
+        self._ensure_idle_watchers(wanted)
 
     def _ensure_idle_watchers(self, accounts) -> None:
         alive_keys = set()
         for scope, cred_username, acc in accounts:
-            key = f"{scope}:{acc.get('account_id') or acc.get('email')}"
+            key = account_key(scope, acc)
             alive_keys.add(key)
             w = self._watchers.get(key)
             if w is None or not w.is_alive():
                 w = _IdleWatcher(scope, cred_username, acc,
                                  request_sync=lambda k=key, s=scope, u=cred_username, a=acc:
-                                 self._request_sync(k, s, u, a))
+                                 self.request_sync(k, s, u, a))
                 self._watchers[key] = w
                 w.start()
         for key in list(self._watchers):

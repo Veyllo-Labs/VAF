@@ -402,15 +402,25 @@ def list_chats_from_store(
         conn.close()
 
 
+def store_exists(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> bool:
+    """Whether this identity's message store file exists. Every reader here runs init_store
+    and thereby creates the file; a glance that only wants to know "anything stored for this
+    person?" asks this first so a read never materialises an empty database."""
+    return _db_path(username, user_scope_id).exists()
+
+
 def get_chat_messages(
     username: str,
     chat_id: str,
     limit: int = 50,
     user_scope_id: Optional[str] = None,
     channel: Optional[str] = "whatsapp",
+    before_ts: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """Get messages for a chat, newest first. When chat_id is a @lid, also look up lid_to_e164 so messages stored under the resolved E.164 are found.
-    channel: filter to one channel ('whatsapp' default, 'telegram', ...); None/'' = all channels."""
+    channel: filter to one channel ('whatsapp' default, 'telegram', ...); None/'' = all channels.
+    before_ts: only rows at or before this unix time (inclusive), the cursor a paged reader
+    passes so page two starts where page one ended instead of at the newest row again."""
     import sqlite3
     from vaf.core.config import Config
     init_store(username, user_scope_id)
@@ -438,15 +448,17 @@ def get_chat_messages(
             seen.add(cid)
             chan_clause = " AND channel = ?" if channel else ""
             chan_param = [channel] if channel else []
+            ts_clause = " AND ts <= ?" if before_ts is not None else ""
+            ts_param = [float(before_ts)] if before_ts is not None else []
             cur = conn.execute(
                 f"""
                 SELECT chat_id, chat_name, body, direction, ts, content_type, channel
                 FROM channel_messages
-                WHERE username = ? AND chat_id = ?{chan_clause}
+                WHERE username = ? AND chat_id = ?{chan_clause}{ts_clause}
                 ORDER BY ts DESC
                 LIMIT ?
                 """,
-                ((username or "").strip() or "", cid, *chan_param, min(max(limit, 1), 200)),
+                ((username or "").strip() or "", cid, *chan_param, *ts_param, min(max(limit, 1), 200)),
             )
             all_rows.extend([dict(row) for row in cur.fetchall()])
         all_rows.sort(key=lambda r: -(r.get("ts") or 0))
@@ -482,6 +494,46 @@ def oldest_message(
         )
         row = cur.fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def chat_stats(
+    username: str,
+    chat_ids: List[str],
+    user_scope_id: Optional[str] = None,
+    channel: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Counts and bounds over a set of chats in one query: {"count", "out_count", "first_ts",
+    "last_ts"}. out_count is what the agent (or the owner's own number) sent; deleted
+    tombstones are not counted; first_ts is the oldest STORED row, which for a channel that
+    loads history on demand is not the first contact ever. A missing store or an empty id
+    list answers zeros without creating a database."""
+    zeros: Dict[str, Any] = {"count": 0, "out_count": 0, "first_ts": None, "last_ts": None}
+    ids = [str(c) for c in (chat_ids or []) if c]
+    if not ids or not store_exists(username, user_scope_id):
+        return zeros
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        placeholders = ",".join("?" for _ in ids)
+        clauses = ["username = ?", f"chat_id IN ({placeholders})", "COALESCE(content_type, 'text') != 'deleted'"]
+        params: List[Any] = [(username or "").strip() or "", *ids]
+        if channel:
+            clauses.append("channel = ?")
+            params.append(channel)
+        cur = conn.execute(
+            f"SELECT COUNT(*) AS count, COALESCE(SUM(direction = 'out'), 0) AS out_count, "
+            f"MIN(ts) AS first_ts, MAX(ts) AS last_ts FROM channel_messages WHERE {' AND '.join(clauses)}",
+            tuple(params),
+        )
+        row = dict(cur.fetchone() or {})
+        return {
+            "count": int(row.get("count") or 0),
+            "out_count": int(row.get("out_count") or 0),
+            "first_ts": float(row["first_ts"]) if row.get("first_ts") is not None else None,
+            "last_ts": float(row["last_ts"]) if row.get("last_ts") is not None else None,
+        }
     finally:
         conn.close()
 

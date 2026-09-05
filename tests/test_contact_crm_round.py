@@ -239,3 +239,185 @@ def test_sync_stamps_new_records_but_never_rewrites_existing_ones(scratch):
     fresh = by_name["Fresh Person"]
     assert fresh["source"] == "whatsapp" and fresh["tags"] == [] and fresh["created_at"] == fresh["links"]["whatsapp"]["linked_at"]
     assert cs.contact_created(fresh) == {"ts": fresh["created_at"], "source": "whatsapp"}
+
+
+# ── message store: stats and paging ──────────────────────────────────────────────
+
+def _seed_chat(username, chat_id, scope, n, start=1_700_000_000.0, channel="whatsapp"):
+    for i in range(n):
+        store.append_message(username, chat_id, f"msg {i}", direction="out" if i % 3 == 0 else "in",
+                             message_id=f"m{i}", user_scope_id=scope, channel=channel, ts=start + i * 60)
+
+
+def test_store_exists_and_chat_stats_never_create_a_database(scratch):
+    assert store.store_exists("alice", SCOPE_A) is False
+    assert store.chat_stats("alice", ["+491700000042"], user_scope_id=SCOPE_A, channel="whatsapp") == \
+        {"count": 0, "out_count": 0, "first_ts": None, "last_ts": None}
+    assert not (scratch / "data" / "scopes" / SCOPE_A / "channel_messages.db").exists()
+    assert store.chat_stats("alice", [], user_scope_id=SCOPE_A) == {"count": 0, "out_count": 0, "first_ts": None, "last_ts": None}
+
+
+def test_chat_stats_count_both_keys_skip_tombstones_and_tolerate_null_content_type(scratch):
+    _seed_chat("alice", "+491700000042", SCOPE_A, 6)                       # out at i=0,3 -> 2 out
+    _seed_chat("alice", "999@lid", SCOPE_A, 2, start=1_700_100_000.0)     # out at i=0 -> 1 out
+    store.mark_deleted("alice", "+491700000042", "m5", user_scope_id=SCOPE_A) if hasattr(store, "mark_deleted") else None
+    conn = store._get_conn("alice", SCOPE_A)
+    conn.execute("UPDATE channel_messages SET content_type = NULL WHERE message_id = 'm1'")
+    conn.commit(); conn.close()
+    s = store.chat_stats("alice", ["+491700000042", "999@lid"], user_scope_id=SCOPE_A, channel="whatsapp")
+    assert s["out_count"] == 3 and s["first_ts"] == 1_700_000_000.0 and s["last_ts"] == 1_700_100_060.0
+    assert s["count"] in (7, 8)                                               # 8 rows, minus the tombstone when mark_deleted exists
+    # no rows for these ids in an existing store: zeros, not NULLs
+    assert store.chat_stats("alice", ["+490000000000"], user_scope_id=SCOPE_A) == {"count": 0, "out_count": 0, "first_ts": None, "last_ts": None}
+    # another scope is another file
+    assert store.chat_stats("alice", ["+491700000042"], user_scope_id=SCOPE_B)["count"] == 0
+
+
+def test_get_chat_messages_before_ts_is_an_inclusive_cursor(scratch):
+    _seed_chat("alice", "+491700000042", SCOPE_A, 5)
+    rows = store.get_chat_messages("alice", "+491700000042", limit=10, user_scope_id=SCOPE_A, before_ts=1_700_000_120.0)
+    assert [r["body"] for r in rows] == ["msg 2", "msg 1", "msg 0"]
+
+
+# ── mail: the per-address query ──────────────────────────────────────────────────
+
+@pytest.fixture
+def pinned_mail_key():
+    import os
+    import vaf.mail.crypto as mail_crypto
+    old = mail_crypto._cached_key
+    mail_crypto._cached_key = os.urandom(32)
+    yield
+    mail_crypto._cached_key = old
+
+
+def _mail(message_id, subject, from_addr, to_addrs, ts, body="body", cc=""):
+    from vaf.mail.parser import ParsedMessage
+    return ParsedMessage(message_id=message_id, subject=subject, from_addr=from_addr, to_addrs=to_addrs,
+                         cc_addrs=cc, date_ts=ts, body_text=body)
+
+
+def _mail_store_with_bob(scope):
+    from vaf.mail.store import MailStore
+    s = MailStore(scope)
+    apk = s.upsert_account("owner@example.com", "imap", "owner@example.com")
+    inbox = s.upsert_folder(apk, "INBOX", special_use="\\Inbox", sync_tier="eager")
+    sent = s.upsert_folder(apk, "Gesendet", special_use="\\Sent", sync_tier="headers")
+    junk = s.upsert_folder(apk, "Spam", special_use="\\Junk", sync_tier="lazy")
+    s.ingest_message(apk, inbox, 1, _mail("<in1@x>", "Angebot", "Bob <bob@example.com>", "owner@example.com", 1_700_000_100, "hi"))
+    s.ingest_message(apk, sent, 2, _mail("<out1@x>", "Re: Angebot", "owner@example.com", "Bob <bob@example.com>", 1_700_000_200, ""))
+    s.ingest_message(apk, inbox, 3, _mail("<cc1@x>", "Team", "carol@example.com", "owner@example.com", 1_700_000_300, "x", cc="bob@example.com"))
+    s.ingest_message(apk, inbox, 4, _mail("<mention@x>", "News", "news@example.com", "owner@example.com", 1_700_000_400, "ask bob@example.com about it"))
+    s.ingest_message(apk, junk, 5, _mail("<junk@x>", "Spam", "bob@example.com", "owner@example.com", 1_700_000_500, "spam"))
+    s.ingest_message(apk, inbox, 6, _mail("<nodate@x>", "Undated", "bob@example.com", "owner@example.com", None, "?"))
+    return s
+
+
+def test_mail_store_messages_for_address_uses_headers_not_full_text(scratch, pinned_mail_key):
+    from vaf.mail.store import MailStore
+    assert MailStore.exists(SCOPE_A) is False
+    s = _mail_store_with_bob(SCOPE_A)
+    assert MailStore.exists(SCOPE_A) is True
+    rows = s.messages_for_address("Bob@Example.com")
+    assert [r["message_id"] for r in rows] == ["<cc1@x>", "<out1@x>", "<in1@x>"]      # newest first; junk, body-only and undated left out
+    assert rows[1]["special_use"] == "\\Sent" and rows[1]["snippet"] == ""
+    assert [r["message_id"] for r in s.messages_for_address("bob@example.com", before_ts=1_700_000_200)] == ["<out1@x>", "<in1@x>"]
+    s.close()
+
+
+def test_messages_for_address_merged_decides_direction_and_keeps_the_legacy_user_rule(scratch, pinned_mail_key, monkeypatch):
+    from vaf.mail import tool_bridge
+    s = _mail_store_with_bob(SCOPE_A)
+    s.close()
+    rows = tool_bridge.messages_for_address_merged("bob@example.com", None, 10, "alice", SCOPE_A)
+    assert [(r["message_id"], r["direction"]) for r in rows] == [("<cc1@x>", "out"), ("<out1@x>", "out"), ("<in1@x>", "in")]
+    assert all(isinstance(r["ts"], float) for r in rows)
+    # A username-only caller never constructs the v2 store, whatever the admin scope holds.
+    from vaf.mail import store as mail_store_module
+    monkeypatch.setattr(mail_store_module.MailStore, "__init__", lambda *a, **k: (_ for _ in ()).throw(AssertionError("v2 touched")))
+    assert tool_bridge.messages_for_address_merged("bob@example.com", None, 10, "alice", None) == []
+    # ...and reads the legacy store when it has one.
+    from vaf.core import email_sync_store as legacy
+    legacy.init_store("alice", None)
+    conn = legacy._get_conn("alice", None)
+    conn.execute("INSERT INTO email_messages (username, account_id, folder, message_id, subject, from_addr, date_str, body_snippet, synced_at, message_date_iso) "
+                 "VALUES ('', 'acct', 'INBOX', '<legacy@x>', 'Old mail', 'bob@example.com', 'Tue, 01 Sep 2026 10:00:00 +0200', 'old', '2026-09-01T08:00:00Z', '2026-09-01T08:00:00Z')")
+    conn.execute("INSERT INTO email_messages (username, account_id, folder, message_id, subject, from_addr, date_str, body_snippet, synced_at, message_date_iso) "
+                 "VALUES ('', 'acct', 'INBOX', '<undated@x>', 'No date', 'bob@example.com', '', 'x', '2026-09-01T08:00:00Z', NULL)")
+    conn.commit(); conn.close()
+    rows = tool_bridge.messages_for_address_merged("bob@example.com", None, 10, "alice", None)
+    assert [r["message_id"] for r in rows] == ["<legacy@x>"] and rows[0]["direction"] == "in"
+    assert abs(rows[0]["ts"] - 1_788_249_600.0) < 1                              # 2026-09-01T08:00:00Z
+
+
+# ── the timeline ─────────────────────────────────────────────────────────────────
+
+def test_contact_timeline_merges_every_source_newest_first(scratch, pinned_mail_key):
+    c = cs.create_contact("Bob Example", "alice", user_scope_id=SCOPE_A, whatsapp_phone="0170 0000042", email="Bob@Example.com")
+    _seed_chat("alice", "+491700000042", SCOPE_A, 3, start=1_700_000_000.0)
+    _seed_chat("alice", "999@lid", SCOPE_A, 1, start=1_700_000_500.0)             # the agent's send, stored under the lid
+    note = cs.add_contact_note(c["id"], "wants a demo", "alice", user_scope_id=SCOPE_A)
+    ev = cs.add_contact_event(c["id"], "Demo", 4_000_000_000.0, "alice", user_scope_id=SCOPE_A, note="bring the deck")
+    _mail_store_with_bob(SCOPE_A).close()
+    contact = cs.get_contact_by_id(c["id"], "alice", user_scope_id=SCOPE_A)
+    out = cs.contact_timeline(contact, "alice", SCOPE_A, lid_map={"999@lid": "+491700000042"})
+    kinds = [(it["kind"], it.get("direction")) for it in out["items"]]
+    assert kinds[:2] == [("event", None), ("note", None)]                            # attached just now
+    assert ("created", None) in kinds and kinds.index(("created", None)) == 2
+    bodies = [it["body"] for it in out["items"] if it["kind"] == "message"]
+    assert bodies == ["msg 0", "msg 2", "msg 1", "msg 0"]                            # lid row (newest) then the three by number
+    assert [it["ref"]["chat_id"] for it in out["items"] if it["kind"] == "message"][0] == "999@lid"
+    mails = [(it["title"], it["direction"]) for it in out["items"] if it["kind"] == "mail"]
+    assert mails == [("Team", "out"), ("Re: Angebot", "out"), ("Angebot", "in")]
+    assert out["next_cursor"] is None
+    ts_list = [it["ts"] for it in out["items"]]
+    assert ts_list == sorted(ts_list, reverse=True)
+    ev_item = next(it for it in out["items"] if it["kind"] == "event")
+    assert ev_item["ref"]["when_ts"] == 4_000_000_000.0 and ev_item["body"] == "bring the deck" and ev_item["id"] == ev["id"]
+    assert next(it for it in out["items"] if it["kind"] == "note")["id"] == note["id"]
+    # tabs
+    only_notes = cs.contact_timeline(contact, "alice", SCOPE_A, kinds={"note"})
+    assert [it["kind"] for it in only_notes["items"]] == ["note"]
+
+
+def test_contact_timeline_pages_exactly_through_a_long_chat_and_same_second_ties(scratch):
+    c = cs.create_contact("Chatty", "alice", user_scope_id=SCOPE_A, whatsapp_phone="+491700000042")
+    _seed_chat("alice", "+491700000042", SCOPE_A, 120, start=1_700_000_000.0)
+    # a note written in the very second of message 60
+    cs.add_contact_note(c["id"], "same second", "alice", user_scope_id=SCOPE_A)
+    contact = cs.get_contact_by_id(c["id"], "alice", user_scope_id=SCOPE_A)
+    contact["notes_log"][0]["ts"] = 1_700_000_000.0 + 60 * 60
+    seen, cursor, pages = [], None, 0
+    while True:
+        out = cs.contact_timeline(contact, "alice", SCOPE_A, limit=25, cursor=cursor)
+        seen.extend(out["items"]); pages += 1
+        cursor = out["next_cursor"]
+        if not cursor:
+            break
+        assert pages < 20
+    ids = [it["id"] for it in seen]
+    assert len(ids) == len(set(ids)) == 122                                           # 120 messages + note + created, nothing twice
+    assert pages == 5
+    assert [it["ts"] for it in seen] == sorted((it["ts"] for it in seen), reverse=True)
+    assert cs.decode_timeline_cursor("garbage") is None and cs.decode_timeline_cursor("") is None
+
+
+def test_contact_timeline_survives_a_broken_mail_lane_and_creates_no_store(scratch, monkeypatch):
+    c = cs.create_contact("Quiet", "alice", user_scope_id=SCOPE_A, email="q@example.com", whatsapp_phone="+491700000042")
+    from vaf.mail import tool_bridge
+    monkeypatch.setattr(tool_bridge, "messages_for_address_merged", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("mail down")))
+    out = cs.contact_timeline(c, "alice", SCOPE_A)
+    assert [it["kind"] for it in out["items"]] == ["created"]
+    assert not (scratch / "data" / "scopes" / SCOPE_A / "channel_messages.db").exists()
+    assert not (scratch / "data" / "scopes" / SCOPE_A / "mail.db").exists()
+
+
+def test_contact_timeline_and_stats_stay_inside_the_callers_scope(scratch):
+    c = cs.create_contact("Bob", "alice", user_scope_id=SCOPE_A, whatsapp_phone="+491700000042")
+    _seed_chat("alice", "+491700000042", SCOPE_A, 4)
+    same_number_other_scope = {"id": "x", "name": "Bob", "channels": [{"type": "whatsapp", "value": "+491700000042"}]}
+    assert [it["kind"] for it in cs.contact_timeline(same_number_other_scope, "bob", SCOPE_B)["items"]] == []
+    assert cs.contact_activity_stats(same_number_other_scope, "bob", SCOPE_B)["messages"] == 0
+    stats = cs.contact_activity_stats(c, "alice", SCOPE_A)
+    assert stats["messages"] == 4 and stats["from_agent"] == 2 and stats["first_ts"] == 1_700_000_000.0
+    assert stats["last_ts"] == 1_700_000_180.0 and set(stats["by_channel"]) == {"whatsapp"}

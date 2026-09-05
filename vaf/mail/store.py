@@ -811,6 +811,49 @@ class MailStore:
             out.append(d)
         return out
 
+    @staticmethod
+    def exists(user_scope_id: str, base_dir: Optional[Path] = None) -> bool:
+        """Whether this scope has a mail store on disk. Constructing a MailStore creates the
+        file and its schema; a read that only wants to know "any mail for this person?"
+        asks here first so a glance never materialises an empty database."""
+        scope = str(user_scope_id or "").strip()
+        if not scope:
+            return False
+        if base_dir is None:
+            from vaf.core.platform import Platform
+            base_dir = Platform.data_dir()
+        return (Path(base_dir) / "scopes" / scope / "mail.db").exists()
+
+    def messages_for_address(self, address: str, *, before_ts: Optional[float] = None,
+                             limit: int = 50) -> List[Dict[str, Any]]:
+        """Every message exchanged with one address, newest first: the address in From, To
+        or Cc, by substring on the stored header strings, with the folder's special_use so
+        the caller can tell the mailbox's own sent mail from the correspondent's. Junk,
+        Trash and Drafts are left out; rows without any date are left out because a
+        timeline cannot place them. Header-only rows (Sent folders sync without bodies)
+        come back with an empty snippet. This is the per-person query: search() is ranked
+        full text over the body too and cannot say whether a hit was addressed to or merely
+        mentioned the person."""
+        addr = (address or "").strip().lower()
+        if not addr:
+            return []
+        pattern = f"%{addr}%"
+        where = ["(lower(m.from_addr) LIKE ? OR lower(m.to_addrs) LIKE ? OR lower(m.cc_addrs) LIKE ?)",
+                 "COALESCE(m.date_ts, m.internaldate_ts) IS NOT NULL",
+                 "COALESCE(f.special_use, '') NOT IN (?, ?, ?)"]
+        args: List[Any] = [pattern, pattern, pattern, "\\Junk", "\\Trash", "\\Drafts"]
+        if before_ts is not None:
+            where.append("COALESCE(m.date_ts, m.internaldate_ts) <= ?")
+            args.append(int(before_ts))
+        args.append(max(1, min(int(limit), 200)))
+        rows = self._conn().execute(
+            f"SELECT m.id, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs, m.snippet, "
+            f"COALESCE(m.date_ts, m.internaldate_ts) AS ts, f.name AS folder_name, f.special_use, "
+            f"a.account_id AS acct FROM messages m "
+            f"JOIN accounts a ON a.id=m.account_id JOIN folders f ON f.id=m.folder_id "
+            f"WHERE {' AND '.join(where)} ORDER BY ts DESC, m.id DESC LIMIT ?", args).fetchall()
+        return [dict(r) for r in rows]
+
     # ── local writes + op queue (phase 2; EMAIL_CLIENT.md K-9 pattern) ─────
 
     def set_local_flags(self, pk: int, add: Iterable[str] = (),

@@ -555,9 +555,11 @@ def contact_created(contact: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 # ── status, notes, events: the personal file grows into a small CRM ─────────────
 #
-# Everything below lives INSIDE the contact record, so it inherits the store's
-# isolation for free: the record sits in the file of one username or one scope
-# (see _contacts_path), and no query here crosses files.
+# Record-internal: status, notes, events, the summary and the self view live INSIDE the
+# contact record, so they inherit the store's isolation for free: the record sits in the
+# file of one username or one scope (see _contacts_path), and none of these functions
+# reads another file. The cross-store glances further down (calendar, timeline,
+# statistics) read the SAME user's other stores, keyed by the same username and scope.
 
 # The status is a free label; these are the suggestions a fresh contact book offers.
 CONTACT_STATUS_DEFAULTS = ("lead", "in_contact", "customer", "archived")
@@ -736,6 +738,17 @@ def contact_summary(contact: Dict[str, Any], now_ts: Optional[float] = None) -> 
     }
 
 
+# ── cross-store glances: what the user's other stores know about this person ────
+#
+# Live reads, never stored, best-effort by design: each source sits in its own try/except
+# and a missing store answers nothing instead of being created. Every read is keyed by the
+# caller's own username and user_scope_id, the same pair that picks the store FILE, so a
+# tenant sees only their own calendar, messages and mail. Two named boundaries: Discord
+# rows are written under the literal admin identity (discord_bridge stores with
+# username "admin" and no scope), so the discord lane runs for the local admin only; and a
+# legacy per-username caller (username, no scope) reaches the legacy mail store only, the
+# rule vaf/mail/tool_bridge.messages_for_address_merged enforces.
+
 def contact_calendar_events(
     contact: Dict[str, Any],
     username: Optional[str] = None,
@@ -772,6 +785,199 @@ def contact_calendar_events(
         hay = f"{e.get('summary') or ''} {e.get('description') or ''}".lower()
         if any(n in hay for n in needles):
             out.append(e)
+    return out
+
+
+TIMELINE_KINDS = ("message", "mail", "note", "event", "created")
+_MESSAGE_CHANNELS = ("whatsapp", "telegram", "discord")
+
+
+def _timeline_sort_key(item: Dict[str, Any]) -> tuple:
+    return (float(item.get("ts") or 0), str(item.get("kind") or ""), str(item.get("id") or ""))
+
+
+def encode_timeline_cursor(item: Dict[str, Any]) -> str:
+    """An opaque page marker: the sort key of the last item shown, URL-safe."""
+    import base64
+    import json as _json
+    raw = _json.dumps(list(_timeline_sort_key(item)), separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_timeline_cursor(cursor: Optional[str]) -> Optional[tuple]:
+    """The sort key a cursor encodes, or None for an empty or unreadable cursor (page one)."""
+    import base64
+    import json as _json
+    s = (cursor or "").strip()
+    if not s:
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+        ts, kind, ident = _json.loads(raw.decode("utf-8"))
+        return (float(ts), str(kind), str(ident))
+    except Exception:
+        return None
+
+
+def _message_channel_username(channel: str, username: Optional[str]) -> str:
+    # discord_bridge writes every row as username "admin"; the rows sit in the admin's file,
+    # which the local admin caller reads anyway, so the row filter has to use the same name.
+    return "admin" if channel == "discord" else ((username or "").strip() or "admin")
+
+
+def contact_timeline(
+    contact: Dict[str, Any],
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+    *,
+    limit: int = 50,
+    cursor: Optional[str] = None,
+    kinds: Optional[Any] = None,
+    lid_map: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Everything the user's stores hold about this person, newest first, as one list:
+    {"items": [...], "next_cursor": str | None}. Item: {"kind": message | mail | note |
+    event | created, "id", "ts", "channel", "direction": in | out | None, "title", "body",
+    "source", "ref": {...}}.
+
+    Sources: the record's notes_log (note) and events (event, at the moment it was
+    attached; ref.when_ts is the appointment), the record's own creation (created, from
+    contact_created), the message store per endpoint per channel (message; deleted
+    tombstones skipped; ref.chat_id lets a window jump into the chat), and the mail stores
+    per address (mail; direction from headers, see messages_for_address_merged). Every
+    source is best-effort on its own, so a broken mail engine never empties the messages.
+
+    Paging: the cursor is the sort key (ts, kind, id) of the last item shown. Every store
+    source is asked for limit + 1 rows at or before the cursor's ts (inclusive, so a second
+    shared by several items is never skipped), the merge drops what sorts at or above the
+    cursor, and next_cursor is set when more than limit items remain OR a store source
+    returned as many rows as it was asked for (it may hold older ones). More than limit + 1
+    rows within one and the same second is the one case that can lose rows; message stores
+    do not produce it. `kinds` narrows the sources (a tab), so a notes-only view opens no
+    message store."""
+    limit = max(1, min(int(limit or 50), 200))
+    want = set(TIMELINE_KINDS) if not kinds else {str(k).strip().lower() for k in kinds}
+    cursor_key = decode_timeline_cursor(cursor)
+    before_ts = cursor_key[0] if cursor_key else None
+    per_source = limit + 1
+    truncated = False
+    items: List[Dict[str, Any]] = []
+
+    def _keep(ts: Any) -> bool:
+        try:
+            t = float(ts or 0)
+        except (TypeError, ValueError):
+            return False
+        return bool(t) and (before_ts is None or t <= before_ts)
+
+    if "note" in want:
+        for n in (contact.get("notes_log") or []):
+            if isinstance(n, dict) and _keep(n.get("ts")):
+                items.append({"kind": "note", "id": str(n.get("id") or ""), "ts": float(n["ts"]), "channel": None,
+                              "direction": None, "title": None, "body": str(n.get("text") or ""),
+                              "source": n.get("source") or "user", "ref": {"note_id": n.get("id")}})
+    if "event" in want:
+        for e in (contact.get("events") or []):
+            if isinstance(e, dict) and _keep(e.get("ts")):
+                items.append({"kind": "event", "id": str(e.get("id") or ""), "ts": float(e["ts"]), "channel": None,
+                              "direction": None, "title": str(e.get("title") or ""), "body": str(e.get("note") or ""),
+                              "source": e.get("source") or "user",
+                              "ref": {"event_id": e.get("id"), "when_ts": e.get("when_ts")}})
+    if "created" in want:
+        created = contact_created(contact)
+        if created and _keep(created["ts"]):
+            link = (contact.get("links") or {}).get(created["source"]) if isinstance(contact.get("links"), dict) else None
+            shown = (link or {}).get("display_name") if isinstance(link, dict) else None
+            items.append({"kind": "created", "id": "created", "ts": float(created["ts"]), "channel": None,
+                          "direction": None, "title": (str(shown).strip() or None) if shown else None,
+                          "body": created["source"], "source": created["source"], "ref": {"source": created["source"]}})
+
+    endpoints = contact_endpoints(contact, with_lids=True, lid_map=lid_map) if ({"message", "mail"} & want) else {}
+
+    if "message" in want:
+        for chan in _MESSAGE_CHANNELS:
+            keys = endpoints.get(chan) or []
+            if not keys:
+                continue
+            if chan == "discord" and not _is_local_admin_caller(username, user_scope_id):
+                continue
+            try:
+                from vaf.core.channel_message_store import get_chat_messages, store_exists
+                if not store_exists(username, user_scope_id):
+                    continue
+                row_user = _message_channel_username(chan, username)
+                for key in keys:
+                    rows = get_chat_messages(row_user, key, limit=per_source, user_scope_id=user_scope_id,
+                                             channel=chan, before_ts=before_ts)
+                    truncated = truncated or len(rows) >= per_source
+                    for row in rows:
+                        if (row.get("content_type") or "text") == "deleted" or not _keep(row.get("ts")):
+                            continue
+                        direction = "out" if (row.get("direction") or "in") == "out" else "in"
+                        items.append({"kind": "message", "id": f"{chan}:{key}:{float(row['ts']):.3f}:{direction}",
+                                      "ts": float(row["ts"]), "channel": chan, "direction": direction, "title": None,
+                                      "body": str(row.get("body") or ""), "source": "agent" if direction == "out" else None,
+                                      "ref": {"chat_id": row.get("chat_id") or key, "content_type": row.get("content_type") or "text"}})
+            except Exception as e:
+                logger.debug("contact_timeline: %s lane skipped: %s", chan, e)
+
+    if "mail" in want:
+        for addr in endpoints.get("email") or []:
+            try:
+                from vaf.mail.tool_bridge import messages_for_address_merged
+                rows = messages_for_address_merged(addr, before_ts, per_source, username, user_scope_id)
+                truncated = truncated or len(rows) >= per_source
+                for row in rows:
+                    if not _keep(row.get("ts")):
+                        continue
+                    items.append({"kind": "mail", "id": f"mail:{row.get('account_id') or ''}:{row.get('message_id') or ''}",
+                                  "ts": float(row["ts"]), "channel": "email", "direction": row.get("direction") or "in",
+                                  "title": str(row.get("subject") or ""), "body": str(row.get("snippet") or ""),
+                                  "source": None,
+                                  "ref": {"account_id": row.get("account_id"), "folder": row.get("folder"),
+                                          "message_id": row.get("message_id"), "from": row.get("from"), "to": row.get("to")}})
+            except Exception as e:
+                logger.debug("contact_timeline: mail lane skipped for one address: %s", e)
+
+    if cursor_key is not None:
+        items = [it for it in items if _timeline_sort_key(it) < cursor_key]
+    items.sort(key=_timeline_sort_key, reverse=True)
+    page = items[:limit]
+    next_cursor = encode_timeline_cursor(page[-1]) if page and (len(items) > limit or truncated) else None
+    return {"items": page, "next_cursor": next_cursor}
+
+
+def contact_activity_stats(
+    contact: Dict[str, Any],
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+    *,
+    lid_map: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """The key figures over a person's stored messages: {"messages", "from_agent",
+    "first_ts", "last_ts", "by_channel": {channel: chat_stats}}. first_ts is the oldest
+    STORED message (history loads on demand), so the window labels it as such; the true
+    first-seen date is contact_created. Same channel and identity rules as contact_timeline."""
+    out: Dict[str, Any] = {"messages": 0, "from_agent": 0, "first_ts": None, "last_ts": None, "by_channel": {}}
+    endpoints = contact_endpoints(contact, with_lids=True, lid_map=lid_map)
+    for chan in _MESSAGE_CHANNELS:
+        keys = endpoints.get(chan) or []
+        if not keys or (chan == "discord" and not _is_local_admin_caller(username, user_scope_id)):
+            continue
+        try:
+            from vaf.core.channel_message_store import chat_stats
+            s = chat_stats(_message_channel_username(chan, username), keys, user_scope_id=user_scope_id, channel=chan)
+        except Exception as e:
+            logger.debug("contact_activity_stats: %s lane skipped: %s", chan, e)
+            continue
+        if not s.get("count"):
+            continue
+        out["by_channel"][chan] = s
+        out["messages"] += int(s["count"])
+        out["from_agent"] += int(s.get("out_count") or 0)
+        for bound, pick in (("first_ts", min), ("last_ts", max)):
+            if s.get(bound) is not None:
+                out[bound] = float(s[bound]) if out[bound] is None else pick(out[bound], float(s[bound]))
     return out
 
 

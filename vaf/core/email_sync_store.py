@@ -421,6 +421,79 @@ def search_messages(
         conn.close()
 
 
+def _legacy_row_ts(row: Any) -> Optional[float]:
+    """Unix time of a legacy row: message_date_iso (Z-suffixed UTC) first, then the raw Date
+    header, else None. A row with no usable date has no place on a timeline."""
+    from datetime import datetime, timezone
+    keys = row.keys() if hasattr(row, "keys") else ()
+    iso = (row["message_date_iso"] if "message_date_iso" in keys else None) or ""
+    if iso:
+        try:
+            dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        except ValueError:
+            pass
+    raw = (row["date_str"] if "date_str" in keys else None) or ""
+    if raw:
+        try:
+            from email.utils import parsedate_to_datetime
+            dt = parsedate_to_datetime(str(raw))
+            if dt is not None:
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.timestamp()
+        except (TypeError, ValueError, IndexError):
+            pass
+    return None
+
+
+def messages_from_address(
+    address: str,
+    limit: int = 50,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+    before_ts: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """Legacy-store half of a person's mail timeline: INBOX rows whose sender is this
+    address, newest first, each with a float "ts" and direction "in" (the legacy store
+    holds no Sent mail). Timeline row shape, see vaf/mail/tool_bridge.messages_for_address_merged.
+    Reads nothing when this identity has no legacy store on disk."""
+    addr = (address or "").strip().lower()
+    if not addr or not _db_path(username, user_scope_id).exists():
+        return []
+    init_store(username, user_scope_id)
+    user = _user_for_query(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        cur = conn.execute(
+            """
+            SELECT account_id, folder, message_id, subject, from_addr, date_str, body_snippet, message_date_iso
+            FROM email_messages
+            WHERE username = ? AND folder = 'INBOX' AND lower(from_addr) LIKE ?
+            ORDER BY message_date_iso DESC NULLS LAST, synced_at DESC
+            LIMIT 500
+            """,
+            (user, f"%{addr}%"),
+        )
+        out: List[Dict[str, Any]] = []
+        for r in cur.fetchall():
+            ts = _legacy_row_ts(r)
+            if ts is None or (before_ts is not None and ts > float(before_ts)):
+                continue
+            out.append({
+                "ts": ts, "direction": "in", "subject": r["subject"] or "", "from": r["from_addr"] or "",
+                "to": "", "cc": "", "snippet": r["body_snippet"] or "", "account_id": r["account_id"] or "",
+                "folder": r["folder"] or "INBOX", "message_id": r["message_id"] or "", "special_use": "",
+            })
+            if len(out) >= max(1, int(limit)):
+                break
+        return out
+    finally:
+        conn.close()
+
+
 def count_messages(account_id: Optional[str] = None, folder: str = "INBOX", username: Optional[str] = None, user_scope_id: Optional[str] = None, category: Optional[str] = None) -> int:
     """Return total count for account (or all) and folder. Optional category filter. username/user_scope_id scopes to that user when set."""
     init_store(username, user_scope_id)

@@ -156,6 +156,56 @@ def search_messages_merged(query, folder, limit, username, user_scope_id):
     return _merge(v2_rows, legacy_rows, v2_accounts, int(limit), 0)
 
 
+def messages_for_address_merged(address, before_ts, limit, username, user_scope_id):
+    """Every mail exchanged with one address, newest first, as timeline rows:
+    {ts, direction, subject, from, to, cc, snippet, account_id, folder, message_id,
+    special_use}. Direction is decided from headers and folders, never from a search hit:
+    "in" when the address is in From; "out" when the row sits in the mailbox's Sent folder
+    or the address is only in To/Cc.
+
+    Scope rule, the same one email_sync_store enforces: a caller with a username and NO
+    scope is a legacy per-username user and gets the legacy store only (INBOX, inbound);
+    mapping an empty scope to the admin's real scope would hand over the admin's mailbox.
+    A scope whose mail.db does not exist reads nothing from v2 and creates nothing."""
+    from vaf.core.email_sync_store import messages_from_address as legacy_from_address
+    addr = (address or "").strip().lower()
+    if not addr:
+        return []
+    limit = max(1, int(limit))
+    legacy_user = bool((username or "").strip()) and not (user_scope_id or "").strip()
+    v2_rows: List[Dict[str, Any]] = []
+    v2_accounts: set = set()
+    if not legacy_user:
+        from vaf.mail.store import MailStore
+        scope = _scope(user_scope_id)
+        if MailStore.exists(scope):
+            store = MailStore(scope)
+            v2_accounts = _v2_account_ids(store)
+            for m in store.messages_for_address(addr, before_ts=before_ts, limit=limit):
+                from_l = (m.get("from_addr") or "").lower()
+                if addr in from_l:
+                    direction = "in"
+                elif (m.get("special_use") or "") == "\\Sent" or addr in (m.get("to_addrs") or "").lower() \
+                        or addr in (m.get("cc_addrs") or "").lower():
+                    direction = "out"
+                else:
+                    continue
+                v2_rows.append({
+                    "ts": float(m.get("ts") or 0), "direction": direction,
+                    "subject": m.get("subject") or "", "from": m.get("from_addr") or "",
+                    "to": m.get("to_addrs") or "", "cc": m.get("cc_addrs") or "",
+                    "snippet": m.get("snippet") or "", "account_id": m.get("acct") or "",
+                    "folder": m.get("folder_name") or "", "message_id": m.get("message_id") or f"pk-{m.get('id')}",
+                    "special_use": m.get("special_use") or "",
+                })
+    legacy_rows = [r for r in legacy_from_address(addr, limit=limit, username=username, user_scope_id=user_scope_id,
+                                                  before_ts=before_ts)
+                   if (r.get("account_id") or "") not in v2_accounts]
+    merged = v2_rows + legacy_rows
+    merged.sort(key=lambda r: -float(r.get("ts") or 0))
+    return merged[:limit]
+
+
 def update_message_field(user_scope_id, account_id, message_id, field, value) -> bool:
     """Mirror a category/answered_at write into the v2 store (split-brain fix).
     Field name is allow-listed; matching is bracket-tolerant by Message-ID."""

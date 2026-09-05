@@ -108,6 +108,20 @@ class GetContactTool(BaseTool):
             parts.append(f"Notes: {contact['notes']}")
         if contact.get("allow_as_assistant_user"):
             parts.append("Allowed as assistant user: yes")
+        if contact.get("company"):
+            parts.append(f"Company: {contact['company']}")
+        if contact.get("role"):
+            parts.append(f"Role: {contact['role']}")
+        if contact.get("tags"):
+            parts.append("Tags: " + ", ".join(str(t) for t in contact["tags"] if t))
+        try:
+            from datetime import datetime
+            from vaf.core.contacts_store import contact_created
+            created = contact_created(contact)
+            if created:
+                parts.append(f"Added: {datetime.fromtimestamp(float(created['ts'])).strftime('%Y-%m-%d')} ({created['source']})")
+        except Exception:
+            pass
         try:
             from datetime import datetime
             from vaf.core.contacts_store import contact_summary
@@ -138,4 +152,22 @@ class GetContactTool(BaseTool):
                 when = ""
             shown = link.get("display_name")
             parts.append(f"Linked via {chan}{when}" + (f" (shown there as {shown})" if shown and shown != contact.get("name") else ""))
+        # The newest stored messages and mails with this person, so "what did we last
+        # discuss with X" is one call. Best-effort: a store that is missing or slow costs
+        # nothing but this block.
+        try:
+            from datetime import datetime
+            from vaf.core.contacts_store import contact_timeline
+            recent = contact_timeline(contact, username, user_scope_id, limit=5, kinds={"message", "mail"})["items"]
+            if recent:
+                parts.append("Recent activity (newest first; in = they wrote, out = sent from your side):")
+                labels = {"whatsapp": "WhatsApp", "telegram": "Telegram", "discord": "Discord", "email": "Mail"}
+                for it in recent:
+                    when = datetime.fromtimestamp(float(it["ts"])).strftime("%Y-%m-%d %H:%M")
+                    text = (it.get("title") or it.get("body") or "").strip().replace("\n", " ")
+                    if it.get("kind") == "mail" and it.get("body"):
+                        text = f"{text}: {str(it['body']).strip()}" if it.get("title") else str(it["body"]).strip()
+                    parts.append(f"  {when} {labels.get(it.get('channel') or '', it.get('channel') or '')} {it.get('direction') or ''}: {text[:160]}")
+        except Exception:
+            pass
         return "\n".join(parts)

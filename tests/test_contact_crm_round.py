@@ -470,3 +470,95 @@ def test_front_office_doc_lists_exactly_the_allowed_tools():
     not_available = doc[end:doc.index("At runtime", end)]
     for name in ("list_contacts", "get_contact", "memory_search", "read_whatsapp_chat", "find_mail"):
         assert f"`{name}`" in not_available, name
+
+
+# ── routes and tools ─────────────────────────────────────────────────────────────
+
+def _req(scope, username):
+    from types import SimpleNamespace
+    return SimpleNamespace(state=SimpleNamespace(user={"user_scope_id": scope, "username": username}))
+
+
+def test_timeline_route_is_scoped_paged_and_survives_a_timeout(scratch, monkeypatch):
+    import asyncio
+    from fastapi import HTTPException
+    from vaf.api import contact_routes as routes
+    c = cs.create_contact("Bob", "alice", user_scope_id=SCOPE_A, whatsapp_phone="+491700000042")
+    _seed_chat("alice", "+491700000042", SCOPE_A, 30)
+    cs.add_contact_note(c["id"], "a note", "alice", user_scope_id=SCOPE_A)
+    out = asyncio.run(routes.get_contact_timeline(c["id"], _req(SCOPE_A, "alice"), limit=10))
+    assert len(out["items"]) == 10 and out["next_cursor"]
+    page2 = asyncio.run(routes.get_contact_timeline(c["id"], _req(SCOPE_A, "alice"), limit=10, cursor=out["next_cursor"]))
+    assert len(page2["items"]) == 10 and not ({it["id"] for it in page2["items"]} & {it["id"] for it in out["items"]})
+    notes_only = asyncio.run(routes.get_contact_timeline(c["id"], _req(SCOPE_A, "alice"), kinds="note, created"))
+    assert [it["kind"] for it in notes_only["items"]] == ["created", "note"] or [it["kind"] for it in notes_only["items"]] == ["note", "created"]
+    with pytest.raises(HTTPException):
+        asyncio.run(routes.get_contact_timeline(c["id"], _req(SCOPE_B, "bob")))
+    monkeypatch.setattr(cs, "contact_timeline", lambda *a, **k: (_ for _ in ()).throw(asyncio.TimeoutError()))
+    slow = asyncio.run(routes.get_contact_timeline(c["id"], _req(SCOPE_A, "alice")))
+    assert slow == {"items": [], "next_cursor": None, "timed_out": True}
+
+
+def test_overview_route_adds_stats_endpoints_and_created(scratch, monkeypatch):
+    import asyncio
+    from vaf.api import contact_routes as routes
+    c = cs.create_contact("Bob", "alice", user_scope_id=SCOPE_A, whatsapp_phone="0170 0000042", email="Bob@Example.com")
+    _seed_chat("alice", "+491700000042", SCOPE_A, 3)
+    monkeypatch.setattr(cs, "contact_calendar_events", lambda *a, **k: [])
+    out = asyncio.run(routes.get_contact_overview(c["id"], _req(SCOPE_A, "alice")))
+    assert out["endpoints"] == {"whatsapp": ["+491700000042"], "telegram": [], "discord": [], "email": ["bob@example.com"]}
+    assert out["created"]["source"] == "manual" and out["created"]["ts"] == c["created_at"]
+    assert out["stats"]["messages"] == 3 and out["stats"]["from_agent"] == 1
+    assert out["calendar_events"] == [] and out["notes_count"] == 0
+
+
+def test_bulk_and_tag_routes(scratch):
+    import asyncio
+    from vaf.api import contact_routes as routes
+    a = cs.create_contact("A", "alice", user_scope_id=SCOPE_A)
+    b = cs.create_contact("B", "alice", user_scope_id=SCOPE_A, tags="vip")
+    other = cs.create_contact("Other", "bob", user_scope_id=SCOPE_B)
+    out = asyncio.run(routes.bulk_update_contacts(_req(SCOPE_A, "alice"),
+                                                  routes.BulkUpdate(ids=[a["id"], b["id"], other["id"]], status="lead", add_tags=["berlin"])))
+    assert out == {"updated": 2}
+    assert cs.get_contact_by_id(a["id"], "alice", user_scope_id=SCOPE_A)["tags"] == ["berlin"]
+    assert cs.get_contact_by_id(b["id"], "alice", user_scope_id=SCOPE_A)["tags"] == ["vip", "berlin"]
+    # status left out of the body: unchanged; explicit null: cleared
+    asyncio.run(routes.bulk_update_contacts(_req(SCOPE_A, "alice"), routes.BulkUpdate(ids=[a["id"]], remove_tags=["berlin"])))
+    assert cs.get_contact_by_id(a["id"], "alice", user_scope_id=SCOPE_A)["status"] == "lead"
+    asyncio.run(routes.bulk_update_contacts(_req(SCOPE_A, "alice"), routes.BulkUpdate(ids=[a["id"]], status=None)))
+    assert cs.get_contact_by_id(a["id"], "alice", user_scope_id=SCOPE_A)["status"] is None
+    tags = asyncio.run(routes.get_tag_values(_req(SCOPE_A, "alice")))
+    assert tags == {"values": ["vip", "berlin"]} or tags == {"values": ["berlin", "vip"]}
+    assert asyncio.run(routes.bulk_delete_contacts(_req(SCOPE_A, "alice"), routes.BulkIds(ids=[a["id"], other["id"]]))) == {"deleted": 1}
+    assert cs.get_contact_by_id(other["id"], "bob", user_scope_id=SCOPE_B) is not None
+    # PATCH with the new fields
+    patched = asyncio.run(routes.patch_contact(b["id"], _req(SCOPE_A, "alice"), routes.ContactUpdate(company="Acme", role="CTO", tags=["x", "y"])))
+    assert patched["company"] == "Acme" and patched["role"] == "CTO" and patched["tags"] == ["x", "y"]
+    created = asyncio.run(routes.post_contact(_req(SCOPE_A, "alice"), routes.ContactCreate(name="New", company="Corp", tags=["a"])))
+    assert created["company"] == "Corp" and created["tags"] == ["a"] and created["source"] == "manual"
+
+
+def test_tools_carry_the_new_fields_and_recent_activity(scratch):
+    from vaf.tools.create_contact import CreateContactTool
+    from vaf.tools.get_contact import GetContactTool
+    from vaf.tools.list_contacts import ListContactsTool
+    from vaf.tools.update_contact import UpdateContactTool
+    out = CreateContactTool().run(name="Lena Example", username="alice", user_scope_id=SCOPE_A, whatsapp_phone="+491700000042",
+                                  company="Studio Example", role="CEO", tags="vip, berlin")
+    assert "Contact created: Lena Example" in out
+    lena = cs.get_contact_by_name("Lena Example", "alice", user_scope_id=SCOPE_A)
+    assert lena["source"] == "agent" and lena["tags"] == ["vip", "berlin"] and lena["company"] == "Studio Example"
+    cs.create_contact("Plain", "alice", user_scope_id=SCOPE_A)
+    listed = ListContactsTool().run(username="alice", user_scope_id=SCOPE_A, tag="VIP")
+    assert "Lena Example" in listed and "| Tags: vip, berlin" in listed and "Plain" not in listed
+    assert "No contacts with tag 'nobody'" in ListContactsTool().run(username="alice", user_scope_id=SCOPE_A, tag="nobody")
+    out = UpdateContactTool().run(contact_id=lena["id"], username="alice", user_scope_id=SCOPE_A, tags="a, b, a", role="CTO")
+    assert "fields role, tags" in out
+    assert cs.get_contact_by_id(lena["id"], "alice", user_scope_id=SCOPE_A)["tags"] == ["a", "b"]
+    _seed_chat("alice", "+491700000042", SCOPE_A, 3)
+    out = GetContactTool().run(name="Lena Example", username="alice", user_scope_id=SCOPE_A)
+    assert "Company: Studio Example" in out and "Role: CTO" in out and "Tags: a, b" in out and "Added: " in out and "(agent)" in out
+    assert "Recent activity" in out and "WhatsApp in: msg 2" in out and "WhatsApp out: msg 0" in out
+    # The pinned lines of the older test still hold.
+    assert "WhatsApp/Phone: +491700000042" in out

@@ -21,7 +21,7 @@ class CreateContactTool(BaseTool):
     side_effect_class = "reversible"
     description = (
         "Create a contact in the central contact list. Required: name. Optional: email, whatsapp_phone, telegram_username, "
-        "preferred_language, how_to_address, birthday, notes, allow_as_assistant_user. "
+        "preferred_language, how_to_address, birthday, notes, allow_as_assistant_user, company, role, tags. "
         "Returns the new contact with contact_id (use for update_contact or delete_contact)."
     )
     parameters = {
@@ -36,6 +36,9 @@ class CreateContactTool(BaseTool):
             "birthday": {"type": "string", "description": "MM-DD or ISO date."},
             "notes": {"type": "string", "description": "Free-form notes."},
             "allow_as_assistant_user": {"type": "boolean", "description": "If true, this contact can reach your assistant (front office)."},
+            "company": {"type": "string", "description": "Company or organisation the person belongs to."},
+            "role": {"type": "string", "description": "The person's role or job title."},
+            "tags": {"type": "string", "description": "Comma-separated tags (a tag cannot contain a comma), e.g. 'vip, berlin'."},
         },
         "required": ["name"],
     }
@@ -63,6 +66,10 @@ class CreateContactTool(BaseTool):
             birthday=(kwargs.get("birthday") or "").strip() or None,
             notes=(kwargs.get("notes") or "").strip() or None,
             allow_as_assistant_user=bool(kwargs.get("allow_as_assistant_user", False)),
+            company=(kwargs.get("company") or "").strip() or None,
+            role=(kwargs.get("role") or "").strip() or None,
+            tags=kwargs.get("tags") or None,
+            source="agent",
         )
         cid = contact.get("id") or ""
         return f"Contact created: {contact.get('name', '')} | contact_id: {cid}. Use update_contact(contact_id='{cid}', ...) or delete_contact(contact_id='{cid}') to modify or remove."

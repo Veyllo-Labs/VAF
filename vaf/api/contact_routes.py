@@ -54,6 +54,9 @@ class ContactCreate(BaseModel):
     birthday: Optional[str] = None
     notes: Optional[str] = None
     allow_as_assistant_user: bool = False
+    company: Optional[str] = None
+    role: Optional[str] = None
+    tags: Optional[List[str]] = None
 
 
 class ContactUpdate(BaseModel):
@@ -69,6 +72,20 @@ class ContactUpdate(BaseModel):
     birthday: Optional[str] = None
     notes: Optional[str] = None
     allow_as_assistant_user: Optional[bool] = None
+    company: Optional[str] = None
+    role: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+
+class BulkUpdate(BaseModel):
+    ids: List[str]
+    status: Optional[str] = None          # left out: unchanged; null or "": cleared
+    add_tags: Optional[List[str]] = None
+    remove_tags: Optional[List[str]] = None
+
+
+class BulkIds(BaseModel):
+    ids: List[str]
 
 
 @router.get("")
@@ -114,8 +131,31 @@ async def post_contact(request: Request, body: ContactCreate) -> Dict[str, Any]:
         birthday=body.birthday,
         notes=body.notes,
         allow_as_assistant_user=body.allow_as_assistant_user,
+        company=body.company,
+        role=body.role,
+        tags=body.tags,
     )
     return contact
+
+
+@router.post("/bulk")
+async def bulk_update_contacts(request: Request, body: BulkUpdate) -> Dict[str, int]:
+    """Set a status and/or add and remove tags on several contacts at once. Ids outside the
+    caller's book are ignored. Declared as POST so it never collides with PATCH /{contact_id}."""
+    from vaf.core.contacts_store import _UNSET, update_contacts_bulk
+    user_info = get_current_vaf_user(request)
+    status = body.status if "status" in body.model_fields_set else _UNSET
+    n = update_contacts_bulk(body.ids, user_info["username"], user_info.get("user_scope_id"),
+                             status=status, add_tags=body.add_tags, remove_tags=body.remove_tags)
+    return {"updated": n}
+
+
+@router.post("/bulk/delete")
+async def bulk_delete_contacts(request: Request, body: BulkIds) -> Dict[str, int]:
+    """Delete several contacts at once; ids outside the caller's book are ignored."""
+    from vaf.core.contacts_store import delete_contacts
+    user_info = get_current_vaf_user(request)
+    return {"deleted": delete_contacts(body.ids, user_info["username"], user_info.get("user_scope_id"))}
 
 
 @router.patch("/{contact_id}")
@@ -173,6 +213,14 @@ async def get_status_values(request: Request) -> Dict[str, Any]:
     from vaf.core.contacts_store import contact_status_values
     user_info = get_current_vaf_user(request)
     return {"values": contact_status_values(user_info["username"], user_scope_id=user_info.get("user_scope_id"))}
+
+
+@router.get("/tags/values")
+async def get_tag_values(request: Request) -> Dict[str, Any]:
+    """Every tag in use, most frequent first (the suggestions behind the tag input)."""
+    from vaf.core.contacts_store import contact_tag_values
+    user_info = get_current_vaf_user(request)
+    return {"values": contact_tag_values(user_info["username"], user_scope_id=user_info.get("user_scope_id"))}
 
 
 @router.post("/{contact_id}/notes")
@@ -233,7 +281,44 @@ async def get_contact_overview(contact_id: str, request: Request) -> Dict[str, A
             asyncio.to_thread(contact_calendar_events, contact, username, user_scope_id, 30), timeout=6.0)
     except Exception:
         summary["calendar_events"] = []
+    # The store keys the window passes to a chat window (no lid jids: the WhatsApp dashboard
+    # files a resolved chat under its number), since when the record exists, and the key
+    # figures over the stored messages (best-effort like the calendar half).
+    from vaf.core.contacts_store import contact_activity_stats, contact_created, contact_endpoints
+    summary["endpoints"] = contact_endpoints(contact)
+    summary["created"] = contact_created(contact)
+    try:
+        summary["stats"] = await asyncio.wait_for(
+            asyncio.to_thread(contact_activity_stats, contact, username, user_scope_id), timeout=6.0)
+    except Exception:
+        summary["stats"] = None
     return summary
+
+
+@router.get("/{contact_id}/timeline")
+async def get_contact_timeline(contact_id: str, request: Request, limit: int = 50,
+                               cursor: Optional[str] = None, kinds: Optional[str] = None) -> Dict[str, Any]:
+    """One newest-first list of everything the user's stores hold about this contact
+    (messages, mails, notes, events, the record's creation), paged by an opaque cursor.
+    `kinds` narrows the sources: a comma-separated subset of message, mail, note, event,
+    created. A lane that takes too long yields an empty page marked timed_out instead of
+    blocking the window."""
+    import asyncio
+    from vaf.core.contacts_store import contact_timeline
+    user_info = get_current_vaf_user(request)
+    username = user_info["username"]
+    user_scope_id = user_info.get("user_scope_id")
+    contact = get_contact_by_id(contact_id, username, user_scope_id=user_scope_id)
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    kind_set = {k.strip().lower() for k in (kinds or "").split(",") if k.strip()} or None
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(contact_timeline, contact, username, user_scope_id,
+                              limit=min(max(int(limit or 50), 1), 200), cursor=cursor, kinds=kind_set),
+            timeout=10.0)
+    except asyncio.TimeoutError:
+        return {"items": [], "next_cursor": None, "timed_out": True}
 
 
 @router.delete("/{contact_id}")

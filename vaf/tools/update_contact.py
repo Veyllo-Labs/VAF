@@ -21,7 +21,8 @@ class UpdateContactTool(BaseTool):
     side_effect_class = "reversible"
     description = (
         "Update a contact by contact_id. Required: contact_id (from list_contacts or get_contact). "
-        "Optional: name, email, whatsapp_phone, telegram_username, preferred_language, how_to_address, birthday, notes, allow_as_assistant_user. "
+        "Optional: name, email, whatsapp_phone, telegram_username, preferred_language, how_to_address, birthday, notes, "
+        "allow_as_assistant_user, company, role, tags, status, add_note, add_event_title + add_event_when. "
         "When multiple contacts have the same name, always ask the user which one they mean before updating."
     )
     parameters = {
@@ -37,6 +38,9 @@ class UpdateContactTool(BaseTool):
             "birthday": {"type": "string", "description": "MM-DD or ISO date."},
             "notes": {"type": "string", "description": "Free-form notes."},
             "allow_as_assistant_user": {"type": "boolean", "description": "Can reach your assistant (front office)."},
+            "company": {"type": "string", "description": "Company or organisation the person belongs to."},
+            "role": {"type": "string", "description": "The person's role or job title."},
+            "tags": {"type": "string", "description": "Comma-separated tags that REPLACE the current ones (a tag cannot contain a comma); empty string clears them."},
             "status": {"type": "string", "description": "Relationship status, a free label; the usual ones are lead, in_contact, customer, archived."},
             "add_note": {"type": "string", "description": "Append a dated note to the contact's file (e.g. 'interested in feature X', 'follow up next week'). Use this for anything worth remembering about the person; it is kept with the date."},
             "add_event_title": {"type": "string", "description": "Attach a dated event to the contact (e.g. 'Meeting'). Requires add_event_when."},
@@ -58,11 +62,15 @@ class UpdateContactTool(BaseTool):
             return f"Contacts unavailable: {e}"
 
         updates = {}
-        for key in ("name", "email", "whatsapp_phone", "telegram_username", "preferred_language", "how_to_address", "birthday", "notes", "allow_as_assistant_user", "status"):
+        for key in ("name", "email", "whatsapp_phone", "telegram_username", "preferred_language", "how_to_address", "birthday", "notes",
+                    "allow_as_assistant_user", "status", "company", "role", "tags"):
             if key in kwargs:
                 v = kwargs[key]
                 if key == "allow_as_assistant_user":
                     updates[key] = bool(v)
+                elif key == "tags":
+                    # The store splits the comma string itself; an empty string clears the list.
+                    updates[key] = v if isinstance(v, (str, list)) else ""
                 elif v is not None and isinstance(v, str) and v.strip():
                     updates[key] = v.strip()
                 elif v is not None:
@@ -72,7 +80,8 @@ class UpdateContactTool(BaseTool):
         event_when = (kwargs.get("add_event_when") or "").strip() if isinstance(kwargs.get("add_event_when"), str) else ""
 
         if not updates and not note_text and not event_title:
-            return "No fields to update. Provide at least one of: name, email, whatsapp_phone, telegram_username, preferred_language, how_to_address, birthday, notes, allow_as_assistant_user, status, add_note, add_event_title + add_event_when."
+            return ("No fields to update. Provide at least one of: name, email, whatsapp_phone, telegram_username, preferred_language, "
+                    "how_to_address, birthday, notes, allow_as_assistant_user, company, role, tags, status, add_note, add_event_title + add_event_when.")
 
         done = []
         contact = get_contact_by_id(contact_id, username, user_scope_id=user_scope_id)

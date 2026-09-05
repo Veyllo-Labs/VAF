@@ -139,11 +139,11 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `update_calendar_event` | write | Update an event. |
 | `delete_calendar_event` | write | Delete an event (irreversible). |
 | `list_calendar_events` | read | List events in a time range. |
-| `create_contact` | write | Create a contact. |
-| `update_contact` | write | Update a contact: fields, status, a dated note (`add_note`), a dated event (`add_event_title` + `add_event_when`). |
+| `create_contact` | write | Create a contact: name, channels, personal file, company, role, comma-separated tags (recorded with source `agent`). |
+| `update_contact` | write | Update a contact: fields (company, role and tags included; tags replace), status, a dated note (`add_note`), a dated event (`add_event_title` + `add_event_when`). |
 | `delete_contact` | write | Delete a contact (irreversible). |
-| `get_contact` | read | Get a contact by name: channel IDs, personal file, status, last contact, upcoming events, newest notes. |
-| `list_contacts` | read | List all contacts, optionally filtered by status. |
+| `get_contact` | read | Get a contact by name: channel IDs, personal file, company, role, tags, since when and from where, status, last contact, upcoming events, newest notes, and the newest stored messages and mails with the person. |
+| `list_contacts` | read | List all contacts, optionally filtered by status or tag. |
 
 ## Email
 

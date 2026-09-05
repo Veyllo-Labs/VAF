@@ -23,13 +23,14 @@ class ListContactsTool(BaseTool):
     side_effect_class = "none"
     description = (
         "List all contacts from the central contact list (Settings → Connections → Contacts). "
-        "Returns each contact's name and which channels they have (WhatsApp, Telegram, email). "
+        "Returns each contact's name, status, tags and which channels they have (WhatsApp, Telegram, email). "
         "Use get_contact(name) to get full details and channel IDs for reading messages or sending."
     )
     parameters = {
         "type": "object",
         "properties": {
             "status": {"type": "string", "description": "Optional. Only contacts with this status (e.g. lead, in_contact, customer, archived)."},
+            "tag": {"type": "string", "description": "Optional. Only contacts carrying this tag (case-insensitive)."},
         },
         "required": [],
     }
@@ -50,6 +51,11 @@ class ListContactsTool(BaseTool):
             contacts = [c for c in contacts if (c.get("status") or "").strip().lower() == status_filter]
             if not contacts:
                 return f"No contacts with status '{status_filter}'."
+        tag_filter = (kwargs.get("tag") or "").strip().lower() if isinstance(kwargs.get("tag"), str) else ""
+        if tag_filter:
+            contacts = [c for c in contacts if tag_filter in [str(t).strip().lower() for t in (c.get("tags") or [])]]
+            if not contacts:
+                return f"No contacts with tag '{tag_filter}'."
 
         lines = []
         for i, c in enumerate(contacts, 1):
@@ -68,6 +74,7 @@ class ListContactsTool(BaseTool):
                     channels.append("Telegram")
                 if c.get("email"):
                     channels.append("Email")
-                ch = ", ".join(channels) if channels else "—"
-            lines.append(f"{i}. {name} | contact_id: {cid} | Channels: {ch}")
+                ch = ", ".join(channels) if channels else "-"
+            tags = ", ".join(str(t) for t in (c.get("tags") or []) if t)
+            lines.append(f"{i}. {name} | contact_id: {cid} | Channels: {ch}" + (f" | Tags: {tags}" if tags else ""))
         return "Contacts:\n" + "\n".join(lines) + "\n\nUse get_contact(name=\"...\") for full details. For update_contact or delete_contact use contact_id; if multiple contacts share a name, always ask the user which one they mean."

@@ -1268,7 +1268,8 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
                                 </button>
                             </div>
                             {anySelected && (
-                                <div className="px-3 py-2 border-b border-gray-200 bg-gray-50 flex flex-col gap-1.5 shrink-0 text-xs">
+                                // Slides in under the filters; transform and opacity only, so the repaint stays cheap.
+                                <div className="px-3 py-2 border-b border-gray-200 bg-gray-50 flex flex-col gap-1.5 shrink-0 text-xs animate-in fade-in slide-in-from-top-1 duration-150">
                                     <div className="flex items-center justify-between">
                                         <span className="font-medium text-gray-900">{tc('selected', { count: selectedIds.size })}</span>
                                         <button type="button" onClick={() => setSelectedIds(new Set())} className="text-gray-600 hover:text-gray-900">{tcm('deselectAll')}</button>
@@ -1284,11 +1285,15 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
                                             className={cn(INPUT, 'flex-1 min-w-0 py-1 text-xs')} />
                                     </div>
                                     {bulkError && <p className="text-xs text-red-600">{bulkError}</p>}
-                                    <div className="flex gap-1.5">
+                                    <div className="flex items-center gap-1.5">
                                         <button type="button" onClick={applyBulk} disabled={bulkBusy || (!bulkStatus.trim() && !bulkTag.trim())}
                                             className={cn('flex-1 px-2 py-1 rounded-lg text-xs font-medium disabled:opacity-50', PRIMARY)}>{tc('apply')}</button>
+                                        {/* Quiet until hovered: deleting asks in the house dialog first, so the bar needs no red button. */}
                                         <button type="button" onClick={() => setConfirm({ kind: 'deleteSelected', ids: Array.from(selectedIds) })} disabled={bulkBusy}
-                                            className={cn(BTN, 'px-2 py-1 text-xs text-red-600')}><Trash2 className="w-3.5 h-3.5" />{tc('deleteSelected')}</button>
+                                            title={tc('deleteSelected')}
+                                            className={cn(BTN_GHOST, 'px-2 py-1 hover:text-red-600 hover:bg-red-50 disabled:opacity-50')}>
+                                            <Trash2 className="w-3.5 h-3.5" />{tcm('delete')}
+                                        </button>
                                     </div>
                                 </div>
                             )}
@@ -1301,15 +1306,31 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
                                     <ul>
                                         {visibleContacts.map(c => {
                                             const isSelected = selectedIds.has(c.id);
+                                            const showBox = anySelected || isSelected;
                                             const active = selectedContactId === c.id;
                                             const seen = lastSeen(c);
                                             const status = (c.status || '').trim();
                                             return (
-                                                <li key={c.id} className="group relative">
-                                                    <button type="button" onClick={() => setSelectedContactId(c.id)}
-                                                        className={cn('w-full text-left grid grid-cols-[34px_1fr_auto] gap-2.5 items-center px-3 py-2 border-b border-gray-200 border-l-2 transition-colors',
+                                                <li key={c.id} className="group">
+                                                    <div role="button" tabIndex={0} onClick={() => setSelectedContactId(c.id)}
+                                                        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedContactId(c.id); } }}
+                                                        className={cn('w-full text-left grid grid-cols-[34px_1fr_auto] gap-2.5 items-center px-3 py-2 border-b border-gray-200 border-l-2 transition-colors cursor-pointer select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-gray-400',
                                                             active ? 'bg-gray-100 border-l-gray-900 dark:bg-[#3a3a3a] dark:text-white dark:border-l-[#e6e6e6]' : 'border-l-transparent hover:bg-gray-50')}>
-                                                        <ContactAvatar name={c.name} size="sm" />
+                                                        {/* The avatar IS the checkbox: hovering the row (or having any selection) fades the
+                                                            initials out and the box in, in the same 34px slot. A click on the slot selects
+                                                            without opening the record; on a touch screen the avatar itself is the target. */}
+                                                        <span className="relative w-[34px] h-[34px] shrink-0"
+                                                            onClick={e => { e.stopPropagation(); if (!(e.target instanceof HTMLInputElement)) toggleSelected(c.id); }}>
+                                                            <span className={cn('absolute inset-0 transition-[opacity,transform] duration-150 ease-out',
+                                                                showBox ? 'opacity-0 scale-75' : 'opacity-100 scale-100 group-hover:opacity-0 group-hover:scale-75')}>
+                                                                <ContactAvatar name={c.name} size="sm" />
+                                                            </span>
+                                                            <span className={cn('absolute inset-0 grid place-items-center transition-[opacity,transform] duration-150 ease-out',
+                                                                showBox ? 'opacity-100 scale-100' : 'opacity-0 scale-75 group-hover:opacity-100 group-hover:scale-100')}>
+                                                                <input type="checkbox" checked={isSelected} tabIndex={showBox ? 0 : -1} onChange={() => toggleSelected(c.id)}
+                                                                    aria-label={tc('selectContact')} className="w-[18px] h-[18px] rounded cursor-pointer accent-gray-900 dark:accent-[#d9d9d9]" />
+                                                            </span>
+                                                        </span>
                                                         <div className="min-w-0">
                                                             <div className="text-[13px] font-semibold truncate flex items-center gap-1.5">
                                                                 <span className="truncate">{c.name}</span>
@@ -1326,14 +1347,7 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
                                                             <span>{seen ? fmtWhen(seen.ts) : ''}</span>
                                                             <span className="flex gap-1">{channelTypes(c).map(t => <ChannelIcon key={t} type={t} className="w-3 h-3" />)}</span>
                                                         </div>
-                                                    </button>
-                                                    <label
-                                                        onClick={e => e.stopPropagation()}
-                                                        className={cn('absolute left-3 top-1/2 -translate-y-1/2 w-[34px] h-[34px] rounded-full grid place-items-center cursor-pointer bg-white border border-gray-200',
-                                                            // Hidden until hover, and not clickable while hidden (a tap on the avatar must open the record); touch screens see it always.
-                                                            anySelected || isSelected ? 'opacity-100' : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto max-md:opacity-100 max-md:pointer-events-auto')}>
-                                                        <input type="checkbox" checked={isSelected} onChange={() => toggleSelected(c.id)} aria-label={tc('selectContact')} className="w-4 h-4 accent-gray-900 dark:accent-[#d9d9d9]" />
-                                                    </label>
+                                                    </div>
                                                 </li>
                                             );
                                         })}

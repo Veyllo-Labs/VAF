@@ -436,24 +436,20 @@ def _normalize_phone(phone: str) -> str:
 
 
 def _phone_digits_canonical(phone_or_jid: str) -> str:
-    """Digits for matching: E.164-style. Converts 0176... (10 digits) to 49176... so WhatsApp JID 49176... matches contact 0176...."""
-    digits = _normalize_phone(phone_or_jid if not (phone_or_jid or "").strip().endswith(".net") else _jid_to_e164(phone_or_jid))
-    if not digits:
-        return ""
-    if len(digits) == 10 and digits.startswith("0"):
-        return "49" + digits[1:]
-    return digits
+    """Digits for matching, from the one canonicaliser the contact book and the dashboard use
+    (contacts_store.phone_digits_canonical): a JID's user part, 0-prefixed German numbers as
+    49..., a LID or group as no number at all."""
+    from vaf.core.contacts_store import phone_digits_canonical
+    return phone_digits_canonical(phone_or_jid if isinstance(phone_or_jid, str) else "")
 
 
 def _to_e164_display(phone_or_jid: str) -> str:
-    """Return E.164 display form with exactly one leading + (e.g. +491761234567). Avoids double plus."""
+    """The message-store key for a number (contacts_store.whatsapp_store_key: one leading +,
+    canonical digits), or "" when the value is not a phone number."""
     if not phone_or_jid or not isinstance(phone_or_jid, str):
         return ""
-    s = (phone_or_jid or "").strip().lstrip("+")
-    digits = "".join(c for c in s if c.isdigit())
-    if not digits or len(digits) < 7 or len(digits) > 15:
-        return ""
-    return f"+{digits}"
+    from vaf.core.contacts_store import whatsapp_store_key
+    return whatsapp_store_key(phone_or_jid) or ""
 
 
 def _e164_to_jid(phone: str) -> str:
@@ -595,18 +591,13 @@ def _get_allowed_phones_for_user(username: str, user_scope_id: str) -> Tuple[Lis
             if p not in allowed_phones:
                 allowed_phones.append(p)
     try:
-        from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_whatsapp_values
+        from vaf.core.contacts_store import front_office_endpoints
         seen_phones: set = set()
         for scope_arg in (user_scope_id, None, get_local_admin_scope_id()):
-            scope_str = str(scope_arg) if scope_arg else ""
-            for c in get_contacts_allowing_assistant(username, user_scope_id=scope_arg or None):
-                for p in _contact_whatsapp_values(c):
-                    if p and str(p).strip():
-                        pn = str(p).strip()
-                        key = _phone_digits_canonical(pn)
-                        if key and key not in seen_phones:
-                            seen_phones.add(key)
-                            allowed_phones.append(pn)
+            for key in sorted(front_office_endpoints(username, scope_arg or None, "whatsapp")):
+                if key not in seen_phones:
+                    seen_phones.add(key)
+                    allowed_phones.append(key)
     except Exception:
         pass
     return config_phones, allowed_phones

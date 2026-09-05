@@ -56,7 +56,8 @@ class FindWhatsAppMessagesTool(BaseTool):
         except ImportError as e:
             return f"WhatsApp store unavailable: {e}"
 
-        matches = search_messages(username, query, chat_id=chat_id, limit=limit)
+        # Same per-scope store file the bridge writes to; the scope picks the file, not a row filter.
+        matches = search_messages(username, query, chat_id=chat_id, limit=limit, user_scope_id=kwargs.get("user_scope_id"))
         if not matches:
             scope = f" in chat {chat_id}" if chat_id else ""
             return f"No WhatsApp messages matching '{query}'{scope}. Messages are stored as they arrive; older chats may not be indexed yet."

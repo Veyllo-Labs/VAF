@@ -11,7 +11,7 @@ import logging
 import threading
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 from vaf.core.platform import Platform
@@ -92,9 +92,22 @@ def _contacts_path_candidates(username: Optional[str] = None, user_scope_id: Opt
             alt_user = data_dir / "users" / u / "contacts.json"
             if alt_user not in candidates:
                 candidates.append(alt_user)
-    if data_dir / "contacts.json" not in candidates:
+    # The local admin's book is a candidate for the local admin only. Deliberate: _load_all
+    # walks on past an empty or missing file, so with the admin path in every caller's list
+    # a tenant without contacts read the admin's whole book, and the next write copied it
+    # into the tenant's own file.
+    if _is_local_admin_caller(username, user_scope_id) and data_dir / "contacts.json" not in candidates:
         candidates.append(data_dir / "contacts.json")
     return candidates
+
+
+def _is_local_admin_caller(username: Optional[str], user_scope_id: Optional[str]) -> bool:
+    """Whether this identity is the machine's local admin: by scope when a scope is given,
+    by username otherwise (an empty username has always meant the local admin here)."""
+    if user_scope_id:
+        return _normalize_scope(user_scope_id) == _normalize_scope(_local_admin_scope_id())
+    u = _safe_username(username)
+    return not u or u == _local_admin()
 
 
 CHANNEL_TYPES = ("phone", "whatsapp", "telegram", "email", "discord")
@@ -210,14 +223,60 @@ def _normalize_phone_for_match(value: str) -> str:
     return "".join(c for c in (value or "") if c.isdigit())
 
 
-def _phone_digits_canonical(value: str) -> str:
-    """Same as normalize but 0-prefix German (10 or 11 digits) -> 49... so +49 and 0-prefix match."""
-    digits = _normalize_phone_for_match((value or "").split("@")[0] if "@" in (value or "") else (value or ""))
+# JIDs that carry no phone number: a LID is an opaque id, a group or a broadcast list is not
+# a person. None of them may ever be read as digits of a phone.
+_NON_PHONE_JID_SUFFIXES = ("@lid", "@g.us", "@broadcast", "@status", "@newsletter")
+
+
+def phone_digits_canonical(value: str) -> str:
+    """The digits that identify one phone number across every notation people type and
+    channels emit: "+49 176 1234567", "0176 1234567", "0049 176 1234567" and
+    "491761234567:3@s.whatsapp.net" all become "491761234567".
+
+    Rules, in order: a JID contributes only its user part (before "@", without the
+    ":device" suffix), and a JID that is not a phone (LID, group, broadcast) contributes
+    nothing; digits only; a leading "00" is the international prefix and is dropped; a
+    trunk zero followed by 10 to 12 digits in total is read as a German national number
+    (the one national convention this store knows: 089 1234567, 0151 1234567 and
+    0176 12345678 are all valid there) and becomes 49..., but only when the raw value said
+    nothing about the country, so "+0176..." and "0049..." are never rewritten.
+    This is the ONE canonicaliser: the WhatsApp bridge, the dashboard routes and the
+    contact book all match numbers through it, so a contact typed as 0176... and a chat
+    stored as +49176... are the same person everywhere."""
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    if "@" in raw:
+        low = raw.lower()
+        if any(low.endswith(suffix) for suffix in _NON_PHONE_JID_SUFFIXES):
+            return ""
+        raw = raw.split("@", 1)[0]
+    raw = raw.split(":", 1)[0].strip()
+    digits = "".join(c for c in raw if c.isdigit())
     if not digits:
         return ""
-    if digits.startswith("0") and len(digits) in (10, 11):
+    country_given = raw.startswith("+") or digits.startswith("00")
+    if digits.startswith("00"):
+        digits = digits[2:]
+    if not country_given and digits.startswith("0") and 10 <= len(digits) <= 12:
         return "49" + digits[1:]
     return digits
+
+
+def whatsapp_store_key(value: str) -> Optional[str]:
+    """The key under which the message store and the WhatsApp dashboard file a chat with
+    this number: "+" followed by the canonical digits, or None when the value is not a
+    phone number (a LID, a group, fewer than 7 or more than 15 digits). The bridge writes
+    inbound and outbound rows under exactly this key, so anything that wants to find a
+    person's messages asks here instead of building the key itself."""
+    digits = phone_digits_canonical(value)
+    if not digits or len(digits) < 7 or len(digits) > 15:
+        return None
+    return f"+{digits}"
+
+
+# The older private name; the callers that grew up with it keep working.
+_phone_digits_canonical = phone_digits_canonical
 
 
 def get_contact_by_telegram_user_id(telegram_user_id: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -677,3 +736,92 @@ def get_contacts_allowing_assistant(username: Optional[str] = None, user_scope_i
     """Return contacts with allow_as_assistant_user=True, for bridge whitelist checks."""
     with _LOCK:
         return [dict(c) for c in _load_all(username, user_scope_id) if c.get("allow_as_assistant_user")]
+
+
+# ── endpoints: where a contact's messages live ──────────────────────────────────
+#
+# The message store keys a chat by channel-specific ids: "+<E.164 digits>" for WhatsApp,
+# the numeric chat id for Telegram, the numeric user id for Discord; mail is keyed by
+# address. A contact record holds the values a person typed or a channel synced, in
+# whatever notation. These two functions are the one place that turns a record into store
+# keys, so the dashboard, the bridge, the cross-chat filter and the timeline never build
+# a key by hand again.
+
+def _lid_keys_for_digits(digit_keys: List[str], lid_map: Optional[Dict[str, Any]]) -> List[str]:
+    """The "<lid>@lid" jids whose mapped number is one of these canonical digit strings.
+    Agent-sent messages to a LID-addressed account are stored under the raw lid jid, so a
+    person's messages can sit under two keys; the persisted lid_to_e164 map joins them."""
+    if lid_map is None:
+        try:
+            from vaf.core.config import Config
+            wc = Config.get("whatsapp_config") or {}
+            lid_map = (wc.get("lid_to_e164") or {}) if isinstance(wc, dict) else {}
+        except Exception:
+            lid_map = {}
+    if not isinstance(lid_map, dict) or not lid_map:
+        return []
+    wanted = set(digit_keys)
+    out: List[str] = []
+    for lid, e164 in lid_map.items():
+        lid_s = str(lid or "").strip()
+        if not lid_s.endswith("@lid"):
+            continue
+        if phone_digits_canonical(str(e164 or "")) in wanted and lid_s not in out:
+            out.append(lid_s)
+    return out
+
+
+def contact_endpoints(
+    contact: Dict[str, Any],
+    *,
+    with_lids: bool = False,
+    lid_map: Optional[Dict[str, Any]] = None,
+) -> Dict[str, List[str]]:
+    """The store keys of one contact per channel: {"whatsapp": ["+4917..."], "telegram":
+    ["12345"], "discord": ["9876"], "email": ["bob@example.com"]}.
+
+    WhatsApp keys come from whatsapp_store_key over every phone/WhatsApp value; with
+    with_lids=True the "<lid>@lid" jids mapped to the same number are appended (the
+    timeline and statistics want both keys, the dashboard's phone lists do not). Telegram
+    keeps numeric values only: an "@username" cannot be matched to a stored chat id.
+    Addresses are lowercased. Pure over the record, apart from the optional config read
+    for the lid map (pass lid_map to avoid it)."""
+    c = _contact_ensure_channels(contact)
+    out: Dict[str, List[str]] = {"whatsapp": [], "telegram": [], "discord": [], "email": []}
+    for p in _contact_whatsapp_values(c):
+        key = whatsapp_store_key(p)
+        if key and key not in out["whatsapp"]:
+            out["whatsapp"].append(key)
+    if with_lids and out["whatsapp"]:
+        for lid in _lid_keys_for_digits([k[1:] for k in out["whatsapp"]], lid_map):
+            if lid not in out["whatsapp"]:
+                out["whatsapp"].append(lid)
+    for v in _contact_telegram_values(c):
+        v = (v or "").strip()
+        if v.isdigit() and v not in out["telegram"]:
+            out["telegram"].append(v)
+    for ch in (c.get("channels") or []):
+        if (ch.get("type") or "").strip().lower() == "discord":
+            v = (ch.get("value") or "").strip()
+            if v and v not in out["discord"]:
+                out["discord"].append(v)
+    for e in _contact_email_values(c):
+        e = (e or "").strip().lower()
+        if e and e not in out["email"]:
+            out["email"].append(e)
+    return out
+
+
+def front_office_endpoints(
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+    channel: str = "whatsapp",
+) -> Set[str]:
+    """The store keys, on one channel, of every contact who may reach the assistant
+    ("Can reach your assistant"). The WhatsApp bridge decides ingress with it and the
+    dashboard labels chats with it; one implementation, the same keys everywhere."""
+    out: Set[str] = set()
+    chan = (channel or "").strip().lower()
+    for c in get_contacts_allowing_assistant(username, user_scope_id=user_scope_id):
+        out.update(contact_endpoints(c).get(chan) or [])
+    return out

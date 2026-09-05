@@ -49,7 +49,9 @@ class ReadWhatsAppChatTool(BaseTool):
         except ImportError as e:
             return f"WhatsApp store unavailable: {e}"
 
-        messages = get_chat_messages(username, chat_id, limit=limit)
+        # The store file is chosen by username AND scope; without the scope a tenant reads
+        # an empty file while the bridge wrote the rows under the scope.
+        messages = get_chat_messages(username, chat_id, limit=limit, user_scope_id=kwargs.get("user_scope_id"))
         if not messages:
             return f"No messages found for chat {chat_id}. Messages are stored as they arrive; this chat may not have any yet."
 
@@ -64,7 +66,7 @@ class ReadWhatsAppChatTool(BaseTool):
                 dt = datetime.fromtimestamp(ts)
                 ts_str = dt.strftime("%Y-%m-%d %H:%M")
             else:
-                ts_str = "—"
+                ts_str = "-"
             lines.append(f"[{ts_str}] {label}: {body}")
         out = f"Chat {chat_id} (last {len(messages)} messages):\n" + "\n".join(lines)
         return out

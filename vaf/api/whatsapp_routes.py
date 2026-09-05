@@ -43,14 +43,13 @@ def _jid_to_phone(jid: str) -> str:
 
 
 def _normalize_chat_id(chat_id: str) -> str:
-    """Return E.164 with exactly one leading + so ++49176... becomes +49176... (merge duplicates)."""
+    """The store key for a number (contacts_store.whatsapp_store_key: one leading +, canonical
+    digits); a value that is not a phone number comes back as typed, so callers can keep
+    matching raw ids such as a group jid."""
     if not chat_id or not isinstance(chat_id, str):
         return ""
-    s = chat_id.strip().lstrip("+")
-    digits = "".join(c for c in s if c.isdigit())
-    if not digits or len(digits) < 7 or len(digits) > 15:
-        return chat_id.strip()
-    return f"+{digits}"
+    from vaf.core.contacts_store import whatsapp_store_key
+    return whatsapp_store_key(chat_id) or chat_id.strip()
 
 
 def _normalize_phone(phone: str) -> str:
@@ -301,12 +300,9 @@ async def get_whatsapp_dashboard(request: Request):
             }
     # Include Front Office contacts (allow_as_assistant_user) so their chats appear even before Baileys syncs
     try:
-        from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_whatsapp_values
-        for contact in get_contacts_allowing_assistant(username):
-            for phone in _contact_whatsapp_values(contact):
-                if not phone or not phone.strip():
-                    continue
-                chat_id = phone.strip() if phone.strip().startswith("+") else f"+{phone.strip()}"
+        from vaf.core.contacts_store import contact_endpoints, get_contacts_allowing_assistant
+        for contact in get_contacts_allowing_assistant(username, user_scope_id=user_info.get("user_scope_id")):
+            for chat_id in contact_endpoints(contact)["whatsapp"]:
                 if chat_id not in sessions_by_chat:
                     sessions_by_chat[chat_id] = {
                         "chat_id": chat_id,
@@ -455,12 +451,8 @@ async def get_whatsapp_dashboard(request: Request):
         del sessions_by_chat[key]
     # Infer LID→E.164 when we have one FO contact with no messages and one LID-style session with messages (same user)
     try:
-        from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_whatsapp_values
-        fo_phones = set()
-        for contact in get_contacts_allowing_assistant(username):
-            for phone in _contact_whatsapp_values(contact):
-                if phone and phone.strip():
-                    fo_phones.add(_normalize_chat_id(phone.strip()) or (phone.strip() if phone.strip().startswith("+") else f"+{phone.strip()}"))
+        from vaf.core.contacts_store import front_office_endpoints
+        fo_phones = front_office_endpoints(username, user_info.get("user_scope_id"), "whatsapp")
         lid_sessions_with_messages = [
             rec for rec in sessions_by_chat.values()
             if (rec.get("message_count") or 0) > 0
@@ -507,12 +499,8 @@ async def get_whatsapp_dashboard(request: Request):
     # FO phones (E.164) for answerable check
     fo_phones: set = set()
     try:
-        from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_whatsapp_values
-        for contact in get_contacts_allowing_assistant(username):
-            for phone in _contact_whatsapp_values(contact):
-                if phone and phone.strip():
-                    cid = phone.strip() if phone.strip().startswith("+") else f"+{phone.strip()}"
-                    fo_phones.add(_normalize_chat_id(cid) or cid)
+        from vaf.core.contacts_store import front_office_endpoints
+        fo_phones = front_office_endpoints(username, user_info.get("user_scope_id"), "whatsapp")
     except Exception:
         pass
 
@@ -623,14 +611,11 @@ async def get_whatsapp_dashboard(request: Request):
     # Front Office contacts (Can reach your assistant) with WhatsApp number – for dashboard display
     front_office_contacts: list = []
     try:
-        from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_whatsapp_values
+        from vaf.core.contacts_store import contact_endpoints, get_contacts_allowing_assistant
         user_scope_id = user_info.get("user_scope_id")
         for contact in get_contacts_allowing_assistant(username, user_scope_id=user_scope_id):
             name = (contact.get("name") or "").strip() or None
-            for phone in _contact_whatsapp_values(contact):
-                if not phone or not phone.strip():
-                    continue
-                chat_id = phone.strip() if phone.strip().startswith("+") else f"+{phone.strip()}"
+            for chat_id in contact_endpoints(contact)["whatsapp"]:
                 front_office_contacts.append({"name": name, "phone_number": chat_id})
     except Exception:
         pass

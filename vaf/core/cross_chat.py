@@ -359,20 +359,21 @@ def _contact_endpoints(user_scope_id: Optional[str], username: Optional[str]) ->
     chats stay eligible there.
     """
     try:
-        from vaf.core.contacts_store import list_contacts
+        from vaf.core.contacts_store import contact_endpoints, list_contacts
         contacts = list_contacts(username, user_scope_id) or []
     except Exception:
         return set()
     endpoints: Set[str] = set()
     for contact in contacts:
-        for channel in (contact.get("channels") or []):
-            value = str(channel.get("value") or "").strip()
-            if not value:
-                continue
-            endpoints.add(value.lower())
-            digits = re.sub(r"\D", "", value)
-            if digits:
-                endpoints.add(digits)
+        # The store keys per channel (one canonical form, so a contact typed as 0176...
+        # still covers a chat filed under +49176...), plus their bare digits, because a
+        # channel session id carries the digits without the plus.
+        for values in contact_endpoints(contact).values():
+            for value in values:
+                endpoints.add(value.lower())
+                digits = re.sub(r"\D", "", value)
+                if digits:
+                    endpoints.add(digits)
     return endpoints
 
 

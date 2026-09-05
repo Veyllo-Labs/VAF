@@ -115,7 +115,7 @@ function Avatar({ label, url, size }: { label: string; url?: string | null; size
     );
 }
 
-function initials(label: string): string {
+export function initials(label: string): string {
     const words = label.replace(/[^\p{L}\p{N} ]/gu, '').trim().split(/\s+/).filter(Boolean);
     if (words.length === 0) return '#';
     return words.slice(0, 2).map(w => w[0]).join('').toUpperCase();

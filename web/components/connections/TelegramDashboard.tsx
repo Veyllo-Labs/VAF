@@ -7,7 +7,7 @@
 // contact, badges for full access / relay / read-only, settings with the bot, the
 // paired users, the relay list and the activity chart.
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslations } from 'next-intl';
 import { Send, ExternalLink, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -21,6 +21,8 @@ export interface TelegramDashboardProps {
     onClose: () => void;
     config: any;
     onConfigChange: (key: string, value: any) => void;
+    /** Chat to open on arrival (a jump from the contact book); null leaves the selection alone. */
+    initialChatId?: string | null;
 }
 
 interface TelegramSession {
@@ -49,7 +51,7 @@ interface DashboardData {
     running: boolean;
 }
 
-export default function TelegramDashboard({ isOpen, onClose, config, onConfigChange }: TelegramDashboardProps) {
+export default function TelegramDashboard({ isOpen, onClose, config, onConfigChange, initialChatId }: TelegramDashboardProps) {
     const t = useTranslations('settings.telegramDashboard');
     const [data, setData] = useState<DashboardData | null>(null);
     const [loading, setLoading] = useState(false);
@@ -59,6 +61,11 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
     const [relayAddId, setRelayAddId] = useState('');
     const [relayAddUsername, setRelayAddUsername] = useState('');
     const [relayError, setRelayError] = useState<string | null>(null);
+    const [note, setNote] = useState<string | null>(null);
+    // The jump id waiting to be checked against the loaded sessions. A ref, consumed once,
+    // so the check runs on the load that follows the jump and not on every later refresh
+    // (a refresh would otherwise yank the selection back to the first chat).
+    const jumpPendingRef = useRef<string | null>(null);
 
     const fetchDashboard = useCallback(async () => {
         setLoading(true);
@@ -82,12 +89,29 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                 running: status?.running === true,
             });
             setSelectedChatId(prev => prev ?? (sessions[0]?.chat_id ?? null));
+            const pendingJump = jumpPendingRef.current;
+            if (pendingJump) {
+                jumpPendingRef.current = null;
+                if (!sessions.some(s => s.chat_id === pendingJump)) {
+                    setSelectedChatId(sessions[0]?.chat_id ?? null);
+                    setNote(t('jumpChatNotFound'));
+                }
+            }
         } catch {
             setLoadFailed(true);
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [t]);
+
+    useEffect(() => {
+        // Closing runs this effect before the parent clears the jump; a closed window must
+        // neither re-arm the pending id nor move the selection.
+        if (!isOpen) { jumpPendingRef.current = null; return; }
+        if (!initialChatId) return;
+        jumpPendingRef.current = initialChatId;
+        setSelectedChatId(initialChatId);
+    }, [initialChatId, isOpen]);
 
     useEffect(() => { if (isOpen) fetchDashboard(); }, [isOpen, fetchDashboard]);
 
@@ -216,7 +240,8 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
             onRefresh={fetchDashboard}
             historyUrl={(sid) => `api/telegram/session/${encodeURIComponent(sid)}/history`}
             selectedId={selectedChatId}
-            onSelect={setSelectedChatId}
+            onSelect={(id) => { setSelectedChatId(id); setNote(null); }}
+            conversationNote={note}
             settingsTitle={t('settingsTitle')}
             settingsContent={settingsContent}
             settingsOpen={showSettings}

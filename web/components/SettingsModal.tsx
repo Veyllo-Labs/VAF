@@ -1272,6 +1272,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showWhatsAppDashboard, setShowWhatsAppDashboard] = useState(false);
     const [showTelegramDashboard, setShowTelegramDashboard] = useState(false);
     const [showContactsDashboard, setShowContactsDashboard] = useState(false);
+    // A jump from the contact book into a channel chat. Cleared once both channel windows
+    // are closed rather than in onClose: the WhatsApp window also closes through
+    // onOpenSetupWizard and onOpenContacts, which never call onClose.
+    const [chatJump, setChatJump] = useState<{ channel: 'whatsapp' | 'telegram'; chatId: string } | null>(null);
+    useEffect(() => {
+        if (!showWhatsAppDashboard && !showTelegramDashboard) setChatJump(null);
+    }, [showWhatsAppDashboard, showTelegramDashboard]);
     const [showDiscordDashboard, setShowDiscordDashboard] = useState(false);
     const [showMailClient, setShowMailClient] = useState(false);
     const [showCloudWizard, setShowCloudWizard] = useState(false);
@@ -8093,6 +8100,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     setShowWhatsAppDashboard(false);
                     setShowContactsDashboard(true);
                 }}
+                initialChatId={chatJump?.channel === 'whatsapp' ? chatJump.chatId : null}
             />
 
             {/* Telegram Dashboard (when configured, Settings opens this) */}
@@ -8101,12 +8109,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onClose={() => setShowTelegramDashboard(false)}
                 config={localConfig}
                 onConfigChange={handleChange}
+                initialChatId={chatJump?.channel === 'telegram' ? chatJump.chatId : null}
             />
 
             {/* Contacts (list + personal file, from Connections) */}
             <ContactsDashboard
                 isOpen={showContactsDashboard}
                 onClose={() => setShowContactsDashboard(false)}
+                onOpenChat={(channel: 'whatsapp' | 'telegram', chatId: string) => {
+                    setShowContactsDashboard(false);
+                    setChatJump({ channel, chatId });
+                    if (channel === 'whatsapp') setShowWhatsAppDashboard(true);
+                    else setShowTelegramDashboard(true);
+                }}
             />
 
             {/* Discord Dashboard (when configured, Settings opens this) */}

@@ -687,7 +687,7 @@ _HARDCODED_COPY_DEBT = {
     "web/components/connections/CloudDashboard.tsx": 15,
     "web/components/connections/CloudSetupWizard.tsx": 26,
     "web/components/connections/ConnectionsPanel.tsx": 3,
-    "web/components/connections/ContactsDashboard.tsx": 26,
+    "web/components/connections/ContactsDashboard.tsx": 0,
     "web/components/connections/DiscordDashboard.tsx": 0,
     "web/components/connections/DiscordSetupWizard.tsx": 47,
     "web/components/connections/GitHubDashboard.tsx": 3,

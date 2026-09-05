@@ -9,7 +9,7 @@
 // hold the agent number, the owner's registered number, who else may write, the
 // reply window and the activity chart.
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslations } from 'next-intl';
 import { Phone, UserPlus, Trash2, AlertTriangle, BookUser } from 'lucide-react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -26,6 +26,8 @@ export interface WhatsAppDashboardProps {
     onConfigChange: (key: string, value: any) => void;
     onOpenSetupWizard?: () => void;
     onOpenContacts?: () => void;
+    /** Chat to open on arrival (a jump from the contact book); null leaves the selection alone. */
+    initialChatId?: string | null;
 }
 
 interface WhatsAppSession {
@@ -60,7 +62,7 @@ interface DashboardData {
     log_path: string | null;
 }
 
-export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigChange, onOpenSetupWizard, onOpenContacts }: WhatsAppDashboardProps) {
+export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigChange, onOpenSetupWizard, onOpenContacts, initialChatId }: WhatsAppDashboardProps) {
     const t = useTranslations('settings.whatsappDashboard');
     const [data, setData] = useState<DashboardData | null>(null);
     const [loading, setLoading] = useState(false);
@@ -82,6 +84,10 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const [namesBusy, setNamesBusy] = useState(false);
     const [namesMsg, setNamesMsg] = useState<string | null>(null);
     const [historyVersion, setHistoryVersion] = useState(0);
+    // The jump id waiting to be checked against the loaded sessions. A ref, consumed once,
+    // so the check runs on the load that follows the jump and not on every later refresh
+    // (a refresh would otherwise yank the selection back to the first chat).
+    const jumpPendingRef = useRef<string | null>(null);
 
     const fetchDashboard = useCallback(async () => {
         setLoading(true);
@@ -107,12 +113,29 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             });
             if (typeof json?.reply_window_hours === 'number') setWindowInput(String(json.reply_window_hours));
             setSelectedChatId(prev => prev ?? (sessions[0]?.chat_id ?? null));
+            const pendingJump = jumpPendingRef.current;
+            if (pendingJump) {
+                jumpPendingRef.current = null;
+                if (!sessions.some(s => s.chat_id === pendingJump)) {
+                    setSelectedChatId(sessions[0]?.chat_id ?? null);
+                    setNote(t('jumpChatNotFound'));
+                }
+            }
         } catch {
             setLoadFailed(true);
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [t]);
+
+    useEffect(() => {
+        // Closing runs this effect before the parent clears the jump; a closed window must
+        // neither re-arm the pending id nor move the selection.
+        if (!isOpen) { jumpPendingRef.current = null; return; }
+        if (!initialChatId) return;
+        jumpPendingRef.current = initialChatId;
+        setSelectedChatId(initialChatId);
+    }, [initialChatId, isOpen]);
 
     useEffect(() => { if (isOpen) fetchDashboard(); }, [isOpen, config?.whatsapp_config, fetchDashboard]);
 

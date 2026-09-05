@@ -115,7 +115,7 @@ def test_no_file_outside_the_contact_book_builds_whatsapp_keys_from_contact_valu
         if path.name == "contacts_store.py":
             continue
         if "_contact_whatsapp_values" in path.read_text(encoding="utf-8", errors="replace"):
-            offenders.append(str(path.relative_to(root.parent)))
+            offenders.append(path.relative_to(root.parent).as_posix())
     assert offenders == [], offenders
 
 

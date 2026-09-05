@@ -33,7 +33,6 @@ _HAND_ROLLED = {
     "web/components/NotificationsModal.tsx",
     "web/components/SettingsModal.tsx",
     "web/components/SubAgentWindow.tsx",
-    "web/components/connections/ContactsDashboard.tsx",
     "web/components/connections/GitHubDashboard.tsx",
     "web/components/settings/UserVisibilityPicker.tsx",
     "web/hooks/useEscapeLayer.ts",

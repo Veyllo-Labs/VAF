@@ -266,6 +266,9 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
     const [copiedValue, setCopiedValue] = useState<string | null>(null);
 
     const [showFormModal, setShowFormModal] = useState(false);
+    // A failed create or update is reported in the form's own footer, where the person
+    // still is; fileError belongs to the record card behind the modal and would be hidden.
+    const [formError, setFormError] = useState<string | null>(null);
     const [modalContact, setModalContact] = useState<Contact | null>(null);
     const [form, setForm] = useState<ContactForm | null>(null);
     const [saving, setSaving] = useState(false);
@@ -516,12 +519,14 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
 
     const openCreate = () => {
         setModalContact(null);
+        setFormError(null);
         setForm(emptyForm());
         setShowFormModal(true);
     };
 
     const openEdit = (c: Contact) => {
         setMenuOpen(false);
+        setFormError(null);
         setModalContact(c);
         const channels = contactChannels(c);
         setForm({
@@ -538,7 +543,7 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
         setShowFormModal(true);
     };
 
-    const closeForm = () => { setShowFormModal(false); setModalContact(null); setForm(null); };
+    const closeForm = () => { setShowFormModal(false); setModalContact(null); setForm(null); setFormError(null); };
 
     const handleSave = async () => {
         if (!form) return;
@@ -585,7 +590,7 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
             }
         } catch (e) {
             console.error(e);
-            setFileError(tc('saveFailed'));
+            setFormError(tc('saveFailed'));
         } finally {
             setSaving(false);
         }
@@ -1480,12 +1485,15 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat }: Conta
                             </div>
                         </div>
 
-                        <div className="flex items-center justify-between p-6 border-t border-gray-200 bg-gray-50 shrink-0 max-md:p-4">
+                        <div className="flex items-center justify-between gap-3 p-6 border-t border-gray-200 bg-gray-50 shrink-0 max-md:p-4">
                             <button type="button" onClick={closeForm} className="text-gray-600 hover:bg-gray-200 px-4 py-2 rounded-lg transition-colors">{tcm('cancel')}</button>
-                            <button type="button" onClick={handleSave} disabled={saving || !form.name.trim()}
-                                className={cn('px-6 py-2 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed', PRIMARY)}>
-                                {saving ? tcm('saving') : tcm('save')}
-                            </button>
+                            <div className="flex items-center gap-3 min-w-0">
+                                {formError && <p className="text-xs text-red-600 truncate" role="alert">{formError}</p>}
+                                <button type="button" onClick={handleSave} disabled={saving || !form.name.trim()}
+                                    className={cn('px-6 py-2 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0', PRIMARY)}>
+                                    {saving ? tcm('saving') : tcm('save')}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>

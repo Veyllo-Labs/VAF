@@ -456,10 +456,13 @@ def messages_from_address(
     user_scope_id: Optional[str] = None,
     before_ts: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
-    """Legacy-store half of a person's mail timeline: INBOX rows whose sender is this
-    address, newest first, each with a float "ts" and direction "in" (the legacy store
-    holds no Sent mail). Timeline row shape, see vaf/mail/tool_bridge.messages_for_address_merged.
-    Reads nothing when this identity has no legacy store on disk."""
+    """Legacy-store half of a person's mail timeline: INBOX rows whose sender is exactly
+    this address (the complete mailbox in the From header, so ann@example.com never
+    matches joann@example.com), newest first, each with a float "ts" and direction "in"
+    (the legacy store holds no Sent mail). Timeline row shape, see
+    vaf/mail/tool_bridge.messages_for_address_merged. Reads nothing when this identity
+    has no legacy store on disk."""
+    from vaf.mail.addressing import header_addresses
     addr = (address or "").strip().lower()
     if not addr or not _db_path(username, user_scope_id).exists():
         return []
@@ -467,6 +470,7 @@ def messages_from_address(
     user = _user_for_query(username, user_scope_id)
     conn = _get_conn(username, user_scope_id)
     try:
+        # LIKE narrows the scan; the parsed-header comparison below decides.
         cur = conn.execute(
             """
             SELECT account_id, folder, message_id, subject, from_addr, date_str, body_snippet, message_date_iso
@@ -479,6 +483,8 @@ def messages_from_address(
         )
         out: List[Dict[str, Any]] = []
         for r in cur.fetchall():
+            if addr not in header_addresses(r["from_addr"]):
+                continue
             ts = _legacy_row_ts(r)
             if ts is None or (before_ts is not None and ts > float(before_ts)):
                 continue

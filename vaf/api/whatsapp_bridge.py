@@ -27,7 +27,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from vaf.core.config import Config, get_local_admin_scope_id
+from vaf.core.config import Config
 from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
 from vaf.core.messaging_connections import save_whatsapp_chat_jid, whatsapp_enabled_for_scope
 from vaf.core.platform import Platform
@@ -593,7 +593,12 @@ def _get_allowed_phones_for_user(username: str, user_scope_id: str) -> Tuple[Lis
     try:
         from vaf.core.contacts_store import front_office_endpoints
         seen_phones: set = set()
-        for scope_arg in (user_scope_id, None, get_local_admin_scope_id()):
+        # This user's book by scope, then their legacy per-username file. Never the
+        # local admin's scope on top: for the admin it is user_scope_id already, and
+        # for anyone else it would admit the admin's Front Office contacts to a
+        # tenant's agent number (the contact book keeps that door shut on its side
+        # as well, see contacts_store._contacts_path_candidates).
+        for scope_arg in (user_scope_id, None):
             for key in sorted(front_office_endpoints(username, scope_arg or None, "whatsapp")):
                 if key not in seen_phones:
                     seen_phones.add(key)
@@ -873,10 +878,14 @@ def _is_reply_allowed(username: str, chat_jid: str, user_scope_id: Optional[str]
     conversation (a stored message with that number inside the reply window: the agent
     wrote to them, or their message was accepted). An unresolved @lid matches nothing.
     Explicit recipients (`send_whatsapp(to_phone=...)`) do not pass through here."""
+    from vaf.core.config import scope_id_for_username
     uname = (username or "").strip() or "admin"
     scope = str(user_scope_id).strip() if user_scope_id else None
     chat_id = _jid_to_chat_id(uname, chat_jid)
-    _, allowed_phones = _get_allowed_phones_for_user(uname, scope or get_local_admin_scope_id())
+    # A missing scope is resolved from the NAME (the admin's own scope for the admin, a
+    # tenant's own for a tenant, nothing for a stranger), never defaulted to the admin's:
+    # that default read the admin's Front Office contacts for every scopeless caller.
+    _, allowed_phones = _get_allowed_phones_for_user(uname, scope or scope_id_for_username(uname) or "")
     if chat_id and _allow_from_match(chat_id, allowed_phones):
         return True
     return bool(chat_id) and _conversation_is_open(uname, chat_id, scope)

@@ -826,17 +826,21 @@ class MailStore:
 
     def messages_for_address(self, address: str, *, before_ts: Optional[float] = None,
                              limit: int = 50) -> List[Dict[str, Any]]:
-        """Every message exchanged with one address, newest first: the address in From, To
-        or Cc, by substring on the stored header strings, with the folder's special_use so
-        the caller can tell the mailbox's own sent mail from the correspondent's. Junk,
-        Trash and Drafts are left out; rows without any date are left out because a
-        timeline cannot place them. Header-only rows (Sent folders sync without bodies)
-        come back with an empty snippet. This is the per-person query: search() is ranked
-        full text over the body too and cannot say whether a hit was addressed to or merely
-        mentioned the person."""
+        """Every message exchanged with one address, newest first: the address as a complete
+        mailbox in From, To or Cc (parsed from the stored header strings, so ann@example.com
+        never matches joann@example.com), with the folder's special_use so the caller can
+        tell the mailbox's own sent mail from the correspondent's. Junk, Trash and Drafts
+        are left out; rows without any date are left out because a timeline cannot place
+        them. Header-only rows (Sent folders sync without bodies) come back with an empty
+        snippet. This is the per-person query: search() is ranked full text over the body
+        too and cannot say whether a hit was addressed to or merely mentioned the person."""
+        from vaf.mail.addressing import header_addresses
         addr = (address or "").strip().lower()
         if not addr:
             return []
+        # LIKE narrows the scan to candidates; the parsed-header comparison below decides,
+        # and the limit counts decided rows, so a run of near-miss addresses (joann@ when
+        # ann@ is wanted) cannot shorten a page.
         pattern = f"%{addr}%"
         where = ["(lower(m.from_addr) LIKE ? OR lower(m.to_addrs) LIKE ? OR lower(m.cc_addrs) LIKE ?)",
                  "COALESCE(m.date_ts, m.internaldate_ts) IS NOT NULL",
@@ -845,14 +849,21 @@ class MailStore:
         if before_ts is not None:
             where.append("COALESCE(m.date_ts, m.internaldate_ts) <= ?")
             args.append(int(before_ts))
-        args.append(max(1, min(int(limit), 200)))
-        rows = self._conn().execute(
+        wanted = max(1, min(int(limit), 200))
+        cur = self._conn().execute(
             f"SELECT m.id, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs, m.snippet, "
             f"COALESCE(m.date_ts, m.internaldate_ts) AS ts, f.name AS folder_name, f.special_use, "
             f"a.account_id AS acct FROM messages m "
             f"JOIN accounts a ON a.id=m.account_id JOIN folders f ON f.id=m.folder_id "
-            f"WHERE {' AND '.join(where)} ORDER BY ts DESC, m.id DESC LIMIT ?", args).fetchall()
-        return [dict(r) for r in rows]
+            f"WHERE {' AND '.join(where)} ORDER BY ts DESC, m.id DESC", args)
+        out: List[Dict[str, Any]] = []
+        for r in cur:
+            if addr in header_addresses(r["from_addr"]) or addr in header_addresses(r["to_addrs"]) \
+                    or addr in header_addresses(r["cc_addrs"]):
+                out.append(dict(r))
+                if len(out) >= wanted:
+                    break
+        return out
 
     # ── local writes + op queue (phase 2; EMAIL_CLIENT.md K-9 pattern) ─────
 

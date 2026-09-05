@@ -8,7 +8,24 @@ to import the heavy vaf.core.email_transport module for a pure helper. The histo
 name email_transport.normalize_recipients is re-exported from here (a guard test
 pins them to one object, Rule 2 single-source)."""
 from email.utils import getaddresses
-from typing import Any, List
+from typing import Any, List, Set
+
+
+def header_addresses(value: Any) -> Set[str]:
+    """The complete mailboxes named in one address header, lowercased: "Bob <Bob@Example.com>,
+    ann@example.com" gives {"bob@example.com", "ann@example.com"}. This is the matching
+    counterpart of normalize_recipients: a query for ann@example.com must match a message
+    from ann@example.com and NOT one from joann@example.com, which a substring test on the
+    stored header string would. Display names are dropped; an empty or unparseable header
+    gives an empty set."""
+    if not value:
+        return set()
+    out: Set[str] = set()
+    for _name, addr in getaddresses([str(value)]):
+        addr = (addr or "").strip().lower()
+        if "@" in addr:
+            out.add(addr)
+    return out
 
 
 def normalize_recipients(value: Any) -> List[str]:

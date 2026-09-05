@@ -190,6 +190,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A tenant's WhatsApp number never admits the admin's Front Office contacts.** The
+  bridge collected the allowed senders for a user from their own contact book and, on
+  top, from the local admin's, so a person the admin had cleared could write to any
+  user's agent number. The admin's book is read for the admin only.
+- **A person's mail timeline matches the whole address.** The per-address queries of
+  both mail stores compared substrings of the header strings, so `ann@example.com` also
+  found the mail of `joann@example.com`; they now compare the parsed mailboxes, and a
+  page is filled from matching rows only. A mail store that cannot be read no longer
+  takes the legacy rows down with it.
+- **Two WhatsApp messages in the same second are two timeline entries.** The entry id was
+  built from time and direction, so such a pair collapsed into one key and paging could
+  skip the second; the store's message id is part of the key now.
+- **A failed contact save is visible in the form.** The message went to the record card
+  behind the modal; it now appears in the form's footer and the form stays open.
 - **One rule for phone numbers everywhere.** The WhatsApp bridge, the dashboard and the
   contact book used four normalisers with two different rules, so a contact typed as
   0176 ... did not always match the chat stored as +49176 .... One canonical form now:

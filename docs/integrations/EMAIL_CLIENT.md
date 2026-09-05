@@ -144,7 +144,11 @@ Deliberately deferred, listed so nobody looks for them in the code:
   The stored Sent bytes are sent verbatim, so the delivered Message-ID is
   byte-identical to the local copy and replies join the same thread. Bcc is
   stripped from the delivered wire and rides the SMTP envelope only;
-  `normalize_recipients` lives in `vaf/mail/addressing.py`. All four senders
+  `normalize_recipients` lives in `vaf/mail/addressing.py`, next to its matching
+  counterpart `header_addresses` (the complete lowercased mailboxes named in one
+  header string), which the per-address queries of both mail stores and the
+  contact timeline's direction rule use so that `ann@example.com` never matches
+  `joann@example.com`. All four senders
   (send_mail/reply_mail/forward_mail tools + `writeback._op_send`) route here.
 - Libraries: IMAPClient (BSD-3) as the IMAP driver, stdlib `smtplib` for SMTP
   submission (every caller is synchronous, so an async SMTP client buys nothing;

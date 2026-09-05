@@ -418,6 +418,8 @@ def get_chat_messages(
     before_ts: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """Get messages for a chat, newest first. When chat_id is a @lid, also look up lid_to_e164 so messages stored under the resolved E.164 are found.
+    Each row carries its message_id (the channel's own id, or the store's `_<ts>_<dir>` fallback key),
+    so a reader that pages by time can tell two messages of the same second apart.
     channel: filter to one channel ('whatsapp' default, 'telegram', ...); None/'' = all channels.
     before_ts: only rows at or before this unix time (inclusive), the cursor a paged reader
     passes so page two starts where page one ended instead of at the newest row again."""
@@ -452,7 +454,7 @@ def get_chat_messages(
             ts_param = [float(before_ts)] if before_ts is not None else []
             cur = conn.execute(
                 f"""
-                SELECT chat_id, chat_name, body, direction, ts, content_type, channel
+                SELECT chat_id, chat_name, body, direction, ts, content_type, channel, message_id
                 FROM channel_messages
                 WHERE username = ? AND chat_id = ?{chan_clause}{ts_clause}
                 ORDER BY ts DESC

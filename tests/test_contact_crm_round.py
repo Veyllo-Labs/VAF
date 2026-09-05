@@ -562,3 +562,91 @@ def test_tools_carry_the_new_fields_and_recent_activity(scratch):
     assert "Recent activity" in out and "WhatsApp in: msg 2" in out and "WhatsApp out: msg 0" in out
     # The pinned lines of the older test still hold.
     assert "WhatsApp/Phone: +491700000042" in out
+
+
+# ── the bridge's allow lists read the caller's book, never the admin's ───────────
+
+def _no_whatsapp_config(monkeypatch, wa):
+    real_get = wa.Config.get
+    monkeypatch.setattr(wa.Config, "get",
+                        classmethod(lambda cls, k, d=None: {} if k == "whatsapp_config" else real_get(k, d)))
+
+
+def test_bridge_allowed_phones_never_include_the_admins_front_office_contacts(scratch, monkeypatch):
+    from vaf.api import whatsapp_bridge as wa
+    from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+    admin_user, admin_scope = get_local_admin_username(), get_local_admin_scope_id()
+    cs.create_contact("Admin Friend", admin_user, user_scope_id=admin_scope, whatsapp_phone="+491700000001", allow_as_assistant_user=True)
+    cs.create_contact("Bobs Friend", "bob", user_scope_id=SCOPE_B, whatsapp_phone="+491700000002", allow_as_assistant_user=True)
+    _no_whatsapp_config(monkeypatch, wa)
+    assert wa._get_allowed_phones_for_user("bob", SCOPE_B) == ([], ["+491700000002"])
+    assert wa._get_allowed_phones_for_user(admin_user, admin_scope) == ([], ["+491700000001"])
+    # The reply lane with no scope resolves the tenant's own scope, not the admin's.
+    assert wa._is_reply_allowed("bob", "491700000001@s.whatsapp.net", None) is False
+    assert wa._is_reply_allowed("bob", "491700000002@s.whatsapp.net", SCOPE_B) is True
+    assert wa._is_reply_allowed(admin_user, "491700000001@s.whatsapp.net", None) is True
+
+
+# ── two messages in one second, and a page key for each ─────────────────────────
+
+def test_contact_timeline_keeps_two_messages_of_the_same_second_apart(scratch):
+    c = cs.create_contact("Twin", "alice", user_scope_id=SCOPE_A, whatsapp_phone="+491700000042")
+    for mid in ("m-a", "m-b"):
+        store.append_message("alice", "+491700000042", f"body {mid}", direction="in", message_id=mid,
+                             user_scope_id=SCOPE_A, channel="whatsapp", ts=1_700_000_000.0)
+    rows = store.get_chat_messages("alice", "+491700000042", user_scope_id=SCOPE_A)
+    assert sorted(r["message_id"] for r in rows) == ["m-a", "m-b"]
+    out = cs.contact_timeline(c, "alice", SCOPE_A, kinds={"message"})
+    ids = [it["id"] for it in out["items"]]
+    assert sorted(ids) == ["whatsapp:+491700000042:m-a", "whatsapp:+491700000042:m-b"]
+    first = cs.contact_timeline(c, "alice", SCOPE_A, kinds={"message"}, limit=1)
+    second = cs.contact_timeline(c, "alice", SCOPE_A, kinds={"message"}, limit=1, cursor=first["next_cursor"])
+    assert {first["items"][0]["id"], second["items"][0]["id"]} == set(ids)
+
+
+# ── the per-address mail queries match the whole mailbox ─────────────────────────
+
+def test_header_addresses_names_complete_mailboxes_only():
+    from vaf.mail.addressing import header_addresses
+    assert header_addresses("Bob <Bob@Example.com>, ann@example.com") == {"bob@example.com", "ann@example.com"}
+    assert header_addresses("") == set() and header_addresses(None) == set()
+    assert "ann@example.com" not in header_addresses("Joann <joann@example.com>")
+
+
+def test_mail_store_per_address_query_matches_the_whole_mailbox_and_fills_the_page(scratch, pinned_mail_key):
+    s = _mail_store_with_bob(SCOPE_A)
+    apk = s.account_pk("owner@example.com")
+    inbox = s.get_folder(apk, "INBOX")["id"]
+    s.ingest_message(apk, inbox, 7, _mail("<joann@x>", "Near miss", "Joann <joann@example.com>", "owner@example.com", 1_700_000_700, "x"))
+    s.ingest_message(apk, inbox, 8, _mail("<ann@x>", "Exact", "ann@example.com", "owner@example.com", 1_700_000_600, "x"))
+    assert [r["message_id"] for r in s.messages_for_address("ann@example.com")] == ["<ann@x>"]
+    assert [r["message_id"] for r in s.messages_for_address("joann@example.com")] == ["<joann@x>"]
+    # the newer near miss does not use up the page
+    assert [r["message_id"] for r in s.messages_for_address("ann@example.com", limit=1)] == ["<ann@x>"]
+    s.close()
+
+
+def test_legacy_mail_store_per_address_query_matches_the_whole_mailbox(scratch):
+    from vaf.core import email_sync_store as legacy
+    legacy.init_store("alice", SCOPE_A)
+    conn = legacy._get_conn("alice", SCOPE_A)
+    for mid, sender in (("<joann@x>", "Joann <joann@example.com>"), ("<ann@x>", "Ann <ann@example.com>")):
+        conn.execute("INSERT INTO email_messages (username, account_id, folder, message_id, subject, from_addr, date_str, body_snippet, synced_at, message_date_iso) "
+                     "VALUES ('', 'acct', 'INBOX', ?, 'Hi', ?, 'Tue, 01 Sep 2026 10:00:00 +0200', 'x', '2026-09-01T08:00:00Z', '2026-09-01T08:00:00Z')",
+                     (mid, sender))
+    conn.commit(); conn.close()
+    assert [r["message_id"] for r in legacy.messages_from_address("ann@example.com", username="alice", user_scope_id=SCOPE_A)] == ["<ann@x>"]
+
+
+def test_messages_for_address_merged_keeps_the_legacy_rows_when_the_v2_store_breaks(scratch, monkeypatch):
+    from vaf.core import email_sync_store as legacy
+    from vaf.mail import store as mail_store_module
+    from vaf.mail import tool_bridge
+    legacy.init_store("alice", SCOPE_A)
+    conn = legacy._get_conn("alice", SCOPE_A)
+    conn.execute("INSERT INTO email_messages (username, account_id, folder, message_id, subject, from_addr, date_str, body_snippet, synced_at, message_date_iso) "
+                 "VALUES ('', 'acct', 'INBOX', '<legacy@x>', 'Old mail', 'bob@example.com', 'Tue, 01 Sep 2026 10:00:00 +0200', 'old', '2026-09-01T08:00:00Z', '2026-09-01T08:00:00Z')")
+    conn.commit(); conn.close()
+    monkeypatch.setattr(mail_store_module.MailStore, "exists", staticmethod(lambda *a, **k: (_ for _ in ()).throw(RuntimeError("mail.db unreadable"))))
+    rows = tool_bridge.messages_for_address_merged("bob@example.com", None, 10, "alice", SCOPE_A)
+    assert [r["message_id"] for r in rows] == ["<legacy@x>"]

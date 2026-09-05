@@ -166,8 +166,15 @@ def messages_for_address_merged(address, before_ts, limit, username, user_scope_
     Scope rule, the same one email_sync_store enforces: a caller with a username and NO
     scope is a legacy per-username user and gets the legacy store only (INBOX, inbound);
     mapping an empty scope to the admin's real scope would hand over the admin's mailbox.
-    A scope whose mail.db does not exist reads nothing from v2 and creates nothing."""
+    A scope whose mail.db does not exist reads nothing from v2 and creates nothing.
+
+    Merge rule, the same one list_messages_merged applies: the v2 rows win for every
+    account the engine syncs, and the legacy rows stay only for accounts the engine does
+    not know. A broken v2 lane (an unreadable mail.db, a schema from a newer build) is
+    logged and the legacy rows still answer, so the timeline degrades instead of going
+    blank, the way the mailbox listing does."""
     from vaf.core.email_sync_store import messages_from_address as legacy_from_address
+    from vaf.mail.addressing import header_addresses
     addr = (address or "").strip().lower()
     if not addr:
         return []
@@ -176,28 +183,31 @@ def messages_for_address_merged(address, before_ts, limit, username, user_scope_
     v2_rows: List[Dict[str, Any]] = []
     v2_accounts: set = set()
     if not legacy_user:
-        from vaf.mail.store import MailStore
-        scope = _scope(user_scope_id)
-        if MailStore.exists(scope):
-            store = MailStore(scope)
-            v2_accounts = _v2_account_ids(store)
-            for m in store.messages_for_address(addr, before_ts=before_ts, limit=limit):
-                from_l = (m.get("from_addr") or "").lower()
-                if addr in from_l:
-                    direction = "in"
-                elif (m.get("special_use") or "") == "\\Sent" or addr in (m.get("to_addrs") or "").lower() \
-                        or addr in (m.get("cc_addrs") or "").lower():
-                    direction = "out"
-                else:
-                    continue
-                v2_rows.append({
-                    "ts": float(m.get("ts") or 0), "direction": direction,
-                    "subject": m.get("subject") or "", "from": m.get("from_addr") or "",
-                    "to": m.get("to_addrs") or "", "cc": m.get("cc_addrs") or "",
-                    "snippet": m.get("snippet") or "", "account_id": m.get("acct") or "",
-                    "folder": m.get("folder_name") or "", "message_id": m.get("message_id") or f"pk-{m.get('id')}",
-                    "special_use": m.get("special_use") or "",
-                })
+        try:
+            from vaf.mail.store import MailStore
+            scope = _scope(user_scope_id)
+            if MailStore.exists(scope):
+                store = MailStore(scope)
+                v2_accounts = _v2_account_ids(store)
+                for m in store.messages_for_address(addr, before_ts=before_ts, limit=limit):
+                    if addr in header_addresses(m.get("from_addr")):
+                        direction = "in"
+                    elif (m.get("special_use") or "") == "\\Sent" or addr in header_addresses(m.get("to_addrs")) \
+                            or addr in header_addresses(m.get("cc_addrs")):
+                        direction = "out"
+                    else:
+                        continue
+                    v2_rows.append({
+                        "ts": float(m.get("ts") or 0), "direction": direction,
+                        "subject": m.get("subject") or "", "from": m.get("from_addr") or "",
+                        "to": m.get("to_addrs") or "", "cc": m.get("cc_addrs") or "",
+                        "snippet": m.get("snippet") or "", "account_id": m.get("acct") or "",
+                        "folder": m.get("folder_name") or "", "message_id": m.get("message_id") or f"pk-{m.get('id')}",
+                        "special_use": m.get("special_use") or "",
+                    })
+        except Exception as e:
+            logger.warning("v2 store per-address read failed, using legacy rows only: %s", e)
+            v2_rows, v2_accounts = [], set()
     legacy_rows = [r for r in legacy_from_address(addr, limit=limit, username=username, user_scope_id=user_scope_id,
                                                   before_ts=before_ts)
                    if (r.get("account_id") or "") not in v2_accounts]

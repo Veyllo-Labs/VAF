@@ -975,7 +975,11 @@ def contact_timeline(
                         if (row.get("content_type") or "text") == "deleted" or not _keep(row.get("ts")):
                             continue
                         direction = "out" if (row.get("direction") or "in") == "out" else "in"
-                        items.append({"kind": "message", "id": f"{chan}:{key}:{float(row['ts']):.3f}:{direction}",
+                        # The store's message_id is unique per row, so two messages in the same
+                        # second stay two items (and two page keys); a row without one, which
+                        # the store never produces, falls back to time and direction.
+                        ident = str(row.get("message_id") or "").strip() or f"{float(row['ts']):.3f}:{direction}"
+                        items.append({"kind": "message", "id": f"{chan}:{key}:{ident}",
                                       "ts": float(row["ts"]), "channel": chan, "direction": direction, "title": None,
                                       "body": str(row.get("body") or ""), "source": "agent" if direction == "out" else None,
                                       "ref": {"chat_id": row.get("chat_id") or key, "content_type": row.get("content_type") or "text"}})

@@ -453,14 +453,20 @@ def _firewalld_marker_write(zone: str, rule: str) -> None:
         logger.debug("firewalld: could not write the marker file: %s", e)
 
 
-def _elevation_argv() -> list:
-    """How to gain root for the firewall change: pkexec in desktop mode (NATIVE polkit password dialog),
+def elevation_argv() -> list:
+    """How to gain root for a host change: pkexec in desktop mode (NATIVE polkit password dialog),
     otherwise non-interactive sudo (`sudo -n`) so a headless/server run fails fast instead of hanging on
-    a TTY password prompt."""
+    a TTY password prompt. The one elevation lane of the process: the firewall setup here and the
+    service repair (vaf/core/service_health.py, the host's IP forwarding switch) both use it, so a
+    platform that needs a different dialog changes one function."""
     if (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')) and \
        subprocess.run(['which', 'pkexec'], capture_output=True).returncode == 0:
         return ['pkexec']
     return ['sudo', '-n']
+
+
+# The older private name; the callers and tests that grew up with it keep working.
+_elevation_argv = elevation_argv
 
 
 def _setup_firewall_linux_firewalld(port: int, port_frontend: int):

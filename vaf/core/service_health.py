@@ -20,14 +20,25 @@ The failure modes this exists for, all seen in the field:
 - a container runs, but the published host port and the port VAF is configured
   to reach disagree, so a healthy service reads as a dead one;
 - the docker daemon is down, or its socket is unreadable for this user;
-- the OS firewall drops traffic between VAF and its own local containers.
+- the OS firewall drops traffic between VAF and its own local containers;
+- the Linux host has IP forwarding switched off, so every container runs but
+  none can reach the internet (the browser never comes up, nothing can be
+  pulled). Docker switches it on when it starts; a firewalld reload or a system
+  update that re-applies /etc/sysctl.d (openSUSE's 70-yast.conf carries
+  `net.ipv4.ip_forward = 0`) switches it back off behind Docker's back.
+  Measured twice on the same host; nothing inside a container can repair it,
+  and a container restart only hides the cause for a while.
 
 What repair deliberately never does: no `compose down`, no volume or image
 removal, no config writes (the port keys are a security decision, so a mismatch
 is REPORTED, never silently corrected), no restart of a container runtime that
-is already running (that stops the engine for minutes), no privilege escalation
-(a Linux daemon that needs `systemctl start docker` gets a named instruction,
-not a sudo attempt).
+is already running (that stops the engine for minutes), and no privilege
+escalation for the engine (a Linux daemon that needs `systemctl start docker`
+gets a named instruction, not a sudo attempt). The ONE elevated step is the
+host's IP forwarding switch, through the same lane the firewall setup uses
+(`vaf.network.firewall.elevation_argv`: a native polkit dialog on a desktop,
+non-interactive sudo headless, never a hanging TTY prompt): one kernel setting
+and one drop-in file, both named in the step's message, both reversible.
 """
 from __future__ import annotations
 
@@ -61,6 +72,13 @@ INSPECT_TIMEOUT = 10.0
 # Ceiling for waiting on an engine that was just asked to start. The boot path
 # waits far longer (three rounds of 300s), but that is a boot; this is a button.
 DAEMON_WAIT_SECONDS = 120
+# The kernel switch every container's internet access hangs on (Linux only), and
+# the drop-in that keeps it on across the next `sysctl --system`. 99- sorts after
+# the distribution files (openSUSE's 70-yast.conf writes 0), so it has the last word.
+HOST_FORWARDING_PATH = "/proc/sys/net/ipv4/ip_forward"
+HOST_FORWARDING_DROPIN = "/etc/sysctl.d/99-vaf-docker-ip-forward.conf"
+# How long the password dialog may stay open before the step gives up.
+ELEVATION_TIMEOUT = 120
 
 
 def _run_docker(args: Sequence[str], timeout: float) -> subprocess.CompletedProcess:
@@ -183,6 +201,68 @@ def _probe_http(path: str, port: Optional[int], timeout: float) -> Dict[str, Any
             return {"kind": "http", "ok": 200 <= code < 500, "detail": f"HTTP {code}"}
     except Exception as e:
         return {"kind": "http", "ok": False, "detail": str(e)[:200]}
+
+
+def probe_host_forwarding(path: str = HOST_FORWARDING_PATH,
+                          system: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Is the Linux host forwarding packets for its containers? None where the
+    question does not arise (macOS and Windows run the engine in a VM that
+    forwards for itself) or the file cannot be read; else {"ok", "value"}.
+
+    A file read, not a command: it costs nothing, needs no privilege, and is the
+    same number `sysctl net.ipv4.ip_forward` prints."""
+    if (system or platform.system()) != "Linux":
+        return None
+    try:
+        with open(path, "r", encoding="ascii") as fh:
+            value = int((fh.read() or "").strip() or "0")
+    except Exception:
+        return None
+    return {"ok": value == 1, "value": value}
+
+
+def derive_host_status(forwarding: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Pure: the host row of a snapshot. `forwarding_ok` is None where the probe
+    does not apply, so a caller can tell "fine" from "not a Linux host"."""
+    if forwarding is None:
+        return {"ip_forward": None, "forwarding_ok": None, "reason": ""}
+    if forwarding.get("ok"):
+        return {"ip_forward": 1, "forwarding_ok": True, "reason": ""}
+    return {
+        "ip_forward": int(forwarding.get("value") or 0),
+        "forwarding_ok": False,
+        "reason": ("IP forwarding is off on this host (net.ipv4.ip_forward = 0), so the "
+                   "containers run but none of them can reach the internet: the browser "
+                   "cannot start, and no image or model can be pulled. Docker switches it on "
+                   "when it starts; a firewall reload or a system update that re-applies "
+                   "/etc/sysctl.d switches it back off. Repair switches it on again."),
+    }
+
+
+def enable_host_forwarding(run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+                           elevation: Optional[Callable[[], List[str]]] = None,
+                           ) -> Dict[str, Any]:
+    """Switch IP forwarding on for good, with the privilege dialog of the platform.
+
+    One elevation covers both halves: the live switch (`sysctl -w`) and the drop-in
+    under /etc/sysctl.d that wins the next `sysctl --system`, which is exactly the
+    call that keeps switching it off. Returns {"ok", "detail"}; never raises."""
+    if elevation is None:
+        from vaf.network.firewall import elevation_argv as elevation
+    inner = ("sysctl -w net.ipv4.ip_forward=1 && mkdir -p /etc/sysctl.d && "
+             f"printf 'net.ipv4.ip_forward = 1\\n' > {HOST_FORWARDING_DROPIN}")
+    argv = list(elevation()) + ["sh", "-c", inner]
+    try:
+        result = run(argv, capture_output=True, text=True, timeout=ELEVATION_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "detail": "the password dialog was not answered in time"}
+    except Exception as e:
+        return {"ok": False, "detail": str(e)[:200]}
+    if result.returncode != 0:
+        detail = ((result.stderr or "") or (result.stdout or "")).strip().splitlines()
+        return {"ok": False, "detail": (detail[-1].strip()[:200] if detail
+                                       else f"exit status {result.returncode}")}
+    return {"ok": True, "detail": ""}
 
 
 def derive_service_status(spec: ServiceSpec,
@@ -322,15 +402,19 @@ def collect_service_status(
     inspect_probe: Callable[[Sequence[str]], List[Dict[str, Any]]] = inspect_containers,
     port_reader: Callable[[ServiceSpec], Optional[int]] = configured_port,
     service_probe: Callable[[ServiceSpec, Optional[int]], Optional[Dict[str, Any]]] = probe_service,
+    host_probe: Callable[[], Optional[Dict[str, Any]]] = probe_host_forwarding,
 ) -> Dict[str, Any]:
-    """Every service's state in one snapshot.
+    """Every service's state in one snapshot, plus the host's forwarding switch.
 
     With the daemon down nothing else is attempted: no inspect, no probes. That
     keeps the worst case at one `docker info` (10s) instead of seven timeouts,
-    which matters because a web request waits on this.
+    which matters because a web request waits on this. The host probe is a file
+    read and runs regardless: with forwarding off the containers ARE running,
+    which is what makes the failure look like seven separate ones.
     """
     daemon = daemon_probe()
     root = find_stack_root()
+    host = derive_host_status(host_probe())
     services: List[Dict[str, Any]] = []
 
     if not daemon.get("ok"):
@@ -377,6 +461,7 @@ def collect_service_status(
             "detail": str(daemon.get("detail") or ""),
         },
         "stack_root": str(root) if root else None,
+        "host": host,
         "services": services,
         "starting": bool(starting),
         "starting_seconds_left": max([int(s.get("starting_seconds_left") or 0)
@@ -506,11 +591,30 @@ def repair_service_stack(
         return finish()
     add("stack_root", "check", True, f"Using the compose file in {root}.")
 
-    # 3. Anything missing or stopped: one idempotent `compose up`. Optional
+    before = status_probe()
+
+    # 3. The host's forwarding switch, BEFORE any container is touched: with it
+    #    off, every restart below would succeed and change nothing, and the
+    #    final firewall hint would send the user looking in the wrong place.
+    forwarding_was_off = (before.get("host") or {}).get("forwarding_ok") is False
+    if forwarding_was_off:
+        switched = enable_host_forwarding()
+        if switched.get("ok"):
+            add("host_forwarding", "sysctl", True,
+                "Switched IP forwarding on (net.ipv4.ip_forward = 1) and wrote "
+                f"{HOST_FORWARDING_DROPIN} so it stays on. The containers have their "
+                "internet access back; the browser recovers on its own within a minute.")
+        else:
+            add("host_forwarding", "sysctl", False,
+                "IP forwarding is off on this host and could not be switched on "
+                f"({switched.get('detail') or 'no privileges'}). Run "
+                "`sudo sysctl -w net.ipv4.ip_forward=1` and put `net.ipv4.ip_forward = 1` "
+                f"into {HOST_FORWARDING_DROPIN}; until then no container can reach the internet.")
+
+    # 4. Anything missing or stopped: one idempotent `compose up`. Optional
     #    services count here too - `compose up` starts them best-effort anyway,
     #    and a stopped optional container is shown to the user as a problem, so
     #    a repair that skips it answers a question nobody asked.
-    before = status_probe()
     down = [s for s in before.get("services", [])
             if not s.get("exists") or not s.get("running")]
     if down:
@@ -524,7 +628,7 @@ def repair_service_stack(
     else:
         add("compose_up", "skip", True, "Every container was already running.")
 
-    # 4. Running but unreachable: restart the container itself. A port mismatch
+    # 5. Running but unreachable: restart the container itself. A port mismatch
     #    is excluded here on purpose - restarting cannot fix a disagreement
     #    about which port to use, it only hides the reason for a while.
     after_up = status_probe()
@@ -551,7 +655,7 @@ def repair_service_stack(
         add(f"restart:{name}", "restart", ok,
             f"Restarted {name}." if ok else f"Could not restart {name}: {detail}")
 
-    # 5. Port mismatches: named, never corrected.
+    # 6. Port mismatches: named, never corrected.
     for svc in after_up.get("services", []):
         if not svc.get("port_mismatch"):
             continue
@@ -564,10 +668,17 @@ def repair_service_stack(
             f"matching port variable in ~/.vaf/compose.env and start the stack again. "
             f"VAF does not rewrite this for you.")
 
-    # 6. Whatever is still unreachable after a restart: the network in between.
+    # 7. Whatever is still unreachable after a restart: the network in between.
+    #    Unless forwarding was just switched on - then the container is
+    #    recovering from THAT, and a firewall hint would point the wrong way.
     final = status_probe()
     for svc in final.get("services", []):
         if svc.get("running") and svc.get("probe_ok") is False and not svc.get("port_mismatch"):
+            if forwarding_was_off:
+                add(f"recovering:{svc.get('name')}", "report", True,
+                    f"{svc.get('name')} does not answer yet; it is recovering from the "
+                    f"forwarding switch. Check again in a minute.")
+                continue
             add(f"firewall:{svc.get('name')}", "report", False,
                 f"{svc.get('name')} runs and publishes its port but still does not "
                 f"answer. " + _firewall_hint())

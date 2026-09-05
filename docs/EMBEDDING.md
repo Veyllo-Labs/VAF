@@ -555,7 +555,12 @@ What an embedded agent can and cannot do on the host - the short version of
   `stop_service_stack`) starts and stops the stack, and
   `vaf.core.service_health` (`collect_service_status`, `repair_service_stack`)
   answers what state each container is in and repairs a broken one, with every
-  probe injectable so an embedder can test against it without Docker. One
+  probe injectable so an embedder can test against it without Docker. The
+  snapshot's `host` row reports the Linux host's IP forwarding switch (off means
+  every container runs and none reaches the internet), and a repair switches it
+  on through `vaf.network.firewall.elevation_argv`, the one privilege lane of the
+  framework (a native polkit dialog on a desktop, non-interactive `sudo -n`
+  headless); an embedder with its own dialog replaces that one function. One
   exception to know:
   `python_sandbox(with_vaf_tools=True)` opens a temporary tool-bridge port on
   `0.0.0.0` (random ephemeral port, per-run token auth) for the duration of

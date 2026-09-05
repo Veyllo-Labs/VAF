@@ -190,6 +190,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Repair switches the host's IP forwarding back on.** With `net.ipv4.ip_forward = 0`
+  (a firewall reload or a system update re-applying `/etc/sysctl.d` behind Docker's
+  back) every container ran and none could reach the internet, the browser relaunched
+  Chromium every 30 seconds, and a repair only restarted containers and pointed at the
+  firewall. The status snapshot now carries a `host` row, `vaf repair --check` and the
+  dialog show it, and a repair switches forwarding on through the same password dialog
+  the firewall setup uses and writes a sysctl drop-in so it stays on.
+- **`vaf repair` no longer restarts a healthy memory database.** Its database probe
+  borrowed the cached main-thread engine from a fresh event loop, answered True once and
+  False from the second probe on, and the run restarted the container that "did not
+  answer". The probe uses an engine of its own per call now.
+- **The browser container starts without internet access.** Its X server queried STUN
+  servers for a public address before serving anything, synchronously; with no egress
+  Chromium blocked on the display for the whole timeout and its CDP port never opened.
+  The X server is now given the loopback address (its UDP lane is not published anyway),
+  and CDP comes up within a second whether or not the host has egress.
 - **A tenant's WhatsApp number never admits the admin's Front Office contacts.** The
   bridge collected the allowed senders for a user from their own contact book and, on
   top, from the local admin's, so a person the admin had cleared could write to any

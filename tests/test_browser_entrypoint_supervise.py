@@ -342,3 +342,15 @@ def test_both_health_checks_authenticate_against_the_stream():
     assert "$$(cat /tmp/kasmvnc.secret)" in browser_block
     # And the credential has to reach the container in the first place.
     assert "VAF_BROWSER_VNC_SECRET" in browser_block
+
+
+def test_the_x_server_never_waits_for_the_internet_at_start():
+    """Without a public IP given, Xkasmvnc queries STUN servers before it serves
+    anything, synchronously: with no egress Chromium blocks on the X connection,
+    its CDP port never opens and the supervisor loop never converges (measured
+    live with the host's ip_forward off). The flag pins the X server to the
+    loopback answer; the UDP lane is not published anyway."""
+    code = "\n".join(ln for ln in _script().splitlines() if not ln.lstrip().startswith("#"))
+    x_line = code[code.index("Xkasmvnc :99"):]
+    x_line = x_line[:x_line.index("-ac")]
+    assert "-publicIP 127.0.0.1" in x_line

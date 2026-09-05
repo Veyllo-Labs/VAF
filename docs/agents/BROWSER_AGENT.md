@@ -378,6 +378,18 @@ server (`/api/browser-vnc/t/<ticket>/...`), never directly: the container port
 (127.0.0.1:6901, loopback-only like CDP, and credentialed since the stream gained basic
 auth) is reachable for LAN users only via that proxy. "Never directly" is a security
 property, not a routing preference - see the stream-port section under Security.
+
+**The X server does not wait for the internet.** Xkasmvnc is started with
+`-publicIP 127.0.0.1`. Without a public address given it asks a chain of STUN servers
+for one before it serves anything (its WebRTC/UDP lane), synchronously: with no egress
+from the container (measured: the host's `net.ipv4.ip_forward` switched off behind
+Docker's back, see [DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md), Troubleshooting)
+that took about 100 seconds per attempt, Chromium blocked on the display the whole time,
+its CDP port never opened, and the supervisor loop never converged. Measured in the
+container: CDP never up against a STUN-waiting X server, up after one second with the
+flag. Nothing is lost: only the TCP stream port is published, and VAF's proxy speaks
+WebSocket, so the UDP lane was unreachable anyway. `-udpPort 0` does not skip the query.
+Pinned by `tests/test_browser_entrypoint_supervise.py`.
 The ticket in the path is the credential, validated against the current lease on every
 request; a stopped or superseded lease kills its ticket immediately. The two halves of
 the stream carry that ticket differently, and it is worth knowing which is which: ASSETS

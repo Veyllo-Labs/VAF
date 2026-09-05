@@ -23,6 +23,11 @@ _STATE_STYLE = {
 }
 
 
+def host_forwarding_off(status: Dict[str, Any]) -> bool:
+    """The host row's one finding: forwarding switched off (None means not a Linux host)."""
+    return (status.get("host") or {}).get("forwarding_ok") is False
+
+
 def format_status(status: Dict[str, Any]) -> List[str]:
     """The service table as plain lines, for a terminal or a TUI note."""
     lines: List[str] = []
@@ -33,6 +38,8 @@ def format_status(status: Dict[str, Any]) -> List[str]:
         detail = str(docker.get("detail") or "").strip()
         lines.append(f"Docker: NOT reachable ({docker.get('reason') or 'unknown'})"
                      + (f" - {detail}" if detail else ""))
+    if host_forwarding_off(status):
+        lines.append(f"Host: IP forwarding OFF - {(status.get('host') or {}).get('reason') or ''}")
     if not status.get("stack_root"):
         lines.append("Compose file: none found (this install manages no containers)")
     for svc in status.get("services", []):
@@ -50,6 +57,9 @@ def print_status(status: Dict[str, Any]) -> None:
                  f"({docker.get('reason') or 'unknown'})")
         if docker.get("detail"):
             UI.print(f"  {docker['detail']}", style="dim")
+    if host_forwarding_off(status):
+        UI.print("[bold]Host:[/bold] [red]IP forwarding off[/red]")
+        UI.print(f"  {(status.get('host') or {}).get('reason') or ''}", style="dim")
     if not status.get("stack_root"):
         UI.print("No compose file found: this install manages no containers.", style="dim")
     for svc in status.get("services", []):
@@ -106,7 +116,7 @@ def cmd_repair(
         print_status(status)
         broken = [s for s in status.get("services", [])
                   if s.get("required") and s.get("state") in ("error", "unknown")]
-        if broken:
+        if broken or host_forwarding_off(status):
             UI.print("")
             UI.warning("Run `vaf repair` to try to fix this.")
             raise typer.Exit(1)

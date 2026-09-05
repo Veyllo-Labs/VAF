@@ -234,6 +234,19 @@ async def _run_schema_migrations(engine: AsyncEngine) -> bool:
     return True
 
 
+def _throwaway_engine(url: str) -> AsyncEngine:
+    """An engine for one loop and one use: NullPool, so every connection closes
+    when its work is done and nothing outlives the loop it was made on. This is
+    what a daemon thread gets, and what any probe that runs on a loop of its own
+    must use: an asyncpg connection is bound to the loop that opened it, so the
+    cached pooled engine of the main loop cannot be borrowed from a second loop."""
+    return create_async_engine(
+        url,
+        echo=False,  # Never log outside the main lane
+        poolclass=NullPool,  # No pooling! Connections close immediately.
+    )
+
+
 async def get_engine() -> AsyncEngine:
     """
     Get or create the async database engine.
@@ -252,14 +265,8 @@ async def get_engine() -> AsyncEngine:
     # Daemon threads get NullPool engines (no pooling = no leak)
     # These engines are created fresh each time and disposed immediately after use
     if not _is_main_thread():
-        # Create a throwaway engine with NullPool - closes connections immediately
-        engine = create_async_engine(
-            url,
-            echo=False,  # Never log in daemon threads
-            poolclass=NullPool,  # No pooling! Connections close immediately.
-        )
         # Don't run migrations from daemon threads
-        return engine
+        return _throwaway_engine(url)
 
     # Main thread: use cached pooled engine
     with _engine_lock:
@@ -543,16 +550,30 @@ def check_db_connection_sync(timeout_seconds: float = 5.0) -> bool:
 
     Exists so a reader that got an empty result can tell "no rows" apart
     from "database unreachable" - the memory tools reported a dead DB as an
-    empty memory. Runs the coroutine on a fresh loop; when this thread
-    already runs one, hops to a worker thread. False on any failure or
-    timeout - the caller is asking "can I trust an empty answer", and an
-    unanswerable probe means no.
+    empty memory. Runs on a fresh loop; when this thread already runs one,
+    hops to a worker thread. False on any failure or timeout - the caller is
+    asking "can I trust an empty answer", and an unanswerable probe means no.
+
+    On an engine of its own, never the cached one: the pooled main-thread engine
+    is bound to the loop that first used it, and this probe runs each call on a
+    NEW loop. Borrowing it answered True once and False from the second call on
+    ("attached to a different loop"), which made `vaf repair` restart a healthy
+    memory database under a running VAF (live incident).
     """
     import asyncio
     import concurrent.futures
 
+    async def _select_one() -> bool:
+        engine = _throwaway_engine(get_database_url())
+        try:
+            async with engine.connect() as conn:
+                result = await conn.execute(text("SELECT 1"))
+                return result.scalar() == 1
+        finally:
+            await engine.dispose()
+
     def _probe() -> bool:
-        return asyncio.run(asyncio.wait_for(check_db_connection(), timeout=timeout_seconds))
+        return asyncio.run(asyncio.wait_for(_select_one(), timeout=timeout_seconds))
 
     try:
         try:

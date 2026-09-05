@@ -237,3 +237,59 @@ def test_the_snapshot_says_the_stack_is_coming_up():
     )
     assert status["starting"] is True
     assert status["starting_seconds_left"] > 0
+
+
+# ── the host's forwarding switch ─────────────────────────────────────────────────
+
+def test_host_forwarding_probe_reads_the_kernel_switch(tmp_path):
+    on, off = tmp_path / "on", tmp_path / "off"
+    on.write_text("1\n"); off.write_text("0\n")
+    assert sh.probe_host_forwarding(str(on), system="Linux") == {"ok": True, "value": 1}
+    assert sh.probe_host_forwarding(str(off), system="Linux") == {"ok": False, "value": 0}
+    # not a question on the platforms whose engine runs in a VM, nor for an unreadable file
+    assert sh.probe_host_forwarding(str(off), system="Darwin") is None
+    assert sh.probe_host_forwarding(str(tmp_path / "missing"), system="Linux") is None
+
+
+def test_host_row_names_the_switch_and_its_remedy():
+    assert sh.derive_host_status(None) == {"ip_forward": None, "forwarding_ok": None, "reason": ""}
+    assert sh.derive_host_status({"ok": True, "value": 1})["forwarding_ok"] is True
+    row = sh.derive_host_status({"ok": False, "value": 0})
+    assert row["forwarding_ok"] is False and row["ip_forward"] == 0
+    assert "ip_forward" in row["reason"] and "internet" in row["reason"]
+
+
+def test_the_snapshot_carries_the_host_row_even_with_docker_down():
+    status = sh.collect_service_status(
+        daemon_probe=lambda: {"ok": False, "reason": "not_running", "detail": "down"},
+        inspect_probe=lambda names: [],
+        port_reader=lambda spec: 1,
+        service_probe=lambda spec, port: None,
+        host_probe=lambda: {"ok": False, "value": 0},
+    )
+    assert status["host"]["forwarding_ok"] is False
+
+
+def test_enabling_forwarding_is_one_elevated_shell_with_switch_and_dropin():
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    out = sh.enable_host_forwarding(run=run, elevation=lambda: ["fake-elevate"])
+    assert out == {"ok": True, "detail": ""}
+    assert len(calls) == 1 and calls[0][:3] == ["fake-elevate", "sh", "-c"]
+    inner = calls[0][3]
+    assert "sysctl -w net.ipv4.ip_forward=1" in inner and sh.HOST_FORWARDING_DROPIN in inner
+
+    def refused(argv, **kw):
+        return subprocess.CompletedProcess(argv, 126, stdout="", stderr="Not authorized\n")
+
+    out = sh.enable_host_forwarding(run=refused, elevation=lambda: ["fake-elevate"])
+    assert out["ok"] is False and "Not authorized" in out["detail"]
+
+    def dismissed(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, 1)
+
+    assert sh.enable_host_forwarding(run=dismissed, elevation=lambda: ["fake-elevate"])["ok"] is False

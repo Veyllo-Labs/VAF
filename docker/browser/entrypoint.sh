@@ -116,8 +116,20 @@ start_xvfb() {
     # the host arrives as the same bridge address - so five failures from anything
     # on the machine would lock out VAF's own proxy for everyone. Brute force is
     # not the threat it would defend against: the secret is 43 URL-safe characters.
+    #
+    # -publicIP 127.0.0.1 keeps the X server OFF the internet at start. Without a
+    # public IP given, Xkasmvnc asks a chain of STUN servers for one before it serves
+    # anything (its WebRTC/UDP lane), and it does so synchronously: with no egress
+    # (measured: the host's ip_forward switched off behind Docker's back) that takes
+    # about 100 seconds per attempt, Chromium blocks on the X connection the whole
+    # time, its CDP port never opens, the supervisor kills it every 30 seconds, and
+    # then the X server exits and the cycle restarts. Measured in this container:
+    # CDP never up against a STUN-waiting X, up after ONE second with this flag.
+    # The UDP lane is unreachable anyway: only the TCP stream port is published,
+    # and VAF's proxy speaks WebSocket. -udpPort 0 does NOT skip the query.
     Xkasmvnc :99 -geometry 1920x1080 -depth 24 \
         -websocketPort 6901 -interface 0.0.0.0 \
+        -publicIP 127.0.0.1 \
         -httpd /usr/share/kasmvnc/www \
         -KasmPasswordFile "$KASM_PASSWD_FILE" -BlacklistThreshold 0 \
         -SecurityTypes None \

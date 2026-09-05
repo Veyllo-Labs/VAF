@@ -232,3 +232,52 @@ def test_a_starting_container_is_left_alone(monkeypatch, recorder):
     step = [s for s in result["steps"] if s["step"].startswith("starting:")][0]
     assert step["ok"] is True
     assert "still starting" in step["message"]
+
+
+# ── the host's forwarding switch ─────────────────────────────────────────────────
+
+def _host(ok):
+    return {"ip_forward": 1 if ok else 0, "forwarding_ok": ok, "reason": "" if ok else "off"}
+
+
+def test_forwarding_off_is_switched_on_before_any_container_is_touched(monkeypatch, recorder):
+    """A restart cannot fix a host sysctl; switching it on first is what makes
+    the rest of the run meaningful, and the recovering container gets a
+    'check again' instead of a firewall hint that points the wrong way."""
+    browser = _svc(key="vaf-browser", name="vaf-browser", required=False, probe_ok=False,
+                   health="unhealthy", state="warn")
+    seq = [dict(_status([browser]), host=_host(False))] * 3
+    _, probe = _patch_env(monkeypatch, statuses=seq)
+    order = []
+    monkeypatch.setattr(sh, "enable_host_forwarding",
+                        lambda: (order.append("sysctl"), {"ok": True, "detail": ""})[1])
+    monkeypatch.setattr(sh, "_run_docker",
+                        lambda args, timeout=None: (order.append(args[0]),
+                                                    subprocess.CompletedProcess(list(args), 0, "", ""))[1])
+    result = sh.repair_service_stack(status_probe=probe)
+    assert order[0] == "sysctl"
+    step = next(s for s in result["steps"] if s["step"] == "host_forwarding")
+    assert step["ok"] is True and sh.HOST_FORWARDING_DROPIN in step["message"]
+    assert not any(s["step"].startswith("firewall:") for s in result["steps"])
+    assert any(s["step"] == "recovering:vaf-browser" and s["ok"] for s in result["steps"])
+
+
+def test_forwarding_on_never_elevates(monkeypatch, recorder):
+    seq = [dict(_status([_svc()]), host=_host(True))] * 3
+    _, probe = _patch_env(monkeypatch, statuses=seq)
+    monkeypatch.setattr(sh, "enable_host_forwarding",
+                        lambda: (_ for _ in ()).throw(AssertionError("elevated for nothing")))
+    result = sh.repair_service_stack(status_probe=probe)
+    assert result["ok"] is True
+    assert not any(s["step"] == "host_forwarding" for s in result["steps"])
+
+
+def test_a_refused_forwarding_switch_gives_the_command_and_fails_the_run(monkeypatch, recorder):
+    seq = [dict(_status([_svc()]), host=_host(False))] * 3
+    _, probe = _patch_env(monkeypatch, statuses=seq)
+    monkeypatch.setattr(sh, "enable_host_forwarding", lambda: {"ok": False, "detail": "Not authorized"})
+    result = sh.repair_service_stack(status_probe=probe)
+    step = next(s for s in result["steps"] if s["step"] == "host_forwarding")
+    assert step["ok"] is False
+    assert "sysctl -w net.ipv4.ip_forward=1" in step["message"] and "Not authorized" in step["message"]
+    assert result["ok"] is False

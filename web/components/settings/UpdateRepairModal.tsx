@@ -38,6 +38,10 @@ export interface ServiceRow {
 interface ServicesSnapshot {
     docker: { available: boolean; reason?: string; detail?: string };
     stack_root?: string | null;
+    /** The Linux host's IP forwarding switch: every container's internet access
+     *  hangs on it, and a container restart cannot fix it. forwarding_ok is null
+     *  where the question does not arise (macOS, Windows). */
+    host?: { ip_forward?: number | null; forwarding_ok?: boolean | null; reason?: string };
     services: ServiceRow[];
     /** Something is inside its own start window: repairing it now would only
      *  restart a container that is already on its way up. */
@@ -554,6 +558,9 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
     // exactly the state while the server is restarting during an update.
     const rows = useMemo(() => services?.services ?? [], [services]);
     const issues = useMemo(() => rows.filter((s) => healthOf(s) !== 'ok'), [rows]);
+    // The host's forwarding switch is a finding of its own, above the containers:
+    // with it off they all run and none can reach the internet.
+    const hostForwardingOff = services?.host?.forwarding_ok === false;
     // While the stack is inside its own start window there is nothing to repair
     // yet: the containers are already on their way up, and a repair would only
     // restart them and begin the wait again. The countdown is the container's
@@ -898,9 +905,16 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                                             </span>
                                         </div>
                                     )}
-                                    {issues.length === 0 && rows.length > 0 && (
+                                    {issues.length === 0 && rows.length > 0 && !hostForwardingOff && (
                                         <div className="flex items-center gap-2 text-xs text-green-600">
                                             <Check size={13} /> {tM('noIssues')}
+                                        </div>
+                                    )}
+                                    {hostForwardingOff && (
+                                        <div className="flex items-start gap-2 text-xs">
+                                            <span className="w-2 h-2 rounded-full mt-1 shrink-0" style={{ background: COLOR.down }} />
+                                            <span className="font-medium text-gray-700 shrink-0">host</span>
+                                            <span className="text-gray-500">{services?.host?.reason}</span>
                                         </div>
                                     )}
                                     {issues.map((svc) => (

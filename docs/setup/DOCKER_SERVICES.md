@@ -354,6 +354,17 @@ service):
 | `state` | `ok`, `warn`, `error`, `absent`, or `unknown` when the daemon is down |
 | `reason` | one sentence, the same text the dialog and the terminal print |
 
+The snapshot also carries one **host** row, `host: {ip_forward, forwarding_ok, reason}`:
+the Linux kernel's `net.ipv4.ip_forward` switch, read from `/proc` (no command, no
+privilege). With it off every container runs and none can reach the internet: the
+browser never brings its CDP port up, nothing can be pulled, and the seven service rows
+look like seven separate failures. Docker switches it on when it starts; a firewall
+reload or a system update that re-applies `/etc/sysctl.d` (openSUSE's `70-yast.conf`
+carries `net.ipv4.ip_forward = 0`) switches it back off behind Docker's back. Measured
+twice on one host. `forwarding_ok` is `null` on macOS and Windows, where the engine runs
+in a VM that forwards for itself. The terminal prints the row as `Host: IP forwarding
+OFF`, and the dialog lists it as `host` above the containers.
+
 **Still starting is not broken.** Right after a start a database does not answer
 yet, so a status that called that "does not answer" would send someone to a
 repair button for something that needs a few more seconds. A container counts as
@@ -382,23 +393,38 @@ as it finishes:
    it then waits up to 120 seconds for readiness.
 2. **Compose file.** None found means a pip install, which manages no stack. That is
    reported honestly, not as a failure to fix.
-3. **Missing or stopped containers.** One idempotent `compose up` for the whole
+3. **The host's forwarding switch**, before any container is touched. With
+   `net.ipv4.ip_forward = 0` the run switches it on (`sysctl -w`) and writes
+   `/etc/sysctl.d/99-vaf-docker-ip-forward.conf` so the next `sysctl --system` keeps it
+   on (`99-` sorts after the distribution's files, so it has the last word). This is the
+   one elevated step of a repair, through the lane the firewall setup already uses
+   (`vaf.network.firewall.elevation_argv`): a native polkit password dialog on a
+   desktop, non-interactive `sudo -n` headless, never a hanging terminal prompt. A
+   refused or dismissed dialog fails the step with the two commands to run by hand.
+   First, because every restart below would succeed and change nothing while the
+   switch is off.
+4. **Missing or stopped containers.** One idempotent `compose up` for the whole
    stack, not one command per container.
-4. **Running but unreachable, or unhealthy.** `docker restart -t 5 <container>` -
+5. **Running but unreachable, or unhealthy.** `docker restart -t 5 <container>` -
    unless the container is still starting, which is left alone: restarting
    something that is booting throws away the progress it has made and begins
    the wait again.
-5. **Port mismatch.** Reported with both numbers and the config key that carries the
+6. **Port mismatch.** Reported with both numbers and the config key that carries the
    expectation. Never corrected: which port VAF talks to is a configuration decision,
    and a restart cannot make two different numbers agree anyway.
-6. **Still unreachable afterwards.** The OS firewall hint for this platform (the
+7. **Still unreachable afterwards.** The OS firewall hint for this platform (the
    `DOCKER-USER` chain on Linux, Defender on Windows, the application firewall on
-   macOS). Detection only.
+   macOS). Detection only. When step 3 has just switched forwarding on, a container
+   that does not answer yet is reported as recovering from that ("check again in a
+   minute") instead, because a firewall hint would point the wrong way.
 
 **What repair never does:** no `compose down`, no volume or image removal, no config
 writes, no restart of a container runtime that is already running, no restart of a
-container that is still inside its start window, and no privilege escalation - a daemon needing `sudo systemctl start docker` gets a named instruction
-instead of a sudo attempt.
+container that is still inside its start window, and no privilege escalation for the
+engine - a daemon needing `sudo systemctl start docker` gets a named instruction
+instead of a sudo attempt. The forwarding switch in step 3 is the one exception, and
+it is a switch, not a service: one kernel setting and one drop-in file, both named in
+the step's message, both reversible by hand.
 
 ## Configuration
 
@@ -463,6 +489,31 @@ docker logs vaf-tts
 docker logs vaf-stt
 docker logs vaf-memory-db
 ```
+
+### Containers Run but Have No Internet (Linux)
+
+The browser container relaunches Chromium every 30 seconds and its log says
+`Chromium did not become ready in time`, `vaf repair --check` lists the browser as
+"runs but does not answer", DNS fails inside every container:
+
+```bash
+cat /proc/sys/net/ipv4/ip_forward        # 0 = the cause
+docker exec vaf-browser getent hosts www.google.com   # empty = no egress
+```
+
+The host has IP forwarding switched off, so the kernel does not route the containers'
+packets out. Docker switches it on at daemon start; a firewall reload or a system update
+that re-applies `/etc/sysctl.d` switches it back off (openSUSE: `70-yast.conf` carries
+`net.ipv4.ip_forward = 0`). `vaf repair` (or the Repair button) switches it on again and
+writes `/etc/sysctl.d/99-vaf-docker-ip-forward.conf`, asking for the password once. By
+hand:
+
+```bash
+sudo sysctl -w net.ipv4.ip_forward=1
+echo 'net.ipv4.ip_forward = 1' | sudo tee /etc/sysctl.d/99-vaf-docker-ip-forward.conf
+```
+
+The browser container heals itself afterwards; nothing needs a restart.
 
 ### TTS Not Responding
 

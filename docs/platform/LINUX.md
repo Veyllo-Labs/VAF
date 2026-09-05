@@ -176,6 +176,14 @@ had been launched from the browser.
   instead of degrading silently. Poppler is NOT needed any more - page images
   come from the PDF's embedded streams or a `pypdfium2` render (a pip wheel).
   `ffmpeg` and `portaudio` support the speech features.
+- **The containers can lose the internet behind Docker's back.** Docker switches
+  `net.ipv4.ip_forward` on at daemon start; a firewalld reload or a system update
+  that re-applies `/etc/sysctl.d` switches it off again (openSUSE's `70-yast.conf`
+  carries `net.ipv4.ip_forward = 0`). Every container then runs and none can reach
+  the internet; the browser is the first to show it. `vaf repair` (or the Repair
+  button) switches it back on, asking for the password once, and writes
+  `/etc/sysctl.d/99-vaf-docker-ip-forward.conf` so it stays on. See the
+  troubleshooting section in [DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md).
 
 ## See also
 

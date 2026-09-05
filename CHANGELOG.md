@@ -13,6 +13,31 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **The Contacts window is a small CRM now.** It opens as wide as the channel windows.
+  The list on the left searches name, number, address, company and tags, filters by
+  status chips that carry counts, sorts by last contact or by name, and a hover checkbox
+  opens a bulk bar to set a status, add a tag or delete several contacts at once. The
+  record on the right shows the initials, company and role, the status as a pill (typed
+  freely, with the known values offered), tags with an inline input, quick actions
+  ("WhatsApp-Chat öffnen", "Telegram-Chat öffnen", Notiz, Termin, edit, delete) and the
+  "Agent darf antworten" switch, which asks before it turns on. One activity timeline
+  merges the stored WhatsApp, Telegram and Discord messages, the mails exchanged with the
+  person, the notes, the events and the record's own creation, newest first, with tabs
+  per kind and an "Ältere Einträge laden" pill at the end. Cards on the right carry the
+  channels (with a copy button), the file (company, role, language, how to address,
+  birthday with the days to go, source and since when), the upcoming events (own and from
+  the calendar) and the key figures (messages, of those from the agent, oldest stored
+  message, last contact). "WhatsApp-Chat öffnen" jumps into the WhatsApp window with that
+  chat selected; a contact whose number has no stored chat gets a note there instead of
+  an empty pane. Every string of the window comes from the message catalogues in all seven
+  languages; every confirmation is the house dialog instead of the browser's.
+- **A contact carries company, role, tags, a source and a creation date.** The agent's
+  `create_contact` and `update_contact` accept company, role and comma-separated tags,
+  `list_contacts` filters by tag, and `get_contact` reports company, role, tags, since when
+  and from where the record exists, and the newest stored messages and mails with the
+  person, so "what did we last discuss with X" is one call. Records that predate the
+  fields show the date of their oldest channel link. New routes: the timeline
+  (`GET /api/contacts/{id}/timeline`), the tag suggestions, and the two bulk endpoints.
 - **WhatsApp is the agent's own number now.** The account you link by QR code is your
   agent's WhatsApp number: the agent writes to contacts and other people from it, and
   nobody chats with the agent from that phone (its own "message yourself" chat is
@@ -144,7 +169,31 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   same way as before. Both timings remain configurable (`thinking_wait_nudge_minutes`,
   `thinking_wait_skip_minutes`).
 
+### Security
+
+- **A user without contacts could read the local admin's contact book.** The contact
+  store offered the admin's file as a fallback to every caller and walked past an empty
+  file, so a user whose own book was missing or empty saw the admin's contacts, and the
+  next write copied that book into the user's own file. The admin's file is a candidate
+  for the admin only now.
+- **Front Office hands out no read tools any more.** While the agent talks to a contact
+  who may reach it, only the platform send tools and web search are available. The
+  inboxes, chat readers, message search, memory search and save, and every mail tool
+  reached your stores through a free argument, so a contact could have the agent look up
+  another person or your mailbox. What the contact may know about their own record
+  (channels, language, how to address, birthday, their own upcoming appointments) reaches
+  the agent through the contact block; your notes about them never do.
+- **Two WhatsApp read tools read the caller's own store.** `read_whatsapp_chat` and
+  `find_whatsapp_messages` passed no scope to the message store, so a non-admin user read
+  an empty file while the bridge had written the rows under the scope.
+
 ### Fixed
+
+- **One rule for phone numbers everywhere.** The WhatsApp bridge, the dashboard and the
+  contact book used four normalisers with two different rules, so a contact typed as
+  0176 ... did not always match the chat stored as +49176 .... One canonical form now:
+  a leading 00 is the international prefix, a trunk zero with 10 to 12 digits is a German
+  number, a LID or group id is never a number.
 
 - **Four German strings read as if a stranger had written them.** The security
   overview said "Isolierte Skill gelöscht", which is the wrong gender, and the two

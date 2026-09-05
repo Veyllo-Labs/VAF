@@ -271,13 +271,17 @@ User-scoped data stores use UUID-based directories. This is the preferred path f
 
 ```
 ~/.vaf/scopes/<user_scope_id>/
-├── email_sync.db              # Synced email messages (SQLite)
-├── contacts.json              # User's contact list, including each contact's status, dated notes, events and channel links
-├── whatsapp_messages.db       # WhatsApp message history (SQLite)
+├── email_sync.db              # Synced email messages, legacy store (SQLite)
+├── mail.db                    # Synced email messages, v2 mail store (SQLite; MailStore, see EMAIL_CLIENT.md)
+├── contacts.json              # User's contact list: per contact the channels, personal file, status, company, role, tags,
+│                              # source and created_at, dated notes, events and channel links. The contact timeline and
+│                              # key figures read only this same user's message and mail stores, keyed by the same scope
+├── channel_messages.db        # Message history of the messaging channels (SQLite); whatsapp_messages.db is the legacy
+│                              # file name, migrated into channel_messages.db once on first open
 └── ...
 ```
 
-The local admin's data remains at the legacy root paths (`~/.vaf/email_sync.db`, `~/.vaf/contacts.json`) since `local_admin_scope_id` maps to the global location.
+The local admin's data remains at the legacy root paths (`~/.vaf/email_sync.db`, `~/.vaf/contacts.json`, `~/.vaf/channel_messages.db`) since `local_admin_scope_id` maps to the global location. That root file is a read candidate for the local admin ONLY: `contacts_store._contacts_path_candidates` walks a caller's own scope and username paths and appends `data_dir/contacts.json` only when the caller is the local admin (by scope when a scope is given, by username otherwise). A tenant with no or an empty contacts file therefore reads an empty book; it never falls through to the admin's, and no write copies the admin's book into the tenant's path. The bulk routes ignore ids outside the caller's own file for the same reason.
 
 ### User workspace (legacy)
 

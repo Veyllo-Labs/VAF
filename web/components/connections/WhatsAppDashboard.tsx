@@ -320,7 +320,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             const json = await res.json().catch(() => ({}));
             if (!res.ok) { setNote(json?.detail || t('loadOlderFailed')); return; }
             const loaded = Number(json?.loaded || 0);
-            setNote(loaded > 0 ? t('loadedOlder', { count: loaded }) : t('noOlder'));
+            setNote(loaded > 0 ? t('loadedOlder', { count: loaded }) : json?.no_cursor ? t('olderNeedsMessage') : t('noOlder'));
             if (loaded > 0) setHistoryVersion(v => v + 1);
         } catch {
             setNote(t('loadOlderFailed'));
@@ -449,7 +449,8 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                                 onClick={() => reachOn ? handleAllowReach(s, false) : setReachConfirm(s)}
                                 // The house switch in its dark form (ConnectionsPanel, ContactsDashboard): light track and dark knob when on, dark track and light knob when off. The shell is dark-only, so the dark pair is used outright.
                                 className={cn('relative w-11 h-6 rounded-full transition-colors', reachOn ? 'bg-[#d9d9d9]' : 'bg-[#333333]')}>
-                                <span className={cn('absolute top-1 w-4 h-4 rounded-full shadow transition-transform', reachOn ? 'translate-x-6 bg-[#1a1a1a]' : 'translate-x-1 bg-[#e8e8e8]')} />
+                                {/* left-0: an absolutely positioned SPAN inside a button starts at the button's centred static position, so without it the knob sat on the right while the switch was off. */}
+                                <span className={cn('absolute left-0 top-1 w-4 h-4 rounded-full shadow transition-transform', reachOn ? 'translate-x-6 bg-[#1a1a1a]' : 'translate-x-1 bg-[#e8e8e8]')} />
                             </button>
                             {t('allowReach')}
                         </label>

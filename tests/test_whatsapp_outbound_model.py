@@ -346,6 +346,7 @@ def test_fetch_older_messages_asks_the_node_and_waits_for_the_store_to_grow(isol
 
 def test_fetch_older_messages_reports_a_refusal_instead_of_waiting(isolated, monkeypatch):
     import io
+    store.append_message("alice", "+491700000042", "oldest", direction="out", user_scope_id=SCOPE, ts=100.0, message_id="A")  # the cursor
     written = io.StringIO()
     fake_proc = SimpleNamespace(stdin=written, poll=lambda: None)
     monkeypatch.setattr(wa, "_processes", {"alice": fake_proc})
@@ -607,3 +608,33 @@ def test_a_stored_rejected_inbound_opens_no_reply_window_but_an_accepted_reply_e
     assert wa._is_reply_allowed("alice", "491700000044@s.whatsapp.net", SCOPE) is False
     # the inbound acceptance rule (direction="out") is unchanged
     assert wa.conversation_open_until("alice", "+491700000043", SCOPE, direction="out") is not None
+
+
+def test_a_later_rejected_inbound_does_not_shadow_the_reply_that_extended_the_window(isolated, monkeypatch):
+    """Outbound, an accepted reply inside the window (which extends it), then a stale
+    inbound after the window from the outbound closed (rejected, stored for the owner):
+    the extension the accepted reply earned must survive, and the stale row must add
+    nothing. The store answers with the newest inbound INSIDE the window (until_ts)."""
+    monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
+    now = time.time()
+    t0 = now - 72.8 * 3600
+    store.append_message("alice", "+491700000045", "hello", direction="out", user_scope_id=SCOPE, ts=t0)
+    store.append_message("alice", "+491700000045", "yes", direction="in", user_scope_id=SCOPE, ts=t0 + 3600)          # accepted: inside
+    store.append_message("alice", "+491700000045", "again?", direction="in", user_scope_id=SCOPE, ts=t0 + 72.5 * 3600)  # rejected: after
+    until = wa.conversation_open_until("alice", "+491700000045", SCOPE)
+    assert until is not None and abs(until - (t0 + 3600 + 72 * 3600)) < 5                # the accepted reply's extension
+    assert wa._is_reply_allowed("alice", "491700000045@s.whatsapp.net", SCOPE) is True   # now (t0 + 72.8h) is before t0 + 73h
+    assert store.last_message_ts("alice", "+491700000045", direction="in", user_scope_id=SCOPE, until_ts=t0 + 72 * 3600) == t0 + 3600
+    assert store.last_message_ts("alice", "+491700000045", direction="in", user_scope_id=SCOPE) == t0 + 72.5 * 3600
+
+
+def test_fetch_older_messages_on_an_empty_chat_says_so_instead_of_asking(isolated, monkeypatch):
+    """Baileys pages backwards from a stored key; with nothing stored there is none, and a
+    request with an empty key only ever came back with nothing. The window turns
+    no_cursor into its own note instead of "nothing older arrived"."""
+    import io
+    written = io.StringIO()
+    monkeypatch.setattr(wa, "_processes", {"alice": SimpleNamespace(stdin=written, poll=lambda: None)})
+    out = wa.fetch_older_messages("alice", "491700000042@s.whatsapp.net", "+491700000042", SCOPE, wait_timeout=1.0)
+    assert out["ok"] is True and out["no_cursor"] is True and out["stored_before"] == 0
+    assert written.getvalue() == ""                                                       # nothing was asked of the Node

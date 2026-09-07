@@ -546,15 +546,19 @@ def last_message_ts(
     direction: Optional[str] = None,
     user_scope_id: Optional[str] = None,
     channel: Optional[str] = "whatsapp",
+    until_ts: Optional[float] = None,
 ) -> Optional[float]:
     """Unix timestamp of the newest stored message in a chat, or None when the chat has none.
 
-    direction: "out" = newest message the agent SENT, "in" = newest accepted inbound,
-    None = either. This is the one query behind a channel's reply window: "did the
-    agent write to this number within the last N hours" is answered by the store that
-    already records every outbound send, so no bridge keeps a second ledger of open
-    conversations. Rejected inbound is never stored, so an "in" row always means the
-    sender was accepted once."""
+    direction: "out" = newest message the agent SENT, "in" = newest inbound, None =
+    either. `until_ts` bounds the answer from above (rows at or before that time), so a
+    caller can ask for the newest inbound that fell INSIDE a window. This is the one query
+    behind a channel's reply window: "did the agent write to this number within the last N
+    hours" is answered by the store that already records every outbound send, so no bridge
+    keeps a second ledger of open conversations. An "in" row does NOT mean the sender was
+    accepted: the store keeps a rejected sender's message for the owner's inbox too, which
+    is why the reply rule (whatsapp_bridge.conversation_open_until) reads inbound rows only
+    inside the window an outbound message opened."""
     init_store(username, user_scope_id)
     conn = _get_conn(username, user_scope_id)
     try:
@@ -566,6 +570,9 @@ def last_message_ts(
         if direction:
             clauses.append("direction = ?")
             params.append(direction)
+        if until_ts is not None:
+            clauses.append("ts <= ?")
+            params.append(float(until_ts))
         cur = conn.execute(
             f"SELECT MAX(ts) AS ts FROM channel_messages WHERE {' AND '.join(clauses)}",
             tuple(params),

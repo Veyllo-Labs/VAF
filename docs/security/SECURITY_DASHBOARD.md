@@ -145,7 +145,7 @@ undeclared, undocumented here, or unlabelled in the dashboard.
 | `login_failed` | Wrong username/password on `/api/auth/login` | `vaf/api/auth_routes.py` |
 | `twofa_failed` | Wrong/expired 2FA code or temp token | `vaf/api/auth_routes.py` |
 | `ws_rejected` | Rejected NETWORK WebSocket handshake (IP/token); trusted-localhost paths do not emit | `vaf/core/web_server.py` (`_emit_sec_ws`) |
-| `channel_rejected` | Unauthorized messenger sender not answered at ingress (the message itself is kept for the owner's inbox); `channel` carries the platform, `username` the sender id | `vaf/api/telegram_bridge.py`, `whatsapp_bridge.py`, `discord_bridge.py` |
+| `channel_rejected` | Unauthorized messenger sender not answered at ingress; the event covers every rejection, and the message itself is kept for the owner's inbox where the lane keeps it (WhatsApp, Telegram, Discord DMs; a rejected Discord guild message is not kept). `channel` carries the platform, `username` the sender id | `vaf/api/telegram_bridge.py`, `whatsapp_bridge.py`, `discord_bridge.py` |
 | `mail_high_risk_send_blocked` | Outgoing mail stopped as high-risk before sending | `vaf/tools/send_mail.py`, `reply_mail.py`, `manage_mail.py` |
 | `mail_image_proxy_blocked` | Remote image proxy refused a host | `vaf/api/mail_routes.py` |
 | `skill_blocked` | HIGH scan result stopped a skill install/update | `vaf/skills/scanner.py emit_skill_security_event`, called from the `create_skill`/`update_skill` tools and the WebUI editor/zip import |

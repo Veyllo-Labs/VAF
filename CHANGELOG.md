@@ -235,6 +235,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   dashboard showed nothing at all. The policy decides who the agent answers, not what you
   may read on your own number: WhatsApp, Telegram and Discord (DMs) now keep such a message
   in the channel store, the dashboard lists the chat as read-only, and nothing runs on it.
+- **The WhatsApp window's reply switch sat on the right while it was off.** The knob had
+  no left offset and started from the button's centre; it now starts at the left edge,
+  so left is off and right is on like every other switch. "Load older messages" on a
+  chat with nothing stored says that a stored message is needed first instead of
+  reporting that nothing arrived, and the nothing-arrived note reads plainly.
 - **Calendar times were forced to UTC.** Every read and write of the calendar tools sent
   wall-clock times as UTC, so an appointment typed as 14:00 landed at a different hour;
   they are read and written in the user's timezone now, and the provider client pages

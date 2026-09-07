@@ -1054,7 +1054,8 @@ async def load_older_whatsapp_messages(request: Request, body: OlderMessagesRequ
     if not result.get("ok"):
         raise HTTPException(status_code=502, detail=result.get("error") or "History request failed.")
     return {"chat_id": cid, "stored_before": result["stored_before"], "stored_after": result["stored_after"],
-            "loaded": max(0, int(result["stored_after"]) - int(result["stored_before"]))}
+            "loaded": max(0, int(result["stored_after"]) - int(result["stored_before"])),
+            "no_cursor": bool(result.get("no_cursor"))}
 
 
 @router.get("/qr/log-path")

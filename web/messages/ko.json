@@ -972,13 +972,14 @@
       "loadOlder": "이전 메시지 불러오기",
       "loadingOlder": "WhatsApp에 요청하는 중…",
       "loadedOlder": "이전 메시지 {count}개를 불러왔어요",
-      "noOlder": "더 이전 메시지는 오지 않았어요. WhatsApp은 휴대폰에 아직 남아 있는 것만 넘겨줘요.",
+      "noOlder": "더 이전 메시지가 없어요. WhatsApp은 휴대폰에 아직 저장된 것만 넘겨줘요.",
       "loadOlderFailed": "이전 메시지를 불러오지 못했어요.",
       "reloadNames": "휴대폰에서 이름 다시 불러오기",
       "reloadingNames": "이름을 가져오는 중…",
       "reloadNamesDone": "이름을 요청했어요. WhatsApp이 보내는 대로 목록에 나타나요.",
       "reloadNamesFailed": "이름을 요청하지 못했어요.",
-      "jumpChatNotFound": "이 연락처의 채팅이 여기에 저장되어 있지 않아요."
+      "jumpChatNotFound": "이 연락처의 채팅이 여기에 저장되어 있지 않아요.",
+      "olderNeedsMessage": "이 채팅에 메시지가 저장되면 이전 메시지를 불러올 수 있어요."
     },
     "telegramDashboard": {
       "title": "Telegram",

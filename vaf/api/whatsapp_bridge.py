@@ -134,8 +134,11 @@ def conversation_open_until(
     if out_ts is None:
         return None
     until = out_ts + window
-    in_ts = last_message_ts(user, chat_id, direction="in", user_scope_id=user_scope_id)
-    if in_ts is not None and in_ts > out_ts and (in_ts - out_ts) <= window:
+    # The newest inbound INSIDE the window the outbound opened: a later, rejected inbound
+    # (kept in the store for the owner) must neither open the window nor shadow the reply
+    # the contact sent while it was open.
+    in_ts = last_message_ts(user, chat_id, direction="in", user_scope_id=user_scope_id, until_ts=until)
+    if in_ts is not None and in_ts > out_ts:
         until = max(until, in_ts + window)
     return until
 
@@ -2020,6 +2023,12 @@ def fetch_older_messages(
         oldest = oldest_message(uname, chat_id, user_scope_id=user_scope_id)
     except Exception:
         oldest = None
+    if oldest is None:
+        # Baileys pages backwards from a message key; a chat with nothing stored has no
+        # key to page from, and a request with an empty one comes back with nothing. Say so
+        # instead of asking: the first stored message (an inbound, a send) is the cursor.
+        out.update({"ok": True, "no_cursor": True})
+        return out
     with _process_lock:
         proc = _processes.get(uname)
         if (not proc or proc.poll() is not None or not proc.stdin) and len(_processes) == 1:

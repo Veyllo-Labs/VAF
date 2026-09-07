@@ -199,7 +199,7 @@ The Discord configuration is stored locally in your VAF config:
 - Each whitelist entry links one Telegram user to one VAF user (user_scope_id and username from the Web UI session when that user was added).
 - **Verified account owner**: The user who linked their Telegram with the bot (via the whitelist step or by having sent at least one message) does not need to be manually re-added for proactive sends. The bot resolves their chat ID from the whitelist (with loose matching on scope and username) or from the single linked account when there is only one.
 - **Contact whitelist**: In strict pairing mode (`channel_ingress_policy.mode = paired_only`, default), contact-based fallback is disabled for Telegram. Contacts must be explicitly paired via Telegram whitelist/relay whitelist before inbound messages are accepted.
-- Only whitelisted users receive replies. Non-whitelisted inbound messages are dropped at ingress (no reply, no queue task), reducing abuse/amplification risk.
+- Only whitelisted users receive replies. A non-whitelisted inbound message is not answered (no queue task, no agent run), which keeps the abuse and amplification risk down; the message itself is kept in the channel store so you can read it in the Telegram window and through the inbox tools.
 - Every drop at ingress is additionally recorded as a `channel_rejected` security event (platform, sender id, time; with its own flood throttle), visible in the security log and in the Overview dashboard's channel module. This applies to all channel bridges (Telegram, WhatsApp, Discord). "Silently" means the sender gets no reply, not that the attempt goes unrecorded.
 - RAG, memories, and user identity are scoped per user, same as in the Web UI.
 
@@ -248,7 +248,7 @@ Global options (top-level in config):
 
 ### Troubleshooting
 
-- **No reply for a non-whitelisted Telegram account**: Expected behavior. Unauthorized traffic is silently dropped by design.
+- **No reply for a non-whitelisted Telegram account**: Expected behavior. Unauthorized traffic is not answered by design; the messages are still stored for you to read.
 - **No reply for a whitelisted account**: Ensure the bridge is running (Settings → Connections, Telegram toggle on). After a VAF restart, the bridge auto-starts if Telegram is enabled.
 - **High unauthorized traffic**: Unauthorized drops are logged with per-user throttling to avoid log amplification under spam/flood attempts. Each drop is also mirrored as a `channel_rejected` security event (with its own per-sender throttle), so rejected senders show up in the security log and the Overview channel module even when the sender sees nothing.
 - **Telegram reconnects after restart even after Disconnect**: Disconnect now clears token + verification + whitelist and persists `enabled=false`. After disconnect, Telegram should stay off across restarts. If it still reconnects, refresh Settings and verify `telegram_config` is empty/disabled in the saved config.
@@ -264,7 +264,7 @@ For full technical documentation (architecture, voice flow, configuration, troub
 - **Per-user isolation**: Each VAF user links their own account. Credentials are stored in `~/.vaf/users/<username>/whatsapp/`. Other users cannot see or use your WhatsApp; there is no shared credential set.
 - **QR link**: Scan a QR code with WhatsApp (Linked Devices) to link your phone.
 - **Who is answered**: the registered main-user number (full chat), contacts with "Can reach your assistant" (Front Office; in strict pairing mode, `channel_ingress_policy.mode = paired_only`, only with `allow_contact_fallback`), and anyone your agent wrote to inside the reply window (`whatsapp_config.reply_window_hours`, default 72; Front Office, reason `open_conversation`). See [WHATSAPP_INTEGRATION.md](WHATSAPP_INTEGRATION.md#roles-the-linked-account-is-the-agent).
-- **Read-only for everyone else**: Messages from other numbers are rejected and logged as security events; the agent never answers them.
+- **Read-only for everyone else**: Messages from other numbers are stored for you (the dashboard lists the chat as read-only, the inbox tools read it) and logged as security events; the agent never answers them. The same rule holds for Telegram (any sender) and Discord (DMs; guild chatter is not kept): the ingress policy decides who is answered, not what you may read on your own bot.
 - **Node.js required**: Uses Baileys via a Node subprocess. Its dependencies are installed from the lockfile automatically on the first start (and by `vaf update`); nothing to run by hand.
 - **Agent tools**: `whatsapp_inbox`, `find_whatsapp_messages`, `read_whatsapp_chat` list/search/read chats. **`send_whatsapp`** sends text, voice messages, or **documents (PDF, etc.)** to the user – WhatsApp as a channel where the bot can send the user content. `whatsapp_call` is a placeholder (not implemented).
 - **Voice (TTS/STT)**: Incoming voice messages are downloaded, transcribed via Whisper STT (speech_stt_docker_url, default localhost:5003), and passed as text to the agent. When the user sends a voice message, replies can automatically be sent as voice (TTS) in the detected language. The agent can also explicitly send voice via `send_whatsapp(voice_lang="de")` or `send_telegram(voice_lang="de")`.

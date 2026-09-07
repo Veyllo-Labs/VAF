@@ -84,6 +84,19 @@ def _append_discord_activity(channel_id: str, direction: str = "in") -> None:
         pass
 
 
+def _keep_rejected_discord_message(author_id: str, content: str, message_id: str, is_dm: bool) -> bool:
+    """A DM the policy did not admit is still the owner's mail: it is stored for the
+    dashboard and the inbox tools (no agent run), the way the WhatsApp and Telegram bridges
+    keep a rejected sender's message. A guild message is not: the bot sees every channel it
+    sits in, and storing that would fill the owner's inbox with other people's chatter.
+    Returns whether the message was kept."""
+    if not is_dm:
+        return False
+    _store_discord_message(str(author_id or ""), (content or "").strip() or "<message>", "in",
+                           message_id=str(message_id or "") or None)
+    return True
+
+
 def _store_discord_message(chat_id, body, direction, content_type="text", message_id=None) -> None:
     """Record a Discord message in the shared channel store (whatsapp_message_store, channel='discord')
     so the agent's read_discord_chat / find_discord_messages tools can read history. Discord is
@@ -274,6 +287,8 @@ def _run_bot() -> None:
                                    username=sender_id, detail=str(reason or "not_paired"))
             except Exception:
                 pass
+            _keep_rejected_discord_message(sender_id, message.content or "", str(getattr(message, "id", "") or ""),
+                                           isinstance(message.channel, discord.DMChannel))
             return
 
         text = (message.content or "").strip()

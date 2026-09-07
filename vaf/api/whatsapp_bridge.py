@@ -118,14 +118,26 @@ def conversation_open_until(
     """Unix timestamp until which `chat_id` (E.164 display form, the store's key) counts as an
     open conversation, or None when there is no message inside the window. `direction="out"`
     asks whether the AGENT wrote last-ish (the inbound acceptance rule: the door is opened by
-    the agent's own message); None counts either side (the reply rule: an accepted message
-    may always be answered)."""
+    the agent's own message). None is the reply rule: the agent's own message opens the
+    window, and a reply the contact sent INSIDE that window extends it (an accepted message
+    may always be answered). An inbound row alone opens nothing: the store keeps a rejected
+    sender's message for the owner's inbox too, and that row must not become a door."""
     window = reply_window_hours() * 3600.0
     if window <= 0 or not chat_id:
         return None
     from vaf.core.channel_message_store import last_message_ts
-    ts = last_message_ts((username or "").strip() or "admin", chat_id, direction=direction, user_scope_id=user_scope_id)
-    return (ts + window) if ts is not None else None
+    user = (username or "").strip() or "admin"
+    out_ts = last_message_ts(user, chat_id, direction="out", user_scope_id=user_scope_id)
+    if direction == "out" or direction is not None:
+        ts = out_ts if direction == "out" else last_message_ts(user, chat_id, direction=direction, user_scope_id=user_scope_id)
+        return (ts + window) if ts is not None else None
+    if out_ts is None:
+        return None
+    until = out_ts + window
+    in_ts = last_message_ts(user, chat_id, direction="in", user_scope_id=user_scope_id)
+    if in_ts is not None and in_ts > out_ts and (in_ts - out_ts) <= window:
+        until = max(until, in_ts + window)
+    return until
 
 
 def _conversation_is_open(
@@ -875,8 +887,9 @@ def _jid_to_chat_id(username: str, chat_jid: str) -> str:
 def _is_reply_allowed(username: str, chat_jid: str, user_scope_id: Optional[str] = None) -> bool:
     """May the agent send to this JID on a REPLY lane (headless reply, owner delivery)?
     Yes for the registered main-user number, a Front Office contact, or an open
-    conversation (a stored message with that number inside the reply window: the agent
-    wrote to them, or their message was accepted). An unresolved @lid matches nothing.
+    conversation (the agent wrote to them inside the reply window, or they answered
+    inside it; a stored message of a rejected sender opens nothing, see
+    conversation_open_until). An unresolved @lid matches nothing.
     Explicit recipients (`send_whatsapp(to_phone=...)`) do not pass through here."""
     from vaf.core.config import scope_id_for_username
     uname = (username or "").strip() or "admin"
@@ -1488,10 +1501,24 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                                    username=sender_for_throttle, detail=str(policy_reason or "not_paired"))
             except Exception:
                 pass
-            # Record activity so dashboard still shows this chat (as Read-only) even when Node chat list omits it after reconnect
-            _reject_chat_id = _to_e164_display(_jid_to_e164(from_jid or "")) if _jid_to_e164(from_jid or "") else str(from_jid or "")
-            if _reject_chat_id:
-                _append_chat_activity(_reject_chat_id, None, "in")
+            # The policy decides whether the AGENT reacts, not whether the OWNER may read
+            # their own number's mail: the message is kept in the store like any other
+            # inbound (the dashboard shows the chat as read-only, the inbox tools read it,
+            # the history sync stores the same senders anyway), and nothing runs on it.
+            # Under the same key the accept path uses, so the chat sits under the phone
+            # number and the contact's name, not under a bare @lid.
+            _append_chat_activity(chat_id, user_scope_id, "in")
+            try:
+                from vaf.core.channel_message_store import append_message
+                append_message(
+                    username, chat_id, body, direction="in", sender_jid=from_jid,
+                    chat_name=(str(obj.get("pushName") or "").strip() or None),
+                    message_id=obj.get("messageId") or obj.get("message_id"),
+                    content_type="voice" if was_voice else "text",
+                    user_scope_id=user_scope_id,
+                )
+            except Exception:
+                pass
             return
         try:
             from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr

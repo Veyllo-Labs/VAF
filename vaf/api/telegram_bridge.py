@@ -123,12 +123,23 @@ def _drop_unauthorized_telegram(
     chat_id: str,
     message_kind: str = "text",
     reason: str = "not_paired",
+    update: Any = None,
 ) -> None:
     """
-    Silently drop unauthorized inbound Telegram traffic.
-    Logging is throttled per user to avoid log amplification under abuse.
+    Drop unauthorized inbound Telegram traffic for the AGENT: nothing runs on it, and the
+    log is throttled per user to avoid amplification under abuse. The message itself is
+    kept in the channel store for the OWNER (the dashboard and the inbox tools read it),
+    the way the WhatsApp bridge keeps a rejected sender's message: the ingress policy
+    decides who is answered, not what the owner may read on their own bot. `update` is the
+    python-telegram-bot Update when the caller has one; its text (or caption, or a
+    placeholder naming the kind) and message id are what gets stored.
     """
     uid = str(telegram_user_id or "")
+    msg = getattr(update, "effective_message", None) if update is not None else None
+    if msg is not None:
+        body = (getattr(msg, "text", None) or getattr(msg, "caption", None) or "").strip() or f"<{message_kind}>"
+        _store_telegram_message("admin", chat_id, body, "in", content_type=message_kind if message_kind in ("voice", "photo", "document") else "text",
+                                message_id=str(getattr(msg, "message_id", "") or "") or None)
     policy = Config.get("channel_ingress_policy")
     should_log = should_log_unauthorized("telegram", uid, policy)
     if should_log:
@@ -876,7 +887,7 @@ def _run_bot():
         chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
         entry, is_relay = _resolve_telegram_user(telegram_user_id)
         if not entry:
-            _drop_unauthorized_telegram(telegram_user_id, chat_id, "text")
+            _drop_unauthorized_telegram(telegram_user_id, chat_id, "text", update=update)
             return
         user_scope_id = entry.get("user_scope_id")
         vaf_username = entry.get("vaf_username") or "admin"
@@ -922,7 +933,7 @@ def _run_bot():
         chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
         entry, _is_relay = _resolve_telegram_user(telegram_user_id)
         if not entry:
-            _drop_unauthorized_telegram(telegram_user_id, chat_id, "edited")
+            _drop_unauthorized_telegram(telegram_user_id, chat_id, "edited", update=update)
             return
         new_text = em.text.strip()
         if not new_text:
@@ -953,7 +964,7 @@ def _run_bot():
         # Check authorization
         entry, is_relay = _resolve_telegram_user(telegram_user_id)
         if not entry:
-            _drop_unauthorized_telegram(telegram_user_id, chat_id, "voice")
+            _drop_unauthorized_telegram(telegram_user_id, chat_id, "voice", update=update)
             return
         user_scope_id = entry.get("user_scope_id")
         vaf_username = entry.get("vaf_username") or "admin"
@@ -1012,7 +1023,7 @@ def _run_bot():
 
         entry, is_relay = _resolve_telegram_user(telegram_user_id)
         if not entry:
-            _drop_unauthorized_telegram(telegram_user_id, chat_id, "document")
+            _drop_unauthorized_telegram(telegram_user_id, chat_id, "document", update=update)
             return
         user_scope_id = entry.get("user_scope_id")
         vaf_username = entry.get("vaf_username") or "admin"
@@ -1135,7 +1146,7 @@ def _run_bot():
         chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
         entry, is_relay = _resolve_telegram_user(telegram_user_id)
         if not entry:
-            _drop_unauthorized_telegram(telegram_user_id, chat_id, "photo")
+            _drop_unauthorized_telegram(telegram_user_id, chat_id, "photo", update=update)
             return
         # Telegram sends several JPEG renditions; the last is the highest resolution.
         photo = update.message.photo[-1]
@@ -1160,7 +1171,7 @@ def _run_bot():
                 chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
                 entry, _ = _resolve_telegram_user(telegram_user_id)
                 if not entry:
-                    _drop_unauthorized_telegram(telegram_user_id, chat_id, "command_start")
+                    _drop_unauthorized_telegram(telegram_user_id, chat_id, "command_start", update=update)
                     return
         except Exception:
             # Fail-safe: do not leak command responses to unauthorized users.

@@ -44,6 +44,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   calendar tools are stale until retrained (Tools window, or `vaf ww retrain --pending`).
 - **The "Automation Calendar" is the calendar window** ("Kalender"); its strings come from
   the catalogues and Escape goes through the shared layer registry.
+- **The calendar window says which lane is which.** The day view carries a sticky header
+  naming the appointments lane and the automations lane, the automations lane is tinted
+  grey all the way down with lightning chips, an empty hovered hour says what a click
+  creates there, the current hour is framed in red across all three columns with the time
+  under its label (the marker the automation calendar always had), and the month grid
+  carries a legend for its blue and grey dots.
 - **The mail sync supervisor runs on a shared supervisor base** (`vaf/core/sync_supervisor.py`)
   and starts once per process; it started twice under TLS, once per server lifespan.
 - **The Contacts window is a small CRM now.** It opens as wide as the channel windows.
@@ -223,6 +229,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A rejected sender's message is still yours to read.** The messenger bridges dropped
+  the message of a sender the ingress policy did not admit before storing it, so a
+  contact without "Can reach your assistant" wrote to your WhatsApp number and the
+  dashboard showed nothing at all. The policy decides who the agent answers, not what you
+  may read on your own number: WhatsApp, Telegram and Discord (DMs) now keep such a message
+  in the channel store, the dashboard lists the chat as read-only, and nothing runs on it.
 - **Calendar times were forced to UTC.** Every read and write of the calendar tools sent
   wall-clock times as UTC, so an appointment typed as 14:00 landed at a different hour;
   they are read and written in the user's timezone now, and the provider client pages

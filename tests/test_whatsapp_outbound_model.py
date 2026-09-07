@@ -556,3 +556,54 @@ def test_dashboard_marks_a_number_the_contact_book_already_knows(isolated, monke
     known, unknown = by_id["+491700000042"], by_id["+491700000077"]
     assert known["contact_id"] and known["contact_name"] == "Dana New" and known["type"] == "unknown"
     assert unknown["contact_id"] is None and unknown["contact_name"] is None
+
+
+# ── a rejected sender's message is the owner's mail ───────────────────────────
+
+def test_a_rejected_senders_message_is_kept_for_the_owner_but_not_answered(isolated, monkeypatch):
+    """The ingress policy decides whether the AGENT reacts, not whether the OWNER may read
+    the mail of their own number. Live incident: two contacts wrote, neither had "Can
+    reach your assistant", and the dashboard showed nothing at all, because the reject
+    path returned before the store. Now the message is stored like any other inbound (the
+    dashboard lists the chat as read-only), nothing is queued, and no reply window opens."""
+    monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
+    activity = []
+    monkeypatch.setattr(wa, "_append_chat_activity", lambda chat_id, scope, direction="in": activity.append((chat_id, scope, direction)))
+    assert _dispatch("alice", "491700000042@s.whatsapp.net", body="hello?", pushName="Dana") is None
+    rows = store.get_chat_messages("alice", "+491700000042", user_scope_id=SCOPE)
+    assert [(r["body"], r["direction"], r["message_id"]) for r in rows] == [("hello?", "in", "m1")]
+    listed = store.list_chats_from_store("alice", user_scope_id=SCOPE)
+    assert listed and listed[0]["chat_id"] == "+491700000042" and listed[0]["chat_name"] == "Dana"
+    assert activity == [("+491700000042", SCOPE, "in")]                       # under the phone, with the scope
+    assert wa._is_reply_allowed("alice", "491700000042@s.whatsapp.net", SCOPE) is False
+    # a resolved @lid lands under the phone number too, never under the bare LID
+    assert _dispatch("alice", "173642054922259@lid", body="second", fromE164="+491700000042", messageId="m2") is None
+    assert [r["body"] for r in store.get_chat_messages("alice", "+491700000042", user_scope_id=SCOPE)] == ["second", "hello?"]
+    # and the tenant boundary holds: another scope sees none of it
+    assert store.get_chat_messages("bob", "+491700000042", user_scope_id="66666666-7777-8888-9999-000000000000") == []
+
+
+def test_a_stored_rejected_inbound_opens_no_reply_window_but_an_accepted_reply_extends_it(isolated, monkeypatch):
+    """conversation_open_until with no direction is the reply rule. Now that a rejected
+    sender's message is stored too, an inbound row alone must open nothing (a door the
+    stranger could open by writing); the agent's own message opens the window and a reply
+    inside it extends it, so an accepted answer can still be answered."""
+    monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
+    now = time.time()
+    store.append_message("alice", "+491700000042", "stranger", direction="in", user_scope_id=SCOPE, ts=now - 60)
+    assert wa.conversation_open_until("alice", "+491700000042", SCOPE) is None
+    assert wa._is_reply_allowed("alice", "491700000042@s.whatsapp.net", SCOPE) is False
+    # the agent wrote 70 hours ago, the contact answered an hour ago: open until an hour ago + 72h
+    store.append_message("alice", "+491700000043", "hello", direction="out", user_scope_id=SCOPE, ts=now - 70 * 3600)
+    store.append_message("alice", "+491700000043", "yes", direction="in", user_scope_id=SCOPE, ts=now - 3600)
+    until = wa.conversation_open_until("alice", "+491700000043", SCOPE)
+    assert until is not None and abs(until - (now - 3600 + 72 * 3600)) < 5
+    assert wa._is_reply_allowed("alice", "491700000043@s.whatsapp.net", SCOPE) is True
+    # an inbound that arrived AFTER the window had closed was a rejected one: it extends nothing
+    store.append_message("alice", "+491700000044", "hello", direction="out", user_scope_id=SCOPE, ts=now - 80 * 3600)
+    store.append_message("alice", "+491700000044", "too late", direction="in", user_scope_id=SCOPE, ts=now - 60)
+    stale = wa.conversation_open_until("alice", "+491700000044", SCOPE)
+    assert stale is None or stale < now                                          # the window closed with the outbound
+    assert wa._is_reply_allowed("alice", "491700000044@s.whatsapp.net", SCOPE) is False
+    # the inbound acceptance rule (direction="out") is unchanged
+    assert wa.conversation_open_until("alice", "+491700000043", SCOPE, direction="out") is not None

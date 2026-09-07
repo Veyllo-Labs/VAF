@@ -195,6 +195,11 @@ def _sandbox_available() -> bool:
 
 @pytest.mark.skipif(not _sandbox_available(), reason="vaf-sandbox container not running")
 def test_integration_real_pytest_pass_and_fail(tmp_path):
+    # The skip above is decided at collection, minutes before this runs in a full suite;
+    # a stack going down in between (measured: one local CI run) turned an environment
+    # change into a red test. Ask again at run time.
+    if not _sandbox_available():
+        pytest.skip("vaf-sandbox container stopped since collection")
     (tmp_path / "test_pass.py").write_text("def test_ok():\n    assert 1 + 1 == 2\n")
     passed = run_project_tests(str(tmp_path))
     assert "TESTS PASSED" in passed, passed

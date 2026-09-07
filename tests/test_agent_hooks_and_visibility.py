@@ -107,10 +107,14 @@ def test_a_slow_hook_is_nothing_to_add_and_a_broken_one_is_swallowed():
     fail a run. Both leave the compacted history exactly as the compaction left it.
     """
     slow = _Agent()
-    slow.set_compaction_hook(lambda info: time.sleep(3) or "late")
+    # The hook sleeps far longer than the fake agent's one-second budget, and the bound
+    # leaves room for a loaded runner: an unbounded call takes the whole eight seconds, a
+    # bounded one returns after about one, and the Windows CI runner once needed three
+    # seconds of scheduling slack for a bounded call (measured: 3.3 s against a 2.5 s bound).
+    slow.set_compaction_hook(lambda info: time.sleep(8) or "late")
     started = time.monotonic()
     slow._compress_history_if_needed()
-    assert time.monotonic() - started < 2.5, "the hook held the turn"
+    assert time.monotonic() - started < 6, "the hook held the turn"
     assert slow.history[-1]["content"] == "[summary]"
 
     broken = _Agent()

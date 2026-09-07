@@ -807,7 +807,9 @@ def contact_summary(contact: Dict[str, Any], now_ts: Optional[float] = None, *,
         "last_contact": last,
         "next_event": upcoming[0] if upcoming else None,
         "upcoming_events": upcoming[:10],
-        "recent_notes": sorted(notes, key=lambda n: float(n.get("ts") or 0), reverse=True)[:5],
+        # Newest first; two notes written within one clock tick (Windows' time.time() ticks
+        # coarsely) carry the same ts, and the reversed input keeps the later one in front.
+        "recent_notes": sorted(reversed(notes), key=lambda n: float(n.get("ts") or 0), reverse=True)[:5],
         "notes_count": len(notes),
     }
 

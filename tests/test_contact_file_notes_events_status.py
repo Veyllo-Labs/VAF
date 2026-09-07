@@ -127,3 +127,18 @@ def test_overview_route_is_scoped_and_survives_a_missing_calendar(scratch, monke
     from fastapi import HTTPException
     with pytest.raises(HTTPException):
         asyncio.run(routes.get_contact_overview(c["id"], req_b))
+
+
+def test_two_notes_from_one_clock_tick_still_come_newest_first(scratch):
+    """Windows CI: add_contact_note stamps time.time(), which ticks coarsely there, so two
+    notes added back to back carried the same ts and the summary listed the older one
+    first. The order of equal timestamps is the order they were written, newest first."""
+    c = cs.create_contact("Dana New", "alice", user_scope_id=SCOPE_A)
+    contacts = cs._load_all("alice", SCOPE_A)
+    for rec in contacts:
+        if rec["id"] == c["id"]:
+            rec["notes_log"] = [{"id": "older", "ts": 1000.0, "text": "first", "source": "user"},
+                                {"id": "newer", "ts": 1000.0, "text": "second", "source": "user"}]
+    cs._save_all(contacts, "alice", SCOPE_A)
+    s = cs.contact_summary(cs.get_contact_by_id(c["id"], "alice", user_scope_id=SCOPE_A), now_ts=2000.0)
+    assert [n["id"] for n in s["recent_notes"]] == ["newer", "older"]

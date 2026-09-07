@@ -340,6 +340,17 @@ export default function AutomationCalendarModal({
         setSaveError(null);
     }, [isOpen]);
 
+    // The clock behind the red frame and the time under the hour label. Ticking state,
+    // not a value read at render: a day view left open across an hour boundary would
+    // otherwise keep framing the old hour and showing the time it was opened at.
+    const [now, setNow] = useState(() => new Date());
+    useEffect(() => {
+        if (!isOpen || !selectedDayForView) return;
+        setNow(new Date());
+        const id = window.setInterval(() => setNow(new Date()), 30_000);
+        return () => window.clearInterval(id);
+    }, [isOpen, selectedDayForView]);
+
     useEffect(() => {
         if (!draft) return;
         let cancelled = false;
@@ -657,7 +668,6 @@ export default function AutomationCalendarModal({
                     {isMobile && notesPanel(true)}
                     <div className="flex-1 flex flex-col min-w-0 min-h-0 rounded-xl border-2 border-dashed border-gray-200 p-3 overflow-hidden max-md:flex-none max-md:min-h-[400px]">
                         {selectedDayForView ? (() => {
-                            const now = new Date();
                             const isToday = sameDay(selectedDayForView, now);
                             const currentHour = now.getHours();
                             const currentTimeStr = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: userTimeFormat === '12h' });
@@ -692,8 +702,11 @@ export default function AutomationCalendarModal({
                                         The two lanes are NAMED at the top and hint what a click does, because a grid of empty
                                         cells does not say which column holds appointments and which the agent's schedules;
                                         the automations lane is tinted so it reads as its own thing all the way down. */}
+                                    {/* The events lane keeps a floor of 12rem and the automations lane narrows on a phone;
+                                        when the two do not fit, the grid overflows the scroll container sideways instead
+                                        of the events lane collapsing to nothing. */}
                                     <div className="flex-1 overflow-auto min-h-0 border border-gray-200 rounded-lg bg-white">
-                                        <div className="grid" style={{ gridTemplateColumns: '3.5rem minmax(0, 1fr) 14rem', gridTemplateRows: `2.25rem repeat(24, ${HOUR_REM}rem)` }}>
+                                        <div className="grid" style={{ gridTemplateColumns: `3.5rem minmax(12rem, 1fr) ${isMobile ? '10rem' : '14rem'}`, gridTemplateRows: `2.25rem repeat(24, ${HOUR_REM}rem)` }}>
                                             <div style={{ gridColumn: 1, gridRow: 1 }} className="sticky top-0 z-10 bg-white border-b border-gray-200" />
                                             <div style={{ gridColumn: 2, gridRow: 1 }} className="sticky top-0 z-10 bg-white border-b border-l border-gray-200 px-2 flex items-center gap-1.5 min-w-0" title={t('laneEventsHint')}>
                                                 <CalendarDays className="w-3.5 h-3.5 shrink-0 text-blue-500" />
@@ -731,7 +744,8 @@ export default function AutomationCalendarModal({
                                                             tabIndex={0}
                                                             onClick={() => setSelectedSlot({ date: selectedDayForView, hour: h })}
                                                             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedSlot({ date: selectedDayForView, hour: h }); } }}
-                                                            className={cn('group border-b border-l border-gray-200 p-1 flex flex-wrap content-start gap-1 overflow-hidden cursor-pointer transition-colors', isCurrentHourSlot ? 'bg-red-50/50 hover:bg-red-50/70' : 'bg-gray-100/70 hover:bg-gray-200/70')}
+                                                            className={cn('group border-b border-l border-gray-200 p-1 flex flex-wrap content-start gap-1 overflow-y-auto vaf-scroll cursor-pointer transition-colors', isCurrentHourSlot ? 'bg-red-50/50 hover:bg-red-50/70' : 'bg-gray-100/70 hover:bg-gray-200/70')}
+                                                            title={slotAutomations.length > 1 ? slotAutomations.map((auto) => auto.name).join(', ') : undefined}
                                                         >
                                                             {slotAutomations.length === 0 && <span className="hidden group-hover:inline text-[11px] text-gray-400 select-none">{t('addAutomationHere')}</span>}
                                                             {slotAutomations.map((auto) => (

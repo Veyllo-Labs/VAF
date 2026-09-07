@@ -188,10 +188,17 @@ views refetch.
 
 - **The calendar window** ("Kalender", the sidebar footer button and Settings > Automations)
   shows the month with the VAF calendar's events (blue dots, on past days too) beside the
-  automations (grey dots, today and later). The day view is one grid of 24 hour rows with an
-  all-day row on top, the events lane in the middle (blocks span their duration and sit
-  side by side when they overlap; a click on an empty hour creates an event there) and the
-  automations lane on the right (chips per hour; a click creates an automation, as before).
+  automations (grey dots, today and later); a legend above the grid names the two colours.
+  The day view is one grid of 24 hour rows with an all-day row on top and a sticky header
+  that names the two lanes: "Termine" (calendar icon, with the hint that a click on an hour
+  creates an appointment) and "Automatisierungen" (lightning icon), because two columns of
+  empty cells do not say which is which. The events lane is in the middle (blocks span
+  their duration and sit side by side when they overlap; a click on an empty hour creates
+  an event there, and the hovered cell says "+ Termin"); the automations lane on the right
+  is tinted grey all the way down, its chips carry the lightning icon, and an empty hovered
+  cell says "+ Automatisierung" (a click creates an automation, as before). On today the
+  current hour is framed in red across all three columns, with the current time under the
+  hour label, the way the automation calendar always marked it.
   The event popup edits title, date, start and end, all-day, location, description, linked
   contacts, the reminder and, on creation, whether the event is also written into the
   connected calendar; a mirrored event shows its source, its push state and a link to open

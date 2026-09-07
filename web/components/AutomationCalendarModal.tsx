@@ -13,7 +13,7 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslations } from 'next-intl';
-import { X, ChevronRight, Zap, Trash2, Plus, ExternalLink, Loader2, MapPin, Users } from 'lucide-react';
+import { X, ChevronRight, Zap, Trash2, Plus, ExternalLink, Loader2, MapPin, Users, CalendarDays } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useEscapeLayer } from '@/hooks/useEscapeLayer';
@@ -660,6 +660,7 @@ export default function AutomationCalendarModal({
                             const now = new Date();
                             const isToday = sameDay(selectedDayForView, now);
                             const currentHour = now.getHours();
+                            const currentTimeStr = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: userTimeFormat === '12h' });
                             return (
                                 <>
                                     <div className="flex items-center justify-between gap-2 shrink-0 mb-3">
@@ -687,34 +688,52 @@ export default function AutomationCalendarModal({
                                             {dayEvents.allDay.map((ev) => eventChip(ev, 'max-w-[240px]'))}
                                         </div>
                                     </div>
-                                    {/* 24 fixed rows: hour labels, the events lane, the automations lane */}
+                                    {/* One sticky header row, then 24 fixed rows: hour labels, the events lane, the automations lane.
+                                        The two lanes are NAMED at the top and hint what a click does, because a grid of empty
+                                        cells does not say which column holds appointments and which the agent's schedules;
+                                        the automations lane is tinted so it reads as its own thing all the way down. */}
                                     <div className="flex-1 overflow-auto min-h-0 border border-gray-200 rounded-lg bg-white">
-                                        <div className="grid" style={{ gridTemplateColumns: '3.5rem minmax(0, 1fr) 12rem', gridTemplateRows: `repeat(24, ${HOUR_REM}rem)` }}>
+                                        <div className="grid" style={{ gridTemplateColumns: '3.5rem minmax(0, 1fr) 14rem', gridTemplateRows: `2.25rem repeat(24, ${HOUR_REM}rem)` }}>
+                                            <div style={{ gridColumn: 1, gridRow: 1 }} className="sticky top-0 z-10 bg-white border-b border-gray-200" />
+                                            <div style={{ gridColumn: 2, gridRow: 1 }} className="sticky top-0 z-10 bg-white border-b border-l border-gray-200 px-2 flex items-center gap-1.5 min-w-0" title={t('laneEventsHint')}>
+                                                <CalendarDays className="w-3.5 h-3.5 shrink-0 text-blue-500" />
+                                                <span className="text-xs font-semibold text-gray-700 shrink-0">{t('laneEvents')}</span>
+                                                <span className="text-xs text-gray-400 truncate">{t('laneEventsHint')}</span>
+                                            </div>
+                                            <div style={{ gridColumn: 3, gridRow: 1 }} className="sticky top-0 z-10 bg-gray-100 border-b border-l border-gray-200 px-2 flex items-center gap-1.5 min-w-0" title={t('laneAutomationsHint')}>
+                                                <Zap className="w-3.5 h-3.5 shrink-0 text-gray-700" />
+                                                <span className="text-xs font-semibold text-gray-700 truncate">{t('laneAutomations')}</span>
+                                            </div>
                                             {(dayViewSlots ?? []).map(({ h, slotAutomations }) => {
                                                 const isCurrentHourSlot = isToday && h === currentHour;
+                                                const row = h + 2;
                                                 return (
                                                     <>
-                                                        <div key={`label-${h}`} style={{ gridColumn: 1, gridRow: h + 1 }} className={cn('border-b border-gray-100 px-2 pt-1 text-xs font-medium', isCurrentHourSlot ? 'text-red-600' : 'text-gray-500')}>
+                                                        <div key={`label-${h}`} style={{ gridColumn: 1, gridRow: row }} className={cn('border-b border-gray-100 px-2 pt-1 text-xs font-medium', isCurrentHourSlot ? 'text-red-600 font-semibold bg-red-50/30' : 'text-gray-500')}>
                                                             {pad2(h)}:00
+                                                            {isCurrentHourSlot && <span className="block text-[11px] font-normal text-red-600 mt-0.5">{currentTimeStr}</span>}
                                                         </div>
                                                         <div
                                                             key={`events-${h}`}
-                                                            style={{ gridColumn: 2, gridRow: h + 1 }}
+                                                            style={{ gridColumn: 2, gridRow: row }}
                                                             role="button"
                                                             tabIndex={0}
                                                             onClick={() => openNewDraft(selectedDayForView, h)}
                                                             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openNewDraft(selectedDayForView, h); } }}
-                                                            className={cn('border-b border-l border-gray-100 cursor-pointer transition-colors', isCurrentHourSlot ? 'bg-red-50/30' : 'hover:bg-gray-100')}
-                                                        />
+                                                            className={cn('group border-b border-l border-gray-100 cursor-pointer transition-colors flex items-start justify-end p-1', isCurrentHourSlot ? 'bg-red-50/30 hover:bg-red-50/50' : 'hover:bg-gray-100')}
+                                                        >
+                                                            <span className="hidden group-hover:inline text-[11px] text-gray-400 select-none">{t('addEventHere')}</span>
+                                                        </div>
                                                         <div
                                                             key={`auto-${h}`}
-                                                            style={{ gridColumn: 3, gridRow: h + 1 }}
+                                                            style={{ gridColumn: 3, gridRow: row }}
                                                             role="button"
                                                             tabIndex={0}
                                                             onClick={() => setSelectedSlot({ date: selectedDayForView, hour: h })}
                                                             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedSlot({ date: selectedDayForView, hour: h }); } }}
-                                                            className={cn('border-b border-l border-dashed border-gray-200 p-1 flex flex-wrap content-start gap-1 overflow-hidden cursor-pointer transition-colors', isCurrentHourSlot ? 'bg-red-50/30' : 'bg-gray-50/50 hover:bg-gray-100')}
+                                                            className={cn('group border-b border-l border-gray-200 p-1 flex flex-wrap content-start gap-1 overflow-hidden cursor-pointer transition-colors', isCurrentHourSlot ? 'bg-red-50/50 hover:bg-red-50/70' : 'bg-gray-100/70 hover:bg-gray-200/70')}
                                                         >
+                                                            {slotAutomations.length === 0 && <span className="hidden group-hover:inline text-[11px] text-gray-400 select-none">{t('addAutomationHere')}</span>}
                                                             {slotAutomations.map((auto) => (
                                                                 <span
                                                                     key={auto.id}
@@ -734,7 +753,7 @@ export default function AutomationCalendarModal({
                                                 );
                                             })}
                                             {/* the events lane's content spans all rows and positions its blocks by time */}
-                                            <div style={{ gridColumn: 2, gridRow: '1 / span 24' }} className="relative pointer-events-none">
+                                            <div style={{ gridColumn: 2, gridRow: '2 / span 24' }} className="relative pointer-events-none">
                                                 {dayEvents.placed.map((p) => eventChip(p.ev, 'absolute pointer-events-auto shadow-sm', {
                                                     top: `${p.top * HOUR_REM}rem`,
                                                     height: `calc(${p.height * HOUR_REM}rem - 2px)`,
@@ -742,11 +761,22 @@ export default function AutomationCalendarModal({
                                                     width: `calc(${100 / p.cols}% - 4px)`,
                                                 }))}
                                             </div>
+                                            {/* the red frame around the current hour, across all three columns: drawn over the
+                                                cells and passing every click through, so the row keeps its two click targets */}
+                                            {isToday && (
+                                                <div style={{ gridColumn: '1 / span 3', gridRow: currentHour + 2 }} className="pointer-events-none ring-2 ring-red-500 ring-inset rounded-md z-[5]" />
+                                            )}
                                         </div>
                                     </div>
                                 </>
                             );
                         })() : (
+                            <>
+                            {/* what the dots in the cells mean; the same two colours the day view's lanes use */}
+                            <div className="flex items-center gap-4 shrink-0 mb-2 px-1 text-xs text-gray-500">
+                                <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />{t('legendEvent')}</span>
+                                <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-gray-500 dark:bg-[#bdbdbd] shrink-0" />{t('legendAutomation')}</span>
+                            </div>
                             <div className="grid grid-cols-7 gap-px bg-gray-400 rounded-xl flex-1 min-h-0 w-full" style={{ gridTemplateRows: `auto repeat(${monthCells.numRows}, minmax(0, 1fr))` }}>
                                 {weekdayLabels.map((day, i) => (
                                     <div key={day + i} className="bg-gray-50 flex items-center justify-center text-xs font-medium text-gray-500 uppercase tracking-wide py-1.5">{day}</div>
@@ -786,6 +816,7 @@ export default function AutomationCalendarModal({
                                     );
                                 })}
                             </div>
+                            </>
                         )}
                     </div>
                 </div>

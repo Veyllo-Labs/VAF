@@ -153,3 +153,24 @@ def test_the_chat_label_fills_in_for_a_row_without_a_name():
     rows = [{"body": "hi", "direction": "in", "ts": 5, "chat_name": "", "sender_jid": ""}]
     ctx = C.build_chat_context(rows, budget_chars=12000, chat_label="+49 152 ...")
     assert ctx.blocks[0].startswith("--- from: +49 152 ...")
+
+
+def test_the_counters_describe_what_the_model_was_given():
+    """The panel repeats these numbers ("tone matched to N of your messages"), so a
+    message the budget dropped, or one that only became a summary, is not counted:
+    the count used to move at the top of the loop, before the budget had spoken."""
+    rows = [_row("mine " + "y" * 900, "out", ts=1), _row("theirs " + "x" * 900, ts=2),
+            _row("mine again " + "y" * 900, "out", ts=3), _row("newest " + "z" * 100, ts=4)]
+    ctx = C.build_chat_context(rows, budget_chars=C.MIN_CONTEXT_CHARS, per_msg_chars=1000)
+    joined = "\n".join(ctx.blocks)
+    assert ctx.own_included == joined.count(f"from: {C.CHAT.own_label}")
+    assert ctx.own_included < 2, "one of the two own messages did not fit and must not be counted"
+    assert ctx.included == len(ctx.blocks)
+    # a hidden placeholder that does not fit is neither included nor counted as hidden
+    entries = [C.Entry(who="a", when="d", body="x" * 1900),
+               C.Entry(who="b", when="d", body="", hidden="[hidden]" * 300, own=True),
+               C.Entry(who="c", when="d", body="anchor")]
+    ctx = C.assemble(entries, anchor_index=2, budget_chars=C.MIN_CONTEXT_CHARS,
+                     per_msg_chars=4000, max_messages=8)
+    assert ctx.hidden_suspicious == 0 and ctx.own_included == 0
+    assert ctx.included == len(ctx.blocks)

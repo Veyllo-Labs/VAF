@@ -994,7 +994,7 @@
         "localUnavailable": "本地模型没能加载。请稍后再试。",
         "localLoading": "正在加载本地模型…",
         "panelTitle": "Composer",
-        "panelHint": "只会把建议写进输入框，不会发送任何邮件，发送由你自己来做。",
+        "panelHint": "只会把建议写进输入框，不会发送任何消息，发送由你自己来做。",
         "readCount": "这个聊天共 {total} 条消息，已读取 {used} 条。",
         "shortened": "较早的部分做了缩略。",
         "newChat": "新建",

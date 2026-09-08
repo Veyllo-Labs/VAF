@@ -119,7 +119,10 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     // The compose box under the chat and the Composer beside it. `beforeAssist` backs
     // the Undo button, so one click always restores exactly what the person had typed.
     const [composeText, setComposeText] = useState('');
-    const [sending, setSending] = useState(false);
+    // The chat a send is running for (null: none). Keyed by chat rather than a flag,
+    // so a send still in flight for the chat left behind does not grey out the box of
+    // the chat arrived at.
+    const [sendingFor, setSendingFor] = useState<string | null>(null);
     const [sendError, setSendError] = useState<string | null>(null);
     const [assistBusy, setAssistBusy] = useState(false);
     const [assistNote, setAssistNote] = useState('');
@@ -135,6 +138,12 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     // chat. Kept in the window's memory only: restoring it on a chat switch is a state
     // swap, no request leaves the browser until the person clicks Draft or Send.
     const composeStashRef = useRef<Map<string, ComposeStash>>(new Map());
+    // The chat the live state belongs to, readable from inside a run that started
+    // earlier: a draft or a send is bound to the chat it started for, and when that
+    // chat is no longer the selected one its outcome goes into that chat's stash
+    // instead of into whichever chat is on screen now.
+    const selectedRef = useRef<string | null>(null);
+    useEffect(() => { selectedRef.current = selectedChatId; }, [selectedChatId]);
     useEffect(() => { chatEndRef.current?.scrollIntoView({ block: 'end' }); }, [turns, assistBusy]);
     // Both text fields start one line high and grow with their content, like a
     // messenger's input: a two-line box under a chat reads as a form, not a chat.
@@ -432,6 +441,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
      *  generation still running for the leaving chat is stopped; its partial draft
      *  stays in that chat's stash. */
     const switchCompose = (from: string | null, to: string | null) => {
+        selectedRef.current = to;
         abortRef.current?.abort();
         if (from) {
             composeStashRef.current.set(from, {
@@ -451,6 +461,13 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         // Closing the window ends the day's exchanges: nothing is kept across opens.
         if (!isOpen) composeStashRef.current.clear();
     }, [isOpen]);
+    /** Merge an outcome into a chat's stash: the chat a run started for is no longer
+     *  on screen, so its result must land where that chat will find it. */
+    const stashUpdate = (chatId: string, patch: Partial<ComposeStash>) => {
+        const cur = composeStashRef.current.get(chatId)
+            || { composeText: '', turns: [], meta: null, instruction: '', beforeAssist: null };
+        composeStashRef.current.set(chatId, { ...cur, ...patch });
+    };
 
     /** The person writes here only where the agent does not: a read-only sender, or the
      *  whole channel with inbound_to_agent off. Owner, contact and conversation chats
@@ -461,29 +478,41 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const handleSend = async (s: WhatsAppSession) => {
         const text = composeText.trim();
         if (!text) return;
-        setSending(true);
+        const runChat = s.chat_id;
+        const live = () => selectedRef.current === runChat;
+        setSendingFor(runChat);
         setSendError(null);
         try {
             const res = await fetch(api('api/whatsapp/send'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
-                body: JSON.stringify({ chat_id: s.chat_id, text }),
+                body: JSON.stringify({ chat_id: runChat, text }),
             });
             const json = await res.json().catch(() => ({}));
-            if (!res.ok) { setSendError(json?.detail || t('sendFailed')); return; }
-            setComposeText('');
-            setBeforeAssist(null);
-            setHistoryVersion(v => v + 1);
+            if (!res.ok) {
+                if (live()) setSendError(json?.detail || t('sendFailed'));
+                return;
+            }
+            // Sent: the box of THAT chat empties, wherever that chat is now.
+            if (live()) {
+                setComposeText('');
+                setBeforeAssist(null);
+                setHistoryVersion(v => v + 1);
+            } else {
+                stashUpdate(runChat, { composeText: '', beforeAssist: null });
+            }
             fetchDashboard();
         } catch {
-            setSendError(t('sendFailed'));
+            if (live()) setSendError(t('sendFailed'));
         } finally {
-            setSending(false);
+            setSendingFor(cur => (cur === runChat ? null : cur));
         }
     };
 
     const runComposer = useCallback(async (s: WhatsAppSession, mode: 'draft' | 'rewrite') => {
+        const runChat = s.chat_id;
+        const live = () => selectedRef.current === runChat;
         const said = assistInstruction.trim();
         // The conversation sent to the server is what happened BEFORE this turn;
         // the current instruction travels separately as the operator turn.
@@ -520,6 +549,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 const frames = buf.split('\n\n');
                 buf = frames.pop() || '';
                 for (const frame of frames) {
+                    if (!live()) continue;   // the chat changed under this run: nothing of it reaches the screen
                     if (frame.startsWith('event: notice')) {
                         // Why nothing is happening yet: a cold local model maps from disk.
                         setAssistNote(t('composer.localLoading'));
@@ -552,14 +582,25 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 }
             }
         } catch (e) {
-            if ((e as Error)?.name !== 'AbortError') setAssistNote(t('composer.failed'));
+            if ((e as Error)?.name !== 'AbortError' && live()) setAssistNote(t('composer.failed'));
         } finally {
             // The assistant's turn IS the draft: replaying it lets the next
             // instruction ("shorter") refine what it just wrote instead of
-            // starting over from the chat.
-            if (produced) setTurns(x => [...x, { role: 'assistant', content: produced }]);
+            // starting over from the chat. When the chat changed meanwhile, the
+            // draft and its turn belong to the chat the run started for, so they go
+            // into that chat's stash (a switch stops the stream, and what had
+            // arrived by then is that chat's partial draft).
+            if (produced) {
+                if (live()) {
+                    setTurns(x => [...x, { role: 'assistant', content: produced }]);
+                } else {
+                    const cur = composeStashRef.current.get(runChat);
+                    stashUpdate(runChat, { composeText: produced,
+                        turns: [...(cur?.turns ?? []), { role: 'assistant', content: produced }] });
+                }
+            }
             setAssistBusy(false);
-            abortRef.current = null;
+            if (abortRef.current === ctrl) abortRef.current = null;
         }
     }, [composeText, assistInstruction, turns, t]);
 
@@ -671,6 +712,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const composeBar = (chat: ShellChat) => {
         const s = sessionsById.get(chat.id);
         if (!s || !canCompose(s)) return null;
+        const sending = sendingFor === s.chat_id;
         return (
             <div className="px-4 py-2.5 border-t border-[#2e2e2e] bg-[#1a1a1a] shrink-0 flex flex-col gap-1">
                 <div className="flex items-end gap-2">

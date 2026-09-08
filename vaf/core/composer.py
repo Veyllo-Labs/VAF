@@ -322,10 +322,12 @@ def assemble(entries: List[Entry], *, anchor_index: int, budget_chars: int,
     spent = 0
     blocks: List[Tuple[int, str]] = []
 
+    # The counters (`included`, `own_included`, `hidden_suspicious`) describe what the
+    # model was actually given, because the panel repeats them to the person: "tone
+    # matched to N of your messages" must not count one that the budget dropped.
+    # So every counter moves only when its block is appended.
     for pos, (idx, entry) in enumerate(ordered):
         is_anchor = pos == 0
-        if entry.own:
-            ctx.own_included += 1
         # Labelling who wrote what is what lets the model copy the USER's register
         # instead of the correspondent's, and lets it see which points are already
         # answered. The own label is a fixed phrase rather than a name, so it cannot
@@ -333,12 +335,12 @@ def assemble(entries: List[Entry], *, anchor_index: int, budget_chars: int,
         head = f"--- from: {entry.who} | date: {entry.when} ---"
 
         if entry.hidden is not None and not is_anchor:
-            ctx.hidden_suspicious += 1
             block = f"{head}\n{entry.hidden}"
             if spent + len(block) <= budget_chars:
                 blocks.append((idx, block))
                 spent += len(block)
                 ctx.included += 1
+                ctx.hidden_suspicious += 1
             continue
 
         body = entry.body
@@ -360,6 +362,8 @@ def assemble(entries: List[Entry], *, anchor_index: int, budget_chars: int,
         blocks.append((idx, block))
         spent += len(block)
         ctx.included += 1
+        if entry.own:
+            ctx.own_included += 1
 
     # back to chronological for the prompt: a model reads a conversation forwards
     blocks.sort(key=lambda b: b[0])

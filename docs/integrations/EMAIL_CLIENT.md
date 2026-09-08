@@ -282,8 +282,9 @@ lookup, the local-model loading and the ONE tool-less streamed completion, booke
 on the calling window's usage lane. `vaf/mail/composer.py` keeps what is true of
 mail only: quoted tails and signatures to strip, the Sent folder deciding whose
 message it is (`is_own_message`, `build_thread_context`), the one-line quotes
-from other threads. A second window therefore adds a route and a panel, never a
-second prompt or a second model call.
+from other threads. Every Composer turn, in whichever window, is still exactly one
+tool-less model completion of its own; what the shared core prevents is a second
+IMPLEMENTATION of the prompt and the call, not a call per window.
 
 **UI.** The compose window is two columns. Left: the message, with a larger editor
 and a light-mode toggle so a draft can be proof-read the way the recipient will see
@@ -334,12 +335,13 @@ when retrieval found nothing, carrying an explicit "nothing matched" - also the 
 agent's behaviour, and informative: "you looked and there is nothing" is different
 from "you never looked".
 
-**Which language.** The correspondent's, always: the reply is written in the
+**Which language.** The correspondent's, by default: the reply is written in the
 language of the message being answered, even when the instruction is typed in
-another one. The instruction says WHAT to say, not which language to say it in;
-only an explicit ask ("auf Deutsch") switches. The earlier rule let the
-instruction's language win, and a Turkish chat got a German reply because the
-instruction was German.
+another one, because the instruction says WHAT to say, not which language to say
+it in. An explicit language request in the instruction ("auf Deutsch", "answer in
+English") overrides that default. The earlier rule let the instruction's language
+win on its own, and a Turkish chat got a German reply because the instruction was
+German.
 
 **Whose words are whose.** Each message in the assembled thread is labelled with
 who wrote it, and the user's own messages carry `from: YOUR USER (wrote this)`. The

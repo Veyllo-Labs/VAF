@@ -979,7 +979,31 @@
       "reloadNamesDone": "Names requested. They appear in the list as WhatsApp delivers them.",
       "reloadNamesFailed": "The names could not be requested.",
       "jumpChatNotFound": "No chat is stored here for this contact.",
-      "olderNeedsMessage": "Older messages can be loaded once a message is stored in this chat."
+      "olderNeedsMessage": "Older messages can be loaded once a message is stored in this chat.",
+      "composePlaceholder": "Write a message ...",
+      "send": "Send",
+      "sending": "Sending ...",
+      "sendFailed": "The message could not be sent.",
+      "composer": {
+        "draft": "Write a draft",
+        "rewrite": "Rewrite my text",
+        "stop": "Stop",
+        "undo": "Undo",
+        "instruction": "What should it say? (optional)",
+        "failed": "The draft could not be created.",
+        "localUnavailable": "The local model could not be loaded. Try again in a moment.",
+        "localLoading": "Loading the local model ...",
+        "panelTitle": "Composer",
+        "panelHint": "Puts a suggestion in the text field. Nothing is sent - you do that yourself.",
+        "readCount": "Read {used} of {total} messages in this chat.",
+        "shortened": "Older parts were shortened.",
+        "newChat": "New",
+        "followUp": "Change anything else?",
+        "inserted": "Draft inserted into the text field.",
+        "working": "writing ...",
+        "matchedYourTone": "Tone matched to {n, plural, one {one message} other {# messages}} sent from your number.",
+        "noToneSample": "No message from your number in this chat - neutral tone."
+      }
     },
     "telegramDashboard": {
       "title": "Telegram",

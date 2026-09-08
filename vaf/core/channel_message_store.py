@@ -33,6 +33,13 @@ __all__ = [
 ]
 
 
+#: The `sender_jid` an outbound row carries when the PERSON sent it from the dashboard
+#: (their own words, from their agent's number) rather than the agent. The reply window
+#: reads outbound rows to answer "did the agent write to this number", and a row with this
+#: label must not open it: nobody asked the agent to talk to that person.
+OWNER_SENDER = "owner"
+
+
 def _local_admin() -> str:
     return get_local_admin_username().lower()
 
@@ -547,6 +554,7 @@ def last_message_ts(
     user_scope_id: Optional[str] = None,
     channel: Optional[str] = "whatsapp",
     until_ts: Optional[float] = None,
+    exclude_sender: Optional[str] = None,
 ) -> Optional[float]:
     """Unix timestamp of the newest stored message in a chat, or None when the chat has none.
 
@@ -558,7 +566,9 @@ def last_message_ts(
     keeps a second ledger of open conversations. An "in" row does NOT mean the sender was
     accepted: the store keeps a rejected sender's message for the owner's inbox too, which
     is why the reply rule (whatsapp_bridge.conversation_open_until) reads inbound rows only
-    inside the window an outbound message opened."""
+    inside the window an outbound message opened. `exclude_sender` leaves out rows stored
+    under that sender label: the reply rule passes OWNER_SENDER, because a message the
+    person sent from the dashboard left the number without the agent writing anything."""
     init_store(username, user_scope_id)
     conn = _get_conn(username, user_scope_id)
     try:
@@ -573,6 +583,9 @@ def last_message_ts(
         if until_ts is not None:
             clauses.append("ts <= ?")
             params.append(float(until_ts))
+        if exclude_sender:
+            clauses.append("COALESCE(sender_jid, '') != ?")
+            params.append(exclude_sender)
         cur = conn.execute(
             f"SELECT MAX(ts) AS ts FROM channel_messages WHERE {' AND '.join(clauses)}",
             tuple(params),

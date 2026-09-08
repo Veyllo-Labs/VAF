@@ -979,7 +979,31 @@
       "reloadNamesDone": "이름을 요청했어요. WhatsApp이 보내는 대로 목록에 나타나요.",
       "reloadNamesFailed": "이름을 요청하지 못했어요.",
       "jumpChatNotFound": "이 연락처의 채팅이 여기에 저장되어 있지 않아요.",
-      "olderNeedsMessage": "이 채팅에 메시지가 저장되면 이전 메시지를 불러올 수 있어요."
+      "olderNeedsMessage": "이 채팅에 메시지가 저장되면 이전 메시지를 불러올 수 있어요.",
+      "composePlaceholder": "메시지 입력…",
+      "send": "보내기",
+      "sending": "보내는 중…",
+      "sendFailed": "메시지를 보내지 못했어요.",
+      "composer": {
+        "draft": "초안 쓰기",
+        "rewrite": "내 글 다듬기",
+        "stop": "중지",
+        "undo": "되돌리기",
+        "instruction": "무엇을 쓸까요?(선택 사항)",
+        "failed": "초안을 만들지 못했어요.",
+        "localUnavailable": "로컬 모델을 불러오지 못했어요. 잠시 뒤에 다시 시도해 주세요.",
+        "localLoading": "로컬 모델을 불러오는 중…",
+        "panelTitle": "Composer",
+        "panelHint": "입력란에 제안을 써 넣기만 하고, 보내지는 않아요. 보내기는 직접 해 주세요.",
+        "readCount": "이 채팅의 메시지 {total}개 중 {used}개를 읽었어요.",
+        "shortened": "이전 내용은 줄여서 담았어요.",
+        "newChat": "새 대화",
+        "followUp": "더 고칠 곳이 있나요?",
+        "inserted": "초안을 입력란에 넣었어요.",
+        "working": "쓰는 중…",
+        "matchedYourTone": "내 번호에서 보낸 메시지 {n}개에 맞춰 말투를 조정했어요.",
+        "noToneSample": "이 채팅에는 내 번호에서 보낸 메시지가 없어 중립적인 말투로 썼어요."
+      }
     },
     "telegramDashboard": {
       "title": "Telegram",

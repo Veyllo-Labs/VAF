@@ -125,9 +125,13 @@ def conversation_open_until(
     window = reply_window_hours() * 3600.0
     if window <= 0 or not chat_id:
         return None
-    from vaf.core.channel_message_store import last_message_ts
+    from vaf.core.channel_message_store import OWNER_SENDER, last_message_ts
     user = (username or "").strip() or "admin"
-    out_ts = last_message_ts(user, chat_id, direction="out", user_scope_id=user_scope_id)
+    # Only what the AGENT sent opens a door. A message the person sent from the dashboard
+    # is stored as an outbound row too (it left the number), labelled OWNER_SENDER, and it
+    # must not hand the contact's answer to an agent nobody allowed to talk to them.
+    out_ts = last_message_ts(user, chat_id, direction="out", user_scope_id=user_scope_id,
+                             exclude_sender=OWNER_SENDER)
     if direction == "out" or direction is not None:
         ts = out_ts if direction == "out" else last_message_ts(user, chat_id, direction=direction, user_scope_id=user_scope_id)
         return (ts + window) if ts is not None else None
@@ -287,6 +291,7 @@ def _dequeue_external_send_request() -> Optional[Tuple[Any, ...]]:
                     req_id,
                     str(data.get("document_path") or "").strip() or None,
                     response_path,
+                    str(data.get("origin") or "").strip() or None,
                 )
             except Exception as e:
                 try:
@@ -676,7 +681,10 @@ def _run_user_process(username: str, auth_dir: Path) -> Optional[subprocess.Pope
 
 
 def _sender_loop() -> None:
-    """Read (username, chat_jid, text, voice_path?, req_id?) from queue, write to that user's Node stdin."""
+    """Read (username, chat_jid, text, voice_path?, req_id?, document_path?, response_path?, origin?)
+    from the queue and write to that user's Node stdin. `origin` is "owner" when the person
+    sent the message from the dashboard; the stored row then carries OWNER_SENDER so the
+    reply window does not count it as the agent writing."""
     global _outgoing_queue, _processes
     while True:
         try:
@@ -692,6 +700,7 @@ def _sender_loop() -> None:
             voice_path = item[3] if len(item) >= 4 else None
             document_path = item[5] if len(item) >= 6 else None
             response_path = item[6] if len(item) >= 7 else None
+            origin = item[7] if len(item) >= 8 else None
             username, chat_jid, text = item[0], item[1], (item[2] or "")
             _register_external_response_path(req_id, response_path)
             if not username or not chat_jid:
@@ -841,7 +850,7 @@ def _sender_loop() -> None:
                 pass
             try:
                 chat_id = f"+{_jid_to_e164(chat_jid)}" if _jid_to_e164(chat_jid) else str(chat_jid or "")
-                from vaf.core.channel_message_store import append_message
+                from vaf.core.channel_message_store import OWNER_SENDER, append_message
                 if voice_path:
                     body = "[Voice message]"
                     ctype = "voice"
@@ -854,7 +863,8 @@ def _sender_loop() -> None:
                 # Same per-scope store as the inbound lane, so the reply window and the
                 # read tools see both directions of one conversation.
                 _scope = _scope_by_user.get(username)
-                append_message(username, chat_id or chat_jid, body, direction="out", content_type=ctype, user_scope_id=_scope)
+                append_message(username, chat_id or chat_jid, body, direction="out", content_type=ctype,
+                               sender_jid=(OWNER_SENDER if origin == "owner" else None), user_scope_id=_scope)
                 if chat_id:
                     _append_chat_activity(chat_id, _scope, "out")
             except Exception:
@@ -957,15 +967,18 @@ def send_whatsapp_with_confirmation(
     document_path: Optional[str] = None,
     timeout: float = 15.0,
     allow_contact_send: bool = False,
+    origin: Optional[str] = None,
 ) -> str:
-    # Voice/document need more time (TTS synthesis, file upload)
-    if voice_path or document_path:
-        timeout = max(timeout, 45.0)
     """
     Send a WhatsApp message (text, voice, or document) and wait for delivery confirmation from the Node bridge.
     Returns a success message or an error string for the agent to report.
     When allow_contact_send is True, the recipient may be any phone/JID (e.g. a contact); otherwise only whitelisted.
+    origin="owner" marks a message the person sent from the dashboard: it is stored under
+    OWNER_SENDER and opens no reply window (the agent did not write to that number).
     """
+    # Voice/document need more time (TTS synthesis, file upload)
+    if voice_path or document_path:
+        timeout = max(timeout, 45.0)
     if not allow_contact_send and not _is_reply_allowed(username, chat_jid):
         return (
             "WhatsApp: Cannot send - this number is neither the registered main-user number, "
@@ -1009,6 +1022,7 @@ def send_whatsapp_with_confirmation(
                     "voice_path": str(voice_path or ""),
                     "document_path": str(document_path or ""),
                     "response_path": str(response_path),
+                    "origin": str(origin or ""),
                 },
             )
         except Exception as e:
@@ -1024,7 +1038,7 @@ def send_whatsapp_with_confirmation(
     with _pending_sends_lock:
         _pending_sends[req_id] = result_queue
     try:
-        _outgoing_queue.put((username, chat_jid, text or "", voice_path, req_id, document_path))
+        _outgoing_queue.put((username, chat_jid, text or "", voice_path, req_id, document_path, None, origin))
     except Exception as e:
         with _pending_sends_lock:
             _pending_sends.pop(req_id, None)

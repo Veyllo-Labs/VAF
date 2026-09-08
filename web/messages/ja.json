@@ -979,7 +979,31 @@
       "reloadNamesDone": "名前をリクエストしました。WhatsAppから届き次第、一覧に表示されます。",
       "reloadNamesFailed": "名前をリクエストできませんでした。",
       "jumpChatNotFound": "この連絡先のチャットはここに保存されていません。",
-      "olderNeedsMessage": "このチャットにメッセージが保存されると、それ以前のメッセージを読み込めます。"
+      "olderNeedsMessage": "このチャットにメッセージが保存されると、それ以前のメッセージを読み込めます。",
+      "composePlaceholder": "メッセージを入力…",
+      "send": "送信",
+      "sending": "送信中…",
+      "sendFailed": "メッセージを送信できませんでした。",
+      "composer": {
+        "draft": "下書きを書く",
+        "rewrite": "文章を書き直す",
+        "stop": "停止",
+        "undo": "取り消し",
+        "instruction": "何を書きましょうか（任意）",
+        "failed": "下書きを作成できませんでした。",
+        "localUnavailable": "ローカルモデルを読み込めませんでした。少し待ってからもう一度お試しください。",
+        "localLoading": "ローカルモデルを読み込んでいます…",
+        "panelTitle": "Composer",
+        "panelHint": "入力欄に提案を書き込むだけで、送信はしません。送信は自分で行ってください。",
+        "readCount": "このチャットの{total}件のうち{used}件を読みました。",
+        "shortened": "古い部分は短くまとめました。",
+        "newChat": "新規",
+        "followUp": "他に直すところはありますか",
+        "inserted": "下書きを入力欄に挿入しました。",
+        "working": "書いています…",
+        "matchedYourTone": "お使いの番号から送られた{n}件のメッセージに口調を合わせました。",
+        "noToneSample": "このチャットにはお使いの番号からのメッセージがないため、中立的な口調です。"
+      }
     },
     "telegramDashboard": {
       "title": "Telegram",

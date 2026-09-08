@@ -7,11 +7,15 @@
 // agent's own number; each chat's badge says who it is to the agent (owner /
 // contact / conversation inside the reply window / read-only), and the settings
 // hold the agent number, the owner's registered number, who else may write, the
-// reply window and the activity chart.
+// reply window and the activity chart. Where the agent does NOT answer (a read-only
+// sender, or the whole channel with inbound_to_agent off) the person answers
+// themselves: a compose box under the chat sends from the agent's number, and the
+// Composer on the right drafts into that box (the mail window's assistant on the
+// shared lane, never sending anything itself).
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslations } from 'next-intl';
-import { Phone, UserPlus, Trash2, AlertTriangle, BookUser } from 'lucide-react';
+import { Phone, UserPlus, Trash2, AlertTriangle, BookUser, Send, Sparkles, Loader2 } from 'lucide-react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { cn } from '@/lib/utils';
 import MessagesChart from './MessagesChart';
@@ -60,7 +64,14 @@ interface DashboardData {
     running: boolean;
     enabled: boolean;
     log_path: string | null;
+    composer_enabled: boolean;
 }
+
+/** What the Composer read, so the panel can say so rather than imply it saw everything. */
+interface ComposerMeta { included: number; total: number; truncated: boolean; dropped: number; own_included: number }
+/** One exchange with the Composer. Assistant turns hold the draft they produced,
+ *  replayed on the next request so a follow-up refines rather than restarts. */
+interface ComposerTurn { role: 'user' | 'assistant'; content: string }
 
 export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigChange, onOpenSetupWizard, onOpenContacts, initialChatId }: WhatsAppDashboardProps) {
     const t = useTranslations('settings.whatsappDashboard');
@@ -84,6 +95,20 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const [namesBusy, setNamesBusy] = useState(false);
     const [namesMsg, setNamesMsg] = useState<string | null>(null);
     const [historyVersion, setHistoryVersion] = useState(0);
+    // The compose box under the chat and the Composer beside it. `beforeAssist` backs
+    // the Undo button, so one click always restores exactly what the person had typed.
+    const [composeText, setComposeText] = useState('');
+    const [sending, setSending] = useState(false);
+    const [sendError, setSendError] = useState<string | null>(null);
+    const [assistBusy, setAssistBusy] = useState(false);
+    const [assistNote, setAssistNote] = useState('');
+    const [assistInstruction, setAssistInstruction] = useState('');
+    const [beforeAssist, setBeforeAssist] = useState<string | null>(null);
+    const [assistMeta, setAssistMeta] = useState<ComposerMeta | null>(null);
+    const [turns, setTurns] = useState<ComposerTurn[]>([]);
+    const abortRef = useRef<AbortController | null>(null);
+    const chatEndRef = useRef<HTMLDivElement>(null);
+    useEffect(() => { chatEndRef.current?.scrollIntoView({ block: 'end' }); }, [turns, assistBusy]);
     // The jump id waiting to be checked against the loaded sessions. A ref, consumed once,
     // so the check runs on the load that follows the jump and not on every later refresh
     // (a refresh would otherwise yank the selection back to the first chat).
@@ -110,6 +135,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 running: json?.running === true,
                 enabled: json?.enabled === true,
                 log_path: json?.log_path || null,
+                composer_enabled: json?.composer_enabled !== false,
             });
             if (typeof json?.reply_window_hours === 'number') setWindowInput(String(json.reply_window_hours));
             setSelectedChatId(prev => prev ?? (sessions[0]?.chat_id ?? null));
@@ -366,6 +392,129 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         }
     };
 
+    /** A draft typed for one chat must never be sent to another: everything the
+     *  compose box and the Composer hold is dropped when the selection moves. */
+    const resetCompose = () => {
+        abortRef.current?.abort();
+        setComposeText('');
+        setSendError(null);
+        setTurns([]);
+        setAssistMeta(null);
+        setAssistNote('');
+        setAssistInstruction('');
+        setBeforeAssist(null);
+    };
+
+    /** The person writes here only where the agent does not: a read-only sender, or the
+     *  whole channel with inbound_to_agent off. Owner, contact and conversation chats
+     *  are the agent's to answer, and an unassigned LID has no address to send to. */
+    const canCompose = (s: WhatsAppSession) =>
+        !s.needs_assign && (data?.inbound_to_agent === false || s.type === 'unknown');
+
+    const handleSend = async (s: WhatsAppSession) => {
+        const text = composeText.trim();
+        if (!text) return;
+        setSending(true);
+        setSendError(null);
+        try {
+            const res = await fetch(api('api/whatsapp/send'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ chat_id: s.chat_id, text }),
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) { setSendError(json?.detail || t('sendFailed')); return; }
+            setComposeText('');
+            setBeforeAssist(null);
+            setHistoryVersion(v => v + 1);
+            fetchDashboard();
+        } catch {
+            setSendError(t('sendFailed'));
+        } finally {
+            setSending(false);
+        }
+    };
+
+    const runComposer = useCallback(async (s: WhatsAppSession, mode: 'draft' | 'rewrite') => {
+        const said = assistInstruction.trim();
+        // The conversation sent to the server is what happened BEFORE this turn;
+        // the current instruction travels separately as the operator turn.
+        const priorTurns = turns.map(x => ({ role: x.role, content: x.content }));
+        setTurns(x => [...x, { role: 'user', content: said || (mode === 'draft' ? '\u2726' : '\u21bb') }]);
+        setAssistInstruction('');
+        setBeforeAssist(composeText);
+        setAssistBusy(true);
+        setAssistNote('');
+        setAssistMeta(null);
+        let produced = '';
+        const ctrl = new AbortController();
+        abortRef.current = ctrl;
+        try {
+            const res = await fetch(api('api/whatsapp/composer'), {
+                method: 'POST', credentials: 'include', signal: ctrl.signal,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: s.chat_id, mode, instruction: said,
+                    draft: mode === 'rewrite' ? composeText : '',
+                    turns: priorTurns, chat_label: s.display_name || s.name || s.phone_number || '',
+                }),
+            });
+            if (!res.ok || !res.body) { setAssistNote(t('composer.failed')); return; }
+            // SSE: each data frame carries the FULL text so far (see the route),
+            // so we replace rather than append and never show a partial <think>.
+            const reader = res.body.getReader();
+            const dec = new TextDecoder();
+            let buf = '';
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buf += dec.decode(value, { stream: true });
+                const frames = buf.split('\n\n');
+                buf = frames.pop() || '';
+                for (const frame of frames) {
+                    if (frame.startsWith('event: notice')) {
+                        // Why nothing is happening yet: a cold local model maps from disk.
+                        setAssistNote(t('composer.localLoading'));
+                        continue;
+                    }
+                    if (frame.startsWith('event: error')) {
+                        const l = frame.split('\n').find(x => x.startsWith('data: '));
+                        let code = 'failed';
+                        try { code = JSON.parse(l ? l.slice(6) : '""') || 'failed'; } catch { /* keep default */ }
+                        setAssistNote(t(code === 'local_unavailable' ? 'composer.localUnavailable'
+                            : code === 'local_loading' ? 'composer.localLoading' : 'composer.failed'));
+                        continue;
+                    }
+                    const line = frame.split('\n').find(l => l.startsWith('data: '));
+                    if (!line) continue;
+                    if (frame.startsWith('event: meta')) {
+                        try { setAssistMeta(JSON.parse(line.slice(6))); } catch { /* ignore */ }
+                        continue;
+                    }
+                    if (frame.startsWith('event: end')) continue;
+                    try {
+                        const text = JSON.parse(line.slice(6));
+                        if (typeof text === 'string') {
+                            setAssistNote('');       // tokens arrive: the wait is over
+                            produced = text;
+                            setComposeText(text);
+                        }
+                    } catch { /* partial frame: the next read completes it */ }
+                }
+            }
+        } catch (e) {
+            if ((e as Error)?.name !== 'AbortError') setAssistNote(t('composer.failed'));
+        } finally {
+            // The assistant's turn IS the draft: replaying it lets the next
+            // instruction ("shorter") refine what it just wrote instead of
+            // starting over from the chat.
+            if (produced) setTurns(x => [...x, { role: 'assistant', content: produced }]);
+            setAssistBusy(false);
+            abortRef.current = null;
+        }
+    }, [composeText, assistInstruction, turns, t]);
+
     const badgeFor = (s: WhatsAppSession) => {
         if (s.needs_assign) return { label: t('badgeAssign'), cls: BADGE_CLS.assign };
         if (s.type === 'owner') return { label: t('badgeOwner'), cls: BADGE_CLS.owner };
@@ -471,6 +620,119 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         );
     };
 
+    const composeBar = (chat: ShellChat) => {
+        const s = sessionsById.get(chat.id);
+        if (!s || !canCompose(s)) return null;
+        return (
+            <div className="px-5 py-3 border-t border-[#2e2e2e] shrink-0 flex flex-col gap-1.5">
+                <div className="flex items-end gap-2">
+                    <textarea value={composeText} onChange={e => setComposeText(e.target.value)}
+                        onKeyDown={e => {
+                            if (e.key === 'Enter' && !e.shiftKey && !sending && composeText.trim()) {
+                                e.preventDefault();
+                                handleSend(s);
+                            }
+                        }}
+                        placeholder={t('composePlaceholder')} rows={2} disabled={sending}
+                        className={cn(INPUT, 'flex-1 resize-none leading-relaxed')} />
+                    <button type="button" onClick={() => handleSend(s)} disabled={sending || !composeText.trim()}
+                        className={cn(BTN_PRIMARY, 'flex items-center gap-1.5 shrink-0')}>
+                        <Send className="w-3.5 h-3.5" />{sending ? t('sending') : t('send')}
+                    </button>
+                </div>
+                {sendError && <p className="text-xs text-[#e08c8c]">{sendError}</p>}
+            </div>
+        );
+    };
+
+    const aside = (chat: ShellChat) => {
+        const s = sessionsById.get(chat.id);
+        if (!s || !canCompose(s) || data?.composer_enabled === false) return null;
+        return (
+            <div className="p-4 flex flex-col gap-3 flex-1 min-h-0">
+                <div className="flex items-center gap-2 text-[13px] font-semibold shrink-0">
+                    <Sparkles className="w-4 h-4 text-[#25a244]" />{t('composer.panelTitle')}
+                    {turns.length > 0 && !assistBusy && (
+                        <button type="button" onClick={() => { setTurns([]); setAssistMeta(null); }}
+                            className="ml-auto text-[11px] font-normal text-[#7a7a7a] hover:text-white">
+                            {t('composer.newChat')}
+                        </button>
+                    )}
+                </div>
+
+                {/* The exchange. Assistant turns are a short result line, not the draft
+                    text: the draft is already in the compose box in full. */}
+                <div className="flex-1 min-h-[6rem] overflow-y-auto space-y-2 pr-0.5">
+                    {turns.length === 0 && !assistBusy && (
+                        <p className="text-[#7a7a7a] text-xs leading-relaxed">{t('composer.panelHint')}</p>
+                    )}
+                    {turns.map((turn, i) => turn.role === 'user' ? (
+                        <div key={i} className="ml-6 px-3 py-1.5 rounded-lg bg-[#2e2e2e] text-sm break-words">{turn.content}</div>
+                    ) : (
+                        <div key={i} className="mr-6 px-3 py-1.5 rounded-lg bg-[#262626] border border-[#2e2e2e] text-xs text-[#9a9a9a] leading-relaxed">
+                            {t('composer.inserted')}
+                        </div>
+                    ))}
+                    {assistBusy && (
+                        <div className="mr-6 px-3 py-1.5 rounded-lg bg-[#262626] border border-[#2e2e2e] text-xs text-[#9a9a9a] flex items-center gap-1.5">
+                            <Loader2 className="w-3 h-3 animate-spin" />{t('composer.working')}
+                        </div>
+                    )}
+                    {assistNote && <div className="text-[#e0b84c] text-xs leading-relaxed">{assistNote}</div>}
+                    {assistMeta && !assistNote && !assistBusy && (
+                        <div className="text-[#7a7a7a] text-[11px] leading-relaxed">
+                            {t('composer.readCount', { used: assistMeta.included, total: assistMeta.total })}
+                            {(assistMeta.truncated || assistMeta.dropped > 0) && <> {t('composer.shortened')}</>}
+                            {/* Whether it had a sample of the person's own writing at all.
+                                Without one it falls back to a neutral register, and the
+                                person should know that rather than wonder why it sounds off. */}
+                            <> {assistMeta.own_included > 0
+                                ? t('composer.matchedYourTone', { n: assistMeta.own_included })
+                                : t('composer.noToneSample')}</>
+                        </div>
+                    )}
+                    <div ref={chatEndRef} />
+                </div>
+
+                <div className="shrink-0 space-y-2">
+                    <textarea value={assistInstruction} onChange={e => setAssistInstruction(e.target.value)}
+                        onKeyDown={e => {
+                            if (e.key === 'Enter' && !e.shiftKey && !assistBusy) {
+                                e.preventDefault();
+                                runComposer(s, 'draft');
+                            }
+                        }}
+                        placeholder={turns.length ? t('composer.followUp') : t('composer.instruction')}
+                        disabled={assistBusy} rows={3}
+                        className={cn(INPUT, 'w-full resize-none')} />
+                    {assistBusy ? (
+                        <button type="button" onClick={() => abortRef.current?.abort()}
+                            className={cn(BTN, 'w-full flex items-center justify-center gap-1.5')}>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />{t('composer.stop')}
+                        </button>
+                    ) : (
+                        <div className="flex gap-2">
+                            <button type="button" onClick={() => runComposer(s, 'draft')}
+                                className={cn(BTN, 'flex-1 flex items-center justify-center gap-1.5')}>
+                                <Sparkles className="w-3.5 h-3.5" />{t('composer.draft')}
+                            </button>
+                            <button type="button" onClick={() => runComposer(s, 'rewrite')} disabled={!composeText.trim()}
+                                className={cn(BTN, 'flex-1')}>
+                                {t('composer.rewrite')}
+                            </button>
+                        </div>
+                    )}
+                    {beforeAssist !== null && beforeAssist !== composeText && !assistBusy && (
+                        <button type="button" onClick={() => { setComposeText(beforeAssist); setBeforeAssist(null); }}
+                            className="w-full px-3 py-1.5 rounded-lg text-sm text-[#9a9a9a] hover:text-white border border-[#2e2e2e]">
+                            {t('composer.undo')}
+                        </button>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
     const settingsContent = (
         <>
             <SettingsCard title={t('cardAgentTitle')} desc={t('cardAgentDesc')}>
@@ -550,10 +812,12 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             historyUrl={(cid) => `api/whatsapp/chat-messages?chat_id=${encodeURIComponent(cid)}`}
             historyVersion={historyVersion}
             selectedId={selectedChatId}
-            onSelect={(id) => { setSelectedChatId(id); setNote(null); }}
+            onSelect={(id) => { if (id !== selectedChatId) resetCompose(); setSelectedChatId(id); setNote(null); }}
             banner={banner}
             conversationExtra={conversationExtra}
             conversationTop={conversationTop}
+            composeBar={composeBar}
+            aside={aside}
             conversationNote={note}
             settingsTitle={t('settingsTitle')}
             settingsContent={settingsContent}

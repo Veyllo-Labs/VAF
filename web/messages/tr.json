@@ -979,7 +979,31 @@
       "reloadNamesDone": "İsimler istendi. WhatsApp gönderdikçe listede görünecekler.",
       "reloadNamesFailed": "İsimler istenemedi.",
       "jumpChatNotFound": "Bu kişi için burada kayıtlı bir sohbet yok.",
-      "olderNeedsMessage": "Eski mesajlar, bu sohbette bir mesaj kaydedildikten sonra yüklenebilir."
+      "olderNeedsMessage": "Eski mesajlar, bu sohbette bir mesaj kaydedildikten sonra yüklenebilir.",
+      "composePlaceholder": "Mesaj yaz ...",
+      "send": "Gönder",
+      "sending": "Gönderiliyor ...",
+      "sendFailed": "Mesaj gönderilemedi.",
+      "composer": {
+        "draft": "Taslak yaz",
+        "rewrite": "Metnimi yeniden yaz",
+        "stop": "Durdur",
+        "undo": "Geri al",
+        "instruction": "Ne yazsın? (isteğe bağlı)",
+        "failed": "Taslak oluşturulamadı.",
+        "localUnavailable": "Yerel model yüklenemedi. Birazdan yeniden dene.",
+        "localLoading": "Yerel model yükleniyor ...",
+        "panelTitle": "Composer",
+        "panelHint": "Metin alanına bir öneri yazar. Hiçbir şey gönderilmez - onu sen yaparsın.",
+        "readCount": "Bu sohbetteki {total} mesajdan {used} tanesi okundu.",
+        "shortened": "Eski bölümler kısaltıldı.",
+        "newChat": "Yeni",
+        "followUp": "Başka bir şey değişsin mi?",
+        "inserted": "Taslak metin alanına eklendi.",
+        "working": "yazıyor ...",
+        "matchedYourTone": "Ton, numarandan gönderilen {n} mesaja göre ayarlandı.",
+        "noToneSample": "Bu sohbette numarandan gönderilmiş mesaj yok - nötr ton."
+      }
     },
     "telegramDashboard": {
       "title": "Telegram",

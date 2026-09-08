@@ -638,3 +638,48 @@ def test_fetch_older_messages_on_an_empty_chat_says_so_instead_of_asking(isolate
     out = wa.fetch_older_messages("alice", "491700000042@s.whatsapp.net", "+491700000042", SCOPE, wait_timeout=1.0)
     assert out["ok"] is True and out["no_cursor"] is True and out["stored_before"] == 0
     assert written.getvalue() == ""                                                       # nothing was asked of the Node
+
+
+def test_a_message_the_person_sent_from_the_dashboard_opens_no_reply_window(isolated, monkeypatch):
+    """An outbound row the PERSON sent (the compose box under the chat, stored under
+    OWNER_SENDER) leaves the number without the agent writing anything, so the
+    contact's answer must stay a read-only message: no window, no Front Office."""
+    monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
+    now = time.time()
+    store.append_message("alice", "+491700000050", "hi, it's me", direction="out",
+                         sender_jid=store.OWNER_SENDER, user_scope_id=SCOPE, ts=now - 60)
+    assert wa.conversation_open_until("alice", "+491700000050", SCOPE) is None
+    assert wa.conversation_open_until("alice", "+491700000050", SCOPE, direction="out") is None
+    store.append_message("alice", "+491700000050", "hello back", direction="in", user_scope_id=SCOPE, ts=now - 30)
+    assert wa._is_reply_allowed("alice", "491700000050@s.whatsapp.net", SCOPE) is False
+    # the agent's own message still opens it, and the row is visible to the pane either way
+    store.append_message("alice", "+491700000050", "agent here", direction="out", user_scope_id=SCOPE, ts=now - 10)
+    assert wa.conversation_open_until("alice", "+491700000050", SCOPE) is not None
+    assert len(store.get_chat_messages("alice", "+491700000050", user_scope_id=SCOPE)) == 3
+
+
+def test_the_owner_origin_travels_through_both_send_paths(isolated, monkeypatch, tmp_path):
+    """The sender loop stores the outbound row, so the origin has to reach it: as the
+    eighth queue element in-process, as the `origin` field over the file IPC."""
+    import queue as _queue
+    q = _queue.Queue()
+    monkeypatch.setattr(wa, "_outgoing_queue", q)
+    monkeypatch.setattr(wa, "_processes", {"alice": SimpleNamespace(poll=lambda: None)})
+    monkeypatch.setattr(wa, "_pending_sends", {})
+    out = wa.send_whatsapp_with_confirmation("alice", "491700000051@s.whatsapp.net", "hi",
+                                             timeout=0.05, allow_contact_send=True, origin="owner")
+    item = q.get_nowait()
+    assert len(item) == 8 and item[7] == "owner" and item[2] == "hi"
+    assert "No delivery confirmation" in out                    # nobody answered the fake process
+    # the external path: the request file carries origin, and the dequeue hands it back
+    monkeypatch.setattr(wa, "_outgoing_queue", None)
+    monkeypatch.setattr(wa, "_processes", {})
+    wa._write_json_atomic(wa._ipc_state_path(), {"running": True, "usernames": ["alice"], "updated_at": time.time()})
+    monkeypatch.setattr(wa, "_wait_for_external_send_result", lambda *a, **k: "Message sent via WhatsApp.")
+    assert wa.send_whatsapp_with_confirmation("alice", "491700000051@s.whatsapp.net", "hi",
+                                              allow_contact_send=True, origin="owner").startswith("Message sent")
+    dequeued = wa._dequeue_external_send_request()
+    assert dequeued is not None and dequeued[7] == "owner" and dequeued[0] == "alice"
+    # an agent send carries no origin on either path
+    wa.send_whatsapp_with_confirmation("alice", "491700000051@s.whatsapp.net", "hi", allow_contact_send=True)
+    assert wa._dequeue_external_send_request()[7] is None

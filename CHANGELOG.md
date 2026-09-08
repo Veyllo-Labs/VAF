@@ -13,6 +13,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **Answer WhatsApp chats yourself, with a Composer.** In the WhatsApp window, a chat the
+  agent does not answer (a sender nobody allowed, or the whole channel with inbound to
+  the agent switched off) now has a compose box under the conversation: what you type is
+  sent from your agent's number, and your own message opens no reply window for the
+  agent. To the right, the Composer drafts a reply into that box the way the mail
+  window's does: say what it should say or what to pay attention to, it reads the stored
+  chat, matches the tone this number writes in, uses what VAF remembers about you,
+  refines on follow-ups, and never sends anything itself. The Composer is now one shared
+  lane for the mail window and the messenger windows (`vaf/core/composer.py`,
+  `vaf/core/composer_lane.py`); the `mail_composer_*` keys govern both.
 - **The VAF calendar.** Appointments live in a calendar of VAF's own (one store per user,
   `calendar.db`), the calendar window in the sidebar footer shows them beside the
   automations (a month grid with dots for both, a day view with an all-day row, an events

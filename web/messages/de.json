@@ -979,7 +979,31 @@
       "reloadNamesDone": "Namen angefordert. Sie erscheinen in der Liste, sobald WhatsApp sie liefert.",
       "reloadNamesFailed": "Die Namen konnten nicht angefordert werden.",
       "jumpChatNotFound": "Für diesen Kontakt ist hier kein Chat gespeichert.",
-      "olderNeedsMessage": "Ältere Nachrichten lassen sich erst laden, wenn in diesem Chat eine Nachricht gespeichert ist."
+      "olderNeedsMessage": "Ältere Nachrichten lassen sich erst laden, wenn in diesem Chat eine Nachricht gespeichert ist.",
+      "composePlaceholder": "Nachricht schreiben ...",
+      "send": "Senden",
+      "sending": "Sendet ...",
+      "sendFailed": "Die Nachricht konnte nicht gesendet werden.",
+      "composer": {
+        "draft": "Entwurf schreiben",
+        "rewrite": "Text überarbeiten",
+        "stop": "Stopp",
+        "undo": "Rückgängig",
+        "instruction": "Was soll drinstehen? (optional)",
+        "failed": "Der Entwurf konnte nicht erstellt werden.",
+        "localUnavailable": "Das lokale Modell konnte nicht geladen werden. Versuch es gleich noch einmal.",
+        "localLoading": "Das lokale Modell wird geladen ...",
+        "panelTitle": "Composer",
+        "panelHint": "Schreibt einen Vorschlag in das Textfeld. Gesendet wird nichts - das machst du selbst.",
+        "readCount": "Gelesen: {used} von {total} Nachrichten des Chats.",
+        "shortened": "Ältere Teile wurden gekürzt.",
+        "newChat": "Neu",
+        "followUp": "Noch etwas ändern?",
+        "inserted": "Entwurf ins Textfeld eingefügt.",
+        "working": "schreibt ...",
+        "matchedYourTone": "Ton an {n, plural, one {eine Nachricht} other {# Nachrichten}} von deiner Nummer angelehnt.",
+        "noToneSample": "Keine Nachricht von deiner Nummer im Chat - neutraler Ton."
+      }
     },
     "telegramDashboard": {
       "title": "Telegram",

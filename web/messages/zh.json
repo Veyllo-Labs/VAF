@@ -979,7 +979,31 @@
       "reloadNamesDone": "已请求姓名。WhatsApp 送达后会出现在列表中。",
       "reloadNamesFailed": "无法请求姓名。",
       "jumpChatNotFound": "这里没有为这个联系人保存的聊天。",
-      "olderNeedsMessage": "此对话中保存了一条消息后，才能加载更早的消息。"
+      "olderNeedsMessage": "此对话中保存了一条消息后，才能加载更早的消息。",
+      "composePlaceholder": "输入消息…",
+      "send": "发送",
+      "sending": "正在发送…",
+      "sendFailed": "消息发送失败。",
+      "composer": {
+        "draft": "写草稿",
+        "rewrite": "帮我改写",
+        "stop": "停止",
+        "undo": "撤销",
+        "instruction": "想写点什么？（可选）",
+        "failed": "没能生成草稿。",
+        "localUnavailable": "本地模型没能加载。请稍后再试。",
+        "localLoading": "正在加载本地模型…",
+        "panelTitle": "Composer",
+        "panelHint": "只会把建议写进输入框，不会发送任何邮件，发送由你自己来做。",
+        "readCount": "这个聊天共 {total} 条消息，已读取 {used} 条。",
+        "shortened": "较早的部分做了缩略。",
+        "newChat": "新建",
+        "followUp": "还要改点什么吗？",
+        "inserted": "草稿已插入输入框。",
+        "working": "正在写…",
+        "matchedYourTone": "语气参考了从你号码发出的 {n} 条消息。",
+        "noToneSample": "这个聊天里没有从你号码发出的消息，使用中性语气。"
+      }
     },
     "telegramDashboard": {
       "title": "Telegram",

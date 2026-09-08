@@ -103,6 +103,11 @@ async def get_whatsapp_dashboard_debug(request: Request):
     }
 
 
+def _composer_enabled() -> bool:
+    from vaf.core import composer_lane
+    return bool(composer_lane.settings()["enabled"])
+
+
 def _is_whatsapp_admin(request: Request) -> bool:
     """True if current user is admin (can see all WhatsApp whitelist/sessions)."""
     from vaf.api.config_routes import get_current_user_or_local_admin
@@ -655,6 +660,8 @@ async def get_whatsapp_dashboard(request: Request):
         "owner_number": _owner_number_for(whitelist, username, user_info.get("user_scope_id")),
         "reply_window_hours": _reply_window_hours(),
         "inbound_to_agent": bool(whatsapp_config.get("inbound_to_agent", True)) if isinstance(whatsapp_config, dict) else True,
+        # The Composer panel is offered only when the lane is on (the same switch as the mail window).
+        "composer_enabled": _composer_enabled(),
         "running": running,
         "connected": connected,
         "enabled": enabled_effective,
@@ -1266,3 +1273,126 @@ async def get_whatsapp_config(request: Request):
         "enabled": _whatsapp_enabled_for_request(request, whatsapp_config, user_scope_id),
         "whitelist": visible_whitelist,
     }
+
+
+# ── Composer and the person's own send, from the dashboard ─────────────────────
+#
+# Both exist for the chats the AGENT does not answer in (read-only senders, or the
+# whole channel with inbound_to_agent off): the person reads the chat in VAF and
+# answers it themselves, from the agent's number, optionally with a draft the
+# Composer wrote. The Composer is the shared one (vaf/core/composer.py, its IO in
+# vaf/core/composer_lane.py): ONE model call, NO tools, text into the compose box;
+# the person presses Send. The send lane is the bridge's own, so the stored row and
+# the activity come from the sender loop as for every other outbound message.
+
+class ComposerRequest(BaseModel):
+    chat_id: str
+    mode: str = "draft"
+    instruction: str = ""
+    draft: str = ""
+    turns: Optional[list] = None
+    #: The name the dashboard shows for the chat: the memory fallback query when nothing
+    #: was typed, and the label of rows the store has no name for. Untrusted text; it only
+    #: ever lands inside the fence or in a memory query, never in an instruction.
+    chat_label: str = ""
+
+
+class SendRequest(BaseModel):
+    chat_id: str
+    text: str
+
+
+@router.post("/composer")
+async def whatsapp_composer(request: Request, body: ComposerRequest):
+    """Draft a reply to one WhatsApp chat, or rewrite the person's own text; SSE frames
+    exactly as `POST /api/mail/composer` sends them. It NEVER sends: the text goes into
+    the compose box under the chat, and the person presses Send."""
+    import asyncio
+
+    from fastapi.responses import StreamingResponse
+
+    from vaf.core import composer, composer_lane
+    from vaf.core.channel_message_store import get_chat_messages
+
+    cfg = composer_lane.settings()
+    if not cfg["enabled"]:
+        raise HTTPException(status_code=403, detail="the Composer is disabled")
+    mode = (body.mode or "draft").strip().lower()
+    if mode not in ("draft", "rewrite"):
+        raise HTTPException(status_code=422, detail="mode must be draft or rewrite")
+    if mode == "rewrite" and not (body.draft or "").strip():
+        raise HTTPException(status_code=422, detail="nothing to rewrite")
+    cid = (body.chat_id or "").strip()
+    if not cid:
+        raise HTTPException(status_code=400, detail="chat_id required")
+
+    user_info = get_current_vaf_user(request)
+    username = user_info["username"]
+    user_scope_id = user_info.get("user_scope_id")
+    label = (body.chat_label or "").strip()[:200]
+
+    def _assemble():
+        # rewrite works on the person's own text and deliberately reads no chat at all:
+        # smallest context, smallest injection surface (the mail route does the same).
+        rows = [] if mode == "rewrite" else get_chat_messages(
+            username, cid, limit=200, user_scope_id=user_scope_id)
+        return composer.build_chat_context(rows, budget_chars=cfg["budget"], chat_label=label)
+
+    ctx = await asyncio.to_thread(_assemble)
+    instruction = (body.instruction or "")
+    knowledge = ""
+    if cfg["memory"]:
+        knowledge = await asyncio.to_thread(
+            composer_lane.knowledge, user_scope_id, instruction, label, caller="whatsapp_composer")
+    turns = [t for t in (body.turns or []) if isinstance(t, dict)]
+    messages = composer.build_prompt(
+        ctx, mode=mode, instruction=instruction, draft=(body.draft or ""),
+        knowledge=knowledge, turns=turns, profile=composer.CHAT)
+    temperature = 0.2 if mode == "rewrite" else 0.3
+    meta = {"included": ctx.included, "total": ctx.total, "truncated": ctx.truncated,
+            "hidden_suspicious": ctx.hidden_suspicious, "dropped": ctx.dropped,
+            "own_included": ctx.own_included}
+
+    def _stream(msgs, max_tokens, temp):
+        return composer_lane.stream_completion(msgs, max_tokens, temp, lane="whatsapp")
+
+    events = composer_lane.sse_events(messages, meta=meta, max_tokens=cfg["max_tokens"],
+                                      temperature=temperature, stream=_stream,
+                                      log_name="whatsapp composer")
+    return StreamingResponse(events, media_type="text/event-stream", headers={
+        "Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+@router.post("/send")
+async def send_whatsapp_message(request: Request, body: SendRequest):
+    """Send the person's own message to one chat from their agent's number.
+
+    The person may write to anyone from their own number, as `send_whatsapp(to_phone=...)`
+    may; the ingress rules decide who the AGENT answers, not who the owner may write to.
+    The message is stored under OWNER_SENDER (`origin="owner"`), so the reply window does
+    not open: the contact's answer stays a read-only message for the person, and no agent
+    starts talking to someone nobody allowed."""
+    import asyncio
+
+    from vaf.api.whatsapp_bridge import _e164_to_jid, is_bridge_running, send_whatsapp_with_confirmation
+
+    cid = (body.chat_id or "").strip()
+    text = (body.text or "").strip()
+    if not cid:
+        raise HTTPException(status_code=400, detail="chat_id required")
+    if not text:
+        raise HTTPException(status_code=400, detail="text required")
+    if len(text) > 20000:
+        raise HTTPException(status_code=413, detail="message too long")
+    if not is_bridge_running():
+        raise HTTPException(status_code=503, detail="WhatsApp bridge not running.")
+    chat_jid = cid if "@" in cid else _e164_to_jid(cid)
+    if not chat_jid:
+        raise HTTPException(status_code=400, detail="chat_id is not a phone number or chat address")
+    user_info = get_current_vaf_user(request)
+    result = await asyncio.to_thread(
+        send_whatsapp_with_confirmation, user_info["username"], chat_jid, text,
+        allow_contact_send=True, origin="owner")
+    if not str(result).startswith("Message sent"):
+        raise HTTPException(status_code=502, detail=str(result))
+    return {"ok": True, "chat_id": cid}

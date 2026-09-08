@@ -65,6 +65,10 @@ export interface ChannelDashboardShellProps {
     conversationNote?: string | null;
     /** Rendered as the first element of the message list, so it is what a reader sees when scrolling up (load older messages). */
     conversationTop?: (chat: ShellChat) => React.ReactNode;
+    /** Rendered between the message list and the footer: the channel's own compose box for this chat (null hides it). */
+    composeBar?: (chat: ShellChat) => React.ReactNode;
+    /** A column to the right of the conversation (the Composer); null renders no column at all. Stacks under the conversation on mobile. */
+    aside?: (chat: ShellChat) => React.ReactNode;
     settingsTitle: string;
     settingsContent: React.ReactNode;
     settingsOpen: boolean;
@@ -150,7 +154,7 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
     const {
         isOpen, onClose, icon, iconClass, title, subtitle, dot, dotTitle, chats, loading, loadFailed, onRefresh,
         historyUrl, historyVersion, selectedId, onSelect, banner, conversationExtra, conversationNote, conversationTop,
-        settingsTitle, settingsContent, settingsOpen, onSettingsOpenChange,
+        composeBar, aside, settingsTitle, settingsContent, settingsOpen, onSettingsOpenChange,
     } = props;
     const t = useTranslations('settings.channelDashboard');
     const [listFilter, setListFilter] = useState('');
@@ -343,13 +347,15 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                         {!selected ? (
                             <div className="flex-1 grid place-items-center text-sm text-[#9a9a9a]">{t('selectChat')}</div>
                         ) : (
-                            <>
+                            <div className="flex-1 flex max-md:flex-col min-w-0 min-h-0">
+                            <div className="flex-1 flex flex-col min-w-0 min-h-0">
                                 <div className="flex items-center gap-3 px-5 py-2.5 border-b border-[#2e2e2e] shrink-0 flex-wrap">
                                     <Avatar label={selected.label} url={selected.avatarUrl} size="md" />
                                     <div className="min-w-0 flex-1">
                                         <div className="font-semibold flex items-center gap-2 min-w-0">
                                             <span className="truncate">{selected.label}</span>
-                                            <span className={cn('text-[11px] px-1.5 rounded-md font-normal', selected.badge.cls)}>{selected.badge.label}</span>
+                                            {/* nowrap: next to the Composer column the header is narrower, and a badge broken over two lines read as two badges. */}
+                                            <span className={cn('text-[11px] px-1.5 rounded-md font-normal whitespace-nowrap', selected.badge.cls)}>{selected.badge.label}</span>
                                         </div>
                                         <div className="text-xs text-[#9a9a9a] truncate">{selected.subline}</div>
                                     </div>
@@ -417,6 +423,7 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                         );
                                     })}
                                 </div>
+                                {composeBar?.(selected)}
                                 <div className="px-5 py-2 border-t border-[#2e2e2e] text-xs text-[#9a9a9a] flex justify-between gap-3 flex-wrap shrink-0">
                                     <span className="min-w-0 truncate">{selected.footer}</span>
                                     <span className="shrink-0">
@@ -428,7 +435,16 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                         })()}
                                     </span>
                                 </div>
-                            </>
+                            </div>
+                            {(() => {
+                                const column = aside?.(selected);
+                                return column ? (
+                                    <aside className="w-80 shrink-0 border-l border-[#2e2e2e] bg-[#181818] flex flex-col min-h-0 max-md:w-full max-md:border-l-0 max-md:border-t max-md:max-h-[45vh]">
+                                        {column}
+                                    </aside>
+                                ) : null;
+                            })()}
+                            </div>
                         )}
                     </section>
                 </main>

@@ -239,6 +239,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The Composer answers in the correspondent's language.** A Turkish chat got a German
+  draft because the instruction was typed in German and the rule let the instruction's
+  language win. The reply is now written in the language of the message being answered,
+  in the mail window and the WhatsApp window alike; only an explicit ask ("auf Deutsch")
+  switches.
 - **The Composer no longer inserts a thinking model's scratchpad as the draft.** On the
   Veyllo gateway a reply whose output budget ran out inside the model's reasoning came
   back as that reasoning ("The user wants me to ...") and landed in the compose box. The

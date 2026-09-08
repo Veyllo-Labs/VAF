@@ -145,9 +145,10 @@ EMAIL = ComposerProfile(
         "addresses the sender, the actual point in as many sentences as it takes, and a "
         "closing. A single bare sentence is not a usable email. Do not pad it either - "
         "say what needs saying and stop.\n"
-        "Write in the same language as the message being replied to. If your user's "
-        "instruction is in a different language, follow the instruction's language: they "
-        "know their correspondent."),
+        "Write in the same language as the message being replied to, even when your "
+        "user's instruction is in another language: the instruction says WHAT to say, "
+        "not which language to say it in. Switch languages only when your user "
+        "explicitly asks for one."),
     own_label="YOUR USER (wrote this)",
     voice=(
         "Messages marked `from: YOUR USER (wrote this)` were written by the person you "
@@ -187,9 +188,10 @@ CHAT = ComposerProfile(
         "to three sentences, and no greeting or sign-off unless your user writes that "
         "way in this chat. Answer what the last message asked or said; when your user's "
         "instruction says what to say, say that.\n"
-        "Write in the same language as the conversation. If your user's instruction is "
-        "in a different language, follow the instruction's language: they know their "
-        "correspondent."),
+        "Write in the language the other person writes in - the language of the message "
+        "you are answering - even when your user's instruction is in another language: "
+        "the instruction says WHAT to say, not which language to say it in. Switch "
+        "languages only when your user explicitly asks for one."),
     own_label="YOUR USER (sent from their number)",
     voice=(
         "Messages marked `from: YOUR USER (sent from their number)` left the number you "

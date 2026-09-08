@@ -334,6 +334,13 @@ when retrieval found nothing, carrying an explicit "nothing matched" - also the 
 agent's behaviour, and informative: "you looked and there is nothing" is different
 from "you never looked".
 
+**Which language.** The correspondent's, always: the reply is written in the
+language of the message being answered, even when the instruction is typed in
+another one. The instruction says WHAT to say, not which language to say it in;
+only an explicit ask ("auf Deutsch") switches. The earlier rule let the
+instruction's language win, and a Turkish chat got a German reply because the
+instruction was German.
+
 **Whose words are whose.** Each message in the assembled thread is labelled with
 who wrote it, and the user's own messages carry `from: YOUR USER (wrote this)`. The
 `## VOICE` section then tells the model to read those for HOW the user writes -

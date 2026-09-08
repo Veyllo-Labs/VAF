@@ -35,8 +35,21 @@ def test_the_chat_profile_asks_for_a_chat_message_not_a_letter():
     rules = C.CHAT.system_rules()
     assert "chat message, not a letter" in rules
     assert "no greeting or sign-off unless" in rules
-    assert "same language as the conversation" in rules
+    assert "language of the message you are answering" in rules
     assert C.CHAT.own_label in rules, "the VOICE rule must name the label the assembler uses"
+
+
+def test_the_instruction_language_does_not_decide_the_reply_language():
+    """Live: a Turkish message got a German reply because the instruction was German
+    and the rule said to follow the instruction's language. The instruction says WHAT
+    to say; the correspondent's language decides which language, unless the user
+    asks for one explicitly. Both profiles, one rule."""
+    for profile in (C.EMAIL, C.CHAT):
+        rules = profile.system_rules()
+        assert "even when your user's instruction is in another language" in rules
+        assert "the instruction says WHAT to say, not which language" in rules
+        assert "explicitly asks" in rules
+        assert "follow the instruction's language" not in rules
 
 
 def test_the_mail_profile_is_the_mail_window_rules_unchanged():

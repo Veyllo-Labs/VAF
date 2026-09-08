@@ -1002,7 +1002,8 @@
         "inserted": "草稿已插入输入框。",
         "working": "正在写…",
         "matchedYourTone": "语气参考了从你号码发出的 {n} 条消息。",
-        "noToneSample": "这个聊天里没有从你号码发出的消息，使用中性语气。"
+        "noToneSample": "这个聊天里没有从你号码发出的消息，使用中性语气。",
+        "reasoningOnly": "模型把全部输出额度都用在了思考上，没有写出回复。请用更短的指示再试一次，或提高 Composer 的输出上限。"
       }
     },
     "telegramDashboard": {
@@ -2381,7 +2382,8 @@
       "inserted": "草稿已插入输入框。",
       "working": "正在写…",
       "matchedYourTone": "语气参考了你在这条会话里的 {n} 封邮件。",
-      "noToneSample": "这条会话里没有你自己写的邮件，采用中性语气。"
+      "noToneSample": "这条会话里没有你自己写的邮件，采用中性语气。",
+      "reasoningOnly": "模型把全部输出额度都用在了思考上，没有写出回复。请用更短的指示再试一次，或提高 Composer 的输出上限。"
     }
   }
 }

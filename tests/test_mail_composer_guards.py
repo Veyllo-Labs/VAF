@@ -211,6 +211,33 @@ def test_reasoning_scratchpad_never_reaches_the_textarea(monkeypatch):
     assert '"Thanks, but no."' in out
 
 
+def test_a_thinking_models_copied_scratchpad_never_reaches_the_box(monkeypatch):
+    """Measured on the Veyllo gateway: when the output budget runs out inside the
+    reasoning, the gateway closes the think block and sends the SAME reasoning once
+    more as content. The tags are stripped as designed; the copy must be caught by
+    shape and reported, not inserted as the draft."""
+    svc = _Svc([_row(1)])
+    thought = "The user wants me to write a reply in German. Let me parse the instruction carefully."
+    out, _ = _run({"mode": "draft", "thread_id": 7, "anchor_pk": 1}, svc, monkeypatch,
+                  chunks=("<think>", thought, "</think>\n\n", thought[:60]))
+    assert "The user wants" not in out
+    assert 'event: error\ndata: "reasoning_only"' in out
+    # a genuine answer after the reasoning still streams, and the scratchpad stays out
+    out, _ = _run({"mode": "draft", "thread_id": 7, "anchor_pk": 1}, svc, monkeypatch,
+                  chunks=("<think>", thought, "</think>\n\n", "Ja, morgen passt."))
+    assert '"Ja, morgen passt."' in out and "The user wants" not in out and "event: error" not in out
+
+
+def test_reasoning_leak_is_decided_by_shape():
+    thought = "x" * 100
+    assert lane.reasoning_leaked(f"<think>{thought}</think>\n\n{thought}", thought)
+    assert lane.reasoning_leaked(f"<think>{thought}</think>\n\n{thought[:50]}", thought[:50])
+    assert not lane.reasoning_leaked(f"<think>{thought}</think>\n\nJa, morgen passt mir gut, bis dann.", "Ja, morgen passt mir gut, bis dann.")
+    assert not lane.reasoning_leaked("no think block at all", "no think block at all")
+    # a short answer that happens to share its first words with the reasoning is not a leak
+    assert not lane.reasoning_leaked("<think>Ja, morgen passt. The user wants...</think>\n\nJa, morgen passt.", "Ja, morgen passt.")
+
+
 def test_a_provider_failure_is_reported_not_silently_empty(monkeypatch):
     svc = _Svc([_row(1)])
     monkeypatch.setattr(mr, "_service", lambda u: svc)

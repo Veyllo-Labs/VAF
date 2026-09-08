@@ -392,6 +392,20 @@ first so the panel can say why nothing is happening - a silent minute of
 hang. Telling the user to go start the model themselves is not an answer the chat
 lane gives either.
 
+**Thinking providers.** A reasoning model (Veyllo, DeepSeek) thinks before it
+writes, inside the same output budget, and no request parameter switches that off
+on the Veyllo gateway (`enable_thinking`, `thinking.type=disabled` and
+`reasoning_effort=none` were probed and ignored). Two consequences are handled.
+The output cap (`mail_composer_max_output_tokens`, 2500) is sized so the reasoning
+leaves room for the reply: at the earlier 800 a typo-ridden instruction was
+deciphered for 790 tokens and nothing was left. And when the budget still runs out
+inside the reasoning, the gateway closes the think block and sends that same
+reasoning once more as the answer; the tags are stripped as designed, so the copy
+would land in the compose box as a draft. `composer_lane.reasoning_leaked` catches
+it by shape (the answer equals, or is a prefix of, what stood inside the think
+block) and the panel says the model spent its budget thinking (`reasoning_only`)
+instead of showing "The user wants me to ...".
+
 **Budget.** Characters, not tokens: there is no real tokenizer on this path (the
 repo has two different chars-per-token heuristics and a tokenizer only for the
 local GGUF lane). 12000 chars total, 4000 per message, 8 messages, clamped to

@@ -1002,7 +1002,8 @@
         "inserted": "Taslak metin alanına eklendi.",
         "working": "yazıyor ...",
         "matchedYourTone": "Ton, numarandan gönderilen {n} mesaja göre ayarlandı.",
-        "noToneSample": "Bu sohbette numarandan gönderilmiş mesaj yok - nötr ton."
+        "noToneSample": "Bu sohbette numarandan gönderilmiş mesaj yok - nötr ton.",
+        "reasoningOnly": "Model tüm çıktı bütçesini düşünmeye harcadı ve yanıt yazmadı. Daha kısa bir talimatla tekrar dene ya da Composer'ın çıktı sınırını yükselt."
       }
     },
     "telegramDashboard": {
@@ -2381,7 +2382,8 @@
       "inserted": "Taslak metin alanına eklendi.",
       "working": "yazıyor ...",
       "matchedYourTone": "Üslup, bu konuşmadaki kendi {n} mesajına göre ayarlandı.",
-      "noToneSample": "Bu konuşmada kendine ait mesaj yok - nötr üslup."
+      "noToneSample": "Bu konuşmada kendine ait mesaj yok - nötr üslup.",
+      "reasoningOnly": "Model tüm çıktı bütçesini düşünmeye harcadı ve yanıt yazmadı. Daha kısa bir talimatla tekrar dene ya da Composer'ın çıktı sınırını yükselt."
     }
   }
 }

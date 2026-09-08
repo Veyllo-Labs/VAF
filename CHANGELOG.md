@@ -239,6 +239,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The Composer no longer inserts a thinking model's scratchpad as the draft.** On the
+  Veyllo gateway a reply whose output budget ran out inside the model's reasoning came
+  back as that reasoning ("The user wants me to ...") and landed in the compose box. The
+  lane now recognises the copied reasoning by shape and says the model spent its budget
+  thinking, and the default output cap is 2500 tokens instead of 800 so the reasoning
+  leaves room for the reply.
 - **A rejected sender's message is still yours to read.** The messenger bridges dropped
   the message of a sender the ingress policy did not admit before storing it, so a
   contact without "Can reach your assistant" wrote to your WhatsApp number and the

@@ -1002,7 +1002,8 @@
         "inserted": "Draft inserted into the text field.",
         "working": "writing ...",
         "matchedYourTone": "Tone matched to {n, plural, one {one message} other {# messages}} sent from your number.",
-        "noToneSample": "No message from your number in this chat - neutral tone."
+        "noToneSample": "No message from your number in this chat - neutral tone.",
+        "reasoningOnly": "The model spent its whole output budget thinking and wrote no reply. Try again with a shorter instruction, or raise the Composer's output limit."
       }
     },
     "telegramDashboard": {
@@ -2381,7 +2382,8 @@
       "inserted": "Draft inserted into the text field.",
       "working": "writing ...",
       "matchedYourTone": "Tone matched to {n} of your own messages in this thread.",
-      "noToneSample": "No message of your own in this thread - neutral tone."
+      "noToneSample": "No message of your own in this thread - neutral tone.",
+      "reasoningOnly": "The model spent its whole output budget thinking and wrote no reply. Try again with a shorter instruction, or raise the Composer's output limit."
     }
   }
 }

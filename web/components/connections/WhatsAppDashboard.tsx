@@ -500,7 +500,8 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                         let code = 'failed';
                         try { code = JSON.parse(l ? l.slice(6) : '""') || 'failed'; } catch { /* keep default */ }
                         setAssistNote(t(code === 'local_unavailable' ? 'composer.localUnavailable'
-                            : code === 'local_loading' ? 'composer.localLoading' : 'composer.failed'));
+                            : code === 'local_loading' ? 'composer.localLoading'
+                            : code === 'reasoning_only' ? 'composer.reasoningOnly' : 'composer.failed'));
                         continue;
                     }
                     const line = frame.split('\n').find(l => l.startsWith('data: '));

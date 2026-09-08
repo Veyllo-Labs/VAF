@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
 
@@ -56,7 +57,7 @@ def settings() -> Dict[str, Any]:
         "budget": composer.clamp_budget(Config.get("mail_composer_max_context_chars", 12000), 12000),
         "per_msg": max(200, int(Config.get("mail_composer_max_message_chars", 4000) or 4000)),
         "max_messages": max(1, int(Config.get("mail_composer_max_messages", 8) or 8)),
-        "max_tokens": max(64, int(Config.get("mail_composer_max_output_tokens", 800) or 800)),
+        "max_tokens": max(64, int(Config.get("mail_composer_max_output_tokens", 2500) or 2500)),
         "memory": bool(Config.get("mail_composer_memory_enabled", True)),
         "mailbox": bool(Config.get("mail_composer_mailbox_search_enabled", False)),
     }
@@ -241,6 +242,7 @@ async def sse_events(messages: List[Dict[str, str]], *, meta: Dict[str, Any],
     from vaf.core import composer
 
     yield f"event: meta\ndata: {_json.dumps(meta)}\n\n"
+    produced = False
     if await asyncio.to_thread(local_model_is_cold):
         yield f"event: notice\ndata: {_json.dumps('local_loading')}\n\n"
     queue: asyncio.Queue = asyncio.Queue()
@@ -267,14 +269,43 @@ async def sse_events(messages: List[Dict[str, str]], *, meta: Dict[str, Any],
         while True:
             kind, payload = await queue.get()
             if kind == "done":
+                # The stream ended without one usable frame. A thinking model that
+                # spent the whole output budget on reasoning is the usual cause, and
+                # the person must be told THAT rather than shown an empty box that
+                # looks like a hang.
+                if not produced and buffered.strip():
+                    yield f"event: error\ndata: {_json.dumps('reasoning_only')}\n\n"
                 break
             if kind == "error":
                 yield f"event: error\ndata: {_json.dumps(payload)}\n\n"
                 break
             buffered += payload
             cleaned = composer.clean_output(buffered)
-            if cleaned:
+            if cleaned and not reasoning_leaked(buffered, cleaned):
+                produced = True
                 yield f"data: {_json.dumps(cleaned)}\n\n"
     finally:
         task.cancel()
     yield "event: end\ndata: {}\n\n"
+
+
+_THINK_BLOCK = re.compile(r"<think>(.*?)</think>", re.DOTALL | re.IGNORECASE)
+
+
+def reasoning_leaked(raw: str, cleaned: str) -> bool:
+    """True when the text left after cleaning is the model's own scratchpad.
+
+    Measured on the Veyllo gateway (a DeepSeek-dialect thinking model): when the
+    output budget runs out INSIDE the reasoning, the gateway closes the reasoning
+    and then sends that same reasoning once more as the answer content. The tags
+    are stripped as designed, the copy is not, and a compose box full of "The user
+    wants me to ..." was the live result. No request parameter switches the
+    thinking off there (`enable_thinking`, `thinking.type=disabled` and
+    `reasoning_effort=none` were all probed and ignored), so the leak is caught by
+    shape: the answer equals, or is a prefix of, what stood inside the think block.
+    """
+    thoughts = " ".join(m.strip() for m in _THINK_BLOCK.findall(raw or "") if m.strip())
+    if not thoughts or not cleaned:
+        return False
+    head = cleaned.strip()[:200]
+    return len(head) >= 40 and thoughts.startswith(head)

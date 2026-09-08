@@ -1002,7 +1002,8 @@
         "inserted": "Entwurf ins Textfeld eingefügt.",
         "working": "schreibt ...",
         "matchedYourTone": "Ton an {n, plural, one {eine Nachricht} other {# Nachrichten}} von deiner Nummer angelehnt.",
-        "noToneSample": "Keine Nachricht von deiner Nummer im Chat - neutraler Ton."
+        "noToneSample": "Keine Nachricht von deiner Nummer im Chat - neutraler Ton.",
+        "reasoningOnly": "Das Modell hat sein ganzes Ausgabebudget mit Nachdenken verbraucht und keine Antwort geschrieben. Versuch es noch einmal, mit einer kürzeren Anweisung, oder erhöhe die Ausgabegrenze des Composers."
       }
     },
     "telegramDashboard": {
@@ -2381,7 +2382,8 @@
       "inserted": "Entwurf ins Textfeld eingefügt.",
       "working": "schreibt ...",
       "matchedYourTone": "Ton an {n} deiner eigenen Nachrichten im Verlauf angelehnt.",
-      "noToneSample": "Keine eigene Nachricht im Verlauf - neutraler Ton."
+      "noToneSample": "Keine eigene Nachricht im Verlauf - neutraler Ton.",
+      "reasoningOnly": "Das Modell hat sein ganzes Ausgabebudget mit Nachdenken verbraucht und keine Antwort geschrieben. Versuch es noch einmal, mit einer kürzeren Anweisung, oder erhöhe die Ausgabegrenze des Composers."
     }
   }
 }

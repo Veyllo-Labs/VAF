@@ -766,7 +766,10 @@ class Config:
         "mail_composer_max_context_chars": 12000,  # total thread budget (clamped 2000-40000)
         "mail_composer_max_message_chars": 4000,   # per-message cap inside that budget
         "mail_composer_max_messages": 8,           # hard message-count cap
-        "mail_composer_max_output_tokens": 800,    # output cap for the single call
+        # Output cap for the single call. On a thinking provider the reasoning counts
+        # against it too (Veyllo spent 790 tokens deciphering one typo-ridden
+        # instruction and had none left for the reply), so it is sized for that.
+        "mail_composer_max_output_tokens": 2500,
         # Let the Composer consult the user's own long-term memory. Retrieval is keyed
         # on the USER's instruction only (never on mail text), so a mail cannot steer
         # what is pulled; the residual risk is disclosure INTO a draft the user then

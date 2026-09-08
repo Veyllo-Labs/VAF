@@ -153,7 +153,7 @@ undeclared, undocumented here, or unlabelled in the dashboard.
 | `skill_scan_alert` | Periodic re-scan found a worsened risk level (below high) | `vaf/skills/rescan.py` |
 | `skill_quarantined` | Skill quarantined (auto on worsened-to-high, or manual isolate) | `vaf/skills/rescan.py`, `security_routes.py` isolate |
 | `skill_removed` | Quarantined skill deleted from the dashboard | `security_routes.py` delete |
-| `upload_blocked` | Arriving content matched the known-bad hash list and was refused; `channel` carries the lane (`web_chat`, `workspace_upload`, `a2a_room`, `telegram`, `discord`, `whatsapp`, `mail`, `cloud_sync`, `skill_import`, `browser_download`), `path` the sha256 prefix | `vaf/core/threat_db.py` (`inspect_upload`, `emit_threat_block`), called from every ingress lane |
+| `upload_blocked` | Arriving content matched the known-bad hash list and was refused; `channel` carries the lane (`web_chat`, `web_chat_image`, `workspace_upload`, `a2a_room`, `telegram`, `discord`, `whatsapp`, `mail`, `cloud_sync`, `skill_import`, `skill_create`, `skill_update`, `browser_download`), `path` the sha256 prefix | `vaf/core/threat_db.py` (`inspect_upload`, `emit_threat_block`), called from every ingress lane |
 | `upload_flagged` | Arriving content tripped the static scanner. ADVISORY: it was delivered, not refused | `vaf/core/threat_db.py` (`inspect_upload`) |
 | `threat_listed` | A digest was added to the known-bad list | `vaf/core/threat_db.py` (`record_threat`) |
 | `threat_delisted` | A digest was removed from the known-bad list | `vaf/core/threat_db.py` (`remove_threat`) |
@@ -311,6 +311,7 @@ before the bytes reach anything that reads them:
 | WhatsApp | `_transcribe_voice_file` | Not transcribed |
 | Mail attachments | `MailService.get_attachment` | None. The gate is on the FETCH, not the sync: mail arrives regardless, and the only thing that can be refused is handing the bytes onward |
 | Cloud sync | `SyncEngine._execute_download` | File deleted, no manifest row, `errors` incremented. The next sync re-downloads and re-refuses - honest, because the file genuinely is still up there |
+| Browser downloads | `browser_interactive._sweep_container_downloads` (the hand-off from the browser container into the workspace's `Downloads/`) | The bytes go nowhere; the refusal is written to the `webui` domain log, and the funnel has already logged the event |
 
 Not ingress, and deliberately not gated: live microphone audio (not a file), and
 the agent's own `write_file` tool (an agent action, not foreign content).
@@ -410,3 +411,8 @@ CI-guarded contracts (run with the repo venv):
   is caller-scoped (non-admins only see and cancel their own sessions' units).
 - `tests/test_thinking_status_route.py`: the background-agent panel's snapshot
   is read-only, admin-gated, and carries only whitelisted request fields.
+- `tests/test_threat_db.py`: the known-bad list itself (both hash families, the
+  tombstone delist, the format tag, torn lines, the 0600 mode, both config gates).
+- `tests/test_upload_scan_wiring.py`: every ingress lane above, driven through the
+  real ingress function rather than the funnel alone, so a lane that stops asking
+  fails here.

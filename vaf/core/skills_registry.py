@@ -453,7 +453,7 @@ def import_skill_zip(
                                     "An administrator must delist it first."),
                     }],
                 }
-                emit_threat_block("import", skill_id, listed)
+                emit_threat_block("skill_import", skill_id, listed)
                 raise SkillScanBlocked(blocked_scan)
 
             # Security scan the full bundle (body + every bundled file) before install.

@@ -240,6 +240,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The WhatsApp compose fields no longer show a scrollbar.** The compose box under the
+  conversation and the Composer's instruction field were sized two pixels short of their
+  own border, so a single line already overflowed and the browser drew a bar beside it.
+  Both fields now grow with the text to three lines and scroll beyond that, without a
+  visible bar.
+- **A refused skill import is logged under the channel the security documentation names.** The
+  `upload_blocked` event for a skill zip whose contents are on the known-bad list carried the
+  channel `import`; it is `skill_import` now, next to `skill_create` and `skill_update`. The
+  documentation's lane table also gained the browser-download lane it had left out.
 - **The Composer answers in the correspondent's language.** A Turkish chat got a German
   draft because the instruction was typed in German and the rule let the instruction's
   language win. The reply is now written in the language of the message being answered,

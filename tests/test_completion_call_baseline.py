@@ -37,7 +37,7 @@ EXCLUDED = {
 # GENERATED, never typed (regenerate with the collector below after a deliberate
 # change). May only SHRINK. Every entry names why it is not a complete() consumer.
 DIRECT_CALL_SITES = {
-    "vaf/api/mail_routes.py": 1,      # SSE streaming composer; AST-guarded in test_mail_composer_guards.py
+    "vaf/core/composer_lane.py": 1,   # the Composer's one tool-less SSE completion (mail and the messenger windows); AST-guarded in test_mail_composer_guards.py
     "vaf/core/vision_infer.py": 1,    # vision block arrays + its own sentinel/strip collector
     "vaf/core/voice_agent.py": 1,     # chunk-spanning <think> state machine, latency lane
     "vaf/memory/rag.py": 1,           # _stream_answer: genuinely streaming (SSE), shares the frame predicate

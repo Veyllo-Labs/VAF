@@ -18,6 +18,7 @@ import pytest
 from fastapi import HTTPException
 
 import vaf.api.mail_routes as mr
+import vaf.core.composer_lane as lane
 from vaf.core.config import Config
 
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -90,11 +91,13 @@ def _run(body, svc, monkeypatch, chunks=("Hello",), user=None):
 
 def test_the_completion_is_made_without_tools(monkeypatch):
     """The one property everything else rests on. Read from the SOURCE, so it
-    holds even if a future refactor stops routing through _composer_stream."""
-    src = (_ROOT / "vaf" / "api" / "mail_routes.py").read_text(encoding="utf-8")
+    holds even if a future refactor stops routing through stream_completion. The
+    call lives in the shared lane now (vaf/core/composer_lane.py), which every
+    Composer window goes through - so this one guard covers all of them."""
+    src = (_ROOT / "vaf" / "core" / "composer_lane.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     fn = next(n for n in ast.walk(tree)
-              if isinstance(n, ast.FunctionDef) and n.name == "_composer_stream")
+              if isinstance(n, ast.FunctionDef) and n.name == "stream_completion")
     calls = [n for n in ast.walk(fn)
              if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "chat_completion"]
     assert calls, "the composer must still make its completion here"
@@ -105,12 +108,20 @@ def test_the_completion_is_made_without_tools(monkeypatch):
         assert kw["tool_choice"].value is None
 
 
-def test_the_composer_module_cannot_send_or_enqueue():
-    """A grep-style guard on the pure module: no send, no op, no store writes."""
-    src = (_ROOT / "vaf" / "mail" / "composer.py").read_text(encoding="utf-8")
+@pytest.mark.parametrize("path", [
+    ("vaf", "mail", "composer.py"),
+    ("vaf", "core", "composer.py"),
+    ("vaf", "core", "composer_lane.py"),
+])
+def test_the_composer_modules_cannot_send_or_enqueue(path):
+    """A grep-style guard on the pure modules and the lane: no send, no op, no
+    store writes - for mail AND for the messenger lanes the shared core serves."""
+    src = (_ROOT.joinpath(*path)).read_text(encoding="utf-8")
     for forbidden in ("queue_send", "enqueue_op", "_op_send", "smtplib", "send_mail",
-                      "reply_mail", "OpExecutor", "writeback"):
-        assert forbidden not in src, f"composer.py must not reference {forbidden}"
+                      "reply_mail", "OpExecutor", "writeback",
+                      "send_whatsapp", "_outgoing_queue", "_enqueue_reply",
+                      "send_to_main_messenger"):
+        assert forbidden not in src, f"{path[-1]} must not reference {forbidden}"
 
 
 def test_the_route_enqueues_nothing(monkeypatch):
@@ -230,7 +241,7 @@ def test_a_cold_local_model_is_loaded_rather_than_refused(monkeypatch):
     monkeypatch.setattr(Config, "get_llama_server_url",
                         classmethod(lambda cls, e="": "http://127.0.0.1:8080"))
     loads = {"n": 0}
-    monkeypatch.setattr(mr, "_ensure_local_model", lambda: loads.update(n=loads["n"] + 1))
+    monkeypatch.setattr(lane, "ensure_local_model", lambda: loads.update(n=loads["n"] + 1))
 
     health = iter([503, 503, 200])          # cold, still mapping weights, ready
 
@@ -239,7 +250,7 @@ def test_a_cold_local_model_is_loaded_rather_than_refused(monkeypatch):
             self.status_code = code
 
     monkeypatch.setattr(rq, "get", lambda *a, **k: _R(next(health)))
-    monkeypatch.setattr(mr.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(lane.time, "sleep", lambda _s: None)
 
     class _Res:
         status_code = 200
@@ -272,8 +283,8 @@ def test_a_model_that_never_comes_up_is_reported(monkeypatch):
         lambda cls, k, d=None: "local" if k == "provider" else Config.DEFAULTS.get(k, d)))
     monkeypatch.setattr(Config, "get_llama_server_url",
                         classmethod(lambda cls, e="": "http://127.0.0.1:8080"))
-    monkeypatch.setattr(mr, "_ensure_local_model", lambda: None)
-    monkeypatch.setattr(mr, "_LOCAL_MODEL_WAIT_S", 0)
+    monkeypatch.setattr(lane, "ensure_local_model", lambda: None)
+    monkeypatch.setattr(lane, "_LOCAL_MODEL_WAIT_S", 0)
 
     def _refused(*a, **k):
         raise rq.ConnectionError("refused")
@@ -289,7 +300,7 @@ def test_ensure_local_model_never_raises_into_the_request(monkeypatch):
     the health wait, not to a 500."""
     monkeypatch.setattr("vaf.core.web_interface.get_web_interface",
                         lambda: (_ for _ in ()).throw(RuntimeError("no web interface")))
-    mr._ensure_local_model()          # must not raise
+    lane.ensure_local_model()          # must not raise
 
 
 def test_the_error_code_reaches_the_client(monkeypatch):

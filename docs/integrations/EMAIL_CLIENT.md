@@ -260,14 +260,30 @@ readable rather than blanking its mailbox.
 
 ### Mail Composer
 
-The drafting assistant in the compose box (`vaf/mail/composer.py`,
-`POST /api/mail/composer`, the button row in `ComposeModal`). It writes a reply
-from the thread, or rewrites text the user already typed. It writes INTO the
-textarea and stops there: the user reads it and presses Send. There is no
-auto-send, no draft persistence and no new agent tool.
+The drafting assistant in the compose box (`POST /api/mail/composer`, the button
+row in `ComposeModal`). It writes a reply from the thread, or rewrites text the
+user already typed. It writes INTO the textarea and stops there: the user reads it
+and presses Send. There is no auto-send, no draft persistence and no new agent tool.
 
 Do not confuse it with `vaf/mail/compose.py`, which builds the RFC 822 message
 that goes on the wire. The Composer never produces or sends a message.
+
+**One Composer, several windows.** The Composer is not mail's alone: every window
+with a conversation and a compose box gets the same assistant, and the mail-shaped
+part is deliberately small. `vaf/core/composer.py` is the shared, IO-free core:
+the `ComposerProfile` (the fence tag, the ROLE and OUTPUT sections, the label of
+the user's own side and the VOICE rule around it), the budgeted newest-first
+allocation (`assemble`), the untrusted fence and `neutralize`, the memory message,
+the follow-up turns and `clean_output`. It ships two profiles, `EMAIL` and `CHAT`
+(a messenger chat from the channel message store, with `build_chat_context`).
+`vaf/core/composer_lane.py` is the IO every Composer route shares: the settings
+(the `mail_composer_*` keys govern the Composer wherever it appears), the memory
+lookup, the local-model loading and the ONE tool-less streamed completion, booked
+on the calling window's usage lane. `vaf/mail/composer.py` keeps what is true of
+mail only: quoted tails and signatures to strip, the Sent folder deciding whose
+message it is (`is_own_message`, `build_thread_context`), the one-line quotes
+from other threads. A second window therefore adds a route and a panel, never a
+second prompt or a second model call.
 
 **UI.** The compose window is two columns. Left: the message, with a larger editor
 and a light-mode toggle so a draft can be proof-read the way the recipient will see

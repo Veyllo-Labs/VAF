@@ -203,8 +203,10 @@ def test_one_place_clamps_the_retrieval_size():
     prim = body.split("def turn_memory_context(", 1)[1].split("\ndef ", 1)[0]
     assert "max(1, min(20, k))" in prim, "the primitive does not clamp"
 
+    # The mail route reaches memory through the shared Composer lane (every Composer
+    # window does), so the lane is what must use the primitive, not the route.
     for lane in ("vaf/core/automation.py", "vaf/core/thinking_mode.py",
-                 "vaf/core/headless_runner.py", "vaf/api/mail_routes.py"):
+                 "vaf/core/headless_runner.py", "vaf/core/composer_lane.py"):
         text = (ROOT / lane).read_text(encoding="utf-8")
         assert "max(1, min(20," not in text, f"{lane} still clamps by hand"
         assert "turn_memory_context(" in text, f"{lane} does not use the primitive"

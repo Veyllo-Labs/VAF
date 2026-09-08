@@ -413,11 +413,26 @@ def test_every_llm_lane_carries_its_label():
         ("vaf/core/vision_infer.py", "vision"),
         ("vaf/core/voice_agent.py", "voice"),
         ("vaf/tools/librarian.py", "librarian"),
-        ("vaf/api/mail_routes.py", "mail"),
         ("vaf/tools/browser_agent.py", "browser"),
     ):
         src = pathlib.Path(path).read_text(encoding="utf-8")
         assert f'@usage_lane("{lane}")' in src, f"{path} no longer labels its model calls"
+
+    # The Composer's one completion is shared by several windows, so its label is a
+    # PARAMETER the calling route passes rather than a decorator: the lane module
+    # must open the context with it, and the mail route must pass "mail".
+    lane_src = pathlib.Path("vaf/core/composer_lane.py").read_text(encoding="utf-8")
+    assert "with usage_context(lane=lane):" in lane_src, "composer_lane no longer labels its completion"
+    import vaf.api.mail_routes as mr
+    import vaf.core.composer_lane as lane_mod
+    seen = {}
+    orig = lane_mod.stream_completion
+    lane_mod.stream_completion = lambda messages, max_tokens, temperature, *, lane: seen.update(lane=lane) or iter(())
+    try:
+        list(mr._composer_stream([], 10, 0.1))
+    finally:
+        lane_mod.stream_completion = orig
+    assert seen.get("lane") == "mail", "the mail route no longer books its drafts on the mail lane"
 
 
 def test_the_lane_label_survives_a_streaming_call(tmp_path, monkeypatch):

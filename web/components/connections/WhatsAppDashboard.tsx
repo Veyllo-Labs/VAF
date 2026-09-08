@@ -83,6 +83,8 @@ interface ComposerMeta { included: number; total: number; truncated: boolean; dr
 /** One exchange with the Composer. Assistant turns hold the draft they produced,
  *  replayed on the next request so a follow-up refines rather than restarts. */
 interface ComposerTurn { role: 'user' | 'assistant'; content: string }
+/** What a chat's compose box and Composer held when the person switched away. */
+interface ComposeStash { composeText: string; turns: ComposerTurn[]; meta: ComposerMeta | null; instruction: string; beforeAssist: string | null }
 
 export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigChange, onOpenSetupWizard, onOpenContacts, initialChatId }: WhatsAppDashboardProps) {
     const t = useTranslations('settings.whatsappDashboard');
@@ -121,6 +123,10 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const chatEndRef = useRef<HTMLDivElement>(null);
     const composeRef = useRef<HTMLTextAreaElement>(null);
     const instructionRef = useRef<HTMLTextAreaElement>(null);
+    // The Composer exchange of every chat visited while the window is open, keyed by
+    // chat. Kept in the window's memory only: restoring it on a chat switch is a state
+    // swap, no request leaves the browser until the person clicks Draft or Send.
+    const composeStashRef = useRef<Map<string, ComposeStash>>(new Map());
     useEffect(() => { chatEndRef.current?.scrollIntoView({ block: 'end' }); }, [turns, assistBusy]);
     // Both text fields start one line high and grow with their content, like a
     // messenger's input: a two-line box under a chat reads as a form, not a chat.
@@ -177,8 +183,11 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         if (!isOpen) { jumpPendingRef.current = null; return; }
         if (!initialChatId) return;
         jumpPendingRef.current = initialChatId;
+        // A jump from the contact book bypasses the list's onSelect, so the compose
+        // stash has to change hands here too, or the old chat's draft would travel along.
+        if (initialChatId !== selectedChatId) switchCompose(selectedChatId, initialChatId);
         setSelectedChatId(initialChatId);
-    }, [initialChatId, isOpen]);
+    }, [initialChatId, isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => { if (isOpen) fetchDashboard(); }, [isOpen, config?.whatsapp_config, fetchDashboard]);
 
@@ -409,18 +418,31 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         }
     };
 
-    /** A draft typed for one chat must never be sent to another: everything the
-     *  compose box and the Composer hold is dropped when the selection moves. */
-    const resetCompose = () => {
+    /** A draft typed for one chat must never be sent to another, but it must not be
+     *  lost either: on a switch the leaving chat's box and exchange go into the stash
+     *  under its id, and the arriving chat gets its own back (or a clean slate). A
+     *  generation still running for the leaving chat is stopped; its partial draft
+     *  stays in that chat's stash. */
+    const switchCompose = (from: string | null, to: string | null) => {
         abortRef.current?.abort();
-        setComposeText('');
+        if (from) {
+            composeStashRef.current.set(from, {
+                composeText, turns, meta: assistMeta, instruction: assistInstruction, beforeAssist,
+            });
+        }
+        const next = (to && composeStashRef.current.get(to)) || null;
+        setComposeText(next?.composeText ?? '');
+        setTurns(next?.turns ?? []);
+        setAssistMeta(next?.meta ?? null);
+        setAssistInstruction(next?.instruction ?? '');
+        setBeforeAssist(next?.beforeAssist ?? null);
         setSendError(null);
-        setTurns([]);
-        setAssistMeta(null);
         setAssistNote('');
-        setAssistInstruction('');
-        setBeforeAssist(null);
     };
+    useEffect(() => {
+        // Closing the window ends the day's exchanges: nothing is kept across opens.
+        if (!isOpen) composeStashRef.current.clear();
+    }, [isOpen]);
 
     /** The person writes here only where the agent does not: a read-only sender, or the
      *  whole channel with inbound_to_agent off. Owner, contact and conversation chats
@@ -832,7 +854,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             historyUrl={(cid) => `api/whatsapp/chat-messages?chat_id=${encodeURIComponent(cid)}`}
             historyVersion={historyVersion}
             selectedId={selectedChatId}
-            onSelect={(id) => { if (id !== selectedChatId) resetCompose(); setSelectedChatId(id); setNote(null); }}
+            onSelect={(id) => { if (id !== selectedChatId) switchCompose(selectedChatId, id); setSelectedChatId(id); setNote(null); }}
             banner={banner}
             conversationExtra={conversationExtra}
             conversationTop={conversationTop}

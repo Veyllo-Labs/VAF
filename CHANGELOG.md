@@ -20,7 +20,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   agent. To the right, the Composer drafts a reply into that box the way the mail
   window's does: say what it should say or what to pay attention to, it reads the stored
   chat, matches the tone this number writes in, uses what VAF remembers about you,
-  refines on follow-ups, and never sends anything itself. The Composer is now one shared
+  refines on follow-ups, keeps each chat's exchange while the window is open, and never
+  sends anything itself. The Composer is now one shared
   lane for the mail window and the messenger windows (`vaf/core/composer.py`,
   `vaf/core/composer_lane.py`); the `mail_composer_*` keys govern both.
 - **The VAF calendar.** Appointments live in a calendar of VAF's own (one store per user,

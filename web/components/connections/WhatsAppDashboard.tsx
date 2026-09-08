@@ -23,14 +23,22 @@ import ChannelDashboardShell, { BADGE_CLS, BTN, BTN_PRIMARY, INPUT, KvRow, Setti
 
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
-/** Size a textarea to its content, one line at minimum, `max` pixels at most. */
-function growField(el: HTMLTextAreaElement | null, max: number) {
+/** Size a textarea to its content: one line at minimum, `maxRows` lines at most, and
+ *  beyond that it scrolls (the bar itself is hidden by `scrollbar-hide` in FIELD).
+ *  scrollHeight excludes the border while the border-box height includes it, so the
+ *  border is added back: without it the field is two pixels short and shows a
+ *  scrollbar beside a single line of text. */
+function growField(el: HTMLTextAreaElement | null, maxRows: number) {
     if (!el) return;
+    const cs = getComputedStyle(el);
+    const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+    const padding = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    const line = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, max)}px`;
+    el.style.height = `${Math.min(el.scrollHeight + border, line * maxRows + padding + border)}px`;
 }
 
-const FIELD = 'bg-[#262626] border border-[#2e2e2e] rounded-2xl px-4 py-2 text-sm leading-5 outline-none focus:border-[#444] resize-none';
+const FIELD = 'bg-[#262626] border border-[#2e2e2e] rounded-2xl px-4 py-2 text-sm leading-5 outline-none focus:border-[#444] resize-none scrollbar-hide';
 const ROUND_BTN = 'w-9 h-9 rounded-full grid place-items-center shrink-0 bg-[#25a244] text-white hover:bg-[#2db54e] disabled:opacity-40 disabled:hover:bg-[#25a244]';
 const QUIET_BTN = 'text-xs text-[#9a9a9a] hover:text-white disabled:opacity-40 disabled:hover:text-[#9a9a9a]';
 
@@ -130,8 +138,8 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     useEffect(() => { chatEndRef.current?.scrollIntoView({ block: 'end' }); }, [turns, assistBusy]);
     // Both text fields start one line high and grow with their content, like a
     // messenger's input: a two-line box under a chat reads as a form, not a chat.
-    useEffect(() => { growField(composeRef.current, 200); }, [composeText]);
-    useEffect(() => { growField(instructionRef.current, 120); }, [assistInstruction]);
+    useEffect(() => { growField(composeRef.current, 3); }, [composeText]);
+    useEffect(() => { growField(instructionRef.current, 3); }, [assistInstruction]);
     // The jump id waiting to be checked against the loaded sessions. A ref, consumed once,
     // so the check runs on the load that follows the jump and not on every later refresh
     // (a refresh would otherwise yank the selection back to the first chat).

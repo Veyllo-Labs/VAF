@@ -23,6 +23,17 @@ import ChannelDashboardShell, { BADGE_CLS, BTN, BTN_PRIMARY, INPUT, KvRow, Setti
 
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
+/** Size a textarea to its content, one line at minimum, `max` pixels at most. */
+function growField(el: HTMLTextAreaElement | null, max: number) {
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, max)}px`;
+}
+
+const FIELD = 'bg-[#262626] border border-[#2e2e2e] rounded-2xl px-4 py-2 text-sm leading-5 outline-none focus:border-[#444] resize-none';
+const ROUND_BTN = 'w-9 h-9 rounded-full grid place-items-center shrink-0 bg-[#25a244] text-white hover:bg-[#2db54e] disabled:opacity-40 disabled:hover:bg-[#25a244]';
+const QUIET_BTN = 'text-xs text-[#9a9a9a] hover:text-white disabled:opacity-40 disabled:hover:text-[#9a9a9a]';
+
 export interface WhatsAppDashboardProps {
     isOpen: boolean;
     onClose: () => void;
@@ -108,7 +119,13 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const [turns, setTurns] = useState<ComposerTurn[]>([]);
     const abortRef = useRef<AbortController | null>(null);
     const chatEndRef = useRef<HTMLDivElement>(null);
+    const composeRef = useRef<HTMLTextAreaElement>(null);
+    const instructionRef = useRef<HTMLTextAreaElement>(null);
     useEffect(() => { chatEndRef.current?.scrollIntoView({ block: 'end' }); }, [turns, assistBusy]);
+    // Both text fields start one line high and grow with their content, like a
+    // messenger's input: a two-line box under a chat reads as a form, not a chat.
+    useEffect(() => { growField(composeRef.current, 200); }, [composeText]);
+    useEffect(() => { growField(instructionRef.current, 120); }, [assistInstruction]);
     // The jump id waiting to be checked against the loaded sessions. A ref, consumed once,
     // so the check runs on the load that follows the jump and not on every later refresh
     // (a refresh would otherwise yank the selection back to the first chat).
@@ -624,23 +641,23 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         const s = sessionsById.get(chat.id);
         if (!s || !canCompose(s)) return null;
         return (
-            <div className="px-5 py-3 border-t border-[#2e2e2e] shrink-0 flex flex-col gap-1.5">
+            <div className="px-4 py-2.5 border-t border-[#2e2e2e] bg-[#1a1a1a] shrink-0 flex flex-col gap-1">
                 <div className="flex items-end gap-2">
-                    <textarea value={composeText} onChange={e => setComposeText(e.target.value)}
+                    <textarea ref={composeRef} value={composeText} onChange={e => setComposeText(e.target.value)}
                         onKeyDown={e => {
                             if (e.key === 'Enter' && !e.shiftKey && !sending && composeText.trim()) {
                                 e.preventDefault();
                                 handleSend(s);
                             }
                         }}
-                        placeholder={t('composePlaceholder')} rows={2} disabled={sending}
-                        className={cn(INPUT, 'flex-1 resize-none leading-relaxed')} />
+                        placeholder={t('composePlaceholder')} rows={1} disabled={sending}
+                        className={cn(FIELD, 'flex-1')} />
                     <button type="button" onClick={() => handleSend(s)} disabled={sending || !composeText.trim()}
-                        className={cn(BTN_PRIMARY, 'flex items-center gap-1.5 shrink-0')}>
-                        <Send className="w-3.5 h-3.5" />{sending ? t('sending') : t('send')}
+                        title={sending ? t('sending') : t('send')} className={ROUND_BTN}>
+                        {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4 -ml-0.5" />}
                     </button>
                 </div>
-                {sendError && <p className="text-xs text-[#e08c8c]">{sendError}</p>}
+                {sendError && <p className="text-xs text-[#e08c8c] px-1">{sendError}</p>}
             </div>
         );
     };
@@ -694,8 +711,10 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                     <div ref={chatEndRef} />
                 </div>
 
+                {/* One primary action, the rest quiet: the column is narrow, and two
+                    labelled buttons side by side broke into four lines of text. */}
                 <div className="shrink-0 space-y-2">
-                    <textarea value={assistInstruction} onChange={e => setAssistInstruction(e.target.value)}
+                    <textarea ref={instructionRef} value={assistInstruction} onChange={e => setAssistInstruction(e.target.value)}
                         onKeyDown={e => {
                             if (e.key === 'Enter' && !e.shiftKey && !assistBusy) {
                                 e.preventDefault();
@@ -703,30 +722,30 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                             }
                         }}
                         placeholder={turns.length ? t('composer.followUp') : t('composer.instruction')}
-                        disabled={assistBusy} rows={3}
-                        className={cn(INPUT, 'w-full resize-none')} />
+                        disabled={assistBusy} rows={1}
+                        className={cn(FIELD, 'w-full')} />
                     {assistBusy ? (
                         <button type="button" onClick={() => abortRef.current?.abort()}
                             className={cn(BTN, 'w-full flex items-center justify-center gap-1.5')}>
                             <Loader2 className="w-3.5 h-3.5 animate-spin" />{t('composer.stop')}
                         </button>
                     ) : (
-                        <div className="flex gap-2">
-                            <button type="button" onClick={() => runComposer(s, 'draft')}
-                                className={cn(BTN, 'flex-1 flex items-center justify-center gap-1.5')}>
-                                <Sparkles className="w-3.5 h-3.5" />{t('composer.draft')}
-                            </button>
-                            <button type="button" onClick={() => runComposer(s, 'rewrite')} disabled={!composeText.trim()}
-                                className={cn(BTN, 'flex-1')}>
+                        <button type="button" onClick={() => runComposer(s, 'draft')}
+                            className="w-full px-3 py-2 rounded-xl text-sm font-medium bg-[#25a244] text-white hover:bg-[#2db54e] flex items-center justify-center gap-1.5">
+                            <Sparkles className="w-4 h-4" />{t('composer.draft')}
+                        </button>
+                    )}
+                    {!assistBusy && (composeText.trim() || (beforeAssist !== null && beforeAssist !== composeText)) && (
+                        <div className="flex items-center justify-between gap-3 px-1">
+                            <button type="button" onClick={() => runComposer(s, 'rewrite')} disabled={!composeText.trim()} className={QUIET_BTN}>
                                 {t('composer.rewrite')}
                             </button>
+                            {beforeAssist !== null && beforeAssist !== composeText && (
+                                <button type="button" onClick={() => { setComposeText(beforeAssist); setBeforeAssist(null); }} className={QUIET_BTN}>
+                                    {t('composer.undo')}
+                                </button>
+                            )}
                         </div>
-                    )}
-                    {beforeAssist !== null && beforeAssist !== composeText && !assistBusy && (
-                        <button type="button" onClick={() => { setComposeText(beforeAssist); setBeforeAssist(null); }}
-                            className="w-full px-3 py-1.5 rounded-lg text-sm text-[#9a9a9a] hover:text-white border border-[#2e2e2e]">
-                            {t('composer.undo')}
-                        </button>
                     )}
                 </div>
             </div>

@@ -92,10 +92,13 @@ def test_the_compose_box_obeys_the_whatsapp_rule_and_the_unread_token_is_mails()
 
 def test_mobile_is_additive_and_the_three_panes_stack():
     src = _read(WINDOW)
-    assert "max-md:grid-cols-1 max-md:grid-rows-[auto_1fr]" in src
+    assert "grid-cols-[210px_380px_1fr] max-md:grid-cols-1 max-md:grid-rows-[auto_1fr]" in src
+    assert "gridTemplateColumns" not in src, "an inline style outranks the max-md class; the columns are a class"
+    shell = _read(WEB / "components" / "connections" / "ChannelDashboardShell.tsx")
+    assert "grid-cols-[320px_1fr] max-md:grid-cols-1" in shell and "gridTemplateColumns" not in shell
     assert "mobilePane === 'preview' && 'max-md:hidden'" in src and "mobilePane === 'list' && 'max-md:hidden'" in src
     assert 'className="md:hidden p-1.5' in src, "the back button exists on a phone only"
-    assert "max-md:flex-row max-md:flex-wrap" in src, "the rail becomes a chip strip"
+    assert "max-md:flex-row max-md:flex-nowrap max-md:overflow-x-auto" in src, "the rail becomes a chip strip that scrolls sideways"
 
 
 def test_the_seven_catalogues_carry_the_nav_entry_and_the_block_with_the_same_arguments():

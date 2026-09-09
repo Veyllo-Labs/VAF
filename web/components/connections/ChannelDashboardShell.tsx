@@ -460,7 +460,9 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                     </button>
                 </header>
 
-                <main className="flex-1 grid min-h-0 max-md:grid-cols-1 max-md:grid-rows-[38vh_1fr]" style={{ gridTemplateColumns: '320px 1fr' }}>
+                {/* The columns are a class, not an inline style: an inline style outranks the max-md
+                    class, and the phone kept both columns (320px beside a sliver). */}
+                <main className="flex-1 grid min-h-0 grid-cols-[320px_1fr] max-md:grid-cols-1 max-md:grid-rows-[38vh_1fr]">
                     <nav className="border-r border-[#2e2e2e] bg-[#1f1f1f] overflow-y-auto max-md:border-r-0 max-md:border-b">
                         <div className="sticky top-0 z-10 bg-[#1f1f1f] border-b border-[#2e2e2e]">
                             <div className="relative px-3 pt-3 pb-2">

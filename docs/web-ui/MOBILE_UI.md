@@ -72,10 +72,14 @@ The connection dashboards: a fixed-width pane next to a `flex-1` pane stack on m
 The inbox window (`web/components/inbox/InboxWindow.tsx`): a rail, a list and a preview in a
 `grid` with fixed rail and list widths.
 
-- The grid: append `max-md:grid-cols-1 max-md:grid-rows-[auto_1fr]`
-- The rail becomes a chip strip: append `max-md:flex-row max-md:flex-wrap max-md:gap-1
+- The grid: the columns are a class (`grid-cols-[210px_380px_1fr]`), never an inline
+  `style={{ gridTemplateColumns }}`, because an inline style outranks the `max-md:` class
+  and the phone keeps every column; append `max-md:grid-cols-1 max-md:grid-rows-[auto_1fr]`
+- The rail becomes a chip strip that scrolls sideways (a wrapping strip eats half the
+  screen): append `max-md:flex-row max-md:flex-nowrap max-md:overflow-x-auto max-md:gap-1
   max-md:p-2 max-md:border-r-0 max-md:border-b`, hide its headings and status lines with
-  `max-md:hidden`, and give each button `max-md:mx-0 max-md:px-2 max-md:py-1 max-md:text-xs`
+  `max-md:hidden`, and give each button `max-md:mx-0 max-md:px-2 max-md:py-1 max-md:text-xs
+  max-md:shrink-0 max-md:whitespace-nowrap`
 - The list and the preview take turns: a `mobilePane` state hides the other one with
   `max-md:hidden`; selecting a row switches to the preview, a `md:hidden` back button in
   the preview header (and an Escape rung of its own) switches back

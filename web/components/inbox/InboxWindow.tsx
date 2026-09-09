@@ -84,7 +84,7 @@ const CHANNEL_SQUARE: Record<InboxChannel, string> = {
 const VIEWS = ['all', 'waits', 'unread', 'agent'] as const;
 type View = typeof VIEWS[number];
 const MODE_CHIP = 'text-[11px] px-1.5 rounded-md bg-[#262626] text-[#9a9a9a] border border-[#2e2e2e] whitespace-nowrap';
-const RAIL_BTN = 'mx-2 px-3 py-1.5 rounded-lg flex items-center justify-between gap-2 text-left max-md:mx-0 max-md:px-2 max-md:py-1 max-md:text-xs max-md:border max-md:border-[#2e2e2e]';
+const RAIL_BTN = 'mx-2 px-3 py-1.5 rounded-lg flex items-center justify-between gap-2 text-left max-md:mx-0 max-md:px-2 max-md:py-1 max-md:text-xs max-md:border max-md:border-[#2e2e2e] max-md:shrink-0 max-md:whitespace-nowrap';
 const RAIL_HEAD = 'px-4 pt-4 pb-1 text-[11px] uppercase tracking-wide text-[#8a8a8a] max-md:hidden';
 
 function keyParts(key: string): { channel: string; id: string } {
@@ -95,7 +95,7 @@ function keyParts(key: string): { channel: string; id: string } {
 /** One switch row in the rail: a pill that is green when on. */
 function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
     return (
-        <button type="button" onClick={() => onChange(!on)} className="mx-4 py-1 flex items-center gap-2 text-[#c8c8c8] text-left max-md:mx-0 max-md:px-2 max-md:text-xs">
+        <button type="button" onClick={() => onChange(!on)} className="mx-4 py-1 flex items-center gap-2 text-[#c8c8c8] text-left max-md:mx-0 max-md:px-2 max-md:text-xs max-md:shrink-0 max-md:whitespace-nowrap">
             <span className={cn('w-8 h-4 rounded-full relative shrink-0', on ? 'bg-[#25a244]' : 'bg-[#3a3a3a]')}>
                 <span className={cn('absolute top-0.5 w-3 h-3 rounded-full', on ? 'right-0.5 bg-white' : 'left-0.5 bg-[#9a9a9a]')} />
             </span>
@@ -294,8 +294,11 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                     </button>
                 </header>
 
-                <main className="flex-1 grid min-h-0 max-md:grid-cols-1 max-md:grid-rows-[auto_1fr]" style={{ gridTemplateColumns: '210px 380px 1fr' }}>
-                    <nav className="border-r border-[#2e2e2e] bg-[#1a1a1a] flex flex-col text-sm overflow-y-auto max-md:flex-row max-md:flex-wrap max-md:gap-1 max-md:p-2 max-md:border-r-0 max-md:border-b max-md:overflow-y-visible">
+                {/* The columns are a class, not an inline style: an inline style outranks the max-md
+                    class and the phone would keep the three columns. */}
+                <main className="flex-1 grid min-h-0 grid-cols-[210px_380px_1fr] max-md:grid-cols-1 max-md:grid-rows-[auto_1fr]">
+                    {/* On a phone the rail is one row that scrolls sideways: a wrapping strip ate half the screen. */}
+                    <nav className="border-r border-[#2e2e2e] bg-[#1a1a1a] flex flex-col text-sm overflow-y-auto max-md:flex-row max-md:flex-nowrap max-md:overflow-x-auto max-md:overflow-y-visible max-md:gap-1 max-md:p-2 max-md:border-r-0 max-md:border-b">
                         <div className={RAIL_HEAD}>{t('rail.view')}</div>
                         {VIEWS.map(v => (
                             <button key={v} type="button" onClick={() => setView(v)} className={cn(RAIL_BTN, view === v ? 'bg-[#2a2a2a]' : 'hover:bg-[#262626]')}>
@@ -382,7 +385,8 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                 <div className="px-5 py-3 border-b border-[#2e2e2e] flex items-center gap-3 flex-wrap shrink-0">
                                     <button type="button" onClick={() => setMobilePane('list')} title={t('back')} className="md:hidden p-1.5 rounded-md hover:bg-[#262626] text-[#9a9a9a]"><ArrowLeft className="w-4 h-4" /></button>
                                     <div className="w-9 h-9 rounded-full bg-[#2e2e2e] grid place-items-center text-[#c8c8c8] text-xs font-medium shrink-0">{initials(selected.name || selected.id)}</div>
-                                    <div className="min-w-0 flex-1">
+                                    {/* The name block keeps a readable width; the actions wrap under it before they squeeze it. */}
+                                    <div className="flex-1 min-w-[280px] max-md:min-w-0">
                                         <div className="flex items-center gap-2 min-w-0 flex-wrap">
                                             <span className="font-semibold truncate">{selected.name || selected.id}</span>
                                             <span className="text-[11px] px-1.5 rounded-md bg-[#262626] text-[#c8c8c8] flex items-center gap-1.5 whitespace-nowrap">

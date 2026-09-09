@@ -23,6 +23,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   folder and answered mark. When the agent asks the owner a question about a contact's chat
   (the Front Office back-channel), that chat is marked as waiting for the owner until they
   answer or the agent writes to the contact again.
+  `vaf inbox list` prints the same rows from the terminal, behind the session door.
 - **A messenger chat has its own memory.** What the agent learns inside a chat with a
   contact is stored in that chat's own namespace (`source = chat/<session id>`), which every
   ordinary lookup of your agent leaves out in SQL, in both lanes of the hybrid search. Only

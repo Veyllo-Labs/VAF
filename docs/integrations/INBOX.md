@@ -65,6 +65,15 @@ browsers (`web_interface.notify_inbox_changed`, the calendar signal's twin), thr
 scope with a trailing edge so a history sync tells them once and once more at the end. The
 `rooms_changed` signal refreshes the inbox as well.
 
+## Command line
+
+`vaf inbox list` prints the same rows as a table (When, Channel, Name, Unread, Waits, Mode,
+Preview) with the counts above it; `--channel`, `--view`, `--limit`, `--no-groups`, `--done`,
+`--query` narrow it and `--json` prints one object per line. It runs as the machine owner
+(no `--scope`: the CLI has no authentication) behind the same terminal door as `vaf session`,
+because it prints chats. Read-only by design: marks are set in the inbox window, where the
+person sees what they are closing.
+
 ## API (module)
 
 - `list_conversations(username, user_scope_id, *, channels=None, view="all", include_groups=True, include_done=False, query="", limit=200, now=None)` returns `{rows, counts, channels}`; `view` is one of `all`, `waits`, `unread`, `agent`; the group and done toggles apply before the counts, the view after them; `query` keeps rows whose name or preview contain it or whose stored messages match (`search_hits`).

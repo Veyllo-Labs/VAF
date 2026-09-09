@@ -85,6 +85,14 @@ def test_the_window_reads_the_shells_pieces_and_registers_its_own_escape_rungs()
     assert "<Toggle on={bulk} onChange={setBulk} label={t('showBulk')} />" in src
     assert "done: String(done), bulk: String(bulk), limit: '200'" in src and "new URLSearchParams({ groups: String(groups), done: String(done), bulk: String(bulk) })" in src
     assert "disabled={markingAll || !anythingToRead} title={t('markAllReadHint')}" in src and "{t('markAllRead')}" in src
+    # The list's own actions sit above the search field, not in the window header, so nothing
+    # up there has to line up with the preview's buttons.
+    assert '<div className="ml-auto flex gap-2 min-w-0">' not in src
+    head = src.split("<header", 1)[1].split("</header>", 1)[0]
+    assert "markAllRead" not in head and "RefreshCw" not in head and "ml-auto p-2 rounded-lg" in head
+    toolbar = src.split('<div className="flex items-center gap-2 px-3 pt-3">', 1)[1].split("</div>", 1)[0]
+    assert "RefreshCw" in toolbar and "{t('markAllRead')}" in toolbar and "ml-auto flex items-center gap-1.5" in toolbar
+    assert src.index('<div className="flex items-center gap-2 px-3 pt-3">') < src.index("placeholder={t('search')}"), "the row sits above the search field"
     body = src.split("const anythingToRead = (() => {", 1)[1].split("})();", 1)[0]
     assert "const invitations = counts.invitations ?? 0;" in body and "counts.unread_per_channel?.[channel]" in body and "counts.waits - invitations > 0" in body, \
         "the button is offered only while the selection holds something a read can clear"

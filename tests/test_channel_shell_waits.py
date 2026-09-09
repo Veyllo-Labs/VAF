@@ -77,6 +77,9 @@ def test_opening_a_chat_posts_its_seen_mark_and_a_read_chat_no_longer_waits():
     assert "title={t('markAllRead')}" in body, "an icon-only button on a phone still has a name"
     assert "const anythingToRead = chats.some(c => unreadOf(c) > 0 || waitsOf(c));" in body and "try { await onRefresh(); }" in body, \
         "the button reads the local state and stays disabled until the refetch landed"
+    head = body.split("<header", 1)[1].split("</header>", 1)[0]
+    assert "markAllRead" not in head and "RefreshCw" not in head, "the list's own actions sit above the chat list, not in the header"
+    assert body.index('<div className="flex items-center gap-2 px-3 pt-3">') < body.index("placeholder={t('searchChats')}")
     assert "body: JSON.stringify({ channels: [channel], groups: true })," in body and "{channel && (" in body and "{t('markAllRead')}" in body, \
         "'All read' reads the window's own channel through the bulk route, only where the window names its channel"
     assert "const readOf = (c: ShellChat) => c.id === selectedId || marked.get(c.id) === stateOf(c);" in body

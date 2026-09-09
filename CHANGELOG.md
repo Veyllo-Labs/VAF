@@ -65,10 +65,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   narrowed to (they read as 0 for every other channel before). A mail from a no-reply or
   notification address, a newsletter, a status page or a non-primary Gmail category never
   waits. The inbox has no input field of its own: "Write a draft" opens the channel window
-  on the chat and the Composer starts writing there. "Mark all as read" in the inbox header
-  reads every conversation of the selected channel (or all of them) at once, groups and
-  rooms as the toggle says; the view and the search do not narrow it. Each channel window
-  has "All read" for its own channel. Opening a room row in the inbox reads the room too.
+  on the chat and the Composer starts writing there. "Mark all as read" sits above the
+  inbox's search field next to the refresh symbol (the list's actions over the list, not
+  in the window header) and reads every conversation of the selected channel (or all of
+  them) at once, groups and rooms as the toggle says; the view and the search do not
+  narrow it. Each channel window has the same row above its chat list, "All read" for its
+  own channel. Opening a room row in the inbox reads the room too.
   Bulk mail is not inbox material: a mail thread under a promotions, social, updates or
   forums tab (the provider's or the person's own label in the mail client), in the Junk
   folder, or, without a category, from a no-reply or newsletter sender stays out of the

@@ -481,18 +481,8 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                         <span className={cn('w-2 h-2 rounded-full shrink-0', dotCls)} title={dotTitle} />
                         <span className="truncate">{subtitle}</span>
                     </span>
-                    <div className="ml-auto flex gap-2 min-w-0">
-                        {channel && (
-                            <button type="button" onClick={() => { void markAllRead(); }} disabled={markingAll || !anythingToRead} title={t('markAllRead')} className={cn('flex items-center gap-1.5 max-md:px-2', BTN)}>
-                                <CheckCheck className="w-4 h-4" /><span className="max-md:hidden">{t('markAllRead')}</span>
-                            </button>
-                        )}
-                        <button type="button" onClick={() => { void onRefresh(); }} disabled={loading} className={cn('flex items-center gap-1.5 max-md:px-2', BTN)}>
-                            <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} /><span className="max-md:hidden">{t('refresh')}</span>
-                        </button>
-                    </div>
                     <button type="button" onClick={() => onSettingsOpenChange(true)} title={t('settings')}
-                        className="p-2 rounded-lg bg-[#262626] border border-[#2e2e2e] hover:border-[#444]">
+                        className="ml-auto p-2 rounded-lg bg-[#262626] border border-[#2e2e2e] hover:border-[#444]">
                         <Settings className="w-4 h-4" />
                     </button>
                     <button type="button" onClick={onClose} title={t('close')} className="p-2 rounded-lg hover:bg-[#262626] text-[#9a9a9a] hover:text-white">
@@ -505,9 +495,22 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                 <main className="flex-1 grid min-h-0 grid-cols-[320px_1fr] max-md:grid-cols-1 max-md:grid-rows-[38vh_1fr]">
                     <nav className="border-r border-[#2e2e2e] bg-[#1f1f1f] overflow-y-auto max-md:border-r-0 max-md:border-b">
                         <div className="sticky top-0 z-10 bg-[#1f1f1f] border-b border-[#2e2e2e]">
-                            <div className="relative px-3 pt-3 pb-2">
+                            {/* The list's own actions sit over the list they act on, in one row that shares the
+                                search field's edges (the inbox window keeps the same row): the refresh as a
+                                symbol on the left, "all read" on the right where the window names its channel. */}
+                            <div className="flex items-center gap-2 px-3 pt-3">
+                                <button type="button" onClick={() => { void onRefresh(); }} disabled={loading} title={t('refresh')} className={cn('flex items-center', BTN)}>
+                                    <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
+                                </button>
+                                {channel && (
+                                    <button type="button" onClick={() => { void markAllRead(); }} disabled={markingAll || !anythingToRead} title={t('markAllRead')} className={cn('ml-auto flex items-center gap-1.5', BTN)}>
+                                        <CheckCheck className="w-4 h-4" />{t('markAllRead')}
+                                    </button>
+                                )}
+                            </div>
+                            <div className="relative px-3 pt-2 pb-2">
                                 {/* Deliberate: cn() is tailwind-merge, so the padding override must come AFTER the shared INPUT classes or px-3 silently wins and the icon sits on the text. */}
-                                <Search className="w-4 h-4 absolute left-6 top-1/2 -translate-y-0.5 text-[#9a9a9a] pointer-events-none" />
+                                <Search className="w-4 h-4 absolute left-6 top-1/2 text-[#9a9a9a] pointer-events-none" />
                                 <input value={listFilter} onChange={e => setListFilter(e.target.value)} placeholder={t('searchChats')}
                                     className={cn(INPUT, 'w-full pl-9')} />
                             </div>

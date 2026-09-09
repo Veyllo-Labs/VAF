@@ -332,15 +332,7 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                         <span className={cn('w-2 h-2 rounded-full shrink-0', counts && counts.waits > 0 ? 'bg-[#e0b866]' : 'bg-[#3fbf5f]')} />
                         <span className="truncate">{t('subtitle', { waits: counts?.waits ?? 0, unread: counts?.unread ?? 0 })}</span>
                     </span>
-                    <div className="ml-auto flex gap-2 min-w-0">
-                        <button type="button" onClick={() => { void markAllRead(); }} disabled={markingAll || !anythingToRead} title={t('markAllReadHint')} className={cn('flex items-center gap-1.5', BTN)}>
-                            <CheckCheck className="w-4 h-4" /><span className="max-md:hidden">{t('markAllRead')}</span>
-                        </button>
-                        <button type="button" onClick={() => { void load(); }} disabled={loading} className={cn('flex items-center gap-1.5', BTN)}>
-                            <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} /><span className="max-md:hidden">{t('refresh')}</span>
-                        </button>
-                    </div>
-                    <button type="button" onClick={onClose} title={t('close')} className="p-2 rounded-lg hover:bg-[#262626] text-[#9a9a9a] hover:text-white">
+                    <button type="button" onClick={onClose} title={t('close')} className="ml-auto p-2 rounded-lg hover:bg-[#262626] text-[#9a9a9a] hover:text-white">
                         <X className="w-4 h-4" />
                     </button>
                 </header>
@@ -393,8 +385,19 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
 
                     <section className={cn('border-r border-[#2e2e2e] bg-[#1f1f1f] flex flex-col min-h-0 max-md:border-r-0', mobilePane === 'preview' && 'max-md:hidden')}>
                         <div className="sticky top-0 z-10 bg-[#1f1f1f] border-b border-[#2e2e2e] shrink-0">
-                            <div className="relative px-3 pt-3 pb-2">
-                                <Search className="w-4 h-4 absolute left-6 top-1/2 -translate-y-0.5 text-[#9a9a9a] pointer-events-none" />
+                            {/* The list's own actions sit over the list they act on, in one row that shares
+                                the search field's edges: the refresh as a symbol on the left, "mark all as
+                                read" on the right. Nothing up here has to line up with the preview's buttons. */}
+                            <div className="flex items-center gap-2 px-3 pt-3">
+                                <button type="button" onClick={() => { void load(); }} disabled={loading} title={t('refresh')} className={cn('flex items-center', BTN)}>
+                                    <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
+                                </button>
+                                <button type="button" onClick={() => { void markAllRead(); }} disabled={markingAll || !anythingToRead} title={t('markAllReadHint')} className={cn('ml-auto flex items-center gap-1.5', BTN)}>
+                                    <CheckCheck className="w-4 h-4" />{t('markAllRead')}
+                                </button>
+                            </div>
+                            <div className="relative px-3 pt-2 pb-2">
+                                <Search className="w-4 h-4 absolute left-6 top-1/2 text-[#9a9a9a] pointer-events-none" />
                                 <input value={queryInput} onChange={e => setQueryInput(e.target.value)} placeholder={t('search')} className={cn(INPUT, 'w-full pl-9')} />
                             </div>
                             <div className="px-4 pb-2 text-xs text-[#9a9a9a] flex items-center justify-between gap-2">

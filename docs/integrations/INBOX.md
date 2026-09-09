@@ -258,13 +258,15 @@ reads it, and a read row no longer waits, so in the "waits for you" view it leav
 conversation stays open in the preview (the window keeps the opened row, and the amber
 sentence that said why it waited, until another row is chosen). The done mark stays a
 primitive of the marks route and `mark_conversation` without a button; the "show done"
-toggle shows the conversations the person answered last. "Mark all as read" in the window's
-header reads every conversation of the selected channel (or of all of them) at once, group
+toggle shows the conversations the person answered last. "Mark all as read" sits above the
+list's search field, next to the refresh symbol (the list's own actions over the list they
+act on, sharing the search field's edges, so nothing has to line up with the preview's
+buttons), and reads every conversation of the selected channel (or of all of them) at once, group
 chats and rooms as the group toggle says, through `POST /api/inbox/marks/all`; the view and
 the search do not narrow it. It is disabled while the selection holds nothing a read can
 clear (an invitation waits for a decision, so it does not count; the summary's
 `unread_per_channel`, `waits_per_channel` and `invitations` tell). The channel windows carry
-the same button for their own channel ("All read"). "Write a draft" jumps with the
+the same row above their chat list ("All read" for their own channel). "Write a draft" jumps with the
 draft flag and the Composer starts writing: the WhatsApp window selects the chat and runs
 the Composer's draft (the person watches the draft land in the compose box and sends or
 rewrites it there), the mail client opens the thread's reply composer and runs the Mail

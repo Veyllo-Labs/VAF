@@ -30,6 +30,24 @@ ROUTABLE_CHANNELS = ("telegram", "whatsapp", "discord")
 # Channel -> per-platform send tool (interactive, explicit-platform lane).
 CHANNEL_SEND_TOOLS = {ch: f"send_{ch}" for ch in KNOWN_CHANNELS}
 
+
+def whatsapp_session_id(username: Optional[str], endpoint: str, *, fallback: str = "self") -> str:
+    """The session, and therefore the memory namespace, of one WhatsApp chat:
+    `whatsapp_<user>_<digits>`. The recipe was hand-rolled at eight sites, and a drifted
+    copy means the Composer or the thinking lane looks for a chat under a name the bridge
+    never wrote, with no error. `endpoint` is anything that names the other side: an E.164
+    display (+49 170...), a JID (49170...:7@s.whatsapp.net), an unresolved @lid, or bare
+    digits; the digits before "@" and ":" are the key. `fallback` stands in when there are
+    none ("self" for the owner's own chat, "unknown" for an unresolved sender); with an
+    empty fallback the result is "" instead, for callers that must not name a session."""
+    local = (endpoint or "").split("@", 1)[0].split(":", 1)[0]
+    digits = "".join(c for c in local if c.isdigit())
+    key = digits or (fallback or "")
+    if not key:
+        return ""
+    uname = (username or "admin").strip() or "admin"
+    return f"whatsapp_{uname}_{key}"
+
 _ENDPOINTS_LOCK = threading.Lock()
 _ENDPOINTS_FILE = None
 
@@ -411,7 +429,7 @@ def _record_outbound(
     """
     uname = (username or "admin").strip() or "admin"
     if channel == "whatsapp":
-        session_id = f"whatsapp_{uname}_{(endpoint.split('@', 1)[0] or 'self')}"
+        session_id = whatsapp_session_id(uname, endpoint)
     else:
         session_id = f"{channel}_{endpoint}"
     try:

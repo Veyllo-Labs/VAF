@@ -460,7 +460,8 @@ however, is channel-agnostic and exists exactly once:
   When no messenger is reachable, delivery falls back to the Web UI (notification
   preview, and for automations the result lane) - content is never dropped silently.
   Every delivery is also mirrored into the channel session (`telegram_<chat id>`,
-  `whatsapp_<user>_<number>`, `discord_<user id>`) through
+  `whatsapp_<user>_<digits>` as `messaging_connections.whatsapp_session_id` spells it, the one
+  builder the bridge, the dashboard and the thinking lane share, `discord_<user id>`) through
   `SessionManager.append_background_message`, tagged with the caller's `kind`
   (`thinking` for a background question, `nudge` for its reminder, none for an
   automation result), so the channel's main agent has its own last message in

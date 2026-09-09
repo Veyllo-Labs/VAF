@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
+from vaf.core.messaging_connections import whatsapp_session_id
 
 logger = logging.getLogger("vaf.api.whatsapp")
 
@@ -224,11 +225,6 @@ async def get_whatsapp_dashboard(request: Request):
                     my_phones.add("+" + p)
         activity = [a for a in activity_raw if (a.get("chat_id") or "").strip() in my_phones or ("+" + (a.get("chat_id") or "").replace(" ", "")) in my_phones]
 
-    def _phone_to_session_id(phone: str, vaf_username: str) -> str:
-        digits = "".join(c for c in phone if c.isdigit())
-        uname = (vaf_username or "admin").strip()
-        return f"whatsapp_{uname}_{digits}"
-
     whitelist_by_phone: Dict[str, Dict[str, Any]] = {}
     for e in whitelist:
         phone = (e.get("phone_number") or "").strip()
@@ -280,7 +276,7 @@ async def get_whatsapp_dashboard(request: Request):
                 "chat_id": key,
                 "phone_number": (phone or chat_id) if key == chat_id else (key if not key.endswith("@lid") else phone or key),
                 "vaf_username": vaf_username,
-                "session_id": _phone_to_session_id(phone or chat_id, vaf_username),
+                "session_id": whatsapp_session_id(vaf_username, phone or chat_id),
                 "type": stype,
                 "name": c.get("name"),
                 "last_ts": int(c.get("last_ts") or 0),
@@ -294,12 +290,11 @@ async def get_whatsapp_dashboard(request: Request):
         if not cid:
             cid = cid_raw
         if cid not in sessions_by_chat:
-            digits = "".join(c for c in cid if c.isdigit())
             sessions_by_chat[cid] = {
                 "chat_id": cid,
                 "phone_number": cid,
                 "vaf_username": username,
-                "session_id": f"whatsapp_{username}_{digits}",
+                "session_id": whatsapp_session_id(username, cid),
                 "type": "contact",
                 "name": None,
                 "last_ts": 0,
@@ -320,7 +315,7 @@ async def get_whatsapp_dashboard(request: Request):
                 "chat_id": chat_id,
                 "phone_number": phone,
                 "vaf_username": vaf_username,
-                "session_id": _phone_to_session_id(phone, vaf_username),
+                "session_id": whatsapp_session_id(vaf_username, phone),
                 "type": "owner",
                 "name": None,
                 "last_ts": 0,
@@ -336,7 +331,7 @@ async def get_whatsapp_dashboard(request: Request):
                         "chat_id": chat_id,
                         "phone_number": chat_id,
                         "vaf_username": username,
-                        "session_id": _phone_to_session_id(chat_id, username),
+                        "session_id": whatsapp_session_id(username, chat_id),
                         "type": "contact",
                         "name": (contact.get("name") or "").strip() or None,
                         "last_ts": 0,
@@ -368,7 +363,7 @@ async def get_whatsapp_dashboard(request: Request):
                     "chat_id": key,
                     "phone_number": key if not key.endswith("@lid") else cid,
                     "vaf_username": username,
-                    "session_id": _phone_to_session_id(key if not key.endswith("@lid") else cid, username),
+                    "session_id": whatsapp_session_id(username, key if not key.endswith("@lid") else cid),
                     "type": "contact",
                     "name": (row.get("chat_name") or "").strip() or None,
                     "last_ts": last_ts,
@@ -450,7 +445,7 @@ async def get_whatsapp_dashboard(request: Request):
         canonical = _normalize_chat_id(e164)
         if not canonical:
             continue
-        sid_lid = f"whatsapp_{username}_{lid_digits}"
+        sid_lid = whatsapp_session_id(username, lid_jid)
         if canonical in sessions_by_chat:
             sessions_by_chat[canonical]["session_id"] = sid_lid
     # Merge LID rows into E.164 so the same contact (Bob, Alice) appears only once
@@ -474,7 +469,7 @@ async def get_whatsapp_dashboard(request: Request):
             rec2 = dict(rec)
             rec2["chat_id"] = e164
             rec2["phone_number"] = e164
-            rec2["session_id"] = rec.get("session_id") or _phone_to_session_id(e164, username)
+            rec2["session_id"] = rec.get("session_id") or whatsapp_session_id(username, e164)
             sessions_by_chat[e164] = rec2
         del sessions_by_chat[key]
     # Infer LID→E.164 when we have one FO contact with no messages and one LID-style session with messages (same user)
@@ -988,8 +983,7 @@ async def get_whatsapp_chat_messages(request: Request, chat_id: str, limit: int 
             "timestamp": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else None,
             "content_type": r.get("content_type") or "text",
         })
-    digits = "".join(c for c in cid.split("@", 1)[0] if c.isdigit())
-    session_id = f"whatsapp_{username}_{digits}" if digits else ""
+    session_id = whatsapp_session_id(username, cid, fallback="")
     out = {"chat_id": cid, "session_id": session_id, "messages": messages}
     # The Memory Learning counter travels only for a chat that can learn (see
     # _learns_from_chat); the pane shows no counter when the fields are absent.

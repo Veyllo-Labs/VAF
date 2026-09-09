@@ -2805,6 +2805,7 @@ def _run_thinking_for_user(
                 get_messaging_connections,
                 get_telegram_chat_id,
                 get_whatsapp_chat_jid,
+                whatsapp_session_id,
             )
             uname = getattr(agent, "_current_username", None) or get_local_admin_username()
             conn = get_messaging_connections(username=uname, user_scope_id=user_scope_id)
@@ -2818,9 +2819,8 @@ def _run_thinking_for_user(
             elif main_messenger == "whatsapp":
                 jid = get_whatsapp_chat_jid(user_scope_id, uname)
                 if jid:
-                    # The bridge names the owner's chat session by user and number digits
-                    # (whatsapp_<username>_<digits>), the same way _record_outbound does.
-                    chat_session_id = f"whatsapp_{uname}_{jid.split('@', 1)[0].split(':', 1)[0] or 'self'}"
+                    # The one builder the bridge and _record_outbound use as well.
+                    chat_session_id = whatsapp_session_id(uname, jid)
             # Fallback: user-scoped default session
             if not chat_session_id:
                 safe_scope = scope_key.replace("-", "")[:8]

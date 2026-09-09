@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from vaf.core.config import Config
 from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
-from vaf.core.messaging_connections import save_whatsapp_chat_jid, whatsapp_enabled_for_scope
+from vaf.core.messaging_connections import save_whatsapp_chat_jid, whatsapp_enabled_for_scope, whatsapp_session_id
 from vaf.core.platform import Platform
 from vaf.core.task_queue import TaskQueue
 from vaf.core.whatsapp_auth import get_linked_phone, get_whatsapp_auth_dir, linked_usernames
@@ -1611,7 +1611,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                     pass
                 logger.info("WhatsApp: skip agent reply for %s (owner has control, 10 min not elapsed)", from_jid)
             else:
-                session_id = f"whatsapp_{username}_{resolved_digits or 'unknown'}"
+                session_id = whatsapp_session_id(username, resolved_digits, fallback="unknown")
                 # Only the registered main-user number is the owner; a contact and a
                 # reply-window sender both land in Front Office.
                 from_contact = policy_reason != "explicit_pair"

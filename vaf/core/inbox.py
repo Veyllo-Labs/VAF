@@ -22,6 +22,7 @@ cross-channel inbox is the measurement that earns an export.
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -34,6 +35,97 @@ VIEWS: Tuple[str, ...] = ("all", "waits", "unread", "agent")
 WAITS_UNANSWERED = "unanswered"
 WAITS_OWNER_ASKED = "owner_asked"
 WAITS_INVITATION = "invitation"
+
+# Whether an inbound message asks for an answer is decided from its text alone, no model
+# (see reply_expectation): a score from 0 to 1, and the configured threshold turns it into
+# "waits for you". 0.6 is the point where a plain greeting or statement still waits and a
+# short thank-you, goodbye or acknowledgement does not.
+WAITS_THRESHOLD_DEFAULT = 0.6
+
+# The question marks of every script a chat may arrive in: ASCII, fullwidth CJK, Arabic,
+# Armenian (the voice agent's is_question reads the same set for a spoken reply; it is not
+# imported here because that module carries the whole voice stack).
+_QUESTION_MARKS = "?\uff1f\u061f\u055e"
+
+# A message that closes an exchange rather than opening one: thanks, goodbyes, plain
+# acknowledgements. Matched as the whole message or its beginning after punctuation and
+# emoji are stripped; a question mark anywhere outweighs it (see the weights).
+_CLOSERS = (
+    "danke", "dankeschön", "danke schön", "danke dir", "danke sehr", "vielen dank", "besten dank", "herzlichen dank",
+    "alles klar", "alles gut", "ok", "okay", "okey", "passt", "perfekt", "super", "top", "prima", "gut", "in ordnung",
+    "verstanden", "gerne", "gern", "ja", "jo", "jep", "jup", "nein", "nö", "bis später", "bis dann", "bis morgen",
+    "bis bald", "bis gleich", "tschüss", "tschüß", "ciao", "servus", "schönen tag", "schönes wochenende", "gute nacht",
+    "guten abend", "lg", "vg", "mfg",
+    "thanks", "thank you", "thx", "ty", "cheers", "got it", "noted", "alright", "all right", "sounds good", "great",
+    "perfect", "cool", "nice", "fine", "sure", "yes", "yep", "yeah", "no", "nope", "bye", "goodbye", "see you",
+    "see ya", "later", "take care", "good night", "have a nice day", "will do", "done",
+)
+# A cue that the writer wants something back: a question word, a request, an offer.
+_REQUEST_CUES = (
+    "kannst du", "könntest du", "könnten wir", "können wir", "könnte", "würdest du", "würde", "bitte", "brauche",
+    "bräuchte", "schick", "schickst", "sende", "melde dich", "sag mir", "sag bescheid", "gib bescheid", "wann", "wie",
+    "wo", "was", "wer", "warum", "wieso", "ob", "hast du", "habt ihr", "gibt es", "ist das", "geht das", "passt das",
+    "vorschlag", "termin",
+    "can you", "could you", "would you", "please", "need", "send", "let me know", "tell me", "when", "what", "where",
+    "how", "why", "who", "do you", "did you", "is it", "are you", "have you", "any chance", "if you", "proposal",
+)
+_CLOSER_START_RE = re.compile(r"^(?:" + "|".join(re.escape(c) for c in sorted(_CLOSERS, key=len, reverse=True)) + r")(?:\s|$)")
+_CLOSER_ANY_RE = re.compile(r"(?<![\w])(?:" + "|".join(re.escape(c) for c in sorted(_CLOSERS, key=len, reverse=True)) + r")(?![\w])")
+_REQUEST_RE = re.compile(r"(?<![\w])(?:" + "|".join(re.escape(c) for c in sorted(_REQUEST_CUES, key=len, reverse=True)) + r")(?![\w])")
+_WORD_RE = re.compile(r"[^\W\d_]+")
+
+
+def reply_expectation(text: str) -> float:
+    """How much an inbound message asks for an answer, 0 to 1, from the text alone.
+
+    No model: a question mark (any script) or a request cue raises the score, a message
+    that is or begins with a thank-you, goodbye or acknowledgement lowers it, emoji and
+    digits are not words, and the length nudges it a little (a long message usually
+    carries something to answer). A plain greeting or statement lands at 0.6: it opened
+    the exchange and waits; "danke", "bis später", "ok" or a lone thumbs-up land near 0.
+    The threshold that turns the number into "waits for you" is `inbox_waits_threshold`."""
+    raw = str(text or "").strip()
+    if not raw:
+        return 0.0
+    low = raw.lower()
+    words = _WORD_RE.findall(low)
+    n = len(words)
+    norm = re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", low)).strip()
+    score = 0.6
+    asks = any(m in raw for m in _QUESTION_MARKS)
+    if asks:
+        score += 0.4
+    if _REQUEST_RE.search(norm):
+        score += 0.2
+    if n == 0:
+        score -= 0.4
+    elif n > 12:
+        score += 0.15
+    elif n > 4:
+        score += 0.1
+    # A closer with a question mark is a question ("ok?", "passt Donnerstag?"): the mark wins.
+    if norm and not asks:
+        if _CLOSER_START_RE.match(norm):
+            score -= 0.5
+        elif n <= 6 and _CLOSER_ANY_RE.search(norm):
+            score -= 0.3
+    return max(0.0, min(1.0, round(score, 3)))
+
+
+def waits_threshold() -> float:
+    """The configured threshold (`inbox_waits_threshold`, clamped to 0..1)."""
+    try:
+        from vaf.core.config import Config
+        value = float(Config.get("inbox_waits_threshold", WAITS_THRESHOLD_DEFAULT))
+    except Exception:
+        value = WAITS_THRESHOLD_DEFAULT
+    return max(0.0, min(1.0, value))
+
+
+def expects_answer(text: str, threshold: Optional[float] = None) -> bool:
+    """Whether the newest inbound message waits for an answer, by the score and the threshold."""
+    t = waits_threshold() if threshold is None else threshold
+    return reply_expectation(text) >= t
 
 _CHANNEL_NAMES = {"whatsapp": "WhatsApp", "telegram": "Telegram", "discord": "Discord", "mail": "Mail", "room": "Room"}
 
@@ -62,16 +154,19 @@ def is_group(channel: str, chat_id: str) -> bool:
     return channel == "room"
 
 
-def chat_state(row: Dict[str, Any], *, now: Optional[float] = None) -> Dict[str, Any]:
+def chat_state(row: Dict[str, Any], *, now: Optional[float] = None,
+               waits_threshold_value: Optional[float] = None) -> Dict[str, Any]:
     """The person's view of one messenger chat, from one overview row.
 
     unread: inbound rows after the seen marker (the overview counted them).
     answered_by_agent: the newest row is the agent's own send.
     done: marked done and nothing newer arrived, or the newest row is the person's own reply.
     waits: not done, and either the agent asked the person about this chat and neither the
-    person nor the agent has written since, or the newest row is the other side's and nobody
-    answered. The agent's reply lifts "waits" and does not close the row: the person may still
-    want to see what was said in their name."""
+    person nor the agent has written since, or the newest row is the other side's, nobody
+    answered, and its text asks for an answer (`reply_expectation` at or above the
+    threshold: a "danke" or a "bis später" waits for nobody). The agent's reply lifts "waits"
+    and does not close the row: the person may still want to see what was said in their name.
+    `waits_threshold_value` defaults to the configured `inbox_waits_threshold`."""
     last_ts = float(row.get("last_ts") or 0.0)
     last_direction = row.get("last_direction") or ""
     last_sender = row.get("last_sender") or ""
@@ -88,7 +183,7 @@ def chat_state(row: Dict[str, Any], *, now: Optional[float] = None) -> Dict[str,
     if not done:
         if owner_asked_pending:
             waits_reason = WAITS_OWNER_ASKED
-        elif last_direction == "in":
+        elif last_direction == "in" and expects_answer(row.get("last_body") or "", waits_threshold_value):
             waits_reason = WAITS_UNANSWERED
     preview_from = "you" if newest_is_owner else ("agent" if newest_is_agent else "them")
     return {
@@ -120,10 +215,12 @@ def chat_mode(channel: str, chat_id: str, *, owners: Set[str], contacts: Set[str
     return "readonly"
 
 
-def mail_thread_state(thread: Dict[str, Any], mark: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def mail_thread_state(thread: Dict[str, Any], mark: Optional[Dict[str, Any]], *,
+                      waits_threshold_value: Optional[float] = None) -> Dict[str, Any]:
     """A mail thread's state: unread is IMAP's count, the last word was ours when the newest
     message sits in the Sent folder, and the thread waits when it is not done, the last word
-    was the correspondent's and nobody marked it answered."""
+    was the correspondent's, nobody marked it answered, and its text asks for an answer (the
+    newest message's snippet through `reply_expectation`, as a chat message would be)."""
     newest_in_sent = str(thread.get("newest_special_use") or "").lower() == "\\sent"
     # The newest message alone: an older reply in the thread says nothing about the mail
     # that arrived after it.
@@ -131,7 +228,8 @@ def mail_thread_state(thread: Dict[str, Any], mark: Optional[Dict[str, Any]]) ->
     last_ts = float(thread.get("last_date_ts") or 0.0)
     done_ts = (mark or {}).get("done_ts")
     done = newest_in_sent or (done_ts is not None and float(done_ts) >= last_ts)
-    waits = (not done) and (not answered)
+    waits = (not done) and (not answered) and expects_answer(thread.get("snippet") or thread.get("subject") or "",
+                                                              waits_threshold_value)
     return {
         "unread": int(thread.get("unread_count") or 0),
         "waits": waits,
@@ -222,6 +320,7 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
     from vaf.core.messaging_connections import owner_endpoints, reply_window_hours
     rows: List[Dict[str, Any]] = []
     window = reply_window_hours() * 3600.0
+    threshold = waits_threshold()
     for channel in channels:
         if channel not in MESSENGERS:
             continue
@@ -245,7 +344,7 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
             contacts = set()
         for o in overview:
             chat_id = str(o.get("chat_id") or "")
-            state = chat_state(o, now=now)
+            state = chat_state(o, now=now, waits_threshold_value=threshold)
             until = reply_window_until(o.get("last_agent_ts"), o.get("last_in_within_ts"), window) \
                 if channel == "whatsapp" else None
             needs_assign = channel == "whatsapp" and _lid_needs_assign(chat_id)
@@ -287,10 +386,11 @@ def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: 
     from vaf.mail.service import MailService
     svc = MailService(user_scope_id)
     marks = chat_marks(username or "", user_scope_id, channel="mail")
+    threshold = waits_threshold()
     rows: List[Dict[str, Any]] = []
     for t in svc.list_threads(account_id=account_id or None, folder=folder or None, limit=min(max(int(limit), 1), 200)):
         thread_id = str(t.get("thread_id"))
-        state = mail_thread_state(t, marks.get(("mail", thread_id)))
+        state = mail_thread_state(t, marks.get(("mail", thread_id)), waits_threshold_value=threshold)
         rows.append({
             "key": f"mail:{thread_id}",
             "channel": "mail",

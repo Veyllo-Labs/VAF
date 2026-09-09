@@ -73,6 +73,7 @@ def test_opening_a_chat_posts_its_seen_mark_and_reading_is_not_answering():
     assert "const waiting = useMemo(() => chats.filter(c => c.waits), [chats]);" in body
     assert "onSelect(waiting[(idx + 1) % waiting.length].id);" in body, "the header button walks the waiting chats round and round"
     assert "{selected.waits && selected.waitsReason === 'owner_asked' && (" in body, "the agent's question to the person is said in the header"
+    assert "t('waitsUnanswered', { name: selected.label })" in body, "and so is an unanswered last message, by name"
     assert "t('waitsHeader', { count: waiting.length })" in body and "t('newestFirst')" in body
 
 
@@ -105,8 +106,8 @@ def test_the_shells_escape_ladder_is_unchanged():
 
 def test_the_seven_catalogues_carry_the_chip_keys_with_the_same_arguments():
     import json
-    keys = {"waitsForYou": set(), "waitsOwnerAsked": set(), "waitsHeader": {"count"}, "jumpWaiting": set(),
-            "unreadCount": {"count"}, "agentAnswered": set(), "done": set()}
+    keys = {"waitsForYou": set(), "waitsOwnerAsked": set(), "waitsUnanswered": {"name"}, "waitsHeader": {"count"},
+            "jumpWaiting": set(), "unreadCount": {"count"}, "agentAnswered": set(), "done": set()}
     for p in sorted((WEB / "messages").glob("*.json")):
         block = json.loads(_read(p))["settings"]["channelDashboard"]
         for key, args in keys.items():

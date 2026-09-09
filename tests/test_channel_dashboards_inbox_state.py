@@ -79,19 +79,21 @@ def world(monkeypatch, tmp_path):
 def test_whatsapp_rows_carry_the_stores_count_the_state_and_the_reply_window(world):
     _msg("+491700000042", "hallo", ts=NOW - 100, message_id="w1")
     _msg("+491700000042", "hi", direction="out", ts=NOW - 50, sender="agent", message_id="w2")
-    _msg("+491700000042", "danke", ts=NOW - 10, message_id="w3")
+    _msg("+491700000042", "und wann?", ts=NOW - 10, message_id="w3")
     _msg("+491700000050", "moin", ts=NOW - 5, message_id="w4")
     _msg("+491700000060", "done?", ts=NOW - 30, message_id="w5")
     _msg("+491700000060", "yes", direction="out", ts=NOW - 20, sender=store.OWNER_SENDER, message_id="w6")
+    _msg("+491700000070", "danke!", ts=NOW - 40, message_id="w7")
     out = asyncio.run(routes.get_whatsapp_dashboard(_request()))
     by_id = {s["chat_id"]: s for s in out["sessions"]}
     a, b, c = by_id["+491700000042"], by_id["+491700000050"], by_id["+491700000060"]
     assert a["message_count"] == 3 and a["unread"] == 2 and a["waits"] is True and a["waits_reason"] == "unanswered"
+    assert by_id["+491700000070"]["waits"] is False and by_id["+491700000070"]["unread"] == 1, "a thank-you waits for nobody"
     assert a["type"] == "conversation" and a["reply_window_until"] == pytest.approx(NOW - 10 + WINDOW_H * 3600)
-    assert a["last_preview"] == "danke" and a["preview_from"] == "them" and a["answered_by_agent"] is False
+    assert a["last_preview"] == "und wann?" and a["preview_from"] == "them" and a["answered_by_agent"] is False
     assert b["type"] == "unknown" and b["reply_window_until"] is None and b["unread"] == 1 and b["message_count"] == 1
     assert c["done"] is True and c["waits"] is False and c["preview_from"] == "you", "the person's own reply closes it"
-    assert [s["chat_id"] for s in out["sessions"]] == ["+491700000050", "+491700000042", "+491700000060"]
+    assert [s["chat_id"] for s in out["sessions"]] == ["+491700000050", "+491700000042", "+491700000060", "+491700000070"]
 
 
 def test_a_lid_row_merged_into_its_number_keeps_both_store_keys_and_the_newer_state():

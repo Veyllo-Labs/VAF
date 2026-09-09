@@ -10,6 +10,7 @@ floor and the back-channel test goes red; read Discord rows for every caller and
 test goes red.
 """
 import time
+from pathlib import Path
 
 import pytest
 
@@ -267,6 +268,44 @@ def test_another_scope_sees_nothing(world):
     assert inbox.conversation_history("bob", OTHER, "whatsapp", "+491700000042") == []
 
 
+def test_reply_expectation_reads_the_text_without_a_model():
+    """MUTATION: drop the closer list and "danke" waits; drop the question-mark bonus and
+    "ok?" does not; let a closer outweigh the mark and "Danke, und wann?" does not."""
+    waits = lambda s: inbox.reply_expectation(s) >= inbox.WAITS_THRESHOLD_DEFAULT
+    for closer in ("danke", "Vielen Dank!", "bis später", "ok", "OK 👍", "\U0001F44D", "Alles klar, bis dann", "Super, danke dir!",
+                   "thanks", "see you", "Ja, gerne!", "Vielen Dank für die schnelle Antwort, das hilft mir sehr weiter."):
+        assert not waits(closer), closer
+    for asks in ("hallo", "Guten Morgen", "Wann kommst du", "ok?", "Danke, und wann?", "Passt Donnerstag 10 Uhr für die Übergabe?",
+                 "Hallo, wegen der Übergabe der Wohnung: ich könnte Donnerstag.", "Kannst du mir bitte den Vertrag schicken",
+                 "Thanks! One more thing: can you send the invoice?", "Bin da.", "\u3053\u3093\u306b\u3061\u306f\uff1f"):
+        assert waits(asks), asks
+    assert inbox.reply_expectation("") == 0.0
+    assert 0.0 <= inbox.reply_expectation("?" * 50) <= 1.0
+
+
+def test_the_threshold_comes_from_the_config_and_reaches_every_lane(world, monkeypatch):
+    _msg("+491700000042", "danke", ts=NOW - 10)
+    _msg("+491700000050", "wann passt es dir?", ts=NOW - 5)
+    keys = lambda **kw: [r["key"] for r in _rows(view="waits", **kw)["rows"]]
+    assert keys() == ["whatsapp:+491700000050"], "a thank-you waits for nobody, a question does"
+    import vaf.core.config as cfg_mod
+    strict = dict(CONFIG, inbox_waits_threshold=1.0)
+    monkeypatch.setattr(cfg_mod.Config, "get", classmethod(lambda cls, key, default=None: strict.get(key, default)))
+    assert keys() == ["whatsapp:+491700000050"], "at 1.0 only a question (capped at 1.0) still waits"
+    loose = dict(CONFIG, inbox_waits_threshold=0.0)
+    monkeypatch.setattr(cfg_mod.Config, "get", classmethod(lambda cls, key, default=None: loose.get(key, default)))
+    assert keys() == ["whatsapp:+491700000050", "whatsapp:+491700000042"], "at 0 every inbound waits, as before the rule"
+    from vaf.core.config import Config
+    assert Config.DEFAULTS["inbox_waits_threshold"] == 0.6
+    doc = (Path(__file__).resolve().parent.parent / "docs" / "setup" / "CONFIG_SCHEMA.md").read_text(encoding="utf-8")
+    assert "`inbox_waits_threshold`" in doc
+    # The mail rule, at the default threshold (the config above still says 0.0).
+    thread = {"newest_special_use": "\\Inbox", "newest_answered_at": None, "last_date_ts": 100.0, "snippet": "Danke, hat geklappt!"}
+    assert inbox.mail_thread_state(thread, None, waits_threshold_value=0.6)["waits"] is False, "mail runs the newest snippet through the same rule"
+    assert inbox.mail_thread_state(dict(thread, snippet="Könnten Sie mir das Angebot schicken?"), None, waits_threshold_value=0.6)["waits"] is True
+    assert inbox.mail_thread_state(thread, None)["waits"] is True, "and the configured threshold (0.0 here) reaches the mail lane too"
+
+
 def test_the_counts_say_what_each_lane_holds_before_any_filter(world):
     _msg("+491700000042", "hi", ts=NOW - 10)
     _msg("+491700000042", "bye", direction="out", ts=NOW - 5, sender=store.OWNER_SENDER)   # done by the person
@@ -297,6 +336,7 @@ def test_the_pure_rules_stand_alone():
     assert not inbox.is_group("discord", "-5") and not inbox.is_group("whatsapp", "+49")
     assert inbox.channel_label("whatsapp") == "WhatsApp" and inbox.channel_label("room") == "Room"
     # A thread whose older message was answered still waits when the newest one was not.
-    older_answered = {"newest_special_use": "\\Inbox", "newest_answered_at": None, "answered": 1, "last_date_ts": 100.0}
+    older_answered = {"newest_special_use": "\\Inbox", "newest_answered_at": None, "answered": 1, "last_date_ts": 100.0,
+                      "snippet": "Wann können wir telefonieren?"}
     assert inbox.mail_thread_state(older_answered, None)["waits"] is True
     assert inbox.mail_thread_state(dict(older_answered, newest_answered_at="2026-09-09 10:00:00"), None)["waits"] is False

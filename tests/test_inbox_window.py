@@ -60,6 +60,10 @@ def test_the_window_reads_the_shells_pieces_and_registers_its_own_escape_rungs()
     assert levels == ["67", "66", "65"], levels
     assert "addEventListener('keydown'" not in src
     assert "fetch(api('api/inbox/marks'), {" in src and "seen: true" in src and "done: value" in src
+    assert "t('unanswered', { name: selected.name || selected.id })" in src, "the reason is said in one sentence"
+    assert "{selected.waits && (" in src and "setDoneMark(selected, true)" in src, "needs-no-answer only where a chat waits"
+    assert "{!selected.waits && selected.done && (" in src and "setDoneMark(selected, false)" in src, "reopen only where one was closed"
+    assert "setDoneMark(selected, !selected.done)" not in src
     assert "api/inbox/history?channel=" in src
 
 

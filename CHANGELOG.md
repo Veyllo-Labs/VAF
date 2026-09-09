@@ -50,6 +50,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Discord window or on the mail thread, "done", "write a draft", and the compose box for a
   WhatsApp chat you write in yourself). It refetches on the signal, never on a timer; on a
   phone the rail is a chip strip and the panes take turns. Seven catalogues carry the strings.
+  Whether the last message asks for an answer is read from its text, without a model: a
+  "danke", a "bis später" or a thumbs-up waits for nobody, a question or a request does,
+  and `inbox_waits_threshold` (default 0.6) is the line between them. The reason a chat
+  waits is said in one sentence in the inbox and in the channel windows ("The last message
+  came from Alice, still unanswered"), and "Needs no answer" is offered only where a chat
+  waits.
 - **A messenger chat has its own memory.** What the agent learns inside a chat with a
   contact is stored in that chat's own namespace (`source = chat/<session id>`), which every
   ordinary lookup of your agent leaves out in SQL, in both lanes of the hybrid search. Only

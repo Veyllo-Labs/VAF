@@ -408,9 +408,18 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                         <button type="button" onClick={() => openElsewhere(selected, false)} className={cn('flex items-center gap-1.5', BTN)}>
                                             <ExternalLink className="w-3.5 h-3.5" />{selected.channel === 'room' ? t('openRoom') : t('openIn', { channel: t(`channel.${selected.channel}`) })}
                                         </button>
-                                        <button type="button" onClick={() => { void setDoneMark(selected, !selected.done); }} className={cn('flex items-center gap-1.5', BTN)}>
-                                            {selected.done ? <Undo2 className="w-3.5 h-3.5" /> : <Check className="w-3.5 h-3.5" />}{selected.done ? t('reopen') : t('markDone')}
-                                        </button>
+                                        {/* "Needs no answer" only where a chat waits, "Reopen" only where one was closed:
+                                            a button on every row read as a control nobody could place. */}
+                                        {selected.waits && (
+                                            <button type="button" onClick={() => { void setDoneMark(selected, true); }} className={cn('flex items-center gap-1.5', BTN)}>
+                                                <Check className="w-3.5 h-3.5" />{t('markDone')}
+                                            </button>
+                                        )}
+                                        {!selected.waits && selected.done && (
+                                            <button type="button" onClick={() => { void setDoneMark(selected, false); }} className={cn('flex items-center gap-1.5', BTN)}>
+                                                <Undo2 className="w-3.5 h-3.5" />{t('reopen')}
+                                            </button>
+                                        )}
                                         {canDraft(selected) && (
                                             <button type="button" onClick={() => openElsewhere(selected, true)} className="px-3 py-1.5 rounded-lg bg-[#25a244] text-white text-sm font-medium flex items-center gap-1.5">
                                                 <Sparkles className="w-4 h-4" />{t('writeDraft')}
@@ -425,6 +434,9 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                         <p className="text-sm text-[#9a9a9a] self-center">{t('noMessages')}</p>
                                     ) : (
                                         <ConversationBubbles messages={bubbles} iconClass={CHANNEL_SQUARE[selected.channel]} query="" currentMatch={null} />
+                                    )}
+                                    {selected.waits && selected.waits_reason === 'unanswered' && (
+                                        <span className="self-center mt-2 text-[11px] text-[#e0b866] bg-[#2b2417] border border-[#4a3b1e] px-3 py-1 rounded-full text-center">{t('unanswered', { name: selected.name || selected.id })}</span>
                                     )}
                                     {selected.waits && selected.waits_reason === 'owner_asked' && (
                                         <span className="self-center mt-2 text-[11px] text-[#e0b866] bg-[#2b2417] border border-[#4a3b1e] px-3 py-1 rounded-full text-center">{t('ownerAsked')}</span>

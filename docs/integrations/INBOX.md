@@ -33,9 +33,23 @@ One shape for five sources:
 
 The rules are pure functions in `vaf/core/inbox.py`, each pinned by a test: `chat_state`
 (messenger), `mail_thread_state`, `room_state`, `chat_mode`, `is_group`,
-`reply_window_until`. The agent's reply lifts "waits" but does not close a row: the person
-may still want to see what was said in their name. The agent's question to the person
-(`owner_asked`) is answered by the person, or by the agent writing to the contact again.
+`reply_window_until`, `reply_expectation`. The agent's reply lifts "waits" but does not
+close a row: the person may still want to see what was said in their name. The agent's
+question to the person (`owner_asked`) is answered by the person, or by the agent writing
+to the contact again.
+
+**Does the last message ask for an answer?** A "danke", a "bis später" or a thumbs-up
+waits for nobody, and no model is asked to tell. `reply_expectation(text)` scores the
+newest inbound message from its text alone, 0 to 1: a question mark in any script (+0.4) or
+a request cue such as "kannst du", "wann", "please", "let me know" (+0.2) raise it; a
+message that is or begins with a thank-you, goodbye or acknowledgement lowers it (-0.5,
+-0.3 when the closer sits inside a short message); emoji and digits are not words, and an
+emoji-only message counts as none (-0.4); a longer message nudges up (+0.1 above four words,
++0.15 above twelve). A question mark outweighs a closer ("ok?" asks). A plain greeting or
+statement lands at 0.6 and waits; the configured `inbox_waits_threshold` (default 0.6, not
+in the UI, see [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md)) decides: lower it and more
+chats wait, raise it and fewer do. Mail threads run the newest message's snippet through
+the same rule; rooms wait on unread frames and invitations only.
 
 ## The marks
 
@@ -147,11 +161,15 @@ status lines), the list (a search over every channel, one row per conversation w
 channel square on the avatar, the kind tag for groups and rooms, the preview with who said
 it, and the chip line: unread, waits, agent answered, done, and the lane that answers), and
 the preview (the conversation in the shell's bubbles, the amber note when the agent asked
-the person or a room waits for an invitation answer, and the actions). "Open in the channel
-window" closes the inbox and opens Settings on Connections with a jump into the WhatsApp,
+the person or a room waits for an invitation answer, and the actions). The reason is said
+in one sentence, from `waits_reason` and the name: "The last message came from Alice, still
+unanswered", "The agent asked you a question about this chat", "This room waits for your
+answer to the invitation"; the channel windows say the same in their conversation header.
+"Open in the channel window" closes the inbox and opens Settings on Connections with a jump into the WhatsApp,
 Telegram or Discord window or the mail client (a repeat jump to the same chat fires again,
 because the page hands the jump in once and resets it when Settings consumed it); a room
-opens in the sidebar. "Done" and "Reopen" write the done mark. "Write a draft" jumps with the
+opens in the sidebar. "Needs no answer" is offered only on a row that waits and writes the
+done mark (the exchange is over for the person); "Reopen" only on a row marked done. "Write a draft" jumps with the
 draft flag: the WhatsApp window puts the cursor into the Composer's instruction field, the
 mail client opens the thread and its reply composer. The compose box is offered for WhatsApp rows the person writes
 in themselves (`can_compose`, the WhatsApp window's rule) and posts to the WhatsApp send

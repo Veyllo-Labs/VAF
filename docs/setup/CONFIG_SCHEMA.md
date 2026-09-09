@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (347 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (348 keys).
 
 ## How configuration is set
 
@@ -429,6 +429,7 @@ Most of these are populated by the setup wizard / Connections UI, not hand-edite
 
 | Key | Default | Meaning |
 |-----|---------|---------|
+| `inbox_waits_threshold` | `0.6` | The inbox's "waits for you": an inbound message waits when its reply-expectation score (0 to 1, computed from the text without a model: a question mark or a request cue raises it, a thank-you, goodbye or acknowledgement lowers it, emoji do not count as words) is at or above this. Lower it and more chats wait, raise it and fewer do; see [INBOX.md](../integrations/INBOX.md). Not in the UI. |
 | `telegram_config` | `None` | Telegram bot config (set via UI). |
 | `telegram_debounce_seconds` | `5` | Telegram message debounce. |
 | `telegram_idle_timeout` | `120` | Telegram session idle timeout. |

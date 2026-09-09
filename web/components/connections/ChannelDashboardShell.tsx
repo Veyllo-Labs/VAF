@@ -554,6 +554,9 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                     {selected.waits && selected.waitsReason === 'owner_asked' && (
                                         <p className="w-full text-xs text-[#e0b866]">{t('waitsOwnerAsked')}</p>
                                     )}
+                                    {selected.waits && selected.waitsReason === 'unanswered' && (
+                                        <p className="w-full text-xs text-[#e0b866]">{t('waitsUnanswered', { name: selected.label })}</p>
+                                    )}
                                 </div>
                                 <div ref={inlineChatRef} className="flex-1 min-h-0 overflow-y-auto bg-[#151515] p-5 flex flex-col gap-2.5">
                                     {conversationTop && !(historyLoading && sessionHistory.length === 0) && (

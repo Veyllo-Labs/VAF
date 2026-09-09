@@ -64,8 +64,13 @@ def settings() -> Dict[str, Any]:
 
 
 def knowledge(user_scope_id: Optional[str], instruction: str, fallback: str = "", *,
-              caller: str) -> str:
+              caller: str, chat_key: Optional[str] = None) -> str:
     """The user's own long-term memory, retrieved for this request.
+
+    A messenger window may name the chat's own memory namespace (``chat_key``, the
+    session id of that chat): the draft then also knows what the agent learned in that
+    chat when it answered there before. The mail window never names one, so a mail
+    draft can never reach a contact's namespace.
 
     The SAME lane the main agent and the voice agent use - `turn_memory_context`
     with the user's scope - and called the same way they call it: unconditionally,
@@ -95,7 +100,8 @@ def knowledge(user_scope_id: Optional[str], instruction: str, fallback: str = ""
         from uuid import UUID
 
         from vaf.memory.rag import turn_memory_context
-        return turn_memory_context(query, user_scope_id=UUID(str(scope)), caller=caller)
+        return turn_memory_context(query, user_scope_id=UUID(str(scope)), caller=caller,
+                                   chat_key=chat_key)
     except Exception as e:  # pragma: no cover - memory is optional infrastructure
         logger.info("composer: memory lookup unavailable: %s", e)
         return ""

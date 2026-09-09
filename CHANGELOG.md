@@ -28,7 +28,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   compacts on the usual interval into its namespace (facts about the person and what was
   agreed, read from the stored transcript), relay contacts and stored-only messages learn
   nowhere, and the owner's profile cache never carries a contact's facts. This replaces the
-  rule that contact chats were never written to memory at all.
+  rule that contact chats were never written to memory at all. The WhatsApp Composer
+  drafting for such a chat knows what the agent learned there; the mail Composer never
+  reaches a chat's namespace.
 - **Undo and redo in every editor.** The document editor (the DOCX path and the HTML
   path), the code viewer and the custom tool editor have Undo and Redo buttons, and answer
   Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z (Cmd on a Mac) while the keyboard is inside them. The

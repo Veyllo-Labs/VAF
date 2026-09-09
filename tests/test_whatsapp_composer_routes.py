@@ -53,8 +53,8 @@ def composer(monkeypatch):
 
     monkeypatch.setattr(lane, "stream_completion", _stream)
     monkeypatch.setattr(lane, "knowledge",
-                        lambda scope, instruction, fallback="", *, caller:
-                        seen["knowledge"].append((scope, instruction, fallback, caller)) or "")
+                        lambda scope, instruction, fallback="", *, caller, chat_key=None:
+                        seen["knowledge"].append((scope, instruction, fallback, caller, chat_key)) or "")
     return seen
 
 
@@ -100,15 +100,32 @@ def test_memory_is_keyed_on_the_instruction_with_the_chat_name_as_the_fallback(c
     _run({"chat_id": "+491700000001", "instruction": "confirm the day rate", "chat_label": "Bob"})
     _run({"chat_id": "+491700000001", "chat_label": "Bob"})
     assert composer["knowledge"] == [
-        (SCOPE, "confirm the day rate", "Bob", "whatsapp_composer"),
-        (SCOPE, "", "Bob", "whatsapp_composer"),
-    ]
+        (SCOPE, "confirm the day rate", "Bob", "whatsapp_composer", "whatsapp_alice_491700000001"),
+        (SCOPE, "", "Bob", "whatsapp_composer", "whatsapp_alice_491700000001"),
+    ], "the Composer names this chat's namespace with the bridge's own session id"
 
 
 def test_rewrite_reads_no_chat_and_carries_the_draft(composer):
     _run({"chat_id": "+491700000001", "mode": "rewrite", "draft": "ja passt", "instruction": "höflicher"})
     assert composer["reads"] == [], "rewrite works on the person's text and reads nothing"
     assert "<user_draft>\nja passt\n</user_draft>" in composer["messages"][-1]["content"]
+    assert composer["knowledge"][-1][4] == "whatsapp_alice_491700000001", \
+        "the person's preferences from this chat are as useful when rewriting"
+
+
+def test_the_composer_lane_forwards_the_namespace_and_the_mail_lane_never_names_one(monkeypatch):
+    from pathlib import Path
+
+    from vaf.core import composer_lane
+    from vaf.memory import rag
+
+    seen = []
+    monkeypatch.setattr(rag, "turn_memory_context", lambda query, **kw: seen.append(kw) or "")
+    composer_lane.knowledge(SCOPE, "q", "Bob", caller="whatsapp_composer", chat_key="whatsapp_alice_1")
+    composer_lane.knowledge(SCOPE, "q", "Bob", caller="mail_composer")
+    assert seen[0]["chat_key"] == "whatsapp_alice_1" and seen[1]["chat_key"] is None
+    mail = (Path(__file__).resolve().parent.parent / "vaf" / "api" / "mail_routes.py").read_text(encoding="utf-8")
+    assert "chat_key" not in mail, "a mail draft must never reach a contact's namespace"
 
 
 def test_refusals(composer, monkeypatch):

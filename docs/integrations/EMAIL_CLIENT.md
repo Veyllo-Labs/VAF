@@ -278,8 +278,9 @@ the follow-up turns and `clean_output`. It ships two profiles, `EMAIL` and `CHAT
 (a messenger chat from the channel message store, with `build_chat_context`).
 `vaf/core/composer_lane.py` is the IO every Composer route shares: the settings
 (the `mail_composer_*` keys govern the Composer wherever it appears), the memory
-lookup, the local-model loading and the ONE tool-less streamed completion, booked
-on the calling window's usage lane. `vaf/mail/composer.py` keeps what is true of
+lookup (which a messenger window points at that chat's own memory namespace as
+well, see below), the local-model loading and the ONE tool-less streamed
+completion, booked on the calling window's usage lane. `vaf/mail/composer.py` keeps what is true of
 mail only: quoted tails and signatures to strip, the Sent folder deciding whose
 message it is (`is_own_message`, `build_thread_context`), the one-line quotes
 from other threads. Every Composer turn, in whichever window, is still exactly one
@@ -362,9 +363,13 @@ classified, and it is refused outright for anything in Inbox, Junk or Trash, whi
 is precisely where a forged From lands.
 
 **The user's own knowledge** is retrieved the way the main agent and the voice agent
-retrieve it - `run_memory_search_sync` with the caller's scope, gated only on
-`memory_enabled`, with `memory_rag_k` (the main agent's own key) rather than a
-number invented here. UNCONDITIONALLY, and deliberately so: a composer that only
+retrieve it - `composer_lane.knowledge` calls `turn_memory_context` with the caller's
+scope, gated only on `memory_enabled`, with `memory_rag_k` (the main agent's own key)
+rather than a number invented here. In the WhatsApp window the lookup also names the
+chat's own memory namespace (the session id the bridge builds for that number), so a
+draft for a person the agent once answered knows what was agreed with them; the mail
+window never names one, which a test pins, so a mail draft cannot reach a contact's
+namespace. UNCONDITIONALLY, and deliberately so: a composer that only
 sometimes remembers who you are is worse than one that never does, because you
 cannot tell which run you got. The query is the user's instruction, their prompt for
 this turn exactly as `task.input_text` is the main agent's; with nothing typed it

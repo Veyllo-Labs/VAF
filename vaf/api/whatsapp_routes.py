@@ -1353,8 +1353,13 @@ async def whatsapp_composer(request: Request, body: ComposerRequest):
     instruction = (body.instruction or "")
     knowledge = ""
     if cfg["memory"]:
+        # The chat's own memory namespace is keyed by the session id the bridge builds for
+        # this number (one builder, so the key cannot drift); it holds what the agent
+        # learned here when it answered before, and is empty for a chat it never answered.
+        chat_key = whatsapp_session_id(username, cid, fallback="") or None
         knowledge = await asyncio.to_thread(
-            composer_lane.knowledge, user_scope_id, instruction, label, caller="whatsapp_composer")
+            composer_lane.knowledge, user_scope_id, instruction, label,
+            caller="whatsapp_composer", chat_key=chat_key)
     turns = [t for t in (body.turns or []) if isinstance(t, dict)]
     messages = composer.build_prompt(
         ctx, mode=mode, instruction=instruction, draft=(body.draft or ""),

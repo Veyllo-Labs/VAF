@@ -170,7 +170,9 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                 memType: n.data.type || 'note',
                 docTag: (n.data as { docTag?: string }).docTag || '',
                 memoryCount: n.data.memoryCount || 0,
-                color: isTag ? TAG_COLOR : isChat ? CHAT_COLOR : (TYPE_COLORS[n.data.type || ''] || DEFAULT_COLOR),
+                // A memory learned in a chat wears the chat colour: the Chat legend row is
+                // the one that hides it, so its swatch has to be the colour on the canvas.
+                color: isTag ? TAG_COLOR : (isChat || n.data.chatKey) ? CHAT_COLOR : (TYPE_COLORS[n.data.type || ''] || DEFAULT_COLOR),
                 size: 3,
             });
         }

@@ -2044,12 +2044,14 @@
       "chatDetails": "聊天详情",
       "chatLearnedHere": "智能体在此聊天中学到的内容",
       "chatMemoriesCount": "记忆",
-      "chatShowInSearch": "在记忆搜索中显示这些记忆",
+      "chatShowInSearch": "在搜索面板中显示这些记忆",
       "chatDeleteButton": "删除聊天记忆",
       "chatDeleteBody": "将永久删除智能体在此聊天中学到的全部内容。聊天本身保留。",
       "chatDeleteConfirm": "删除",
       "chatDeleteCancel": "取消",
       "chatDeleting": "正在删除…",
+      "chatCollapse": "收起",
+      "chatExpand": "展开",
       "chatClose": "关闭"
     },
     "userIdentity": {

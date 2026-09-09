@@ -80,4 +80,10 @@ def test_a_missing_scope_or_a_malformed_key_is_refused(monkeypatch):
     with pytest.raises(HTTPException) as bad_key:
         asyncio.run(routes.delete_chat_namespace("alice 49/../x", user_scope_id=uuid4()))
     assert bad_key.value.status_code == 400
+    with pytest.raises(HTTPException):
+        asyncio.run(routes.delete_chat_namespace("whatsapp_alice\n_49", user_scope_id=uuid4()))
     assert _FakePipeline.cleared == []
+    # A username may carry a space or an accent; the session id, and so the key, carries it too.
+    scope = uuid4()
+    asyncio.run(routes.delete_chat_namespace("whatsapp_Max Müller_491701234567", user_scope_id=scope))
+    assert _FakePipeline.cleared == [("whatsapp_Max Müller_491701234567", scope)]

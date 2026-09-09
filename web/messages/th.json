@@ -2044,12 +2044,14 @@
       "chatDetails": "รายละเอียดแชท",
       "chatLearnedHere": "สิ่งที่เอเจนต์เรียนรู้จากแชทนี้",
       "chatMemoriesCount": "ความจำ",
-      "chatShowInSearch": "แสดงความจำเหล่านี้ในการค้นหาความจำ",
+      "chatShowInSearch": "แสดงความจำเหล่านี้ในแผงค้นหา",
       "chatDeleteButton": "ลบความจำของแชท",
       "chatDeleteBody": "จะลบทุกอย่างที่เอเจนต์เรียนรู้จากแชทนี้อย่างถาวร ตัวแชทเองยังคงอยู่",
       "chatDeleteConfirm": "ลบ",
       "chatDeleteCancel": "ยกเลิก",
       "chatDeleting": "กำลังลบ…",
+      "chatCollapse": "ย่อ",
+      "chatExpand": "ขยาย",
       "chatClose": "ปิด"
     },
     "userIdentity": {

@@ -34,6 +34,15 @@ CHAT_SOURCE_PREFIX = "chat/"
 
 _NAMESPACE_KEYS = ("chat_key", "chat_channel", "chat_label")
 _CHANNEL_NAMES = {"whatsapp": "WhatsApp", "telegram": "Telegram", "discord": "Discord"}
+_LABEL_MAX_CHARS = 80
+
+
+def clean_label(text: Any) -> str:
+    """One line, collapsed whitespace, capped. A label reaches the compaction prompt as
+    the speaker prefix of every line the person wrote and inside the instruction, and it
+    is text the OTHER side of the chat chose (a push name), so it may never carry a line
+    break that would forge an assistant turn, nor run long enough to become a message."""
+    return " ".join(str(text or "").split())[:_LABEL_MAX_CHARS].strip()
 
 
 def chat_source(chat_key: str) -> str:
@@ -105,6 +114,13 @@ class ChatNamespace:
     key: str
     channel: str
     label: str
+
+    def __post_init__(self) -> None:
+        # Normalised on every construction path: the bridges' metadata, the queue task,
+        # the stored meta and a test all build one through here.
+        object.__setattr__(self, "key", str(self.key or "").strip())
+        object.__setattr__(self, "channel", str(self.channel or "").strip().lower())
+        object.__setattr__(self, "label", clean_label(self.label) or _endpoint_of(self.key))
 
     @property
     def source(self) -> str:

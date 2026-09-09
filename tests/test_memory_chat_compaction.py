@@ -36,9 +36,10 @@ class _FakePipeline:
         _FakePipeline.searches.append(kw)
         return []
 
-    async def ingest(self, content, metadata=None, auto_connect=True, user_scope_id=None):
+    async def ingest(self, content, metadata=None, auto_connect=True, user_scope_id=None, keep_namespace=False):
         _FakePipeline.ingests.append({"content": content, "meta": dict(metadata or {}),
-                                      "auto_connect": auto_connect, "scope": user_scope_id})
+                                      "auto_connect": auto_connect, "scope": user_scope_id,
+                                      "keep_namespace": keep_namespace})
         return object()
 
 
@@ -113,7 +114,9 @@ def test_a_chat_run_writes_into_its_namespace_and_dedups_only_there(monkeypatch)
                            "tags": ["preferences"], "chat_key": ALICE.key,
                            "chat_channel": "whatsapp", "chat_label": "Alice"}
     assert rec["auto_connect"] is False and rec["scope"] == SCOPE
+    assert rec["keep_namespace"] is True, "the compaction is the one writer that owns the namespace keys"
     assert _FakePipeline.searches[0]["chat_key"] == ALICE.key, "the dedup check must stay inside the namespace"
+    assert _FakePipeline.searches[0]["hybrid"] is False, "pure cosine, or one shared token dedups everything"
     assert refreshed == [], "a chat run never rebuilds the owner's profile cache"
     assert saved == [{ALICE.key: 1}]
     prompt = agent.prompts[0]
@@ -141,7 +144,8 @@ def test_an_owner_run_is_unchanged(monkeypatch):
     rag.run_session_compaction_sync(agent, SCOPE, "web_session", 1)
     rec = _FakePipeline.ingests[0]
     assert rec["meta"]["source"].startswith("memory/") and "chat_key" not in rec["meta"]
-    assert _FakePipeline.searches[0]["chat_key"] is None
+    assert rec["keep_namespace"] is False
+    assert _FakePipeline.searches[0]["chat_key"] is None and _FakePipeline.searches[0]["hybrid"] is False
     assert refreshed == [SCOPE]
     assert "You are storing durable memories from this chat." in agent.prompts[0]
     assert agent.prompts[0].count("Assistant: noted") == 1, "the owner run still reads the agent history"
@@ -181,7 +185,7 @@ def test_the_agent_excerpt_is_byte_identical_for_the_owner():
     assert rag._build_compaction_conversation_excerpt(agent) == "User: hi there\n\nAssistant: hello"
 
 
-def test_a_turn_inside_a_chat_gets_the_general_block_and_the_chat_block(monkeypatch):
+def test_a_turn_inside_a_chat_names_its_namespace_in_the_one_call_every_lane_makes(monkeypatch):
     from vaf.core.config import Config
 
     cfg = {"memory_enabled": True, "memory_rag_k": 3}
@@ -190,18 +194,52 @@ def test_a_turn_inside_a_chat_gets_the_general_block_and_the_chat_block(monkeypa
 
     def _spy(query, k=5, user_scope_id=None, caller=None, **kw):
         calls.append((query, k, user_scope_id, caller, kw))
-        return "[Chat Source 1] (Relevance: 90%)\nAlice wants Ali" if kw.get("chat_key") else "[Source 1] (Relevance: 80%)\nowner fact"
+        return "block"
     monkeypatch.setattr(rag, "run_memory_search_sync", _spy)
 
-    assert rag.turn_memory_context("q", user_scope_id=SCOPE, caller="headless") == "[Source 1] (Relevance: 80%)\nowner fact"
+    assert rag.turn_memory_context("q", user_scope_id=SCOPE, caller="headless") == "block"
     assert calls == [("q", 3, SCOPE, "headless", {})], "without a key the general call is the only call, unchanged"
-
     calls.clear()
-    out = rag.turn_memory_context("q", user_scope_id=SCOPE, caller="headless", chat_key=ALICE.key)
+    assert rag.turn_memory_context("q", user_scope_id=SCOPE, caller="headless", chat_key=ALICE.key) == "block"
+    assert calls == [("q", 3, SCOPE, "headless", {"chat_key": ALICE.key})], "one call, the key on it"
+
+
+def test_the_search_carries_both_lanes_in_one_block_and_one_snippet_push(monkeypatch):
+    """The general lane first, then the chat's namespace, formatted as two blocks, pushed to
+    the owner's RAG-Snippets panel ONCE with both lists: a second push would replace the
+    first and the panel would under-report exactly the turns this lane exists for."""
+    from vaf.core.config import Config
+
+    cfg = {"memory_enabled": True, "memory_rag_refine_query": False, "local_network_enabled": False,
+           "memory_rag_threshold": 0.3, "debug_logs_enabled": False}
+    monkeypatch.setattr(Config, "get", classmethod(lambda cls, key, default=None: cfg.get(key, default)))
+    owner = rag.RagSource(memory_id=uuid4(), chunk_id=uuid4(), text="owner fact", score=0.8, metadata={})
+    chat = rag.RagSource(memory_id=uuid4(), chunk_id=uuid4(), text="Alice wants Ali", score=0.9,
+                         metadata={"chat_key": ALICE.key})
+    seen = []
+
+    class _Pipeline:
+        def __init__(self, db):
+            pass
+
+        async def search(self, query, **kw):
+            seen.append(kw.get("chat_key"))
+            return [chat] if kw.get("chat_key") else [owner]
+    pushes = []
+    import vaf.core.web_interface as wi
+    monkeypatch.setattr(wi, "get_web_interface",
+                        lambda: SimpleNamespace(push_update_to_user=lambda scope, payload: pushes.append(payload)))
+    monkeypatch.setattr(rag, "get_db", _FakeGetDb)
+    monkeypatch.setattr(rag, "RagPipeline", _Pipeline)
+
+    out = rag.run_memory_search_sync("q", k=3, user_scope_id=SCOPE, caller="t", chat_key=ALICE.key)
     assert out == "[Source 1] (Relevance: 80%)\nowner fact\n\n---\n\n[Chat Source 1] (Relevance: 90%)\nAlice wants Ali"
-    assert calls[0][4] == {} and calls[1][3] == "headless:chat"
-    assert calls[1][4] == {"chat_key": ALICE.key, "source_label": "Chat Source"}
+    assert seen == [None, ALICE.key]
+    assert len(pushes) == 1 and [s["text"] for s in pushes[0]["sources"]] == ["owner fact", "Alice wants Ali"]
     assert rag.count_sources(out) == 2
+    seen.clear(); pushes.clear()
+    assert rag.run_memory_search_sync("q", k=3, user_scope_id=SCOPE, caller="t") == "[Source 1] (Relevance: 80%)\nowner fact"
+    assert seen == [None] and len(pushes) == 1
 
 
 def test_the_chat_header_is_formatted_by_the_shared_formatter_and_rejected_as_a_fact():

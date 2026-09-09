@@ -2044,12 +2044,14 @@
       "chatDetails": "Sohbet ayrıntıları",
       "chatLearnedHere": "Ajanın bu sohbette öğrendikleri",
       "chatMemoriesCount": "Anılar",
-      "chatShowInSearch": "Bu anıları aramada göster",
+      "chatShowInSearch": "Bu anıları arama panelinde göster",
       "chatDeleteButton": "Sohbet anılarını sil",
       "chatDeleteBody": "Ajanın bu sohbette öğrendiği her şeyi kalıcı olarak kaldırır. Sohbetin kendisi kalır.",
       "chatDeleteConfirm": "Sil",
       "chatDeleteCancel": "İptal",
       "chatDeleting": "Siliniyor…",
+      "chatCollapse": "Daralt",
+      "chatExpand": "Genişlet",
       "chatClose": "Kapat"
     },
     "userIdentity": {

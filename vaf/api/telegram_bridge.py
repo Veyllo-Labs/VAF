@@ -814,7 +814,7 @@ def _run_bot():
 
     async def _enqueue_telegram_image(file_id, display_name, mime, caption,
                                       entry, is_relay, telegram_user_id, chat_id,
-                                      message_id=None) -> bool:
+                                      message_id=None, chat_label="") -> bool:
         """Download a Telegram image and enqueue it for the VISION pipeline — the same path the
         Web UI uses (metadata['images'] with persisted file entries). Returns False on download
         failure. Shared by handle_photo (compressed photos) and handle_document (image sent as a file)."""
@@ -870,6 +870,7 @@ def _run_bot():
         if entry.get("from_contact"):
             metadata["from_contact"] = True
             metadata["telegram_user_id"] = str(telegram_user_id)
+            metadata["chat_label"] = str(chat_label or "")
 
         user_message = f"[Photo] (User: {caption})" if caption else "[Photo]"
         TaskQueue().add(session_id=session_id, input_text=user_message,
@@ -1051,6 +1052,7 @@ def _run_bot():
                 doc.file_id, file_name, doc_mime or "image/jpeg", caption,
                 entry, is_relay, telegram_user_id, chat_id,
                 message_id=str(update.message.message_id),
+                chat_label=_telegram_display_name(user),
             )
             if not ok:
                 await update.message.reply_text("❌ Bild konnte nicht verarbeitet werden.")
@@ -1167,6 +1169,7 @@ def _run_bot():
             photo.file_id, "telegram_photo.jpg", "image/jpeg", caption,
             entry, is_relay, telegram_user_id, chat_id,
             message_id=str(update.message.message_id),
+            chat_label=_telegram_display_name(user),
         )
         if not ok:
             await update.message.reply_text("❌ Foto konnte nicht verarbeitet werden. Bitte erneut senden.")

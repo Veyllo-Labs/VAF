@@ -40,16 +40,23 @@ function ChatDetailsView({
     connectedMemories,
     onShowInSearch,
     onDelete,
-    isLoading,
+    error,
 }: {
     chatNode: { id: string; data: { label: string; memoryCount?: number; chatChannel?: string } };
     connectedMemories: Array<{ id: string; label: string; type?: string }>;
     onShowInSearch: () => void;
     onDelete: () => Promise<void>;
-    isLoading: boolean;
+    error?: string | null;
 }) {
     const tm = useTranslations('modals');
     const [confirming, setConfirming] = useState(false);
+    // Own busy flag, like the tag view: the store's isLoading also flips on a graph
+    // refresh, which must not read as "deleting" on this button.
+    const [isDoing, setIsDoing] = useState(false);
+    const runDelete = async () => {
+        setIsDoing(true);
+        try { await onDelete(); } finally { setIsDoing(false); }
+    };
 
     return (
         <div className="space-y-4">
@@ -66,7 +73,7 @@ function ChatDetailsView({
                 <button
                     type="button"
                     onClick={() => setConfirming(true)}
-                    disabled={isLoading || confirming}
+                    disabled={isDoing || confirming}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50 shrink-0"
                 >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -80,20 +87,23 @@ function ChatDetailsView({
                         <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
                         <span className="text-sm font-medium text-red-800">{tm('memory.chatDeleteBody')}</span>
                     </div>
+                    {error && !isDoing && (
+                        <p className="text-xs text-red-700 mb-2">{error}</p>
+                    )}
                     <div className="flex gap-2">
                         <button
                             type="button"
-                            onClick={() => { void onDelete(); }}
-                            disabled={isLoading}
+                            onClick={() => { void runDelete(); }}
+                            disabled={isDoing}
                             className="px-3 py-1 text-xs font-medium bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50"
                         >
-                            {isLoading ? tm('memory.chatDeleting') : tm('memory.chatDeleteConfirm')}
+                            {isDoing ? tm('memory.chatDeleting') : tm('memory.chatDeleteConfirm')}
                         </button>
                         <button
                             type="button"
                             onClick={() => setConfirming(false)}
-                            disabled={isLoading}
-                            className="px-3 py-1 text-xs font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+                            disabled={isDoing}
+                            className="px-3 py-1 text-xs font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50"
                         >
                             {tm('memory.chatDeleteCancel')}
                         </button>
@@ -425,7 +435,7 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                         <button
                             onClick={toggleExpand}
                             className="p-2 hover:bg-sky-100 rounded-lg transition-colors"
-                            title={expanded ? 'Collapse' : 'Expand'}
+                            title={expanded ? tm('memory.chatCollapse') : tm('memory.chatExpand')}
                         >
                             {expanded ? (
                                 <ChevronDown className="w-4 h-4 text-sky-600" />
@@ -450,7 +460,7 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                             connectedMemories={connectedMemories}
                             onShowInSearch={() => selectedNodeId && showTagResults(
                                 selectedNodeId, String((selectedNode as any)?.data?.label || ''))}
-                            isLoading={isLoading}
+                            error={error}
                             onDelete={async () => {
                                 const count = await deleteChatNamespace(chatKey);
                                 if (count >= 0) onClose?.();

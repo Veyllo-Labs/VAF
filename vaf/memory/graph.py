@@ -17,11 +17,18 @@ from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from vaf.memory.models import Memory, Connection, Chunk, EMBEDDING_DIM
-from vaf.memory.lanes import ChatNamespace, not_attachment_lane, not_chat_lane
+from vaf.memory.lanes import ChatNamespace, is_chat_source, not_attachment_lane, not_chat_lane
 from vaf.core.config import Config
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _chat_key_of(meta) -> str:
+    """The namespace a memory belongs to, read off its SOURCE: a `chat_key` on a row whose
+    source is not a chat lane is a stray key and groups nothing (the delete goes by source)."""
+    meta = meta or {}
+    return str(meta.get("chat_key") or "").strip() if is_chat_source(meta.get("source")) else ""
 
 
 class GraphManager:
@@ -158,7 +165,7 @@ class GraphManager:
                     # key (set by learn_document on sections AND the root).
                     "docTag": (memory.meta or {}).get("doc_tag", ""),
                     # Learned inside one messenger chat: hangs off that chat's node.
-                    "chatKey": (memory.meta or {}).get("chat_key", ""),
+                    "chatKey": _chat_key_of(memory.meta),
                 }
             }
             nodes.append(node)
@@ -202,7 +209,7 @@ class GraphManager:
         for memory in memories:
             meta = memory.meta or {}
             memory_id_str = str(memory.id)
-            chat_key = str(meta.get("chat_key") or "").strip()
+            chat_key = _chat_key_of(meta)
             if chat_key:
                 group = chat_groups.setdefault(chat_key, {"channel": "", "label": "", "ids": set()})
                 group["ids"].add(memory_id_str)
@@ -461,7 +468,9 @@ class GraphManager:
         if memory.embedding is None:
             logger.warning(f"Memory {memory.id} has no embedding, skipping auto-connect")
             return []
-        
+        if is_chat_source((getattr(memory, "meta", None) or {}).get("source")):
+            return []   # a chat memory never initiates an edge either; the lane stays closed both ways
+
         threshold = threshold or self.auto_connect_threshold
         
         # Find similar memories using pgvector

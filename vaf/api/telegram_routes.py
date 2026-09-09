@@ -460,6 +460,13 @@ async def get_telegram_session_history(session_id: str, request: Request):
     user_scope_id = str(current_user.get("user_scope_id") or "").strip()
     is_admin = _is_telegram_admin(request)
     chat_id = session_id[len("telegram_") :]
+    # A relay contact is answered by nobody and never compacts: the pane shows no
+    # Memory Learning counter for that chat (the counter would count turns that never learn).
+    _cfg = Config.get("telegram_config") or {}
+    _relay_ids = {str(e.get("telegram_user_id") or "").strip()
+                  for e in (list(_cfg.get("relay_whitelist") or []) if isinstance(_cfg, dict) else [])
+                  if isinstance(e, dict)}
+    learns = chat_id not in _relay_ids
     if not is_admin:
         telegram_config = Config.get("telegram_config") or {}
         if not isinstance(telegram_config, dict):
@@ -485,15 +492,18 @@ async def get_telegram_session_history(session_id: str, request: Request):
         if user_turn_count == 0 and session.messages:
             user_turn_count = sum(1 for m in (session.messages or []) if getattr(m, "role", None) == "user")
         last_compaction_at_turn, compaction_interval = _get_compaction_info(session_id)
-        return {
-            "session_id": session_id,
-            "messages": messages,
-            "user_turn_count": user_turn_count,
-            "compaction_interval": compaction_interval,
-            "last_compaction_at_turn": last_compaction_at_turn,
-        }
+        out = {"session_id": session_id, "messages": messages}
+        if learns:
+            out.update({
+                "user_turn_count": user_turn_count,
+                "compaction_interval": compaction_interval,
+                "last_compaction_at_turn": last_compaction_at_turn,
+            })
+        return out
     except FileNotFoundError:
         last_compaction_at_turn, compaction_interval = _get_compaction_info(session_id)
+        if not learns:
+            return {"session_id": session_id, "messages": []}
         return {
             "session_id": session_id,
             "messages": [],

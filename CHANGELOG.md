@@ -266,6 +266,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   an empty file while the bridge had written the rows under the scope.
 
 ### Fixed
+- Memory learning: the duplicate check before a learned fact is stored ran through the hybrid search, whose lexical lane admits any existing row sharing a single word, so a new fact could be dropped as a duplicate of an unrelated one. The check is a pure cosine search now, as the `memory_save` check always was.
 - Telegram: a contact whose burst started with a voice message was answered as the owner, with the owner's full tool set, because the voice handler's pending record lacked the contact flag the text handler sets. Both records carry it now.
 - WhatsApp window: the Memory Learning counter appeared under every chat, including read-only chats and chats the person writes in by hand, although only the owner's own chat with the agent answering is ever compacted. The counter now travels only for that chat, and where the compose box is shown it takes the footer's place, so the input sits at the bottom of the conversation.
 

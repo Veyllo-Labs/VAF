@@ -124,3 +124,13 @@ def test_a_chat_memory_hangs_only_on_its_chat_node():
     assert all(e["target"] == "chat-whatsapp_alice_49" for e in chat_edges)
     assert not [e for e in data["edges"] if e["source"] == str(chat.id) and e["target"].startswith("tag-")]
     assert "chat/" not in _where(limit=0), "the graph query keeps chat rows in"
+
+
+def test_a_stray_chat_key_without_a_chat_source_groups_nothing():
+    """The delete goes by source; a node that grouped on the key alone would show a memory the
+    delete leaves behind."""
+    stray = _mem({"title": "x", "type": "note", "tags": [], "chat_key": "whatsapp_alice_49"})
+    db = _SpyDb(rows_per_call=[[stray], []])
+    data = asyncio.run(GraphManager(db).get_graph_data(limit=0))
+    assert not [n for n in data["nodes"] if n["type"] == "chatNode"]
+    assert data["nodes"][0]["data"]["chatKey"] == ""

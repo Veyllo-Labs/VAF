@@ -57,6 +57,31 @@ def test_a_telegram_contact_is_front_office_whether_the_burst_starts_with_text_o
         assert '"chat_label": _telegram_display_name(user),' in part
     flush = _between(src, "async def _delayed_flush", "async def handle_message")
     assert 'metadata["chat_label"] = str(pending.get("chat_label") or "")' in flush
+    image = _between(src, "async def _enqueue_telegram_image", "async def handle_message")
+    assert 'metadata["chat_label"] = str(chat_label or "")' in image
+    assert src.count("chat_label=_telegram_display_name(user),") == 2, "both image callers pass the label"
+
+
+def test_a_relay_contact_gets_no_learning_counter_in_the_telegram_pane(monkeypatch):
+    """A relay contact is answered by nobody and never compacts; a counter there would count
+    turns that never learn."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from vaf.api import telegram_routes as routes
+    from vaf.core.config import Config
+
+    cfg = {"telegram_config": {"whitelist": [{"telegram_user_id": "7", "user_scope_id": "s"}],
+                               "relay_whitelist": [{"telegram_user_id": "9", "user_scope_id": "s"}]},
+           "memory_compaction_interval": 15}
+    monkeypatch.setattr(Config, "get", classmethod(lambda cls, key, default=None: cfg.get(key, default)))
+    monkeypatch.setattr(routes, "_is_telegram_admin", lambda request: True)
+    monkeypatch.setattr(routes, "get_current_vaf_user", lambda request: {"user_scope_id": "s", "username": "alice"})
+    request = SimpleNamespace(state=SimpleNamespace(user={}))
+    owner = asyncio.run(routes.get_telegram_session_history("telegram_7", request))
+    relay = asyncio.run(routes.get_telegram_session_history("telegram_9", request))
+    assert "compaction_interval" in owner and owner["messages"] == []
+    assert "compaction_interval" not in relay and "user_turn_count" not in relay and relay["messages"] == []
 
 
 def test_the_whatsapp_bridge_labels_a_contact_task_and_never_the_owner():

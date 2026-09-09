@@ -29,6 +29,7 @@ def test_a_chat_click_pins_the_same_result_set_a_tag_does():
 def test_the_chat_toggle_hides_the_hub_and_its_members_together():
     graph = _code(WEB / "MemoryGraph.tsx")
     assert "{ type: 'chat', label: 'Chat', color: CHAT_COLOR }" in graph
+    assert "(isChat || n.data.chatKey) ? CHAT_COLOR" in graph, "a chat memory wears the colour of the row that hides it"
     reducer = graph[graph.index("nodeReducer:"):graph.index("edgeReducer:")]
     assert "(attrs.isChat || attrs.chatKey) ? 'chat'" in reducer, \
         "a chat memory must follow the Chat toggle, not the Conversation one, or the hub is orphaned"
@@ -66,7 +67,8 @@ def test_both_hubs_take_the_short_details_panel_and_their_own_icon():
 def test_every_catalogue_carries_the_chat_strings():
     import json
     keys = {"chatDetails", "chatLearnedHere", "chatMemoriesCount", "chatShowInSearch", "chatDeleteButton",
-            "chatDeleteBody", "chatDeleteConfirm", "chatDeleteCancel", "chatDeleting", "chatClose"}
+            "chatDeleteBody", "chatDeleteConfirm", "chatDeleteCancel", "chatDeleting", "chatClose",
+            "chatCollapse", "chatExpand"}
     for path in sorted((ROOT / "web" / "messages").glob("*.json")):
         memory = json.loads(path.read_text(encoding="utf-8"))["modals"]["memory"]
         assert keys <= set(memory), f"{path.name} lacks {keys - set(memory)}"

@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # The lane predicates live in vaf/memory/lanes.py (graph.py applies them too and cannot
 # import this module); the constant is re-exported here for its existing importers.
 from vaf.memory.lanes import (  # noqa: E402
-    ATTACHMENT_EPHEMERAL_SOURCE, ChatNamespace, chat_source, in_chat_lane,
+    ATTACHMENT_EPHEMERAL_SOURCE, ChatNamespace, chat_source, clean_label, in_chat_lane,
     not_attachment_lane, not_chat_lane, pin_namespace,
 )
 
@@ -253,7 +253,8 @@ class RagPipeline:
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[UUID] = None,
         auto_connect: bool = True,
-        user_scope_id: Optional[UUID] = None
+        user_scope_id: Optional[UUID] = None,
+        keep_namespace: bool = False,
     ) -> Memory:
         """
         Ingest content into the memory system.
@@ -282,6 +283,12 @@ class RagPipeline:
             raise ValueError("Cannot ingest empty content")
         
         metadata = metadata or {}
+        # The lane is set HERE and nowhere else. Only the compaction of a messenger chat
+        # writes a namespace's keys; every other writer (POST /api/memory forwards a
+        # free-form metadata dict) has them stripped, or a request body could plant a
+        # row that no owner-side search can ever return.
+        if not keep_namespace:
+            metadata = pin_namespace({}, metadata)
 
         # Set default title if not provided. NEVER derive it from content:
         # meta is stored unencrypted, and for short fact memories a
@@ -1395,6 +1402,7 @@ def _format_compaction_dialogue(dialogue: List[Tuple[Any, Any]], max_chars: int 
     """The transcript a compaction reads: the newest user and assistant lines that fit
     `max_chars`, oldest first, one line each. `user_label` names the human side - "User"
     for the account owner, the person's name for a messenger chat with a contact."""
+    user_label = clean_label(user_label) or "User"
     lines: List[str] = []
     total = 0
     for role, content in reversed(dialogue):
@@ -1649,9 +1657,13 @@ def run_session_compaction_sync(
                     try:
                         # A chat run dedups inside its own namespace, never against the
                         # owner's memories (and the owner's run never against a chat's).
+                        # Pure cosine (hybrid=False), as the memory_save check: the hybrid
+                        # fusion returns rank values no threshold can read, and its lexical
+                        # lane admits any row sharing one token, which in a small namespace
+                        # would make the first fact the only fact.
                         existing = await pipeline.search(
                             content.strip(), k=1, threshold=0.95,
-                            user_scope_id=user_scope_id,
+                            user_scope_id=user_scope_id, hybrid=False,
                             chat_key=(chat.key if chat is not None else None),
                         )
                         if existing:
@@ -1677,6 +1689,7 @@ def run_session_compaction_sync(
                         metadata=meta,
                         user_scope_id=user_scope_id,
                         auto_connect=False,
+                        keep_namespace=chat is not None,
                     )
                     _counts["ingested"] += 1
 
@@ -2029,23 +2042,20 @@ def turn_memory_context(query: str, *, user_scope_id: Optional[UUID] = None,
     to act on the difference by lying about what it knows.
 
     ``chat_key`` is the one addition a turn INSIDE a messenger chat makes: a second block,
-    `[Chat Source N]`, from that chat's own namespace, underneath the general snippets.
-    The general call is the same call every other lane makes; the namespace is a second
-    search, so a caller without a key is byte-identical to before.
+    `[Chat Source N]`, from that chat's own namespace, underneath the general snippets,
+    out of the same call (one snippet push to the owner's panel, one timeout). A caller
+    without a key makes the call every other lane makes, byte-identical to before.
     """
     try:
         if not Config.get("memory_enabled", True):
             return ""
         k = int(Config.get("memory_rag_k", 5))
         k = max(1, min(20, k))
-        general = run_memory_search_sync(query, k=k, user_scope_id=user_scope_id,
-                                         caller=caller or None) or ""
-        if not chat_key:
-            return general
-        chat_block = run_memory_search_sync(query, k=k, user_scope_id=user_scope_id,
-                                            caller=f"{caller or 'turn'}:chat",
-                                            chat_key=chat_key, source_label="Chat Source") or ""
-        return "\n\n---\n\n".join(b for b in (general, chat_block) if b)
+        if chat_key:
+            return run_memory_search_sync(query, k=k, user_scope_id=user_scope_id,
+                                          caller=caller or None, chat_key=chat_key) or ""
+        return run_memory_search_sync(query, k=k, user_scope_id=user_scope_id,
+                                      caller=caller or None) or ""
     except Exception:
         return ""
 
@@ -2058,7 +2068,7 @@ def run_memory_search_sync(
     include_ids: bool = False,
     exclude_documents: bool = False,
     chat_key: Optional[str] = None,
-    source_label: str = "Source",
+    source_label: str = "Chat Source",
 ) -> str:
     """
     Run RAG search synchronously for use from sync code (e.g. headless runner).
@@ -2071,8 +2081,9 @@ def run_memory_search_sync(
         TOOL asks for this so the model can NAME a memory to memory_update; the
         per-turn prompt injection deliberately does not - ids there are noise the
         model would copy into answers.
-    chat_key: search ONE chat namespace instead of the general lane (see
-        `RagPipeline.search`); `source_label` names the snippet headers of that block.
+    chat_key: ALSO search that chat's namespace: the general lane as always, then the
+        namespace, in one call, so the snippet push to the owner's panel carries both
+        and the timeout is paid once. `source_label` heads the namespace's block.
     """
     import time as _time
     _t0 = _time.time()
@@ -2156,14 +2167,21 @@ def run_memory_search_sync(
             sources = await pipeline.search(
                 query, k=k, threshold=threshold, metadata_filter=metadata_filter,
                 user_scope_id=user_scope_id, exclude_documents=exclude_documents,
-                chat_key=chat_key,
             )
-            
+            chat_sources: List[RagSource] = []
+            if chat_key:
+                chat_sources = await pipeline.search(
+                    query, k=k, threshold=threshold, metadata_filter=metadata_filter,
+                    user_scope_id=user_scope_id, exclude_documents=exclude_documents,
+                    chat_key=chat_key,
+                )
+                _rag_timing_log(f"RAG_CHAT_LANE key={chat_key} results={len(chat_sources)}")
+
             # PUSH TO WEB UI (for Hover/Info)
             try:
                 from vaf.core.web_interface import get_web_interface
                 web_sources = []
-                for s in sources:
+                for s in list(sources) + list(chat_sources):
                     web_sources.append({
                         "text": s.text[:200] + "..." if len(s.text) > 200 else s.text,
                         "full_text": s.text,
@@ -2187,9 +2205,10 @@ def run_memory_search_sync(
                 # Don't break RAG if UI push fails
                 logger.warning(f"Failed to push RAG results to UI: {e}")
 
-            if not sources:
-                return ""
-            return _format_sources(sources, include_ids=include_ids, label=source_label)
+            blocks = [_format_sources(sources, include_ids=include_ids)]
+            if chat_sources:
+                blocks.append(_format_sources(chat_sources, include_ids=include_ids, label=source_label))
+            return "\n\n---\n\n".join(b for b in blocks if b)
 
     _RAG_TIMEOUT = 15.0  # seconds; avoid blocking chat if DB is down or slow
 

@@ -167,8 +167,8 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
                         <button
                             type="button"
                             onClick={clearTagResults}
-                            aria-label="Clear tag selection"
-                            title="Clear tag selection"
+                            aria-label="Clear selection"
+                            title="Clear selection"
                             className="ml-auto p-1 rounded hover:bg-gray-200 text-gray-500 hover:text-gray-700 flex-shrink-0"
                         >
                             <X className="w-3.5 h-3.5" />
@@ -200,7 +200,7 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
                             </button>
                         )) : (
                             <p className="text-xs text-gray-400 text-center py-6">
-                                No memories carry this tag
+                                No memories in this result set
                             </p>
                         )}
                     </div>

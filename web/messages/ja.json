@@ -2044,12 +2044,14 @@
       "chatDetails": "チャットの詳細",
       "chatLearnedHere": "エージェントがこのチャットで学んだこと",
       "chatMemoriesCount": "記憶",
-      "chatShowInSearch": "これらの記憶を記憶検索で表示",
+      "chatShowInSearch": "これらの記憶を検索パネルに表示",
       "chatDeleteButton": "チャットの記憶を削除",
       "chatDeleteBody": "エージェントがこのチャットで学んだ内容をすべて完全に削除します。チャット自体は残ります。",
       "chatDeleteConfirm": "削除",
       "chatDeleteCancel": "キャンセル",
       "chatDeleting": "削除中…",
+      "chatCollapse": "折りたたむ",
+      "chatExpand": "展開する",
       "chatClose": "閉じる"
     },
     "userIdentity": {

@@ -2044,12 +2044,14 @@
       "chatDetails": "Chat-Details",
       "chatLearnedHere": "Was der Agent in diesem Chat gelernt hat",
       "chatMemoriesCount": "Erinnerungen",
-      "chatShowInSearch": "Diese Erinnerungen in der Suche zeigen",
+      "chatShowInSearch": "Diese Erinnerungen im Suchfeld zeigen",
       "chatDeleteButton": "Chat-Erinnerungen löschen",
       "chatDeleteBody": "Entfernt dauerhaft alles, was der Agent in diesem Chat gelernt hat. Der Chat selbst bleibt.",
       "chatDeleteConfirm": "Löschen",
       "chatDeleteCancel": "Abbrechen",
       "chatDeleting": "Wird gelöscht…",
+      "chatCollapse": "Einklappen",
+      "chatExpand": "Ausklappen",
       "chatClose": "Schließen"
     },
     "userIdentity": {

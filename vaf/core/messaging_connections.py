@@ -75,7 +75,11 @@ def owner_endpoints(channel: str, username: Optional[str], user_scope_id: Option
                 continue
             phone = str(e.get("phone_number") or "").strip()
             if phone:
-                out.add(phone if phone.startswith("+") else f"+{phone}")
+                # The key the store files the chat under (canonical digits behind one plus),
+                # so a formatted, 00-prefixed or trunk-zero whitelist number still matches.
+                from vaf.core.contacts_store import whatsapp_store_key
+                key = whatsapp_store_key(phone)
+                out.add(key or (phone if phone.startswith("+") else f"+{phone}"))
     elif channel == "telegram":
         tc = Config.get("telegram_config") or {}
         key = "relay_whitelist" if relay else "whitelist"

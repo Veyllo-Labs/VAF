@@ -730,8 +730,9 @@
     "offline": "Offline",
     "undo": "Rückgängig",
     "redo": "Wiederholen",
-    "undoWithShortcut": "Rückgängig (Strg+Z)",
-    "redoWithShortcut": "Wiederholen (Strg+Y)"
+    "undoWithShortcut": "Rückgängig ({shortcut})",
+    "redoWithShortcut": "Wiederholen ({shortcut})",
+    "ctrlKey": "Strg"
   },
   "settings": {
     "title": "Einstellungen",
@@ -2270,7 +2271,7 @@
     "refresh": "Aktualisieren",
     "close": "Schließen",
     "search": "Alle Kanäle durchsuchen",
-    "listHeader": "{count} Gespräche",
+    "listHeader": "{count, plural, one {# Gespräch} other {# Gespräche}}",
     "newestFirst": "neueste zuerst",
     "loading": "Lädt…",
     "couldNotLoad": "Der Posteingang konnte nicht geladen werden.",
@@ -2301,7 +2302,7 @@
     "status": {
       "on": "{channel} verbunden",
       "off": "{channel} gestoppt",
-      "mail": "{count} Mailkonten"
+      "mail": "{count, plural, one {# Mailkonto} other {# Mailkonten}}"
     },
     "kind": {
       "group": "Gruppe",
@@ -2346,8 +2347,8 @@
     "composePlaceholder": "Nachricht schreiben",
     "send": "Senden",
     "sending": "Wird gesendet…",
-    "members": "{count} Agenten",
-    "messagesCount": "{count} Nachrichten"
+    "members": "{count, plural, one {# Agent} other {# Agenten}}",
+    "messagesCount": "{count, plural, one {# Nachricht} other {# Nachrichten}}"
   },
   "mailV2": {
     "title": "Mail",

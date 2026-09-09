@@ -12814,7 +12814,7 @@ class Agent:
         if not isinstance(ref, dict) or not ref.get("chat_id"):
             return
         a = args if isinstance(args, dict) else {}
-        if name == "send_whatsapp" and ((a.get("to_phone") or a.get("phone_number") or "").strip()):
+        if name == "send_whatsapp" and str(a.get("to_phone") or a.get("phone_number") or "").strip():
             return
         try:
             from vaf.core.context import tool_result_is_error

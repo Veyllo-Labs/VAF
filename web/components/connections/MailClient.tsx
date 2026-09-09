@@ -12,11 +12,13 @@
 import React from 'react';
 import { MailClientView } from '@/app/mail/page';
 
-export function MailClient({ isOpen, onClose, initialThread }: {
+export function MailClient({ isOpen, onClose, initialThread, initialDraft }: {
     isOpen: boolean;
     onClose: () => void;
     /** Thread to open on arrival (a jump from the inbox); null leaves the selection alone. */
     initialThread?: number | null;
+    /** With a jump: open the reply composer on that thread (the inbox's "write a draft"). */
+    initialDraft?: boolean;
 }) {
     if (!isOpen) return null;
     return (
@@ -28,7 +30,7 @@ export function MailClient({ isOpen, onClose, initialThread }: {
                 className="relative bg-[#181818] w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-[#2e2e2e] flex flex-col overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0"
                 onClick={e => e.stopPropagation()}
             >
-                <MailClientView onClose={onClose} initialThread={initialThread} />
+                <MailClientView onClose={onClose} initialThread={initialThread} initialDraft={initialDraft} />
             </div>
         </div>
     );

@@ -111,4 +111,4 @@ def test_the_seven_catalogues_carry_the_chip_keys_with_the_same_arguments():
         block = json.loads(_read(p))["settings"]["channelDashboard"]
         for key, args in keys.items():
             assert key in block, (p.name, key)
-            assert set(re.findall(r"\{(\w+)\}", block[key])) == args, (p.name, key)
+            assert set(re.findall(r"\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?=[},])", block[key])) == args, (p.name, key)

@@ -8,6 +8,7 @@ import dynamic from 'next/dynamic';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useTranslations } from 'next-intl';
+import { useEditShortcuts } from '@/hooks/useEditShortcuts';
 import type { editor as monacoEditor } from 'monaco-editor';
 
 // Monaco is heavy — load it only on client side
@@ -124,6 +125,7 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
   // What Monaco's own history can still take back; refreshed on every content change.
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });
   const tc = useTranslations('common');
+  const shortcuts = useEditShortcuts(tc('ctrlKey'));
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const language = detectLanguage(filePath);
   const isMarkdown = language === 'markdown';
@@ -273,7 +275,7 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
               onClick={() => runHistory('undo')}
               disabled={!history.canUndo}
               className="p-1 rounded hover:bg-[#3e3e3e] text-[#9ca3af] hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[#9ca3af] transition-colors shrink-0"
-              title={tc('undoWithShortcut')}
+              title={tc('undoWithShortcut', { shortcut: shortcuts.undo })}
               aria-label={tc('undo')}
             >
               <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/></svg>
@@ -282,7 +284,7 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
               onClick={() => runHistory('redo')}
               disabled={!history.canRedo}
               className="p-1 rounded hover:bg-[#3e3e3e] text-[#9ca3af] hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[#9ca3af] transition-colors shrink-0"
-              title={tc('redoWithShortcut')}
+              title={tc('redoWithShortcut', { shortcut: shortcuts.redo })}
               aria-label={tc('redo')}
             >
               <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13"/></svg>

@@ -125,7 +125,9 @@ def mail_thread_state(thread: Dict[str, Any], mark: Optional[Dict[str, Any]]) ->
     message sits in the Sent folder, and the thread waits when it is not done, the last word
     was the correspondent's and nobody marked it answered."""
     newest_in_sent = str(thread.get("newest_special_use") or "").lower() == "\\sent"
-    answered = bool(thread.get("newest_answered_at")) or int(thread.get("answered") or 0) > 0
+    # The newest message alone: an older reply in the thread says nothing about the mail
+    # that arrived after it.
+    answered = bool(thread.get("newest_answered_at"))
     last_ts = float(thread.get("last_date_ts") or 0.0)
     done_ts = (mark or {}).get("done_ts")
     done = newest_in_sent or (done_ts is not None and float(done_ts) >= last_ts)
@@ -273,7 +275,8 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
     return rows
 
 
-def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: int) -> List[Dict[str, Any]]:
+def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: int,
+               account_id: Optional[str] = None, folder: Optional[str] = None) -> List[Dict[str, Any]]:
     from vaf.tools.mail_utils import mail_v2_active
     if not mail_v2_active(username or "", user_scope_id) or not user_scope_id:
         return []
@@ -285,7 +288,7 @@ def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: 
     svc = MailService(user_scope_id)
     marks = chat_marks(username or "", user_scope_id, channel="mail")
     rows: List[Dict[str, Any]] = []
-    for t in svc.list_threads(limit=min(max(int(limit), 1), 200)):
+    for t in svc.list_threads(account_id=account_id or None, folder=folder or None, limit=min(max(int(limit), 1), 200)):
         thread_id = str(t.get("thread_id"))
         state = mail_thread_state(t, marks.get(("mail", thread_id)))
         rows.append({
@@ -310,7 +313,7 @@ def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: 
             "session_id": "",
             "jump": {"channel": "mail", "thread_id": thread_id, "account_id": t.get("acct"),
                      "folder": t.get("newest_folder"), "message_id": t.get("newest_message_id"),
-                     "message_pk": t.get("newest_pk")},
+                     "provider_message_id": t.get("newest_gm_msgid") or "", "message_pk": t.get("newest_pk")},
         })
     return rows
 
@@ -393,13 +396,16 @@ def search_hits(username: Optional[str], user_scope_id: Optional[str], query: st
 def list_conversations(username: Optional[str], user_scope_id: Optional[str], *,
                        channels: Optional[Iterable[str]] = None, view: str = "all",
                        include_groups: bool = True, include_done: bool = False, query: str = "",
-                       limit: int = 200, now: Optional[float] = None) -> Dict[str, Any]:
+                       limit: int = 200, now: Optional[float] = None,
+                       mail_account_id: Optional[str] = None, mail_folder: Optional[str] = None) -> Dict[str, Any]:
     """Every conversation of this person, newest first, with the counts the rail shows.
 
     `channels` narrows the lanes (default all five); `view` is one of VIEWS; the group and
     done toggles apply before the counts, the view after them, so the rail's numbers describe
     what the toggles allow. `query` keeps rows whose name or preview contain it, or whose
-    stored messages match (`search_hits`)."""
+    stored messages match (`search_hits`). `mail_account_id` and `mail_folder` narrow the mail
+    lane at the source, before the counts and the limit, so a narrowed listing never loses a
+    matching thread to the cut."""
     now = float(now if now is not None else time.time())
     wanted = tuple(c for c in (channels or CHANNELS) if c in CHANNELS) or CHANNELS
     view = view if view in VIEWS else "all"
@@ -407,7 +413,8 @@ def list_conversations(username: Optional[str], user_scope_id: Optional[str], *,
     rows.extend(_messenger_rows(username, user_scope_id, wanted, now=now))
     if "mail" in wanted:
         try:
-            rows.extend(_mail_rows(username, user_scope_id, limit=max(int(limit), 50)))
+            rows.extend(_mail_rows(username, user_scope_id, limit=max(int(limit), 50),
+                                   account_id=mail_account_id, folder=mail_folder))
         except Exception:
             pass
     if "room" in wanted:

@@ -930,7 +930,12 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             f"metadata.enqueue_session_id={expected_sid} source={getattr(task, 'source', '')}",
                         )
                     source = str(getattr(task, "source", "") or "").strip().lower()
-                    if source == "web" and str(task.session_id).startswith(("telegram_", "discord_", "whatsapp_")):
+                    # A compaction is enqueued by the runner itself (source "web") for
+                    # whichever session just ran, messenger sessions included: it is not a
+                    # cross-channel message and must reach the compaction branch, or a chat
+                    # namespace is never written.
+                    if (source == "web" and meta.get("compaction") is not True
+                            and str(task.session_id).startswith(("telegram_", "discord_", "whatsapp_"))):
                         append_domain_log(
                             "headless",
                             f"[ROUTING_BLOCK] Dropping cross-channel task from web to {task.session_id}",

@@ -730,8 +730,9 @@
     "offline": "Çevrimdışı",
     "undo": "Geri al",
     "redo": "Yinele",
-    "undoWithShortcut": "Geri al (Ctrl+Z)",
-    "redoWithShortcut": "Yinele (Ctrl+Y)"
+    "undoWithShortcut": "Geri al ({shortcut})",
+    "redoWithShortcut": "Yinele ({shortcut})",
+    "ctrlKey": "Ctrl"
   },
   "settings": {
     "title": "Ayarlar",

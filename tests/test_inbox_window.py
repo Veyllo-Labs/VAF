@@ -73,13 +73,14 @@ def test_the_window_closes_before_it_opens_a_channel_window_and_every_window_acc
     settings = _read(SETTINGS)
     assert "channel: 'whatsapp' | 'telegram' | 'discord'; chatId: string; draft?: boolean" in settings
     assert "initialChatId={chatJump?.channel === 'discord' ? chatJump.chatId : null}" in settings
-    assert "initialThread={mailJump}" in settings
+    assert "initialThread={mailJump?.threadId ?? null}" in settings and "initialDraft={mailJump?.draft ?? false}" in settings
     assert "initialDraft={chatJump?.channel === 'whatsapp' ? !!chatJump.draft : false}" in settings
     assert "onChatJumpConsumed?.();" in settings
     discord = _read(WEB / "components" / "connections" / "DiscordDashboard.tsx")
     assert "initialChatId?: string | null;" in discord and "setSelectedChatId(initialChatId);" in discord
     mail = _read(WEB / "app" / "mail" / "page.tsx")
     assert "void openThread({ thread_id: initialThread } as ThreadRow);" in mail
+    assert "jumpHandledRef.current === initialThread" in mail and "draftPendingRef.current = initialDraft ? initialThread : null" in mail
 
 
 def test_the_compose_box_obeys_the_whatsapp_rule_and_the_unread_token_is_mails():
@@ -113,7 +114,7 @@ def test_the_seven_catalogues_carry_the_nav_entry_and_the_block_with_the_same_ar
                 if isinstance(a[k], dict):
                     walk(a[k], b[k], f"{path}{k}.")
                 else:
-                    assert set(re.findall(r"\{(\w+)\}", a[k])) == set(re.findall(r"\{(\w+)\}", b[k])), (p.name, path + k)
+                    assert set(re.findall(r"\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?=[},])", a[k])) == set(re.findall(r"\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?=[},])", b[k])), (p.name, path + k)
         walk(ref["inbox"], block)
     used = set(re.findall(r"\bt\('([\w.]+)'", _read(WINDOW)))
     flat = set()

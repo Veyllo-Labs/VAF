@@ -161,16 +161,15 @@ class InboxTool(BaseTool):
             except Exception:
                 pass
 
-        result = list_conversations(username, user_scope_id, channels=channels, view=view,
-                                    include_groups=include_groups, include_done=include_done,
-                                    query=query, limit=max_chats)
-        rows = result["rows"]
+        # The mail account and folder narrow the lane at the source (before the counts and
+        # the cut to max_chats), or a narrowed listing could lose a matching thread to the limit.
         account_id = (kwargs.get("account_id") or "").strip()
         folder = (kwargs.get("folder") or "").strip()
-        if account_id:
-            rows = [r for r in rows if r["channel"] != "mail" or (r.get("jump") or {}).get("account_id") == account_id]
-        if folder:
-            rows = [r for r in rows if r["channel"] != "mail" or (r.get("jump") or {}).get("folder") == folder]
+        result = list_conversations(username, user_scope_id, channels=channels, view=view,
+                                    include_groups=include_groups, include_done=include_done,
+                                    query=query, limit=max_chats,
+                                    mail_account_id=account_id or None, mail_folder=folder or None)
+        rows = result["rows"]
         rows, blocked = _hide_suspicious_mail(rows)
         counts = result["counts"]
 
@@ -189,7 +188,7 @@ class InboxTool(BaseTool):
             if r["channel"] == "mail":
                 j = r.get("jump") or {}
                 id_lines.append(f"  {i}: account_id={j.get('account_id') or ''} message_id={j.get('message_id') or ''!r} "
-                                f"provider_message_id= folder={j.get('folder') or 'INBOX'}")
+                                f"provider_message_id={j.get('provider_message_id') or ''} folder={j.get('folder') or 'INBOX'}")
         if id_lines:
             out += "\n\nIDs for read_mail (by index; do not invent or repeat entries):\n" + "\n".join(id_lines)
         if blocked:

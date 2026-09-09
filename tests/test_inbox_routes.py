@@ -49,6 +49,7 @@ def world(monkeypatch, tmp_path):
     signals = []
     import vaf.core.web_interface as wi
     monkeypatch.setattr(wi, "notify_inbox_changed", lambda scope: signals.append(scope))
+    store._reset_announce_state()   # a timer an earlier test left behind must not fire in here
     monkeypatch.setattr(store, "_announce_last", {})
     monkeypatch.setattr(store, "_announce_timers", {})
     import vaf.core.session as session_mod

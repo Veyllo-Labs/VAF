@@ -729,9 +729,10 @@
     "online": "在线",
     "offline": "离线",
     "undo": "撤销",
-    "redo": "恢复",
-    "undoWithShortcut": "撤销（Ctrl+Z）",
-    "redoWithShortcut": "恢复（Ctrl+Y）"
+    "redo": "重做",
+    "undoWithShortcut": "撤销（{shortcut}）",
+    "redoWithShortcut": "重做（{shortcut}）",
+    "ctrlKey": "Ctrl"
   },
   "settings": {
     "title": "设置",

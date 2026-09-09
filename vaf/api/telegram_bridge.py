@@ -60,7 +60,7 @@ _telegram_session_documents: Dict[str, list] = {}
 
 def _store_telegram_message(username, chat_id, body, direction, content_type="text",
                             user_scope_id=None, message_id=None) -> None:
-    """Record a Telegram message in the shared channel message store (whatsapp_message_store,
+    """Record a Telegram message in the shared channel message store (channel_message_store,
     channel='telegram') so the agent's read_telegram_chat / find_telegram_messages tools can read
     history — the Telegram equivalent of the WhatsApp bridge's append_message calls. Best-effort."""
     try:

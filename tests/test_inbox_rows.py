@@ -44,6 +44,7 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(contacts, "get_contact_name_by_phone", lambda phone, username=None, user_scope_id=None: "Bob" if phone == "+491700000005" else None)
     import vaf.core.web_interface as wi
     monkeypatch.setattr(wi, "notify_inbox_changed", lambda scope: None)
+    store._reset_announce_state()   # a timer an earlier test left behind must not fire in here
     monkeypatch.setattr(store, "_announce_last", {})
     monkeypatch.setattr(store, "_announce_timers", {})
     rooms = []
@@ -267,6 +268,18 @@ def test_another_scope_sees_nothing(world):
     assert inbox.conversation_history("bob", OTHER, "whatsapp", "+491700000042") == []
 
 
+def test_owner_endpoints_file_a_formatted_whitelist_number_under_the_store_key(monkeypatch):
+    from vaf.core import messaging_connections as mc
+    import vaf.core.config as cfg_mod
+    cfg = {"whatsapp_config": {"whitelist": [
+        {"phone_number": "+49 170 000 0009", "vaf_username": "alice", "user_scope_id": SCOPE},
+        {"phone_number": "0049 170 0000010", "vaf_username": "alice", "user_scope_id": SCOPE},
+        {"phone_number": "0170 0000011", "vaf_username": "alice", "user_scope_id": SCOPE},
+    ]}}
+    monkeypatch.setattr(cfg_mod.Config, "get", classmethod(lambda cls, key, default=None: cfg.get(key, default)))
+    assert mc.owner_endpoints("whatsapp", "alice", SCOPE) == {"+491700000009", "+491700000010", "+491700000011"}
+
+
 def test_the_pure_rules_stand_alone():
     assert inbox.reply_window_until(None, None, 3600) is None
     assert inbox.reply_window_until(100.0, None, 3600) == 3700.0
@@ -275,3 +288,7 @@ def test_the_pure_rules_stand_alone():
     assert inbox.is_group("whatsapp", "1@g.us") and inbox.is_group("telegram", "-5") and inbox.is_group("room", "x")
     assert not inbox.is_group("discord", "-5") and not inbox.is_group("whatsapp", "+49")
     assert inbox.channel_label("whatsapp") == "WhatsApp" and inbox.channel_label("room") == "Room"
+    # A thread whose older message was answered still waits when the newest one was not.
+    older_answered = {"newest_special_use": "\\Inbox", "newest_answered_at": None, "answered": 1, "last_date_ts": 100.0}
+    assert inbox.mail_thread_state(older_answered, None)["waits"] is True
+    assert inbox.mail_thread_state(dict(older_answered, newest_answered_at="2026-09-09 10:00:00"), None)["waits"] is False

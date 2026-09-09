@@ -57,6 +57,7 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(Config, "save", classmethod(lambda cls, cfg: None))
     import vaf.core.web_interface as wi
     monkeypatch.setattr(wi, "notify_inbox_changed", lambda scope: None)
+    store._reset_announce_state()   # a timer an earlier test left behind must not fire in here
     monkeypatch.setattr(store, "_announce_last", {})
     monkeypatch.setattr(store, "_announce_timers", {})
     # WhatsApp: the bridge answers nothing; the rows must come from the store alone.

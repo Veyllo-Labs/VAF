@@ -730,8 +730,9 @@
     "offline": "Offline",
     "undo": "Undo",
     "redo": "Redo",
-    "undoWithShortcut": "Undo (Ctrl+Z)",
-    "redoWithShortcut": "Redo (Ctrl+Y)"
+    "undoWithShortcut": "Undo ({shortcut})",
+    "redoWithShortcut": "Redo ({shortcut})",
+    "ctrlKey": "Ctrl"
   },
   "settings": {
     "title": "Settings",
@@ -2270,7 +2271,7 @@
     "refresh": "Refresh",
     "close": "Close",
     "search": "Search every channel",
-    "listHeader": "{count} conversations",
+    "listHeader": "{count, plural, one {# conversation} other {# conversations}}",
     "newestFirst": "newest first",
     "loading": "Loading…",
     "couldNotLoad": "The inbox could not be loaded.",
@@ -2301,7 +2302,7 @@
     "status": {
       "on": "{channel} connected",
       "off": "{channel} stopped",
-      "mail": "{count} mail accounts"
+      "mail": "{count, plural, one {# mail account} other {# mail accounts}}"
     },
     "kind": {
       "group": "Group",
@@ -2346,8 +2347,8 @@
     "composePlaceholder": "Write a message",
     "send": "Send",
     "sending": "Sending…",
-    "members": "{count} agents",
-    "messagesCount": "{count} messages"
+    "members": "{count, plural, one {# agent} other {# agents}}",
+    "messagesCount": "{count, plural, one {# message} other {# messages}}"
   },
   "mailV2": {
     "title": "Mail",

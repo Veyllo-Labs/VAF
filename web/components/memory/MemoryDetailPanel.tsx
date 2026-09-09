@@ -463,7 +463,9 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                             error={error}
                             onDelete={async () => {
                                 const count = await deleteChatNamespace(chatKey);
-                                if (count >= 0) onClose?.();
+                                // A failed request (-1) or a request that matched nothing (0) is
+                                // not an erasure, so it does not close the panel as one.
+                                if (count > 0) onClose?.();
                             }}
                         />
                     </div>

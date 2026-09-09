@@ -79,7 +79,11 @@ def test_the_badge_counts_only_what_the_view_would_show(rooms):
     host = rooms.identity_for(participant_key("agent", SCOPE))
     rooms.ping(host, "p-codex")
 
-    assert _room_rows(SCOPE)[0]["unread"] == 1, "the say counts, the check-in must not"
+    row = _room_rows(SCOPE)[0]
+    assert row["unread"] == 1, "the say counts, the check-in must not"
+    # "When they last spoke" is the newest conversation frame too: a check-in after the
+    # person marked the room done must not reopen it in the inbox.
+    assert row["last_ts"] == row["last"]["ts"], "last_ts follows the newest conversation frame, not the ping"
 
 
 def test_both_local_lanes_are_looked_up_but_a_room_is_listed_once(tmp_path, monkeypatch):

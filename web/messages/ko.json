@@ -730,8 +730,9 @@
     "offline": "오프라인",
     "undo": "실행 취소",
     "redo": "다시 실행",
-    "undoWithShortcut": "실행 취소 (Ctrl+Z)",
-    "redoWithShortcut": "다시 실행 (Ctrl+Y)"
+    "undoWithShortcut": "실행 취소 ({shortcut})",
+    "redoWithShortcut": "다시 실행 ({shortcut})",
+    "ctrlKey": "Ctrl"
   },
   "settings": {
     "title": "설정",

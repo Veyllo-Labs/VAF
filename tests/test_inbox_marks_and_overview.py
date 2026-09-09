@@ -32,6 +32,7 @@ def scratch(monkeypatch, tmp_path):
     frames = []
     import vaf.core.web_interface as wi
     monkeypatch.setattr(wi, "notify_inbox_changed", lambda scope: frames.append(scope))
+    store._reset_announce_state()   # a timer an earlier test left behind must not fire in here
     monkeypatch.setattr(store, "_announce_last", {})
     monkeypatch.setattr(store, "_announce_timers", {})
     return frames
@@ -142,18 +143,22 @@ def test_another_scope_and_a_missing_store_see_nothing(scratch, tmp_path):
 
 
 def test_writers_announce_once_per_scope_and_once_more_when_the_burst_ends(scratch, monkeypatch):
-    monkeypatch.setattr(store, "_ANNOUNCE_MIN_INTERVAL_S", 0.05)
+    # The interval is wide enough that ten appends finish inside it on a slow CI box (a
+    # burst that outlives the interval announces twice and the assertion below lies).
+    monkeypatch.setattr(store, "_ANNOUNCE_MIN_INTERVAL_S", 0.4)
     for i in range(10):
         _row("+491700000042", f"m{i}", ts=100.0 + i)
     assert scratch == [SCOPE], "the first write announces at once, the burst collapses"
-    time.sleep(0.2)
+    deadline = time.time() + 3.0
+    while len(scratch) < 2 and time.time() < deadline:
+        time.sleep(0.05)
     assert scratch == [SCOPE, SCOPE], "the trailing announcement carries what the burst appended"
     scratch.clear()
-    time.sleep(0.06)
+    time.sleep(0.45)
     store.mark_seen("alice", "whatsapp", "+491700000042", user_scope_id=SCOPE)
     assert scratch == [SCOPE]
     # A Discord row lives in the admin's file with no scope: it announces to the admin's scope.
     scratch.clear()
-    time.sleep(0.06)
+    time.sleep(0.45)
     store.append_message("admin", "1234", "dm", channel="discord", ts=500.0)
     assert scratch == ["admin-scope"]

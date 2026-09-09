@@ -98,7 +98,7 @@ def _keep_rejected_discord_message(author_id: str, content: str, message_id: str
 
 
 def _store_discord_message(chat_id, body, direction, content_type="text", message_id=None) -> None:
-    """Record a Discord message in the shared channel store (whatsapp_message_store, channel='discord')
+    """Record a Discord message in the shared channel store (channel_message_store, channel='discord')
     so the agent's read_discord_chat / find_discord_messages tools can read history. Discord is
     admin-only: username='admin', user_scope_id=None. chat_id = the Discord user/author id (==
     get_discord_user_id), so incoming and proactive-outgoing land in the same bucket. Best-effort."""

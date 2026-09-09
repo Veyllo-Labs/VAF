@@ -40,6 +40,7 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(contacts, "is_local_admin_caller", lambda username, user_scope_id: False)
     import vaf.core.web_interface as wi
     monkeypatch.setattr(wi, "notify_inbox_changed", lambda scope: None)
+    store._reset_announce_state()   # a timer an earlier test left behind must not fire in here
     monkeypatch.setattr(store, "_announce_last", {})
     monkeypatch.setattr(store, "_announce_timers", {})
     import vaf.core.session as session_mod

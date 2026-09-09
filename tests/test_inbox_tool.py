@@ -34,6 +34,12 @@ def listing(monkeypatch):
     def fake(username, user_scope_id, **kw):
         seen["username"], seen["scope"], seen["kw"] = username, user_scope_id, kw
         rows = seen.get("rows", [])
+        # The core narrows the mail lane at the source (the store's thread-level folder rule);
+        # the fake approximates it on its rows by the newest message's folder.
+        if kw.get("mail_account_id"):
+            rows = [r for r in rows if r["channel"] != "mail" or (r.get("jump") or {}).get("account_id") == kw["mail_account_id"]]
+        if kw.get("mail_folder"):
+            rows = [r for r in rows if r["channel"] != "mail" or (r.get("jump") or {}).get("folder") == kw["mail_folder"]]
         return {"rows": rows, "counts": {"all": len(rows), "waits": sum(1 for r in rows if r["waits"]),
                                           "unread": sum(r["unread"] for r in rows), "agent": 0},
                 "channels": kw.get("channels")}
@@ -49,7 +55,8 @@ def test_every_lane_renders_and_names_its_read_tool(listing):
         _row("whatsapp", "+491700000042", mode="contact"),
         _row("telegram", "7", mode="owner", unread=0, waits=False, answered_by_agent=True, preview_from="agent"),
         _row("mail", "9", subject="Vertrag Q4", name="Lena <lena@example.com>",
-             jump={"channel": "mail", "thread_id": "9", "account_id": "a@x", "folder": "INBOX", "message_id": "<q@x>"}),
+             jump={"channel": "mail", "thread_id": "9", "account_id": "a@x", "folder": "INBOX", "message_id": "<q@x>",
+                   "provider_message_id": "18f2"}),
         _row("room", "r1", name="Phoenix", is_group=True, mode="room", waits_reason="invitation"),
     ]
     out = InboxTool().run(username="alice", user_scope_id="s")
@@ -62,7 +69,7 @@ def test_every_lane_renders_and_names_its_read_tool(listing):
     assert "Front Office" in out and "1 unread" in out
     assert "[Telegram] name-7 | chat_id=7" in out and "agent answered" in out and "your own chat" in out
     assert "[Mail] Lena <lena@example.com> | subject: Vertrag Q4" in out
-    assert "  3: account_id=a@x message_id='<q@x>' provider_message_id= folder=INBOX" in out
+    assert "  3: account_id=a@x message_id='<q@x>' provider_message_id=18f2 folder=INBOX" in out
     assert "[Room] Phoenix | room_id=r1" in out and "WAITS FOR YOU (invitation)" in out
     assert "Discord: no stored chats yet" in out, "an empty lane says so instead of vanishing"
     assert listing["kw"]["channels"] == ["whatsapp", "telegram", "discord", "mail", "room"]
@@ -76,10 +83,11 @@ def test_channel_view_and_toggles_pass_through_and_mail_narrows_by_account_and_f
     out = InboxTool().run(username="alice", user_scope_id="s", channel="mail", view="waits", max_chats="15",
                           query="vertrag", include_groups=False, include_done=True, account_id="a@x")
     assert listing["kw"] == {"channels": ["mail"], "view": "waits", "include_groups": False, "include_done": True,
-                             "query": "vertrag", "limit": 15}
+                             "query": "vertrag", "limit": 15, "mail_account_id": "a@x", "mail_folder": None}
     assert "name-1" in out and "name-2" not in out
     out = InboxTool().run(username="alice", user_scope_id="s", channel="mail", folder="Sent")
     assert "name-2" in out and "name-1" not in out
+    assert listing["kw"]["mail_folder"] == "Sent" and listing["kw"]["mail_account_id"] is None
     assert "Unknown channel" in InboxTool().run(channel="fax")
 
 

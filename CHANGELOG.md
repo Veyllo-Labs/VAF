@@ -70,7 +70,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   reaches a chat's namespace.
 - **Undo and redo in every editor.** The document editor (the DOCX path and the HTML
   path), the code viewer and the custom tool editor have Undo and Redo buttons, and answer
-  Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z (Cmd on a Mac) while the keyboard is inside them. The
+  Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z (Cmd on a Mac) while the keyboard is inside them; the
+  buttons' tooltips name the keys of the keyboard in front of the person (Command on a Mac,
+  the localized Control key elsewhere). The
   DOCX editor keeps its own history over the document model: a paragraph edit is one step
   per leaving the box (while the box is focused, the browser's own undo over the keystrokes
   applies first), a formatting change or an added or deleted block is one step each, typing

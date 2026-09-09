@@ -730,8 +730,9 @@
     "offline": "ออฟไลน์",
     "undo": "เลิกทำ",
     "redo": "ทำซ้ำ",
-    "undoWithShortcut": "เลิกทำ (Ctrl+Z)",
-    "redoWithShortcut": "ทำซ้ำ (Ctrl+Y)"
+    "undoWithShortcut": "เลิกทำ ({shortcut})",
+    "redoWithShortcut": "ทำซ้ำ ({shortcut})",
+    "ctrlKey": "Ctrl"
   },
   "settings": {
     "title": "การตั้งค่า",

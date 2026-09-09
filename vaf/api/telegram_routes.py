@@ -360,34 +360,39 @@ async def get_telegram_dashboard(request: Request):
         rec = sessions_by_chat[cid]
         ts = a.get("ts") or 0
         rec["last_ts"] = max(rec.get("last_ts") or 0, ts)
-    try:
+    def _store_rows() -> list:
         from vaf.core.channel_message_store import chat_overview, store_exists
         from vaf.core.contacts_store import message_channel_username
-        from vaf.core.inbox import chat_state
         row_user = message_channel_username("telegram", current_user.get("username"))
-        if store_exists(row_user, user_scope_id):
-            for row in chat_overview(row_user, user_scope_id=user_scope_id, channel="telegram", limit=500):
-                cid = str(row.get("chat_id") or "")
-                if not cid:
-                    continue
-                rec = sessions_by_chat.setdefault(cid, {
-                    "chat_id": cid, "telegram_user_id": cid, "telegram_username": None,
-                    "vaf_username": None, "type": "unknown",
-                })
-                state = chat_state(row)
-                rec["last_ts"] = max(rec.get("last_ts") or 0, int(row.get("last_ts") or 0))
-                rec.update({
-                    "name": (row.get("chat_name") or "").strip() or None,
-                    "message_count": int(row.get("message_count") or 0),
-                    "last_preview": row.get("last_body") or "",
-                    "last_direction": row.get("last_direction") or "",
-                    "preview_from": state["preview_from"],
-                    "unread": state["unread"],
-                    "waits": state["waits"],
-                    "waits_reason": state["waits_reason"],
-                    "answered_by_agent": state["answered_by_agent"],
-                    "done": state["done"],
-                })
+        if not store_exists(row_user, user_scope_id):
+            return []
+        return chat_overview(row_user, user_scope_id=user_scope_id, channel="telegram", limit=500)
+
+    try:
+        from vaf.core.inbox import chat_state
+        # SQLite off the event loop, as the mail and inbox routes do.
+        for row in await asyncio.to_thread(_store_rows):
+            cid = str(row.get("chat_id") or "")
+            if not cid:
+                continue
+            rec = sessions_by_chat.setdefault(cid, {
+                "chat_id": cid, "telegram_user_id": cid, "telegram_username": None,
+                "vaf_username": None, "type": "unknown",
+            })
+            state = chat_state(row)
+            rec["last_ts"] = max(rec.get("last_ts") or 0, int(row.get("last_ts") or 0))
+            rec.update({
+                "name": (row.get("chat_name") or "").strip() or None,
+                "message_count": int(row.get("message_count") or 0),
+                "last_preview": row.get("last_body") or "",
+                "last_direction": row.get("last_direction") or "",
+                "preview_from": state["preview_from"],
+                "unread": state["unread"],
+                "waits": state["waits"],
+                "waits_reason": state["waits_reason"],
+                "answered_by_agent": state["answered_by_agent"],
+                "done": state["done"],
+            })
     except Exception:
         pass
     for rec in sessions_by_chat.values():

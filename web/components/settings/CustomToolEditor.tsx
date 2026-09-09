@@ -28,6 +28,7 @@
 import dynamic from 'next/dynamic';
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
+import { useEditShortcuts } from '@/hooks/useEditShortcuts';
 import { AlertCircle, ChevronDown, ChevronUp, Loader2, Redo2, Save, Trash2, Undo2, Users, X } from 'lucide-react';
 import type { editor as monacoEditor } from 'monaco-editor';
 
@@ -172,6 +173,7 @@ export default function CustomToolEditor({
   // What Monaco's own history can still take back; refreshed on every content change.
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });
   const tc = useTranslations('common');
+  const shortcuts = useEditShortcuts(tc('ctrlKey'));
   // Undo / Redo trigger Monaco's own commands, so a click does exactly what Ctrl+Z and
   // Ctrl+Y do inside the editor; focus goes back so the next keystroke lands in the code.
   const runHistory = (action: 'undo' | 'redo') => {
@@ -299,7 +301,7 @@ export default function CustomToolEditor({
                 onClick={() => runHistory('undo')}
                 disabled={!history.canUndo}
                 className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
-                title={tc('undoWithShortcut')}
+                title={tc('undoWithShortcut', { shortcut: shortcuts.undo })}
                 aria-label={tc('undo')}
               >
                 <Undo2 size={15} />
@@ -309,7 +311,7 @@ export default function CustomToolEditor({
                 onClick={() => runHistory('redo')}
                 disabled={!history.canRedo}
                 className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
-                title={tc('redoWithShortcut')}
+                title={tc('redoWithShortcut', { shortcut: shortcuts.redo })}
                 aria-label={tc('redo')}
               >
                 <Redo2 size={15} />

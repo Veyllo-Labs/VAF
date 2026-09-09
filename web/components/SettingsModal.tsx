@@ -1289,7 +1289,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showDiscordDashboard, setShowDiscordDashboard] = useState(false);
     const [showMailClient, setShowMailClient] = useState(false);
     // The mail thread a jump from the inbox lands on; cleared with the client.
-    const [mailJump, setMailJump] = useState<number | null>(null);
+    const [mailJump, setMailJump] = useState<{ threadId: number; draft: boolean } | null>(null);
     useEffect(() => {
         if (!showWhatsAppDashboard && !showTelegramDashboard && !showDiscordDashboard) setChatJump(null);
     }, [showWhatsAppDashboard, showTelegramDashboard, showDiscordDashboard]);
@@ -1301,7 +1301,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     useEffect(() => {
         if (!isOpen || !initialChatJump) return;
         if (initialChatJump.channel === 'mail') {
-            setMailJump(initialChatJump.threadId);
+            setMailJump({ threadId: initialChatJump.threadId, draft: !!initialChatJump.draft });
             setShowMailClient(true);
         } else {
             setChatJump({ channel: initialChatJump.channel, chatId: initialChatJump.chatId, draft: initialChatJump.draft });
@@ -8185,7 +8185,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     setShowMailClient(false);
                     setCloudDashboardRefresh(r => r + 1);
                 }}
-                initialThread={mailJump}
+                initialThread={mailJump?.threadId ?? null}
+                initialDraft={mailJump?.draft ?? false}
             />
 
             {/* Calendar Setup Wizard (reuses Email OAuth; opened from Connections Calendar cards) */}

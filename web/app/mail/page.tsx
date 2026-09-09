@@ -50,7 +50,7 @@ interface ThreadRow {
     waits?: boolean; waits_reason?: string; done?: boolean; answered_by_agent?: boolean;
 }
 interface Msg {
-    id: number; subject: string; from_addr: string; to_addrs: string; date_ts?: number;
+    id: number; thread_id?: number; subject: string; from_addr: string; to_addrs: string; date_ts?: number;
     internaldate_ts?: number; snippet: string; flags: string[]; folder_name: string;
     has_attachments: number; answered_at?: string; category?: string;
     suspicious_for_agent?: boolean; suspicious_reasons?: string[];
@@ -546,7 +546,7 @@ function MessageView({ msg, expanded, onToggle, onRelabeled }: {
     );
 }
 
-export function MailClientView({ onClose, initialThread }: { onClose?: () => void; initialThread?: number | null }) {
+export function MailClientView({ onClose, initialThread, initialDraft }: { onClose?: () => void; initialThread?: number | null; initialDraft?: boolean }) {
     const t = useTranslations('mailV2');
     const catLabel = (c: string) => (STD_CATEGORIES as readonly string[]).includes(c) ? t(`cat.${c}`) : catDisplay(c);
     const [status, setStatus] = useState<{ accounts?: Account[]; composer_enabled?: boolean } | null>(null);
@@ -686,11 +686,17 @@ export function MailClientView({ onClose, initialThread }: { onClose?: () => voi
         } catch { setThreadMsgs([]); }
     }, [loadFolders]);
 
-    // A jump from the inbox: the thread opens by id, whichever folder the list shows.
+    // A jump from the inbox: the thread opens by id, whichever folder the list shows. The id
+    // is remembered so a new openThread identity (the folder list reloaded) does not open it
+    // again; a draft jump opens the reply composer once the thread's messages are on screen.
+    const jumpHandledRef = useRef<number | null>(null);
+    const draftPendingRef = useRef<number | null>(null);
     useEffect(() => {
-        if (!initialThread) return;
+        if (!initialThread || jumpHandledRef.current === initialThread) return;
+        jumpHandledRef.current = initialThread;
+        draftPendingRef.current = initialDraft ? initialThread : null;
         void openThread({ thread_id: initialThread } as ThreadRow);
-    }, [initialThread, openThread]);
+    }, [initialThread, initialDraft, openThread]);
 
     // "N waiting for you" in the list header: the threads whose last word is the
     // correspondent's and nobody answered (the inbox's rule, INBOX.md); the button
@@ -726,6 +732,18 @@ export function MailClientView({ onClose, initialThread }: { onClose?: () => voi
             setCompose(pre);
         } catch { setError(t('actionFailed')); }
     }, [threadMsgs, t]);
+    useEffect(() => {
+        // The draft jump's second half: the jumped-to thread's own messages are on screen
+        // (openThread sets activeThread before its fetch answers, so the messages, not the
+        // active id, prove the thread), and the reply composer can prefill from them. The
+        // person moving to another thread first drops the intent.
+        const pending = draftPendingRef.current;
+        if (pending === null) return;
+        if (activeThread !== pending) { draftPendingRef.current = null; return; }
+        if (threadMsgs.length === 0 || threadMsgs.some(m => m.thread_id !== undefined && m.thread_id !== pending)) return;
+        draftPendingRef.current = null;
+        void openCompose('reply');
+    }, [activeThread, threadMsgs, openCompose]);
 
     const runSearch = useCallback(async () => {
         const q = query.trim();

@@ -24,6 +24,15 @@ def _between(src: str, start: str, end: str) -> str:
     return src[i:src.index(end, i)]
 
 
+def test_the_routing_guard_lets_a_messenger_compaction_through():
+    """The runner enqueues every compaction with source "web", messenger sessions included;
+    the cross-channel routing guard drops web tasks aimed at messenger sessions. Without the
+    exemption a WhatsApp or Telegram chat never compacted into its namespace."""
+    guard = RUNNER.split("[ROUTING_BLOCK]", 1)[0].rsplit("if (", 1)[1]
+    assert 'meta.get("compaction") is not True' in guard, "the guard must exempt the runner's own compaction task"
+    assert 'source == "web"' in guard and '("telegram_", "discord_", "whatsapp_")' in guard
+
+
 def test_the_gdpr_skip_is_gone_and_the_namespace_decides():
     assert "contact_chat_dsgvo" not in RUNNER
     assert "never learn from other people's messages" not in RUNNER

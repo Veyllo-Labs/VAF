@@ -177,6 +177,21 @@ def init_store(username: Optional[str] = None, user_scope_id: Optional[str] = No
         conn.close()
 
 
+def _reset_announce_state() -> None:
+    """Cancel every pending trailing announcement and forget the throttle stamps. A test
+    seam: a timer a test left behind would otherwise fire into the next test's patched
+    signal sink (the interval is seconds, a test suite runs faster than that)."""
+    with _announce_lock:
+        timers = list(_announce_timers.values())
+        _announce_timers.clear()
+        _announce_last.clear()
+    for t in timers:
+        try:
+            t.cancel()
+        except Exception:
+            pass
+
+
 def _announce_changed(username: Optional[str], user_scope_id: Optional[str]) -> None:
     """Tell the person's browsers that a conversation list changed (`inbox_changed`).
 

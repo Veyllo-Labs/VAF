@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { useTranslations } from 'next-intl';
+import { useEditShortcuts } from '@/hooks/useEditShortcuts';
 import { X, Download, FileText, Save, Loader2, CheckCircle2, Circle, Plus, Trash2, ChevronDown, Bold, Italic, Underline, List, ListOrdered, AlignLeft, AlignCenter, AlignRight, Highlighter, Eraser, Printer, Undo2, Redo2 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import { downloadText } from '@/lib/download';
@@ -340,6 +341,7 @@ function LegacyDocumentEditor({
     insertedSelections = [],
 }: DocumentEditorProps) {
     const tc = useTranslations('common');
+    const shortcuts = useEditShortcuts(tc('ctrlKey'));
     const [content, setContent] = useState<string>(initialContent);
     /**
      * Sync from parent when content is pushed from outside (e.g. agent replace_editor_selection).
@@ -864,8 +866,8 @@ function LegacyDocumentEditor({
             {/* Undo / Redo are the browser's history of the editable body, driven through the
                 same execCommand lane as the formatting; Ctrl+Z / Ctrl+Y inside the sheet do
                 the same. Greyed out from queryCommandEnabled, refreshed on every input. */}
-            <button type="button" onClick={() => execEditorCommand('undo')} disabled={!selectionFormat.canUndo} className="p-1.5 rounded hover:bg-gray-200 disabled:opacity-40 disabled:hover:bg-transparent" title={tc('undoWithShortcut')} aria-label={tc('undo')}><Undo2 size={16} /></button>
-            <button type="button" onClick={() => execEditorCommand('redo')} disabled={!selectionFormat.canRedo} className="p-1.5 rounded hover:bg-gray-200 disabled:opacity-40 disabled:hover:bg-transparent" title={tc('redoWithShortcut')} aria-label={tc('redo')}><Redo2 size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('undo')} disabled={!selectionFormat.canUndo} className="p-1.5 rounded hover:bg-gray-200 disabled:opacity-40 disabled:hover:bg-transparent" title={tc('undoWithShortcut', { shortcut: shortcuts.undo })} aria-label={tc('undo')}><Undo2 size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('redo')} disabled={!selectionFormat.canRedo} className="p-1.5 rounded hover:bg-gray-200 disabled:opacity-40 disabled:hover:bg-transparent" title={tc('redoWithShortcut', { shortcut: shortcuts.redo })} aria-label={tc('redo')}><Redo2 size={16} /></button>
             <span className="w-px h-5 bg-gray-300 mx-0.5" />
             <button type="button" onClick={() => execEditorCommand('bold')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.bold && "bg-gray-300")} title="Bold"><Bold size={16} /></button>
             <button type="button" onClick={() => execEditorCommand('italic')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.italic && "bg-gray-300")} title="Italic"><Italic size={16} /></button>

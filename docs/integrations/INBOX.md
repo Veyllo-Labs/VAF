@@ -21,7 +21,7 @@ One shape for five sources:
 | `last_ts`, `message_count` | the newest message and the store's own count (tombstones excluded), one meaning on every surface |
 | `unread` | messenger: inbound messages after the person last opened the chat; mail: IMAP's unseen count; room: the person's own reading position |
 | `waits`, `waits_reason` | `unanswered` (the last word is the other side's and nobody answered), `owner_asked` (the agent asked the person about this chat), `invitation` (a room waits for the person's answer) |
-| `answered_by_agent` | the newest message is the agent's own send (mail: the newest message carries the answered mark) |
+| `answered_by_agent` | the newest message is the agent's own send (mail: the newest message carries the answered mark; an older reply in the thread says nothing about the mail that arrived after it) |
 | `done` | marked done and nothing newer arrived, or the newest message is the person's own reply (mail: the newest message sits in the Sent folder). A newer message reopens |
 | `is_group` | WhatsApp `@g.us`, a negative Telegram id, every room |
 | `mode` | which lane answers: `owner`, `contact` (Front Office), `conversation` (WhatsApp reply window open), `readonly`, `needs_assign` (an unresolved WhatsApp `@lid`), `admin` (Discord), `relay` (Telegram), `mail`, `room` |
@@ -75,7 +75,8 @@ inbox as well.
 (`whatsapp_inbox`, `telegram_inbox`, `discord_inbox`, `mail_inbox`). Parameters: `channel`
 (one of the five, or `all`), `view` (`all`, `waits`, `unread`, `agent`), `max_chats`
 (1-200, default 30; the user's number is passed as is), `query`, `include_groups`,
-`include_done`, and for the mail lane `account_id` and `folder`. The output leads with the
+`include_done`, and for the mail lane `account_id` and `folder` (they narrow the lane at the
+source, before the counts and the cut to `max_chats`). The output leads with the
 next-step hint (read one conversation with the per-channel read tools or `read_mail`,
 search mail with `find_mail`, never call `inbox` again for the same request), then the
 counts and one line per conversation, then the "IDs by index" block `read_mail` needs; mail
@@ -152,7 +153,7 @@ Telegram or Discord window or the mail client (a repeat jump to the same chat fi
 because the page hands the jump in once and resets it when Settings consumed it); a room
 opens in the sidebar. "Done" and "Reopen" write the done mark. "Write a draft" jumps with the
 draft flag: the WhatsApp window puts the cursor into the Composer's instruction field, the
-mail client opens the thread. The compose box is offered for WhatsApp rows the person writes
+mail client opens the thread and its reply composer. The compose box is offered for WhatsApp rows the person writes
 in themselves (`can_compose`, the WhatsApp window's rule) and posts to the WhatsApp send
 route; the other channels have no owner send route yet, which is a named boundary, not an
 omission. Opening a row posts its seen mark like the channel windows do. The window refetches
@@ -164,7 +165,7 @@ with a back button; the desktop markup is unchanged.
 
 ## API (module)
 
-- `list_conversations(username, user_scope_id, *, channels=None, view="all", include_groups=True, include_done=False, query="", limit=200, now=None)` returns `{rows, counts, channels}`; `view` is one of `all`, `waits`, `unread`, `agent`; the group and done toggles apply before the counts, the view after them; `query` keeps rows whose name or preview contain it or whose stored messages match (`search_hits`).
+- `list_conversations(username, user_scope_id, *, channels=None, view="all", include_groups=True, include_done=False, query="", limit=200, now=None, mail_account_id=None, mail_folder=None)` returns `{rows, counts, channels}`; `view` is one of `all`, `waits`, `unread`, `agent`; the group and done toggles apply before the counts, the view after them; `query` keeps rows whose name or preview contain it or whose stored messages match (`search_hits`); `mail_account_id` and `mail_folder` narrow the mail lane at the source.
 - `mark_conversation(username, user_scope_id, channel, id, *, seen=False, done=None)`.
 - `conversation_history(username, user_scope_id, channel, id, limit=200)` in the channel windows' pane shape (`role`, `content`, `timestamp`, `content_type`, `sender`).
 - `search_hits(username, user_scope_id, query, channels)`.

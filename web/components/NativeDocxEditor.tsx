@@ -9,6 +9,7 @@ import {
   Italic, List, ListOrdered, Loader2, MessageSquare, Plus, Printer, Redo2, Save, Trash2, Type, Underline, Undo2, X,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { useEditShortcuts } from '@/hooks/useEditShortcuts';
 
 import { cn, getApiBase } from '@/lib/utils';
 import {
@@ -738,6 +739,7 @@ export default function NativeDocxEditor({
   insertedSelections = [],
 }: NativeDocxEditorProps) {
   const tc = useTranslations('common');
+  const shortcuts = useEditShortcuts(tc('ctrlKey'));
   // The model and its undo history change together: an edit records the model it
   // replaces, undo and redo move between the recorded snapshots. One state object keeps
   // the pair consistent under functional updates. Snapshots are held by reference, which
@@ -1188,8 +1190,8 @@ export default function NativeDocxEditor({
       {/* Toolbar — global formatting (applies to the selected paragraph) + actions, all at
           the top like Word / the A4 editor. Click a paragraph to select it, then format here. */}
       <div className="flex flex-wrap items-center gap-0.5 border-b border-gray-200 bg-gray-50 px-2 py-1 shrink-0">
-        <button type="button" onClick={() => stepHistory('undo')} disabled={!canUndo(editState.history)} className="rounded border border-gray-200 bg-white p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-white" title={tc('undoWithShortcut')} aria-label={tc('undo')}><Undo2 size={16} /></button>
-        <button type="button" onClick={() => stepHistory('redo')} disabled={!canRedo(editState.history)} className="rounded border border-gray-200 bg-white p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-white" title={tc('redoWithShortcut')} aria-label={tc('redo')}><Redo2 size={16} /></button>
+        <button type="button" onClick={() => stepHistory('undo')} disabled={!canUndo(editState.history)} className="rounded border border-gray-200 bg-white p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-white" title={tc('undoWithShortcut', { shortcut: shortcuts.undo })} aria-label={tc('undo')}><Undo2 size={16} /></button>
+        <button type="button" onClick={() => stepHistory('redo')} disabled={!canRedo(editState.history)} className="rounded border border-gray-200 bg-white p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-white" title={tc('redoWithShortcut', { shortcut: shortcuts.redo })} aria-label={tc('redo')}><Redo2 size={16} /></button>
         <Sep />
         <ToggleBtn active={!!selRun?.bold} disabled={!selectedParagraph} onClick={() => setSelRun((r) => ({ ...r, bold: !r.bold }))} title="Bold"><Bold size={16} /></ToggleBtn>
         <ToggleBtn active={!!selRun?.italic} disabled={!selectedParagraph} onClick={() => setSelRun((r) => ({ ...r, italic: !r.italic }))} title="Italic"><Italic size={16} /></ToggleBtn>

@@ -219,6 +219,8 @@ async def get_discord_dashboard(request: Request):
         for a in raw_activity
     ]
 
+    # SQLite off the event loop, as the mail and inbox routes do.
+    sessions = await asyncio.to_thread(_store_sessions)
     return {
         "configured": bool(discord_config.get("verified") and discord_config.get("admin_user_id")),
         "running": is_bridge_running(),
@@ -226,7 +228,7 @@ async def get_discord_dashboard(request: Request):
         "admin_user_id": discord_config.get("admin_user_id"),
         "enabled": discord_config.get("enabled", False),
         "activity": activity,
-        "sessions": _store_sessions(),
+        "sessions": sessions,
     }
 
 

@@ -2137,12 +2137,13 @@ def _room_rows(user_scope_id: Optional[str] = None) -> List[Dict]:
         same frames the count reads, the same kinds the room view shows."""
         try:
             from vaf.core.a2a.room import NON_CONVERSATION_KINDS, derive_peer_id
-            frames = room.store.frames()
             human = derive_peer_id(participant_key("cli", user_scope_id), room.room_id)
+            # Conversation frames only, the same filter the unread count applies: a
+            # bookkeeping frame (a ping, a cursor) is not "they spoke", and it must not
+            # reopen a room the person marked done.
+            frames = [f for f in room.store.frames() if f.kind not in NON_CONVERSATION_KINDS]
             last_ts = float(frames[-1].ts) if frames else 0.0
             for frame in reversed(frames):
-                if frame.kind in NON_CONVERSATION_KINDS:
-                    continue
                 text = str((frame.body or {}).get("text") or "").strip()
                 if not text:
                     continue

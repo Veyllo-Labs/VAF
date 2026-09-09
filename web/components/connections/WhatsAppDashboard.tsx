@@ -212,12 +212,24 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         setSelectedChatId(initialChatId);
     }, [initialChatId, isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // A draft jump is a pending intent: the cursor goes into the Composer's instruction
+    // field once, as soon as that field is on screen for the jumped-to chat (the column
+    // mounts with the dashboard data), and never again on a refetch, which would pull the
+    // cursor out of whatever the person is typing. No timer: a timer tied to an effect's
+    // cleanup was cancelled by the data landing inside its delay.
+    const draftPendingRef = useRef<string | null>(null);
     useEffect(() => {
-        // The Composer column mounts after the dashboard data lands, so the focus waits a beat.
-        if (!isOpen || !initialDraft || !initialChatId) return;
-        const id = setTimeout(() => instructionRef.current?.focus(), 400);
-        return () => clearTimeout(id);
-    }, [initialDraft, initialChatId, isOpen, data]);
+        if (!isOpen) { draftPendingRef.current = null; return; }
+        if (initialDraft && initialChatId) draftPendingRef.current = initialChatId;
+    }, [initialDraft, initialChatId, isOpen]);
+    useEffect(() => {
+        const pending = draftPendingRef.current;
+        if (!isOpen || !pending || pending !== selectedChatId) return;
+        const el = instructionRef.current;
+        if (!el) return;   // the column is not mounted yet; the next render (data, selection) retries
+        draftPendingRef.current = null;
+        el.focus();
+    }, [isOpen, data, selectedChatId, initialDraft, initialChatId]);
 
     useEffect(() => { if (isOpen) fetchDashboard(); }, [isOpen, config?.whatsapp_config, fetchDashboard]);
 

@@ -115,9 +115,9 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
     // from there); the paired admin's row from the activity log stands in until the store
     // holds a message.
     const chats: ShellChat[] = useMemo(() => {
-        if (!data?.admin_user_id) return [];
-        const adminId = String(data.admin_user_id);
-        const adminLabel = data.admin_username ? `@${data.admin_username}` : adminId;
+        if (!data) return [];
+        const adminId = data.admin_user_id ? String(data.admin_user_id) : null;
+        const adminLabel = data.admin_username ? `@${data.admin_username}` : (adminId ?? '');
         const rows: ShellChat[] = (data.sessions || []).map(s => ({
             id: s.chat_id,
             historyKey: `discord_${s.chat_id}`,
@@ -133,7 +133,8 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
             answeredByAgent: s.answered_by_agent,
             done: s.done,
         }));
-        if (rows.some(r => r.id === adminId)) return rows;
+        // No paired admin: the store's rows are all there is; the synthetic admin row needs one.
+        if (!adminId || rows.some(r => r.id === adminId)) return rows;
         const newest = data.activity.length ? data.activity[data.activity.length - 1] : null;
         return [{
             id: adminId,

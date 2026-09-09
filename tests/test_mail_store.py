@@ -229,10 +229,11 @@ def test_list_threads_carries_the_newest_messages_identity_and_folder(store):
     apk, fpk = _setup(store)
     sent = store.upsert_folder(apk, "Sent", special_use="\\Sent", sync_tier="eager")
     root = store.ingest_message(apk, fpk, 40, _msg("<q@example.com>", "Question"))
-    store.ingest_message(apk, sent, 41, _msg("<a@example.com>", "Re: Question", refs=["<q@example.com>"]))
+    store.ingest_message(apk, sent, 41, _msg("<a@example.com>", "Re: Question", refs=["<q@example.com>"]), gm_msgid="18f2a")
     row = next(t for t in store.list_threads() if t["subject"].endswith("Question"))
     assert row["newest_message_id"] == "<a@example.com>" and row["newest_folder"] == "Sent"
     assert row["newest_special_use"] == "\\Sent" and row["newest_answered_at"] is None
+    assert row["newest_gm_msgid"] == "18f2a", "read_mail wants the provider id of the message it opens"
     store.set_answered(root)
     row = next(t for t in store.list_threads() if t["subject"].endswith("Question"))
     assert row["answered"] == 1 and row["newest_answered_at"] is None, "answered is the thread's, newest_answered_at the last message's"

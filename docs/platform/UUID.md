@@ -264,7 +264,7 @@ key = f"memory_graph:{user_scope_id}:{limit}"
 ```python
 # Current hybrid: scope path preferred, username path kept as fallback
 ~/.vaf/scopes/<user_scope_id>/email_sync.db
-~/.vaf/scopes/<user_scope_id>/whatsapp_messages.db
+~/.vaf/scopes/<user_scope_id>/channel_messages.db
 ~/.vaf/scopes/<user_scope_id>/contacts.json
 ```
 
@@ -272,7 +272,7 @@ key = f"memory_graph:{user_scope_id}:{limit}"
 ```python
 # Username-based legacy paths
 ~/.vaf/users/<username>/email_sync.db
-~/.vaf/users/<username>/whatsapp_messages.db
+~/.vaf/users/<username>/channel_messages.db
 ~/.vaf/users/<username>/contacts.json
 ```
 
@@ -369,7 +369,7 @@ All functions that previously accepted only `username` now also accept `user_sco
 **Migrated files:**
 - `vaf/tools/mail_utils.py` - `store_scope_from_kwargs()`, `cred_scope_from_kwargs()`
 - `vaf/core/email_sync_store.py` - All CRUD functions accept `user_scope_id`
-- `vaf/core/whatsapp_message_store.py` - `_db_path()`, `append_message()`, etc.
+- `vaf/core/channel_message_store.py` - `_db_path()`, `append_message()`, etc.
 - `vaf/core/contacts_store.py` - All CRUD + lookup functions accept `user_scope_id`
 - `vaf/core/credential_store.py` - `_credential_key()`, get/set/delete functions
 - `vaf/core/email_accounts.py` - account-config SSOT: `get_email_config()`, `get_account()`, `list_mail_accounts()` (re-exported by `email_transport.py`, which is now only a compatibility shim)
@@ -405,7 +405,7 @@ Lookup priority (implemented in `email_accounts.get_email_config()` and `mail_ut
 
 Stores use scope-based paths when `user_scope_id` is provided:
 - `email_sync_store.py` → `scopes/<uuid>/email_sync.db`
-- `whatsapp_message_store.py` → `scopes/<uuid>/whatsapp_messages.db`
+- `channel_message_store.py` → `scopes/<uuid>/channel_messages.db`
 - `contacts_store.py` → `scopes/<uuid>/contacts.json`
 
 Migration script: `scripts/migrate_users_to_scopes.py`
@@ -490,7 +490,7 @@ When building a new feature that handles user data:
 | Email accounts (SSOT) | `vaf/core/email_accounts.py` | `get_email_config(username, user_scope_id)` with scope-first lookup |
 | Email Sync Store | `vaf/core/email_sync_store.py` | `scopes/{scope_id}/email_sync.db` |
 | Email Routes | `vaf/api/email_routes.py` | `_get_current_user()` returns `user_scope_id`, all endpoints pass it |
-| WhatsApp Store | `vaf/core/whatsapp_message_store.py` | `scopes/{scope_id}/whatsapp_messages.db` |
+| WhatsApp Store | `vaf/core/channel_message_store.py` | `scopes/{scope_id}/channel_messages.db` |
 | Contact Store | `vaf/core/contacts_store.py` | `scopes/{scope_id}/contacts.json`, all CRUD + lookup functions |
 | Credential Store | `vaf/core/credential_store.py` | `email:{provider}:{scope_id}:{account_id}` |
 | Browser Sessions | `vaf/tools/browser_agent.py` | `browser_sessions/<scope>/<session>.json` (resolved arg → `VAF_USER_SCOPE_ID` → local-admin) |
@@ -514,7 +514,7 @@ When building a new feature that handles user data:
 |------|----------------------|----------------|
 | `vaf/tools/mail_utils.py` | Scope check → `local_admin_username` fallback | Scope-only |
 | `vaf/core/email_sync_store.py` | `_is_per_user_db(username, user_scope_id)` | Scope-only |
-| `vaf/core/whatsapp_message_store.py` | `_is_per_user_db(username, user_scope_id)` | Scope-only |
+| `vaf/core/channel_message_store.py` | `_db_path(username, user_scope_id)` | Scope-only |
 | `vaf/core/contacts_store.py` | `_contacts_path(username, user_scope_id)` | Scope-only |
 | `vaf/core/credential_store.py` | `_credential_key(…, user_scope_id)` | Scope-only |
 | `vaf/core/email_accounts.py` | `get_email_config(username, user_scope_id)` | Scope-only |

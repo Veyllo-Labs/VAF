@@ -69,10 +69,11 @@ def test_opening_a_chat_posts_its_seen_mark_and_a_read_chat_no_longer_waits():
     body = src.split("export default function ChannelDashboardShell(", 1)[1]
     assert "fetch(api('api/inbox/marks'), {" in body and "body: JSON.stringify({ channel, id, seen: true })" in body
     assert "for (const id of selected.markIds ?? [selected.id])" in body, "an @lid merged into its number marks both store rows"
-    assert "if (!channel || !isOpen || !selected || !selectedNeedsMark || marked.get(selected.id) === selectedState) return;" in body, \
+    assert "if (!channel || !isOpen || !selected || !selectedNeedsMark) return;" in body, \
         "the mark goes out for an unread chat and for one that waits (the agent's question needs no unread message)"
     assert "const stateOf = (c: ShellChat) => `${c.unread ?? 0}:${c.waits ? 1 : 0}:${c.ts ?? 0}`;" in body, "a newer message is news even at the same count"
-    assert "}).then(res => { if (!res.ok) forget(); }).catch(forget);" in body, "a refused mark is forgotten"
+    assert "}).then(res => { if (!res.ok) refused(); }).catch(refused);" in body and "if (prior === selectedState || prior === `refused:${selectedState}`) return;" in body, \
+        "a refused mark is remembered as refused for that state, not retried on every render"
     assert "title={t('markAllRead')}" in body, "an icon-only button on a phone still has a name"
     assert "const anythingToRead = chats.some(c => unreadOf(c) > 0 || waitsOf(c));" in body and "try { await onRefresh(); }" in body, \
         "the button reads the local state and stays disabled until the refetch landed"

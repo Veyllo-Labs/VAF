@@ -86,6 +86,27 @@ def test_backfill_alone_applies_existing_rules(svc, cfg):
     assert svc.apply_sender_rules_backfill(username=None) == 0
 
 
+def test_a_primary_rule_is_stored_as_primary_so_the_inbox_lists_the_sender(svc, cfg):
+    """MUTATION: adopt a rule's answer only when it differs from primary (the old rule) and
+    the bank's mail keeps its empty category, which the inbox reads as no category at all."""
+    m = _ingest(svc.store, 7, "Bank <no-reply@bank.example>")
+    assert svc.store.get_message(m)["category"] == ""
+    ea.upsert_sender_rule("no-reply@bank.example", "primary", username=None, user_scope_id=_SCOPE)
+    assert svc.apply_sender_rules_backfill(username=None) == 1
+    assert svc.store.get_message(m)["category"] == "primary"
+    assert svc.apply_sender_rules_backfill(username=None) == 0, "idempotent"
+    # The sync's own ingest decision, on the engine's rule reader.
+    from vaf.mail.sync import ImapSyncEngine
+    eng = ImapSyncEngine.__new__(ImapSyncEngine)
+    eng._sender_rules = ea.get_sender_rules(None, user_scope_id=_SCOPE)
+    assert eng._ruled_category("Bank <no-reply@bank.example>", "") == "primary"
+    assert eng._ruled_category("Lena <lena@example.com>", "") == "", "no rule, no category"
+    assert eng._ruled_category("Lena <lena@example.com>", "promotions") == "promotions", "the provider's tab stands"
+    from vaf.core.inbox import is_bulk_mail
+    assert not is_bulk_mail({"category": "primary", "from_addr": "Bank <no-reply@bank.example>"})
+    assert is_bulk_mail({"category": "", "from_addr": "Bank <no-reply@bank.example>"})
+
+
 def test_upsert_sender_rule_replaces_same_pattern(cfg):
     assert ea.upsert_sender_rule("twitch.tv", "social", user_scope_id=_SCOPE)
     assert ea.upsert_sender_rule("Twitch.TV", "promotions", user_scope_id=_SCOPE)  # case-fold replace

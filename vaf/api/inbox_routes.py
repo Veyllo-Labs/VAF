@@ -24,6 +24,7 @@ from vaf.api.contact_routes import get_current_vaf_user
 router = APIRouter(prefix="/api/inbox", tags=["inbox"])
 
 _LIMIT_MAX = 500
+_HISTORY_MAX = 200   # conversation_history's own cap
 
 
 def _channels(channel: Optional[str]) -> Optional[List[str]]:
@@ -81,29 +82,32 @@ def _status(username: str, user_scope_id: Optional[str]) -> Dict[str, Any]:
 
 @router.get("")
 async def list_inbox(request: Request, channel: Optional[str] = None, view: str = "all",
-                     groups: bool = True, done: bool = False, q: str = "", limit: int = 200) -> Dict[str, Any]:
+                     groups: bool = True, done: bool = False, bulk: bool = False, q: str = "",
+                     limit: int = 200) -> Dict[str, Any]:
     """The rows of the Posteingang: `channel` (one name, a comma list, or all), `view` (all,
-    waits, unread, agent), the `groups` and `done` toggles, `q`, `limit`; and the per-channel
-    status the rail shows. Rows, counts and channels are `inbox.list_conversations`' own."""
+    waits, unread, agent), the `groups`, `done` and `bulk` toggles (bulk mail is hidden unless
+    asked), `q`, `limit`; and the per-channel status the rail shows. Rows, counts and channels
+    are `inbox.list_conversations`' own."""
     user = get_current_vaf_user(request)
     channels = _channels(channel)
     from vaf.core.inbox import list_conversations
     result = await asyncio.to_thread(
         list_conversations, user["username"], user["user_scope_id"], channels=channels, view=view,
-        include_groups=groups, include_done=done, query=q, limit=min(max(int(limit or 1), 1), _LIMIT_MAX))
+        include_groups=groups, include_done=done, include_bulk=bulk, query=q,
+        limit=min(max(int(limit or 1), 1), _LIMIT_MAX))
     result["status"] = await asyncio.to_thread(_status, user["username"], user["user_scope_id"])
     return result
 
 
 @router.get("/summary")
-async def inbox_summary(request: Request, groups: bool = True, done: bool = False) -> Dict[str, Any]:
+async def inbox_summary(request: Request, groups: bool = True, done: bool = False, bulk: bool = False) -> Dict[str, Any]:
     """The whole inbox's counts, whatever one channel the list is narrowed to: the footer
     badge reads `waits` and `unread`, the inbox window's rail reads every count (per view
-    and per channel) under the same group and done toggles as its list."""
+    and per channel) under the same group, done and bulk toggles as its list."""
     user = get_current_vaf_user(request)
     from vaf.core.inbox import list_conversations
     counts = (await asyncio.to_thread(list_conversations, user["username"], user["user_scope_id"], limit=1,
-                                      include_groups=groups, include_done=done))["counts"]
+                                      include_groups=groups, include_done=done, include_bulk=bulk))["counts"]
     return dict(counts)
 
 
@@ -115,7 +119,7 @@ async def inbox_history(request: Request, channel: str, id: str, limit: int = 20
     from vaf.core.inbox import conversation_history
     try:
         messages = await asyncio.to_thread(conversation_history, user["username"], user["user_scope_id"],
-                                           channel, id, limit=limit)
+                                           channel, id, limit=min(max(int(limit or 1), 1), _HISTORY_MAX))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError:
@@ -125,9 +129,10 @@ async def inbox_history(request: Request, channel: str, id: str, limit: int = 20
 
 @router.post("/marks/all")
 async def inbox_marks_all(request: Request, body: Dict[str, Any] = Body(default={})) -> Dict[str, Any]:
-    """{channels?, groups?}: "mark all as read". `channels` is a list, a comma list or `all`
-    (the default; `all` inside a list means the same); `groups` false leaves group chats and
-    rooms alone (the strings false, 0, no and off read as false too). Answers `moved` per
+    """{channels?, groups?, bulk?}: "mark all as read". `channels` is a list, a comma list or
+    `all` (the default; `all` inside a list means the same); `groups` false leaves group chats
+    and rooms alone, `bulk` true reads the mail lane's bulk mail too (the strings false, 0,
+    no and off read as false). Answers `moved` per
     channel (a messenger or mail lane without a store, and Discord for anybody but the local
     admin, are absent; rooms are present whenever wanted). The messenger stores announce `inbox_changed`
     themselves (throttled per scope), the room lane announces `rooms_changed` when a cursor
@@ -151,12 +156,15 @@ async def inbox_marks_all(request: Request, body: Dict[str, Any] = Body(default=
     unknown = [c for c in wanted if c not in CHANNELS]
     if unknown:
         raise HTTPException(status_code=400, detail=f"unknown channel: {', '.join(unknown)}")
-    groups = body.get("groups") if isinstance(body, dict) else None
-    if isinstance(groups, str):
-        groups = groups.strip().lower() not in ("false", "0", "no", "off", "")
-    groups = True if groups is None else bool(groups)
+    def flag(name: str, default: bool) -> bool:
+        value = body.get(name) if isinstance(body, dict) else None
+        if isinstance(value, str):
+            value = value.strip().lower() not in ("false", "0", "no", "off", "")
+        return default if value is None else bool(value)
+    groups = flag("groups", True)
+    bulk = flag("bulk", False)
     moved = await asyncio.to_thread(mark_all_seen, user["username"], user["user_scope_id"],
-                                    channels=wanted, include_groups=groups)
+                                    channels=wanted, include_groups=groups, include_bulk=bulk)
     from vaf.core.web_interface import notify_inbox_changed
     notify_inbox_changed(user["user_scope_id"])
     return {"ok": True, "moved": moved}

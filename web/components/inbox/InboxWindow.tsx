@@ -115,6 +115,9 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
     const [channel, setChannel] = useState<InboxChannel | null>(null);
     const [groups, setGroups] = useState(true);
     const [done, setDone] = useState(false);
+    // Bulk mail (promotions, social, newsletters, notifications, junk) stays out of the
+    // list unless asked: the inbox is for the mail a person answers.
+    const [bulk, setBulk] = useState(false);
     const [queryInput, setQueryInput] = useState('');
     const [query, setQuery] = useState('');
     const [rows, setRows] = useState<InboxRow[]>([]);
@@ -136,10 +139,10 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
     // the selected channel, and a rail that reads them shows WhatsApp at 0 the moment
     // Telegram is selected.
     const load = useCallback(async () => {
-        const params = new URLSearchParams({ view, groups: String(groups), done: String(done), limit: '200' });
+        const params = new URLSearchParams({ view, groups: String(groups), done: String(done), bulk: String(bulk), limit: '200' });
         if (channel) params.set('channel', channel);
         if (query) params.set('q', query);
-        const summaryParams = new URLSearchParams({ groups: String(groups), done: String(done) });
+        const summaryParams = new URLSearchParams({ groups: String(groups), done: String(done), bulk: String(bulk) });
         setLoading(true);
         setLoadFailed(false);
         try {
@@ -158,7 +161,7 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
         } finally {
             setLoading(false);
         }
-    }, [view, channel, groups, done, query]);
+    }, [view, channel, groups, done, bulk, query]);
     const loadRef = useRef(load);
     loadRef.current = load;
 
@@ -192,8 +195,10 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
     // Opening a row reads it, as in the channel windows: the seen mark goes to the store,
     // the pill and the "waits for you" chip go out at once, and they stay out while the
     // server reports what was marked; a different count, a fresh "waits" or a newer
-    // message (the state carries the newest timestamp) is news, and a mark the server
-    // refused is forgotten so the next fetch shows its state again. A room row's seen moves
+    // message (the state carries the newest timestamp) is news. A mark the server refused is
+    // remembered as refused for that state: the pill comes back once another row is chosen
+    // and nothing retries until the row's state changes, so a failing server is asked once
+    // per state. A room row's seen moves
     // the person's cursor as the room view does: reading the room here is reading it. An
     // invitation is read by answering it, so its row posts nothing and keeps its chip.
     const [marked, setMarked] = useState<Map<string, string>>(() => new Map());
@@ -202,14 +207,17 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
     const selectedState = live ? stateOf(live) : '';
     const selectedNeedsMark = !!live && live.waits_reason !== 'invitation' && (live.unread > 0 || live.waits);
     useEffect(() => {
-        if (!isOpen || !live || !selectedNeedsMark || marked.get(live.key) === selectedState) return;
+        if (!isOpen || !live || !selectedNeedsMark) return;
+        const prior = marked.get(live.key);
+        if (prior === selectedState || prior === `refused:${selectedState}`) return;
         const key = live.key;
-        setMarked(prev => new Map(prev).set(key, selectedState));
-        const forget = () => setMarked(prev => { const next = new Map(prev); next.delete(key); return next; });
+        const state = selectedState;
+        setMarked(prev => new Map(prev).set(key, state));
+        const refused = () => setMarked(prev => (prev.get(key) === state ? new Map(prev).set(key, `refused:${state}`) : prev));
         fetch(api('api/inbox/marks'), {
             method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ channel: live.channel, id: live.id, seen: true }),
-        }).then(res => { if (!res.ok) forget(); }).catch(forget);
+        }).then(res => { if (!res.ok) refused(); }).catch(refused);
     }, [isOpen, live, selectedState, selectedNeedsMark, marked]);
     const readOf = (r: InboxRow) => r.waits_reason !== 'invitation' && (r.key === selectedKey || marked.get(r.key) === stateOf(r));
     const unreadOf = (r: InboxRow) => readOf(r) ? 0 : r.unread;
@@ -253,7 +261,7 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
         try {
             await fetch(api('api/inbox/marks/all'), {
                 method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channels: channel ? [channel] : 'all', groups }),
+                body: JSON.stringify({ channels: channel ? [channel] : 'all', groups, bulk }),
             });
         } catch { /* the list reloads either way and shows what the server says */ }
         await load();
@@ -352,6 +360,7 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                         <div className={RAIL_HEAD}>{t('rail.filters')}</div>
                         <Toggle on={groups} onChange={setGroups} label={t('showGroups')} />
                         <Toggle on={done} onChange={setDone} label={t('showDone')} />
+                        <Toggle on={bulk} onChange={setBulk} label={t('showBulk')} />
                         <div className="mt-auto px-4 py-3 border-t border-[#2e2e2e] text-xs text-[#9a9a9a] space-y-1 max-md:hidden">
                             {(['whatsapp', 'telegram', 'discord', 'mail'] as const).map(ch => {
                                 const line = statusLine(ch);

@@ -55,6 +55,7 @@ def list_conversations(
     limit: int = typer.Option(50, "--limit", "-n", help="Rows to print"),
     groups: bool = typer.Option(True, "--groups/--no-groups", help="Include group chats and rooms"),
     done: bool = typer.Option(False, "--done", help="Include conversations the person answered last (or marked done through the API)"),
+    bulk: bool = typer.Option(False, "--bulk", help="Include promotions, social, newsletters, notifications and junk mail"),
     query: Optional[str] = typer.Option(None, "--query", "-q", help="Only conversations matching this text"),
     json_out: bool = typer.Option(False, "--json", help="One JSON object per line."),
 ) -> None:
@@ -64,7 +65,7 @@ def list_conversations(
     username, scope = _identity()
     result = inbox.list_conversations(
         username, scope, channels=[channel] if channel else None, view=view,
-        include_groups=groups, include_done=done, query=query or "", limit=max(1, int(limit)))
+        include_groups=groups, include_done=done, include_bulk=bulk, query=query or "", limit=max(1, int(limit)))
     rows = result["rows"]
     if json_out:
         for row in rows:
@@ -72,7 +73,8 @@ def list_conversations(
         return
     counts = result["counts"]
     UI.console.print(f"[bold]{counts['all']} conversations[/bold]  {counts['waits']} wait for you  "
-                     f"{counts['unread']} unread  {counts['agent']} answered by the agent")
+                     f"{counts['unread']} unread  {counts['agent']} answered by the agent"
+                     + (f"  {counts['bulk_hidden']} bulk mail hidden (--bulk shows them)" if counts.get("bulk_hidden") else ""))
     if not rows:
         UI.console.print("  [dim]nothing here[/dim]")
         return

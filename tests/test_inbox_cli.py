@@ -50,6 +50,16 @@ def test_list_prints_one_json_object_per_conversation_newest_first(world):
     assert [json.loads(l)["key"] for l in waiting.output.strip().splitlines()] == ["whatsapp:+491700000042"]
 
 
+def test_the_bulk_flag_is_off_unless_given(world, monkeypatch):
+    seen = []
+    from vaf.core import inbox as inbox_mod
+    real = inbox_mod.list_conversations
+    monkeypatch.setattr(inbox_mod, "list_conversations", lambda *a, **kw: seen.append(kw.get("include_bulk")) or real(*a, **kw))
+    assert CliRunner().invoke(inbox_cmd.app, ["list", "--json"]).exit_code == 0
+    assert CliRunner().invoke(inbox_cmd.app, ["list", "--json", "--bulk"]).exit_code == 0
+    assert seen == [False, True]
+
+
 def test_the_table_carries_the_counts_and_the_waits_reason(world):
     result = CliRunner().invoke(inbox_cmd.app, ["list"])
     assert result.exit_code == 0, result.output

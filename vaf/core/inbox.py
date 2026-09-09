@@ -352,6 +352,31 @@ _AUTOMATED_LOCALS = frozenset((
 _AUTOMATED_CATEGORIES = frozenset(("promotions", "social", "updates", "forums", "newsletter", "newsletters"))
 
 
+# The categories that make a mail thread bulk mail: the provider's tabs and the labels the
+# mail client offers, plus the words a person or a sender rule may file a thread under.
+# "junkemail" is the legacy Outlook spelling the phishing scorer in mail_utils accepts too.
+_BULK_CATEGORIES = frozenset(_AUTOMATED_CATEGORIES | {"spam", "junk", "junkemail", "marketing", "notifications", "ads", "advertising"})
+
+
+def is_bulk_mail(thread: Dict[str, Any]) -> bool:
+    """Whether a mail thread is bulk mail, which the inbox hides unless asked: it sits in
+    the Junk folder (the provider's or the person's own placement, which outranks any tab
+    stamp: Gmail stamps every message outside INBOX primary), its newest message's category
+    is a bulk one (the provider's tab, the person's own label in the mail client, or a sender
+    rule), or, with no category at all, its sender reads no answer (`is_automated_sender`:
+    no-reply, notifications, newsletters). A thread filed under primary or under a label of
+    the person's own is never bulk, whatever its sender: the person's or the provider's word
+    wins over the heuristic."""
+    if str(thread.get("newest_special_use") or "").lower() == "\\junk":
+        return True
+    category = str(thread.get("category") or "").strip().lower()
+    if category == "primary":
+        return False
+    if category:
+        return category in _BULK_CATEGORIES
+    return is_automated_sender(str(thread.get("from_addr") or ""))
+
+
 def is_automated_sender(from_addr: str, category: Optional[str] = None) -> bool:
     """Whether a mail's sender is something that reads no answer: a no-reply, do-not-reply
     or notification address, a newsletter, a mailer daemon, a status page or an alert
@@ -659,7 +684,7 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
 
 def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: int,
                account_id: Optional[str] = None, folder: Optional[str] = None,
-               svc: Any = None) -> List[Dict[str, Any]]:
+               svc: Any = None, include_bulk: bool = False) -> List[Dict[str, Any]]:
     from vaf.tools.mail_utils import mail_v2_active
     if not mail_v2_active(username or "", user_scope_id) or not user_scope_id:
         return []
@@ -673,6 +698,12 @@ def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: 
     threshold = waits_threshold()
     rows: List[Dict[str, Any]] = []
     for t in svc.list_threads(account_id=account_id or None, folder=folder or None, limit=min(max(int(limit), 1), 200)):
+        # Bulk mail (promotions, social, newsletters, notifications, junk) is not inbox
+        # material unless asked for: the row says so, and the listing drops it after the
+        # stored count (the bulk read asks for the rows it may touch straight away).
+        bulk = is_bulk_mail(t)
+        if not include_bulk and bulk:
+            continue
         thread_id = str(t.get("thread_id"))
         state = mail_thread_state(t, marks.get(("mail", thread_id)), waits_threshold_value=threshold)
         rows.append({
@@ -692,6 +723,7 @@ def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: 
             "done": state["done"],
             "is_group": False,
             "mode": "mail",
+            "bulk": bulk,
             "reply_window_until": None,
             "can_compose": False,
             "session_id": "",
@@ -781,8 +813,11 @@ def list_conversations(username: Optional[str], user_scope_id: Optional[str], *,
                        channels: Optional[Iterable[str]] = None, view: str = "all",
                        include_groups: bool = True, include_done: bool = False, query: str = "",
                        limit: int = 200, now: Optional[float] = None,
-                       mail_account_id: Optional[str] = None, mail_folder: Optional[str] = None) -> Dict[str, Any]:
+                       mail_account_id: Optional[str] = None, mail_folder: Optional[str] = None,
+                       include_bulk: bool = False) -> Dict[str, Any]:
     """Every conversation of this person, newest first, with the counts the rail shows.
+    `include_bulk` lists the mail lane's bulk mail too (`is_bulk_mail`); off, the lane holds
+    primary mail only and `stored_per_channel` still counts everything.
 
     `channels` narrows the lanes (default all five); `view` is one of VIEWS; the group and
     done toggles apply before the counts, the view after them, so the rail's numbers describe
@@ -800,7 +835,7 @@ def list_conversations(username: Optional[str], user_scope_id: Optional[str], *,
             # The lane's own cap, not the caller's row limit: the counts (and the summary,
             # which asks for one row) cover the newest 200 threads.
             rows.extend(_mail_rows(username, user_scope_id, limit=200,
-                                   account_id=mail_account_id, folder=mail_folder))
+                                   account_id=mail_account_id, folder=mail_folder, include_bulk=True))
         except Exception:
             pass
     if "room" in wanted:
@@ -811,6 +846,10 @@ def list_conversations(username: Optional[str], user_scope_id: Optional[str], *,
     # What each lane holds before any toggle, filter or cut: the one number that can say
     # "nothing is stored here" without lying about a view or a query that hid the rows.
     stored_per_channel = {c: sum(1 for r in rows if r["channel"] == c) for c in CHANNELS}
+    bulk_hidden = 0
+    if not include_bulk:
+        bulk_hidden = sum(1 for r in rows if r.get("bulk"))
+        rows = [r for r in rows if not r.get("bulk")]
     if not include_groups:
         rows = [r for r in rows if not r["is_group"]]
     if not include_done:
@@ -833,6 +872,8 @@ def list_conversations(username: Optional[str], user_scope_id: Optional[str], *,
         # Invitations wait for a decision, not for reading: a window subtracts them from what
         # "mark all as read" can clear.
         "invitations": sum(1 for r in rows if r["waits_reason"] == WAITS_INVITATION),
+        # The bulk mail the listing dropped, so a surface can say the list is not all there is.
+        "bulk_hidden": bulk_hidden,
         "stored_per_channel": stored_per_channel,
     }
     if view == "waits":
@@ -953,10 +994,10 @@ def _read_rooms(user_scope_id: Optional[str]) -> int:
 
 def mark_all_seen(username: Optional[str], user_scope_id: Optional[str], *,
                   channels: Optional[Iterable[str]] = None, include_groups: bool = True,
-                  now: Optional[float] = None) -> Dict[str, int]:
+                  include_bulk: bool = False, now: Optional[float] = None) -> Dict[str, int]:
     """"Mark all as read": every conversation of the named channels (default all) counts as
-    read at once; group chats and rooms only when `include_groups` is true (they are the
-    conversations the group toggle shows).
+    read at once; group chats and rooms only when `include_groups` is true, bulk mail only
+    when `include_bulk` is true (they are the conversations the two toggles show).
 
     Messenger chats go through the store's `mark_channel_seen` (one transaction over the
     whole channel, one announce, a marker never moves backwards, no cap); the mail lane's
@@ -991,7 +1032,7 @@ def mark_all_seen(username: Optional[str], user_scope_id: Optional[str], *,
             try:
                 from vaf.mail.service import MailService
                 svc = MailService(user_scope_id)
-                for row in _mail_rows(username, user_scope_id, limit=200, svc=svc):
+                for row in _mail_rows(username, user_scope_id, limit=200, svc=svc, include_bulk=include_bulk):
                     if int(row.get("unread") or 0) <= 0:
                         continue
                     try:

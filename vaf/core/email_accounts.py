@@ -139,6 +139,11 @@ def get_sender_rules(
     return out
 
 
+# A default no category can equal: passed as `current_category`, it comes back unchanged
+# when no rule matched, so a caller can tell "no rule" from "a rule that says primary".
+NO_RULE = "\x00no-rule"
+
+
 def apply_sender_rules_to_category(
     from_str: str,
     current_category: str,

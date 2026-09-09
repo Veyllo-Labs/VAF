@@ -594,7 +594,13 @@ through only split-horizon names the local resolver does not know.
   to the UID range being ingested and to the inbox, degrading to `primary` on any
   error. The client shows a category chip on non-primary conversations and a
   relabel picker in the reader. Categories are applied on INSERT only, so a manual
-  relabel is never overwritten by a later sync.
+  relabel is never overwritten by a later sync. The inbox window hides a thread under a
+  bulk label (promotions, social, updates, forums, newsletter, spam, junk, marketing,
+  notifications, ads), in the Junk folder, or unlabelled from an automated sender, and
+  lists primary and every label of the person's own; the relabel picker is the person's
+  way to hide or show a sender there (see [INBOX.md](INBOX.md)). A sender rule's answer
+  is stored even when it says primary, so a person's primary relabel reaches the sender's
+  later mail on every provider.
 - Sender-rule learning on relabel (deliberate: every relabel learns a rule):
   `PATCH /api/mail/messages/{pk}/category` runs `relabel_and_learn` ->
   it relabels the one message, derives a sender pattern from its From header

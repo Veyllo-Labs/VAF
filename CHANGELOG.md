@@ -69,6 +69,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   reads every conversation of the selected channel (or all of them) at once, groups and
   rooms as the toggle says; the view and the search do not narrow it. Each channel window
   has "All read" for its own channel. Opening a room row in the inbox reads the room too.
+  Bulk mail is not inbox material: a mail thread under a promotions, social, updates or
+  forums tab (the provider's or the person's own label in the mail client), in the Junk
+  folder, or, without a category, from a no-reply or newsletter sender stays out of the
+  inbox's list and counts unless the toggle "Show bulk mail" asks; the
+  agent's tool has `include_bulk`, the command line `--bulk`.
 - **A messenger chat has its own memory.** What the agent learns inside a chat with a
   contact is stored in that chat's own namespace (`source = chat/<session id>`), which every
   ordinary lookup of your agent leaves out in SQL, in both lanes of the hybrid search. Only

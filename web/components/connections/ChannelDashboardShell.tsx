@@ -360,24 +360,29 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
     // and decides for themselves whether to answer. The local state stays while the
     // server still reports what was marked; a different count, a fresh "waits" or a newer
     // message (the state carries the newest timestamp, so one new question after one read
-    // question is news too) is news, and a mark the server refused is forgotten so the
-    // next fetch shows its state again. The conversation header keeps saying why the chat
-    // was flagged until the window next fetches.
+    // question is news too) is news. A mark the server refused is remembered as refused
+    // for that same state: the pill comes back once another chat is chosen (the server
+    // never took the mark) and nothing retries until the chat's state changes, so a
+    // failing server is asked once per state, not once per render. The conversation header keeps saying why the chat was flagged until
+    // the window next fetches.
     const [marked, setMarked] = useState<Map<string, string>>(() => new Map());
     useEffect(() => { if (!isOpen) setMarked(new Map()); }, [isOpen]);
     const stateOf = (c: ShellChat) => `${c.unread ?? 0}:${c.waits ? 1 : 0}:${c.ts ?? 0}`;
     const selectedState = selected ? stateOf(selected) : '';
     const selectedNeedsMark = !!selected && ((selected.unread ?? 0) > 0 || !!selected.waits);
     useEffect(() => {
-        if (!channel || !isOpen || !selected || !selectedNeedsMark || marked.get(selected.id) === selectedState) return;
+        if (!channel || !isOpen || !selected || !selectedNeedsMark) return;
+        const prior = marked.get(selected.id);
+        if (prior === selectedState || prior === `refused:${selectedState}`) return;
         const key = selected.id;
-        setMarked(prev => new Map(prev).set(key, selectedState));
-        const forget = () => setMarked(prev => { const next = new Map(prev); next.delete(key); return next; });
+        const state = selectedState;
+        setMarked(prev => new Map(prev).set(key, state));
+        const refused = () => setMarked(prev => (prev.get(key) === state ? new Map(prev).set(key, `refused:${state}`) : prev));
         for (const id of selected.markIds ?? [selected.id]) {
             fetch(api('api/inbox/marks'), {
                 method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ channel, id, seen: true }),
-            }).then(res => { if (!res.ok) forget(); }).catch(forget);
+            }).then(res => { if (!res.ok) refused(); }).catch(refused);
         }
     }, [channel, isOpen, selected, selectedState, selectedNeedsMark, marked]);
     const readOf = (c: ShellChat) => c.id === selectedId || marked.get(c.id) === stateOf(c);

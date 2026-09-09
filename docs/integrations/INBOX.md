@@ -27,6 +27,7 @@ One shape for five sources:
 | `is_group` | WhatsApp `@g.us`, a negative Telegram id, every room |
 | `mode` | which lane answers: `owner`, `contact` (Front Office), `conversation` (WhatsApp reply window open), `readonly`, `needs_assign` (an unresolved WhatsApp `@lid`), `admin` (Discord), `relay` (Telegram), `mail`, `room` |
 | `reply_window_until` | the WhatsApp reply window, computed from the store with the bridge's rule (a test pins that the two agree) |
+| `bulk` | mail only: the thread is bulk mail (`is_bulk_mail`, see the rules), listed only when the bulk toggle asks |
 | `can_compose` | WhatsApp only: the person may write themselves where the agent does not answer, a read-only chat or every chat once the channel switch (`inbound_to_agent`) is off (the WhatsApp window's rule) |
 | `session_id`, `jump` | what the agent session and the channel window need to land on this conversation |
 
@@ -80,6 +81,22 @@ the same rule, and a mail from something that reads no answer never waits at all
 mailer daemon, a status page, by the address's local part or its display name, and any
 message the sync filed under a non-primary Gmail category such as promotions or updates);
 rooms wait on unread frames and invitations only.
+
+**Bulk mail is not inbox material.** The mail lane lists primary mail only unless asked:
+a thread in the Junk folder (the provider's or the person's own placement, which outranks
+any tab stamp), a thread whose newest message carries a bulk category (the provider's
+tab, promotions or social or updates or forums, the person's own label from the mail
+client's relabel picker, or a sender rule learned from one), and, when no category was set
+at all, a thread from a sender who reads no answer (`is_automated_sender`) stay out of the
+list and its counts (`is_bulk_mail`; `stored_per_channel` still counts them and
+`bulk_hidden` says how many the listing dropped, which the tool and the command line
+repeat). A thread filed under primary, or under a label of the person's own, is never
+bulk, whatever its sender: the person's or the provider's word wins over the heuristic
+(a sender rule's answer is stored even when it says primary, so the rule reaches every
+later mail of that sender on any provider). The
+toggle "Show bulk mail" in the window, `include_bulk` on
+`list_conversations` and on the agent's tool, `--bulk` on the command line and `bulk` on
+the routes show them, and "mark all as read" follows the same toggle.
 
 ## The marks
 
@@ -140,8 +157,9 @@ inbox as well.
 (`whatsapp_inbox`, `telegram_inbox`, `discord_inbox`, `mail_inbox`). Parameters: `channel`
 (one of the five, or `all`), `view` (`all`, `waits`, `unread`, `agent`), `max_chats`
 (1-200, default 30; the user's number is passed as is), `query`, `include_groups`,
-`include_done`, and for the mail lane `account_id` and `folder` (they narrow the lane at the
-source, before the counts and the cut to `max_chats`). The output leads with the
+`include_done`, `include_bulk` (promotions, social, newsletters, notifications and junk
+mail are hidden unless asked), and for the mail lane `account_id` and `folder` (they narrow
+the lane at the source, before the counts and the cut to `max_chats`). The output leads with the
 next-step hint (read one conversation with the per-channel read tools or `read_mail`,
 search mail with `find_mail`, never call `inbox` again for the same request), then the
 counts and one line per conversation, then the "IDs by index" block `read_mail` needs; mail
@@ -153,7 +171,7 @@ a bridge. The tool is not in the Front Office allow-list.
 
 `vaf inbox list` prints the same rows as a table (When, Channel, Name, Unread, Waits, Mode,
 Preview) with the counts above it; `--channel`, `--view`, `--limit`, `--no-groups`, `--done`,
-`--query` narrow it and `--json` prints one object per line. It runs as the machine owner
+`--bulk`, `--query` narrow it and `--json` prints one object per line. It runs as the machine owner
 (no `--scope`: the CLI has no authentication) behind the same terminal door as `vaf session`,
 because it prints chats. Read-only by design: the terminal prints, it does not read for the
 person. The seen mark is written where the person reads (opening a conversation in a window)
@@ -170,11 +188,11 @@ outside network mode); every store read runs off the event loop, and no GET wait
 
 | Route | Answer |
 |---|---|
-| `GET /api/inbox?channel&view&groups&done&q&limit` | `rows`, `counts` and `channels` as `list_conversations` returns them (`channel` is one name, a comma list or `all`), plus `status` per channel: WhatsApp `linked` and `running`, Telegram and Discord `configured` and `running` (Discord for the local admin only), mail `accounts` and `last_sync_at`. What the process knows about itself, never a round trip |
-| `GET /api/inbox/summary?groups&done` | the whole inbox's `counts` (`all`, `waits`, `unread`, `agent`, `per_channel`, `waits_per_channel`, `unread_per_channel`, `invitations`, `stored_per_channel`) under the group and done toggles, never narrowed by a channel, a view or a query: the footer badge reads `waits` and `unread`, the inbox window's rail reads every number |
+| `GET /api/inbox?channel&view&groups&done&bulk&q&limit` | `rows`, `counts` and `channels` as `list_conversations` returns them (`channel` is one name, a comma list or `all`; `bulk` shows the mail lane's bulk mail), plus `status` per channel: WhatsApp `linked` and `running`, Telegram and Discord `configured` and `running` (Discord for the local admin only), mail `accounts` and `last_sync_at`. What the process knows about itself, never a round trip |
+| `GET /api/inbox/summary?groups&done&bulk` | the whole inbox's `counts` (`all`, `waits`, `unread`, `agent`, `per_channel`, `waits_per_channel`, `unread_per_channel`, `invitations`, `stored_per_channel`) under the group, done and bulk toggles, never narrowed by a channel, a view or a query: the footer badge reads `waits` and `unread`, the inbox window's rail reads every number |
 | `GET /api/inbox/history?channel&id&limit` | one conversation in the pane shape (`role`, `content`, `timestamp`, `content_type`, `sender`) |
 | `POST /api/inbox/marks` with `{channel, id, seen?, done?}` | `mark_conversation`; `done` is the primitive without a button; a room's `seen` moves the person's cursor (an invitation's moves nothing); a body that marks nothing, a room that is not the person's and a Discord mark from anybody but the local admin answer 400 |
-| `POST /api/inbox/marks/all` with `{channels?, groups?}` | `mark_all_seen`: every conversation of the named channels (a list, a comma list or `all`, the default, and an empty string means the default; an empty list and an unknown name are a 400), group chats and rooms included unless `groups` is false (the strings false, 0, no and off read as false too), counts as read; answers `moved` per channel (a messenger or mail lane without a store, and Discord for anybody but the local admin, are absent, no 400); the messenger stores announce `inbox_changed` themselves, the room lane `rooms_changed` when a cursor moved, and the route `inbox_changed` once more for the mail lane |
+| `POST /api/inbox/marks/all` with `{channels?, groups?, bulk?}` | `mark_all_seen`: every conversation of the named channels (a list, a comma list or `all`, the default, and an empty string means the default; an empty list and an unknown name are a 400), group chats and rooms included unless `groups` is false, bulk mail only when `bulk` is true (the strings false, 0, no and off read as false), counts as read; answers `moved` per channel (a messenger or mail lane without a store, and Discord for anybody but the local admin, are absent, no 400); the messenger stores announce `inbox_changed` themselves, the room lane `rooms_changed` when a cursor moved, and the route `inbox_changed` once more for the mail lane |
 
 There is no send route and no compose box: writing happens in the channel window, which
 the draft jump opens.
@@ -218,7 +236,7 @@ The inbox window (`web/components/inbox/InboxWindow.tsx`) is the fourth row of t
 footer, between the calendar and the logs, with a badge: the amber count of conversations
 that wait for the person, or a red dot when something is unread and nobody waits. Its
 three panes are the rail (the four views with their counts, the five channels with their
-counts and an amber number where somebody waits, the group and done toggles, the channel
+counts and an amber number where somebody waits, the group, done and bulk toggles, the channel
 status lines; the rail's numbers describe the whole inbox from the summary route, whatever
 one channel the list is narrowed to and whatever the search box says, because a rail that
 follows the search cannot show where else somebody waits; they follow the signal, so they
@@ -259,9 +277,9 @@ with a back button; the desktop markup is unchanged.
 
 ## API (module)
 
-- `list_conversations(username, user_scope_id, *, channels=None, view="all", include_groups=True, include_done=False, query="", limit=200, now=None, mail_account_id=None, mail_folder=None)` returns `{rows, counts, channels}`; `view` is one of `all`, `waits`, `unread`, `agent`; the group and done toggles apply before the counts, the view after them; `query` keeps rows whose name or preview contain it or whose stored messages match (`search_hits`); `mail_account_id` and `mail_folder` narrow the mail lane at the source; the mail lane always reads its newest 200 threads, whatever `limit` says, so the counts cover them. `counts` carries `all`, `waits`, `unread`, `agent`, `per_channel`, `waits_per_channel`, `unread_per_channel` and `invitations` (after the toggles, before the view) and `stored_per_channel` (what each lane holds before any toggle, filter or cut; the tool says "nothing stored" from that number alone).
+- `list_conversations(username, user_scope_id, *, channels=None, view="all", include_groups=True, include_done=False, query="", limit=200, now=None, mail_account_id=None, mail_folder=None, include_bulk=False)` returns `{rows, counts, channels}`; `view` is one of `all`, `waits`, `unread`, `agent`; the group, done and bulk toggles apply before the counts, the view after them; `query` keeps rows whose name or preview contain it or whose stored messages match (`search_hits`); `mail_account_id` and `mail_folder` narrow the mail lane at the source; the mail lane always reads its newest 200 threads, whatever `limit` says, so the counts cover them. `counts` carries `all`, `waits`, `unread`, `agent`, `per_channel`, `waits_per_channel`, `unread_per_channel`, `invitations` and `bulk_hidden` (after the toggles, before the view) and `stored_per_channel` (what each lane holds before any toggle, filter or cut; the tool says "nothing stored" from that number alone).
 - `mark_conversation(username, user_scope_id, channel, id, *, seen=False, done=None)`.
-- `mark_all_seen(username, user_scope_id, *, channels=None, include_groups=True, now=None)` returns `{channel: read}` for the lanes it touched (a messenger lane without a store, and Discord for anybody but the local admin, are absent).
+- `mark_all_seen(username, user_scope_id, *, channels=None, include_groups=True, include_bulk=False, now=None)` returns `{channel: read}` for the lanes it touched (a messenger lane without a store, and Discord for anybody but the local admin, are absent).
 - `conversation_history(username, user_scope_id, channel, id, limit=200)` in the channel windows' pane shape (`role`, `content`, `timestamp`, `content_type`, `sender`).
 - `search_hits(username, user_scope_id, query, channels)`.
 

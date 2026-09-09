@@ -245,6 +245,17 @@ class ImapSyncEngine:
         return apply_sender_rules_to_category(
             from_addr or "", category or "primary", rules=self._sender_rules)
 
+    def _ruled_category(self, from_addr: str, category: str) -> str:
+        """The category a message is stored under: a learned sender rule overrides the
+        provider's tab (legacy ingest parity), and its answer is stored even when it says
+        primary, so a person's primary relabel reaches the sender's later mail on every
+        provider (the inbox reads an explicit primary as the person's word and an empty
+        category as none). Without a matching rule a non-Gmail message keeps its empty
+        category instead of being rewritten to primary."""
+        from vaf.core.email_accounts import NO_RULE
+        ruled = self._apply_sender_rules(from_addr, NO_RULE)
+        return category if ruled == NO_RULE else ruled
+
     def _ingest(self, fpk: int, uid: int, item: Dict[Any, Any], fetched_body: bool,
                 categories: Optional[Dict[int, str]] = None) -> None:
         raw = item.get(b"BODY[]") or item.get("BODY[]")
@@ -260,12 +271,7 @@ class ImapSyncEngine:
         category = ""
         if self.is_gmail:
             category = (categories or {}).get(int(uid), "primary")
-        # A learned sender rule overrides the provider tab (legacy ingest parity).
-        # Only adopt the rule's answer when it actually differs, so a non-Gmail
-        # message keeps its empty category instead of being rewritten to "primary".
-        ruled = self._apply_sender_rules(parsed.from_addr, category or "primary")
-        if ruled != (category or "primary"):
-            category = ruled
+        category = self._ruled_category(parsed.from_addr, category)
         self.store.ingest_message(
             self.account_pk, fpk, uid, parsed,
             raw=bytes(raw) if (raw and fetched_body) else None,

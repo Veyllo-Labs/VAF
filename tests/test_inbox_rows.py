@@ -67,13 +67,17 @@ def _row(key, **kw):
     return next(r for r in _rows(**kw)["rows"] if r["key"] == key)
 
 
-def _mail_thread(unread=True, sent_reply=False):
+def _mail_thread(unread=True, sent_reply=False, *, message_id="<q@example.com>", subject="Vertrag Q4",
+                 from_addr="Lena <lena@example.com>", category=None, junk=False, uid=1):
     s = MailStore(SCOPE)
     apk = s.upsert_account("alice@example.com", "imap", "alice@example.com")
     inbox_pk = s.upsert_folder(apk, "INBOX", special_use="\\Inbox", sync_tier="eager")
-    root = s.ingest_message(apk, inbox_pk, 1, ParsedMessage(
-        message_id="<q@example.com>", subject="Vertrag Q4", from_addr="Lena <lena@example.com>",
+    folder_pk = s.upsert_folder(apk, "Junk", special_use="\\Junk", sync_tier="eager") if junk else inbox_pk
+    root = s.ingest_message(apk, folder_pk, uid, ParsedMessage(
+        message_id=message_id, subject=subject, from_addr=from_addr,
         to_addrs="alice@example.com", date_ts=int(NOW) - 600, refs=[], body_text="zwei Punkte offen"))
+    if category is not None:
+        s.set_category(root, category)
     if not unread:
         s.set_local_flags(root, add=["\\Seen"], remove=())
     if sent_reply:
@@ -175,7 +179,7 @@ def test_views_groups_and_the_done_toggle(world):
                                              "waits_per_channel": {"whatsapp": 1, "telegram": 1, "discord": 0, "mail": 0, "room": 0},
                                              "stored_per_channel": {"whatsapp": 3, "telegram": 1, "discord": 0, "mail": 0, "room": 0}}
     assert sum(counts["unread_per_channel"].values()) == counts["unread"] and counts["invitations"] == 0
-    assert set(counts) == set(pinned) | {"unread_per_channel", "invitations"}, "a new count is a doc and a test, not a surprise"
+    assert set(counts) == set(pinned) | {"unread_per_channel", "invitations", "bulk_hidden"}, "a new count is a doc and a test, not a surprise"
     assert [r["key"] for r in _rows(include_groups=False)["rows"]] == ["whatsapp:+491700000043", "whatsapp:+491700000042"]
     assert [r["key"] for r in _rows(include_done=True)["rows"]][:1] == ["telegram:-500"]
     assert "whatsapp:123@g.us" in [r["key"] for r in _rows(include_done=True)["rows"]]
@@ -233,7 +237,8 @@ def test_room_rows_wait_when_unread_or_invited_and_take_the_done_mark(world):
     inbox.mark_conversation("alice", SCOPE, "room", "r1", done=True)
     assert "room:r1" not in {r["key"] for r in _rows()["rows"]}
     with pytest.raises(ValueError, match="unknown room"):
-        inbox.mark_conversation("alice", SCOPE, "room", "r1", seen=True), "a row the fixture invented has no room behind it"
+        # a row the fixture invented has no room behind it
+        inbox.mark_conversation("alice", SCOPE, "room", "r1", seen=True)
     with pytest.raises(ValueError, match="unknown room"):
         inbox.mark_conversation("alice", SCOPE, "room", "nobody", seen=True)
 
@@ -339,6 +344,33 @@ def test_mark_all_seen_reads_every_lane_at_once_and_respects_the_selection(world
     assert inbox.mark_conversation("alice", SCOPE, "room", "r-inv", seen=True) == {"channel": "room", "id": "r-inv", "seen": False}, \
         "an invitation is read by answering it: a seen moves nothing"
     assert rows["room:r-inv"]["waits"], "and it still waits"
+
+
+def test_bulk_mail_is_hidden_unless_asked_for(world):
+    """MUTATION: drop the `if not include_bulk` filter in list_conversations and the newsletter
+    is listed; drop the gate in _mail_rows and "mark all" reads the bulk mail; drop the primary
+    exception and a no-reply the person filed under primary vanishes."""
+    person = _mail_thread()
+    promo = _mail_thread(message_id="<p@example.com>", subject="Sale", from_addr="Shop <shop@example.com>", category="promotions", uid=2)
+    social = _mail_thread(message_id="<s@example.com>", subject="Pins", from_addr="Pinterest <recommendations@pinterest.example>", category="social", uid=3)
+    junk = _mail_thread(message_id="<j@example.com>", subject="Win", from_addr="Lotto <lotto@example.com>", junk=True, uid=4)
+    letter = _mail_thread(message_id="<n@example.com>", subject="News", from_addr="Galaxus <news@newsletter.galaxus.example>", uid=5)
+    bank = _mail_thread(message_id="<b@example.com>", subject="Kontoauszug", from_addr="Bank <no-reply@bank.example>", category="primary", uid=6)
+    keys = {r["key"] for r in _rows()["rows"]}
+    assert keys == {f"mail:{person}", f"mail:{bank}"}, "primary mail only: the provider's tab, the person's label, the junk folder and the sender heuristic hide the rest"
+    counts = _rows()["counts"]
+    assert counts["per_channel"]["mail"] == 2 and counts["stored_per_channel"]["mail"] == 6, "the lane still holds them"
+    assert counts["bulk_hidden"] == 4 and _rows(include_bulk=True)["counts"]["bulk_hidden"] == 0
+    shown = {r["key"]: r["bulk"] for r in _rows(include_bulk=True)["rows"]}
+    assert set(shown) == {f"mail:{t}" for t in (person, promo, social, junk, letter, bank)}
+    assert shown[f"mail:{person}"] is False and shown[f"mail:{bank}"] is False and all(shown[f"mail:{t}"] for t in (promo, social, junk, letter)), "the row says which it is"
+    assert not inbox.is_bulk_mail({"category": "primary", "from_addr": "no-reply@x"}) and inbox.is_bulk_mail({"category": "updates"})
+    assert inbox.is_bulk_mail({"category": "", "newest_special_use": "\\Junk", "from_addr": "a@b"})
+    assert inbox.is_bulk_mail({"category": "primary", "newest_special_use": "\\Junk", "from_addr": "a@b"}), "Gmail stamps Junk primary; the folder wins"
+    assert not inbox.is_bulk_mail({"category": "work", "from_addr": "no-reply@x"}), "a label of the person's own is not bulk"
+    # "Mark all as read" follows the same toggle: hidden bulk mail keeps its unread flag.
+    assert inbox.mark_all_seen("alice", SCOPE, channels=["mail"]) == {"mail": 2}
+    assert inbox.mark_all_seen("alice", SCOPE, channels=["mail"], include_bulk=True) == {"mail": 4}
 
 
 def test_conversation_history_is_one_shape_for_the_lanes(world):

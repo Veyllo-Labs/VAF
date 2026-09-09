@@ -47,7 +47,8 @@ def listing(monkeypatch):
             rows = [r for r in rows if r["waits"]]
         return {"rows": rows[: kw.get("limit") or 200],
                 "counts": {"all": len(rows), "waits": sum(1 for r in rows if r["waits"]),
-                           "unread": sum(r["unread"] for r in rows), "agent": 0, "stored_per_channel": stored},
+                           "unread": sum(r["unread"] for r in rows), "agent": 0, "stored_per_channel": stored,
+                           "bulk_hidden": 0 if kw.get("include_bulk") else int(seen.get("bulk_hidden", 0))},
                 "channels": kw.get("channels")}
     monkeypatch.setattr("vaf.core.inbox.list_conversations", fake)
     monkeypatch.setattr("vaf.tools.mail_utils.filter_phishing_messages_for_agent", lambda ms: (ms, 0))
@@ -89,7 +90,12 @@ def test_channel_view_and_toggles_pass_through_and_mail_narrows_by_account_and_f
     out = InboxTool().run(username="alice", user_scope_id="s", channel="mail", view="waits", max_chats="15",
                           query="vertrag", include_groups=False, include_done=True, account_id="a@x")
     assert listing["kw"] == {"channels": ["mail"], "view": "waits", "include_groups": False, "include_done": True,
-                             "query": "vertrag", "limit": 15, "mail_account_id": "a@x", "mail_folder": None}
+                             "include_bulk": False, "query": "vertrag", "limit": 15, "mail_account_id": "a@x", "mail_folder": None}
+    InboxTool().run(username="alice", user_scope_id="s", channel="mail", include_bulk=True)
+    assert listing["kw"]["include_bulk"] is True, "bulk mail only when asked"
+    listing["bulk_hidden"] = 3
+    assert "(3 bulk mail thread(s) hidden" in InboxTool().run(username="alice", user_scope_id="s", channel="mail"), "the agent hears what the list dropped"
+    assert "bulk mail thread(s) hidden" not in InboxTool().run(username="alice", user_scope_id="s", channel="mail", include_bulk=True)
     assert "name-1" in out and "name-2" not in out
     out = InboxTool().run(username="alice", user_scope_id="s", channel="mail", folder="Sent")
     assert "name-2" in out and "name-1" not in out

@@ -69,17 +69,21 @@ def test_the_window_reads_the_shells_pieces_and_registers_its_own_escape_rungs()
     # list it may leave, and the amber sentence keeps the reason the row was opened with.
     assert "const readOf = (r: InboxRow) => r.waits_reason !== 'invitation' && (r.key === selectedKey || marked.get(r.key) === stateOf(r));" in src
     assert "const waitsOf = (r: InboxRow) => !readOf(r) && r.waits;" in src and "waits={waitsOf(r)}" in src and "{waitsOf(selected) && <WaitsChip" in src
-    assert "if (!isOpen || !live || !selectedNeedsMark || marked.get(live.key) === selectedState) return;" in src, "a room row is read like any other"
+    assert "if (!isOpen || !live || !selectedNeedsMark) return;" in src, "a room row is read like any other"
     assert "const selectedNeedsMark = !!live && live.waits_reason !== 'invitation' && (live.unread > 0 || live.waits);" in src, "an invitation posts nothing"
     assert "const stateOf = (r: InboxRow) => `${r.unread}:${r.waits ? 1 : 0}:${r.last_ts}`;" in src, "a newer message is news even at the same count"
-    assert "}).then(res => { if (!res.ok) forget(); }).catch(forget);" in src, "a refused mark is forgotten, so the next fetch shows the server's state"
+    assert "}).then(res => { if (!res.ok) refused(); }).catch(refused);" in src and "if (prior === selectedState || prior === `refused:${selectedState}`) return;" in src, \
+        "a refused mark is remembered as refused for that state: the pill stays and nothing retries until the state changes"
     assert "const movedOn = !!(live && opened && (live.last_ts > opened.row.last_ts || live.answered_by_agent || live.done));" in src
     assert "const selected = live ?? (opened && opened.row.key === selectedKey ? opened.row : null);" in src
     assert "const noteReason = live?.waits ? live.waits_reason : (opened && opened.row.key === selectedKey && !movedOn ? opened.reason : '');" in src
     assert "setOpened({ row: r, reason: r.waits ? r.waits_reason : '' });" in src
     assert "{noteReason === 'unanswered' && (" in src and "{noteReason === 'owner_asked' && (" in src and "{noteReason === 'invitation' && (" in src
     # "Mark all as read": the whole selection at once, through the bulk route, then a reload.
-    assert "fetch(api('api/inbox/marks/all'), {" in src and "body: JSON.stringify({ channels: channel ? [channel] : 'all', groups })," in src
+    assert "fetch(api('api/inbox/marks/all'), {" in src and "body: JSON.stringify({ channels: channel ? [channel] : 'all', groups, bulk })," in src
+    # Bulk mail stays out of the list unless the toggle asks; the list, the rail and the bulk read follow it.
+    assert "<Toggle on={bulk} onChange={setBulk} label={t('showBulk')} />" in src
+    assert "done: String(done), bulk: String(bulk), limit: '200'" in src and "new URLSearchParams({ groups: String(groups), done: String(done), bulk: String(bulk) })" in src
     assert "disabled={markingAll || !anythingToRead} title={t('markAllReadHint')}" in src and "{t('markAllRead')}" in src
     body = src.split("const anythingToRead = (() => {", 1)[1].split("})();", 1)[0]
     assert "const invitations = counts.invitations ?? 0;" in body and "counts.unread_per_channel?.[channel]" in body and "counts.waits - invitations > 0" in body, \

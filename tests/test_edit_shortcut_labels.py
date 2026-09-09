@@ -40,7 +40,8 @@ def test_the_seven_catalogues_carry_the_placeholder_and_the_control_keys_name():
     for p in sorted((WEB / "messages").glob("*.json")):
         common = json.loads(p.read_text(encoding="utf-8"))["common"]
         assert "{shortcut}" in common["undoWithShortcut"] and "{shortcut}" in common["redoWithShortcut"], p.name
-        assert "Ctrl" not in common["undoWithShortcut"] and "Strg" not in common["redoWithShortcut"], p.name
+        for key in ("undoWithShortcut", "redoWithShortcut"):
+            assert "Ctrl" not in common[key] and "Strg" not in common[key], (p.name, key)
         assert common["ctrlKey"] in ("Ctrl", "Strg"), p.name
 
 

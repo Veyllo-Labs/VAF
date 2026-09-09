@@ -2306,6 +2306,7 @@
     },
     "showGroups": "Gruppen zeigen",
     "showDone": "Erledigte zeigen",
+    "showBulk": "Massenmails zeigen",
     "status": {
       "on": "{channel} verbunden",
       "off": "{channel} gestoppt",

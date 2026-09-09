@@ -94,7 +94,8 @@ class InboxTool(BaseTool):
         "inbox, Posteingang, mails, chats or who is waiting - it is the ONLY source of their real messages "
         "(memory_search does NOT contain them). Narrow with channel (whatsapp, telegram, discord, mail, room; "
         "default all), view (all, waits, unread, agent), max_chats (when the user names a number, pass it), "
-        "query, include_groups, include_done; account_id and folder narrow the mail lane. "
+        "query, include_groups, include_done, include_bulk (promotions, social, newsletters, notifications and "
+        "junk mail are hidden unless asked); account_id and folder narrow the mail lane. "
         "Then READ one conversation with read_whatsapp_chat / read_telegram_chat / read_discord_chat "
         "(chat_id), read_mail (the IDs block) or room_read (room_id); search mail with find_mail."
     )
@@ -121,6 +122,7 @@ class InboxTool(BaseTool):
             },
             "include_groups": {"type": "boolean", "description": "Include group chats and rooms (default true)."},
             "include_done": {"type": "boolean", "description": "Include conversations the user answered last, or marked done through the API (default false)."},
+            "include_bulk": {"type": "boolean", "description": "Mail only. Include promotions, social, newsletters, notifications and junk mail (default false: primary mail only)."},
             "account_id": {"type": "string", "description": "Mail only. Email of one connected account."},
             "folder": {"type": "string", "description": "Mail only. IMAP folder name (default: every folder)."},
         },
@@ -144,6 +146,7 @@ class InboxTool(BaseTool):
         include_groups = kwargs.get("include_groups")
         include_groups = True if include_groups is None else bool(include_groups)
         include_done = bool(kwargs.get("include_done") or False)
+        include_bulk = bool(kwargs.get("include_bulk") or False)
         query = (kwargs.get("query") or "").strip()
 
         # The derived Telegram/Discord indexes are re-projected from the session files first,
@@ -167,7 +170,7 @@ class InboxTool(BaseTool):
         folder = (kwargs.get("folder") or "").strip()
         result = list_conversations(username, user_scope_id, channels=channels, view=view,
                                     include_groups=include_groups, include_done=include_done,
-                                    query=query, limit=max_chats,
+                                    include_bulk=include_bulk, query=query, limit=max_chats,
                                     mail_account_id=account_id or None, mail_folder=folder or None)
         rows = result["rows"]
         rows, blocked = _hide_suspicious_mail(rows)
@@ -197,6 +200,9 @@ class InboxTool(BaseTool):
             out += "\n\nIDs for read_mail (by index; do not invent or repeat entries):\n" + "\n".join(id_lines)
         if blocked:
             out += f"\n\n(Security) Hidden {blocked} suspicious mail thread(s) by phishing filter."
+        hidden = int(counts.get("bulk_hidden") or 0)
+        if hidden:
+            out += f"\n\n({hidden} bulk mail thread(s) hidden: promotions, social, newsletters, notifications, junk; include_bulk=true lists them.)"
         return out
 
 

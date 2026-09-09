@@ -103,6 +103,21 @@ def test_the_summary_counts_waits_and_unread_for_the_badge(world):
     assert asyncio.run(ir.inbox_summary(_request(), done=True))["all"] == 3
 
 
+def test_the_bulk_toggle_reaches_the_list_the_summary_and_the_bulk_read(world, monkeypatch):
+    seen = []
+    import vaf.core.inbox as inbox_mod
+    real = inbox_mod.list_conversations
+    monkeypatch.setattr(inbox_mod, "list_conversations", lambda *a, **kw: seen.append(kw.get("include_bulk")) or real(*a, **kw))
+    _list(bulk=True); _list()
+    asyncio.run(ir.inbox_summary(_request(), bulk=True)); asyncio.run(ir.inbox_summary(_request()))
+    assert seen == [True, False, True, False]
+    marks = []
+    monkeypatch.setattr(inbox_mod, "mark_all_seen", lambda *a, **kw: marks.append(kw.get("include_bulk")) or {})
+    asyncio.run(ir.inbox_marks_all(_request(), {"bulk": True})); asyncio.run(ir.inbox_marks_all(_request(), {}))
+    asyncio.run(ir.inbox_marks_all(_request(), {"bulk": "false"}))
+    assert marks == [True, False, False]
+
+
 def test_marks_all_reads_the_selection_and_refuses_an_unknown_channel(world):
     _msg("+491700000042", "wann?", ts=NOW - 20, message_id="a1")
     _msg("7", "und du?", ts=NOW - 10, message_id="a2", channel="telegram")

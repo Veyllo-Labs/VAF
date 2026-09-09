@@ -168,13 +168,17 @@ class MailService:
         """Re-apply the sender->category rules (config blob, SSOT) to EVERY stored
         message; returns the count whose category changed. This is the backfill the
         classic dashboard ran so a relabel reaches existing mail of the same sender."""
-        from vaf.core.email_accounts import apply_sender_rules_to_category
+        from vaf.core.email_accounts import NO_RULE, apply_sender_rules_to_category, get_sender_rules
+        rules = get_sender_rules(username, user_scope_id=self.user_scope_id)
         updated = 0
         for row in self.store.list_for_relabel():
-            cur = row.get("category") or "primary"
-            new = apply_sender_rules_to_category(
-                row.get("from_addr") or "", cur, username, self.user_scope_id)
-            new = re.sub(r"\s+", "_", str(new or "primary").strip().lower())[:64] or "primary"
+            # A rule's answer is stored even when it says primary (the inbox reads an explicit
+            # primary as the person's word); a message no rule matches keeps what it has.
+            ruled = apply_sender_rules_to_category(row.get("from_addr") or "", NO_RULE, rules=rules)
+            if ruled == NO_RULE:
+                continue
+            cur = str(row.get("category") or "")
+            new = re.sub(r"\s+", "_", str(ruled or "primary").strip().lower())[:64] or "primary"
             if new != cur:
                 self.store.set_category(int(row["pk"]), new)
                 updated += 1

@@ -31,10 +31,10 @@ def store(tmp_path):
     s.close()
 
 
-def _msg(message_id="<m1@example.com>", subject="Hello", refs=None, body="Hi there, invoice attached."):
+def _msg(message_id="<m1@example.com>", subject="Hello", refs=None, body="Hi there, invoice attached.", date_ts=1_700_000_000):
     return ParsedMessage(message_id=message_id, subject=subject,
                          from_addr="Alice <alice@example.com>", to_addrs="bob@example.com",
-                         date_ts=1_700_000_000, refs=refs or [], body_text=body)
+                         date_ts=date_ts, refs=refs or [], body_text=body)
 
 
 def _setup(store):
@@ -229,7 +229,7 @@ def test_list_threads_carries_the_newest_messages_identity_and_folder(store):
     apk, fpk = _setup(store)
     sent = store.upsert_folder(apk, "Sent", special_use="\\Sent", sync_tier="eager")
     root = store.ingest_message(apk, fpk, 40, _msg("<q@example.com>", "Question"))
-    store.ingest_message(apk, sent, 41, _msg("<a@example.com>", "Re: Question", refs=["<q@example.com>"]), gm_msgid="18f2a")
+    store.ingest_message(apk, sent, 41, _msg("<a@example.com>", "Re: Question", refs=["<q@example.com>"], date_ts=1_700_000_060), gm_msgid="18f2a")
     row = next(t for t in store.list_threads() if t["subject"].endswith("Question"))
     assert row["newest_message_id"] == "<a@example.com>" and row["newest_folder"] == "Sent"
     assert row["newest_special_use"] == "\\Sent" and row["newest_answered_at"] is None

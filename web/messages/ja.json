@@ -2307,6 +2307,7 @@
     "showGroups": "グループを表示",
     "showDone": "完了済みを表示",
     "showBulk": "一斉配信メールを表示",
+    "allChannels": "すべてのチャンネル",
     "status": {
       "on": "{channel}は接続済み",
       "off": "{channel}は停止中",

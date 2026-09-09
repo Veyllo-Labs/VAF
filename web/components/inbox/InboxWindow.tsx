@@ -7,7 +7,7 @@
 // channel (WhatsApp, Telegram, Discord, mail, agent rooms), newest first, with the same
 // four states the channel windows and the agent's `inbox` tool show, because all of
 // them read the rows vaf/core/inbox.py builds (docs/integrations/INBOX.md). A rail with
-// the views, the channels and the two toggles, the list, and a preview with the
+// the views, the channels and the three toggles, the list, and a preview with the
 // conversation and the actions. No input field and no done or read button: the inbox is
 // the place to read and to decide. Opening a row reads it, and a read row no longer waits
 // for you (the person read it and decides for themselves whether to answer), so the
@@ -24,7 +24,7 @@ import { X, Search, RefreshCw, Inbox, ArrowLeft, Sparkles, ExternalLink, CheckCh
 import { cn } from '@/lib/utils';
 import { useEscapeLayer } from '@/hooks/useEscapeLayer';
 import {
-    BTN, INPUT, ConversationBubbles, StateChips, WaitsChip, fmtWhen, initials,
+    BTN, BTN_PRIMARY, INPUT, ConversationBubbles, StateChips, WaitsChip, fmtWhen, initials,
     useConversationHistory, type InboxChannel,
 } from '@/components/connections/ChannelDashboardShell';
 
@@ -97,12 +97,13 @@ function keyParts(key: string): { channel: string; id: string } {
     return at < 0 ? { channel: key, id: '' } : { channel: key.slice(0, at), id: key.slice(at + 1) };
 }
 
-/** One switch row in the rail: a pill that is green when on. */
+/** One switch row in the rail: the dark theme's toggle, a light track with a dark knob when on. */
 function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
     return (
         <button type="button" onClick={() => onChange(!on)} className="mx-4 py-1 flex items-center gap-2 text-[#c8c8c8] text-left max-md:mx-0 max-md:px-2 max-md:text-xs max-md:shrink-0 max-md:whitespace-nowrap">
-            <span className={cn('w-8 h-4 rounded-full relative shrink-0', on ? 'bg-[#25a244]' : 'bg-[#3a3a3a]')}>
-                <span className={cn('absolute top-0.5 w-3 h-3 rounded-full', on ? 'right-0.5 bg-white' : 'left-0.5 bg-[#9a9a9a]')} />
+            {/* The dark theme's toggle: a light track with a dark knob when on, a dark track with a light knob when off. */}
+            <span className={cn('w-8 h-4 rounded-full relative shrink-0', on ? 'bg-[#d9d9d9]' : 'bg-[#333333]')}>
+                <span className={cn('absolute top-0.5 w-3 h-3 rounded-full', on ? 'right-0.5 bg-[#1a1a1a]' : 'left-0.5 bg-[#e8e8e8]')} />
             </span>
             <span className="truncate">{label}</span>
         </button>
@@ -138,7 +139,12 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
     // the WHOLE inbox under the same toggles. The narrowed result's own counts describe only
     // the selected channel, and a rail that reads them shows WhatsApp at 0 the moment
     // Telegram is selected.
+    // A response that is not the newest request's is dropped: a channel switch and the
+    // signal's debounce can leave two requests in flight, and the older answer must not
+    // land on top of the newer list.
+    const loadRequest = useRef(0);
     const load = useCallback(async () => {
+        const requestNo = ++loadRequest.current;
         const params = new URLSearchParams({ view, groups: String(groups), done: String(done), bulk: String(bulk), limit: '200' });
         if (channel) params.set('channel', channel);
         if (query) params.set('q', query);
@@ -150,16 +156,20 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                 fetch(api(`api/inbox?${params}`), { credentials: 'include' }),
                 fetch(api(`api/inbox/summary?${summaryParams}`), { credentials: 'include' }).catch(() => null),
             ]);
+            if (requestNo !== loadRequest.current) return;
             if (!res.ok) { setLoadFailed(true); return; }
             const json = await res.json();
+            if (requestNo !== loadRequest.current) return;
             setRows(Array.isArray(json.rows) ? json.rows : []);
             setStatus(json.status ?? null);
             // The narrowed result's own counts stand in when the summary is unreachable.
-            setCounts(sum?.ok ? await sum.json() : (json.counts ?? null));
+            const countsJson = sum?.ok ? await sum.json() : (json.counts ?? null);
+            if (requestNo !== loadRequest.current) return;
+            setCounts(countsJson);
         } catch {
             setLoadFailed(true);
         } finally {
-            setLoading(false);
+            if (requestNo === loadRequest.current) setLoading(false);
         }
     }, [view, channel, groups, done, bulk, query]);
     const loadRef = useRef(load);
@@ -184,7 +194,7 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
     // own reply) drops it.
     const [opened, setOpened] = useState<{ row: InboxRow; reason: string } | null>(null);
     useEffect(() => {
-        if (!isOpen) { setSelectedKey(null); setOpened(null); setMobilePane('list'); setQueryInput(''); setQuery(''); }
+        if (!isOpen) { setSelectedKey(null); setOpened(null); setMobilePane('list'); setQueryInput(''); setQuery(''); setChannel(null); setView('all'); }
     }, [isOpen]);
 
     const live = useMemo(() => (selectedKey ? rows.find(r => r.key === selectedKey) ?? null : null), [rows, selectedKey]);
@@ -351,6 +361,12 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                             </button>
                         ))}
                         <div className={RAIL_HEAD}>{t('rail.channels')}</div>
+                        {/* "All channels" is its own entry: the view's "All" above is a view, and a person who
+                            narrowed the list to one channel looks here to widen it again. */}
+                        <button type="button" onClick={() => setChannel(null)} className={cn(RAIL_BTN, channel === null ? 'bg-[#2a2a2a]' : 'hover:bg-[#262626]')}>
+                            <span className="flex items-center gap-2 min-w-0"><span className="w-2 h-2 rounded-full shrink-0 bg-[#e6e6e6]" /><span className="truncate">{t('allChannels')}</span></span>
+                            <span className={cn('text-xs', (counts?.waits ?? 0) > 0 ? 'text-[#e0b866] font-medium' : 'text-[#9a9a9a]')}>{counts?.all ?? 0}</span>
+                        </button>
                         {CHANNELS.map(c => (
                             <button key={c} type="button" onClick={() => setChannel(prev => prev === c ? null : c)} className={cn(RAIL_BTN, channel === c ? 'bg-[#2a2a2a]' : 'hover:bg-[#262626]')}>
                                 <span className="flex items-center gap-2 min-w-0"><span className={cn('w-2 h-2 rounded-sm shrink-0', CHANNEL_SQUARE[c])} /><span className="truncate">{t(`channel.${c}`)}</span></span>
@@ -444,9 +460,10 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                         <button type="button" onClick={() => openElsewhere(selected, false)} className={cn('flex items-center gap-1.5', BTN)}>
                                             <ExternalLink className="w-3.5 h-3.5" />{selected.channel === 'room' ? t('openRoom') : t('openIn', { channel: t(`channel.${selected.channel}`) })}
                                         </button>
-                                        {/* No done or read button: opening the row read it, and the reader decides. */}
+                                        {/* No done or read button: opening the row read it, and the reader decides. The one
+                                            emphasis action takes the dark theme's light neutral, not a channel colour. */}
                                         {canDraft(selected) && (
-                                            <button type="button" onClick={() => openElsewhere(selected, true)} className="px-3 py-1.5 rounded-lg bg-[#25a244] text-white text-sm font-medium flex items-center gap-1.5">
+                                            <button type="button" onClick={() => openElsewhere(selected, true)} className={cn('flex items-center gap-1.5', BTN_PRIMARY)}>
                                                 <Sparkles className="w-4 h-4" />{t('writeDraft')}
                                             </button>
                                         )}
@@ -458,7 +475,7 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                     ) : bubbles.length === 0 ? (
                                         <p className="text-sm text-[#9a9a9a] self-center">{t('noMessages')}</p>
                                     ) : (
-                                        <ConversationBubbles messages={bubbles} iconClass={CHANNEL_SQUARE[selected.channel]} query="" currentMatch={null} />
+                                        <ConversationBubbles messages={bubbles} iconClass={CHANNEL_SQUARE[selected.channel]} query="" currentMatch={null} mineClass="bg-[#3a3a3a]" />
                                     )}
                                     {noteReason === 'unanswered' && (
                                         <span className="self-center mt-2 text-[11px] text-[#e0b866] bg-[#2b2417] border border-[#4a3b1e] px-3 py-1 rounded-full text-center">{t('unanswered', { name: selected.name || selected.id })}</span>

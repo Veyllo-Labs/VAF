@@ -2307,6 +2307,7 @@
     "showGroups": "显示群组",
     "showDone": "显示已完成",
     "showBulk": "显示群发邮件",
+    "allChannels": "所有渠道",
     "status": {
       "on": "{channel} 已连接",
       "off": "{channel} 已停止",

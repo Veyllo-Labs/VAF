@@ -697,40 +697,57 @@ def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: 
     marks = chat_marks(username or "", user_scope_id, channel="mail")
     threshold = waits_threshold()
     rows: List[Dict[str, Any]] = []
-    for t in svc.list_threads(account_id=account_id or None, folder=folder or None, limit=min(max(int(limit), 1), 200)):
-        # Bulk mail (promotions, social, newsletters, notifications, junk) is not inbox
-        # material unless asked for: the row says so, and the listing drops it after the
-        # stored count (the bulk read asks for the rows it may touch straight away).
-        bulk = is_bulk_mail(t)
-        if not include_bulk and bulk:
-            continue
-        thread_id = str(t.get("thread_id"))
-        state = mail_thread_state(t, marks.get(("mail", thread_id)), waits_threshold_value=threshold)
-        rows.append({
-            "key": f"mail:{thread_id}",
-            "channel": "mail",
-            "id": thread_id,
-            "name": (t.get("from_addr") or t.get("subject") or "").strip() or thread_id,
-            "subject": t.get("subject") or "",
-            "preview": (t.get("snippet") or t.get("subject") or "")[:160],
-            "preview_from": state["preview_from"],
-            "last_ts": float(t.get("last_date_ts") or 0.0),
-            "message_count": int(t.get("message_count") or 0),
-            "unread": state["unread"],
-            "waits": state["waits"],
-            "waits_reason": state["waits_reason"],
-            "answered_by_agent": state["answered_by_agent"],
-            "done": state["done"],
-            "is_group": False,
-            "mode": "mail",
-            "bulk": bulk,
-            "reply_window_until": None,
-            "can_compose": False,
-            "session_id": "",
-            "jump": {"channel": "mail", "thread_id": thread_id, "account_id": t.get("acct"),
-                     "folder": t.get("newest_folder"), "message_id": t.get("newest_message_id"),
-                     "provider_message_id": t.get("newest_gm_msgid") or "", "message_pk": t.get("newest_pk")},
-        })
+    # The store hands out 200 threads a page. With bulk mail hidden the lane pages on
+    # until it holds `limit` primary threads (or the store runs dry, at most five pages),
+    # so a real conversation behind a wall of newsletters still reaches the inbox.
+    want = min(max(int(limit), 1), 200)
+    primary = 0
+    offset = 0
+    seen: Set[str] = set()
+    for _page in range(5):
+        batch = svc.list_threads(account_id=account_id or None, folder=folder or None, limit=200, offset=offset)
+        for t in batch:
+            # A sync between two pages shifts the order by one: the thread that closed the
+            # last page opens the next, and is listed once.
+            if str(t.get("thread_id")) in seen:
+                continue
+            seen.add(str(t.get("thread_id")))
+            # Bulk mail (promotions, social, newsletters, notifications, junk) is not inbox
+            # material unless asked for: the row says so, the listing drops it after the
+            # stored count, and the bulk read skips it.
+            bulk = is_bulk_mail(t)
+            if not bulk:
+                primary += 1
+            thread_id = str(t.get("thread_id"))
+            state = mail_thread_state(t, marks.get(("mail", thread_id)), waits_threshold_value=threshold)
+            rows.append({
+                "key": f"mail:{thread_id}",
+                "channel": "mail",
+                "id": thread_id,
+                "name": (t.get("from_addr") or t.get("subject") or "").strip() or thread_id,
+                "subject": t.get("subject") or "",
+                "preview": (t.get("snippet") or t.get("subject") or "")[:160],
+                "preview_from": state["preview_from"],
+                "last_ts": float(t.get("last_date_ts") or 0.0),
+                "message_count": int(t.get("message_count") or 0),
+                "unread": state["unread"],
+                "waits": state["waits"],
+                "waits_reason": state["waits_reason"],
+                "answered_by_agent": state["answered_by_agent"],
+                "done": state["done"],
+                "is_group": False,
+                "mode": "mail",
+                "bulk": bulk,
+                "reply_window_until": None,
+                "can_compose": False,
+                "session_id": "",
+                "jump": {"channel": "mail", "thread_id": thread_id, "account_id": t.get("acct"),
+                         "folder": t.get("newest_folder"), "message_id": t.get("newest_message_id"),
+                         "provider_message_id": t.get("newest_gm_msgid") or "", "message_pk": t.get("newest_pk")},
+            })
+        if len(batch) < 200 or (primary if not include_bulk else len(rows)) >= want:
+            break
+        offset += 200
     return rows
 
 
@@ -833,9 +850,12 @@ def list_conversations(username: Optional[str], user_scope_id: Optional[str], *,
     if "mail" in wanted:
         try:
             # The lane's own cap, not the caller's row limit: the counts (and the summary,
-            # which asks for one row) cover the newest 200 threads.
+            # which asks for one row) cover the newest 200 threads the toggle allows (with
+            # bulk mail hidden the lane pages on until it holds 200 primary threads, at most
+            # five pages). Every row read comes back flagged; the listing drops the bulk ones
+            # after the stored count.
             rows.extend(_mail_rows(username, user_scope_id, limit=200,
-                                   account_id=mail_account_id, folder=mail_folder, include_bulk=True))
+                                   account_id=mail_account_id, folder=mail_folder, include_bulk=include_bulk))
         except Exception:
             pass
     if "room" in wanted:
@@ -1001,8 +1021,8 @@ def mark_all_seen(username: Optional[str], user_scope_id: Optional[str], *,
 
     Messenger chats go through the store's `mark_channel_seen` (one transaction over the
     whole channel, one announce, a marker never moves backwards, no cap); the mail lane's
-    unread threads through the same per-thread seen as a single row (the newest 200
-    threads, the lane's reach, one service for the call); every unread room through the
+    unread threads through the same per-thread seen as a single row (the lane's reach:
+    the newest 200 threads the bulk toggle allows, paged; one service for the call); every unread room through the
     person's cursor (`Room.mark_read`, as opening it would; an invitation stays). The done
     and owner-asked marks are left alone (a read marker newer than the agent's question
     lifts that reason by itself). Returns how many conversations were read per channel; a
@@ -1033,7 +1053,7 @@ def mark_all_seen(username: Optional[str], user_scope_id: Optional[str], *,
                 from vaf.mail.service import MailService
                 svc = MailService(user_scope_id)
                 for row in _mail_rows(username, user_scope_id, limit=200, svc=svc, include_bulk=include_bulk):
-                    if int(row.get("unread") or 0) <= 0:
+                    if int(row.get("unread") or 0) <= 0 or (not include_bulk and row.get("bulk")):
                         continue
                     try:
                         if _read_mail_thread(svc, int(row["id"])):

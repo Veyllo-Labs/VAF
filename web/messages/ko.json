@@ -2307,6 +2307,7 @@
     "showGroups": "그룹 표시",
     "showDone": "완료된 대화 표시",
     "showBulk": "대량 메일 표시",
+    "allChannels": "모든 채널",
     "status": {
       "on": "{channel} 연결됨",
       "off": "{channel} 중지됨",

@@ -404,9 +404,12 @@ def append_message(
     user_scope_id: Optional[str] = None,
     ts: Optional[float] = None,
     channel: str = "whatsapp",
+    keep_existing: bool = False,
 ) -> None:
     """Append one message to the store. ts: optional Unix timestamp (e.g. from history sync); default now.
-    channel: messaging channel ('whatsapp' default, 'telegram', 'discord', ...)."""
+    channel: messaging channel ('whatsapp' default, 'telegram', 'discord', ...). `keep_existing`
+    leaves a row with the same key as it is (a history import must not relabel what the send
+    path stored, the person's compose-box row included); the default replaces it."""
     import time
     import sqlite3
     init_store(username, user_scope_id)
@@ -416,8 +419,8 @@ def append_message(
         # Use chat_id+ts+direction as fallback unique key when message_id missing
         mid = message_id or f"_{ts}_{direction}"
         conn.execute(
-            """
-            INSERT OR REPLACE INTO channel_messages
+            f"""
+            INSERT OR {'IGNORE' if keep_existing else 'REPLACE'} INTO channel_messages
             (username, chat_id, chat_name, sender_jid, body, direction, ts, message_id, content_type, channel)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,

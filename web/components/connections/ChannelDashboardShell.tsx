@@ -222,10 +222,11 @@ export function useConversationHistory(historyKey: string | null, isOpen: boolea
 export interface Bubble { role: string; text: string; timestamp?: string }
 
 /** The bubbles of one conversation: the other side on the left, what left on our behalf
- *  on the right in the channel's colour, day separators between days, the current search
- *  match ringed. `currentMatch` is the index of the message the search sits on. */
-export function ConversationBubbles({ messages, iconClass, query, currentMatch }: {
-    messages: Bubble[]; iconClass: string; query: string; currentMatch: number | null;
+ *  on the right in the channel's colour (or `mineClass`, the inbox's neutral surface), day
+ *  separators between days, the current search match ringed. `currentMatch` is the index
+ *  of the message the search sits on. */
+export function ConversationBubbles({ messages, iconClass, query, currentMatch, mineClass }: {
+    messages: Bubble[]; iconClass: string; query: string; currentMatch: number | null; mineClass?: string;
 }) {
     const t = useTranslations('settings.channelDashboard');
     const dayLabel = (iso?: string): string | null => {
@@ -255,7 +256,7 @@ export function ConversationBubbles({ messages, iconClass, query, currentMatch }
                                 <div className="w-6 h-6 rounded-full bg-[#2e2e2e] grid place-items-center text-[#c8c8c8] shrink-0"><User className="w-3.5 h-3.5" /></div>
                             )}
                             <div className={cn('max-w-[62%] px-3 py-2 rounded-2xl text-[13.5px] leading-relaxed',
-                                isBot ? 'bg-[#1f4d2a] rounded-tr-sm' : 'bg-[#262626] rounded-tl-sm',
+                                isBot ? cn(mineClass ?? 'bg-[#1f4d2a]', 'rounded-tr-sm') : 'bg-[#262626] rounded-tl-sm',
                                 isCurrentMatch && 'ring-2 ring-[#e0b866]')}>
                                 <p className="whitespace-pre-wrap break-words"><HighlightedText text={msg.text} query={query} /></p>
                                 {msg.timestamp && <div className={cn('text-[10px] text-[#8a8a8a] mt-1', isBot && 'text-right')}>{msg.timestamp}</div>}
@@ -335,7 +336,7 @@ export function KvRow({ left, right }: { left: React.ReactNode; right?: React.Re
 }
 
 export const BTN = 'px-3 py-1.5 rounded-lg bg-[#262626] border border-[#2e2e2e] text-sm hover:border-[#444] disabled:opacity-50';
-export const BTN_PRIMARY = 'px-3 py-1.5 rounded-lg bg-[#e6e6e6] text-[#181818] text-sm font-medium disabled:opacity-50';
+export const BTN_PRIMARY = 'px-3 py-1.5 rounded-lg bg-[#e6e6e6] text-[#181818] text-sm font-medium hover:bg-[#f5f5f5] disabled:opacity-50';
 export const INPUT = 'bg-[#262626] border border-[#2e2e2e] rounded-lg px-3 py-1.5 text-sm outline-none focus:border-[#444]';
 
 export default function ChannelDashboardShell(props: ChannelDashboardShellProps) {

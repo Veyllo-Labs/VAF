@@ -73,7 +73,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   forums tab (the provider's or the person's own label in the mail client), in the Junk
   folder, or, without a category, from a no-reply or newsletter sender stays out of the
   inbox's list and counts unless the toggle "Show bulk mail" asks; the
-  agent's tool has `include_bulk`, the command line `--bulk`.
+  agent's tool has `include_bulk`, the command line `--bulk`. The window wears the dark
+  theme's own tokens: "Write a draft" is the light neutral emphasis button, the toggles
+  the theme's track and knob, our own bubbles a neutral surface; the channel squares keep
+  their colours. The channel list carries its own "All channels" entry, because the view's
+  "All" is a view and a list narrowed to WhatsApp had no visible way back; closing the
+  window widens the list again. A reply you send from the agent number's own phone is
+  stored as your own message (the bridge hands it over with its text, its time and the
+  resolved number now, knows its own echoes by id, and the history import tells the
+  phone's sends from the bridge's own by the id shape, keeps what a stored row says and
+  adds no second row for a message the send path already stored), so the inbox shows it
+  and no longer credits it to the agent; inbound messages carry their own time, so a
+  backlog keeps its order. A primary mail thread behind a wall of newsletters reaches the
+  inbox: the mail lane pages on, five pages of 200 at most, until it holds 200 primary
+  threads (behind more than 1000 newer bulk threads it still does not; the bulk toggle
+  shows the newest 200 threads regardless).
 - **A messenger chat has its own memory.** What the agent learns inside a chat with a
   contact is stored in that chat's own namespace (`source = chat/<session id>`), which every
   ordinary lookup of your agent leaves out in SQL, in both lanes of the hybrid search. Only

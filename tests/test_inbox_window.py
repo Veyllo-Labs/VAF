@@ -63,7 +63,7 @@ def test_the_window_reads_the_shells_pieces_and_registers_its_own_escape_rungs()
     assert "done: value" not in src and "done: true" not in src and "setDoneMark" not in src and "t('markDone')" not in src and "t('reopen')" not in src, \
         "no done or read button: opening a row reads it, and the reader decides"
     assert "fetch(api(`api/inbox/summary?${summaryParams}`)" in src, "the rail's counts are the whole inbox's, not the narrowed result's"
-    assert "setCounts(sum?.ok ? await sum.json() : (json.counts ?? null));" in src
+    assert "const countsJson = sum?.ok ? await sum.json() : (json.counts ?? null);" in src and "setCounts(countsJson);" in src
     assert "t('unanswered', { name: selected.name || selected.id })" in src, "the reason is said in one sentence"
     # Reading takes a row off "waits for you": the chips clear at once, the opened row outlives the
     # list it may leave, and the amber sentence keeps the reason the row was opened with.
@@ -128,6 +128,21 @@ def test_the_inbox_has_no_input_field_and_a_draft_starts_the_composer_in_the_cha
     assert "autoDraft={composeAutoDraft}" in mail and "void runComposer('draft');" in mail.split("autoDraftDone.current = true;", 1)[1][:200]
     assert "bg-[#e05d44]" not in src, "the unread pill comes from the shell, not a second definition"
     assert "bg-[#25a244]" in src and "bg-[#2aabee]" in src and "bg-[#5865f2]" in src and "bg-[#e0a03c]" in src and "bg-[#a78bfa]" in src
+    # The window is the dark theme's: the one emphasis action takes the light neutral, the
+    # toggles the theme's track and knob, our own bubbles a neutral surface; the channel
+    # squares keep their colours, and amber, red and green stay status colours.
+    assert src.count("bg-[#25a244]") == 1, "the channel square is the only WhatsApp green left"
+    draft = src.split("{canDraft(selected) && (", 1)[1].split("</button>", 1)[0]
+    assert "className={cn('flex items-center gap-1.5', BTN_PRIMARY)}" in draft and "text-white" not in draft and "#25a244" not in draft
+    shell = _read(WEB / "components" / "connections" / "ChannelDashboardShell.tsx")
+    assert "hover:bg-[#f5f5f5]" in shell.split("export const BTN_PRIMARY", 1)[1].split("\n", 1)[0], "the hover is part of the token, not of one call site"
+    assert "cn(mineClass ?? 'bg-[#1f4d2a]', 'rounded-tr-sm')" in shell and shell.count("mineClass=") == 0, "the channel windows keep their green"
+    assert "setChannel(null); setView('all'); }" in src, "closing the window widens the list again"
+    assert "const requestNo = ++loadRequest.current;" in src and src.count("if (requestNo !== loadRequest.current) return;") == 3, "a stale answer never lands on a newer list"
+    assert "if (requestNo === loadRequest.current) setLoading(false);" in src, "and never clears the spinner of the newer one"
+    assert "onClick={() => setChannel(null)}" in src and "{t('allChannels')}" in src, "the channel list has its own All, the view's All is a view"
+    assert "on ? 'bg-[#d9d9d9]' : 'bg-[#333333]'" in src and "on ? 'right-0.5 bg-[#1a1a1a]' : 'left-0.5 bg-[#e8e8e8]'" in src
+    assert 'mineClass="bg-[#3a3a3a]"' in src
 
 
 def test_mobile_is_additive_and_the_three_panes_stack():

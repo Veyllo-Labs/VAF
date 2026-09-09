@@ -2307,6 +2307,7 @@
     "showGroups": "แสดงกลุ่ม",
     "showDone": "แสดงที่เสร็จแล้ว",
     "showBulk": "แสดงอีเมลจำนวนมาก",
+    "allChannels": "ทุกช่องทาง",
     "status": {
       "on": "{channel} เชื่อมต่อแล้ว",
       "off": "{channel} หยุดอยู่",

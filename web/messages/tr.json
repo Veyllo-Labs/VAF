@@ -2307,6 +2307,7 @@
     "showGroups": "Grupları göster",
     "showDone": "Tamamlananları göster",
     "showBulk": "Toplu e-postaları göster",
+    "allChannels": "Tüm kanallar",
     "status": {
       "on": "{channel} bağlı",
       "off": "{channel} durduruldu",

@@ -373,6 +373,46 @@ def test_bulk_mail_is_hidden_unless_asked_for(world):
     assert inbox.mark_all_seen("alice", SCOPE, channels=["mail"], include_bulk=True) == {"mail": 4}
 
 
+def test_a_primary_thread_behind_a_wall_of_bulk_mail_still_reaches_the_inbox(world):
+    """MUTATION: fetch one page of 200 threads and the person's mail behind 250 newsletters
+    is invisible to the inbox, its counts and the bulk read."""
+    person = _mail_thread(message_id="<p@example.com>", subject="Vertrag", uid=1)
+    s = MailStore(SCOPE)
+    apk = s.upsert_account("alice@example.com", "imap", "alice@example.com")
+    fpk = s.upsert_folder(apk, "INBOX", special_use="\\Inbox", sync_tier="eager")
+    for i in range(250):
+        pk = s.ingest_message(apk, fpk, 100 + i, ParsedMessage(
+            message_id=f"<n{i}@example.com>", subject=f"Deal {i}", from_addr="Shop <news@shop.example>",
+            to_addrs="alice@example.com", date_ts=int(NOW) - 500 + i, refs=[], body_text="sale"))
+        s.set_category(pk, "promotions")
+    s.close()
+    keys = [r["key"] for r in _rows()["rows"]]
+    assert keys == [f"mail:{person}"], "the one primary thread, 250 newsletters newer than it notwithstanding"
+    assert _rows()["counts"]["bulk_hidden"] == 250 and _rows()["counts"]["stored_per_channel"]["mail"] == 251
+    assert len(_rows(include_bulk=True)["rows"]) == 200, "with bulk shown the lane is the newest 200"
+
+
+def test_the_mail_lane_lists_a_thread_once_when_a_sync_shifts_the_pages(world):
+    """MUTATION: drop the `seen` set in _mail_rows and the thread that closed one page and
+    opened the next is listed twice."""
+    class Shifting:
+        def __init__(self):
+            self.calls = 0
+        def list_threads(self, account_id=None, folder=None, limit=200, offset=0):
+            self.calls += 1
+            start = offset - (1 if offset else 0)   # a sync landed: everything moved down by one
+            return [{"thread_id": i, "last_date_ts": 10_000 - i, "subject": f"t{i}", "from_addr": "Shop <news@shop.example>",
+                     "snippet": "sale", "message_count": 1, "unread_count": 1, "category": "promotions", "acct": "a@x",
+                     "newest_folder": "INBOX", "newest_special_use": "\\Inbox", "newest_answered_at": None,
+                     "newest_message_id": f"<{i}@x>", "newest_gm_msgid": "", "newest_pk": i}
+                    for i in range(start, min(start + limit, 260))]
+    _mail_thread()   # the lane exists (the store is on disk and v2 is on); the fake service replaces its listing
+    svc = Shifting()
+    rows = inbox._mail_rows("alice", SCOPE, limit=200, svc=svc, include_bulk=False)
+    keys = [r["key"] for r in rows]
+    assert len(keys) == len(set(keys)) == 260 and svc.calls == 2, "two pages, the overlapping thread once"
+
+
 def test_conversation_history_is_one_shape_for_the_lanes(world):
     _msg("+491700000042", "hallo", ts=NOW - 900)
     _msg("+491700000042", "hi", direction="out", ts=NOW - 800)

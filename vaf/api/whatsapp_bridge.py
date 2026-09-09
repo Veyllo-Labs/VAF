@@ -1247,6 +1247,72 @@ def _drop_self_number_from_whitelist(username: str, user_scope_id: str, self_pho
         logger.warning("WhatsApp: whitelist cleanup failed for %s: %s", username, e)
 
 
+def _payload_ts(obj: Dict[str, Any]) -> Optional[float]:
+    """The message's own time from a bridge payload (seconds), or None for the arrival
+    time: a backlog delivered after an outage keeps its order against a reply the person
+    sent from the phone meanwhile."""
+    ts = obj.get("ts")
+    return float(ts) if isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts > 0 else None
+
+
+def _not_a_persons_chat(jid: str) -> bool:
+    """A status post, a channel post, a broadcast list or a group is not a person's chat:
+    nothing the person sends there is stored as a reply to anybody."""
+    j = str(jid or "").strip().lower()
+    return (not j or j == "status@broadcast" or j.endswith("@newsletter") or j.endswith("@broadcast")
+            or j.endswith("@g.us"))
+
+
+def _lid_map_e164(jid: str) -> str:
+    """The configured lid_to_e164 mapping for a JID, or an empty string."""
+    try:
+        wc = Config.get("whatsapp_config") or {}
+        lid_map = wc.get("lid_to_e164") if isinstance(wc, dict) else None
+        e164 = str((lid_map or {}).get(str(jid)) or "").strip() if isinstance(lid_map, dict) else ""
+        return ("+" + e164) if e164 and not e164.startswith("+") else e164
+    except Exception:
+        return ""
+
+
+_MEDIA_FAMILY = {"voice": "audio", "audio": "audio", "document": "document", "image": "image", "video": "video", "sticker": "sticker"}
+
+
+def _already_stored_outbound(username: str, chat_id: str, body: str, ts: Optional[float], user_scope_id: Optional[str],
+                             content_type: str = "text") -> bool:
+    """Whether the store already holds this outbound message of the bridge's under another
+    key: the send path stores a row the moment a message leaves (with no WhatsApp id yet,
+    and with its own labels: "[Voice message]", "[Document] caption"), so a history batch
+    that carries the same message under its id must not add a second row, nor relabel it.
+    A text is the same text within ten minutes; a media message is the same family (voice,
+    document, image) within ten minutes. Only asked for ids of the bridge's own shape: a
+    phone-shaped id was never stored by the send path, so a reply from the phone that
+    happens to repeat the agent's words is kept."""
+    try:
+        from vaf.core.channel_message_store import get_chat_messages
+        want = " ".join(str(body or "").split())
+        family = _MEDIA_FAMILY.get(str(content_type or "text").lower())
+        for row in get_chat_messages(username, chat_id, limit=60, user_scope_id=user_scope_id):
+            if row.get("direction") != "out":
+                continue
+            if ts is not None and abs(float(row.get("ts") or 0.0) - float(ts)) > 600:
+                continue
+            if " ".join(str(row.get("body") or "").split()) == want:
+                return True
+            if family and _MEDIA_FAMILY.get(str(row.get("content_type") or "").lower()) == family:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _sent_by_this_bridge(message_id: Any) -> bool:
+    """Whether a message id has the shape the bridge's own sends carry: Baileys generates
+    its ids as 3EB0 followed by hex, while a message the agent number's phone sent carries
+    the phone's own shape. The history import tells the agent's sends from the person's by
+    it; the live path needs no guess, the bridge knows its own echoes."""
+    return str(message_id or "").upper().startswith("3EB0")
+
+
 def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dict[str, Any]) -> None:
     """Handle one JSON event from the bridge (pong, message, chats, etc.)."""
     if typ == "pong":
@@ -1315,7 +1381,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
     elif typ == "history_messages":
         # Chat history from WhatsApp (messaging-history.set); store so inbox has full history
         try:
-            from vaf.core.channel_message_store import append_message
+            from vaf.core.channel_message_store import OWNER_SENDER, append_message
             stored = 0
             for m in obj.get("messages") or []:
                 chat_id = (m.get("chat_id") or "").strip()
@@ -1325,12 +1391,24 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                 direction = "out" if m.get("direction") == "out" else "in"
                 ts_val = m.get("ts")
                 ts_float = float(ts_val) if ts_val is not None else None
+                # An outbound row the bridge did not send is the person's own (the agent
+                # number's phone): labelled as theirs, so the inbox never credits it to the agent.
+                # A message the store already holds (the send path stored it the moment it
+                # left, the compose box under the person's label) is neither added again nor
+                # relabelled: the import keeps what a row already says.
+                ours = direction == "out" and _sent_by_this_bridge(m.get("message_id"))
+                sender = None if direction == "in" or ours else OWNER_SENDER
+                if ours and _already_stored_outbound(username, chat_id, body, ts_float, user_scope_id,
+                                                     content_type=str(m.get("content_type") or "text")):
+                    continue
                 append_message(
                     username,
                     chat_id,
                     body,
                     direction=direction,
+                    sender_jid=sender,
                     message_id=m.get("message_id"),
+                    keep_existing=True,
                     content_type=m.get("content_type") or "text",
                     user_scope_id=user_scope_id,
                     ts=ts_float,
@@ -1374,6 +1452,24 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                     pass
             except Exception as e:
                 logger.warning("WhatsApp: failed to save owner_control: %s", e)
+        # The person's own words, sent from the agent number's phone: stored as their row
+        # (OWNER_SENDER), so the inbox shows the reply and reads the chat as answered by the
+        # person, not by the agent. The echo of the bridge's own send never reaches here.
+        body = str(obj.get("body") or "").strip()
+        ctype = str(obj.get("content_type") or "text").strip().lower() or "text"
+        if from_jid and body and ctype not in ("reaction", "other") and not _not_a_persons_chat(from_jid):
+            try:
+                from vaf.core.channel_message_store import OWNER_SENDER, append_message
+                msg_ts = _payload_ts({"ts": obj.get("msg_ts")}) or _payload_ts(obj)
+                # The same key the inbound path derives: the resolved number first, then the
+                # configured LID map, then the JID's own digits; an unresolved @lid keeps the JID.
+                raw = str(obj.get("fromE164") or "").strip() or _lid_map_e164(from_jid) or _jid_to_e164(from_jid) or ""
+                chat_id = (_to_e164_display(raw) if raw else "") or str(from_jid)
+                append_message(username, chat_id, body, direction="out",
+                               sender_jid=OWNER_SENDER, message_id=str(obj.get("message_id") or "") or None,
+                               content_type=ctype, user_scope_id=user_scope_id, ts=msg_ts)
+            except Exception as e:
+                logger.warning("WhatsApp: failed to store the person's own message: %s", e)
     elif typ == "message":
         from_jid = obj.get("from") or obj.get("senderJid")
         try:
@@ -1539,6 +1635,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                     message_id=obj.get("messageId") or obj.get("message_id"),
                     content_type="voice" if was_voice else "text",
                     user_scope_id=user_scope_id,
+                    ts=_payload_ts(obj),
                 )
             except Exception:
                 pass
@@ -1600,6 +1697,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                 message_id=obj.get("messageId") or obj.get("message_id"),
                 content_type="voice" if was_voice else "text",
                 user_scope_id=user_scope_id,
+                ts=_payload_ts(obj),
             )
         except Exception:
             pass

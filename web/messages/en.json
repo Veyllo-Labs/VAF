@@ -2307,6 +2307,7 @@
     "showGroups": "Show groups",
     "showDone": "Show done",
     "showBulk": "Show bulk mail",
+    "allChannels": "All channels",
     "status": {
       "on": "{channel} connected",
       "off": "{channel} stopped",

@@ -281,8 +281,22 @@ function rememberSentVoiceToJid(jid) {
   }
 }
 
-/** True if this fromMe message is our own echo (we recently sent this to this jid). */
-function isOurEchoToJid(remoteJid, body, contentType) {
+/** The ids of the messages this bridge sent (Baileys hands the id back with the send), kept
+ *  for a while so an echo is known by its id whatever its body: a chunked reply, a document
+ *  with a caption or a voice note followed by text used to slip past the body match. */
+const sentIds = new Map();
+function rememberSentId(id) {
+  if (!id) return;
+  const now = Date.now();
+  sentIds.set(String(id), now);
+  for (const [k, v] of sentIds.entries()) {
+    if (now - v > SENT_BY_US_TTL_MS) sentIds.delete(k);
+  }
+}
+
+/** True if this fromMe message is our own echo (we recently sent this to this jid, by id or by body). */
+function isOurEchoToJid(remoteJid, body, contentType, messageId) {
+  if (messageId && sentIds.has(String(messageId))) return true;
   const rec = lastSentByUs.get(remoteJid);
   if (!rec || (Date.now() - rec.ts) > SENT_BY_US_TTL_MS) return false;
   const normBody = normalizeForEcho(body || "");
@@ -618,20 +632,44 @@ async function connect(authDir) {
         });
         if (n) chatStore.set(remoteJid, n);
       }
+      // Status updates, newsletter posts and broadcast lists are not people writing to the
+      // agent (nor a person's chat when this number posts to them); handed to Python they
+      // would only be refused and logged as rejected senders.
+      if (remoteJid === "status@broadcast" || remoteJid.endsWith("@newsletter") || remoteJid.endsWith("@broadcast")) continue;
       let selfChat = isSelfChat(remoteJid, selfJid, !!msg.key?.fromMe);
       if (msg.key?.fromMe && !selfChat) {
         const bodyForEcho = extractText(msg);
         const ct = getContentType(msg);
         const bodyOrVoice = (bodyForEcho && bodyForEcho.trim()) || (ct === "audio" ? "<voice>" : "");
-        if (!isGroup && !isOurEchoToJid(remoteJid, bodyOrVoice, ct)) {
-          emit({ type: "owner_sent", from: remoteJid, ts: Math.floor(Date.now() / 1000) });
+        if (!isGroup && !isOurEchoToJid(remoteJid, bodyOrVoice, ct, msg.key?.id)) {
+          // The person's own words from this number's phone: Python stores them as the
+          // person's row, so the inbox shows the reply and never credits it to the agent.
+          // The LID is resolved as the inbound path resolves it, so the row lands in the
+          // contact's chat; a message to this number's own LID chat is a note to self.
+          // No map write here: on a message this account sent, senderPn names this account,
+          // not the contact, so it would tie the contact's LID to our own number.
+          let ownE164 = jidToPhone(remoteJid);
+          let ownSelfChat = false;
+          try {
+            if (!ownE164 && remoteJid.endsWith("@lid")) ownE164 = (await resolveLidToE164(sock, remoteJid)) || "";
+            const selfPhone = jidToPhone(selfJid);
+            ownSelfChat = !!(ownE164 && selfPhone && digitsOnly(ownE164) === digitsOnly(selfPhone));
+          } catch (_) {}
+          // A reaction, a delete or another protocol message is not a reply the person wrote.
+          if (!ownSelfChat && ct !== "reaction" && ct !== "other") {
+            const rawTs = Number(msg.messageTimestamp) || 0;
+            const payload = { type: "owner_sent", from: remoteJid, ts: Math.floor(Date.now() / 1000),
+                              // The history's placeholder for the same message, so a backfill finds the row.
+                              body: bodyOrVoice === "<voice>" ? "<media:audio>" : (bodyOrVoice || (ct && ct !== "text" ? `<media:${ct}>` : "")),
+                              message_id: msg.key?.id || "", content_type: ct || "text",
+                              msg_ts: rawTs > 1e12 ? Math.floor(rawTs / 1000) : rawTs };
+            if (ownE164) payload.fromE164 = ownE164;
+            emit(payload);
+          }
         }
         continue; // skip own msgs except in self-chat
       }
       if (isGroup) continue; // Phase 1: DMs only
-      // Status updates, newsletter posts and broadcast lists are not people writing to the
-      // agent; handed to Python they would only be refused and logged as rejected senders.
-      if (remoteJid === "status@broadcast" || remoteJid.endsWith("@newsletter") || remoteJid.endsWith("@broadcast")) continue;
       const senderJid = msg.key.participant ?? msg.key.remoteJid;
       if (msg.pushName && !msg.key?.fromMe) rememberContact({ id: remoteJid, notify: msg.pushName });
       const contentType = getContentType(msg);
@@ -680,6 +718,7 @@ async function connect(authDir) {
       }
       if (selfChat && msg.key?.fromMe && isEcho(body)) continue; // ignore our own reply (echo)
       try {
+        const inTs = Number(msg.messageTimestamp) || 0;
         const payload = {
           type: "message",
           from: remoteJid,
@@ -689,6 +728,9 @@ async function connect(authDir) {
           messageId: msg.key?.id,
           selfChat: selfChat,
           pushName: displayNameFor(remoteJid) || msg.pushName || "",
+          // The message's own time (seconds): a backlog delivered after an outage keeps
+          // its order against a reply the person sent from the phone meanwhile.
+          ts: inTs > 1e12 ? Math.floor(inTs / 1000) : inTs,
         };
         if (fromE164) payload.fromE164 = fromE164;
         if (voicePath) payload.voice_path = voicePath;
@@ -730,12 +772,14 @@ async function main() {
           rememberSentText(text);
           rememberSentToJid(obj.to, text);
           const sendPromise = currentSock.sendMessage(obj.to, { text });
+          // The id is remembered whenever the send lands, even after the caller's timeout gave up on it.
+          sendPromise.then((res) => rememberSentId(res?.key?.id)).catch(() => {});
           const timeoutMs = 12000;
           const timeoutPromise = new Promise((_, reject) => {
             setTimeout(() => reject(new Error(`Send timeout after ${timeoutMs / 1000}s`)), timeoutMs);
           });
-          Promise.race([sendPromise, timeoutPromise]).then(() => {
-            if (reqId) emit({ type: "send_result", req_id: reqId, success: true });
+          Promise.race([sendPromise, timeoutPromise]).then((res) => {
+            if (reqId) emit({ type: "send_result", req_id: reqId, success: true, message_id: res?.key?.id || "" });
           }).catch((err) => {
             const msg = `Send failed: ${err?.message ?? err}`;
             if (reqId) emit({ type: "send_result", req_id: reqId, success: false, error: msg });
@@ -758,12 +802,14 @@ async function main() {
           try { fs.unlinkSync(p); } catch (_) {}
           const mimetype = p.toLowerCase().endsWith(".ogg") ? "audio/ogg; codecs=opus" : "audio/mpeg";
           const sendPromise = currentSock.sendMessage(obj.to, { audio: buf, mimetype }, { sendAudioAsVoice: true });
+          // The id is remembered whenever the send lands, even after the caller's timeout gave up on it.
+          sendPromise.then((res) => rememberSentId(res?.key?.id)).catch(() => {});
           const timeoutMs = 12000;
           const timeoutPromise = new Promise((_, reject) => {
             setTimeout(() => reject(new Error(`Send timeout after ${timeoutMs / 1000}s`)), timeoutMs);
           });
-          Promise.race([sendPromise, timeoutPromise]).then(() => {
-            if (reqId) emit({ type: "send_result", req_id: reqId, success: true });
+          Promise.race([sendPromise, timeoutPromise]).then((res) => {
+            if (reqId) emit({ type: "send_result", req_id: reqId, success: true, message_id: res?.key?.id || "" });
           }).catch((err) => {
             const msg = `Voice send failed: ${err?.message ?? err}`;
             if (reqId) emit({ type: "send_result", req_id: reqId, success: false, error: msg });
@@ -789,13 +835,16 @@ async function main() {
           const mimeMap = { ".pdf": "application/pdf", ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".txt": "text/plain", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png" };
           const mimetype = mimeMap[ext] || "application/octet-stream";
           const opts = obj.caption ? { caption: String(obj.caption) } : {};
+          if (obj.caption) rememberSentToJid(obj.to, String(obj.caption)); else rememberSentVoiceToJid(obj.to);
           const sendPromise = currentSock.sendMessage(obj.to, { document: buf, mimetype, fileName: obj.fileName || base }, opts);
+          // The id is remembered whenever the send lands, even after the caller's timeout gave up on it.
+          sendPromise.then((res) => rememberSentId(res?.key?.id)).catch(() => {});
           const timeoutMs = 30000;
           const timeoutPromise = new Promise((_, reject) => {
             setTimeout(() => reject(new Error(`Document send timeout after ${timeoutMs / 1000}s`)), timeoutMs);
           });
-          Promise.race([sendPromise, timeoutPromise]).then(() => {
-            if (reqId) emit({ type: "send_result", req_id: reqId, success: true });
+          Promise.race([sendPromise, timeoutPromise]).then((res) => {
+            if (reqId) emit({ type: "send_result", req_id: reqId, success: true, message_id: res?.key?.id || "" });
           }).catch((err) => {
             const msg = `Document send failed: ${err?.message ?? err}`;
             if (reqId) emit({ type: "send_result", req_id: reqId, success: false, error: msg });

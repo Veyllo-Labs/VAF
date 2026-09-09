@@ -124,7 +124,7 @@ def test_owner_number_gets_the_full_chat(isolated, monkeypatch):
     rec = _dispatch("alice", "491700000009@s.whatsapp.net")
     assert rec is not None and rec["session_id"] == "whatsapp_alice_491700000009"
     assert rec["metadata"]["ingress_reason"] == "explicit_pair"
-    assert "from_contact" not in rec["metadata"]
+    assert "from_contact" not in rec["metadata"] and "chat_label" not in rec["metadata"]
     assert saved == ["491700000009@s.whatsapp.net"]                    # the owner endpoint
 
 
@@ -133,9 +133,10 @@ def test_contact_lands_in_front_office_and_does_not_become_the_owner_endpoint(is
     monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], ["+491700000005"]))
     saved = []
     monkeypatch.setattr(wa, "save_whatsapp_chat_jid", lambda scope, user, jid: saved.append(jid))
-    rec = _dispatch("alice", "491700000005@s.whatsapp.net")
+    rec = _dispatch("alice", "491700000005@s.whatsapp.net", pushName="Bob")
     assert rec is not None and rec["metadata"]["from_contact"] is True
     assert rec["metadata"]["ingress_reason"] == "contact_fallback"
+    assert rec["metadata"]["chat_label"] == "Bob", "the namespace label is the name the bridge knew"
     assert saved == []
 
 
@@ -310,9 +311,10 @@ def test_conversation_pane_reads_the_message_store_not_the_agent_session(isolate
 
 
 def test_learning_counter_travels_only_for_the_owners_answered_chat(isolated):
-    """Memory Learning compacts only the owner's own registered number (contact chats
-    are excluded by the from_contact gate) and only while inbound messages reach the
-    agent. The pane's counter must not promise learning anywhere else."""
+    """The pane's counter travels for the owner's own registered number while inbound
+    messages reach the agent. A contact chat the agent answers learns into its own
+    namespace, whose visible surface is the chat node on the Memory page, not this
+    counter; a read-only chat learns nowhere."""
     import asyncio
     from vaf.api import whatsapp_routes as routes
     isolated["whatsapp_config"]["whitelist"] = [{"phone_number": "+491700000001", "vaf_username": "alice", "user_scope_id": SCOPE}]

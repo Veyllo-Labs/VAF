@@ -743,6 +743,11 @@ def _run_bot():
 
     debounce_seconds = max(1, int(Config.get("telegram_debounce_seconds", 5)))
 
+    def _telegram_display_name(user) -> str:
+        """The person's name for a chat's memory namespace, as Telegram shows it."""
+        return str(getattr(user, "full_name", None) or getattr(user, "username", None)
+                   or getattr(user, "id", "") or "").strip()
+
     async def _delayed_flush(chat_id: str) -> None:
         await asyncio.sleep(debounce_seconds)
         with _pending_lock:
@@ -788,6 +793,7 @@ def _run_bot():
         if pending.get("from_contact"):
             metadata["from_contact"] = True
             metadata["telegram_user_id"] = str(telegram_user_id)  # So headless can load contact data for prompt
+            metadata["chat_label"] = str(pending.get("chat_label") or "")
         if voice_lang:
             metadata["voice_lang"] = voice_lang  # Pass language to agent context
         # So the LLM sees that this user message was a voice message (transcribed)
@@ -906,6 +912,7 @@ def _run_bot():
                     "telegram_user_id": telegram_user_id,
                     "relay": is_relay,
                     "from_contact": bool(entry.get("from_contact")),
+                    "chat_label": _telegram_display_name(user),
                 }
             rec = _pending_by_chat[chat_id]
             rec["message_id"] = str(update.message.message_id)  # last message of the burst (edit-stable key)
@@ -993,6 +1000,10 @@ def _run_bot():
                     "vaf_username": vaf_username,
                     "telegram_user_id": telegram_user_id,
                     "relay": is_relay,
+                    # A burst that starts with a voice message is the same person as one that
+                    # starts with text: without this a contact ran with the owner's tools.
+                    "from_contact": bool(entry.get("from_contact")),
+                    "chat_label": _telegram_display_name(user),
                     "voice_lang": detected_lang,  # Store detected language for TTS reply
                 }
             rec = _pending_by_chat[chat_id]
@@ -1096,6 +1107,7 @@ def _run_bot():
         if entry.get("from_contact"):
             metadata["from_contact"] = True
             metadata["telegram_user_id"] = str(telegram_user_id)
+            metadata["chat_label"] = _telegram_display_name(user)
 
         tq.add(
             session_id=session_id,

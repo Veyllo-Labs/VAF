@@ -1073,8 +1073,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 is_compaction = (task.metadata or {}).get("compaction") is True
                 if is_compaction:
                     from uuid import UUID
-                    from vaf.memory.rag import run_session_compaction_sync
+                    from vaf.memory.lanes import ChatNamespace
+                    from vaf.memory.rag import run_session_compaction_sync, session_dialogue_excerpt
                     _scope = (task.metadata or {}).get("user_scope_id")
+                    _chat = ChatNamespace.from_meta(task.metadata or {})
                     _turn = int((task.metadata or {}).get("turn_count", 0))
                     if _scope is not None and not isinstance(_scope, UUID):
                         try:
@@ -1084,7 +1086,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     try:
                         # Load the correct session context (important for queued compaction, e.g. Telegram)
                         agent.load_session_context(task.session_id)
-                        run_session_compaction_sync(agent, _scope, task.session_id, _turn)
+                        # A chat with a contact learns from the STORED transcript: the live history
+                        # holds the Front Office wrapper around the person's message.
+                        _conversation = session_dialogue_excerpt(task.session_id, user_label=_chat.label) if _chat else None
+                        run_session_compaction_sync(agent, _scope, task.session_id, _turn,
+                                                    conversation=_conversation, chat=_chat)
                     except Exception as e:
                         logging.getLogger(__name__).warning("Session compaction (queued) failed: %s", e)
                     try:
@@ -1301,7 +1307,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         def _log_rag(msg: str) -> None:
                             append_domain_log("rag", msg)
                         if Config.get("memory_enabled", True):
-                            from vaf.memory.rag import turn_memory_context
+                            from vaf.memory.lanes import ChatNamespace
+                            from vaf.memory.rag import count_sources, turn_memory_context
                             from uuid import UUID
                             user_scope_id = None
                             raw = task.metadata.get("user_scope_id") if getattr(task, "metadata", None) else None
@@ -1310,6 +1317,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     user_scope_id = UUID(str(raw))
                                 except (ValueError, TypeError):
                                     pass
+                            # A turn inside a chat with a contact also reads what the agent learned
+                            # in THAT chat; the owner's own chats read only the general lane.
+                            _chat_ns = ChatNamespace.from_task(task.session_id, task.metadata or {})
                             try:
                                 _rag_t0 = time.time()
                                 if is_debug_logging_enabled():
@@ -1320,16 +1330,16 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 _rag_t0 = time.time()
                             memory_context = turn_memory_context(
                                 task.input_text, user_scope_id=user_scope_id,
-                                caller="headless")
+                                caller="headless", chat_key=(_chat_ns.key if _chat_ns else None))
                             try:
                                 _rag_dur = time.time() - _rag_t0
                                 if is_debug_logging_enabled():
                                     from datetime import datetime as _dt
                                     with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
-                                        f.write(f"{_dt.now().isoformat()} RAG_DONE session_id={task.session_id} duration_sec={_rag_dur:.1f} snippet_count={memory_context.count('[Source ') if memory_context else 0}\n")
+                                        f.write(f"{_dt.now().isoformat()} RAG_DONE session_id={task.session_id} duration_sec={_rag_dur:.1f} snippet_count={count_sources(memory_context)}\n")
                             except Exception:
                                 pass
-                            snippet_count = memory_context.count("[Source ") if memory_context else 0
+                            snippet_count = count_sources(memory_context)
                             if snippet_count == 0:
                                 _log_rag(f"RAG snippets=0 (no matching memories or DB empty) query_len={len(task.input_text or '')}")
                             else:
@@ -1342,7 +1352,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
 
                     # RAG Ergebnis in Web-UI anzeigen (Trefferzahl = Snippets im System-Prompt)
                     try:
-                        _rag_count = memory_context.count("[Source ") if memory_context else 0
+                        from vaf.memory.rag import count_sources as _count_sources
+                        _rag_count = _count_sources(memory_context)
                         get_web_interface().log(
                             f"RAG: {_rag_count} hit(s) (included in system prompt for this turn).",
                             level="info",
@@ -2493,8 +2504,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         except Exception:
                             pass
 
-                    # 3. Session compaction: main user chats (Web, Telegram, WhatsApp, Discord).
-                    #    DSGVO: skip contact chats (from_contact=True) — never learn from other people's messages.
+                    # 3. Session compaction. The owner's own chats (Web, Telegram, WhatsApp, Discord)
+                    #    learn into the general lane; a chat with a contact learns into that chat's
+                    #    own namespace, which no other lane ever reads (vaf/memory/lanes.py). The
+                    #    Front Office answer and the learning are one gate: the agent may answer here.
                     if _post_chat_ok:
                         try:
                             if is_debug_logging_enabled():
@@ -2505,19 +2518,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             pass
                         try:
                             from uuid import UUID
-                            from vaf.memory.rag import run_session_compaction_sync
+                            from vaf.memory.lanes import ChatNamespace
                             from vaf.core.config import Config
                             _task_meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
-                            _is_contact = bool(_task_meta.get("from_contact"))
-                            if _is_contact:
-                                if is_debug_logging_enabled():
-                                    from datetime import datetime as _dt
-                                    try:
-                                        with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
-                                            f.write(f"{_dt.now().isoformat()} COMPACTION_SKIP session_id={task.session_id} reason=contact_chat_dsgvo\n")
-                                    except Exception:
-                                        pass
-                            elif Config.get("memory_enabled", True) and Config.get("memory_compaction_enabled", True):
+                            if Config.get("memory_enabled", True) and Config.get("memory_compaction_enabled", True):
                                 # CRITICAL: Use PERSISTENT turn_count from session.runtime_state
                                 try:
                                     _session_for_count = session_mgr.load(task.session_id)
@@ -2531,12 +2535,14 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         _scope = UUID(str(_scope))
                                     except (ValueError, TypeError):
                                         _scope = None
+                                _chat_ns = ChatNamespace.from_task(task.session_id, _task_meta)
                                 tq.add(
                                     task.session_id,
                                     "__COMPACTION__",
                                     source="web",
                                     priority=15,
-                                    metadata={"compaction": True, "user_scope_id": str(_scope) if _scope else None, "turn_count": turn_count},
+                                    metadata={"compaction": True, "user_scope_id": str(_scope) if _scope else None,
+                                              "turn_count": turn_count, **(_chat_ns.as_meta() if _chat_ns else {})},
                                 )
                         except Exception as e:
                             logging.getLogger(__name__).warning("Session compaction failed: %s", e)

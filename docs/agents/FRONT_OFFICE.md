@@ -53,10 +53,11 @@ When the sender is a contact with **Can reach your assistant**, the runner prefi
 1. Contact sends a message → bridge matches to contact with "Can reach your assistant" → task has `from_contact: true` in metadata.
 2. Headless runner sets `agent._front_office_mode = True` and `agent._active_tools = <allow-list ∩ agent.tools>`.
 3. User message is prefixed with the existing front-office hint and the contact block (name, channels, language, how to address, birthday, the contact's own upcoming appointments; never the notes).
-4. Agent runs; `build_prompt(..., front_office=True)` adds the Front Office role and Security blocks; only allow-listed tools are used.
+4. Agent runs; `build_prompt(..., front_office=True)` adds the Front Office role and Security blocks; only allow-listed tools are used. The memory block carries the owner's general memory as in every turn, plus a second block with what the agent learned inside THIS chat before (`[Chat Source N]`, from the chat's own namespace).
 5. Reply is sent back to the contact (WhatsApp/Telegram) immediately by default. If you enable reply approval, replies are stored as pending until you approve (see **Reply approval** below).
 6. **Owner notification (if applicable):** If the contact had a request, answer, or important info for the owner, the agent calls `send_telegram` or `send_whatsapp` (based on the owner's `main_messenger` from User Identity) to notify the owner with a short summary. These tools always send to the owner, not the contact.
 7. In a `finally` block, headless sets `agent._front_office_mode = False` and `agent._active_tools = None`.
+8. Every `memory_compaction_interval` contact turns, the chat compacts into its own memory namespace (`source=chat/<session id>`): facts about the contact and what was agreed, read from the stored transcript, never the owner's profile. Nothing of it reaches the owner's own chats, the profile cache or any other lane; the owner sees and deletes it as one node on the Memory page. See [MEMORY_SYSTEM.md](../memory/MEMORY_SYSTEM.md#chat-memory-namespaces-what-a-contact-chat-teaches-stays-in-that-chat).
 
 The **owner’s** user identity (name, language, preferences, do’s/don’ts) is unchanged and still injected into the system prompt; it describes the account owner, not the contact. The contact is identified only in the prefixed user message. See [USER_IDENTITY.md](../memory/USER_IDENTITY.md) for user identity and system prompt injection.
 

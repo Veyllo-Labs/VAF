@@ -23,7 +23,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   learned there linked to it; clicking it pins those memories in the search panel like a tag
   does, and the chat details offer one delete that empties the whole namespace, permanently.
   The chat details are the first strings on the Memory page that come from the language
-  catalogues; the rest of that page is still English.
+  catalogues; the rest of that page is still English. Learning from a contact's chat is bound
+  to "the agent may answer in this chat": a Front Office contact or an open conversation
+  compacts on the usual interval into its namespace (facts about the person and what was
+  agreed, read from the stored transcript), relay contacts and stored-only messages learn
+  nowhere, and the owner's profile cache never carries a contact's facts. This replaces the
+  rule that contact chats were never written to memory at all.
 - **Undo and redo in every editor.** The document editor (the DOCX path and the HTML
   path), the code viewer and the custom tool editor have Undo and Redo buttons, and answer
   Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z (Cmd on a Mac) while the keyboard is inside them. The
@@ -259,6 +264,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   an empty file while the bridge had written the rows under the scope.
 
 ### Fixed
+- Telegram: a contact whose burst started with a voice message was answered as the owner, with the owner's full tool set, because the voice handler's pending record lacked the contact flag the text handler sets. Both records carry it now.
 - WhatsApp window: the Memory Learning counter appeared under every chat, including read-only chats and chats the person writes in by hand, although only the owner's own chat with the agent answering is ever compacted. The counter now travels only for that chat, and where the compose box is shown it takes the footer's place, so the input sits at the bottom of the conversation.
 
 - **Saving from the HTML document editor could miss what was typed.** The effect that

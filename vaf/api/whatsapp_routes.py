@@ -119,11 +119,13 @@ def _visible_whitelist(request: Request, whatsapp_config: dict, user_scope_id) -
 
 
 def _learns_from_chat(request: Request, chat_id: str) -> bool:
-    """Whether Memory Learning can run for this chat at all: only the owner's own
-    registered number gets a compacted agent session (contact chats are excluded from
-    learning by the from_contact gate in the headless runner), and only while inbound
-    messages reach the agent. A read-only or manually written chat never advances the
-    counter, so showing one there would promise learning that cannot happen."""
+    """Whether the pane shows the Memory Learning counter for this chat: the owner's own
+    registered number, while inbound messages reach the agent. A contact chat the agent
+    answers learns too, into its own namespace, but its visible surface is the chat node
+    on the Memory page, not this counter (the learning banner reaches only subscribers of
+    that session, and deciding "the agent answers here" for a contact needs the bridge's
+    ingress evaluation). A read-only or manually written chat never advances any counter,
+    so showing one there would promise learning that cannot happen."""
     whatsapp_config = Config.get("whatsapp_config") or {}
     if not isinstance(whatsapp_config, dict) or not whatsapp_config.get("inbound_to_agent", True):
         return False

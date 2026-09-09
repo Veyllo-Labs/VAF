@@ -455,6 +455,20 @@ def _normalize_phone(phone: str) -> str:
     return "".join(c for c in (phone or "") if c.isdigit())
 
 
+def _chat_label(chat_id: str, push_name: str, username: str, user_scope_id: Optional[str]) -> str:
+    """The person's name for a chat's memory namespace: the contact book first, then the
+    push name WhatsApp carries, else the number itself. Best-effort, never raises."""
+    try:
+        if (chat_id or "").startswith("+"):
+            from vaf.core.contacts_store import get_contact_name_by_phone
+            name = get_contact_name_by_phone(chat_id, username, user_scope_id=user_scope_id)
+            if name and name.strip():
+                return name.strip()
+    except Exception:
+        pass
+    return (push_name or "").strip() or (chat_id or "")
+
+
 def _phone_digits_canonical(phone_or_jid: str) -> str:
     """Digits for matching, from the one canonicaliser the contact book and the dashboard use
     (contacts_store.phone_digits_canonical): a JID's user part, 0-prefixed German numbers as
@@ -1623,6 +1637,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                 }
                 if from_contact:
                     metadata["from_contact"] = True
+                    metadata["chat_label"] = _chat_label(chat_id, str(obj.get("pushName") or ""), username, user_scope_id)
                 if voice_lang:
                     metadata["voice_lang"] = voice_lang
 

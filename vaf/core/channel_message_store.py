@@ -12,10 +12,19 @@ search and read chat history. Each row carries a `channel` column; queries filte
 Isolation: per user and per scope (UUID). When user_scope_id is passed, the DB path is
 scopes/<user_scope_id>/channel_messages.db (or data_dir/channel_messages.db for the local-admin scope).
 Otherwise per-username: data_dir/users/<username>/channel_messages.db or data_dir for the local admin.
+
+Next to the messages sits `chat_marks`, the person's own state per chat: when they last
+opened it (`seen_ts`), when they marked it done (`done_ts`), and when the agent asked them a
+question about it (`owner_asked_ts`). It is keyed on (username, channel, chat_id) because the
+messages' primary key predates the channel column. `chat_overview` is the one grouped read
+every conversation list is built from (the inbox, the channel windows, the agent's tool), and
+every writer announces `inbox_changed` so an open window refetches instead of polling.
 """
 import logging
+import threading
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 from vaf.core.platform import Platform
@@ -28,9 +37,18 @@ _DEFAULT_RETENTION_DAYS = 90
 
 __all__ = [
     "init_store", "append_message", "search_messages",
-    "list_chats_from_store", "get_chat_messages", "last_message_ts", "oldest_message",
+    "list_chats_from_store", "chat_overview", "get_chat_messages", "last_message_ts", "oldest_message",
     "delete_message", "mark_deleted", "replace_chat_rows",
+    "chat_marks", "mark_seen", "mark_done", "mark_owner_asked",
 ]
+
+#: Writers announce `inbox_changed` at most this often per scope; a history sync appends
+#: hundreds of rows in a burst, and the browser only needs to be told once that the list
+#: changed, plus once more at the end of the burst.
+_ANNOUNCE_MIN_INTERVAL_S = 2.0
+_announce_lock = threading.Lock()
+_announce_last: Dict[str, float] = {}
+_announce_timers: Dict[str, threading.Timer] = {}
 
 
 #: The `sender_jid` an outbound row carries when the PERSON sent it from the dashboard
@@ -131,7 +149,165 @@ def init_store(username: Optional[str] = None, user_scope_id: Optional[str] = No
         except sqlite3.OperationalError:
             pass  # column already exists
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ch_msg_channel ON channel_messages(username, channel, chat_id)")
+        # The person's own state per chat. Created once; on that first creation every chat
+        # that already holds messages starts as READ up to its newest row: the day the
+        # marker arrives counts as read, or every history row would light up and no click
+        # could ever clear it (the rule the Logs seen marker follows).
+        had_marks = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_marks'").fetchone() is not None
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS chat_marks (
+                username TEXT NOT NULL DEFAULT '',
+                channel TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                seen_ts REAL,
+                done_ts REAL,
+                owner_asked_ts REAL,
+                PRIMARY KEY (username, channel, chat_id)
+            )
+        """)
+        if not had_marks:
+            conn.execute("""
+                INSERT OR IGNORE INTO chat_marks (username, channel, chat_id, seen_ts)
+                SELECT username, channel, chat_id, MAX(ts) FROM channel_messages
+                GROUP BY username, channel, chat_id
+            """)
         conn.commit()
+    finally:
+        conn.close()
+
+
+def _announce_changed(username: Optional[str], user_scope_id: Optional[str]) -> None:
+    """Tell the person's browsers that a conversation list changed (`inbox_changed`).
+
+    The scope is resolved the way `_db_path` resolves the file: an explicit scope, else the
+    local admin when the rows live in the admin's file (Discord writes under `admin` with no
+    scope), else nobody. Throttled per scope with a trailing edge: the first write of a burst
+    announces at once, the rest collapse into one announcement when the interval ends, so the
+    browser's refetch after the first frame cannot miss what the burst appended after it.
+    Never raises: the store must not fail a write because no browser is listening."""
+    try:
+        scope = str(user_scope_id).strip() if user_scope_id else ""
+        if not scope:
+            u = (username or "").strip()
+            if not u or u.lower() == _local_admin():
+                scope = _local_admin_scope_id() or ""
+        if not scope:
+            return
+        now = time.monotonic()
+        with _announce_lock:
+            last = _announce_last.get(scope, 0.0)
+            if now - last >= _ANNOUNCE_MIN_INTERVAL_S:
+                _announce_last[scope] = now
+                fire_now = True
+            else:
+                fire_now = False
+                if scope not in _announce_timers:
+                    delay = _ANNOUNCE_MIN_INTERVAL_S - (now - last)
+                    timer = threading.Timer(max(0.01, delay), _announce_trailing, args=(scope,))
+                    timer.daemon = True
+                    _announce_timers[scope] = timer
+                    timer.start()
+        if fire_now:
+            _emit_inbox_changed(scope)
+    except Exception:
+        pass
+
+
+def _announce_trailing(scope: str) -> None:
+    with _announce_lock:
+        _announce_timers.pop(scope, None)
+        _announce_last[scope] = time.monotonic()
+    _emit_inbox_changed(scope)
+
+
+def _emit_inbox_changed(scope: str) -> None:
+    try:
+        from vaf.core.web_interface import notify_inbox_changed
+        notify_inbox_changed(scope)
+    except Exception:
+        pass
+
+
+def _upsert_mark(username: Optional[str], channel: str, chat_id: str, user_scope_id: Optional[str],
+                 **columns: Optional[float]) -> None:
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        u = (username or "").strip() or ""
+        conn.execute(
+            "INSERT OR IGNORE INTO chat_marks (username, channel, chat_id) VALUES (?, ?, ?)",
+            (u, channel or "whatsapp", chat_id or ""),
+        )
+        sets = ", ".join(f"{col} = ?" for col in columns)
+        conn.execute(
+            f"UPDATE chat_marks SET {sets} WHERE username = ? AND channel = ? AND chat_id = ?",
+            (*columns.values(), u, channel or "whatsapp", chat_id or ""),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    _announce_changed(username, user_scope_id)
+
+
+def mark_seen(username: str, channel: str, chat_id: str, user_scope_id: Optional[str] = None,
+              ts: Optional[float] = None) -> float:
+    """The person opened this chat: everything up to `ts` (default now) counts as read.
+    Never moves backwards. Returns the marker written."""
+    at = float(ts) if ts is not None else time.time()
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        row = conn.execute(
+            "SELECT seen_ts FROM chat_marks WHERE username = ? AND channel = ? AND chat_id = ?",
+            ((username or "").strip() or "", channel or "whatsapp", chat_id or ""),
+        ).fetchone()
+        if row and row["seen_ts"] is not None and float(row["seen_ts"]) >= at:
+            return float(row["seen_ts"])
+    finally:
+        conn.close()
+    _upsert_mark(username, channel, chat_id, user_scope_id, seen_ts=at)
+    return at
+
+
+def mark_done(username: str, channel: str, chat_id: str, user_scope_id: Optional[str] = None,
+              done: bool = True, ts: Optional[float] = None) -> None:
+    """Mark a chat done (nothing waits until something newer arrives) or take that back."""
+    _upsert_mark(username, channel, chat_id, user_scope_id,
+                 done_ts=(float(ts) if ts is not None else time.time()) if done else None)
+
+
+def mark_owner_asked(username: str, channel: str, chat_id: str, user_scope_id: Optional[str] = None,
+                     ts: Optional[float] = None) -> None:
+    """The agent asked the person a question about this chat (the Front Office back-channel):
+    the chat waits for the person until they, or the agent writing to the contact again, answer."""
+    _upsert_mark(username, channel, chat_id, user_scope_id,
+                 owner_asked_ts=float(ts) if ts is not None else time.time())
+
+
+def chat_marks(username: str, user_scope_id: Optional[str] = None,
+               channel: Optional[str] = None) -> Dict[Tuple[str, str], Dict[str, Optional[float]]]:
+    """Every mark of this identity, keyed by (channel, chat_id). A missing store answers {}."""
+    if not store_exists(username, user_scope_id):
+        return {}
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        clauses, params = ["username = ?"], [(username or "").strip() or ""]
+        if channel:
+            clauses.append("channel = ?")
+            params.append(channel)
+        cur = conn.execute(
+            f"SELECT channel, chat_id, seen_ts, done_ts, owner_asked_ts FROM chat_marks WHERE {' AND '.join(clauses)}",
+            tuple(params),
+        )
+        out: Dict[Tuple[str, str], Dict[str, Optional[float]]] = {}
+        for row in cur.fetchall():
+            d = dict(row)
+            out[(d["channel"], d["chat_id"])] = {
+                "seen_ts": d.get("seen_ts"), "done_ts": d.get("done_ts"), "owner_asked_ts": d.get("owner_asked_ts"),
+            }
+        return out
     finally:
         conn.close()
 
@@ -183,6 +359,7 @@ def append_message(
         pass
     finally:
         conn.close()
+    _announce_changed(username, user_scope_id)
 
 
 def delete_message(
@@ -213,9 +390,12 @@ def delete_message(
             ),
         )
         conn.commit()
-        return cur.rowcount or 0
+        removed = cur.rowcount or 0
     finally:
         conn.close()
+    if removed:
+        _announce_changed(username, user_scope_id)
+    return removed
 
 
 def mark_deleted(
@@ -247,9 +427,12 @@ def mark_deleted(
             ),
         )
         conn.commit()
-        return cur.rowcount or 0
+        changed = cur.rowcount or 0
     finally:
         conn.close()
+    if changed:
+        _announce_changed(username, user_scope_id)
+    return changed
 
 
 def replace_chat_rows(
@@ -307,9 +490,10 @@ def replace_chat_rows(
             )
             inserted += 1
         conn.commit()
-        return inserted
     finally:
         conn.close()
+    _announce_changed(username, user_scope_id)
+    return inserted
 
 
 def search_messages(
@@ -350,6 +534,90 @@ def search_messages(
         conn.close()
 
 
+def chat_overview(
+    username: str,
+    user_scope_id: Optional[str] = None,
+    channel: Optional[str] = None,
+    limit: int = 500,
+    reply_window_seconds: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """One row per chat, newest first, in ONE statement: everything a conversation list
+    needs to say "who, what, when, unread, waiting" without a query per chat.
+
+    Per (channel, chat_id): `last_ts`, `message_count` (tombstones excluded, as `chat_stats`
+    counts), `last_in_ts` (newest inbound), `last_agent_ts` (newest outbound the AGENT sent),
+    `last_owner_ts` (newest outbound the person sent from the dashboard, `OWNER_SENDER`),
+    `unread` (inbound rows after the person's `seen_ts`), the marks (`seen_ts`, `done_ts`,
+    `owner_asked_ts`), the newest row's `chat_name` (newest non-empty), `last_body` (160
+    chars), `last_direction`, `last_sender`, `last_content_type`, and, when
+    `reply_window_seconds` is given, `last_in_within_ts`: the newest inbound that arrived
+    inside the window the agent's last message opened (the reply-window rule's second
+    input, `whatsapp_bridge.conversation_open_until`). `channel=None` lists every channel.
+    Correlated subqueries instead of window functions: the store must run on the SQLite
+    every install ships, and `idx_ch_msg_channel` serves each of them."""
+    if not store_exists(username, user_scope_id):
+        return []
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        u = (username or "").strip() or ""
+        limit = min(max(int(limit or 1), 1), 500)
+        chan_clause = " AND m.channel = ?" if channel else ""
+        chan_param: List[Any] = [channel] if channel else []
+        same_chat = "n.username = m.username AND n.channel = m.channel AND n.chat_id = m.chat_id"
+        live = "COALESCE(n.content_type, 'text') != 'deleted'"
+        newest = (f"(SELECT n.{{col}} FROM channel_messages n WHERE {same_chat} AND {live} "
+                  f"ORDER BY n.ts DESC LIMIT 1)")
+        within = "NULL"
+        window_param: List[Any] = []
+        if reply_window_seconds is not None and float(reply_window_seconds) > 0:
+            within = (f"(SELECT MAX(n.ts) FROM channel_messages n WHERE {same_chat} AND n.direction = 'in' AND {live} "
+                      f"AND n.ts <= (SELECT MAX(o.ts) FROM channel_messages o WHERE o.username = m.username "
+                      f"AND o.channel = m.channel AND o.chat_id = m.chat_id AND o.direction = 'out' "
+                      f"AND COALESCE(o.sender_jid, '') != ? AND COALESCE(o.content_type, 'text') != 'deleted') + ?)")
+            window_param = [OWNER_SENDER, float(reply_window_seconds)]
+        cur = conn.execute(
+            f"""
+            SELECT m.channel, m.chat_id,
+                   MAX(m.ts) AS last_ts,
+                   COUNT(*) AS message_count,
+                   MAX(CASE WHEN m.direction = 'in' THEN m.ts END) AS last_in_ts,
+                   MAX(CASE WHEN m.direction = 'out' AND COALESCE(m.sender_jid, '') != ? THEN m.ts END) AS last_agent_ts,
+                   MAX(CASE WHEN m.direction = 'out' AND COALESCE(m.sender_jid, '') = ? THEN m.ts END) AS last_owner_ts,
+                   SUM(CASE WHEN m.direction = 'in' AND m.ts > COALESCE(k.seen_ts, 0) THEN 1 ELSE 0 END) AS unread,
+                   k.seen_ts AS seen_ts, k.done_ts AS done_ts, k.owner_asked_ts AS owner_asked_ts,
+                   (SELECT n.chat_name FROM channel_messages n WHERE {same_chat} AND n.chat_name IS NOT NULL
+                    AND n.chat_name != '' ORDER BY n.ts DESC LIMIT 1) AS chat_name,
+                   {newest.format(col='body')} AS last_body,
+                   {newest.format(col='direction')} AS last_direction,
+                   {newest.format(col='sender_jid')} AS last_sender,
+                   {newest.format(col='content_type')} AS last_content_type,
+                   {within} AS last_in_within_ts
+            FROM channel_messages m
+            LEFT JOIN chat_marks k ON k.username = m.username AND k.channel = m.channel AND k.chat_id = m.chat_id
+            WHERE m.username = ?{chan_clause} AND COALESCE(m.content_type, 'text') != 'deleted'
+            GROUP BY m.channel, m.chat_id
+            ORDER BY last_ts DESC
+            LIMIT ?
+            """,
+            (OWNER_SENDER, OWNER_SENDER, *window_param, u, *chan_param, limit),
+        )
+        rows = []
+        for row in cur.fetchall():
+            d = dict(row)
+            d["chat_name"] = (d.get("chat_name") or "").strip()
+            d["last_body"] = (d.get("last_body") or "").strip()[:160]
+            d["last_direction"] = d.get("last_direction") or ""
+            d["last_sender"] = d.get("last_sender") or ""
+            d["last_content_type"] = d.get("last_content_type") or "text"
+            d["message_count"] = int(d.get("message_count") or 0)
+            d["unread"] = int(d.get("unread") or 0)
+            rows.append(d)
+        return rows
+    finally:
+        conn.close()
+
+
 def list_chats_from_store(
     username: str,
     limit: int = 500,
@@ -357,56 +625,13 @@ def list_chats_from_store(
     channel: Optional[str] = "whatsapp",
 ) -> List[Dict[str, Any]]:
     """List all chats that have at least one message in the store (for inbox/dashboard merge).
-    Returns list of dicts with chat_id, last_ts, message_count; chat_name from latest message if present.
-    channel: filter to one channel ('whatsapp' default, 'telegram', ...); None/'' = all channels."""
-    import sqlite3
+    Returns list of dicts with chat_id, last_ts, message_count, chat_name (newest non-empty),
+    last_body and last_direction: a projection of `chat_overview`, which is the one grouped
+    read. channel: filter to one channel ('whatsapp' default, 'telegram', ...); None/'' = all."""
     init_store(username, user_scope_id)
-    conn = _get_conn(username, user_scope_id)
-    try:
-        u = (username or "").strip() or ""
-        limit = min(max(limit, 1), 500)
-        chan_clause = " AND channel = ?" if channel else ""
-        chan_param = [channel] if channel else []
-        cur = conn.execute(
-            f"""
-            SELECT chat_id, MAX(ts) AS last_ts, COUNT(*) AS message_count
-            FROM channel_messages
-            WHERE username = ?{chan_clause}
-            GROUP BY chat_id
-            ORDER BY last_ts DESC
-            LIMIT ?
-            """,
-            (u, *chan_param, limit),
-        )
-        rows = [dict(row) for row in cur.fetchall()]
-        # Attach the latest chat_name and the newest message per chat (the list's preview
-        # line, like a mail client's snippet).
-        for r in rows:
-            cid = r.get("chat_id") or ""
-            cur2 = conn.execute(
-                f"""
-                SELECT chat_name FROM channel_messages
-                WHERE username = ? AND chat_id = ?{chan_clause} AND chat_name IS NOT NULL AND chat_name != ''
-                ORDER BY ts DESC LIMIT 1
-                """,
-                (u, cid, *chan_param),
-            )
-            row2 = cur2.fetchone()
-            r["chat_name"] = (dict(row2).get("chat_name") or "").strip() if row2 else ""
-            cur3 = conn.execute(
-                f"""
-                SELECT body, direction FROM channel_messages
-                WHERE username = ? AND chat_id = ?{chan_clause}
-                ORDER BY ts DESC LIMIT 1
-                """,
-                (u, cid, *chan_param),
-            )
-            row3 = cur3.fetchone()
-            r["last_body"] = (dict(row3).get("body") or "").strip()[:160] if row3 else ""
-            r["last_direction"] = (dict(row3).get("direction") or "") if row3 else ""
-        return rows
-    finally:
-        conn.close()
+    keys = ("chat_id", "last_ts", "message_count", "chat_name", "last_body", "last_direction")
+    return [{k: row[k] for k in keys}
+            for row in chat_overview(username, user_scope_id=user_scope_id, channel=channel or None, limit=limit)]
 
 
 def store_exists(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> bool:

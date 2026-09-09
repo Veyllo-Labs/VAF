@@ -753,10 +753,15 @@ class MailStore:
             f"(SELECT COUNT(*) FROM messages ma WHERE ma.thread_id=t.id "
             f" AND ma.answered_at IS NOT NULL AND ma.answered_at != '') AS answered, "
             f"m.id AS newest_pk, m.subject, m.from_addr, m.snippet, m.has_attachments, m.flags, "
-            f"m.category "
+            f"m.category, "
+            # The newest message's identity and folder: what the inbox needs to say whether
+            # the last word was the correspondent's (not in Sent) and to hand read_mail its ids.
+            f"m.message_id AS newest_message_id, fn.name AS newest_folder, "
+            f"fn.special_use AS newest_special_use, m.answered_at AS newest_answered_at "
             f"FROM threads t JOIN accounts a ON a.id=t.account_id "
             f"JOIN messages m ON m.id = (SELECT m3.id FROM messages m3 WHERE m3.thread_id=t.id "
             f"  ORDER BY COALESCE(m3.date_ts, m3.internaldate_ts, 0) DESC, m3.id DESC LIMIT 1) "
+            f"JOIN folders fn ON fn.id = m.folder_id "
             f"WHERE {' AND '.join(where)} "
             f"ORDER BY t.last_date_ts DESC LIMIT ? OFFSET ?", args).fetchall()
         out = []

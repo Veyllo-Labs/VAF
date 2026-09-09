@@ -221,3 +221,18 @@ def test_move_ghost_row_is_adopted_not_duplicated(store):
         "SELECT id, uid, folder_id FROM messages WHERE message_id='<g@example.com>'").fetchall()
     assert len(rows) == 1                                         # adopted, not duplicated
     assert rows[0]["uid"] == 55 and rows[0]["folder_id"] == arch
+
+
+def test_list_threads_carries_the_newest_messages_identity_and_folder(store):
+    """The inbox reads a thread's newest message off the row the list already joins: its
+    RFC id and folder (Sent means the last word was ours), and its answered mark."""
+    apk, fpk = _setup(store)
+    sent = store.upsert_folder(apk, "Sent", special_use="\\Sent", sync_tier="eager")
+    root = store.ingest_message(apk, fpk, 40, _msg("<q@example.com>", "Question"))
+    store.ingest_message(apk, sent, 41, _msg("<a@example.com>", "Re: Question", refs=["<q@example.com>"]))
+    row = next(t for t in store.list_threads() if t["subject"].endswith("Question"))
+    assert row["newest_message_id"] == "<a@example.com>" and row["newest_folder"] == "Sent"
+    assert row["newest_special_use"] == "\\Sent" and row["newest_answered_at"] is None
+    store.set_answered(root)
+    row = next(t for t in store.list_threads() if t["subject"].endswith("Question"))
+    assert row["answered"] == 1 and row["newest_answered_at"] is None, "answered is the thread's, newest_answered_at the last message's"

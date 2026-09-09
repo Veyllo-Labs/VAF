@@ -2132,6 +2132,26 @@ def _room_rows(user_scope_id: Optional[str] = None) -> List[Dict]:
     rows: List[Dict] = []
     seen = set()
 
+    def _last_frame(room) -> Tuple[float, Optional[Dict]]:
+        """The newest conversation frame, for a list that shows what was said last: the
+        same frames the count reads, the same kinds the room view shows."""
+        try:
+            from vaf.core.a2a.room import NON_CONVERSATION_KINDS, derive_peer_id
+            frames = room.store.frames()
+            human = derive_peer_id(participant_key("cli", user_scope_id), room.room_id)
+            last_ts = float(frames[-1].ts) if frames else 0.0
+            for frame in reversed(frames):
+                if frame.kind in NON_CONVERSATION_KINDS:
+                    continue
+                text = str((frame.body or {}).get("text") or "").strip()
+                if not text:
+                    continue
+                return last_ts, {"kind": frame.kind, "text": text[:160], "sender": frame.sender,
+                                 "mine": frame.sender == human, "ts": float(frame.ts)}
+            return last_ts, None
+        except Exception:
+            return 0.0, None
+
     def _human_unread(room) -> int:
         """What the PERSON has not looked at yet, from their own reading position.
 
@@ -2172,6 +2192,7 @@ def _room_rows(user_scope_id: Optional[str] = None) -> List[Dict]:
                 # the row standing, so the bin promised removal and delivered a label.
                 if room.closed:
                     continue
+                last_ts, last = _last_frame(room)
                 rows.append({
                     "id": f"room:{room.room_id}",
                     "kind": "room",
@@ -2185,6 +2206,10 @@ def _room_rows(user_scope_id: Optional[str] = None) -> List[Dict]:
                     "closed": bool(room.closed),
                     "updated_at": "",
                     "message_count": len(room.store.frames()),
+                    # For the inbox: when the room last spoke and what it said. The sidebar
+                    # keeps sorting by its own rule, so `updated_at` stays as it is.
+                    "last_ts": last_ts,
+                    "last": last,
                 })
         except Exception:
             continue

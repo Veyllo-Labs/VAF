@@ -1116,6 +1116,12 @@ def notify_calendar_changed(user_scope_id: Optional[str] = None) -> None:
     notify_user_signal(user_scope_id, "calendar_changed")
 
 
+def notify_inbox_changed(user_scope_id: Optional[str] = None) -> None:
+    """A conversation list of this user changed (a stored message, a mark, a mail sync that
+    saw new mail), so the inbox and the channel windows refetch instead of polling."""
+    notify_user_signal(user_scope_id, "inbox_changed")
+
+
 def notify_file_created(session_id: Optional[str], file_path, title: Optional[str] = None,
                         turn_id: Optional[str] = None) -> None:
     """

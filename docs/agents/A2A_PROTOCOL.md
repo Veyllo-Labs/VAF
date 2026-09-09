@@ -626,6 +626,10 @@ gap in a transcript is noticed, a wrong timestamp is believed.
 
 ## Storage
 
+The sidebar row of a room (`session._room_rows`) also carries `last_ts` and `last` (the
+newest conversation frame: sender, text, whether it was the person's own), read from the
+frames the count already reads; the person's reading position stays the cli lane's cursor.
+
 ```
 <vaf-dir>/a2a/rooms/<room_id>/
   room.json                        manifest, format tag, policy, host

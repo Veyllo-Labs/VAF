@@ -467,6 +467,16 @@ however, is channel-agnostic and exists exactly once:
   automation result), so the channel's main agent has its own last message in
   context when the user replies to it, and a live agent already on that session
   rebuilds from the file instead of answering from a history that predates it.
+- **Read marker and done marker**: next to the messages, `chat_marks` in the same
+  message store holds the person's own state per chat (`seen_ts` when they last opened
+  it, `done_ts` when they marked it done, `owner_asked_ts` when the agent asked them
+  about it), keyed on (username, channel, chat_id). `chat_overview` is the one grouped
+  read every conversation list is built from (unread = inbound rows after `seen_ts`,
+  the newest agent and owner sends, the reply-window inputs), and every writer of the
+  store announces `inbox_changed` to the person's browsers, throttled per scope with a
+  trailing edge, so an open window refetches instead of polling. A store that already
+  holds history starts with every chat read up to its newest row the first time the
+  table is created.
 - **Explicit platform requests** stay on the per-channel tools: "send this via
   Telegram" uses `send_telegram`.
 - **Attachments are confined per user, on every channel**: each sender declares

@@ -13,6 +13,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **The inbox, first the ground under it.** The channel message store keeps the person's own
+  state per chat next to the messages (`chat_marks`: when they last opened it, when they
+  marked it done, when the agent asked them about it), answers every conversation list from
+  one grouped statement instead of a query per chat, and announces `inbox_changed` to the
+  person's browsers on every write, throttled so a history sync tells them once and once more
+  at the end. A store that already holds history starts with every chat read. Room rows carry
+  when they last spoke and what was said; mail thread rows carry the newest message's id,
+  folder and answered mark.
 - **A messenger chat has its own memory.** What the agent learns inside a chat with a
   contact is stored in that chat's own namespace (`source = chat/<session id>`), which every
   ordinary lookup of your agent leaves out in SQL, in both lanes of the hybrid search. Only

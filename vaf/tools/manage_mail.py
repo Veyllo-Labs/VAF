@@ -48,7 +48,7 @@ class ForwardMailTool(BaseTool):
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (
-        "Forward an email. Pass message_id (from mail_inbox/read_mail), the recipient "
+        "Forward an email. Pass message_id (from inbox/read_mail), the recipient "
         "in to, and an optional note that is placed above the forwarded content. "
         "Original attachments are NOT forwarded."
     )
@@ -126,7 +126,7 @@ class ArchiveMailTool(BaseTool):
     side_effect_class = "reversible"
     description = (
         "Archive an email: moves it out of the inbox into the archive folder "
-        "(Gmail: All Mail). Pass message_id from mail_inbox/read_mail."
+        "(Gmail: All Mail). Pass message_id from inbox/read_mail."
     )
     input_examples = [{"message_id": "<abc@example.com>"}]
     parameters = {

@@ -13,7 +13,7 @@ to the LOCAL ADMIN's mailbox. The rule lives in one place
 """
 import vaf.tools.find_mail as fm
 import vaf.tools.label_mail as lm
-import vaf.tools.mail_inbox as mi
+import vaf.tools.inbox as ib
 import vaf.tools.mail_utils as mu
 import vaf.tools.mark_mail_answered as ma
 import vaf.tools.read_mail as rm
@@ -40,17 +40,19 @@ def test_find_mail_v2_searches_and_loads_body(monkeypatch):
     assert "hello vaf" in out and "the full body" in out  # single match -> body appended
 
 
-def test_mail_inbox_v2_lists_from_engine_store(monkeypatch):
-    monkeypatch.setattr(mi, "list_accounts_for_user", lambda u, user_scope_id=None: ["a@x"])
-    monkeypatch.setattr(mi, "store_candidates_for_mail", lambda u, s: [(None, "scope-x")])
-    monkeypatch.setattr(mi, "filter_phishing_messages_for_agent", lambda ms: (ms, 0))
-    monkeypatch.setattr(
-        "vaf.mail.tool_bridge.list_messages_merged",
-        lambda account_id, folder, limit, offset, username, scope, category=None: [
-            {"account_id": "a@x", "message_id": "<m@x>", "from": "Alice",
-             "subject": "hi there", "date": "2026", "provider_message_id": ""}])
-    out = mi.MailInboxTool().run()
-    assert "hi there" in out and "read_mail" in out  # listing + next-step hint
+def test_inbox_mail_lane_lists_from_engine_store(monkeypatch):
+    """The inbox tool's mail rows come from the shared inbox primitive over the v2 store."""
+    row = {"key": "mail:7", "channel": "mail", "id": "7", "name": "Alice", "subject": "hi there",
+           "preview": "hello", "preview_from": "them", "last_ts": 1_700_000_000.0, "message_count": 1,
+           "unread": 1, "waits": True, "waits_reason": "unanswered", "answered_by_agent": False,
+           "done": False, "is_group": False, "mode": "mail", "reply_window_until": None,
+           "can_compose": False, "session_id": "",
+           "jump": {"channel": "mail", "thread_id": "7", "account_id": "a@x", "folder": "INBOX", "message_id": "<m@x>"}}
+    monkeypatch.setattr("vaf.core.inbox.list_conversations",
+                        lambda *a, **k: {"rows": [row], "counts": {"all": 1, "waits": 1, "unread": 1, "agent": 0}, "channels": ["mail"]})
+    monkeypatch.setattr("vaf.tools.mail_utils.filter_phishing_messages_for_agent", lambda ms: (ms, 0))
+    out = ib.InboxTool().run(channel="mail", user_scope_id="scope-x")
+    assert "hi there" in out and "read_mail" in out and "message_id='<m@x>'" in out
 
 
 def test_mark_answered_v2_uses_mailservice(monkeypatch):
@@ -123,29 +125,22 @@ def test_scopeless_username_caller_never_touches_the_v2_store(monkeypatch):
     """B1 end to end: NO v2 read may happen for that caller. Reading the engine
     store here would resolve to the admin's mailbox - a cross-user leak, not a
     fallback. The tool answers empty-handed instead, which is the honest result."""
-    monkeypatch.setattr(mi, "list_accounts_for_user", lambda u, user_scope_id=None: ["a@x"])
-    monkeypatch.setattr(mi, "get_account", lambda *a, **k: {"provider": "imap"})
-    monkeypatch.setattr(mi, "filter_phishing_messages_for_agent", lambda ms: (ms, 0))
-
     def _boom(*a, **k):
         raise AssertionError("v2 store was read for a scope-less username caller")
 
-    monkeypatch.setattr("vaf.mail.tool_bridge.list_messages_merged", _boom)
     monkeypatch.setattr("vaf.mail.service.MailService", _boom)
+    monkeypatch.setattr("vaf.mail.store.MailStore.exists", staticmethod(_boom))
 
-    out = mi.MailInboxTool().run(username="bob", account_id="a@x")
-    assert "sync store yet" in out          # no rows, and crucially no v2 access
+    out = ib.InboxTool().run(username="bob", channel="mail", account_id="a@x")
+    assert "syncs in the background" in out          # no rows, and crucially no v2 access
 
 
-def test_mail_inbox_reports_an_empty_store_neutrally(monkeypatch):
+def test_inbox_reports_an_empty_mail_store_neutrally(monkeypatch):
     """With no live-fetch lane left, an empty store gets ONE honest answer. It must
     not tell the user to press Sync: that fails for exactly the account class that
     can land here (one not connected for the engine yet)."""
-    monkeypatch.setattr(mi, "list_accounts_for_user", lambda u, user_scope_id=None: ["i@x"])
-    monkeypatch.setattr(mi, "get_account", lambda *a, **k: {"provider": "imap"})
-    monkeypatch.setattr(mi, "store_candidates_for_mail", lambda u, s: [(None, "scope-x")])
-    monkeypatch.setattr(mi, "filter_phishing_messages_for_agent", lambda ms: (ms, 0))
-    monkeypatch.setattr("vaf.mail.tool_bridge.list_messages_merged", lambda *a, **k: [])
-    out = mi.MailInboxTool().run(account_id="i@x")
+    monkeypatch.setattr("vaf.core.inbox.list_conversations",
+                        lambda *a, **k: {"rows": [], "counts": {"all": 0, "waits": 0, "unread": 0, "agent": 0}, "channels": ["mail"]})
+    out = ib.InboxTool().run(channel="mail", account_id="i@x", user_scope_id="scope-x")
     assert "syncs in the background" in out
     assert "click Sync" not in out          # would fail for this account class

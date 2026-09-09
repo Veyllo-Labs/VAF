@@ -70,7 +70,7 @@ class FindMailTool(BaseTool):
             limit = 10
         if not query:
             return "query is required (e.g. 'Postman' or 'postman.com')."
-        # Use same store fallback chain as mail_inbox so we search the same DB as the Mail dashboard
+        # Use same store fallback chain as the inbox tool so we search the same DB as the Mail dashboard
         v2 = mail_v2_active(store_username, user_scope_id)
         matches = []
         used_scope, used_username = user_scope_id, cred_username

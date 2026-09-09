@@ -22,7 +22,7 @@ class ReadDiscordChatTool(BaseTool):
         "Read past messages from a Discord chat (in/out, with timestamps). "
         "Use when the user asks 'what did we discuss on Discord' or to recall an earlier Discord message. "
         "chat_id is optional — it defaults to the user's own Discord DM. "
-        "Use discord_inbox to list chats or find_discord_messages to search."
+        "Use inbox to list chats or find_discord_messages to search."
     )
     parameters = {
         "type": "object",
@@ -55,7 +55,7 @@ class ReadDiscordChatTool(BaseTool):
         if not chat_id:
             return (
                 "No Discord chat found. The user must have Discord connected "
-                "(Settings → Connections → Discord), or pass an explicit chat_id from discord_inbox."
+                "(Settings → Connections → Discord), or pass an explicit chat_id from inbox."
             )
 
         # Read straight from the authoritative session JSON (always complete — includes the agent's

@@ -214,7 +214,7 @@ if name == "browser_agent":
     tool_args["user_scope_id"] = self._current_user_scope_id
 
 # Email/messaging tools → username (string)
-if name in ("mail_inbox", "send_mail", ...):
+if name in ("inbox", "send_mail", ...):
     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
 ```
 
@@ -353,8 +353,8 @@ When the system is in local mode (no auth), the WebSocket assigns `username="adm
 
 Email config lookup follows the chain in Phase 2 below. So that the mail client and agent tools stay in sync when the chat session identity differs from the HTTP/session identity (e.g. WebSocket as local admin, dashboard as JWT user), the **tools implement fallbacks**:
 
-- **Account lookup** (`mail_utils.list_accounts_with_labels_for_user`): If the primary lookup (by `user_scope_id` or `cred_username`) returns no accounts, the code tries legacy `email_config` and, when exactly one scope in `email_config_by_scope` has accounts, that scope’s accounts. So `list_email_accounts`, `mail_inbox`, and `send_mail` see the same accounts as the dashboard.
-- **Sync store** (`mail_inbox`): When listing messages, the tool tries the primary store, then the legacy store, then the single-scope store (when only one scope has accounts), so it reads from the same SQLite DB as the mail client.
+- **Account lookup** (`mail_utils.list_accounts_with_labels_for_user`): If the primary lookup (by `user_scope_id` or `cred_username`) returns no accounts, the code tries legacy `email_config` and, when exactly one scope in `email_config_by_scope` has accounts, that scope’s accounts. So `list_email_accounts`, the mail lane of `inbox`, and `send_mail` see the same accounts as the dashboard.
+- **Sync store** (the mail lane of `inbox`): When listing messages, the tool tries the primary store, then the legacy store, then the single-scope store (when only one scope has accounts), so it reads from the same SQLite DB as the mail client.
 
 Best practice: Prefer storing under `email_config_by_scope[user_scope_id]`; the fallbacks cover single-user and identity-mismatch cases.
 
@@ -497,7 +497,7 @@ When building a new feature that handles user data:
 | Config Routes | `vaf/api/config_routes.py` | `get_current_scope_id()`, `user_scope_id` in user dict |
 | Contact Routes | `vaf/api/contact_routes.py` | All CRUD endpoints pass `user_scope_id` |
 | OAuth PKCE | `vaf/core/oauth_pkce.py` | `get_valid_access_token(user_scope_id=...)` for token refresh |
-| All Mail Tools | `vaf/tools/mail_inbox.py`, `send_mail.py`, etc. | `cred_scope_from_kwargs()` / `store_scope_from_kwargs()` |
+| All Mail Tools | `vaf/tools/inbox.py` (mail lane), `send_mail.py`, etc. | `cred_scope_from_kwargs()` / `store_scope_from_kwargs()` |
 
 ### Files That Still Need Migration (Phase 5+)
 
@@ -534,7 +534,7 @@ User B (scope: bbb-..., username: bob)
 1. Alice saves a memory         → scoped to aaa-...
 2. Bob searches memories        → must NOT find Alice's memory
 3. Alice connects Gmail         → stored under scope aaa-...
-4. Bob calls mail_inbox         → must NOT see Alice's emails
+4. Bob calls inbox (mail)       → must NOT see Alice's emails
 5. Alice saves a contact        → stored under scope aaa-...
 6. Bob lists contacts           → must NOT see Alice's contacts
 7. Alice's username is renamed  → all data remains accessible

@@ -1071,13 +1071,13 @@ class WorkflowEngine:
                         elif tool_name == "schedule_reminder":
                             a["username"] = self.username
                             a["user_scope_id"] = self.user_scope_id
-                        elif tool_name in ("whatsapp_inbox", "find_whatsapp_messages", "read_whatsapp_chat", "whatsapp_call"):
+                        elif tool_name in ("find_whatsapp_messages", "read_whatsapp_chat", "whatsapp_call"):
                             a["username"] = self.username
                             a["user_scope_id"] = self.user_scope_id
                         elif tool_name in ("list_contacts", "get_contact", "create_contact", "update_contact", "delete_contact"):
                             a["username"] = self.username
                             a["user_scope_id"] = self.user_scope_id
-                        elif tool_name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered", "label_mail", "list_email_accounts", "send_mail", "reply_mail", "forward_mail", "archive_mail", "delete_mail"):
+                        elif tool_name in ("inbox", "read_mail", "find_mail", "mark_mail_answered", "label_mail", "list_email_accounts", "send_mail", "reply_mail", "forward_mail", "archive_mail", "delete_mail"):
                             a["username"] = self.username
                             a["user_scope_id"] = self.user_scope_id
                         elif tool_name in ("add_automation_note", "add_automation_todo", "list_automation_notes", "list_automation_todos", "delete_automation_note", "delete_automation_todo"):

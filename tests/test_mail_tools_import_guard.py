@@ -11,7 +11,7 @@ import pathlib
 import vaf.tools as _tools_pkg
 
 # The 9 modules that hold the 11 mail verbs (forward/archive/delete live in manage_mail).
-_TOOL_FILES = ["mail_inbox", "read_mail", "find_mail", "send_mail", "label_mail",
+_TOOL_FILES = ["inbox", "read_mail", "find_mail", "send_mail", "label_mail",
                "mark_mail_answered", "list_email_accounts", "reply_mail", "manage_mail"]
 
 

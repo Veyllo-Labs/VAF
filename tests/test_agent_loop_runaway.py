@@ -25,7 +25,7 @@ def _bare() -> Agent:
 # --- _is_nonprogress_tool: read/verify vs progress ------------------------------------------------
 
 def test_is_nonprogress_tool_classification():
-    for t in ("list_automations", "read_automation", "list_calendar_events", "mail_inbox",
+    for t in ("list_automations", "read_automation", "list_calendar_events", "inbox",
               "get_weather", "read_file", "list_foo"):
         assert _is_nonprogress_tool(t) is True, t
     # web_search / memory_search are genuine gathering, NOT verification — they must reset the streak,

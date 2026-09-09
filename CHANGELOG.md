@@ -24,6 +24,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   (the Front Office back-channel), that chat is marked as waiting for the owner until they
   answer or the agent writes to the contact again.
   `vaf inbox list` prints the same rows from the terminal, behind the session door.
+  The agent has one `inbox` tool for the same rows (`channel`, `view`, `max_chats`, `query`), with
+  the next-step hint and the mail IDs block the mail listing carried.
 - **A messenger chat has its own memory.** What the agent learns inside a chat with a
   contact is stored in that chat's own namespace (`source = chat/<session id>`), which every
   ordinary lookup of your agent leaves out in SQL, in both lanes of the hybrid search. Only
@@ -77,6 +79,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   keys `calendar_sync_interval_minutes`, `calendar_sync_past_days`,
   `calendar_sync_future_days` and `calendar_sync_push_enabled`; the event, sync and settings
   routes under `/api/calendar`; the `calendar_changed` WebSocket frame.
+
+### Removed
+
+- The four per-channel listing tools `whatsapp_inbox`, `telegram_inbox`, `discord_inbox` and
+  `mail_inbox`: one `inbox` tool with a channel filter lists every conversation from the same
+  rows the inbox window shows. The per-channel read and search tools stay. The tool-output
+  compression list names `inbox` now, so the Discord lane joins it, which the old
+  `discord_inbox` never did. Learned tool records that named the old tools go stale until
+  retrained.
 
 ### Changed
 

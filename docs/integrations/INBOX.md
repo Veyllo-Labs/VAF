@@ -65,6 +65,20 @@ browsers (`web_interface.notify_inbox_changed`, the calendar signal's twin), thr
 scope with a trailing edge so a history sync tells them once and once more at the end. The
 `rooms_changed` signal refreshes the inbox as well.
 
+## The agent's tool
+
+`inbox` is the agent's view of the same rows and replaced the four per-channel listings
+(`whatsapp_inbox`, `telegram_inbox`, `discord_inbox`, `mail_inbox`). Parameters: `channel`
+(one of the five, or `all`), `view` (`all`, `waits`, `unread`, `agent`), `max_chats`
+(1-200, default 30; the user's number is passed as is), `query`, `include_groups`,
+`include_done`, and for the mail lane `account_id` and `folder`. The output leads with the
+next-step hint (read one conversation with the per-channel read tools or `read_mail`,
+search mail with `find_mail`, never call `inbox` again for the same request), then the
+counts and one line per conversation, then the "IDs by index" block `read_mail` needs; mail
+rows pass the same phishing filter the mail tools apply. The Telegram and Discord indexes
+are re-projected from the session files before listing, as their tools did; nothing waits on
+a bridge. The tool is not in the Front Office allow-list.
+
 ## Command line
 
 `vaf inbox list` prints the same rows as a table (When, Channel, Name, Unread, Waits, Mode,

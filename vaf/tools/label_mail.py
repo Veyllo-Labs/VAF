@@ -62,7 +62,7 @@ class LabelMailTool(BaseTool):
     """
     Set a message's category (label), e.g. promotions, newsletter, social, primary.
     Adds a sender rule so future mails from that sender get the same label.
-    Use account_id, message_id, folder from mail_inbox output.
+    Use account_id, message_id, folder from the inbox output.
     """
     name = "label_mail"
     category    = "mail"
@@ -72,18 +72,18 @@ class LabelMailTool(BaseTool):
     description = (
         "Set an email's label/category (e.g. promotions, newsletter, social, primary). "
         "Use after the user asks to label mails (e.g. 'label newsletters as promotions'). "
-        "Use account_id, message_id, folder from mail_inbox. A sender rule is added so future mails from that sender get the same label."
+        "Use account_id, message_id, folder from the inbox tool. A sender rule is added so future mails from that sender get the same label."
     )
     parameters = {
         "type": "object",
         "properties": {
             "account_id": {
                 "type": "string",
-                "description": "Email address of the connected account (from mail_inbox).",
+                "description": "Email address of the connected account (from the inbox tool).",
             },
             "message_id": {
                 "type": "string",
-                "description": "Message ID from mail_inbox output (IDs by index block).",
+                "description": "Message ID from the inbox output (IDs by index block).",
             },
             "folder": {
                 "type": "string",
@@ -107,7 +107,7 @@ class LabelMailTool(BaseTool):
         category = (kwargs.get("category") or "primary").strip().lower().replace(" ", "_")[:64] or "primary"
 
         if not account_id or not message_id:
-            return "account_id, message_id, and category are required. Use mail_inbox to get message_id from the 'IDs by index' block."
+            return "account_id, message_id, and category are required. Use inbox (channel='mail') to get message_id from the 'IDs by index' block."
         if not get_account(account_id, username=cred_username, user_scope_id=user_scope_id):
             return f"Account '{account_id}' not found. Connected: {', '.join(list_accounts_for_user(cred_username, user_scope_id=user_scope_id))}."
 
@@ -138,7 +138,7 @@ class LabelMailTool(BaseTool):
                 break
 
         if not set_ok:
-            return "Message not found in the synced mailbox. Sync in Settings → Connections → Email and use message_id from mail_inbox."
+            return "Message not found in the synced mailbox. Sync in Settings → Connections → Email and use message_id from the inbox tool."
 
         if v2:
             from vaf.mail.service import MailService

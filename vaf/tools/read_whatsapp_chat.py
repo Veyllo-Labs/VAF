@@ -10,7 +10,7 @@ from vaf.tools.base import BaseTool
 
 class ReadWhatsAppChatTool(BaseTool):
     """
-    Read messages from a WhatsApp chat. Use chat_id from whatsapp_inbox or find_whatsapp_messages.
+    Read messages from a WhatsApp chat. Use chat_id from inbox or find_whatsapp_messages.
     """
     name = "read_whatsapp_chat"
     category    = "whatsapp"
@@ -18,7 +18,7 @@ class ReadWhatsAppChatTool(BaseTool):
     permission_level = "read"
     side_effect_class = "none"
     description = (
-        "Read messages from a WhatsApp chat. Use chat_id from whatsapp_inbox or find_whatsapp_messages. "
+        "Read messages from a WhatsApp chat. Use chat_id from inbox or find_whatsapp_messages. "
         "Returns recent messages (in/out) with timestamps."
     )
     parameters = {
@@ -26,7 +26,7 @@ class ReadWhatsAppChatTool(BaseTool):
         "properties": {
             "chat_id": {
                 "type": "string",
-                "description": "Chat identifier (e.g. +49123456789 from whatsapp_inbox).",
+                "description": "Chat identifier (e.g. +49123456789 from inbox).",
             },
             "limit": {
                 "type": "integer",
@@ -42,7 +42,7 @@ class ReadWhatsAppChatTool(BaseTool):
         limit = min(max(int(kwargs.get("limit") or 50), 1), 200)
 
         if not chat_id:
-            return "chat_id is required (e.g. +49123456789). Use whatsapp_inbox to list chats."
+            return "chat_id is required (e.g. +49123456789). Use inbox to list chats."
 
         try:
             from vaf.core.channel_message_store import get_chat_messages

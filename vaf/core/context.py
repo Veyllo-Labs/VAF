@@ -654,7 +654,7 @@ class ContextManager:
         # 3. Aggressive Pruning for large outputs
         pruned_msg = f"[SEAMLESS COMPRESSION: Tool '{tool_name}' output pruned ({char_count} chars, {line_count} lines)]\n"
         
-        if tool_name in ["read_file", "list_files", "web_search", "webfetch", "github_get_file", "github_list_repos", "mail_inbox", "whatsapp_inbox", "list_email_accounts", "telegram_inbox"]:
+        if tool_name in ["read_file", "list_files", "web_search", "webfetch", "github_get_file", "github_list_repos", "inbox", "list_email_accounts"]:
             # Dynamic pruning window - preserved even more content (40 lines head, 30 lines tail)
             head_lines = 20 if is_small_context else 40
             tail_lines = 15 if is_small_context else 30

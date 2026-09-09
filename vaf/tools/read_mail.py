@@ -3,7 +3,7 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 Read the full body of one email as plain text (same cleaned output as the Mail UI).
-Use after mail_inbox when the user asks what a specific email says. Token-efficient: no HTML, no MIME.
+Use after inbox when the user asks what a specific email says. Token-efficient: no HTML, no MIME.
 Scoped to the current user in network mode (only that user's connected accounts).
 """
 
@@ -25,7 +25,7 @@ class ReadMailTool(BaseTool):
     """
     Read the full body of one email as plain text. Use when the user asks what an email says or contains.
     Returns the same token-efficient, cleaned text shown in the Mail dashboard (no HTML, no MIME).
-    Call mail_inbox first to get message_id and provider_message_id for the message you want.
+    Call inbox (channel='mail') first to get message_id and provider_message_id for the message you want.
     """
     name = "read_mail"
     category    = "mail"
@@ -34,19 +34,19 @@ class ReadMailTool(BaseTool):
     side_effect_class = "none"
     description = (
         "Read the full body of a single email as plain text. "
-        "When the user asks 'what does the [Subject] mail say?' (e.g. Postman, Twitch), use the account_id, message_id, and provider_message_id from your recent mail_inbox output for the line with that subject – do NOT ask the user for these. "
-        "If you have not listed the inbox yet, call mail_inbox first, then read_mail with the matching row's IDs."
+        "When the user asks 'what does the [Subject] mail say?' (e.g. Postman, Twitch), use the account_id, message_id, and provider_message_id from your recent inbox output for the line with that subject – do NOT ask the user for these. "
+        "If you have not listed the inbox yet, call inbox (channel='mail') first, then read_mail with the matching row's IDs."
     )
     parameters = {
         "type": "object",
         "properties": {
             "account_id": {
                 "type": "string",
-                "description": "From the mail_inbox line for this message (e.g. user@gmail.com). Use the account_id from the list, do not ask the user.",
+                "description": "From the inbox line for this message (e.g. user@gmail.com). Use the account_id from the list, do not ask the user.",
             },
             "message_id": {
                 "type": "string",
-                "description": "From the mail_inbox line for this message. Match the subject the user asked about and use that line's message_id.",
+                "description": "From the inbox line for this message. Match the subject the user asked about and use that line's message_id.",
             },
             "folder": {
                 "type": "string",
@@ -54,7 +54,7 @@ class ReadMailTool(BaseTool):
             },
             "provider_message_id": {
                 "type": "string",
-                "description": "Optional. From mail_inbox output; use for Gmail/Microsoft for reliable fetch.",
+                "description": "Optional. From inbox output; use for Gmail/Microsoft for reliable fetch.",
             },
         },
         "required": ["account_id", "message_id"],
@@ -69,8 +69,8 @@ class ReadMailTool(BaseTool):
         folder = (kwargs.get("folder") or "INBOX").strip()
         provider_message_id = (kwargs.get("provider_message_id") or "").strip() or None
         if not account_id or not message_id:
-            return "account_id and message_id are required. Use mail_inbox first to list messages and get their message_id (and provider_message_id for Gmail/Microsoft)."
-        # Try same store/cred fallback as mail_inbox/find_mail so we find account and body when they live in legacy/single-scope
+            return "account_id and message_id are required. Use inbox first to list messages and get their message_id (and provider_message_id for Gmail/Microsoft)."
+        # Try same store/cred fallback as the inbox tool/find_mail so we find account and body when they live in legacy/single-scope
         body = None
         found_account = False
         v2 = mail_v2_active(store_username, user_scope_id)

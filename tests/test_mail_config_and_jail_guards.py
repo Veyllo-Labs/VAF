@@ -154,7 +154,7 @@ def test_mail_tool_registry_copies_stay_in_sync():
     # Until that retirement this is exactly the Rule-2 drift worth guarding: every mail tool
     # the engine lists must also declare, or the same mail tool would reach its store with
     # an identity in one lane and without one in the other.
-    m = _re.search(r'\("mail_inbox", "read_mail"[^)]*\)', engine_src)
+    m = _re.search(r'\("inbox", "read_mail"[^)]*\)', engine_src)
     assert m, "mail kwargs-injection tuple not found in engine.py"
     engine_tools = set(_re.findall(r'"([a-z_]+)"', m.group(0)))
 

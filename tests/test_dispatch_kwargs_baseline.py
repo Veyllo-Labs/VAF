@@ -86,7 +86,6 @@ KWARGS_BASELINE = {
     "delete_contact":            ("chat", ["user_scope_id", "username"]),
     "delete_mail":               ("chat", ["user_scope_id", "username"]),
     "delete_skill":              ("chat", ["user_scope_id", "username"]),
-    "discord_inbox":             ("chat", ["user_scope_id", "username"]),
     "document_agent":            ("chat", []),
     "document_editor":           ("chat", ["user_scope_id"]),
     # user_role joined 2026-07-31 with the file_access declaration (see below).
@@ -140,7 +139,6 @@ KWARGS_BASELINE = {
     "list_tools":                ("chat", ["_agent"]),
     "list_trash":                ("chat", ["user_role", "user_scope_id"]),
     "list_workflows":            ("chat", []),
-    "mail_inbox":                ("chat", ["user_scope_id", "username"]),
     "mark_mail_answered":        ("chat", ["user_scope_id", "username"]),
     "mcp_call":                  ("chat", []),
     "memory_save":               ("chat", ["user_scope_id"]),
@@ -205,7 +203,6 @@ KWARGS_BASELINE = {
     "send_whatsapp":             ("chat", ["_agent", "user_role", "user_scope_id", "username"]),
     "set_git_coauthor":          ("chat", []),
     "set_timer":                 ("chat", ["_agent"]),
-    "telegram_inbox":            ("chat", ["user_scope_id", "username"]),
     "thinking_done":             ("thinking", []),
     # Re-measured 2026-08-04: the tool now declares identity_kwargs. Its schema always
     # said this field was "injected by the framework" while nothing injected it, so it
@@ -228,7 +225,7 @@ KWARGS_BASELINE = {
     "web_search":                ("chat", ["user_scope_id"]),
     "webfetch":                  ("chat", []),
     "whatsapp_call":             ("chat", ["user_scope_id", "username"]),
-    "whatsapp_inbox":            ("chat", ["user_scope_id", "username"]),
+    "inbox":                     ("chat", ["user_scope_id", "username"]),
     "write_file":                ("chat", ["_session_id", "_session_workspace", "user_role", "user_scope_id"]),
 }
 

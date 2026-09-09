@@ -119,6 +119,7 @@ graph TD
 | "code", "script", "bug", "fix" | `coding_agent`, `git_status`, `git_add_commit` |
 | "git", "commit", "push", "pull" | `git_status`, `git_add_commit`, `git_log` |
 | "research", "recherche", "analyse" | `research_agent`, `web_search` |
+| "mail", "inbox", "posteingang", "nachricht", "newsletter", "rechnung" | `inbox`, `find_mail`, `list_email_accounts` |
 | "search", "find", "news", "weather" | `web_search` |
 
 ### `search_tools` - on-demand discovery tool

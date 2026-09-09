@@ -75,7 +75,7 @@ _PATH_PARAM = re.compile(
 NOT_A_LOCAL_PATH = {
     ("find_mail", "folder"): "an IMAP mailbox name, not a directory",
     ("label_mail", "folder"): "an IMAP mailbox name",
-    ("mail_inbox", "folder"): "an IMAP mailbox name",
+    ("inbox", "folder"): "an IMAP mailbox name",
     ("mark_mail_answered", "folder"): "an IMAP mailbox name",
     ("read_mail", "folder"): "an IMAP mailbox name",
     ("github_get_file", "path"): "a path inside a GitHub repository, resolved by the API",

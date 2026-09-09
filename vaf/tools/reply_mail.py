@@ -41,7 +41,7 @@ class ReplyMailTool(BaseTool):
     side_effect_class = "irreversible"
     description = (
         "Reply to an email with correct quoting and threading. Pass the message_id "
-        "(from mail_inbox/read_mail) and the reply body. reply_all=true answers every "
+        "(from inbox/read_mail) and the reply body. reply_all=true answers every "
         "recipient. Requires the v2 mail engine; falls back with a hint when disabled."
     )
     input_examples = [

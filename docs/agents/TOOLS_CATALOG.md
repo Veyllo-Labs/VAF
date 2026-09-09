@@ -2,7 +2,7 @@
 
 The tools the **main agent** loads by default, grouped by area. Generated from the live
 tool registry (`Agent.tools`, populated by `_load_tools()` in
-[vaf/core/agent.py](../../vaf/core/agent.py)); 121 tools, counted from a freshly
+[vaf/core/agent.py](../../vaf/core/agent.py)); 118 tools, counted from a freshly
 constructed agent rather than from this list's own history. The **Coder sub-agent**
 additionally loads `coder_only` file/shell tools (e.g. `bash`, `move_file`,
 `codesearch`) that are not in this list. Some tools only do anything once their
@@ -149,7 +149,6 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 
 | Tool | Perm | What it does |
 |------|------|--------------|
-| `mail_inbox` | read | Show the inbox. |
 | `read_mail` | read | Read the full body of one email. |
 | `find_mail` | read | Search the mailbox by subject/sender. |
 | `send_mail` | write | Send an email (irreversible). |
@@ -178,18 +177,16 @@ runs its model call with no tools at all - see
 
 | Tool | Perm | What it does |
 |------|------|--------------|
+| `inbox` | read | Every conversation across WhatsApp, Telegram, Discord, mail and rooms, newest first, with unread and who waits for an answer; `channel` and `view` narrow it. The rows the inbox window shows. |
 | `send_to_user` | write | Channel-agnostic delivery: resolves the user's `main_messenger` at run time and sends text plus optional file via the canonical router; Web UI notification fallback (irreversible). |
 | `send_whatsapp` | write | Send WhatsApp text / voice / document (irreversible). |
-| `whatsapp_inbox` | read | List WhatsApp chats. |
 | `read_whatsapp_chat` | read | Read messages from a WhatsApp chat. |
 | `find_whatsapp_messages` | read | Search WhatsApp messages. |
 | `whatsapp_call` | write | Placeholder - WhatsApp call (not implemented). |
 | `send_telegram` | write | Send a Telegram message (irreversible). |
-| `telegram_inbox` | read | List Telegram chats with stored messages. |
 | `read_telegram_chat` | read | Read messages from a Telegram chat. |
 | `find_telegram_messages` | read | Search Telegram messages. |
 | `send_discord` | write | Send a Discord message, optionally with a document attachment (irreversible). |
-| `discord_inbox` | read | List Discord chats with stored messages. |
 | `read_discord_chat` | read | Read messages from a Discord chat. |
 | `find_discord_messages` | read | Search Discord messages. |
 | `send_slack` | write | Send a Slack message (irreversible). |

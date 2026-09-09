@@ -126,7 +126,6 @@ NEWLY_IDENTIFIED = {
     "create_skill": ('user_scope_id', 'username'),
     "delete_automation": ('user_role', 'user_scope_id'),
     "delete_skill": ('user_scope_id', 'username'),
-    "discord_inbox": ('user_scope_id', 'username'),
     "document_editor": ('user_scope_id',),
     # +user_role 2026-07-31 (file_access declaration). In the workflow lane this
     # means a second admin running these two as a step is no longer jailed - the
@@ -172,7 +171,6 @@ NEWLY_IDENTIFIED = {
     "room_read": ('user_role', 'user_scope_id'),
     "room_send": ('user_role', 'user_scope_id'),
     "room_verify": ('user_role', 'user_scope_id'),
-    "telegram_inbox": ('user_scope_id', 'username'),
     # Added 2026-08-04. Its schema always told the model this field was "injected by the
     # framework"; it was not, because the tool declared no identity_kwargs, so the tool fell
     # back to a PROCESS-GLOBAL environment variable that a background thinking run sets for

@@ -232,7 +232,8 @@ Deliberately deferred, listed so nobody looks for them in the code:
 
 ### Agent tools contract
 
-Eleven tools: `mail_inbox`, `read_mail`, `find_mail`, `send_mail`, `reply_mail`,
+Ten mail tools plus the cross-channel `inbox` (its mail lane lists the threads, see
+[INBOX.md](INBOX.md)): `read_mail`, `find_mail`, `send_mail`, `reply_mail`,
 `forward_mail`, `archive_mail`, `delete_mail`, `label_mail`,
 `mark_mail_answered`, `list_email_accounts`. They keep the row/body output shapes
 the earlier tools had and read the engine store internally. The destructive verbs
@@ -561,7 +562,7 @@ through only split-horizon names the local resolver does not know.
 
   Know the reach of this filter before relying on it, because it is narrower than
   "the agent is protected from mail": it runs at the two LIST call sites
-  (`mail_inbox`, `find_mail`) and drops whole messages there. `read_mail` does not
+  (the mail lane of `inbox`, `find_mail`) and drops whole messages there. `read_mail` does not
   run it and returns the raw body. The scorer never looks at body text at all, so a
   message whose sole content is an instruction to the model scores zero. Nothing
   wraps or marks mail as untrusted before it enters the prompt - tool results are

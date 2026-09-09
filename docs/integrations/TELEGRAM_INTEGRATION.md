@@ -362,7 +362,7 @@ Incoming and outgoing Telegram messages are recorded in a searchable, per-user m
 
 - `read_telegram_chat` - read a Telegram chat's recent messages (defaults to the user's own chat)
 - `find_telegram_messages` - search Telegram messages by keyword
-- `telegram_inbox` - list Telegram chats that have stored messages
+- `inbox` (channel `telegram`) - list the Telegram chats that have stored messages, with unread and who waits (see [INBOX.md](INBOX.md))
 
 They respect per-user scope isolation. History that predates this feature is imported into the store once, on first use.
 

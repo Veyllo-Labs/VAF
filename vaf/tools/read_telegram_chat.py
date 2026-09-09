@@ -22,7 +22,7 @@ class ReadTelegramChatTool(BaseTool):
         "Read past messages from a Telegram chat (in/out, with timestamps). "
         "Use when the user asks 'what did we discuss on Telegram' or to recall an earlier Telegram message. "
         "chat_id is optional — it defaults to the user's own Telegram chat. "
-        "Use telegram_inbox to list chats or find_telegram_messages to search."
+        "Use inbox to list chats or find_telegram_messages to search."
     )
     parameters = {
         "type": "object",
@@ -55,7 +55,7 @@ class ReadTelegramChatTool(BaseTool):
         if not chat_id:
             return (
                 "No Telegram chat found. The user must have Telegram connected "
-                "(Settings → Connections → Telegram), or pass an explicit chat_id from telegram_inbox."
+                "(Settings → Connections → Telegram), or pass an explicit chat_id from inbox."
             )
 
         # Read straight from the authoritative session JSON (always complete — includes the agent's

@@ -18,7 +18,7 @@ class MarkMailAnsweredTool(BaseTool):
     """
     Mark a message as answered by the agent. Call this after you have processed or
     replied to an email so it shows "Benatwortet am ..." in the Mail UI and is not
-    handled again. Use account_id, folder, message_id from mail_inbox.
+    handled again. Use account_id, folder, message_id from the inbox tool.
     """
     name = "mark_mail_answered"
     category    = "mail"
@@ -27,7 +27,7 @@ class MarkMailAnsweredTool(BaseTool):
     side_effect_class = "reversible"
     description = (
         "Mark an email as answered by the agent. Call after you have processed or replied to the message. "
-        "Use account_id, folder, message_id from mail_inbox. Avoids double handling and shows 'Benatwortet am ...' in the Mail UI."
+        "Use account_id, folder, message_id from the inbox tool. Avoids double handling and shows 'Benatwortet am ...' in the Mail UI."
     )
     parameters = {
         "type": "object",
@@ -38,7 +38,7 @@ class MarkMailAnsweredTool(BaseTool):
             },
             "message_id": {
                 "type": "string",
-                "description": "Message ID from mail_inbox output.",
+                "description": "Message ID from the inbox output.",
             },
             "folder": {
                 "type": "string",
@@ -56,9 +56,9 @@ class MarkMailAnsweredTool(BaseTool):
         message_id = (kwargs.get("message_id") or "").strip()
         folder = (kwargs.get("folder") or "INBOX").strip()
         if not account_id or not message_id:
-            return "account_id and message_id are required. Use mail_inbox to get message_id."
+            return "account_id and message_id are required. Use inbox (channel='mail') to get message_id."
 
-        # Try same store/cred fallback as mail_inbox/find_mail/read_mail so we find the message when it lives in legacy/single-scope
+        # Try same store/cred fallback as the inbox tool/find_mail/read_mail so we find the message when it lives in legacy/single-scope
         found_account = False
         v2 = mail_v2_active(store_username, user_scope_id)
         for try_username, try_scope_id in store_candidates_for_mail(store_username, user_scope_id):

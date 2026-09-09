@@ -61,7 +61,6 @@ IDENTITY_BASELINE = {
     "delete_contact": ["user_scope_id", "username"],
     "delete_mail": ["user_scope_id", "username"],
     "delete_skill": ["user_scope_id", "username"],
-    "discord_inbox": ["user_scope_id", "username"],
     "document_editor": ["user_scope_id"],
     # Both gained user_role on 2026-07-31: `file_access` refuses to be declared
     # without the identity that resolves it, and the role is what recognises a
@@ -99,7 +98,6 @@ IDENTITY_BASELINE = {
     "list_files": ["user_role", "user_scope_id"],
     "list_skills": ["user_scope_id", "username"],
     "list_trash": ["user_role", "user_scope_id"],
-    "mail_inbox": ["user_scope_id", "username"],
     "mark_mail_answered": ["user_scope_id", "username"],
     "memory_save": ["user_scope_id"],
     # username added with the cross-chat half of the tool: the contact lookup that keeps
@@ -127,7 +125,6 @@ IDENTITY_BASELINE = {
     "send_telegram": ["user_role", "user_scope_id", "username"],
     "send_to_user": ["user_role", "user_scope_id", "username"],
     "send_whatsapp": ["user_role", "user_scope_id", "username"],
-    "telegram_inbox": ["user_scope_id", "username"],
     "thinking_workspace_handoff": ["user_scope_id"],
     "thinking_workspace_read": ["user_scope_id"],
     "thinking_workspace_write": ["user_scope_id"],
@@ -141,7 +138,7 @@ IDENTITY_BASELINE = {
     "update_working_memory": ["user_scope_id"],
     "use_skill": ["user_scope_id"],
     "whatsapp_call": ["user_scope_id", "username"],
-    "whatsapp_inbox": ["user_scope_id", "username"],
+    "inbox": ["user_scope_id", "username"],
     "write_file": ["user_role", "user_scope_id"],
 }
 

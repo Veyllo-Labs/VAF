@@ -97,7 +97,7 @@ _BOOKKEEPING_TOOLS = frozenset({"update_working_memory", "update_intent", "add_t
 # prefix. Kept separate from _BOOKKEEPING_TOOLS (that guards plan-spin; this guards read/verify-spin).
 _NONPROGRESS_TOOLS = frozenset({
     "list_automations", "read_automation", "list_automation_notes", "list_automation_todos",
-    "list_calendar_events", "mail_inbox", "read_mail", "find_mail",
+    "list_calendar_events", "inbox", "read_mail", "find_mail",
     "list_timers", "list_email_accounts", "git_status",
 })
 # NOTE: web_search / memory_search are intentionally NOT here — they are genuine information-gathering
@@ -8016,8 +8016,8 @@ class Agent:
             "label", "category", "kategorie", "promotions", "social", "primary",
             "newsletter", "rechnung", "bill", "invoice", "order", "bestellung"
         ]):
-            if "mail_inbox" in self.tools:
-                forced_tools.add("mail_inbox")
+            if "inbox" in self.tools:
+                forced_tools.add("inbox")
             if "find_mail" in self.tools:
                 forced_tools.add("find_mail")
             if "list_email_accounts" in self.tools:

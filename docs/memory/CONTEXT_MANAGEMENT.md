@@ -191,7 +191,7 @@ To prevent the context window from being flooded by large tool outputs (which wo
 **Supported Tools:**
 - **Filesystem:** `list_files`, `github_get_file`, `github_list_repos`
 - **Search:** `web_search`, `web_fetch`
-- **Communication:** `mail_inbox`, `whatsapp_inbox`, `telegram_inbox`, `list_email_accounts`
+- **Communication:** `inbox`, `list_email_accounts`
 
 **Best Practice:** When dealing with large datasets (e.g., listing 50 emails), the agent sees a pruned version (head/tail) in history, but knows the full content is processed. This maintains conversational continuity without losing context "depth".
 

@@ -128,7 +128,7 @@ class SendMailTool(BaseTool):
             },
             "in_reply_to": {
                 "type": "string",
-                "description": "Optional. When replying, pass the original email's message_id (from mail_inbox/read_mail) so the reply threads correctly in the recipient's client.",
+                "description": "Optional. When replying, pass the original email's message_id (from inbox/read_mail) so the reply threads correctly in the recipient's client.",
             },
             "subject": {
                 "type": "string",

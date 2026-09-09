@@ -2040,7 +2040,17 @@
       "legendTag": "Tag",
       "legendTagConnection": "Tag Connection",
       "connected": "Connected",
-      "disconnected": "Disconnected"
+      "disconnected": "Disconnected",
+      "chatDetails": "Chat details",
+      "chatLearnedHere": "What the agent learned in this chat",
+      "chatMemoriesCount": "Memories",
+      "chatShowInSearch": "Show these memories in Memory Search",
+      "chatDeleteButton": "Delete chat memories",
+      "chatDeleteBody": "This permanently removes everything the agent learned in this chat. The chat itself stays.",
+      "chatDeleteConfirm": "Delete",
+      "chatDeleteCancel": "Cancel",
+      "chatDeleting": "Deleting…",
+      "chatClose": "Close"
     },
     "userIdentity": {
       "title": "User Identity",

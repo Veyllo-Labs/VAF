@@ -37,6 +37,8 @@ const TYPE_COLORS: Record<string, string> = {
 };
 const DEFAULT_COLOR = '#9ca3af';
 const TAG_COLOR = '#8b5cf6';
+// A messenger chat the agent learned from: one hub node, its memories keyed by chatKey.
+const CHAT_COLOR = '#0ea5e9';
 const FADED_COLOR = '#d1d5db';
 const HIGHLIGHT_COLOR = '#f97316';
 
@@ -46,6 +48,7 @@ const LEGEND: Array<{ type: string; label: string; color: string }> = [
     { type: 'document', label: 'Document', color: TYPE_COLORS.document },
     { type: 'code', label: 'Code', color: TYPE_COLORS.code },
     { type: 'knowledge', label: 'Knowledge', color: TYPE_COLORS.knowledge },
+    { type: 'chat', label: 'Chat', color: CHAT_COLOR },
     { type: 'other', label: 'Other', color: DEFAULT_COLOR },
 ];
 const KNOWN_TYPES = new Set(Object.keys(TYPE_COLORS));
@@ -156,15 +159,18 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
         const graph = new Graph();
         for (const n of storeNodesNow) {
             const isTag = n.type === 'tagNode' || n.data.isTagNode;
+            const isChat = n.type === 'chatNode' || n.data.isChatNode;
             const { x, y } = seededXY(n.id);
             graph.addNode(n.id, {
                 x, y,
-                label: isTag ? n.data.label : (n.data.label || 'Untitled').slice(0, 60),
+                label: (isTag || isChat) ? n.data.label : (n.data.label || 'Untitled').slice(0, 60),
                 isTag,
+                isChat,
+                chatKey: n.data.chatKey || '',
                 memType: n.data.type || 'note',
                 docTag: (n.data as { docTag?: string }).docTag || '',
                 memoryCount: n.data.memoryCount || 0,
-                color: isTag ? TAG_COLOR : (TYPE_COLORS[n.data.type || ''] || DEFAULT_COLOR),
+                color: isTag ? TAG_COLOR : isChat ? CHAT_COLOR : (TYPE_COLORS[n.data.type || ''] || DEFAULT_COLOR),
                 size: 3,
             });
         }
@@ -176,10 +182,10 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                 weight: e.data?.strength || 0.5,
             });
         }
-        // Node size from structure: degree for memories, membership for tags.
+        // Node size from structure: degree for memories, membership for hubs (tags, chats).
         graph.forEachNode((id, attrs) => {
             const deg = graph.degree(id);
-            graph.setNodeAttribute(id, 'size', attrs.isTag
+            graph.setNodeAttribute(id, 'size', (attrs.isTag || attrs.isChat)
                 ? Math.min(14, 4 + Math.sqrt(attrs.memoryCount || deg) * 1.6)
                 : Math.min(12, 3 + Math.sqrt(deg) * 1.2));
         });
@@ -208,7 +214,11 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                 maxCameraRatio: 6,
                 nodeReducer: (id, attrs) => {
                     const res: Record<string, unknown> = { ...attrs };
-                    if (!attrs.isTag && hiddenTypesRef.current.has(legendKey(attrs.memType as string))) {
+                    // A chat node and the memories learned in that chat share one
+                    // legend key, so the Chat toggle hides them together and the
+                    // Conversation toggle can never leave an orphan hub behind.
+                    const legend = (attrs.isChat || attrs.chatKey) ? 'chat' : legendKey(attrs.memType as string);
+                    if (!attrs.isTag && hiddenTypesRef.current.has(legend)) {
                         res.hidden = true;
                         return res;
                     }
@@ -243,13 +253,16 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                         res.hidden = true;
                         return res;
                     }
-                    res.color = attrs.kind === 'tag' ? edgeTag : edgeSem;
-                    res.size = attrs.kind === 'tag' ? 0.6 : 1;
+                    // A chat edge takes the hub palette but never the Tags toggle:
+                    // it is the only edge a chat memory has.
+                    const hub = attrs.kind === 'tag' || attrs.kind === 'chat';
+                    res.color = hub ? edgeTag : edgeSem;
+                    res.size = hub ? 0.6 : 1;
                     const focus = selectedRef.current || hoveredRef.current;
                     if (focus && g) {
                         const [s, t] = g.extremities(id);
                         if (s === focus || t === focus) {
-                            res.color = attrs.kind === 'tag' ? edgeTagHot : edgeSemHot;
+                            res.color = hub ? edgeTagHot : edgeSemHot;
                             res.size = (res.size as number) + 0.6;
                             res.zIndex = 1;
                         } else {
@@ -264,10 +277,10 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                 selectedRef.current = node;
                 neighborsRef.current = new Set(graph.neighbors(node));
                 setSelectedNodeId(node);
-                if (graph.getNodeAttribute(node, 'isTag')) {
-                    // A tag is a result set, not a record: its memories go to
-                    // the search panel and stay there while the user clicks
-                    // through them.
+                if (graph.getNodeAttribute(node, 'isTag') || graph.getNodeAttribute(node, 'isChat')) {
+                    // A tag or a chat is a result set, not a record: its
+                    // memories go to the search panel and stay there while
+                    // the user clicks through them.
                     showTagResults(node, String(graph.getNodeAttribute(node, 'label') || ''));
                 } else {
                     selectMemory(node);
@@ -453,7 +466,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
             {/* Node count - the honest scale of what is on screen */}
             <div className="absolute bottom-3 right-3 z-10 bg-white/90 border border-gray-200 rounded-lg px-2.5 py-1 shadow-sm">
                 <p className="text-[11px] text-gray-500">
-                    {storeNodes.filter((n) => n.type !== 'tagNode' && !n.data.isTagNode).length} memories
+                    {storeNodes.filter((n) => n.type !== 'tagNode' && !n.data.isTagNode && n.type !== 'chatNode' && !n.data.isChatNode).length} memories
                 </p>
             </div>
         </div>

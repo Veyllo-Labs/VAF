@@ -17,7 +17,7 @@ import React, { useMemo, useState } from 'react';
 import { connectedMemoriesForTag, useMemoryStore, TYPE_LABELS } from './stores/memoryStore';
 import {
     Search, Loader2, X,
-    FileText, ExternalLink, AlertCircle, Hash
+    FileText, ExternalLink, AlertCircle, Hash, MessageSquare
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -155,7 +155,9 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
             {!isQuerying && activeTagNodeId && (
                 <div className="flex-1 overflow-hidden flex flex-col">
                     <div className="px-4 py-2 bg-gray-100 border-b border-gray-200 flex items-center gap-2">
-                        <Hash className="w-3.5 h-3.5 text-purple-600 flex-shrink-0" />
+                        {activeTagNodeId.startsWith('chat-')
+                            ? <MessageSquare className="w-3.5 h-3.5 text-sky-600 flex-shrink-0" />
+                            : <Hash className="w-3.5 h-3.5 text-purple-600 flex-shrink-0" />}
                         <span className="font-medium text-gray-700 text-sm truncate min-w-0">
                             {activeTagLabel.replace(/^#/, '')}
                         </span>

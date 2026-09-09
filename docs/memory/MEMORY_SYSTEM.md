@@ -8,7 +8,7 @@ The Memory System provides persistent memory storage with content encrypted at r
 - **Vector Search**: PostgreSQL with pgvector extension for semantic similarity search
 - **Redis Caching**: Fast caching for embeddings, RAG queries, and graph data
 - **RAG pipeline**: Retrieval and answer generation with source citations
-- **Graph Visualization**: Interactive WebGL memory graph (Sigma.js, force-directed) that renders the WHOLE store of the current user
+- **Graph Visualization**: Interactive WebGL memory graph (Sigma.js, force-directed) that renders the WHOLE store of the current user, with one node per messenger chat the agent learned from
 - **Auto-Connections**: Automatically links semantically related memories
 - **Streaming**: Token streaming for RAG query responses
 - **Session Compaction**: Background process that every N user turns prompts the LLM to write durable memories (MEMORY:/NO_REPLY) into RAG. The model sees only a user/assistant dialogue excerpt (no system or tool messages). See [Session Compaction (background)](#session-compaction-background).
@@ -120,14 +120,21 @@ Memory settings live in `~/.vaf/config.json` (the Memory System has no UI toggle
 ### The /memory right column: a result set above, one record below
 
 The right column holds a RESULT SET on top and the DETAIL of one memory below.
-A result set comes from a search or from a tag: clicking a tag node in the graph
-fills the search panel with the memories carrying that tag, and the list stays
-while the user clicks through its entries, so a selection change never costs the
-list. Only a new search, a different tag, or the panel's clear button replaces
-it. Tag details below then show the tag's stats and its delete action, plus a
-button that pins the list again; the memory tag chips do the same, which is the
-only way to reach a tag's memories below the lg breakpoint, where the graph is
-hidden.
+A result set comes from a search, from a tag, or from a chat: clicking a tag node in
+the graph fills the search panel with the memories carrying that tag, clicking a
+chat node fills it with what the agent learned inside that messenger chat, and the
+list stays while the user clicks through its entries, so a selection change never
+costs the list. Only a new search, a different hub, or the panel's clear button
+replaces it. Tag details below then show the tag's stats and its delete action,
+plus a button that pins the list again; the memory tag chips do the same, which is
+the only way to reach a tag's memories below the lg breakpoint, where the graph is
+hidden. Chat details show the chat's label (channel and person) and its count, the
+same pin button, and ONE delete that empties the whole namespace: hard, every memory
+learned in that chat, chunks and connections included, behind the inline confirm the
+single-memory delete uses. A chat node and its memories share the `Chat` legend
+toggle, so hiding the type never leaves an orphan hub. The chat strings are the
+first on this page to come from the catalogues; the rest of the page's chrome is
+still English and waits for its own sweep.
 
 ### Advanced Configuration (config.json)
 
@@ -320,6 +327,8 @@ ingestion uses the same `RagPipeline.ingest()` as other memories with
 | `/api/memory/{id}` | GET | Get memory by ID (decrypted) |
 | `/api/memory/{id}` | PUT | Update memory content/metadata |
 | `/api/memory/{id}` | DELETE | Delete memory (soft/hard) |
+| `/api/memory/by-doc-tag/{doc_tag}` | DELETE | Delete every memory of one learned document (soft/hard) |
+| `/api/memory/chat/{chat_key}` | DELETE | Delete every memory learned inside one messenger chat (hard; refuses a missing scope) |
 | `/api/memory/graph` | GET | Get graph data for visualization |
 | `/api/memory/rag/query` | POST | Long-term RAG query (returns answer + sources; excludes ephemeral attachment lane by default) |
 | `/api/memory/rag/query/stream` | POST | Streaming RAG query (SSE) |

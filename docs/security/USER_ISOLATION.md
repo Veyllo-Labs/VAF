@@ -231,6 +231,8 @@ This applies to:
 
 Without this, User A could receive cached search results or graph data that was generated for User B.
 
+The graph key carries no chat dimension: a chat namespace is part of the owner's graph, so emptying one (`DELETE /api/memory/chat/{chat_key}`) invalidates the graph cache the same way a single delete does, and the node is gone on the next fetch.
+
 ## 4. Database-Level Security (PostgreSQL RLS)
 
 PostgreSQL Row-Level Security (RLS) is enabled and forced on the `memories` table.

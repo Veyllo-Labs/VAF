@@ -326,10 +326,11 @@ export default function MemoryPage() {
     const [showTagConnections, setShowTagConnections] = useState(true);
 
     // When a tag node is selected, expand the detail panel so "Memories with this tag" list is visible
-    // Tag node ids are always "tag-<tag>" (vaf/memory/graph.py); memory ids are
-    // UUIDs, so the prefix cannot collide - and unlike a nodes lookup it still
-    // holds when a refetch dropped the node.
-    const isTagSelected = !!selectedNodeId?.startsWith('tag-');
+    // Tag node ids are always "tag-<tag>" and chat node ids "chat-<session id>"
+    // (vaf/memory/graph.py); memory ids are UUIDs, so the prefixes cannot collide -
+    // and unlike a nodes lookup it still holds when a refetch dropped the node.
+    // Both hubs are header + stats + one button, so both take the short panel.
+    const isTagSelected = !!(selectedNodeId?.startsWith('tag-') || selectedNodeId?.startsWith('chat-'));
     useEffect(() => {
         if (isTagSelected) setDetailsExpanded(true);
     }, [isTagSelected]);

@@ -19,7 +19,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   a turn inside that chat and the WhatsApp Composer for that chat read it, on top of your
   general memory. The namespace switch is a parameter of the search and is never read from
   a request body, an update cannot move a memory across the boundary, and auto-connect never
-  crosses it.
+  crosses it. The Memory page shows one node per chat ("WhatsApp: Alice") with every memory
+  learned there linked to it; clicking it pins those memories in the search panel like a tag
+  does, and the chat details offer one delete that empties the whole namespace, permanently.
+  The chat details are the first strings on the Memory page that come from the language
+  catalogues; the rest of that page is still English.
 - **Undo and redo in every editor.** The document editor (the DOCX path and the HTML
   path), the code viewer and the custom tool editor have Undo and Redo buttons, and answer
   Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z (Cmd on a Mac) while the keyboard is inside them. The

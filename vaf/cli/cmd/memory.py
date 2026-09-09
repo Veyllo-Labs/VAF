@@ -19,7 +19,9 @@ tell you whether the lane finds the chat you actually meant; this can.
 
 Neither command takes a scope. The CLI has no authentication - the local user is
 the machine owner - so both run under the owner's identity, and a `--scope`
-option would be a purpose-built reader of another tenant's chat text."""
+option would be a purpose-built reader of another tenant's chat text. For the same
+reason there is no command for a chat's memory namespace: emptying one is a per-tenant
+action and belongs to the authenticated Memory page (`DELETE /api/memory/chat/{chat_key}`)."""
 
 import json
 from pathlib import Path

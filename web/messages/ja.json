@@ -2040,7 +2040,17 @@
       "legendTag": "タグ",
       "legendTagConnection": "タグのつながり",
       "connected": "接続済み",
-      "disconnected": "切断済み"
+      "disconnected": "切断済み",
+      "chatDetails": "チャットの詳細",
+      "chatLearnedHere": "エージェントがこのチャットで学んだこと",
+      "chatMemoriesCount": "記憶",
+      "chatShowInSearch": "これらの記憶を記憶検索で表示",
+      "chatDeleteButton": "チャットの記憶を削除",
+      "chatDeleteBody": "エージェントがこのチャットで学んだ内容をすべて完全に削除します。チャット自体は残ります。",
+      "chatDeleteConfirm": "削除",
+      "chatDeleteCancel": "キャンセル",
+      "chatDeleting": "削除中…",
+      "chatClose": "閉じる"
     },
     "userIdentity": {
       "title": "ユーザー情報",

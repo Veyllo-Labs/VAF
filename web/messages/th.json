@@ -2040,7 +2040,17 @@
       "legendTag": "แท็ก",
       "legendTagConnection": "การเชื่อมโยงแท็ก",
       "connected": "เชื่อมต่อแล้ว",
-      "disconnected": "ตัดการเชื่อมต่อแล้ว"
+      "disconnected": "ตัดการเชื่อมต่อแล้ว",
+      "chatDetails": "รายละเอียดแชท",
+      "chatLearnedHere": "สิ่งที่เอเจนต์เรียนรู้จากแชทนี้",
+      "chatMemoriesCount": "ความจำ",
+      "chatShowInSearch": "แสดงความจำเหล่านี้ในการค้นหาความจำ",
+      "chatDeleteButton": "ลบความจำของแชท",
+      "chatDeleteBody": "จะลบทุกอย่างที่เอเจนต์เรียนรู้จากแชทนี้อย่างถาวร ตัวแชทเองยังคงอยู่",
+      "chatDeleteConfirm": "ลบ",
+      "chatDeleteCancel": "ยกเลิก",
+      "chatDeleting": "กำลังลบ…",
+      "chatClose": "ปิด"
     },
     "userIdentity": {
       "title": "ข้อมูลผู้ใช้",

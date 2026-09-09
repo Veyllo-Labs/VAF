@@ -17,7 +17,7 @@ from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from vaf.memory.models import Memory, Connection, Chunk, EMBEDDING_DIM
-from vaf.memory.lanes import not_attachment_lane, not_chat_lane
+from vaf.memory.lanes import ChatNamespace, not_attachment_lane, not_chat_lane
 from vaf.core.config import Config
 import logging
 
@@ -157,6 +157,8 @@ class GraphManager:
                     # Document sections cluster around their document via this
                     # key (set by learn_document on sections AND the root).
                     "docTag": (memory.meta or {}).get("doc_tag", ""),
+                    # Learned inside one messenger chat: hangs off that chat's node.
+                    "chatKey": (memory.meta or {}).get("chat_key", ""),
                 }
             }
             nodes.append(node)
@@ -191,10 +193,24 @@ class GraphManager:
         # Using Set to prevent duplicate memory IDs per tag
         tag_to_memories: Dict[str, Set[str]] = {}
         memory_tag_count: Dict[str, int] = {}  # Track how many tags each memory has
+        # One group per messenger chat the agent learned from. A chat memory never joins a
+        # tag set: its tags would pull a contact's facts into the owner's tag clusters, and
+        # the one place it belongs is under its chat node. Memories arrive newest first, so
+        # the first label seen is the newest name the bridge knew the person by.
+        chat_groups: Dict[str, Dict[str, Any]] = {}
 
         for memory in memories:
-            tags = (memory.meta or {}).get("tags", [])
+            meta = memory.meta or {}
             memory_id_str = str(memory.id)
+            chat_key = str(meta.get("chat_key") or "").strip()
+            if chat_key:
+                group = chat_groups.setdefault(chat_key, {"channel": "", "label": "", "ids": set()})
+                group["ids"].add(memory_id_str)
+                group["channel"] = group["channel"] or str(meta.get("chat_channel") or "")
+                group["label"] = group["label"] or str(meta.get("chat_label") or "")
+                memory_tag_count[memory_id_str] = 0
+                continue
+            tags = meta.get("tags", [])
             memory_tag_count[memory_id_str] = len(tags)
             for tag in tags:
                 # Normalize tag to lowercase for case-insensitive grouping
@@ -206,12 +222,13 @@ class GraphManager:
                 tag_to_memories[normalized_tag].add(memory_id_str)  # Use add() for Set
 
         # Find max memory count for scaling tag node sizes
-        max_memory_count = max((len(mids) for mids in tag_to_memories.values()), default=1)
+        max_memory_count = max([len(mids) for mids in tag_to_memories.values()]
+                               + [len(g["ids"]) for g in chat_groups.values()], default=1)
 
         # Create Tag Master Nodes with organic circular positioning
         # Position tags in a circle around the center, memories will be pulled towards their tags
         import math
-        tag_count = len(tag_to_memories)
+        tag_count = len(tag_to_memories) + len(chat_groups)   # chat nodes share the circle
         center_x, center_y = 400, 300  # Center of the graph
         radius = 350  # Radius for tag node circle
 
@@ -271,6 +288,39 @@ class GraphManager:
                     }
                 }
                 edges.append(edge)
+
+        # One node per messenger chat, on the same circle, with every memory learned
+        # there linked to it and to nothing else. Deleting the node empties the namespace.
+        for chat_key, group in chat_groups.items():
+            ns = ChatNamespace.from_meta({"chat_key": chat_key, "chat_channel": group["channel"],
+                                          "chat_label": group["label"]})
+            if ns is None:
+                continue
+            angle = (2 * math.pi * tag_node_counter) / max(tag_count, 1)
+            nodes.append({
+                "id": f"chat-{chat_key}",
+                "type": "chatNode",
+                "position": {"x": center_x + radius * math.cos(angle), "y": center_y + radius * math.sin(angle)},
+                "data": {
+                    "label": ns.display_label,
+                    "chatKey": chat_key,
+                    "chatChannel": ns.channel,
+                    "memoryCount": len(group["ids"]),
+                    "isChatNode": True,
+                    "sizeScale": 1.0 + (len(group["ids"]) / max(max_memory_count, 1)) * 1.5,
+                }
+            })
+            tag_node_counter += 1
+            for memory_id in sorted(group["ids"]):
+                edges.append({
+                    "id": f"chat-edge-{chat_key}-{memory_id}",
+                    "source": memory_id,
+                    "target": f"chat-{chat_key}",
+                    "type": "default",
+                    "animated": False,
+                    "data": {"strength": 0.8, "connectionType": "chat", "label": None},
+                    "style": {"strokeWidth": 2, "opacity": 0.7, "stroke": type_stroke["conversation"]},
+                })
 
         # Reposition memory nodes towards their connected tags for organic clustering
         for i, node in enumerate(nodes):

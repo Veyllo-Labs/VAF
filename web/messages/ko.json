@@ -2040,7 +2040,17 @@
       "legendTag": "태그",
       "legendTagConnection": "태그 연결",
       "connected": "연결됨",
-      "disconnected": "연결 끊김"
+      "disconnected": "연결 끊김",
+      "chatDetails": "채팅 상세",
+      "chatLearnedHere": "에이전트가 이 채팅에서 배운 내용",
+      "chatMemoriesCount": "기억",
+      "chatShowInSearch": "이 기억을 기억 검색에서 보기",
+      "chatDeleteButton": "채팅 기억 삭제",
+      "chatDeleteBody": "에이전트가 이 채팅에서 배운 모든 내용을 영구적으로 삭제합니다. 채팅 자체는 유지됩니다.",
+      "chatDeleteConfirm": "삭제",
+      "chatDeleteCancel": "취소",
+      "chatDeleting": "삭제 중…",
+      "chatClose": "닫기"
     },
     "userIdentity": {
       "title": "사용자 정보",

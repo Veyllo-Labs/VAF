@@ -91,3 +91,36 @@ def test_nodes_carry_doc_tag():
     db = _SpyDb(rows_per_call=[[mem], []])
     data = asyncio.run(GraphManager(db).get_graph_data(limit=0))
     assert data["nodes"][0]["data"]["docTag"] == "doc-buch"
+
+
+def _mem(meta, ts=1):
+    return SimpleNamespace(id=uuid.uuid4(), meta=meta, created_at=datetime(2026, 1, ts),
+                           updated_at=datetime(2026, 1, ts), chunks=[], parent_id=None)
+
+
+def test_a_chat_memory_hangs_only_on_its_chat_node():
+    """What the agent learned inside one messenger chat is grouped under ONE node per chat,
+    labelled with the channel and the person, and never joins a tag cluster: its tags
+    would otherwise pull a contact's facts into the owner's own tag clusters."""
+    chat = _mem({"title": "Mia", "type": "conversation", "tags": ["family"],
+                 "source": "chat/whatsapp_alice_49", "chat_key": "whatsapp_alice_49",
+                 "chat_channel": "whatsapp", "chat_label": "Alice"}, ts=3)
+    older = _mem({"title": "Coffee", "type": "conversation", "tags": ["family"],
+                  "source": "chat/whatsapp_alice_49", "chat_key": "whatsapp_alice_49",
+                  "chat_channel": "whatsapp", "chat_label": "Ali"}, ts=2)
+    plain = _mem({"title": "Work", "type": "note", "tags": ["work"]}, ts=1)
+    db = _SpyDb(rows_per_call=[[chat, older, plain], []])
+    data = asyncio.run(GraphManager(db).get_graph_data(limit=0))
+    nodes = {n["id"]: n for n in data["nodes"]}
+    hub = nodes["chat-whatsapp_alice_49"]
+    assert hub["type"] == "chatNode" and hub["data"]["isChatNode"] is True
+    assert hub["data"]["label"] == "WhatsApp: Alice", "the newest label wins"
+    assert hub["data"]["memoryCount"] == 2 and hub["data"]["chatChannel"] == "whatsapp"
+    assert "tag-family" not in nodes and "tag-work" in nodes
+    assert nodes[str(chat.id)]["data"]["chatKey"] == "whatsapp_alice_49"
+    assert nodes[str(plain.id)]["data"]["chatKey"] == ""
+    chat_edges = [e for e in data["edges"] if e["data"]["connectionType"] == "chat"]
+    assert sorted(e["source"] for e in chat_edges) == sorted([str(chat.id), str(older.id)])
+    assert all(e["target"] == "chat-whatsapp_alice_49" for e in chat_edges)
+    assert not [e for e in data["edges"] if e["source"] == str(chat.id) and e["target"].startswith("tag-")]
+    assert "chat/" not in _where(limit=0), "the graph query keeps chat rows in"

@@ -5,7 +5,9 @@
 
 /**
  * Memory Detail Panel - View and edit memory content.
- * Also displays Tag details when a tag node is selected.
+ * Also displays Tag details when a tag node is selected, and Chat details
+ * (what the agent learned inside one messenger chat, deletable as a whole)
+ * when a chat node is selected.
  *
  * Features:
  * - Display decrypted content
@@ -16,10 +18,11 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { useTranslations } from 'next-intl';
 import { connectedMemoriesForTag, useMemoryStore, Memory, TYPE_LABELS } from './stores/memoryStore';
 import {
     X, Edit2, Trash2, Save, Tag, Calendar, Link2,
-    ChevronDown, ChevronUp, FileText, AlertTriangle, Hash, CheckSquare, Square
+    ChevronDown, ChevronUp, FileText, AlertTriangle, Hash, CheckSquare, Square, MessageSquare
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -27,6 +30,93 @@ interface MemoryDetailPanelProps {
     className?: string;
     onClose?: () => void;
     onToggleExpand?: (expanded: boolean) => void;
+}
+
+// Chat Details: one messenger chat the agent learned from. The whole namespace
+// goes in one delete - the right to be forgotten for a person who is not the
+// owner - behind the same inline confirm the single-memory delete uses.
+function ChatDetailsView({
+    chatNode,
+    connectedMemories,
+    onShowInSearch,
+    onDelete,
+    isLoading,
+}: {
+    chatNode: { id: string; data: { label: string; memoryCount?: number; chatChannel?: string } };
+    connectedMemories: Array<{ id: string; label: string; type?: string }>;
+    onShowInSearch: () => void;
+    onDelete: () => Promise<void>;
+    isLoading: boolean;
+}) {
+    const tm = useTranslations('modals');
+    const [confirming, setConfirming] = useState(false);
+
+    return (
+        <div className="space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-200">
+                <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-xl bg-sky-100 flex items-center justify-center shrink-0">
+                        <MessageSquare className="w-5 h-5 text-sky-600" />
+                    </div>
+                    <div className="min-w-0">
+                        <h4 className="font-medium text-gray-900 truncate">{chatNode.data.label}</h4>
+                        <p className="text-xs text-gray-500">{tm('memory.chatLearnedHere')}</p>
+                    </div>
+                </div>
+                <button
+                    type="button"
+                    onClick={() => setConfirming(true)}
+                    disabled={isLoading || confirming}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50 shrink-0"
+                >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    {tm('memory.chatDeleteButton')}
+                </button>
+            </div>
+
+            {confirming && (
+                <div className="px-3 py-3 bg-red-50 border border-red-200 rounded-lg">
+                    <div className="flex items-start gap-2 mb-2">
+                        <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                        <span className="text-sm font-medium text-red-800">{tm('memory.chatDeleteBody')}</span>
+                    </div>
+                    <div className="flex gap-2">
+                        <button
+                            type="button"
+                            onClick={() => { void onDelete(); }}
+                            disabled={isLoading}
+                            className="px-3 py-1 text-xs font-medium bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50"
+                        >
+                            {isLoading ? tm('memory.chatDeleting') : tm('memory.chatDeleteConfirm')}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setConfirming(false)}
+                            disabled={isLoading}
+                            className="px-3 py-1 text-xs font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+                        >
+                            {tm('memory.chatDeleteCancel')}
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            <div className="p-3 bg-sky-50 rounded-lg">
+                <div className="text-2xl font-bold text-sky-700">{chatNode.data.memoryCount || 0}</div>
+                <div className="text-xs text-sky-600">{tm('memory.chatMemoriesCount')}</div>
+            </div>
+
+            <button
+                type="button"
+                onClick={onShowInSearch}
+                disabled={connectedMemories.length === 0}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+                <Link2 className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                <span className="text-sm text-gray-700">{tm('memory.chatShowInSearch')}</span>
+            </button>
+        </div>
+    );
 }
 
 // Tag Details Component
@@ -220,12 +310,14 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
         updateMemory,
         deleteMemory,
         deleteByDocTag,
+        deleteChatNamespace,
         removeTagFromMemory,
         isLoading,
         error,
         showTagResults,
         clearTagResults,
     } = useMemoryStore();
+    const tm = useTranslations('modals');
 
     const [isEditing, setIsEditing] = useState(false);
     const [editContent, setEditContent] = useState('');
@@ -248,16 +340,26 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                 data: { label: `#${tag}`, tag, memoryCount: 0, isTagNode: true },
             } as typeof nodes[0];
         }
+        if (selectedNodeId?.startsWith('chat-')) {
+            const chatKey = selectedNodeId.replace(/^chat-/, '');
+            return {
+                id: selectedNodeId,
+                type: 'chatNode',
+                position: { x: 0, y: 0 },
+                data: { label: chatKey, chatKey, memoryCount: 0, isChatNode: true },
+            } as typeof nodes[0];
+        }
         return undefined;
     }, [nodes, selectedNodeId]);
 
     const isTagSelected = !!(selectedNode && (selectedNode.type === 'tagNode' || selectedNode.data?.isTagNode));
+    const isChatSelected = !!(selectedNode && (selectedNode.type === 'chatNode' || selectedNode.data?.isChatNode));
 
     // Same derivation the search panel uses for its tag result list:
-    // one implementation, two consumers.
+    // one implementation, two consumers - and a chat hub walks the same edges.
     const connectedMemories = useMemo(
-        () => (isTagSelected ? connectedMemoriesForTag(nodes, edges, selectedNodeId) : []),
-        [isTagSelected, selectedNodeId, edges, nodes],
+        () => ((isTagSelected || isChatSelected) ? connectedMemoriesForTag(nodes, edges, selectedNodeId) : []),
+        [isTagSelected, isChatSelected, selectedNodeId, edges, nodes],
     );
 
     const toggleExpand = () => {
@@ -312,6 +414,53 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
         setSelectedNodeId(null);
         onClose?.();
     };
+
+    // Show chat details if a chat node is selected
+    if (isChatSelected && selectedNode) {
+        const chatKey = String(selectedNode.data?.chatKey || selectedNodeId?.replace(/^chat-/, '') || '');
+        return (
+            <div className={cn('bg-white rounded-xl border border-gray-200 overflow-hidden', className)}>
+                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-sky-50">
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={toggleExpand}
+                            className="p-2 hover:bg-sky-100 rounded-lg transition-colors"
+                            title={expanded ? 'Collapse' : 'Expand'}
+                        >
+                            {expanded ? (
+                                <ChevronDown className="w-4 h-4 text-sky-600" />
+                            ) : (
+                                <ChevronUp className="w-4 h-4 text-sky-600" />
+                            )}
+                        </button>
+                        <h3 className="font-medium text-sky-800">{tm('memory.chatDetails')}</h3>
+                    </div>
+                    <button
+                        onClick={handleClose}
+                        className="p-2 hover:bg-sky-100 rounded-lg transition-colors text-sky-600"
+                        title={tm('memory.chatClose')}
+                    >
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+                {expanded && (
+                    <div className="flex-1 p-4 overflow-y-auto">
+                        <ChatDetailsView
+                            chatNode={selectedNode as any}
+                            connectedMemories={connectedMemories}
+                            onShowInSearch={() => selectedNodeId && showTagResults(
+                                selectedNodeId, String((selectedNode as any)?.data?.label || ''))}
+                            isLoading={isLoading}
+                            onDelete={async () => {
+                                const count = await deleteChatNamespace(chatKey);
+                                if (count >= 0) onClose?.();
+                            }}
+                        />
+                    </div>
+                )}
+            </div>
+        );
+    }
 
     // Show tag details if a tag node is selected
     if (isTagSelected && selectedNode) {

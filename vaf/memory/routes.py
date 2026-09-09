@@ -25,6 +25,7 @@ from vaf.memory.tag_link_sync import sync_memories_for_tag_link
 from vaf.core.config import Config
 import json
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -494,6 +495,37 @@ async def delete_by_doc_tag(
     except Exception as e:
         logger.error(f"Failed to delete by doc tag {doc_tag!r}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+_CHAT_KEY = re.compile(r"[A-Za-z0-9_.:+-]{1,200}")
+
+
+@memory_router.delete("/chat/{chat_key}")
+async def delete_chat_namespace(
+    chat_key: str,
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope),
+):
+    """Delete every memory the agent learned inside one messenger chat.
+
+    Hard, with no `?hard` switch: this is the right to be forgotten for a person who is
+    not the account owner, and a soft delete would keep their facts on disk. Chunks and
+    connections go with the database's cascade. Fails closed without a scope (the delete
+    would otherwise target the legacy NULL-scope rows, not "everything"). Route ordering:
+    declared before the /{memory_id} catch-all, like /by-doc-tag.
+    """
+    key = (chat_key or "").strip()
+    if not _CHAT_KEY.fullmatch(key):
+        raise HTTPException(status_code=400, detail="Invalid chat key")
+    if user_scope_id is None:
+        raise HTTPException(status_code=403, detail="No user scope")
+    try:
+        async with get_db(user_scope_id=user_scope_id) as db:
+            count = await RagPipeline(db).clear_chat_namespace(key, user_scope_id)
+        await get_cache().invalidate_graph()
+    except Exception as e:
+        logger.error(f"Failed to delete chat namespace {key!r}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "deleted", "chat_key": key, "count": count, "hard": True}
 
 
 @memory_router.delete("/{memory_id}")

@@ -38,7 +38,7 @@ export interface Memory {
 
 export interface MemoryNode {
     id: string;
-    type: string;  // 'memoryNode' | 'tagNode'
+    type: string;  // 'memoryNode' | 'tagNode' | 'chatNode'
     position: { x: number; y: number };
     data: {
         label: string;
@@ -59,6 +59,11 @@ export interface MemoryNode {
         memoryCount?: number;
         isTagNode?: boolean;
         sizeScale?: number;  // Dynamic size multiplier (1.0 to 2.5)
+        // Chat node specific fields: one node per messenger chat the agent learned
+        // from; a memory node carries chatKey when it was learned inside that chat.
+        chatKey?: string;
+        chatChannel?: string;
+        isChatNode?: boolean;
     };
 }
 
@@ -175,6 +180,7 @@ interface MemoryActions {
     updateMemory: (id: string, content?: string, metadata?: Partial<MemoryMetadata>) => Promise<Memory | null>;
     deleteMemory: (id: string, hard?: boolean) => Promise<boolean>;
     deleteByDocTag: (docTag: string, hard?: boolean) => Promise<number>;
+    deleteChatNamespace: (chatKey: string) => Promise<number>;
 
     // Tag management
     addTagToMemory: (memoryId: string, tag: string) => Promise<boolean>;
@@ -406,6 +412,31 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
         } catch (error) {
             set({ error: (error as Error).message, isLoading: false });
             return 0;
+        }
+    },
+
+    // Everything the agent learned inside one messenger chat goes in one call:
+    // the right-to-be-forgotten delete for a person who is not the owner. The
+    // pinned result set is dropped with it, or it would keep naming a chat that
+    // is gone. -1 on failure, so the caller can tell "nothing there" apart.
+    deleteChatNamespace: async (chatKey) => {
+        set({ isLoading: true, error: null });
+        try {
+            const response = await fetch(
+                `${getMemoryApiBase()}/api/memory/chat/${encodeURIComponent(chatKey)}`,
+                { method: 'DELETE' }
+            );
+            if (!response.ok) throw new Error('Failed to delete chat memories');
+            const data = await response.json();
+            set({ selectedMemory: null, selectedNodeId: null });
+            get().clearTagResults();
+            await get().fetchGraph();
+            await get().fetchStats();
+            set({ isLoading: false });
+            return (data as { count?: number }).count ?? 0;
+        } catch (error) {
+            set({ error: (error as Error).message, isLoading: false });
+            return -1;
         }
     },
 

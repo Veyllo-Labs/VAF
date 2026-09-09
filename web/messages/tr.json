@@ -2040,7 +2040,17 @@
       "legendTag": "Etiket",
       "legendTagConnection": "Etiket bağlantısı",
       "connected": "Bağlı",
-      "disconnected": "Bağlantı kesildi"
+      "disconnected": "Bağlantı kesildi",
+      "chatDetails": "Sohbet ayrıntıları",
+      "chatLearnedHere": "Ajanın bu sohbette öğrendikleri",
+      "chatMemoriesCount": "Anılar",
+      "chatShowInSearch": "Bu anıları aramada göster",
+      "chatDeleteButton": "Sohbet anılarını sil",
+      "chatDeleteBody": "Ajanın bu sohbette öğrendiği her şeyi kalıcı olarak kaldırır. Sohbetin kendisi kalır.",
+      "chatDeleteConfirm": "Sil",
+      "chatDeleteCancel": "İptal",
+      "chatDeleting": "Siliniyor…",
+      "chatClose": "Kapat"
     },
     "userIdentity": {
       "title": "Kullanıcı kimliği",

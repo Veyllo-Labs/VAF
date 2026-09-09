@@ -13,6 +13,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **Undo and redo in every editor.** The document editor (the DOCX path and the HTML
+  path), the code viewer and the custom tool editor have Undo and Redo buttons, and answer
+  Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z (Cmd on a Mac) while the keyboard is inside them. The
+  DOCX editor keeps its own history over the document model: a paragraph edit is one step
+  per leaving the box (while the box is focused, the browser's own undo over the keystrokes
+  applies first), a formatting change or an added or deleted block is one step each, typing
+  into a table cell or the font name coalesces into one step, and an agent's edit of the
+  open document can be taken back too. The HTML editor and the two Monaco editors drive
+  the browser's or Monaco's own history, so the buttons do exactly what the shortcuts do.
 - **Answer WhatsApp chats yourself, with a Composer.** In the WhatsApp window, a chat the
   agent does not answer (a sender nobody allowed, or the whole channel with inbound to
   the agent switched off) now has a compose box under the conversation: what you type is
@@ -240,6 +249,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Saving from the HTML document editor could miss what was typed.** The effect that
+  writes the sheet removed the body's input listener on every content change and, when
+  the change came from the sheet itself, returned without attaching it again. From the
+  second keystroke on, nothing typed reached the state that Save, Download and the agent
+  context read, until a toolbar button re-read the sheet. The listeners are now attached
+  on every run, so typing, and the browser's undo and redo, are captured continuously.
 - **The WhatsApp compose fields no longer show a scrollbar.** The compose box under the
   conversation and the Composer's instruction field were sized two pixels short of their
   own border, so a single line already overflowed and the browser drew a bar beside it.

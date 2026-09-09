@@ -726,7 +726,11 @@
     "haveANiceDay": "ขอให้เป็นวันที่ดี",
     "logoutConfirm": "ต้องการลงชื่อออกไหม",
     "online": "ออนไลน์",
-    "offline": "ออฟไลน์"
+    "offline": "ออฟไลน์",
+    "undo": "เลิกทำ",
+    "redo": "ทำซ้ำ",
+    "undoWithShortcut": "เลิกทำ (Ctrl+Z)",
+    "redoWithShortcut": "ทำซ้ำ (Ctrl+Y)"
   },
   "settings": {
     "title": "การตั้งค่า",

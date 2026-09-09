@@ -726,7 +726,11 @@
     "haveANiceDay": "祝你今天愉快",
     "logoutConfirm": "确定要退出登录吗？",
     "online": "在线",
-    "offline": "离线"
+    "offline": "离线",
+    "undo": "撤销",
+    "redo": "恢复",
+    "undoWithShortcut": "撤销（Ctrl+Z）",
+    "redoWithShortcut": "恢复（Ctrl+Y）"
   },
   "settings": {
     "title": "设置",

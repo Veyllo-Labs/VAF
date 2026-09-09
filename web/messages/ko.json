@@ -726,7 +726,11 @@
     "haveANiceDay": "좋은 하루 보내세요",
     "logoutConfirm": "로그아웃할까요?",
     "online": "온라인",
-    "offline": "오프라인"
+    "offline": "오프라인",
+    "undo": "실행 취소",
+    "redo": "다시 실행",
+    "undoWithShortcut": "실행 취소 (Ctrl+Z)",
+    "redoWithShortcut": "다시 실행 (Ctrl+Y)"
   },
   "settings": {
     "title": "설정",

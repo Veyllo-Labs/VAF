@@ -27,7 +27,9 @@
 
 import dynamic from 'next/dynamic';
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, ChevronDown, ChevronUp, Loader2, Save, Trash2, Users, X } from 'lucide-react';
+import { useTranslations } from 'next-intl';
+import { AlertCircle, ChevronDown, ChevronUp, Loader2, Redo2, Save, Trash2, Undo2, Users, X } from 'lucide-react';
+import type { editor as monacoEditor } from 'monaco-editor';
 
 import UserVisibilityPicker from './UserVisibilityPicker';
 
@@ -166,6 +168,18 @@ export default function CustomToolEditor({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showSharePanel, setShowSharePanel]       = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const editorRef = useRef<monacoEditor.IStandaloneCodeEditor | null>(null);
+  // What Monaco's own history can still take back; refreshed on every content change.
+  const [history, setHistory] = useState({ canUndo: false, canRedo: false });
+  const tc = useTranslations('common');
+  // Undo / Redo trigger Monaco's own commands, so a click does exactly what Ctrl+Z and
+  // Ctrl+Y do inside the editor; focus goes back so the next keystroke lands in the code.
+  const runHistory = (action: 'undo' | 'redo') => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.trigger('toolbar', action, null);
+    editor.focus();
+  };
 
   // Focus the name field on mount in create mode
   useEffect(() => {
@@ -278,6 +292,30 @@ export default function CustomToolEditor({
               </datalist>
             </div>
 
+            {/* Undo / Redo over Monaco's history, in the same place the file viewer has them */}
+            <div className="flex items-center justify-end gap-1 px-2 py-1 border-b border-white/10 shrink-0">
+              <button
+                type="button"
+                onClick={() => runHistory('undo')}
+                disabled={!history.canUndo}
+                className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
+                title={tc('undoWithShortcut')}
+                aria-label={tc('undo')}
+              >
+                <Undo2 size={15} />
+              </button>
+              <button
+                type="button"
+                onClick={() => runHistory('redo')}
+                disabled={!history.canRedo}
+                className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
+                title={tc('redoWithShortcut')}
+                aria-label={tc('redo')}
+              >
+                <Redo2 size={15} />
+              </button>
+            </div>
+
             {/* Monaco code editor */}
             <div className="flex-1 overflow-hidden">
               <MonacoEditor
@@ -286,6 +324,15 @@ export default function CustomToolEditor({
                 theme="vs-dark"
                 value={code}
                 onChange={v => setCode(v ?? '')}
+                onMount={(editor) => {
+                  editorRef.current = editor;
+                  const syncHistory = () => {
+                    const model = editor.getModel();
+                    setHistory({ canUndo: !!model?.canUndo(), canRedo: !!model?.canRedo() });
+                  };
+                  syncHistory();
+                  editor.onDidChangeModelContent(syncHistory);
+                }}
                 options={{
                   fontSize: 13,
                   minimap: { enabled: false },

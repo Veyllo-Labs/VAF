@@ -726,7 +726,11 @@
     "haveANiceDay": "良い一日を",
     "logoutConfirm": "ログアウトしますか？",
     "online": "オンライン",
-    "offline": "オフライン"
+    "offline": "オフライン",
+    "undo": "元に戻す",
+    "redo": "やり直し",
+    "undoWithShortcut": "元に戻す（Ctrl+Z）",
+    "redoWithShortcut": "やり直し（Ctrl+Y）"
   },
   "settings": {
     "title": "設定",

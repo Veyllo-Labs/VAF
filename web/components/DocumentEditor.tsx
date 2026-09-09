@@ -5,7 +5,8 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import { X, Download, FileText, Save, Loader2, CheckCircle2, Circle, Plus, Trash2, ChevronDown, Bold, Italic, Underline, List, ListOrdered, AlignLeft, AlignCenter, AlignRight, Highlighter, Eraser, Printer } from 'lucide-react';
+import { useTranslations } from 'next-intl';
+import { X, Download, FileText, Save, Loader2, CheckCircle2, Circle, Plus, Trash2, ChevronDown, Bold, Italic, Underline, List, ListOrdered, AlignLeft, AlignCenter, AlignRight, Highlighter, Eraser, Printer, Undo2, Redo2 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import { downloadText } from '@/lib/download';
 import { CHIP_BG_CLASSES, INSERTION_COLOR_CLASSES } from '@/components/DocumentViewer';
@@ -338,6 +339,7 @@ function LegacyDocumentEditor({
     insertedSelectionsCount = 0,
     insertedSelections = [],
 }: DocumentEditorProps) {
+    const tc = useTranslations('common');
     const [content, setContent] = useState<string>(initialContent);
     /**
      * Sync from parent when content is pushed from outside (e.g. agent replace_editor_selection).
@@ -366,6 +368,9 @@ function LegacyDocumentEditor({
         justifyLeft: boolean;
         justifyCenter: boolean;
         justifyRight: boolean;
+        /** What the browser's own history of the editable body can still take back. */
+        canUndo: boolean;
+        canRedo: boolean;
     }>({
         fontName: 'Arial',
         fontSize: '3',
@@ -376,6 +381,8 @@ function LegacyDocumentEditor({
         justifyLeft: true,
         justifyCenter: false,
         justifyRight: false,
+        canUndo: false,
+        canRedo: false,
     });
     const iframeRef = useRef<HTMLIFrameElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -517,6 +524,8 @@ function LegacyDocumentEditor({
             justifyLeft: doc.queryCommandState('justifyLeft'),
             justifyCenter: doc.queryCommandState('justifyCenter'),
             justifyRight: doc.queryCommandState('justifyRight'),
+            canUndo: doc.queryCommandEnabled('undo'),
+            canRedo: doc.queryCommandEnabled('redo'),
         });
     }, []);
 
@@ -525,28 +534,35 @@ function LegacyDocumentEditor({
         if (!iframeRef.current || !content) return;
         const doc = iframeRef.current.contentDocument;
         if (!doc) return;
-        if (contentFromIframeRef.current) {
-            contentFromIframeRef.current = false;
-            return;
-        }
-        const { bodyInner, headInjectHtml } = extractEditorBodyAndHeadStyles(content);
-        doc.open();
-        doc.write(
-            `<!DOCTYPE html><html><head><meta charset="utf-8"/>${headInjectHtml}</head><body></body></html>`
-        );
-        doc.close();
-        // The body itself IS the continuous, editable A4-width sheet — no JS pagination.
-        doc.body.innerHTML = bodyInner;
-        ensureA4EditorStyles(doc);
-        doc.body.contentEditable = 'true';
-        doc.body.style.outline = 'none';
-
-        // Size the iframe to the content once layout settles (and after webfonts/images),
-        // so the outer panel scrolls through the one long sheet.
         const sizeIframe = () => resizeEditorIframe(iframeRef.current);
-        requestAnimationFrame(() => requestAnimationFrame(sizeIframe));
-        const lateTimers = [120, 400, 800, 1500].map((ms) => window.setTimeout(sizeIframe, ms));
-        try { doc.fonts?.ready?.then(sizeIframe).catch(() => { /* ignore */ }); } catch { /* ignore */ }
+        // Whether this run may skip the rewrite is decided once, here, and the flag is
+        // consumed either way. The listeners further down are attached on EVERY run,
+        // because the cleanup of the previous run has already removed them: a run that only
+        // consumed the flag and returned left the body without its input listener after the
+        // first keystroke, so nothing typed after it reached the state that Save and the
+        // agent read, and the browser's own undo went unnoticed by it as well.
+        const contentFromIframe = contentFromIframeRef.current;
+        contentFromIframeRef.current = false;
+        let lateTimers: number[] = [];
+        if (!contentFromIframe) {
+            const { bodyInner, headInjectHtml } = extractEditorBodyAndHeadStyles(content);
+            doc.open();
+            doc.write(
+                `<!DOCTYPE html><html><head><meta charset="utf-8"/>${headInjectHtml}</head><body></body></html>`
+            );
+            doc.close();
+            // The body itself IS the continuous, editable A4-width sheet, no JS pagination.
+            doc.body.innerHTML = bodyInner;
+            ensureA4EditorStyles(doc);
+            doc.body.contentEditable = 'true';
+            doc.body.style.outline = 'none';
+
+            // Size the iframe to the content once layout settles (and after webfonts/images),
+            // so the outer panel scrolls through the one long sheet.
+            requestAnimationFrame(() => requestAnimationFrame(sizeIframe));
+            lateTimers = [120, 400, 800, 1500].map((ms) => window.setTimeout(sizeIframe, ms));
+            try { doc.fonts?.ready?.then(sizeIframe).catch(() => { /* ignore */ }); } catch { /* ignore */ }
+        }
 
         const focusBodyOnMouseDown = (e: MouseEvent) => {
             if (doc.body.contains(e.target as Node)) doc.body.focus();
@@ -554,10 +570,13 @@ function LegacyDocumentEditor({
         doc.body.addEventListener('mousedown', focusBodyOnMouseDown);
         const captureContent = () => {
             contentFromIframeRef.current = true;
-            const html = doc.body.innerHTML;   // body IS the flow — no decorations to strip
+            const html = doc.body.innerHTML;   // body IS the flow, no decorations to strip
             setContent(html);
             onContentChangeRef.current?.(html);
             sizeIframe();
+            // Typing, and the browser's own undo and redo (they arrive here as input events
+            // too), change what the history can still take back; the toolbar reads that.
+            setTimeout(() => updateSelectionFormat(), 0);
         };
         doc.body.addEventListener('input', captureContent);
         const handleMouseUp = () => {
@@ -842,6 +861,12 @@ function LegacyDocumentEditor({
             className="flex flex-wrap items-center gap-0.5 border-b border-gray-200 bg-gray-50 px-2 py-1 shrink-0"
             onMouseDown={saveSelectionFromIframe}
         >
+            {/* Undo / Redo are the browser's history of the editable body, driven through the
+                same execCommand lane as the formatting; Ctrl+Z / Ctrl+Y inside the sheet do
+                the same. Greyed out from queryCommandEnabled, refreshed on every input. */}
+            <button type="button" onClick={() => execEditorCommand('undo')} disabled={!selectionFormat.canUndo} className="p-1.5 rounded hover:bg-gray-200 disabled:opacity-40 disabled:hover:bg-transparent" title={tc('undoWithShortcut')} aria-label={tc('undo')}><Undo2 size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('redo')} disabled={!selectionFormat.canRedo} className="p-1.5 rounded hover:bg-gray-200 disabled:opacity-40 disabled:hover:bg-transparent" title={tc('redoWithShortcut')} aria-label={tc('redo')}><Redo2 size={16} /></button>
+            <span className="w-px h-5 bg-gray-300 mx-0.5" />
             <button type="button" onClick={() => execEditorCommand('bold')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.bold && "bg-gray-300")} title="Bold"><Bold size={16} /></button>
             <button type="button" onClick={() => execEditorCommand('italic')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.italic && "bg-gray-300")} title="Italic"><Italic size={16} /></button>
             <button type="button" onClick={() => execEditorCommand('underline')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.underline && "bg-gray-300")} title="Underline"><Underline size={16} /></button>

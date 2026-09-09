@@ -726,7 +726,11 @@
     "haveANiceDay": "İyi günler",
     "logoutConfirm": "Çıkış yapmak istediğine emin misin?",
     "online": "Çevrimiçi",
-    "offline": "Çevrimdışı"
+    "offline": "Çevrimdışı",
+    "undo": "Geri al",
+    "redo": "Yinele",
+    "undoWithShortcut": "Geri al (Ctrl+Z)",
+    "redoWithShortcut": "Yinele (Ctrl+Y)"
   },
   "settings": {
     "title": "Ayarlar",

@@ -726,7 +726,11 @@
     "haveANiceDay": "Have a nice day",
     "logoutConfirm": "Are you sure you want to log out?",
     "online": "Online",
-    "offline": "Offline"
+    "offline": "Offline",
+    "undo": "Undo",
+    "redo": "Redo",
+    "undoWithShortcut": "Undo (Ctrl+Z)",
+    "redoWithShortcut": "Redo (Ctrl+Y)"
   },
   "settings": {
     "title": "Settings",

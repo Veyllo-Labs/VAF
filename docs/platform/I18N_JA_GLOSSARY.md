@@ -57,6 +57,7 @@ enforce. `ユーザ`, `サーバ`, `コンピュータ`, `フォルダ`, `ブラ
 | working memory | 短期記憶 | Neither this nor ワーキングメモリ is attested in any shipped Japanese UI. 短期記憶 is the readable contrast to 長期記憶. |
 | latency | 応答時間 | The glossary's 待機時間 means waiting time, which is not what a measured search latency is. |
 | container | コンテナー | See the long-vowel policy above. |
+| undo / redo (the editors) | 元に戻す / やり直し | The mail window's undo of a queued send stays 取り消し: that withdraws an action. The editors step back through edits, and 元に戻す / やり直し is the pair a Japanese user has on every Office and VS Code toolbar. One English word, two renderings, on purpose. |
 
 ## Style rules
 

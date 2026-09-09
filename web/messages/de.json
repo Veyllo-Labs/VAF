@@ -726,7 +726,11 @@
     "haveANiceDay": "Einen schönen Tag noch",
     "logoutConfirm": "Möchtest du dich wirklich abmelden?",
     "online": "Online",
-    "offline": "Offline"
+    "offline": "Offline",
+    "undo": "Rückgängig",
+    "redo": "Wiederholen",
+    "undoWithShortcut": "Rückgängig (Strg+Z)",
+    "redoWithShortcut": "Wiederholen (Strg+Y)"
   },
   "settings": {
     "title": "Einstellungen",

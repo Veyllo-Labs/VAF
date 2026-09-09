@@ -7,6 +7,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { useTranslations } from 'next-intl';
+import type { editor as monacoEditor } from 'monaco-editor';
 
 // Monaco is heavy — load it only on client side
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
@@ -118,7 +120,10 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
   const [mdPreview, setMdPreview] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
-  const editorRef = useRef<unknown>(null);
+  const editorRef = useRef<monacoEditor.IStandaloneCodeEditor | null>(null);
+  // What Monaco's own history can still take back; refreshed on every content change.
+  const [history, setHistory] = useState({ canUndo: false, canRedo: false });
+  const tc = useTranslations('common');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const language = detectLanguage(filePath);
   const isMarkdown = language === 'markdown';
@@ -202,6 +207,17 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
     return () => window.removeEventListener('keydown', onKey);
   }, [isOpen, handleSave, onClose]);
 
+  // Undo / Redo trigger Monaco's own commands, so a click does exactly what Ctrl+Z and
+  // Ctrl+Y do inside the editor; focus goes back so the next keystroke lands in the text.
+  const runHistory = (action: 'undo' | 'redo') => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.trigger('toolbar', action, null);
+    editor.focus();
+  };
+  // No editor is mounted while a Markdown file shows its rendered preview.
+  const editorShown = !(isMarkdown && mdPreview);
+
   if (!isOpen) return null;
 
   return (
@@ -248,6 +264,30 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
             )}
             {mdPreview ? 'Source' : 'Preview'}
           </button>
+        )}
+
+        {/* Undo / Redo (hidden with the editor in the Markdown preview) */}
+        {editorShown && (
+          <>
+            <button
+              onClick={() => runHistory('undo')}
+              disabled={!history.canUndo}
+              className="p-1 rounded hover:bg-[#3e3e3e] text-[#9ca3af] hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[#9ca3af] transition-colors shrink-0"
+              title={tc('undoWithShortcut')}
+              aria-label={tc('undo')}
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/></svg>
+            </button>
+            <button
+              onClick={() => runHistory('redo')}
+              disabled={!history.canRedo}
+              className="p-1 rounded hover:bg-[#3e3e3e] text-[#9ca3af] hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[#9ca3af] transition-colors shrink-0"
+              title={tc('redoWithShortcut')}
+              aria-label={tc('redo')}
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13"/></svg>
+            </button>
+          </>
         )}
 
         {/* Save button */}
@@ -324,7 +364,15 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
               setIsDirty(true);
               setSavedAt(null);
             }}
-            onMount={(editor) => { editorRef.current = editor; }}
+            onMount={(editor) => {
+              editorRef.current = editor;
+              const syncHistory = () => {
+                const model = editor.getModel();
+                setHistory({ canUndo: !!model?.canUndo(), canRedo: !!model?.canRedo() });
+              };
+              syncHistory();
+              editor.onDidChangeModelContent(syncHistory);
+            }}
             options={{
               fontSize: 13,
               fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",

@@ -3,13 +3,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlignCenter, AlignLeft, AlignRight, Bold, ChevronDown, ChevronUp, Download, FileText,
-  Italic, List, ListOrdered, Loader2, MessageSquare, Plus, Printer, Save, Trash2, Type, Underline, X,
+  Italic, List, ListOrdered, Loader2, MessageSquare, Plus, Printer, Redo2, Save, Trash2, Type, Underline, Undo2, X,
 } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 
 import { cn, getApiBase } from '@/lib/utils';
+import {
+  EditHistory, canRedo, canUndo, createEditHistory, historyShortcut, recordStep, redoStep, undoStep,
+} from '@/lib/editHistory';
 import {
   NativeDocxBlock,
   NativeDocxDocument,
@@ -639,10 +643,13 @@ function splitBlocksIntoPages(
   return filtered.length > 0 ? filtered : [[]];
 }
 
+// `blockId` / `paragraphId` remember WHICH block was selected, not only where it sat: an
+// undo, a redo or an agent edit can remove or replace the block at that index, and the
+// selection is then dropped instead of silently moving onto whatever sits there now.
 type SelectedBlock =
-  | { kind: 'block'; sectionIndex: number; blockIndex: number; renderKey?: string; sliceIndex?: number | null }
-  | { kind: 'header'; sectionIndex: number; paragraphIndex: number }
-  | { kind: 'footer'; sectionIndex: number; paragraphIndex: number }
+  | { kind: 'block'; sectionIndex: number; blockIndex: number; renderKey?: string; sliceIndex?: number | null; blockId?: string }
+  | { kind: 'header'; sectionIndex: number; paragraphIndex: number; paragraphId?: string }
+  | { kind: 'footer'; sectionIndex: number; paragraphIndex: number; paragraphId?: string }
   | null;
 
 function normalizeFontSize(value: string): number {
@@ -730,7 +737,22 @@ export default function NativeDocxEditor({
   initialModel = null, onModelChange, onContentChange, onInsertSelection,
   insertedSelections = [],
 }: NativeDocxEditorProps) {
-  const [documentModel, setDocumentModel] = useState<NativeDocxDocument | null>(initialModel);
+  const tc = useTranslations('common');
+  // The model and its undo history change together: an edit records the model it
+  // replaces, undo and redo move between the recorded snapshots. One state object keeps
+  // the pair consistent under functional updates. Snapshots are held by reference, which
+  // is safe because every edit clones before it mutates (see updateDocument).
+  const [editState, setEditState] = useState<{ model: NativeDocxDocument | null; history: EditHistory<NativeDocxDocument> }>(
+    () => ({ model: initialModel, history: createEditHistory<NativeDocxDocument>() })
+  );
+  const documentModel = editState.model;
+  // Replaces the model with one that is not an edit of the user's own: the server load,
+  // the empty fallback, or a model the parent hands in (an agent edit). Replacing an
+  // existing model is still one step, so an agent's rewrite can be taken back like any
+  // other change; the first model of the session has nothing to go back to.
+  const adoptModel = useCallback((model: NativeDocxDocument) => {
+    setEditState((s) => s.model === model ? s : { model, history: s.model ? recordStep(s.history, s.model) : s.history });
+  }, []);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
@@ -749,9 +771,9 @@ export default function NativeDocxEditor({
   // Accept model from parent ONLY when it is genuinely new (not an echo of our own edit)
   useEffect(() => {
     if (initialModel && initialModel !== lastSentModelRef.current) {
-      setDocumentModel(initialModel);
+      adoptModel(initialModel);
     }
-  }, [initialModel]);
+  }, [initialModel, adoptModel]);
 
   // Notify parent when our model changes and track the reference so we can ignore the echo
   useEffect(() => {
@@ -771,13 +793,13 @@ export default function NativeDocxEditor({
         const res = await fetch(`${getApiBase()}/api/file/docx-model?path=${encodeURIComponent(filePath.replace(/\\/g, '/'))}`);
         const payload = await res.json();
         if (!res.ok) throw new Error(payload?.detail || 'Failed to load DOCX model');
-        if (!cancelled) setDocumentModel(payload as NativeDocxDocument);
+        if (!cancelled) adoptModel(payload as NativeDocxDocument);
       } catch (e) {
-        if (!cancelled) { setError(e instanceof Error ? e.message : 'Load failed'); setDocumentModel(createEmptyNativeDocx(filePath, title)); }
+        if (!cancelled) { setError(e instanceof Error ? e.message : 'Load failed'); adoptModel(createEmptyNativeDocx(filePath, title)); }
       } finally { if (!cancelled) setIsLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, [documentModel, filePath, title]);
+  }, [documentModel, filePath, title, adoptModel]);
 
   const blockRanges = useMemo(() => (documentModel ? collectBlockRanges(documentModel) : []), [documentModel]);
 
@@ -844,8 +866,43 @@ export default function NativeDocxEditor({
       .map(({ idx }) => idx);
   };
 
-  const updateDocument = (updater: (d: NativeDocxDocument) => NativeDocxDocument) => {
-    setDocumentModel((c) => updater(c ? cloneNativeDocx(c) : createEmptyNativeDocx(filePath, title)));
+  // Every edit of the user's own goes through here. `coalesceKey` names a field that writes
+  // through on each keystroke (a table cell, the font name), so a burst of typing into it
+  // becomes one undo step instead of one per letter.
+  const updateDocument = (updater: (d: NativeDocxDocument) => NativeDocxDocument, coalesceKey?: string) => {
+    setEditState((s) => {
+      const next = updater(s.model ? cloneNativeDocx(s.model) : createEmptyNativeDocx(filePath, title));
+      return { model: next, history: s.model ? recordStep(s.history, s.model, coalesceKey) : s.history };
+    });
+  };
+
+  const rootRef = useRef<HTMLDivElement>(null);
+  const stepHistory = (direction: 'undo' | 'redo') => {
+    // A focused field inside the editor gives up focus first. The paragraph box commits
+    // its draft on blur (a clean draft commits nothing), and its draft sync is paused
+    // while it is focused, so a step landing in a focused box would not be shown. Focus
+    // then rests on the editor root so the next shortcut still reaches it.
+    const active = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null;
+    if (active && active !== rootRef.current && rootRef.current?.contains(active)) active.blur();
+    setEditState((s) => {
+      if (!s.model) return s;
+      const step = direction === 'undo' ? undoStep(s.history, s.model) : redoStep(s.history, s.model);
+      return step ? { model: step.value, history: step.history } : s;
+    });
+    rootRef.current?.focus({ preventScroll: true });
+  };
+  const onRootKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const action = historyShortcut(e);
+    if (!action) return;
+    e.preventDefault();
+    stepHistory(action);
+  };
+  // A click that lands on nothing focusable (a page, a block) would leave the keyboard on
+  // the document body, out of reach of the handler above. The root is focusable for this.
+  const keepKeyboardInEditor = () => {
+    if (typeof document === 'undefined') return;
+    const active = document.activeElement;
+    if (!active || active === document.body) rootRef.current?.focus({ preventScroll: true });
   };
 
   const saveDocument = async () => {
@@ -961,7 +1018,30 @@ export default function NativeDocxEditor({
     return documentModel.sections[selectedBlock.sectionIndex]?.blocks[selectedBlock.blockIndex] ?? null;
   }, [documentModel, selectedBlock]);
 
-  const updateSelectedParagraph = (updater: (p: NativeDocxParagraph) => NativeDocxParagraph) => {
+  // The selection names a block by id (see SelectedBlock). After an undo, a redo or an
+  // agent edit the block at that index may be a different one or gone: then the selection
+  // is dropped. A paragraph slice that no longer exists (the text got shorter) falls back
+  // to the block's first rendered slice, so the block itself stays selected.
+  useEffect(() => {
+    if (!documentModel || !selectedBlock) return;
+    const section = documentModel.sections[selectedBlock.sectionIndex];
+    if (selectedBlock.kind !== 'block') {
+      const paragraphs = selectedBlock.kind === 'header' ? section?.header.paragraphs : section?.footer.paragraphs;
+      const id = paragraphs?.[selectedBlock.paragraphIndex]?.id;
+      if (!id || (selectedBlock.paragraphId && id !== selectedBlock.paragraphId)) setSelectedBlock(null);
+      return;
+    }
+    const id = section?.blocks[selectedBlock.blockIndex]?.id;
+    if (!id || (selectedBlock.blockId && id !== selectedBlock.blockId)) { setSelectedBlock(null); return; }
+    if (!selectedBlock.renderKey || allPages.some((page) => page.blocks.some((b) => b.key === selectedBlock.renderKey))) return;
+    for (const page of allPages) {
+      if (page.sectionIndex !== selectedBlock.sectionIndex) continue;
+      const first = page.blocks.find((b) => b.originalIndex === selectedBlock.blockIndex);
+      if (first) { setSelectedBlock({ ...selectedBlock, renderKey: first.key, sliceIndex: first.sliceIndex }); return; }
+    }
+  }, [documentModel, allPages, selectedBlock]);
+
+  const updateSelectedParagraph = (updater: (p: NativeDocxParagraph) => NativeDocxParagraph, coalesceKey?: string) => {
     if (!selectedBlock) return;
     updateDocument((d) => {
       if (selectedBlock.kind === 'header') d.sections[selectedBlock.sectionIndex].header.paragraphs[selectedBlock.paragraphIndex] = updater(ensureParagraphHasRun(d.sections[selectedBlock.sectionIndex].header.paragraphs[selectedBlock.paragraphIndex]));
@@ -1006,15 +1086,15 @@ export default function NativeDocxEditor({
         }
       }
       return d;
-    });
+    }, coalesceKey);
   };
 
   // ── Global toolbar formatting: act on the currently selected paragraph (run[0] +
   //    paragraph props), so all controls live in the top toolbar like Word / the A4 editor. ──
   const selPara = selectedParagraph ? ensureParagraphHasRun(selectedParagraph) : null;
   const selRun = selPara?.runs[0] ?? null;
-  const setSelRun = (u: (r: NativeDocxRun) => NativeDocxRun) =>
-    updateSelectedParagraph((p) => { const s = ensureParagraphHasRun(p); return { ...s, runs: s.runs.map((r, i) => i === 0 ? u({ ...r }) : { ...r }) }; });
+  const setSelRun = (u: (r: NativeDocxRun) => NativeDocxRun, coalesceKey?: string) =>
+    updateSelectedParagraph((p) => { const s = ensureParagraphHasRun(p); return { ...s, runs: s.runs.map((r, i) => i === 0 ? u({ ...r }) : { ...r }) }; }, coalesceKey);
   const setSelPara = (patch: Partial<NativeDocxParagraph>) =>
     updateSelectedParagraph((p) => ({ ...ensureParagraphHasRun(p), ...patch }));
 
@@ -1077,7 +1157,13 @@ export default function NativeDocxEditor({
   }
 
   return (
-    <div className={cn('flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-[#F9FAFB] transition-all duration-300 ease-out', isOpen ? 'translate-x-0 opacity-100' : 'translate-x-8 opacity-0 pointer-events-none')}>
+    <div
+      ref={rootRef}
+      tabIndex={-1}
+      onKeyDown={onRootKeyDown}
+      onClickCapture={keepKeyboardInEditor}
+      className={cn('flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-[#F9FAFB] outline-none transition-all duration-300 ease-out', isOpen ? 'translate-x-0 opacity-100' : 'translate-x-8 opacity-0 pointer-events-none')}
+    >
       {/* Header — matches the A4 editor: icon box + filename + status dot */}
       <div className="flex h-12 items-center justify-between border-b border-gray-200 bg-white px-4 shrink-0">
         <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -1102,6 +1188,9 @@ export default function NativeDocxEditor({
       {/* Toolbar — global formatting (applies to the selected paragraph) + actions, all at
           the top like Word / the A4 editor. Click a paragraph to select it, then format here. */}
       <div className="flex flex-wrap items-center gap-0.5 border-b border-gray-200 bg-gray-50 px-2 py-1 shrink-0">
+        <button type="button" onClick={() => stepHistory('undo')} disabled={!canUndo(editState.history)} className="rounded border border-gray-200 bg-white p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-white" title={tc('undoWithShortcut')} aria-label={tc('undo')}><Undo2 size={16} /></button>
+        <button type="button" onClick={() => stepHistory('redo')} disabled={!canRedo(editState.history)} className="rounded border border-gray-200 bg-white p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-white" title={tc('redoWithShortcut')} aria-label={tc('redo')}><Redo2 size={16} /></button>
+        <Sep />
         <ToggleBtn active={!!selRun?.bold} disabled={!selectedParagraph} onClick={() => setSelRun((r) => ({ ...r, bold: !r.bold }))} title="Bold"><Bold size={16} /></ToggleBtn>
         <ToggleBtn active={!!selRun?.italic} disabled={!selectedParagraph} onClick={() => setSelRun((r) => ({ ...r, italic: !r.italic }))} title="Italic"><Italic size={16} /></ToggleBtn>
         <ToggleBtn active={!!selRun?.underline} disabled={!selectedParagraph} onClick={() => setSelRun((r) => ({ ...r, underline: !r.underline }))} title="Underline"><Underline size={16} /></ToggleBtn>
@@ -1123,7 +1212,7 @@ export default function NativeDocxEditor({
         <select value={String(selRun?.font_size_pt ?? 11)} disabled={!selectedParagraph} onChange={(e) => setSelRun((r) => ({ ...r, font_size_pt: normalizeFontSize(e.target.value) }))} className="h-7 w-14 rounded border border-gray-200 bg-white px-1 text-xs text-gray-700 focus:outline-none disabled:opacity-40" title="Font size">
           {FONT_SIZES.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
-        <input value={selRun?.font_name || 'Arial'} disabled={!selectedParagraph} onChange={(e) => setSelRun((r) => ({ ...r, font_name: e.target.value }))} className="h-7 w-24 rounded border border-gray-200 bg-white px-1.5 text-xs text-gray-700 focus:outline-none disabled:opacity-40" placeholder="Font" title="Font family" />
+        <input value={selRun?.font_name || 'Arial'} disabled={!selectedParagraph} onChange={(e) => setSelRun((r) => ({ ...r, font_name: e.target.value }), 'font-name')} className="h-7 w-24 rounded border border-gray-200 bg-white px-1.5 text-xs text-gray-700 focus:outline-none disabled:opacity-40" placeholder="Font" title="Font family" />
         <Sep />
         <button type="button" disabled={!selectedBlock || selectedBlock.kind !== 'block'} onClick={deleteSelectedBlock} className="rounded border border-gray-200 bg-white p-1.5 text-red-600 hover:bg-red-50 disabled:opacity-40 disabled:hover:bg-white" title="Delete block"><Trash2 size={16} /></button>
         {onInsertSelection && <button type="button" disabled={!selectedParagraph} onClick={insertSelectedBlockIntoChat} className="rounded border border-gray-200 bg-white p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-white" title="To chat"><MessageSquare size={16} /></button>}
@@ -1196,7 +1285,7 @@ export default function NativeDocxEditor({
                     {section.header.paragraphs.map((p, pi) => {
                       const selected = isBlockSelected('header', si, pi);
                       return (
-                      <InlineEditableBlock key={p.id} selected={selected} markIndices={getMarkIndices('header', si, -1, pi)} onSelect={() => setSelectedBlock({ kind: 'header', sectionIndex: si, paragraphIndex: pi })}>
+                      <InlineEditableBlock key={p.id} selected={selected} markIndices={getMarkIndices('header', si, -1, pi)} onSelect={() => setSelectedBlock({ kind: 'header', sectionIndex: si, paragraphIndex: pi, paragraphId: p.id })}>
                         <DocxBlockPreview
                           block={selected && selectedParagraph ? selectedParagraph : p}
                           editableParagraph={selected ? selectedParagraph : null}
@@ -1213,17 +1302,17 @@ export default function NativeDocxEditor({
                     const sel = isBlockSelected('block', si, bi, key);
                     const marks = getMarkIndices('body', si, bi, null);
                     return (
-                      <InlineEditableBlock key={key} selected={sel} markIndices={marks} onSelect={() => setSelectedBlock({ kind: 'block', sectionIndex: si, blockIndex: bi, renderKey: key, sliceIndex })}>
+                      <InlineEditableBlock key={key} selected={sel} markIndices={marks} onSelect={() => setSelectedBlock({ kind: 'block', sectionIndex: si, blockIndex: bi, renderKey: key, sliceIndex, blockId: block.id })}>
                         <DocxBlockPreview
                           block={sel && selectedParagraph ? selectedParagraph : block}
                           editableParagraph={sel ? selectedParagraph : null}
                           onParagraphChange={sel ? (np) => updateSelectedParagraph(() => np) : undefined}
                         />
                         {sel && block.type === 'table' && selectedBlockValue?.type === 'table' && (
-                          <InlineTableEditor table={selectedBlockValue} onChange={(t) => updateDocument((d) => { d.sections[si].blocks[bi] = t; return d; })} onDelete={deleteSelectedBlock} onInsertToChat={onInsertSelection ? insertSelectedBlockIntoChat : undefined} />
+                          <InlineTableEditor table={selectedBlockValue} onChange={(t, cell) => updateDocument((d) => { d.sections[si].blocks[bi] = t; return d; }, cell ? `table-cell:${si}:${bi}:${cell}` : undefined)} onDelete={deleteSelectedBlock} onInsertToChat={onInsertSelection ? insertSelectedBlockIntoChat : undefined} />
                         )}
                         {sel && block.type === 'image' && selectedBlockValue?.type === 'image' && (
-                          <InlineImageEditor image={selectedBlockValue} onChange={(img) => updateDocument((d) => { d.sections[si].blocks[bi] = img; return d; })} onDelete={deleteSelectedBlock} onInsertToChat={onInsertSelection ? insertSelectedBlockIntoChat : undefined} />
+                          <InlineImageEditor image={selectedBlockValue} onChange={(img) => updateDocument((d) => { d.sections[si].blocks[bi] = img; return d; }, `image-alt:${si}:${bi}`)} onDelete={deleteSelectedBlock} onInsertToChat={onInsertSelection ? insertSelectedBlockIntoChat : undefined} />
                         )}
                         {sel && block.type === 'unsupported' && (
                           <div data-export-ignore="true" className="mt-2 flex items-center gap-2">
@@ -1242,7 +1331,7 @@ export default function NativeDocxEditor({
                     {section.footer.paragraphs.map((p, pi) => {
                       const selected = isBlockSelected('footer', si, pi);
                       return (
-                      <InlineEditableBlock key={p.id} selected={selected} markIndices={getMarkIndices('footer', si, -2, pi)} onSelect={() => setSelectedBlock({ kind: 'footer', sectionIndex: si, paragraphIndex: pi })}>
+                      <InlineEditableBlock key={p.id} selected={selected} markIndices={getMarkIndices('footer', si, -2, pi)} onSelect={() => setSelectedBlock({ kind: 'footer', sectionIndex: si, paragraphIndex: pi, paragraphId: p.id })}>
                         <DocxBlockPreview
                           block={selected && selectedParagraph ? selectedParagraph : p}
                           editableParagraph={selected ? selectedParagraph : null}
@@ -1298,10 +1387,11 @@ function InlineEditableBlock({ children, selected, onSelect, markIndices = [] }:
 
 
 function InlineTableEditor({ table, onChange, onDelete, onInsertToChat }: {
-  table: NativeDocxTable; onChange: (t: NativeDocxTable) => void; onDelete?: () => void; onInsertToChat?: () => void;
+  // `onChange` names the edited cell so consecutive keystrokes into it coalesce into one undo step.
+  table: NativeDocxTable; onChange: (t: NativeDocxTable, cellKey?: string) => void; onDelete?: () => void; onInsertToChat?: () => void;
 }) {
   const updateCell = (ri: number, ci: number, val: string) => {
-    onChange({ ...table, rows: table.rows.map((row, rIdx) => rIdx !== ri ? row : { ...row, cells: row.cells.map((cell, cIdx) => cIdx !== ci ? cell : { ...cell, paragraphs: cell.paragraphs.map((p, pIdx) => pIdx !== 0 ? p : { ...p, runs: p.runs.map((r, rI) => rI !== 0 ? r : { ...r, text: val }) }) }) }) });
+    onChange({ ...table, rows: table.rows.map((row, rIdx) => rIdx !== ri ? row : { ...row, cells: row.cells.map((cell, cIdx) => cIdx !== ci ? cell : { ...cell, paragraphs: cell.paragraphs.map((p, pIdx) => pIdx !== 0 ? p : { ...p, runs: p.runs.map((r, rI) => rI !== 0 ? r : { ...r, text: val }) }) }) }) }, `${ri}:${ci}`);
   };
   return (
     <div data-export-ignore="true" className="mt-2 rounded-xl border border-gray-200 bg-white p-3 shadow-lg" onClick={(e) => e.stopPropagation()}>
@@ -1394,6 +1484,12 @@ function DocxBlockPreview({
           value={draftText}
           onClick={(e) => e.stopPropagation()}
           onFocus={() => { isFocusedRef.current = true; }}
+          onKeyDown={(e) => {
+            // While the draft differs from the committed text, undo and redo are the
+            // browser's own over the keystrokes in this box; the editor's history must
+            // not answer the same press. A clean box lets it through to the editor.
+            if (historyShortcut(e) && draftText !== editableRun.text) e.stopPropagation();
+          }}
           onChange={(e) => { setDraftText(e.target.value); autosize(e.currentTarget); }}
           onBlur={() => { isFocusedRef.current = false; commitDraft(); }}
           className="block w-full resize-none overflow-hidden rounded-lg border border-gray-200 bg-white/90 px-0 py-0 text-sm text-gray-900 focus:border-blue-400 focus:outline-none focus:ring-0"

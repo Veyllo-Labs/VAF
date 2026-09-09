@@ -8,6 +8,7 @@ This directory contains utility functions, shared logic, and helper modules used
 - **changelog.ts**: The product changelog data shown in the announcement modal; entries are versioned and ordered newest-first.
 - **cursorStore.ts**: Zustand store for the custom-cursor preference (VAF's dot cursor vs. the system mouse), persisted in `localStorage`.
 - **docxNative.ts**: Type definitions for the native DOCX document model (paragraphs, runs, tables, images, warnings) used by the document editor.
+- **editHistory.ts**: A bounded undo/redo history over immutable snapshots (record, undo, redo, coalescing of typing bursts) plus the shared Ctrl+Z / Ctrl+Y shortcut convention; the native DOCX editor's history is built on it.
 - **languages.ts**: Single source of truth for supported UI locales, plus helpers to validate and resolve a locale from the browser language.
 - **licenses_data.ts**: Static list of third-party dependencies and their licenses, shown in the about/licenses view.
 - **localeStore.ts**: Zustand store for the active UI locale, read from `localStorage` (or browser language) and persisted on change.

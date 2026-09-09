@@ -105,6 +105,7 @@ The native DOCX editor currently supports these concepts directly:
 - DIN A4 page layout with fixed dimensions
 - DOM-based pagination with paragraph flow across pages
 - inline paragraph editing (click-to-edit directly in the page preview)
+- undo and redo over the document model (a bounded snapshot history, see "Undo And Redo")
 
 Unsupported or partially supported OOXML content is not silently discarded in the editor model. Instead, it is represented as a warning or an `unsupported` block so the limitation is visible.
 
@@ -162,6 +163,21 @@ When `NativeDocxEditor` updates its `documentModel` (from user edits or server l
 ### Focus Guard (`isFocusedRef`)
 
 Inside `DocxBlockPreview`, a `useEffect` syncs `draftText` from `editableRun.text`. While the textarea is focused, this sync is suppressed via `isFocusedRef` so that external re-renders cannot overwrite the user's in-progress typing.
+
+## Undo And Redo
+
+The document is a plain model, not a DOM the browser could undo on its own, so the history is the editor's: `web/lib/editHistory.ts` keeps a bounded list of snapshots (200 steps) next to the model in one state object, and every edit records the model it replaces. Undo and Redo are the first two toolbar buttons; Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z (Cmd on a Mac) do the same while the keyboard is inside the editor. The editor root is focusable so that a click on a page or a block does not leave the keyboard on the document body, out of reach of the shortcut.
+
+What is one step:
+
+- A paragraph edit is one step per commit, that is, per leaving the box. While the box is focused and its draft differs from the committed text, Ctrl+Z and Ctrl+Y are the browser's own over the keystrokes in that box (the box stops the event, so the editor's history does not answer the same press); once the draft equals the committed text, the shortcut falls through to the editor's history. This follows from the draft pattern above: the model does not change per keystroke, so it cannot be undone per keystroke.
+- A formatting change, a paragraph style, a font size, an alignment, a list toggle, an added or a deleted block: one step each.
+- A field that writes through on every keystroke (a table cell, the image alt text, the font name) coalesces a burst of typing into one step; the burst stays open while keystrokes keep coming within a second of the previous one.
+- A model handed in by the parent, which is how an agent edit arrives (`replaceTextInNativeDocx` in `page.tsx`), is a step too, so the agent's rewrite can be taken back like any other change. The first model of a session (the load) has nothing to go back to.
+
+Before a step is applied, a focused field inside the editor is blurred: the paragraph box commits its draft on blur (a clean draft commits nothing), and its draft sync is paused while it is focused, so a step landing in a focused box would not be shown. The selection survives a step when it still names the same block: the selection carries the block's id, and an effect drops it when the block at that index is a different one or gone, or moves it to the block's first slice when the selected slice no longer exists.
+
+The history lives in the editor component and is not part of the per-session state in `page.tsx`, so switching chats reopens the editor without it. The echo suppression above is unaffected: a snapshot restored by undo is one the parent already holds, and it is recognised as an echo when it comes back as `initialModel`.
 
 ## Gotenberg's Role
 

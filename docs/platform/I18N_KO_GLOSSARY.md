@@ -72,6 +72,7 @@ consonant. When that word is an ICU placeholder, the value is unknown at authori
 | Soul | `Soul`, left in Latin | It has to stay distinct from persona, which is 성격. |
 | latency | 응답 시간 | 대기 시간 (Microsoft) means waiting time; 지연 시간 (VS Code) is a different sense. |
 | hardening | 보안 강화 | 하드닝 is the only form verifiable from a fetched page (Kubernetes ko), and is deliberately not the one shipped. |
+| undo / redo (the editors) | 실행 취소 / 다시 실행 | The composer's undo stays 되돌리기 and the mail window's undo of a queued send stays 취소: those revert or withdraw one action. The editors step back through edits, and 실행 취소 / 다시 실행 is the pair shipped on every Office and VS Code toolbar. One English word, three renderings, on purpose. |
 
 ## Style rules
 

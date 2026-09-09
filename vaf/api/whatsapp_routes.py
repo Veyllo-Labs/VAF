@@ -108,6 +108,34 @@ def _composer_enabled() -> bool:
     return bool(composer_lane.settings()["enabled"])
 
 
+def _visible_whitelist(request: Request, whatsapp_config: dict, user_scope_id) -> list:
+    """The registered main-user numbers this caller may see: every entry for the admin,
+    the caller's own scope for everyone else. Entries without a number are dropped."""
+    raw = [e for e in (whatsapp_config.get("whitelist") or []) if isinstance(e, dict) and e.get("phone_number")]
+    if _is_whatsapp_admin(request):
+        return raw
+    return [e for e in raw if str(e.get("user_scope_id")) == str(user_scope_id)]
+
+
+def _learns_from_chat(request: Request, chat_id: str) -> bool:
+    """Whether Memory Learning can run for this chat at all: only the owner's own
+    registered number gets a compacted agent session (contact chats are excluded from
+    learning by the from_contact gate in the headless runner), and only while inbound
+    messages reach the agent. A read-only or manually written chat never advances the
+    counter, so showing one there would promise learning that cannot happen."""
+    whatsapp_config = Config.get("whatsapp_config") or {}
+    if not isinstance(whatsapp_config, dict) or not whatsapp_config.get("inbound_to_agent", True):
+        return False
+    user_info = get_current_vaf_user(request)
+    cid_norm = _normalize_chat_id(chat_id) or chat_id
+    for e in _visible_whitelist(request, whatsapp_config, user_info.get("user_scope_id")):
+        phone = (e.get("phone_number") or "").strip()
+        wl_id = phone if phone.startswith("+") else f"+{phone}"
+        if chat_id == wl_id or cid_norm == wl_id or cid_norm == (_normalize_chat_id(wl_id) or wl_id):
+            return True
+    return False
+
+
 def _is_whatsapp_admin(request: Request) -> bool:
     """True if current user is admin (can see all WhatsApp whitelist/sessions)."""
     from vaf.api.config_routes import get_current_user_or_local_admin
@@ -174,12 +202,7 @@ async def get_whatsapp_dashboard(request: Request):
     if not isinstance(whatsapp_config, dict):
         whatsapp_config = {}
 
-    whitelist_raw = whatsapp_config.get("whitelist") or []
-    whitelist_raw = [e for e in whitelist_raw if isinstance(e, dict) and e.get("phone_number")]
-    if _is_whatsapp_admin(request):
-        whitelist = whitelist_raw
-    else:
-        whitelist = [e for e in whitelist_raw if str(e.get("user_scope_id")) == str(user_scope_id)]
+    whitelist = _visible_whitelist(request, whatsapp_config, user_scope_id)
 
     current_linked = whatsapp_auth_exists(username)
     any_whitelist_linked = any(
@@ -693,12 +716,7 @@ async def get_whatsapp_status(request: Request):
         whatsapp_config = {}
 
     user_scope_id = user_info.get("user_scope_id")
-    whitelist_raw = list(whatsapp_config.get("whitelist") or [])
-    whitelist_raw = [e for e in whitelist_raw if isinstance(e, dict) and e.get("phone_number")]
-    if _is_whatsapp_admin(request):
-        whitelist = whitelist_raw
-    else:
-        whitelist = [e for e in whitelist_raw if str(e.get("user_scope_id")) == str(user_scope_id)]
+    whitelist = _visible_whitelist(request, whatsapp_config, user_scope_id)
 
     enabled_effective = _whatsapp_enabled_for_request(request, whatsapp_config, user_scope_id)
     linked = whatsapp_auth_exists(username)
@@ -972,23 +990,20 @@ async def get_whatsapp_chat_messages(request: Request, chat_id: str, limit: int 
         })
     digits = "".join(c for c in cid.split("@", 1)[0] if c.isdigit())
     session_id = f"whatsapp_{username}_{digits}" if digits else ""
-    user_turns = 0
-    if session_id:
+    out = {"chat_id": cid, "session_id": session_id, "messages": messages}
+    # The Memory Learning counter travels only for a chat that can learn (see
+    # _learns_from_chat); the pane shows no counter when the fields are absent.
+    if session_id and _learns_from_chat(request, cid):
+        user_turns = 0
         try:
             from vaf.core.session import SessionManager
             _session = SessionManager().load(session_id)
             user_turns = sum(1 for m in (_session.messages or []) if getattr(m, "role", "") == "user")
         except Exception:
             user_turns = 0
-    last_turn, interval = _get_whatsapp_compaction_info(session_id) if session_id else (0, 15)
-    return {
-        "chat_id": cid,
-        "session_id": session_id,
-        "messages": messages,
-        "user_turn_count": user_turns,
-        "compaction_interval": interval,
-        "last_compaction_at_turn": last_turn,
-    }
+        last_turn, interval = _get_whatsapp_compaction_info(session_id)
+        out.update({"user_turn_count": user_turns, "compaction_interval": interval, "last_compaction_at_turn": last_turn})
+    return out
 
 
 @router.get("/avatar")

@@ -65,7 +65,7 @@ export interface ChannelDashboardShellProps {
     conversationNote?: string | null;
     /** Rendered as the first element of the message list, so it is what a reader sees when scrolling up (load older messages). */
     conversationTop?: (chat: ShellChat) => React.ReactNode;
-    /** Rendered between the message list and the footer: the channel's own compose box for this chat (null hides it). */
+    /** Rendered under the message list in place of the footer: the channel's own compose box for this chat (null shows the footer). */
     composeBar?: (chat: ShellChat) => React.ReactNode;
     /** A column to the right of the conversation (the Composer); null renders no column at all. Stacks under the conversation on mobile. */
     aside?: (chat: ShellChat) => React.ReactNode;
@@ -423,7 +423,13 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                         );
                                     })}
                                 </div>
-                                {composeBar?.(selected)}
+                                {(() => {
+                                    // A chat the person writes in themselves ends with its compose box: the
+                                    // footer's mode sentence repeats the header's subline there, and the
+                                    // Memory Learning counter belongs only to a chat the agent answers in.
+                                    const compose = composeBar?.(selected);
+                                    if (compose) return compose;
+                                    return (
                                 <div className="px-5 py-2 border-t border-[#2e2e2e] text-xs text-[#9a9a9a] flex justify-between gap-3 flex-wrap shrink-0">
                                     <span className="min-w-0 truncate">{selected.footer}</span>
                                     <span className="shrink-0">
@@ -435,6 +441,8 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                         })()}
                                     </span>
                                 </div>
+                                    );
+                                })()}
                             </div>
                             {(() => {
                                 const column = aside?.(selected);

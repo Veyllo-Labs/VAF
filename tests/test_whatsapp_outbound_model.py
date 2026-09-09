@@ -304,8 +304,26 @@ def test_conversation_pane_reads_the_message_store_not_the_agent_session(isolate
     request = SimpleNamespace(state=SimpleNamespace(user={"user_scope_id": SCOPE, "username": "alice"}))
     out = asyncio.run(routes.get_whatsapp_chat_messages(request, chat_id="+491700000042"))
     assert [(m["role"], m["content"]) for m in out["messages"]] == [("user", "hello there"), ("assistant", "hi, how can I help?")]
-    assert out["session_id"] == "whatsapp_alice_491700000042" and out["user_turn_count"] == 0
+    assert out["session_id"] == "whatsapp_alice_491700000042"
+    assert "user_turn_count" not in out and "compaction_interval" not in out
     assert asyncio.run(routes.get_whatsapp_chat_messages(request, chat_id="+491700000099"))["messages"] == []
+
+
+def test_learning_counter_travels_only_for_the_owners_answered_chat(isolated):
+    """Memory Learning compacts only the owner's own registered number (contact chats
+    are excluded by the from_contact gate) and only while inbound messages reach the
+    agent. The pane's counter must not promise learning anywhere else."""
+    import asyncio
+    from vaf.api import whatsapp_routes as routes
+    isolated["whatsapp_config"]["whitelist"] = [{"phone_number": "+491700000001", "vaf_username": "alice", "user_scope_id": SCOPE}]
+    request = SimpleNamespace(state=SimpleNamespace(user={"user_scope_id": SCOPE, "username": "alice"}))
+    owner = asyncio.run(routes.get_whatsapp_chat_messages(request, chat_id="+491700000001"))
+    assert owner["user_turn_count"] == 0 and owner["compaction_interval"] == 15 and owner["last_compaction_at_turn"] == 0
+    stranger = asyncio.run(routes.get_whatsapp_chat_messages(request, chat_id="+491700000042"))
+    assert "compaction_interval" not in stranger
+    isolated["whatsapp_config"]["inbound_to_agent"] = False
+    silent = asyncio.run(routes.get_whatsapp_chat_messages(request, chat_id="+491700000001"))
+    assert "compaction_interval" not in silent
 
 
 def test_oldest_message_is_the_cursor_for_an_on_demand_history_fetch(isolated):

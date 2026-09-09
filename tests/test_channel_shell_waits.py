@@ -73,6 +73,11 @@ def test_opening_a_chat_posts_its_seen_mark_and_a_read_chat_no_longer_waits():
         "the mark goes out for an unread chat and for one that waits (the agent's question needs no unread message)"
     assert "const stateOf = (c: ShellChat) => `${c.unread ?? 0}:${c.waits ? 1 : 0}:${c.ts ?? 0}`;" in body, "a newer message is news even at the same count"
     assert "}).then(res => { if (!res.ok) forget(); }).catch(forget);" in body, "a refused mark is forgotten"
+    assert "title={t('markAllRead')}" in body, "an icon-only button on a phone still has a name"
+    assert "const anythingToRead = chats.some(c => unreadOf(c) > 0 || waitsOf(c));" in body and "try { await onRefresh(); }" in body, \
+        "the button reads the local state and stays disabled until the refetch landed"
+    assert "body: JSON.stringify({ channels: [channel], groups: true })," in body and "{channel && (" in body and "{t('markAllRead')}" in body, \
+        "'All read' reads the window's own channel through the bulk route, only where the window names its channel"
     assert "const readOf = (c: ShellChat) => c.id === selectedId || marked.get(c.id) === stateOf(c);" in body
     assert "const waitsOf = (c: ShellChat) => !readOf(c) && !!c.waits;" in body and "waits={waitsOf(c)}" in body
     assert "{waitsOf(selected) && <span className=\"font-normal\"><WaitsChip" in body, "the header chip clears with the row's"

@@ -16,7 +16,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTranslations } from 'next-intl';
-import { X, Search, RefreshCw, Settings, ChevronUp, ChevronDown, Bot, User, Loader2, Send } from 'lucide-react';
+import { X, Search, RefreshCw, Settings, ChevronUp, ChevronDown, Bot, User, Loader2, Send, CheckCheck } from 'lucide-react';
 import { cn, stripThinkBlocks } from '@/lib/utils';
 import { useEscapeLayer } from '@/hooks/useEscapeLayer';
 import HighlightedText from './HighlightedText';
@@ -66,7 +66,7 @@ export interface ChannelDashboardShellProps {
     chats: ShellChat[];
     loading: boolean;
     loadFailed: boolean;
-    onRefresh: () => void;
+    onRefresh: () => void | Promise<void>;
     historyUrl: (historyKey: string) => string;
     /** Bump to reload the conversation without changing the selected chat (older messages arrived). */
     historyVersion?: number;
@@ -384,6 +384,23 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
     const unreadOf = (c: ShellChat) => readOf(c) ? 0 : (c.unread ?? 0);
     const waitsOf = (c: ShellChat) => !readOf(c) && !!c.waits;
 
+    // "All read": every chat of this channel is read at once, server-side (groups included),
+    // and the window refetches so the chips follow what the store now says.
+    const [markingAll, setMarkingAll] = useState(false);
+    const anythingToRead = chats.some(c => unreadOf(c) > 0 || waitsOf(c));
+    const markAllRead = async () => {
+        if (!channel || markingAll) return;
+        setMarkingAll(true);
+        try {
+            await fetch(api('api/inbox/marks/all'), {
+                method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ channels: [channel], groups: true }),
+            });
+        } catch { /* the refetch shows what the server says either way */ }
+        try { await onRefresh(); } catch { /* the window shows what it has */ }
+        setMarkingAll(false);
+    };
+
     // "N waiting for you" in the list header jumps to the next waiting chat, round and round.
     const waiting = useMemo(() => chats.filter(c => c.waits && !(c.id === selectedId || marked.get(c.id) === stateOf(c))), [chats, selectedId, marked]);
     const jumpToWaiting = () => {
@@ -459,7 +476,12 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                         <span className="truncate">{subtitle}</span>
                     </span>
                     <div className="ml-auto flex gap-2 min-w-0">
-                        <button type="button" onClick={onRefresh} disabled={loading} className={cn('flex items-center gap-1.5', BTN)}>
+                        {channel && (
+                            <button type="button" onClick={() => { void markAllRead(); }} disabled={markingAll || !anythingToRead} title={t('markAllRead')} className={cn('flex items-center gap-1.5 max-md:px-2', BTN)}>
+                                <CheckCheck className="w-4 h-4" /><span className="max-md:hidden">{t('markAllRead')}</span>
+                            </button>
+                        )}
+                        <button type="button" onClick={() => { void onRefresh(); }} disabled={loading} className={cn('flex items-center gap-1.5 max-md:px-2', BTN)}>
                             <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} /><span className="max-md:hidden">{t('refresh')}</span>
                         </button>
                     </div>

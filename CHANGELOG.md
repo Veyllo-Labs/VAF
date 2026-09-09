@@ -50,8 +50,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   line and the lane that answers there) and a preview (the conversation, the note when the
   agent asked you, "open in the channel window" which lands in the WhatsApp, Telegram or
   Discord window or on the mail thread, and "write a draft", which opens the channel window
-  on the chat and starts the Composer there; there is no done or read button, reading is
-  the decision). It refetches on the signal, never on a timer; on a
+  on the chat and starts the Composer there; there is no done button and no per-row read
+  button, reading is the decision). It refetches on the signal, never on a timer; on a
   phone the rail is a chip strip and the panes take turns. Seven catalogues carry the strings.
   Whether the last message asks for an answer is read from its text, without a model: a
   "danke", a "bis später" or a thumbs-up waits for nobody, a question or a request does,
@@ -65,7 +65,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   narrowed to (they read as 0 for every other channel before). A mail from a no-reply or
   notification address, a newsletter, a status page or a non-primary Gmail category never
   waits. The inbox has no input field of its own: "Write a draft" opens the channel window
-  on the chat and the Composer starts writing there.
+  on the chat and the Composer starts writing there. "Mark all as read" in the inbox header
+  reads every conversation of the selected channel (or all of them) at once, groups and
+  rooms as the toggle says; the view and the search do not narrow it. Each channel window
+  has "All read" for its own channel. Opening a room row in the inbox reads the room too.
 - **A messenger chat has its own memory.** What the agent learns inside a chat with a
   contact is stored in that chat's own namespace (`source = chat/<session id>`), which every
   ordinary lookup of your agent leaves out in SQL, in both lanes of the hybrid search. Only

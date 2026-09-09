@@ -628,7 +628,7 @@ gap in a transcript is noticed, a wrong timestamp is believed.
 
 The sidebar row of a room (`session._room_rows`) also carries `last_ts` and `last` (the
 newest conversation frame: sender, text, whether it was the person's own), read from the
-frames the count already reads; the person's reading position stays the cli lane's cursor.
+frames the count already reads; the person's reading position stays the cli lane's cursor, and `Room.mark_read(peer_id)` is the one way a surface moves the person's cursor to the newest frame (the room view when it is shown, the inbox's read marks), answering whether it moved so only real movement is announced; the agent lane and the terminal move their own cursors as they read.
 Rooms appear in the inbox as rows of their own (`vaf/core/inbox.py`, see
 [INBOX.md](../integrations/INBOX.md)): a room with unread frames waits for the person, an
 invitation waits for their answer, and the done mark lives in the message store's marks.

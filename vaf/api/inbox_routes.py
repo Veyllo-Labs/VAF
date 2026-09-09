@@ -123,12 +123,53 @@ async def inbox_history(request: Request, channel: str, id: str, limit: int = 20
     return {"messages": messages}
 
 
+@router.post("/marks/all")
+async def inbox_marks_all(request: Request, body: Dict[str, Any] = Body(default={})) -> Dict[str, Any]:
+    """{channels?, groups?}: "mark all as read". `channels` is a list, a comma list or `all`
+    (the default; `all` inside a list means the same); `groups` false leaves group chats and
+    rooms alone (the strings false, 0, no and off read as false too). Answers `moved` per
+    channel (a messenger or mail lane without a store, and Discord for anybody but the local
+    admin, are absent; rooms are present whenever wanted). The messenger stores announce `inbox_changed`
+    themselves (throttled per scope), the room lane announces `rooms_changed` when a cursor
+    moved, and the route announces `inbox_changed` once more at the end for the mail lane,
+    whose flag is no store writer."""
+    user = get_current_vaf_user(request)
+    from vaf.core.inbox import CHANNELS, mark_all_seen
+    raw = body.get("channels", "all") if isinstance(body, dict) else "all"
+    if raw is None or (isinstance(raw, str) and raw.strip().lower() in ("", "all")):
+        wanted = list(CHANNELS)
+    elif isinstance(raw, str):
+        wanted = [c.strip().lower() for c in raw.split(",") if c.strip()]
+    elif isinstance(raw, list):
+        wanted = [str(c).strip().lower() for c in raw if str(c).strip()]
+    else:
+        raise HTTPException(status_code=400, detail="channels must be a list or 'all'")
+    if "all" in wanted:
+        wanted = list(CHANNELS)
+    if not wanted:
+        raise HTTPException(status_code=400, detail="no channel")
+    unknown = [c for c in wanted if c not in CHANNELS]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"unknown channel: {', '.join(unknown)}")
+    groups = body.get("groups") if isinstance(body, dict) else None
+    if isinstance(groups, str):
+        groups = groups.strip().lower() not in ("false", "0", "no", "off", "")
+    groups = True if groups is None else bool(groups)
+    moved = await asyncio.to_thread(mark_all_seen, user["username"], user["user_scope_id"],
+                                    channels=wanted, include_groups=groups)
+    from vaf.core.web_interface import notify_inbox_changed
+    notify_inbox_changed(user["user_scope_id"])
+    return {"ok": True, "moved": moved}
+
+
 @router.post("/marks")
 async def inbox_marks(request: Request, body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     """{channel, id, seen?, done?}: the person opened a conversation (`seen`, which takes it
-    off "waits for you"); `done` is the primitive without a button. A room's seen is refused:
-    opening the room moves its cursor. A Discord mark from anybody but the local admin is
-    refused too, as the Discord rows are."""
+    off "waits for you"); `done` is the primitive without a button. A room's seen moves the
+    person's cursor as the room view does and announces `rooms_changed` when it moved (an
+    invitation moves nothing: it is read by answering it; a room that is not theirs answers
+    400 for seen and done alike). A Discord mark from anybody but the local admin is refused
+    too, as the Discord rows are."""
     user = get_current_vaf_user(request)
     from vaf.core.inbox import mark_conversation
     channel = str(body.get("channel") or "").strip().lower()

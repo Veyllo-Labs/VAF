@@ -24,7 +24,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 from vaf.core.platform import Platform
@@ -39,7 +39,7 @@ __all__ = [
     "init_store", "append_message", "search_messages",
     "list_chats_from_store", "chat_overview", "get_chat_messages", "last_message_ts", "oldest_message",
     "delete_message", "mark_deleted", "replace_chat_rows",
-    "chat_marks", "mark_seen", "mark_done", "mark_owner_asked",
+    "chat_marks", "mark_seen", "mark_channel_seen", "mark_done", "mark_owner_asked",
 ]
 
 #: Writers announce `inbox_changed` at most this often per scope; a history sync appends
@@ -283,6 +283,70 @@ def mark_seen(username: str, channel: str, chat_id: str, user_scope_id: Optional
         conn.close()
     _upsert_mark(username, channel, chat_id, user_scope_id, seen_ts=at)
     return at
+
+
+def mark_channel_seen(username: str, channel: str, user_scope_id: Optional[str] = None,
+                      ts: Optional[float] = None, *, exclude_like: Optional[str] = None) -> int:
+    """"Mark all as read" for one channel: every chat that holds an inbound message after the
+    person's marker, or the agent's question they have not opened the chat for (and nobody
+    answered or closed it since), gets its marker moved to `ts` (default now). One
+    transaction (a seed of the marks rows, then one channel-wide update), one announce, a
+    marker never moves backwards, and no id list: the chats come from the messages table
+    itself, so there is no cap and no parameter limit. `exclude_like` is a chat_id pattern to
+    leave alone (the caller knows the channel's group shape). Returns how many chats were
+    read, the same chats the listing shows as unread or waiting on the agent's question."""
+    at = float(ts) if ts is not None else time.time()
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    u = (username or "").strip() or ""
+    ch = channel or "whatsapp"
+    excl = " AND {col} NOT LIKE ?" if exclude_like else ""
+    excl_param: List[Any] = [exclude_like] if exclude_like else []
+    live = "COALESCE(m.content_type, 'text') != 'deleted'"
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO chat_marks (username, channel, chat_id) "
+            "SELECT DISTINCT m.username, m.channel, m.chat_id FROM channel_messages m "
+            f"WHERE m.username = ? AND m.channel = ?{excl.format(col='m.chat_id')}",
+            (u, ch, *excl_param),
+        )
+        cur = conn.execute(
+            f"""
+            UPDATE chat_marks SET seen_ts = ?
+            WHERE username = ? AND channel = ? AND (seen_ts IS NULL OR seen_ts < ?){excl.format(col='chat_id')}
+              AND (EXISTS (SELECT 1 FROM channel_messages m
+                           WHERE m.username = chat_marks.username AND m.channel = chat_marks.channel
+                             AND m.chat_id = chat_marks.chat_id AND m.direction = 'in' AND {live}
+                             AND m.ts > COALESCE(chat_marks.seen_ts, 0))
+                   OR (chat_marks.owner_asked_ts IS NOT NULL
+                       AND chat_marks.owner_asked_ts > COALESCE(chat_marks.seen_ts, 0)
+                       AND chat_marks.owner_asked_ts > COALESCE(chat_marks.done_ts, 0)
+                       AND chat_marks.owner_asked_ts > COALESCE((SELECT MAX(o.ts) FROM channel_messages o
+                             WHERE o.username = chat_marks.username AND o.channel = chat_marks.channel
+                               AND o.chat_id = chat_marks.chat_id AND o.direction = 'out'
+                               AND COALESCE(o.content_type, 'text') != 'deleted'), 0)
+                       -- and the chat is not done: a live row exists, the newest one is not
+                       -- the person's own reply, and no done mark covers it (chat_state's rule)
+                       AND EXISTS (SELECT 1 FROM channel_messages l WHERE l.username = chat_marks.username
+                                   AND l.channel = chat_marks.channel AND l.chat_id = chat_marks.chat_id
+                                   AND COALESCE(l.content_type, 'text') != 'deleted')
+                       AND COALESCE(chat_marks.done_ts, 0) < (SELECT MAX(l.ts) FROM channel_messages l
+                                   WHERE l.username = chat_marks.username AND l.channel = chat_marks.channel
+                                   AND l.chat_id = chat_marks.chat_id AND COALESCE(l.content_type, 'text') != 'deleted')
+                       AND NOT (SELECT l.direction = 'out' AND COALESCE(l.sender_jid, '') = ? FROM channel_messages l
+                                WHERE l.username = chat_marks.username AND l.channel = chat_marks.channel
+                                AND l.chat_id = chat_marks.chat_id AND COALESCE(l.content_type, 'text') != 'deleted'
+                                ORDER BY l.ts DESC LIMIT 1)))
+            """,
+            (at, u, ch, at, *excl_param, OWNER_SENDER),
+        )
+        moved = int(cur.rowcount or 0)
+        conn.commit()
+    finally:
+        conn.close()
+    if moved:
+        _announce_changed(username, user_scope_id)
+    return moved
 
 
 def mark_done(username: str, channel: str, chat_id: str, user_scope_id: Optional[str] = None,

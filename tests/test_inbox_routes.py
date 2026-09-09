@@ -6,8 +6,8 @@ builds, the footer badge reads the counts, a mark round-trips, one history shape
 lane, and a GET never asks a bridge.
 
 MUTATION: let the list route call get_whatsapp_chats and the first test goes red; drop the
-scope from the identity and the other-scope test goes red; accept a room's seen and the
-refusal test goes red; drop the mail-seen signal and its test goes red.
+scope from the identity and the other-scope test goes red; accept a seen for a room that is
+not the person's and the refusal test goes red; drop the mail-seen signal and its test goes red.
 """
 import asyncio
 import time
@@ -103,7 +103,28 @@ def test_the_summary_counts_waits_and_unread_for_the_badge(world):
     assert asyncio.run(ir.inbox_summary(_request(), done=True))["all"] == 3
 
 
-def test_marks_round_trip_seen_lifts_unread_done_hides_and_a_room_seen_is_refused(world):
+def test_marks_all_reads_the_selection_and_refuses_an_unknown_channel(world):
+    _msg("+491700000042", "wann?", ts=NOW - 20, message_id="a1")
+    _msg("7", "und du?", ts=NOW - 10, message_id="a2", channel="telegram")
+    out = asyncio.run(ir.inbox_marks_all(_request(), {"channels": ["whatsapp"]}))
+    assert out["ok"] is True and out["moved"]["whatsapp"] == 1 and "telegram" not in out["moved"]
+    rows = {r["key"]: r for r in _list()["rows"]}
+    assert rows["whatsapp:+491700000042"]["unread"] == 0 and rows["telegram:7"]["unread"] == 1
+    out = asyncio.run(ir.inbox_marks_all(_request(), {}))
+    assert out["moved"]["telegram"] == 1 and _list()["counts"]["unread"] == 0 and _list()["counts"]["waits"] == 0
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(ir.inbox_marks_all(_request(), {"channels": ["fax"]}))
+    assert e.value.status_code == 400
+    with pytest.raises(HTTPException):
+        asyncio.run(ir.inbox_marks_all(_request(), {"channels": 7}))
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(ir.inbox_marks_all(_request(), {"channels": []}))
+    assert e.value.detail == "no channel"
+    assert asyncio.run(ir.inbox_marks_all(_request(), {"channels": "telegram", "groups": "false"}))["moved"] == {"telegram": 0}, "the string false reads as false"
+    assert set(asyncio.run(ir.inbox_marks_all(_request(), {"channels": ["all"]}))["moved"]) >= {"whatsapp", "telegram"}, "all inside a list is the string form"
+
+
+def test_marks_round_trip_seen_lifts_unread_done_hides_and_an_unknown_rooms_seen_is_refused(world):
     _msg("+491700000042", "hallo", ts=NOW - 10, message_id="c1")
     asyncio.run(ir.inbox_marks(_request(), {"channel": "whatsapp", "id": "+491700000042", "seen": True}))
     row = _list()["rows"][0]

@@ -664,6 +664,20 @@ class Room:
     def open(cls, room_id: str, *, base: Optional[Path] = None) -> "Room":
         return cls(RoomStore(room_id, base=base))
 
+    def mark_read(self, peer_id: str) -> bool:
+        """The reader looked at everything: their cursor moves to the newest frame. Returns
+        whether it moved (a closed room, an empty one, or a cursor already there move
+        nothing), so a caller announces real movement only. The room view and the inbox's
+        read marks share this one rule; a reading position is the reader's own file and
+        needs no membership."""
+        if not peer_id or self.closed:
+            return False
+        latest = self.store.highest_lamport()
+        if not latest or self.store.cursor(peer_id) >= latest:
+            return False
+        self.store.set_cursor(peer_id, latest)
+        return True
+
     def update(self, **fields: Any) -> Dict[str, Any]:
         """Change the manifest through the room, so the in-memory copy cannot drift.
 

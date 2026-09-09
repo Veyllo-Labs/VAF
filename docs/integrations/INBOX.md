@@ -91,13 +91,29 @@ message on. Mail keeps IMAP's Seen flag as its read marker and takes the
 done mark from the same table (`channel='mail'`, the thread id); a room keeps its cursor as
 the read marker and takes the done mark the same way. `mark_conversation` writes them:
 `seen` on a mail thread marks every unseen message of the thread read (local first, the
-mail window's own rule moved server-side); `seen` on a room is refused, because opening the
-room moves the cursor. The owner-asked mark is written by the agent itself: in Front Office
+mail window's own rule moved server-side); `seen` on a room moves the person's cursor to
+the newest frame (`Room.mark_read`, as the room view does when it is shown, and announces
+`rooms_changed` when it moved; an invitation moves nothing, it is read by answering it; a
+room that is not the person's answers as unknown, for seen and done alike). The owner-asked mark is written by the agent itself: in Front Office
 mode a send tool that names no foreign recipient reached the owner, and `Agent._chat_post_dispatch`
 records it on the chat the runner stamped for the turn (`agent._front_office_chat`).
 The inbox lists a mapped WhatsApp `@lid` as its own row, while the WhatsApp window folds it
 into its number and marks both store keys when that merged row is opened; a row opened in
-the inbox marks its own key alone.
+the inbox marks its own key alone. "Mark all as read" is `mark_all_seen(username, scope,
+channels=, include_groups=)`: the messenger chats of each lane through the store's
+`mark_channel_seen` (one transaction over the whole channel, a seed of the marks rows and
+then one channel-wide update, no id list and so no cap, one announce, a marker never
+moves backwards; only the chats the listing shows as unread or waiting on the agent's
+unanswered question are touched, so the count is exact),
+the unread threads of the mail lane through the same per-thread seen as a single row (the
+newest 200 threads, the lane's reach, one mail service for the call, one flags op per
+message for the writeback as the mail window's own read marking does), and the person's
+cursor of every unread room moved to its newest frame through `Room.mark_read`, the one
+primitive the room view uses when it is shown (an invitation waits for a decision, not
+for reading, and stays). Group chats and rooms follow the group toggle. It returns how
+many conversations were read per channel (a messenger or mail lane without a store, and
+Discord for anybody but the local admin, are absent; rooms are present whenever wanted);
+the done and owner-asked marks are left alone.
 
 ## Identity
 
@@ -139,9 +155,12 @@ a bridge. The tool is not in the Front Office allow-list.
 Preview) with the counts above it; `--channel`, `--view`, `--limit`, `--no-groups`, `--done`,
 `--query` narrow it and `--json` prints one object per line. It runs as the machine owner
 (no `--scope`: the CLI has no authentication) behind the same terminal door as `vaf session`,
-because it prints chats. Read-only by design: the seen mark is written by opening a
-conversation in a window, and the done mark has no button; a command that flips marks blind
-would be the one place the two surfaces could disagree.
+because it prints chats. Read-only by design: the terminal prints, it does not read for the
+person. The seen mark is written where the person reads (opening a conversation in a window)
+or where they say they have read everything (the window's "mark all as read",
+`mark_all_seen`), and the done mark has no button. A `vaf inbox read` would be one call to
+that same primitive, so the two surfaces could not disagree; it is left out until a headless
+install asks for it, which is the measurement that earns the command.
 
 ## Routes
 
@@ -152,9 +171,10 @@ outside network mode); every store read runs off the event loop, and no GET wait
 | Route | Answer |
 |---|---|
 | `GET /api/inbox?channel&view&groups&done&q&limit` | `rows`, `counts` and `channels` as `list_conversations` returns them (`channel` is one name, a comma list or `all`), plus `status` per channel: WhatsApp `linked` and `running`, Telegram and Discord `configured` and `running` (Discord for the local admin only), mail `accounts` and `last_sync_at`. What the process knows about itself, never a round trip |
-| `GET /api/inbox/summary?groups&done` | the whole inbox's `counts` (`all`, `waits`, `unread`, `agent`, `per_channel`, `waits_per_channel`, `stored_per_channel`) under the group and done toggles, never narrowed by a channel, a view or a query: the footer badge reads `waits` and `unread`, the inbox window's rail reads every number |
+| `GET /api/inbox/summary?groups&done` | the whole inbox's `counts` (`all`, `waits`, `unread`, `agent`, `per_channel`, `waits_per_channel`, `unread_per_channel`, `invitations`, `stored_per_channel`) under the group and done toggles, never narrowed by a channel, a view or a query: the footer badge reads `waits` and `unread`, the inbox window's rail reads every number |
 | `GET /api/inbox/history?channel&id&limit` | one conversation in the pane shape (`role`, `content`, `timestamp`, `content_type`, `sender`) |
-| `POST /api/inbox/marks` with `{channel, id, seen?, done?}` | `mark_conversation`; `done` is the primitive without a button; a room's `seen` answers 400, and so do a body that marks nothing and a Discord mark from anybody but the local admin |
+| `POST /api/inbox/marks` with `{channel, id, seen?, done?}` | `mark_conversation`; `done` is the primitive without a button; a room's `seen` moves the person's cursor (an invitation's moves nothing); a body that marks nothing, a room that is not the person's and a Discord mark from anybody but the local admin answer 400 |
+| `POST /api/inbox/marks/all` with `{channels?, groups?}` | `mark_all_seen`: every conversation of the named channels (a list, a comma list or `all`, the default, and an empty string means the default; an empty list and an unknown name are a 400), group chats and rooms included unless `groups` is false (the strings false, 0, no and off read as false too), counts as read; answers `moved` per channel (a messenger or mail lane without a store, and Discord for anybody but the local admin, are absent, no 400); the messenger stores announce `inbox_changed` themselves, the room lane `rooms_changed` when a cursor moved, and the route `inbox_changed` once more for the mail lane |
 
 There is no send route and no compose box: writing happens in the channel window, which
 the draft jump opens.
@@ -213,18 +233,24 @@ answer to the invitation"; the channel windows say the same in their conversatio
 "Open in the channel window" closes the inbox and opens Settings on Connections with a jump into the WhatsApp,
 Telegram or Discord window or the mail client (a repeat jump to the same chat fires again,
 because the page hands the jump in once and resets it when Settings consumed it); a room
-opens in the sidebar. There is no "done" or "read" button: opening a row reads it, and a
-read row no longer waits, so in the "waits for you" view it leaves the list while its
+opens in the sidebar. There is no "done" button and no per-row "read" button: opening a row
+reads it, and a read row no longer waits, so in the "waits for you" view it leaves the list while its
 conversation stays open in the preview (the window keeps the opened row, and the amber
 sentence that said why it waited, until another row is chosen). The done mark stays a
 primitive of the marks route and `mark_conversation` without a button; the "show done"
-toggle shows the conversations the person answered last. "Write a draft" jumps with the
+toggle shows the conversations the person answered last. "Mark all as read" in the window's
+header reads every conversation of the selected channel (or of all of them) at once, group
+chats and rooms as the group toggle says, through `POST /api/inbox/marks/all`; the view and
+the search do not narrow it. It is disabled while the selection holds nothing a read can
+clear (an invitation waits for a decision, so it does not count; the summary's
+`unread_per_channel`, `waits_per_channel` and `invitations` tell). The channel windows carry
+the same button for their own channel ("All read"). "Write a draft" jumps with the
 draft flag and the Composer starts writing: the WhatsApp window selects the chat and runs
 the Composer's draft (the person watches the draft land in the compose box and sends or
 rewrites it there), the mail client opens the thread's reply composer and runs the Mail
 Composer's draft. The inbox itself has no input field: it is the place to read and to
 decide, writing happens in the channel window with the Composer beside it (one compose
-box per channel, not a second one in the inbox). Opening a row posts its seen mark like the channel windows do (a room is read by opening it in the sidebar, so a room row keeps waiting until then). The window refetches
+box per channel, not a second one in the inbox). Opening a row posts its seen mark like the channel windows do, a room row's too (its cursor moves as the room view moves it; an invitation row posts nothing and keeps its chip, it is read by answering it). The window refetches
 on `inbox_changed` and `rooms_changed` (debounced 400 ms), never on a timer; the footer badge
 reads `GET /api/inbox/summary` on the same signal. Escape closes a running search first (66),
 steps back from the preview to the list on a phone (67), and closes the window last (65).
@@ -233,8 +259,9 @@ with a back button; the desktop markup is unchanged.
 
 ## API (module)
 
-- `list_conversations(username, user_scope_id, *, channels=None, view="all", include_groups=True, include_done=False, query="", limit=200, now=None, mail_account_id=None, mail_folder=None)` returns `{rows, counts, channels}`; `view` is one of `all`, `waits`, `unread`, `agent`; the group and done toggles apply before the counts, the view after them; `query` keeps rows whose name or preview contain it or whose stored messages match (`search_hits`); `mail_account_id` and `mail_folder` narrow the mail lane at the source; the mail lane always reads its newest 200 threads, whatever `limit` says, so the counts cover them. `counts` carries `all`, `waits`, `unread`, `agent`, `per_channel` and `waits_per_channel` (after the toggles, before the view) and `stored_per_channel` (what each lane holds before any toggle, filter or cut; the tool says "nothing stored" from that number alone).
+- `list_conversations(username, user_scope_id, *, channels=None, view="all", include_groups=True, include_done=False, query="", limit=200, now=None, mail_account_id=None, mail_folder=None)` returns `{rows, counts, channels}`; `view` is one of `all`, `waits`, `unread`, `agent`; the group and done toggles apply before the counts, the view after them; `query` keeps rows whose name or preview contain it or whose stored messages match (`search_hits`); `mail_account_id` and `mail_folder` narrow the mail lane at the source; the mail lane always reads its newest 200 threads, whatever `limit` says, so the counts cover them. `counts` carries `all`, `waits`, `unread`, `agent`, `per_channel`, `waits_per_channel`, `unread_per_channel` and `invitations` (after the toggles, before the view) and `stored_per_channel` (what each lane holds before any toggle, filter or cut; the tool says "nothing stored" from that number alone).
 - `mark_conversation(username, user_scope_id, channel, id, *, seen=False, done=None)`.
+- `mark_all_seen(username, user_scope_id, *, channels=None, include_groups=True, now=None)` returns `{channel: read}` for the lanes it touched (a messenger lane without a store, and Discord for anybody but the local admin, are absent).
 - `conversation_history(username, user_scope_id, channel, id, limit=200)` in the channel windows' pane shape (`role`, `content`, `timestamp`, `content_type`, `sender`).
 - `search_hits(username, user_scope_id, query, channels)`.
 

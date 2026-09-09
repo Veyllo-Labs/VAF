@@ -168,10 +168,14 @@ def test_views_groups_and_the_done_toggle(world):
     store.mark_done("alice", "whatsapp", "123@g.us", user_scope_id=SCOPE, ts=NOW - 790)
     all_rows = _rows()
     assert [r["key"] for r in all_rows["rows"]] == ["telegram:-500", "whatsapp:+491700000043", "whatsapp:+491700000042"]
-    assert all_rows["counts"] == {"all": 3, "waits": 2, "unread": 2, "agent": 1,
-                                  "per_channel": {"whatsapp": 2, "telegram": 1, "discord": 0, "mail": 0, "room": 0},
-                                  "waits_per_channel": {"whatsapp": 1, "telegram": 1, "discord": 0, "mail": 0, "room": 0},
-                                  "stored_per_channel": {"whatsapp": 3, "telegram": 1, "discord": 0, "mail": 0, "room": 0}}
+    counts = all_rows["counts"]
+    pinned = ("all", "waits", "unread", "agent", "per_channel", "waits_per_channel", "stored_per_channel")
+    assert {k: counts[k] for k in pinned} == {"all": 3, "waits": 2, "unread": 2, "agent": 1,
+                                             "per_channel": {"whatsapp": 2, "telegram": 1, "discord": 0, "mail": 0, "room": 0},
+                                             "waits_per_channel": {"whatsapp": 1, "telegram": 1, "discord": 0, "mail": 0, "room": 0},
+                                             "stored_per_channel": {"whatsapp": 3, "telegram": 1, "discord": 0, "mail": 0, "room": 0}}
+    assert sum(counts["unread_per_channel"].values()) == counts["unread"] and counts["invitations"] == 0
+    assert set(counts) == set(pinned) | {"unread_per_channel", "invitations"}, "a new count is a doc and a test, not a surprise"
     assert [r["key"] for r in _rows(include_groups=False)["rows"]] == ["whatsapp:+491700000043", "whatsapp:+491700000042"]
     assert [r["key"] for r in _rows(include_done=True)["rows"]][:1] == ["telegram:-500"]
     assert "whatsapp:123@g.us" in [r["key"] for r in _rows(include_done=True)["rows"]]
@@ -228,8 +232,10 @@ def test_room_rows_wait_when_unread_or_invited_and_take_the_done_mark(world):
     assert rows["room:r2"]["waits_reason"] == inbox.WAITS_INVITATION and rows["room:r2"]["is_group"]
     inbox.mark_conversation("alice", SCOPE, "room", "r1", done=True)
     assert "room:r1" not in {r["key"] for r in _rows()["rows"]}
-    with pytest.raises(ValueError):
-        inbox.mark_conversation("alice", SCOPE, "room", "r1", seen=True)
+    with pytest.raises(ValueError, match="unknown room"):
+        inbox.mark_conversation("alice", SCOPE, "room", "r1", seen=True), "a row the fixture invented has no room behind it"
+    with pytest.raises(ValueError, match="unknown room"):
+        inbox.mark_conversation("alice", SCOPE, "room", "nobody", seen=True)
 
 
 def test_mark_conversation_routes_seen_and_done_per_lane(world):
@@ -287,6 +293,52 @@ def test_reading_takes_a_conversation_off_waits_for_you(world):
     unread = {"newest_special_use": "\\Inbox", "newest_answered_at": None, "last_date_ts": 100.0, "unread_count": 1, "snippet": "Können wir telefonieren?"}
     assert inbox.mail_thread_state(unread, None, waits_threshold_value=0.6)["waits"] is True
     assert inbox.mail_thread_state(dict(unread, unread_count=0), None, waits_threshold_value=0.6)["waits"] is False
+
+
+def test_mark_all_seen_reads_every_lane_at_once_and_respects_the_selection(world):
+    """MUTATION: drop the group filter and the group chat is read with the rest; drop the
+    channel filter and Telegram is read on a WhatsApp-only call; drop the mail lane and the
+    thread stays unread."""
+    _msg("+491700000042", "wann passt es dir?", ts=NOW - 900)
+    _msg("1@g.us", "wer kommt morgen?", ts=NOW - 850)
+    _msg("7", "kannst du mich anrufen?", ts=NOW - 800, channel="telegram")
+    thread = _mail_thread()
+    before = _rows()["counts"]
+    assert before["unread"] == 4 and before["waits"] == 4
+    moved = inbox.mark_all_seen("alice", SCOPE, channels=["whatsapp"], include_groups=False)
+    assert moved == {"whatsapp": 1}
+    rows = {r["key"]: r for r in _rows()["rows"]}
+    assert rows["whatsapp:+491700000042"]["unread"] == 0 and not rows["whatsapp:+491700000042"]["waits"]
+    assert rows["whatsapp:1@g.us"]["unread"] == 1 and rows["whatsapp:1@g.us"]["waits"], "groups left alone"
+    assert rows["telegram:7"]["unread"] == 1 and rows[f"mail:{thread}"]["unread"] == 1, "other channels left alone"
+    moved = inbox.mark_all_seen("alice", SCOPE)
+    assert moved["whatsapp"] == 1 and moved["telegram"] == 1 and moved["mail"] == 1 and moved["room"] == 0
+    after = _rows()["counts"]
+    assert after["unread"] == 0 and after["waits"] == 0
+    assert all(not r["done"] for r in _rows()["rows"]), "read, not done"
+    assert inbox.mark_all_seen("alice", SCOPE) == {"whatsapp": 0, "telegram": 0, "mail": 0, "room": 0}, "a marker never moves backwards, nothing to move twice"
+    assert inbox.mark_all_seen("alice", SCOPE, channels=["fax"]) == {}
+    # Rooms follow the group toggle, and an invitation is a decision, not a message.
+    world.append({"room_id": "r-inv", "name": "Door", "unread": 0, "members": 2, "message_count": 0, "last_ts": 0.0, "last": None, "invited": True})
+    world.append({"room_id": "r-new", "name": "Phoenix", "unread": 2, "members": 3, "message_count": 5, "last_ts": NOW - 50,
+                  "last": {"sender": "atlas", "text": "Entwurf", "mine": False}})
+    assert "room" not in inbox.mark_all_seen("alice", SCOPE, include_groups=False), "rooms are hidden with the groups"
+    read = []
+    import vaf.core.inbox as inbox_mod
+    monkeypatch_read = lambda scope, room_id: read.append(room_id) or True
+    orig = inbox_mod._read_room
+    inbox_mod._read_room = monkeypatch_read
+    try:
+        assert inbox.mark_all_seen("alice", SCOPE, channels=["room"]) == {"room": 1}
+    finally:
+        inbox_mod._read_room = orig
+    assert read == ["r-new"], "the unread room only, never the invitation"
+    rows = {r["key"]: r for r in _rows()["rows"]}
+    assert rows["room:r-inv"]["waits_reason"] == inbox.WAITS_INVITATION
+    assert _rows()["counts"]["invitations"] == 1 and _rows()["counts"]["unread_per_channel"]["room"] == 2
+    assert inbox.mark_conversation("alice", SCOPE, "room", "r-inv", seen=True) == {"channel": "room", "id": "r-inv", "seen": False}, \
+        "an invitation is read by answering it: a seen moves nothing"
+    assert rows["room:r-inv"]["waits"], "and it still waits"
 
 
 def test_conversation_history_is_one_shape_for_the_lanes(world):
@@ -406,6 +458,16 @@ def test_owner_endpoints_file_a_formatted_whitelist_number_under_the_store_key(m
     ]}}
     monkeypatch.setattr(cfg_mod.Config, "get", classmethod(lambda cls, key, default=None: cfg.get(key, default)))
     assert mc.owner_endpoints("whatsapp", "alice", SCOPE) == {"+491700000009", "+491700000010", "+491700000011"}
+
+
+def test_the_group_pattern_agrees_with_the_group_rule():
+    """MUTATION: change either side and the two disagree on a sample."""
+    import re
+    for channel, like in inbox._GROUP_LIKE.items():
+        pattern = re.compile("^" + re.escape(like).replace("%", ".*") + "$")
+        for sample in ("1@g.us", "+491700000042", "-500", "7", "555@lid", "-1001234567890"):
+            assert bool(pattern.match(sample)) == inbox.is_group(channel, sample), (channel, sample)
+    assert "discord" not in inbox._GROUP_LIKE and not inbox.is_group("discord", "-5")
 
 
 def test_the_pure_rules_stand_alone():

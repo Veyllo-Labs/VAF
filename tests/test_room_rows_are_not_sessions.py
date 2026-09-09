@@ -66,6 +66,36 @@ def test_a_joined_room_appears_with_what_a_surface_needs(rooms):
     assert row["closed"] is False
 
 
+def test_mark_all_read_moves_the_persons_cursor_like_opening_the_room(rooms):
+    """MUTATION: drop the set_cursor call in Room.mark_read and the badge stays lit."""
+    from vaf.core.inbox import _read_rooms, mark_conversation
+    assert _room_rows(SCOPE)[0]["unread"] == 1
+    assert _read_rooms(SCOPE) == 1
+    assert _room_rows(SCOPE)[0]["unread"] == 0, "read, as looking at the room would"
+    assert _read_rooms(SCOPE) == 0, "nothing left to move"
+    # The per-row seen of the inbox goes the same way, and says whether anything moved.
+    rooms.say(rooms.join(display="Codex", scope_id=None, peer_id="p-codex"), "one more")
+    assert _room_rows(SCOPE)[0]["unread"] == 1
+    import vaf.core.web_interface as wi
+    frames = []
+    orig = wi.notify_rooms_changed
+    wi.notify_rooms_changed = lambda scope: frames.append(scope)
+    try:
+        assert mark_conversation("alice", SCOPE, "room", "room-visible", seen=True)["seen"] is True
+        assert frames == [SCOPE], "the sidebar hears of the movement"
+        assert _room_rows(SCOPE)[0]["unread"] == 0
+        assert mark_conversation("alice", SCOPE, "room", "room-visible", seen=True)["seen"] is False
+        assert frames == [SCOPE], "nothing moved, nothing announced"
+    finally:
+        wi.notify_rooms_changed = orig
+    with pytest.raises(ValueError, match="unknown room"):
+        mark_conversation("alice", SCOPE, "room", "room-visible-not-mine", done=True)
+    # The room view reads through the same primitive, not a copy of the cursor block.
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    assert "if acting and room.mark_read(acting):" in source
+    assert source.count("set_cursor(") == 0, "the cursor moves through Room.mark_read only"
+
+
 def test_the_badge_counts_only_what_the_view_would_show(rooms):
     """MUTATION: filter the badge on BOOKKEEPING_KINDS instead of NON_CONVERSATION_KINDS.
 

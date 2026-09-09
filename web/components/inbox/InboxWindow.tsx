@@ -20,7 +20,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { X, Search, RefreshCw, Inbox, ArrowLeft, Sparkles, ExternalLink } from 'lucide-react';
+import { X, Search, RefreshCw, Inbox, ArrowLeft, Sparkles, ExternalLink, CheckCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useEscapeLayer } from '@/hooks/useEscapeLayer';
 import {
@@ -58,6 +58,7 @@ export interface InboxRow {
 interface Counts {
     all: number; waits: number; unread: number; agent: number;
     per_channel: Record<string, number>; waits_per_channel: Record<string, number>;
+    unread_per_channel?: Record<string, number>; invitations?: number;
 }
 
 interface Status {
@@ -192,15 +193,16 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
     // the pill and the "waits for you" chip go out at once, and they stay out while the
     // server reports what was marked; a different count, a fresh "waits" or a newer
     // message (the state carries the newest timestamp) is news, and a mark the server
-    // refused is forgotten so the next fetch shows its state again. A room is read by
-    // opening it in the sidebar, so a room row keeps its state here.
+    // refused is forgotten so the next fetch shows its state again. A room row's seen moves
+    // the person's cursor as the room view does: reading the room here is reading it. An
+    // invitation is read by answering it, so its row posts nothing and keeps its chip.
     const [marked, setMarked] = useState<Map<string, string>>(() => new Map());
     useEffect(() => { if (!isOpen) setMarked(new Map()); }, [isOpen]);
     const stateOf = (r: InboxRow) => `${r.unread}:${r.waits ? 1 : 0}:${r.last_ts}`;
     const selectedState = live ? stateOf(live) : '';
-    const selectedNeedsMark = !!live && (live.unread > 0 || live.waits);
+    const selectedNeedsMark = !!live && live.waits_reason !== 'invitation' && (live.unread > 0 || live.waits);
     useEffect(() => {
-        if (!isOpen || !live || live.channel === 'room' || !selectedNeedsMark || marked.get(live.key) === selectedState) return;
+        if (!isOpen || !live || !selectedNeedsMark || marked.get(live.key) === selectedState) return;
         const key = live.key;
         setMarked(prev => new Map(prev).set(key, selectedState));
         const forget = () => setMarked(prev => { const next = new Map(prev); next.delete(key); return next; });
@@ -209,7 +211,7 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
             body: JSON.stringify({ channel: live.channel, id: live.id, seen: true }),
         }).then(res => { if (!res.ok) forget(); }).catch(forget);
     }, [isOpen, live, selectedState, selectedNeedsMark, marked]);
-    const readOf = (r: InboxRow) => r.channel !== 'room' && (r.key === selectedKey || marked.get(r.key) === stateOf(r));
+    const readOf = (r: InboxRow) => r.waits_reason !== 'invitation' && (r.key === selectedKey || marked.get(r.key) === stateOf(r));
     const unreadOf = (r: InboxRow) => readOf(r) ? 0 : r.unread;
     const waitsOf = (r: InboxRow) => !readOf(r) && r.waits;
 
@@ -237,6 +239,35 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
         setOpened({ row: r, reason: r.waits ? r.waits_reason : '' });
         setMobilePane('preview');
     };
+
+    // "Mark all as read": every conversation of the selected channel (or of all of them),
+    // groups and rooms as the toggle says, is read at once, server-side, so every surface
+    // drops its pills and chips; the view and the search do not narrow it. The list reloads
+    // straight away rather than waiting for the signal, and the button stays disabled until
+    // that reload landed. It is offered only while the selection holds something a read can
+    // clear: an invitation waits for a decision, not for reading.
+    const [markingAll, setMarkingAll] = useState(false);
+    const markAllRead = async () => {
+        if (markingAll) return;
+        setMarkingAll(true);
+        try {
+            await fetch(api('api/inbox/marks/all'), {
+                method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ channels: channel ? [channel] : 'all', groups }),
+            });
+        } catch { /* the list reloads either way and shows what the server says */ }
+        await load();
+        setMarkingAll(false);
+    };
+    const anythingToRead = (() => {
+        if (!counts) return false;
+        const invitations = counts.invitations ?? 0;
+        if (channel) {
+            const waits = (counts.waits_per_channel?.[channel] ?? 0) - (channel === 'room' ? invitations : 0);
+            return (counts.unread_per_channel?.[channel] ?? 0) > 0 || waits > 0;
+        }
+        return counts.unread > 0 || counts.waits - invitations > 0;
+    })();
 
     const openElsewhere = (r: InboxRow, draft: boolean) => {
         if (r.channel === 'room') { onClose(); onOpenRoom(r.id, r.name); return; }
@@ -284,6 +315,9 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                         <span className="truncate">{t('subtitle', { waits: counts?.waits ?? 0, unread: counts?.unread ?? 0 })}</span>
                     </span>
                     <div className="ml-auto flex gap-2 min-w-0">
+                        <button type="button" onClick={() => { void markAllRead(); }} disabled={markingAll || !anythingToRead} title={t('markAllReadHint')} className={cn('flex items-center gap-1.5', BTN)}>
+                            <CheckCheck className="w-4 h-4" /><span className="max-md:hidden">{t('markAllRead')}</span>
+                        </button>
                         <button type="button" onClick={() => { void load(); }} disabled={loading} className={cn('flex items-center gap-1.5', BTN)}>
                             <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} /><span className="max-md:hidden">{t('refresh')}</span>
                         </button>

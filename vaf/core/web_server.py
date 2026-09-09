@@ -725,15 +725,12 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
     # file. The notify fires only on actual movement, or the 3-second room poll
     # would broadcast a sidebar refresh forever.
     try:
-        if acting and not room.closed:
-            latest = room.store.highest_lamport()
-            if latest and room.store.cursor(acting) < latest:
-                room.store.set_cursor(acting, latest)
-                try:
-                    from vaf.core.web_interface import notify_rooms_changed
-                    notify_rooms_changed(user_scope_id)
-                except Exception:
-                    pass
+        if acting and room.mark_read(acting):
+            try:
+                from vaf.core.web_interface import notify_rooms_changed
+                notify_rooms_changed(user_scope_id)
+            except Exception:
+                pass
     except Exception:
         pass
 

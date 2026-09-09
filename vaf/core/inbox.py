@@ -405,6 +405,11 @@ def reply_window_until(agent_ts: Optional[float], in_within_ts: Optional[float],
     return until
 
 
+# The group shape of each messenger as a LIKE pattern, for the store's channel-wide read
+# (a test pins that it agrees with `is_group`).
+_GROUP_LIKE = {"whatsapp": "%@g.us", "telegram": "-%"}
+
+
 def is_group(channel: str, chat_id: str) -> bool:
     cid = str(chat_id or "")
     if channel == "whatsapp":
@@ -653,7 +658,8 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
 
 
 def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: int,
-               account_id: Optional[str] = None, folder: Optional[str] = None) -> List[Dict[str, Any]]:
+               account_id: Optional[str] = None, folder: Optional[str] = None,
+               svc: Any = None) -> List[Dict[str, Any]]:
     from vaf.tools.mail_utils import mail_v2_active
     if not mail_v2_active(username or "", user_scope_id) or not user_scope_id:
         return []
@@ -662,7 +668,7 @@ def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: 
         return []
     from vaf.core.channel_message_store import chat_marks
     from vaf.mail.service import MailService
-    svc = MailService(user_scope_id)
+    svc = svc or MailService(user_scope_id)
     marks = chat_marks(username or "", user_scope_id, channel="mail")
     threshold = waits_threshold()
     rows: List[Dict[str, Any]] = []
@@ -823,6 +829,10 @@ def list_conversations(username: Optional[str], user_scope_id: Optional[str], *,
         "agent": sum(1 for r in rows if r["answered_by_agent"]),
         "per_channel": {c: sum(1 for r in rows if r["channel"] == c) for c in CHANNELS},
         "waits_per_channel": {c: sum(1 for r in rows if r["channel"] == c and r["waits"]) for c in CHANNELS},
+        "unread_per_channel": {c: sum(r["unread"] for r in rows if r["channel"] == c) for c in CHANNELS},
+        # Invitations wait for a decision, not for reading: a window subtracts them from what
+        # "mark all as read" can clear.
+        "invitations": sum(1 for r in rows if r["waits_reason"] == WAITS_INVITATION),
         "stored_per_channel": stored_per_channel,
     }
     if view == "waits":
@@ -842,8 +852,8 @@ def mark_conversation(username: Optional[str], user_scope_id: Optional[str], cha
 
     Messenger chats write `chat_marks`; a mail thread's seen goes to every unread message of
     the thread (IMAP's flag stays the read marker, the mail window's own rule moved
-    server-side) and its done to `chat_marks`; a room's seen is refused because opening the
-    room moves the cursor, its done goes to `chat_marks`."""
+    server-side) and its done to `chat_marks`; a room's seen moves the person's cursor to the
+    newest frame (`Room.mark_read`, as the room view does), its done goes to `chat_marks`."""
     from vaf.core.channel_message_store import mark_done, mark_seen
     channel = (channel or "").strip().lower()
     chat_id = str(chat_id or "").strip()
@@ -864,21 +874,137 @@ def mark_conversation(username: Optional[str], user_scope_id: Optional[str], cha
     if channel == "mail":
         if seen and user_scope_id:
             from vaf.mail.service import MailService
-            svc = MailService(user_scope_id)
-            for m in svc.thread_messages(int(chat_id)):
-                if "\\Seen" not in (m.get("flags") or []):
-                    svc.mark_read(int(m["id"]), True)
+            _read_mail_thread(MailService(user_scope_id), int(chat_id))
             out["seen"] = True
         if done is not None:
             mark_done(username or "", "mail", chat_id, user_scope_id=user_scope_id, done=bool(done))
             out["done"] = bool(done)
         return out
+    # A room that is not the person's answers as unknown, for seen and done alike.
+    from vaf.core.session import _room_rows
+    mine = {str(r.get("room_id") or ""): r for r in _room_rows(user_scope_id)}
+    if chat_id not in mine:
+        raise ValueError("unknown room")
     if seen:
-        raise ValueError("a room is read by opening it")
+        # Reading a room in the inbox is reading it: the person's cursor moves as the room
+        # view moves it, and the sidebar hears of real movement. An invitation is read by
+        # answering it: nothing moves.
+        if mine[chat_id].get("invited"):
+            out["seen"] = False
+        else:
+            try:
+                out["seen"] = _read_room(user_scope_id, chat_id)
+            except Exception as e:
+                raise ValueError("unknown room") from e
+            if out["seen"]:
+                try:
+                    from vaf.core.web_interface import notify_rooms_changed
+                    notify_rooms_changed(user_scope_id)
+                except Exception:
+                    pass
     if done is not None:
         mark_done(username or "", "room", chat_id, user_scope_id=user_scope_id, done=bool(done))
         out["done"] = bool(done)
     return out
+
+
+def _read_mail_thread(svc: Any, thread_id: int) -> int:
+    """Every unseen message of the thread is marked read through the service (the local flag
+    first, one flags op per message for the writeback, as the mail window does). Returns how
+    many messages were marked."""
+    n = 0
+    for m in svc.thread_messages(int(thread_id)):
+        if "\\Seen" not in (m.get("flags") or []):
+            svc.mark_read(int(m["id"]), True)
+            n += 1
+    return n
+
+
+def _read_room(user_scope_id: Optional[str], room_id: str) -> bool:
+    """The person's cursor of one room moves to its newest frame (`Room.mark_read`, the rule
+    the room view applies when it is shown). Returns whether it moved."""
+    from vaf.core.a2a.room import Room, derive_peer_id, participant_key
+    room = Room.open(room_id)
+    return bool(room.mark_read(derive_peer_id(participant_key("cli", user_scope_id), room.room_id)))
+
+
+def _read_rooms(user_scope_id: Optional[str]) -> int:
+    """Every room with something to read (the rows the sidebar and the inbox list, unread
+    and not an invitation: an invitation is a decision, not a message) is read through
+    `_read_room`. Returns how many moved and announces `rooms_changed` once when any did."""
+    from vaf.core.session import _room_rows
+    moved = 0
+    for r in _room_rows(user_scope_id):
+        if int(r.get("unread") or 0) <= 0 or r.get("invited"):
+            continue
+        try:
+            if _read_room(user_scope_id, str(r.get("room_id") or "")):
+                moved += 1
+        except Exception:
+            continue
+    if moved:
+        try:
+            from vaf.core.web_interface import notify_rooms_changed
+            notify_rooms_changed(user_scope_id)
+        except Exception:
+            pass
+    return moved
+
+
+def mark_all_seen(username: Optional[str], user_scope_id: Optional[str], *,
+                  channels: Optional[Iterable[str]] = None, include_groups: bool = True,
+                  now: Optional[float] = None) -> Dict[str, int]:
+    """"Mark all as read": every conversation of the named channels (default all) counts as
+    read at once; group chats and rooms only when `include_groups` is true (they are the
+    conversations the group toggle shows).
+
+    Messenger chats go through the store's `mark_channel_seen` (one transaction over the
+    whole channel, one announce, a marker never moves backwards, no cap); the mail lane's
+    unread threads through the same per-thread seen as a single row (the newest 200
+    threads, the lane's reach, one service for the call); every unread room through the
+    person's cursor (`Room.mark_read`, as opening it would; an invitation stays). The done
+    and owner-asked marks are left alone (a read marker newer than the agent's question
+    lifts that reason by itself). Returns how many conversations were read per channel; a
+    messenger or mail lane without a store, and Discord for anybody but the local admin,
+    are absent; rooms are present whenever they were wanted."""
+    wanted = [c for c in (list(channels) if channels else list(CHANNELS)) if c in CHANNELS]
+    at = float(now) if now is not None else time.time()
+    moved: Dict[str, int] = {}
+    from vaf.core.channel_message_store import mark_channel_seen, store_exists
+    for channel in wanted:
+        if channel not in MESSENGERS:
+            continue
+        if channel == "discord" and not _local_admin(username, user_scope_id):
+            continue
+        row_user = _row_username(channel, username)
+        scope = user_scope_id if channel != "discord" else None
+        if not store_exists(row_user, scope):
+            continue
+        moved[channel] = mark_channel_seen(row_user, channel, user_scope_id=scope, ts=at,
+                                           exclude_like=None if include_groups else _GROUP_LIKE.get(channel))
+    if "mail" in wanted and user_scope_id:
+        # The same gate as the listing: a glance must never materialise an empty mail store.
+        from vaf.mail.store import MailStore
+        from vaf.tools.mail_utils import mail_v2_active
+        if mail_v2_active(username or "", user_scope_id) and MailStore.exists(user_scope_id):
+            n = 0
+            try:
+                from vaf.mail.service import MailService
+                svc = MailService(user_scope_id)
+                for row in _mail_rows(username, user_scope_id, limit=200, svc=svc):
+                    if int(row.get("unread") or 0) <= 0:
+                        continue
+                    try:
+                        if _read_mail_thread(svc, int(row["id"])):
+                            n += 1
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            moved["mail"] = n
+    if "room" in wanted and include_groups:
+        moved["room"] = _read_rooms(user_scope_id)
+    return moved
 
 
 def _stamp(ts: Optional[float]) -> Optional[str]:

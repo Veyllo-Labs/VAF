@@ -8,9 +8,12 @@ A headless install has the same question the inbox window answers, and the primi
 CLI has no authentication, so there is no `--scope` (the rule of `vaf memory`), and the
 group sits behind the same terminal door as `vaf session`, because it prints chats.
 
-Read-only by design: the seen mark is written by opening a conversation in a window, and the
-done mark has no button (it stays a primitive of the marks route); a command that flips marks
-blind would be the one place the two surfaces could disagree.
+Read-only by design: the terminal prints, it does not read for the person. The seen mark is
+written where the person reads (opening a conversation in a window) or where they say they
+have read everything (the window's "mark all as read", `mark_all_seen`), and the done mark
+has no button. A `vaf inbox read` would be one call to that same primitive, so the two
+surfaces could not disagree; it is left out until a headless install asks for it, which is
+the measurement that earns the command.
 """
 import json
 import sys

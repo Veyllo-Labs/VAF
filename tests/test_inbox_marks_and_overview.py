@@ -121,6 +121,48 @@ def test_the_overview_carries_the_reply_window_inputs(scratch):
     assert row["last_agent_ts"] == 1000.0, "the person's own send opens no window"
 
 
+def test_mark_channel_seen_reads_the_whole_channel_in_one_statement(scratch):
+    """MUTATION: drop the `seen_ts < ?` clause and an older bulk mark moves markers back;
+    drop the EXISTS clause and a read chat is counted again; route the ids through the
+    overview and the 600th chat stays unread."""
+    for i in range(600):
+        _row(f"+4917{i:08d}", "hallo", ts=100.0 + i)
+    _row("1@g.us", "wer kommt?", ts=50.0)
+    _row("+491799999999", "erledigt", ts=10.0, direction="out")   # only our own word: nothing to read, not counted
+    frames = scratch
+    store._reset_announce_state()   # the seed's own announce and its trailing timer are not under test
+    frames.clear()
+    assert store.mark_channel_seen("alice", "whatsapp", user_scope_id=SCOPE, ts=1000.0, exclude_like="%@g.us") == 600
+    assert frames == [SCOPE], "one announce for the whole channel"
+    marks = store.chat_marks("alice", SCOPE, channel="whatsapp")
+    assert marks[("whatsapp", "+491700000000")]["seen_ts"] == 1000.0 and marks[("whatsapp", "+491700000599")]["seen_ts"] == 1000.0, "no cap"
+    assert (marks.get(("whatsapp", "1@g.us")) or {}).get("seen_ts") is None, "the group pattern left alone"
+    assert (marks.get(("whatsapp", "+491799999999")) or {}).get("seen_ts") is None, "nothing to read, nothing marked"
+    unread = {r["chat_id"]: r["unread"] for r in store.chat_overview("alice", user_scope_id=SCOPE, channel="whatsapp", limit=500)}
+    assert all(v == 0 for k, v in unread.items() if k != "1@g.us"), "every listed chat reads as read"
+    assert store.mark_channel_seen("alice", "whatsapp", user_scope_id=SCOPE, ts=1000.0) == 1, "now the group, nothing else twice"
+    store._reset_announce_state(); frames.clear()
+    assert store.mark_channel_seen("alice", "whatsapp", user_scope_id=SCOPE, ts=900.0) == 0, "never backwards"
+    assert frames == [], "nothing moved, nothing announced"
+    assert store.chat_marks("alice", SCOPE, channel="whatsapp")[("whatsapp", "+4917" + "0" * 8)]["seen_ts"] == 1000.0
+    # The agent's unanswered question counts as something to read; one the agent or the
+    # person answered since does not.
+    store.mark_owner_asked("alice", "whatsapp", "+491700000001", user_scope_id=SCOPE, ts=1100.0)
+    store.mark_owner_asked("alice", "whatsapp", "+491700000002", user_scope_id=SCOPE, ts=1100.0)
+    _row("+491700000002", "ich frage nach", ts=1200.0, direction="out")
+    # A done chat the agent asked about is not waiting either: closed by the mark, or by the
+    # person's own newest reply.
+    store.mark_owner_asked("alice", "whatsapp", "+491700000004", user_scope_id=SCOPE, ts=1100.0)
+    store.mark_done("alice", "whatsapp", "+491700000004", user_scope_id=SCOPE, ts=1150.0)
+    store.mark_owner_asked("alice", "whatsapp", "+491700000005", user_scope_id=SCOPE, ts=1100.0)
+    _row("+491700000005", "ja, gleich", ts=1050.0, direction="out", sender=store.OWNER_SENDER)
+    assert store.mark_channel_seen("alice", "whatsapp", user_scope_id=SCOPE, ts=1300.0) == 1
+    marks = store.chat_marks("alice", SCOPE, channel="whatsapp")
+    assert marks[("whatsapp", "+491700000001")]["seen_ts"] == 1300.0 and marks[("whatsapp", "+491700000002")]["seen_ts"] == 1000.0
+    assert marks[("whatsapp", "+491700000004")]["seen_ts"] == 1000.0 and marks[("whatsapp", "+491700000005")]["seen_ts"] == 1000.0
+    assert store.mark_channel_seen("alice", "telegram", user_scope_id=SCOPE) == 0, "another channel: nothing there"
+
+
 def test_done_and_owner_asked_marks_round_trip(scratch):
     _row("+491700000042", "hi", ts=100.0)
     store.mark_done("alice", "whatsapp", "+491700000042", user_scope_id=SCOPE, ts=150.0)

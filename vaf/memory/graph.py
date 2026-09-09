@@ -17,6 +17,7 @@ from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from vaf.memory.models import Memory, Connection, Chunk, EMBEDDING_DIM
+from vaf.memory.lanes import not_attachment_lane, not_chat_lane
 from vaf.core.config import Config
 import logging
 
@@ -76,12 +77,9 @@ class GraphManager:
         conditions = []
         if not include_deleted:
             conditions.append(Memory.is_deleted == False)  # noqa: E712
-        conditions.append(
-            or_(
-                Memory.meta["source"].astext.is_(None),
-                Memory.meta["source"].astext != "attachment_ephemeral",
-            )
-        )
+        # Chat namespaces stay IN this query: the owner's graph is the one place they are
+        # visible, grouped under their chat node.
+        conditions.append(not_attachment_lane())
         if user_scope_id is not None:
             conditions.append(Memory.user_scope_id == user_scope_id)
 
@@ -431,6 +429,9 @@ class GraphManager:
             scope_filters.append(Memory.user_scope_id == memory.user_scope_id)
         else:
             scope_filters.append(Memory.user_scope_id.is_(None))
+        # Never wire an ordinary memory to what was learned inside a messenger chat: the
+        # graph edge would be the one path that crosses the lane.
+        scope_filters.append(not_chat_lane())
 
         query = select(Memory, Memory.embedding.cosine_distance(memory.embedding).label("distance")).where(
             and_(*scope_filters)

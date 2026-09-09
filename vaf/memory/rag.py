@@ -37,7 +37,12 @@ from vaf.core.cost import usage_lane
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-ATTACHMENT_EPHEMERAL_SOURCE = "attachment_ephemeral"
+# The lane predicates live in vaf/memory/lanes.py (graph.py applies them too and cannot
+# import this module); the constant is re-exported here for its existing importers.
+from vaf.memory.lanes import (  # noqa: E402
+    ATTACHMENT_EPHEMERAL_SOURCE, ChatNamespace, chat_source, in_chat_lane,
+    not_attachment_lane, not_chat_lane, pin_namespace,
+)
 
 # Memory types whose content is DOCUMENT text, not something about the person. A learned PDF
 # contributes hundreds of chunks; the facts about a user are a handful, so on any similarity search
@@ -389,7 +394,19 @@ class RagPipeline:
         result = await self.db.execute(stmt)
         await self.db.flush()
         return result.rowcount if hasattr(result, "rowcount") else 0
-    
+
+    async def clear_chat_namespace(self, chat_key: str, user_scope_id: Optional[UUID]) -> int:
+        """Delete every memory learned in one messenger chat. Hard, on purpose: this is the
+        right to be forgotten for a person who is not the account owner, and a soft delete
+        would keep their facts on disk. Chunks and connections go with the database's
+        ON DELETE CASCADE. Fails closed: without a scope nothing is deleted, because the
+        wrapped delete reads a None scope as `user_scope_id IS NULL`, which is the legacy
+        rows and not "every scope"."""
+        key = (chat_key or "").strip()
+        if user_scope_id is None or not key:
+            return 0
+        return await self.delete_memories_by_source_scope(chat_source(key), user_scope_id)
+
     async def search(
         self,
         query: str,
@@ -399,6 +416,7 @@ class RagPipeline:
         user_scope_id: Optional[UUID] = None,
         hybrid: Optional[bool] = None,
         exclude_documents: bool = False,
+        chat_key: Optional[str] = None,
     ) -> List[RagSource]:
         """
         Search for relevant memories using vector similarity.
@@ -424,6 +442,14 @@ class RagPipeline:
                 An UNTYPED memory is kept: this store predates the type field, and
                 excluding what it cannot classify would silently drop old facts.
                 Off by default, so every existing caller is byte-identical.
+            chat_key: the lane switch for what the agent learned inside ONE messenger
+                chat (`source = chat/<session id>`, see vaf/memory/lanes.py). None, the
+                default for every existing caller, keeps EVERY chat namespace out of both
+                lanes; a key restricts both lanes to exactly that namespace. Applied in
+                SQL for the same recall reason as `exclude_documents`. It is a parameter
+                and is never read out of `metadata_filter`: that dict arrives unfiltered
+                from three public routes, and a namespace that a request body could open
+                by guessing a session id would not be a namespace.
 
         Returns:
             List of RagSource objects
@@ -465,12 +491,13 @@ class RagPipeline:
             metadata_filter and str(metadata_filter.get("source", "")).strip().lower() == ATTACHMENT_EPHEMERAL_SOURCE
         )
         if not wants_attachment_lane:
-            filters.append(
-                or_(
-                    Memory.meta["source"].astext.is_(None),
-                    Memory.meta["source"].astext != ATTACHMENT_EPHEMERAL_SOURCE,
-                )
-            )
+            filters.append(not_attachment_lane())
+        # A chat namespace is invisible to every ordinary lookup and is the ONLY thing a
+        # caller that names one sees; both lanes carry the predicate, in SQL.
+        if chat_key:
+            filters.append(in_chat_lane(chat_key))
+        else:
+            filters.append(not_chat_lane())
         if exclude_documents:
             filters.append(_not_document_memory())
 
@@ -567,12 +594,11 @@ class RagPipeline:
             # document chunks straight back into the RRF the vector lane just excluded them from.
             lexical_filters.append(_not_document_memory())
         if not wants_attachment_lane:
-            lexical_filters.append(
-                or_(
-                    Memory.meta["source"].astext.is_(None),
-                    Memory.meta["source"].astext != ATTACHMENT_EPHEMERAL_SOURCE,
-                )
-            )
+            lexical_filters.append(not_attachment_lane())
+        if chat_key:
+            lexical_filters.append(in_chat_lane(chat_key))
+        else:
+            lexical_filters.append(not_chat_lane())
         # Scope is guaranteed here (the vector lane above already fails closed on an empty scope), but
         # filter unconditionally so the lexical lane can never widen past the caller's scope.
         lexical_filters.append(Memory.user_scope_id == user_scope_id)
@@ -902,7 +928,9 @@ Always cite which source(s) you used."""
             if "tags" in metadata and isinstance(metadata["tags"], list):
                 raw = [t.strip().lower() for t in metadata["tags"] if t and t.strip()]
                 metadata["tags"] = expand_tags_with_links(raw)
-            memory.meta = {**(memory.meta or {}), **metadata}
+            # The lane is set at ingest and an update cannot move a memory across it.
+            before = dict(memory.meta or {})
+            memory.meta = pin_namespace(before, {**before, **metadata})
         
         if content:
             # Re-encrypt content
@@ -1080,7 +1108,8 @@ Always cite which source(s) you used."""
         include_deleted: bool = False,
         tag_filter: Optional[List[str]] = None,
         type_filter: Optional[str] = None,
-        user_scope_id: Optional[UUID] = None
+        user_scope_id: Optional[UUID] = None,
+        chat_key: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         List memories with pagination and filters.
@@ -1092,17 +1121,16 @@ Always cite which source(s) you used."""
             tag_filter: Filter by tags
             type_filter: Filter by type
             user_scope_id: Filter by user scope (only show user's memories)
+            chat_key: list ONE chat namespace instead of the general lane (see `search`)
 
         Returns:
             List of memory dicts (without content)
         """
-        conditions = [Memory.is_deleted == include_deleted]
-        conditions.append(
-            or_(
-                Memory.meta["source"].astext.is_(None),
-                Memory.meta["source"].astext != ATTACHMENT_EPHEMERAL_SOURCE,
-            )
-        )
+        conditions = [Memory.is_deleted == include_deleted, not_attachment_lane()]
+        if chat_key:
+            conditions.append(in_chat_lane(chat_key))
+        else:
+            conditions.append(not_chat_lane())
         if user_scope_id is not None:
             conditions.append(Memory.user_scope_id == user_scope_id)
 

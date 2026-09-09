@@ -31,7 +31,7 @@ from vaf.memory.models import Memory
 from vaf.memory.embeddings import MAX_EMBED_INPUT_CHARS
 
 
-ATTACHMENT_SOURCE = "attachment_ephemeral"
+from vaf.memory.lanes import ATTACHMENT_EPHEMERAL_SOURCE as ATTACHMENT_SOURCE  # noqa: E402
 _attachment_rag_killed = False
 _attachment_rag_kill_reason = ""
 _fingerprint_lock = threading.Lock()

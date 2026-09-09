@@ -140,11 +140,18 @@ All memory access methods accept and enforce `user_scope_id`:
 | `get_memory(id)` | Filters by `Memory.user_scope_id == user_scope_id` |
 | `update_memory(id)` | Filters by scope before allowing update |
 | `delete_memory(id)` | Filters by scope before soft-delete |
-| `search_memories()` | Filters query results by scope; an empty scope returns `[]` (fail-closed) in both vector and lexical/hybrid lanes - never "search all" |
+| `search_memories()` | Filters query results by scope; an empty scope returns `[]` (fail-closed) in both vector and lexical/hybrid lanes - never "search all". Both lanes also leave every `chat/<session id>` namespace out unless the caller names one with `chat_key`, which no request body can do |
 | `store_memory()` | Stamps `user_scope_id` on new records |
 | `get_all_memories()` | Filters listing by scope |
 
 If a user tries to access a memory ID that belongs to another user, the query returns `None` (not found) - the same response as if the memory doesn't exist. This prevents information leakage through error messages.
+
+**Scope is not the only partition.** Inside one scope, what the agent learned in a messenger chat with a
+contact lives in that chat's own namespace (`meta.source = chat/<session id>`, see
+[MEMORY_SYSTEM.md](../memory/MEMORY_SYSTEM.md#chat-memory-namespaces-what-a-contact-chat-teaches-stays-in-that-chat)).
+Every ordinary lookup of the owner's own agent leaves those rows out in SQL; only a turn inside that chat
+and the Composer for that chat name the namespace, `update_memory` cannot move a row across the boundary,
+and the namespace is deleted hard, as one unit, from the Memory page.
 
 ### Graph Connections (`vaf/memory/graph.py`)
 
@@ -156,6 +163,8 @@ if memory.user_scope_id is not None:
     scope_filters.append(Memory.user_scope_id == memory.user_scope_id)
 else:
     scope_filters.append(Memory.user_scope_id.is_(None))
+# Never wire an ordinary memory to what was learned inside a messenger chat.
+scope_filters.append(not_chat_lane())
 ```
 
 Manual connection operations (`update_connections`, `move_memory`, `get_tree_children`) all validate that both source and target memories belong to the same user.

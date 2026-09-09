@@ -378,6 +378,10 @@ curl -X POST http://localhost:8000/api/memory/search \
         "title": "string",
         "tags": ["string"],
         "type": "note|conversation|document|document_index|attachment_section|attachment_ephemeral|code|knowledge",
+        "source": "memory/<date> | memory_save | room/<id> | chat/<session id> | attachment_ephemeral | ...",
+        "chat_key": "session id, only on a memory learned inside one messenger chat",
+        "chat_channel": "whatsapp | telegram, with chat_key",
+        "chat_label": "the person's name as the bridge knew it, with chat_key",
         "preview": "string (first 200 chars)",
         "created_at": "ISO datetime"
     },
@@ -429,9 +433,11 @@ Measured on a real store on 2026-08-30 - 704 chunks, of which 475 (67.5%) were d
   personal ones, because this store predates the `type` field and an inclusion list would silently
   drop old facts.
 
-**Ordinary RAG is unchanged.** The flag is off by default, so every other lookup - the chat memory
+**Ordinary RAG is unchanged** by this flag. It is off by default, so every other lookup - the chat memory
 block, the `memory_search` tool, librarian, coder, research, voice, mail - searches the whole store
-exactly as before, and a question about a document still answers from the document. Verified on the
+exactly as before, and a question about a document still answers from the document. The one lane every
+ordinary lookup leaves out regardless of this flag is the chat namespaces described in
+[Chat memory namespaces](#chat-memory-namespaces-what-a-contact-chat-teaches-stays-in-that-chat). Verified on the
 same store after the change, through the ordinary path with no flag:
 
 | query, default path | document chunks in the top 8 |
@@ -444,6 +450,42 @@ with its own `attachment_rag_*` keys and never passes through this argument.
 
 Exactly two callers opt in, both of which ask about the PERSON in plain words:
 `refresh_user_profile_summary` and the thinking run's memory digest.
+
+### Chat memory namespaces: what a contact chat teaches stays in that chat
+
+A memory learned inside one messenger chat with a contact is an ordinary row in `memories` and
+`chunks` whose `meta.source` is `chat/<session id>` and whose `meta` also carries `chat_key` (the
+session id the bridge built, `whatsapp_<user>_<digits>` or `telegram_<id>`), `chat_channel` and
+`chat_label` (the person's name as the bridge knew it); `type` stays `conversation`. The session id
+IS the namespace: the agent answering in that chat, the compaction that learns from it and the
+Composer drafting for it all derive the same lane from the same id, and nothing else names one.
+
+The contract, implemented once in `vaf/memory/lanes.py` and applied by `RagPipeline.search`,
+`list_memories` and `GraphManager.auto_connect_memory`:
+
+- **Every ordinary lookup leaves every chat namespace out**, in SQL, in both lanes of the hybrid
+  search (`source IS NULL OR source NOT LIKE 'chat/%'`). Rows without a `source` are kept, because
+  the store predates the field. A lookup that names one namespace (`chat_key=`) sees exactly that
+  source and nothing else, ranked within it.
+- **The switch is a parameter, never a `metadata_filter` entry.** `POST /api/memory/search`,
+  `/rag/query` and `/rag/query/stream` forward the client's `metadata_filter` unfiltered, and a
+  namespace that a request body could open by guessing a session id would not be a namespace. The
+  attachment lane's `metadata_filter["source"]` escape is deliberately not the model here.
+- **The lane is set at ingest and an update cannot move it.** `update_memory` pins `source` and the
+  three namespace keys of a chat memory and strips them from any other memory (`pin_namespace`).
+- **Auto-connect never crosses the lane.** An API-created memory (which auto-connects by default)
+  is never wired to a chat memory; chat memories are ingested without auto-connect.
+- **The graph and read-by-id are the owner's admin view.** `get_graph_data` keeps chat memories in
+  its query and groups them under one node per chat; `GET /api/memory/{id}` returns one when the
+  owner asks for it by id. Nothing else in the product reaches them.
+- **Deleting a namespace is hard.** `RagPipeline.clear_chat_namespace(chat_key, scope)` deletes
+  every row of that source in the caller's scope (chunks and connections go with the database's
+  ON DELETE CASCADE), refuses a missing scope, and leaves nothing to audit: it is the right to be
+  forgotten for a person who is not the account owner, so a soft delete that keeps their facts on
+  disk would be the wrong tool.
+
+Who writes into a namespace, who reads it inside a chat, and how it looks in the graph is
+described under [Session Compaction](#session-compaction-background) and the graph section.
 
 ## Encryption
 

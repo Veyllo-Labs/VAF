@@ -13,6 +13,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **A messenger chat has its own memory.** What the agent learns inside a chat with a
+  contact is stored in that chat's own namespace (`source = chat/<session id>`), which every
+  ordinary lookup of your agent leaves out in SQL, in both lanes of the hybrid search. Only
+  a turn inside that chat and the WhatsApp Composer for that chat read it, on top of your
+  general memory. The namespace switch is a parameter of the search and is never read from
+  a request body, an update cannot move a memory across the boundary, and auto-connect never
+  crosses it.
 - **Undo and redo in every editor.** The document editor (the DOCX path and the HTML
   path), the code viewer and the custom tool editor have Undo and Redo buttons, and answer
   Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z (Cmd on a Mac) while the keyboard is inside them. The

@@ -10,8 +10,9 @@
 // conversation history comes from, and the cards for its settings. Everything the
 // three channels used to copy from each other (list, bubbles, in-chat search, day
 // separators, Memory Learning counter, keyboard handling) lives here once, and the
-// pieces the inbox window reads too (the bubbles, the history hook, the compose box,
-// the state chips) are exported from here rather than copied a fourth time.
+// pieces the inbox window reads too (the bubbles, the history hook, the state chips)
+// and the compose box the WhatsApp window uses are exported from here rather than
+// copied a fourth time.
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTranslations } from 'next-intl';
@@ -354,26 +355,37 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
     const { sessionHistory, historyCompaction, historyLoading } = useConversationHistory(historyKey, isOpen, historyUrl, historyVersion);
 
     // Opening a chat reads it: the seen mark goes to the store (the inbox's unread clears
-    // on every surface), and the row's pill goes out at once instead of waiting for the
-    // next fetch. It stays out while the server still reports the count that was marked;
-    // a different count is news. "Waits" stays: reading is not answering.
-    const [markedUnread, setMarkedUnread] = useState<Map<string, number>>(() => new Map());
-    useEffect(() => { if (!isOpen) setMarkedUnread(new Map()); }, [isOpen]);
-    const selectedUnread = selected?.unread ?? 0;
+    // on every surface), and the row's pill and its "waits for you" go out at once instead
+    // of waiting for the next fetch. Reading takes a chat off "waits": the person read it
+    // and decides for themselves whether to answer. The local state stays while the
+    // server still reports what was marked; a different count, a fresh "waits" or a newer
+    // message (the state carries the newest timestamp, so one new question after one read
+    // question is news too) is news, and a mark the server refused is forgotten so the
+    // next fetch shows its state again. The conversation header keeps saying why the chat
+    // was flagged until the window next fetches.
+    const [marked, setMarked] = useState<Map<string, string>>(() => new Map());
+    useEffect(() => { if (!isOpen) setMarked(new Map()); }, [isOpen]);
+    const stateOf = (c: ShellChat) => `${c.unread ?? 0}:${c.waits ? 1 : 0}:${c.ts ?? 0}`;
+    const selectedState = selected ? stateOf(selected) : '';
+    const selectedNeedsMark = !!selected && ((selected.unread ?? 0) > 0 || !!selected.waits);
     useEffect(() => {
-        if (!channel || !isOpen || !selected || selectedUnread <= 0 || markedUnread.get(selected.id) === selectedUnread) return;
-        setMarkedUnread(prev => new Map(prev).set(selected.id, selectedUnread));
+        if (!channel || !isOpen || !selected || !selectedNeedsMark || marked.get(selected.id) === selectedState) return;
+        const key = selected.id;
+        setMarked(prev => new Map(prev).set(key, selectedState));
+        const forget = () => setMarked(prev => { const next = new Map(prev); next.delete(key); return next; });
         for (const id of selected.markIds ?? [selected.id]) {
             fetch(api('api/inbox/marks'), {
                 method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ channel, id, seen: true }),
-            }).catch(() => {});
+            }).then(res => { if (!res.ok) forget(); }).catch(forget);
         }
-    }, [channel, isOpen, selected, selectedUnread, markedUnread]);
-    const unreadOf = (c: ShellChat) => (c.id === selectedId || markedUnread.get(c.id) === (c.unread ?? 0)) ? 0 : (c.unread ?? 0);
+    }, [channel, isOpen, selected, selectedState, selectedNeedsMark, marked]);
+    const readOf = (c: ShellChat) => c.id === selectedId || marked.get(c.id) === stateOf(c);
+    const unreadOf = (c: ShellChat) => readOf(c) ? 0 : (c.unread ?? 0);
+    const waitsOf = (c: ShellChat) => !readOf(c) && !!c.waits;
 
     // "N waiting for you" in the list header jumps to the next waiting chat, round and round.
-    const waiting = useMemo(() => chats.filter(c => c.waits), [chats]);
+    const waiting = useMemo(() => chats.filter(c => c.waits && !(c.id === selectedId || marked.get(c.id) === stateOf(c))), [chats, selectedId, marked]);
     const jumpToWaiting = () => {
         if (waiting.length === 0) return;
         const idx = selectedId ? waiting.findIndex(c => c.id === selectedId) : -1;
@@ -497,7 +509,7 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                             <span className="text-[#9a9a9a] flex-shrink-0">{fmtWhen(c.ts)}</span>
                                         </div>
                                         <div className="text-xs text-[#9a9a9a] truncate pr-20 min-h-[1rem]">{c.preview || ''}</div>
-                                        <StateChips unread={unreadOf(c)} waits={c.waits} waitsReason={c.waitsReason}
+                                        <StateChips unread={unreadOf(c)} waits={waitsOf(c)} waitsReason={c.waitsReason}
                                             answeredByAgent={c.answeredByAgent} done={c.done} className="pr-20" />
                                     </div>
                                 </div>
@@ -520,7 +532,7 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                             <span className="truncate">{selected.label}</span>
                                             {/* nowrap: next to the Composer column the header is narrower, and a badge broken over two lines read as two badges. */}
                                             <span className={cn('text-[11px] px-1.5 rounded-md font-normal whitespace-nowrap', selected.badge.cls)}>{selected.badge.label}</span>
-                                            {selected.waits && <span className="font-normal"><WaitsChip reason={selected.waitsReason} /></span>}
+                                            {waitsOf(selected) && <span className="font-normal"><WaitsChip reason={selected.waitsReason} /></span>}
                                         </div>
                                         <div className="text-xs text-[#9a9a9a] truncate">{selected.subline}</div>
                                     </div>

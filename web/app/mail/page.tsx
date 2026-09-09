@@ -150,9 +150,11 @@ function splitDraft(body: string): [string, string] {
     return [lines.slice(0, idx).join('\n'), lines.slice(idx).join('\n')];
 }
 
-function ComposeModal({ prefill, accounts, threadId, anchorPk, composerEnabled, onClose, onQueued }: {
+function ComposeModal({ prefill, accounts, threadId, anchorPk, composerEnabled, autoDraft, onClose, onQueued }: {
     prefill: Partial<Prefill> | null; accounts: Account[];
     threadId: number | null; anchorPk: number | null; composerEnabled: boolean;
+    /** Run the Mail Composer's draft as soon as the modal opens (the inbox's "write a draft"). */
+    autoDraft?: boolean;
     onClose: () => void; onQueued: (opId: number, undoSeconds: number) => void;
 }) {
     const t = useTranslations('mailV2');
@@ -264,6 +266,13 @@ function ComposeModal({ prefill, accounts, threadId, anchorPk, composerEnabled, 
             abortRef.current = null;
         }
     }, [body, threadId, anchorPk, assistInstruction, turns, t]);
+    // The inbox's draft jump: the reply composer is open on the thread, so the draft starts.
+    const autoDraftDone = useRef(false);
+    useEffect(() => {
+        if (!autoDraft || autoDraftDone.current || !composerEnabled || threadId === null) return;
+        autoDraftDone.current = true;
+        void runComposer('draft');
+    }, [autoDraft, composerEnabled, threadId, runComposer]);
     const send = useCallback(async () => {
         setSending(true);
         setError('');
@@ -567,6 +576,8 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
     const [syncing, setSyncing] = useState(false);
     const [error, setError] = useState('');
     const [compose, setCompose] = useState<Partial<Prefill> | null | false>(false);
+    // The reply composer opened by the inbox's draft jump runs the Mail Composer itself.
+    const [composeAutoDraft, setComposeAutoDraft] = useState(false);
     const [undoState, setUndoState] = useState<{ opId: number; seconds: number } | null>(null);
     const [sentNotice, setSentNotice] = useState(false);
     const [failedSends, setFailedSends] = useState<{ id: number; subject?: string }[]>([]);
@@ -680,7 +691,8 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                 jpost(`api/mail/messages/${m.id}/flags`, { read: true }, 'PATCH').catch(() => undefined);
             }
             if (unread.length) {
-                setThreads(prev => prev.map(tr => tr.thread_id === row.thread_id ? { ...tr, unread_count: 0 } : tr));
+                // A read thread no longer waits for you: the person read it and decides.
+                setThreads(prev => prev.map(tr => tr.thread_id === row.thread_id ? { ...tr, unread_count: 0, waits: false, waits_reason: '' } : tr));
                 loadFolders();   // the folder badge must drop along with the row
             }
         } catch { setThreadMsgs([]); }
@@ -742,6 +754,7 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
         if (activeThread !== pending) { draftPendingRef.current = null; return; }
         if (threadMsgs.length === 0 || threadMsgs.some(m => m.thread_id !== undefined && m.thread_id !== pending)) return;
         draftPendingRef.current = null;
+        setComposeAutoDraft(true);
         void openCompose('reply');
     }, [activeThread, threadMsgs, openCompose]);
 
@@ -1087,7 +1100,8 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                 <ComposeModal prefill={compose} accounts={status.accounts || []}
                     threadId={activeThread} anchorPk={threadMsgs[threadMsgs.length - 1]?.id ?? null}
                     composerEnabled={status.composer_enabled !== false}
-                    onClose={() => setCompose(false)}
+                    autoDraft={composeAutoDraft}
+                    onClose={() => { setCompose(false); setComposeAutoDraft(false); }}
                     onQueued={(opId, seconds) => setUndoState({ opId, seconds })} />
             )}
             {undoState && (

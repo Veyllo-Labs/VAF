@@ -53,17 +53,31 @@ def test_the_badge_and_the_window_follow_the_signal_not_a_timer():
 
 def test_the_window_reads_the_shells_pieces_and_registers_its_own_escape_rungs():
     src = _read(WINDOW)
-    for piece in ("ComposeBox", "ConversationBubbles", "StateChips", "WaitsChip", "useConversationHistory", "initials", "fmtWhen"):
+    for piece in ("ConversationBubbles", "StateChips", "WaitsChip", "useConversationHistory", "initials", "fmtWhen"):
         assert piece in src.split("from '@/components/connections/ChannelDashboardShell';", 1)[0], piece
     assert "rounded-tr-sm" not in src and "const FIELD" not in src, "the bubbles and the compose field live in the shell"
     levels = re.findall(r"useEscapeLayer\(\{ active: [^\n]+?, level: (\d+)", src)
     assert levels == ["67", "66", "65"], levels
     assert "addEventListener('keydown'" not in src
-    assert "fetch(api('api/inbox/marks'), {" in src and "seen: true" in src and "done: value" in src
+    assert "fetch(api('api/inbox/marks'), {" in src and "seen: true" in src
+    assert "done: value" not in src and "done: true" not in src and "setDoneMark" not in src and "t('markDone')" not in src and "t('reopen')" not in src, \
+        "no done or read button: opening a row reads it, and the reader decides"
+    assert "fetch(api(`api/inbox/summary?${summaryParams}`)" in src, "the rail's counts are the whole inbox's, not the narrowed result's"
+    assert "setCounts(sum?.ok ? await sum.json() : (json.counts ?? null));" in src
     assert "t('unanswered', { name: selected.name || selected.id })" in src, "the reason is said in one sentence"
-    assert "{selected.waits && (" in src and "setDoneMark(selected, true)" in src, "needs-no-answer only where a chat waits"
-    assert "{!selected.waits && selected.done && (" in src and "setDoneMark(selected, false)" in src, "reopen only where one was closed"
-    assert "setDoneMark(selected, !selected.done)" not in src
+    # Reading takes a row off "waits for you": the chips clear at once, the opened row outlives the
+    # list it may leave, and the amber sentence keeps the reason the row was opened with.
+    assert "const readOf = (r: InboxRow) => r.channel !== 'room' && (r.key === selectedKey || marked.get(r.key) === stateOf(r));" in src
+    assert "const waitsOf = (r: InboxRow) => !readOf(r) && r.waits;" in src and "waits={waitsOf(r)}" in src and "{waitsOf(selected) && <WaitsChip" in src
+    assert "if (!isOpen || !live || live.channel === 'room' || !selectedNeedsMark || marked.get(live.key) === selectedState) return;" in src
+    assert "const stateOf = (r: InboxRow) => `${r.unread}:${r.waits ? 1 : 0}:${r.last_ts}`;" in src, "a newer message is news even at the same count"
+    assert "}).then(res => { if (!res.ok) forget(); }).catch(forget);" in src, "a refused mark is forgotten, so the next fetch shows the server's state"
+    assert "const movedOn = !!(live && opened && (live.last_ts > opened.row.last_ts || live.answered_by_agent || live.done));" in src
+    assert "const selected = live ?? (opened && opened.row.key === selectedKey ? opened.row : null);" in src
+    assert "const noteReason = live?.waits ? live.waits_reason : (opened && opened.row.key === selectedKey && !movedOn ? opened.reason : '');" in src
+    assert "setOpened({ row: r, reason: r.waits ? r.waits_reason : '' });" in src
+    assert "{noteReason === 'unanswered' && (" in src and "{noteReason === 'owner_asked' && (" in src and "{noteReason === 'invitation' && (" in src
+    assert "selected.waits &&" not in src and "selected.waits_reason ===" not in src, "the header and the notes read the local state, not the stale server flag"
     assert "api/inbox/history?channel=" in src
 
 
@@ -87,10 +101,18 @@ def test_the_window_closes_before_it_opens_a_channel_window_and_every_window_acc
     assert "jumpHandledRef.current === initialThread" in mail and "draftPendingRef.current = initialDraft ? initialThread : null" in mail
 
 
-def test_the_compose_box_obeys_the_whatsapp_rule_and_the_unread_token_is_mails():
+def test_the_inbox_has_no_input_field_and_a_draft_starts_the_composer_in_the_channel_window():
     src = _read(WINDOW)
-    assert "selected.channel === 'whatsapp' && selected.can_compose ? (" in src
-    assert "fetch(api('api/whatsapp/send'), {" in src and "api/telegram/send" not in src and "api/discord/send" not in src
+    assert "ComposeBox" not in src and "api/whatsapp/send" not in src and "api/telegram/send" not in src, \
+        "the inbox reads and decides; writing happens in the channel window"
+    assert "const canDraft = (r: InboxRow) => (r.channel === 'whatsapp' && r.can_compose) || r.channel === 'mail';" in src
+    assert "openElsewhere(selected, true)" in src, "write a draft jumps with the draft flag"
+    wa = _read(WEB / "components" / "connections" / "WhatsAppDashboard.tsx")
+    assert "runDraftRef.current = (chatId: string) => {" in wa and "void runComposer(s, 'draft');" in wa, \
+        "the WhatsApp window runs the Composer's draft for a draft jump"
+    assert "if (runDraftRef.current?.(pending)) draftPendingRef.current = null;" in wa
+    mail = _read(WEB / "app" / "mail" / "page.tsx")
+    assert "autoDraft={composeAutoDraft}" in mail and "void runComposer('draft');" in mail.split("autoDraftDone.current = true;", 1)[1][:200]
     assert "bg-[#e05d44]" not in src, "the unread pill comes from the shell, not a second definition"
     assert "bg-[#25a244]" in src and "bg-[#2aabee]" in src and "bg-[#5865f2]" in src and "bg-[#e0a03c]" in src and "bg-[#a78bfa]" in src
 
@@ -103,8 +125,8 @@ def test_mobile_is_additive_and_the_three_panes_stack():
     assert "grid-cols-[320px_1fr] max-md:grid-cols-1" in shell and "gridTemplateColumns" not in shell
     assert "mobilePane === 'preview' && 'max-md:hidden'" in src and "mobilePane === 'list' && 'max-md:hidden'" in src
     assert 'className="md:hidden p-1.5' in src, "the back button exists on a phone only"
-    assert "if (mobilePane === 'preview' && selectedKey && !selected) setMobilePane('list');" in src, \
-        "a row that vanished under the preview steps the phone back to the list"
+    assert "setMobilePane('list')" in src and "!selected) setMobilePane('list')" not in src, \
+        "the opened row outlives the list, so the phone never lands on an empty preview and never steps back on its own"
     assert "max-md:flex-row max-md:flex-nowrap max-md:overflow-x-auto" in src, "the rail becomes a chip strip that scrolls sideways"
 
 

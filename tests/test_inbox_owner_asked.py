@@ -6,7 +6,7 @@ vaf/core/headless_runner.py).
 
 In Front Office mode a send tool that names no foreign recipient reaches the owner: that is
 the back-channel question, and the inbox shows the contact's chat as waiting for the person
-until they answer or the agent writes to the contact again. The runner stamps which chat the
+until they open the chat or answer, or the agent writes to the contact again. The runner stamps which chat the
 turn belongs to next to the Front Office flag and resets it wherever that flag resets.
 
 MUTATION: drop the mark in Agent._record_owner_question and the first test goes red; stamp

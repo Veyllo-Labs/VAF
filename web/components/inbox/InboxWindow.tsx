@@ -8,19 +8,23 @@
 // four states the channel windows and the agent's `inbox` tool show, because all of
 // them read the rows vaf/core/inbox.py builds (docs/integrations/INBOX.md). A rail with
 // the views, the channels and the two toggles, the list, and a preview with the
-// conversation, the actions and, for a WhatsApp chat the person writes in themselves,
-// the compose box. It refetches on the `inbox_changed` signal, never on a timer. The
-// bubbles, the history hook, the compose box and the chips come from the channel
-// shell; nothing here is a fourth copy. Escape: 65 closes the window, 66 clears a
-// running search first, 67 steps back from the preview on a phone.
+// conversation and the actions. No input field and no done or read button: the inbox is
+// the place to read and to decide. Opening a row reads it, and a read row no longer waits
+// for you (the person read it and decides for themselves whether to answer), so the
+// opened row outlives the list it may leave. Writing happens in the channel window with
+// the Composer beside it, and "write a draft" opens that window on the chat and starts
+// the Composer. It refetches on the
+// `inbox_changed` signal, never on a timer. The bubbles, the history hook and the chips
+// come from the channel shell; nothing here is a fourth copy. Escape: 65 closes the
+// window, 66 clears a running search first, 67 steps back from the preview on a phone.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { X, Search, RefreshCw, Inbox, ArrowLeft, Sparkles, ExternalLink, Check, Undo2 } from 'lucide-react';
+import { X, Search, RefreshCw, Inbox, ArrowLeft, Sparkles, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useEscapeLayer } from '@/hooks/useEscapeLayer';
 import {
-    BTN, INPUT, ComposeBox, ConversationBubbles, StateChips, WaitsChip, fmtWhen, initials,
+    BTN, INPUT, ConversationBubbles, StateChips, WaitsChip, fmtWhen, initials,
     useConversationHistory, type InboxChannel,
 } from '@/components/connections/ChannelDashboardShell';
 
@@ -119,11 +123,6 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
     const [loadFailed, setLoadFailed] = useState(false);
     const [selectedKey, setSelectedKey] = useState<string | null>(null);
     const [mobilePane, setMobilePane] = useState<'list' | 'preview'>('list');
-    const [composeText, setComposeText] = useState('');
-    const [sending, setSending] = useState(false);
-    const [sendError, setSendError] = useState<string | null>(null);
-    const [historyVersion, setHistoryVersion] = useState(0);
-    const composeRef = useRef<HTMLTextAreaElement>(null);
 
     // The search field debounces into the server query: the rows are the server's.
     useEffect(() => {
@@ -131,19 +130,28 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
         return () => clearTimeout(id);
     }, [queryInput]);
 
+    // Two requests per load: the rows of the selected view and channel, and the counts of
+    // the WHOLE inbox under the same toggles. The narrowed result's own counts describe only
+    // the selected channel, and a rail that reads them shows WhatsApp at 0 the moment
+    // Telegram is selected.
     const load = useCallback(async () => {
         const params = new URLSearchParams({ view, groups: String(groups), done: String(done), limit: '200' });
         if (channel) params.set('channel', channel);
         if (query) params.set('q', query);
+        const summaryParams = new URLSearchParams({ groups: String(groups), done: String(done) });
         setLoading(true);
         setLoadFailed(false);
         try {
-            const res = await fetch(api(`api/inbox?${params}`), { credentials: 'include' });
+            const [res, sum] = await Promise.all([
+                fetch(api(`api/inbox?${params}`), { credentials: 'include' }),
+                fetch(api(`api/inbox/summary?${summaryParams}`), { credentials: 'include' }).catch(() => null),
+            ]);
             if (!res.ok) { setLoadFailed(true); return; }
             const json = await res.json();
             setRows(Array.isArray(json.rows) ? json.rows : []);
-            setCounts(json.counts ?? null);
             setStatus(json.status ?? null);
+            // The narrowed result's own counts stand in when the summary is unreachable.
+            setCounts(sum?.ok ? await sum.json() : (json.counts ?? null));
         } catch {
             setLoadFailed(true);
         } finally {
@@ -162,37 +170,53 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
         return () => clearTimeout(id);
     }, [version, isOpen]);
 
+    // The opened row and the reason it waited when it was opened. It outlives the list:
+    // reading takes a row off "waits for you", so in that view the server's next answer no
+    // longer holds it, while its conversation stays open in the preview until another row
+    // is chosen (a filter change or a refetch cannot leave an empty pane either). The
+    // amber sentence keeps the reason the row was opened with, so the reader still sees
+    // why it was flagged; a fresh "waits" from the server replaces it, and a conversation
+    // that moved on for another reason (a newer message, the agent's answer, the person's
+    // own reply) drops it.
+    const [opened, setOpened] = useState<{ row: InboxRow; reason: string } | null>(null);
     useEffect(() => {
-        if (!isOpen) { setSelectedKey(null); setMobilePane('list'); setQueryInput(''); setQuery(''); }
+        if (!isOpen) { setSelectedKey(null); setOpened(null); setMobilePane('list'); setQueryInput(''); setQuery(''); }
     }, [isOpen]);
 
-    const selected = useMemo(() => (selectedKey ? rows.find(r => r.key === selectedKey) ?? null : null), [rows, selectedKey]);
-    // The selected row can vanish under the preview (marked done with done rows hidden, a
-    // filter change, a refetch): on a phone the list is hidden behind that preview, so the
-    // pane steps back on its own instead of leaving an empty pane with no way out.
-    useEffect(() => {
-        if (mobilePane === 'preview' && selectedKey && !selected) setMobilePane('list');
-    }, [mobilePane, selectedKey, selected]);
+    const live = useMemo(() => (selectedKey ? rows.find(r => r.key === selectedKey) ?? null : null), [rows, selectedKey]);
+    const selected = live ?? (opened && opened.row.key === selectedKey ? opened.row : null);
+    const movedOn = !!(live && opened && (live.last_ts > opened.row.last_ts || live.answered_by_agent || live.done));
+    const noteReason = live?.waits ? live.waits_reason : (opened && opened.row.key === selectedKey && !movedOn ? opened.reason : '');
 
     // Opening a row reads it, as in the channel windows: the seen mark goes to the store,
-    // the pill goes out at once, and it stays out while the server reports the marked count.
-    const [markedUnread, setMarkedUnread] = useState<Map<string, number>>(() => new Map());
-    useEffect(() => { if (!isOpen) setMarkedUnread(new Map()); }, [isOpen]);
-    const selectedUnread = selected?.unread ?? 0;
+    // the pill and the "waits for you" chip go out at once, and they stay out while the
+    // server reports what was marked; a different count, a fresh "waits" or a newer
+    // message (the state carries the newest timestamp) is news, and a mark the server
+    // refused is forgotten so the next fetch shows its state again. A room is read by
+    // opening it in the sidebar, so a room row keeps its state here.
+    const [marked, setMarked] = useState<Map<string, string>>(() => new Map());
+    useEffect(() => { if (!isOpen) setMarked(new Map()); }, [isOpen]);
+    const stateOf = (r: InboxRow) => `${r.unread}:${r.waits ? 1 : 0}:${r.last_ts}`;
+    const selectedState = live ? stateOf(live) : '';
+    const selectedNeedsMark = !!live && (live.unread > 0 || live.waits);
     useEffect(() => {
-        if (!isOpen || !selected || selected.channel === 'room' || selectedUnread <= 0 || markedUnread.get(selected.key) === selectedUnread) return;
-        setMarkedUnread(prev => new Map(prev).set(selected.key, selectedUnread));
+        if (!isOpen || !live || live.channel === 'room' || !selectedNeedsMark || marked.get(live.key) === selectedState) return;
+        const key = live.key;
+        setMarked(prev => new Map(prev).set(key, selectedState));
+        const forget = () => setMarked(prev => { const next = new Map(prev); next.delete(key); return next; });
         fetch(api('api/inbox/marks'), {
             method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ channel: selected.channel, id: selected.id, seen: true }),
-        }).catch(() => {});
-    }, [isOpen, selected, selectedUnread, markedUnread]);
-    const unreadOf = (r: InboxRow) => (r.key === selectedKey || markedUnread.get(r.key) === r.unread) ? 0 : r.unread;
+            body: JSON.stringify({ channel: live.channel, id: live.id, seen: true }),
+        }).then(res => { if (!res.ok) forget(); }).catch(forget);
+    }, [isOpen, live, selectedState, selectedNeedsMark, marked]);
+    const readOf = (r: InboxRow) => r.channel !== 'room' && (r.key === selectedKey || marked.get(r.key) === stateOf(r));
+    const unreadOf = (r: InboxRow) => readOf(r) ? 0 : r.unread;
+    const waitsOf = (r: InboxRow) => !readOf(r) && r.waits;
 
     const { sessionHistory, historyLoading } = useConversationHistory(
         selected ? selected.key : null, isOpen,
         (key) => { const { channel: ch, id } = keyParts(key); return `api/inbox/history?channel=${encodeURIComponent(ch)}&id=${encodeURIComponent(id)}&limit=200`; },
-        historyVersion,
+        version,
     );
     const bubbles = useMemo(
         () => sessionHistory.filter(m => m.role === 'user' || m.role === 'assistant').map(m => ({ role: m.role, text: m.content || '', timestamp: m.timestamp })),
@@ -209,19 +233,9 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
     useEscapeLayer({ active: isOpen && queryInput === '' && !(mobilePane === 'preview' && typeof window !== 'undefined' && window.innerWidth < 768), level: 65, onEscape: onClose });
 
     const select = (r: InboxRow) => {
-        if (r.key !== selectedKey) { setComposeText(''); setSendError(null); }
         setSelectedKey(r.key);
+        setOpened({ row: r, reason: r.waits ? r.waits_reason : '' });
         setMobilePane('preview');
-    };
-
-    const setDoneMark = async (r: InboxRow, value: boolean) => {
-        try {
-            await fetch(api('api/inbox/marks'), {
-                method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel: r.channel, id: r.id, done: value }),
-            });
-        } catch { /* the list refetches on the signal either way */ }
-        void load();
     };
 
     const openElsewhere = (r: InboxRow, draft: boolean) => {
@@ -229,27 +243,6 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
         onClose();
         if (r.channel === 'mail') onOpenInChannel({ channel: 'mail', threadId: Number(r.id), draft });
         else onOpenInChannel({ channel: r.channel, chatId: r.id, draft });
-    };
-
-    const send = async (r: InboxRow) => {
-        const text = composeText.trim();
-        if (!text || sending) return;
-        setSending(true);
-        setSendError(null);
-        try {
-            const res = await fetch(api('api/whatsapp/send'), {
-                method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chat_id: r.id, text }),
-            });
-            if (!res.ok) { setSendError(t('sendFailed')); return; }
-            setComposeText('');
-            setHistoryVersion(v => v + 1);
-            void load();
-        } catch {
-            setSendError(t('sendFailed'));
-        } finally {
-            setSending(false);
-        }
     };
 
     const previewLine = (r: InboxRow) => {
@@ -373,7 +366,7 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                             </div>
                                             <div className={cn('text-xs truncate', unreadOf(r) > 0 ? 'text-[#e8e8e8]' : 'text-[#9a9a9a]')}>{r.channel === 'mail' && r.subject ? r.subject : previewLine(r)}</div>
                                             <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-                                                <StateChips unread={unreadOf(r)} waits={r.waits} waitsReason={r.waits_reason} answeredByAgent={r.answered_by_agent} done={r.done} className="mt-0" />
+                                                <StateChips unread={unreadOf(r)} waits={waitsOf(r)} waitsReason={r.waits_reason} answeredByAgent={r.answered_by_agent} done={r.done} className="mt-0" />
                                                 {r.channel !== 'mail' && <span className={MODE_CHIP}>{t(`modeChip.${r.mode}`)}</span>}
                                             </div>
                                         </div>
@@ -398,7 +391,7 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                             <span className="text-[11px] px-1.5 rounded-md bg-[#262626] text-[#c8c8c8] flex items-center gap-1.5 whitespace-nowrap">
                                                 <span className={cn('w-2 h-2 rounded-sm', CHANNEL_SQUARE[selected.channel])} />{t(`channel.${selected.channel}`)}
                                             </span>
-                                            {selected.waits && <WaitsChip reason={selected.waits_reason} />}
+                                            {waitsOf(selected) && <WaitsChip reason={selected.waits_reason} />}
                                         </div>
                                         <div className="text-xs text-[#9a9a9a] truncate">
                                             {t('subline', { mode: t(`mode.${selected.mode}`), id: selected.channel === 'mail' ? (selected.subject || selected.id) : selected.id, when: fmtWhen(selected.last_ts) })}
@@ -408,18 +401,7 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                         <button type="button" onClick={() => openElsewhere(selected, false)} className={cn('flex items-center gap-1.5', BTN)}>
                                             <ExternalLink className="w-3.5 h-3.5" />{selected.channel === 'room' ? t('openRoom') : t('openIn', { channel: t(`channel.${selected.channel}`) })}
                                         </button>
-                                        {/* "Needs no answer" only where a chat waits, "Reopen" only where one was closed:
-                                            a button on every row read as a control nobody could place. */}
-                                        {selected.waits && (
-                                            <button type="button" onClick={() => { void setDoneMark(selected, true); }} className={cn('flex items-center gap-1.5', BTN)}>
-                                                <Check className="w-3.5 h-3.5" />{t('markDone')}
-                                            </button>
-                                        )}
-                                        {!selected.waits && selected.done && (
-                                            <button type="button" onClick={() => { void setDoneMark(selected, false); }} className={cn('flex items-center gap-1.5', BTN)}>
-                                                <Undo2 className="w-3.5 h-3.5" />{t('reopen')}
-                                            </button>
-                                        )}
+                                        {/* No done or read button: opening the row read it, and the reader decides. */}
                                         {canDraft(selected) && (
                                             <button type="button" onClick={() => openElsewhere(selected, true)} className="px-3 py-1.5 rounded-lg bg-[#25a244] text-white text-sm font-medium flex items-center gap-1.5">
                                                 <Sparkles className="w-4 h-4" />{t('writeDraft')}
@@ -435,25 +417,20 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                     ) : (
                                         <ConversationBubbles messages={bubbles} iconClass={CHANNEL_SQUARE[selected.channel]} query="" currentMatch={null} />
                                     )}
-                                    {selected.waits && selected.waits_reason === 'unanswered' && (
+                                    {noteReason === 'unanswered' && (
                                         <span className="self-center mt-2 text-[11px] text-[#e0b866] bg-[#2b2417] border border-[#4a3b1e] px-3 py-1 rounded-full text-center">{t('unanswered', { name: selected.name || selected.id })}</span>
                                     )}
-                                    {selected.waits && selected.waits_reason === 'owner_asked' && (
+                                    {noteReason === 'owner_asked' && (
                                         <span className="self-center mt-2 text-[11px] text-[#e0b866] bg-[#2b2417] border border-[#4a3b1e] px-3 py-1 rounded-full text-center">{t('ownerAsked')}</span>
                                     )}
-                                    {selected.waits && selected.waits_reason === 'invitation' && (
+                                    {noteReason === 'invitation' && (
                                         <span className="self-center mt-2 text-[11px] text-[#e0b866] bg-[#2b2417] border border-[#4a3b1e] px-3 py-1 rounded-full text-center">{t('invitation')}</span>
                                     )}
                                 </div>
-                                {selected.channel === 'whatsapp' && selected.can_compose ? (
-                                    <ComposeBox fieldRef={composeRef} value={composeText} onChange={setComposeText} onSend={() => { void send(selected); }}
-                                        sending={sending} placeholder={t('composePlaceholder')} sendTitle={sending ? t('sending') : t('send')} error={sendError} />
-                                ) : (
-                                    <div className="px-5 py-2 border-t border-[#2e2e2e] text-xs text-[#9a9a9a] flex justify-between gap-3 flex-wrap shrink-0">
-                                        <span className="min-w-0 truncate">{t(`mode.${selected.mode}`)}</span>
-                                        <span className="shrink-0">{selected.channel === 'room' ? t('members', { count: selected.members ?? 0 }) : t('messagesCount', { count: selected.message_count })}</span>
-                                    </div>
-                                )}
+                                <div className="px-5 py-2 border-t border-[#2e2e2e] text-xs text-[#9a9a9a] flex justify-between gap-3 flex-wrap shrink-0">
+                                    <span className="min-w-0 truncate">{t(`mode.${selected.mode}`)}</span>
+                                    <span className="shrink-0">{selected.channel === 'room' ? t('members', { count: selected.members ?? 0 }) : t('messagesCount', { count: selected.message_count })}</span>
+                                </div>
                             </>
                         )}
                     </section>

@@ -64,13 +64,20 @@ def test_the_unread_token_is_the_mail_windows_and_the_chips_keep_their_colours()
     assert "bg-[#e05d44] text-white" in mail, "the mail window's own pill is the token the shell copied"
 
 
-def test_opening_a_chat_posts_its_seen_mark_and_reading_is_not_answering():
+def test_opening_a_chat_posts_its_seen_mark_and_a_read_chat_no_longer_waits():
     src = _read(SHELL)
     body = src.split("export default function ChannelDashboardShell(", 1)[1]
     assert "fetch(api('api/inbox/marks'), {" in body and "body: JSON.stringify({ channel, id, seen: true })" in body
     assert "for (const id of selected.markIds ?? [selected.id])" in body, "an @lid merged into its number marks both store rows"
-    assert "if (!channel || !isOpen || !selected || selectedUnread <= 0 || markedUnread.get(selected.id) === selectedUnread) return;" in body
-    assert "const waiting = useMemo(() => chats.filter(c => c.waits), [chats]);" in body
+    assert "if (!channel || !isOpen || !selected || !selectedNeedsMark || marked.get(selected.id) === selectedState) return;" in body, \
+        "the mark goes out for an unread chat and for one that waits (the agent's question needs no unread message)"
+    assert "const stateOf = (c: ShellChat) => `${c.unread ?? 0}:${c.waits ? 1 : 0}:${c.ts ?? 0}`;" in body, "a newer message is news even at the same count"
+    assert "}).then(res => { if (!res.ok) forget(); }).catch(forget);" in body, "a refused mark is forgotten"
+    assert "const readOf = (c: ShellChat) => c.id === selectedId || marked.get(c.id) === stateOf(c);" in body
+    assert "const waitsOf = (c: ShellChat) => !readOf(c) && !!c.waits;" in body and "waits={waitsOf(c)}" in body
+    assert "{waitsOf(selected) && <span className=\"font-normal\"><WaitsChip" in body, "the header chip clears with the row's"
+    assert "const waiting = useMemo(() => chats.filter(c => c.waits && !(c.id === selectedId || marked.get(c.id) === stateOf(c))), [chats, selectedId, marked]);" in body, \
+        "the N waiting count drops for a chat that was just read"
     assert "onSelect(waiting[(idx + 1) % waiting.length].id);" in body, "the header button walks the waiting chats round and round"
     assert "{selected.waits && selected.waitsReason === 'owner_asked' && (" in body, "the agent's question to the person is said in the header"
     assert "t('waitsUnanswered', { name: selected.label })" in body, "and so is an unanswered last message, by name"

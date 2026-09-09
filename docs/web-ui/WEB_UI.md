@@ -346,8 +346,9 @@ because all of them read the rows `vaf/core/inbox.py` builds. Three panes: the r
 channels, toggles, channel status), the list (search over every channel, one row per
 conversation with the chip line: unread, waits for you, agent answered, done, and the lane
 that answers there), and the preview (the conversation, the amber note when the agent asked
-you about this chat, and the actions: open in the channel window or the mail client, done,
-write a draft, and for a WhatsApp chat you write in yourself the compose box). The badge
+you about this chat, and the actions: open in the channel window or the mail client, and
+write a draft, which opens the channel window and starts the Composer there; the inbox
+has no input field of its own). The badge
 and the open window follow the `inbox_changed` and `rooms_changed` signals, never a timer.
 Strings live in the top-level `inbox` block and `nav.inbox`; design and rules in
 [INBOX.md](../integrations/INBOX.md).

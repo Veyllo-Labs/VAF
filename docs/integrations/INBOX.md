@@ -5,8 +5,9 @@ does somebody wait for me. It lists every conversation of a user across WhatsApp
 and Discord (groups included), the mail threads of the mail store, and the A2A rooms, newest
 first, with the same four states everywhere. The rows are built once, in
 `vaf/core/inbox.py`, and every surface reads them: the agent's tool, the command line, the
-routes behind the Posteingang window, and the per-channel windows' own lists. Nothing about
-"unread", "waits for you" or "done" is computed in a browser.
+routes behind the Posteingang window, and the per-channel windows' own lists. The rules for
+"unread", "waits for you" and "done" live here, not in a browser: a window only clears the
+pill and the chip of the row it just opened until the next fetch confirms it.
 
 ## The row
 
@@ -20,13 +21,13 @@ One shape for five sources:
 | `name`, `preview`, `preview_from` | who and what was said last (`them`, `agent`, `you`, or a room member's label) |
 | `last_ts`, `message_count` | the newest message and the store's own count (tombstones excluded), one meaning on every surface |
 | `unread` | messenger: inbound messages after the person last opened the chat; mail: IMAP's unseen count; room: the person's own reading position |
-| `waits`, `waits_reason` | `unanswered` (the last word is the other side's and nobody answered), `owner_asked` (the agent asked the person about this chat), `invitation` (a room waits for the person's answer) |
+| `waits`, `waits_reason` | `unanswered` (the last word is the other side's, nobody answered, the text asks for an answer, and the person has not opened the conversation since; mail: and the sender is somebody who reads one), `owner_asked` (the agent asked the person about this chat and the person has not opened it since), `invitation` (a room waits for the person's answer). Reading takes a conversation off "waits": the person read it and decides for themselves whether to answer |
 | `answered_by_agent` | the newest message is the agent's own send (mail: the newest message carries the answered mark; an older reply in the thread says nothing about the mail that arrived after it) |
 | `done` | marked done and nothing newer arrived, or the newest message is the person's own reply (mail: the newest message sits in the Sent folder). A newer message reopens |
 | `is_group` | WhatsApp `@g.us`, a negative Telegram id, every room |
 | `mode` | which lane answers: `owner`, `contact` (Front Office), `conversation` (WhatsApp reply window open), `readonly`, `needs_assign` (an unresolved WhatsApp `@lid`), `admin` (Discord), `relay` (Telegram), `mail`, `room` |
 | `reply_window_until` | the WhatsApp reply window, computed from the store with the bridge's rule (a test pins that the two agree) |
-| `can_compose` | WhatsApp only: the person may write themselves where the agent does not answer (the WhatsApp window's rule) |
+| `can_compose` | WhatsApp only: the person may write themselves where the agent does not answer, a read-only chat or every chat once the channel switch (`inbound_to_agent`) is off (the WhatsApp window's rule) |
 | `session_id`, `jump` | what the agent session and the channel window need to land on this conversation |
 
 ## The rules
@@ -36,26 +37,57 @@ The rules are pure functions in `vaf/core/inbox.py`, each pinned by a test: `cha
 `reply_window_until`, `reply_expectation`. The agent's reply lifts "waits" but does not
 close a row: the person may still want to see what was said in their name. The agent's
 question to the person (`owner_asked`) is answered by the person, or by the agent writing
-to the contact again.
+to the contact again, or lifted by the person opening the chat.
 
 **Does the last message ask for an answer?** A "danke", a "bis später" or a thumbs-up
 waits for nobody, and no model is asked to tell. `reply_expectation(text)` scores the
-newest inbound message from its text alone, 0 to 1: a question mark in any script (+0.4) or
-a request cue such as "kannst du", "wann", "please", "let me know" (+0.2) raise it; a
-message that is or begins with a thank-you, goodbye or acknowledgement lowers it (-0.5,
--0.3 when the closer sits inside a short message); emoji and digits are not words, and an
-emoji-only message counts as none (-0.4); a longer message nudges up (+0.1 above four words,
-+0.15 above twelve). A question mark outweighs a closer ("ok?" asks). A plain greeting or
+newest inbound message from its text alone, 0 to 1. Links and quoted speech are stripped
+first (a link's own "?" is not a question, a question quoted from somebody else asks
+nothing of the reader), and an automatic reply, an order confirmation, a verification code
+or a list footer scores 0 outright. Then a question mark in any script, the two emoji
+marks included (+0.4), a clause that opens like a question or a request after a greeting
+or a filler ("wann", "kannst du", "soll ich", "und du", "could you"), a request anywhere
+("bitte", "let me know", "melde dich", "schick mir") or an objection ("aber", "but") raise
+it (+0.2); a message that is, or begins with, a thank-you, goodbye, acknowledgement or
+deferral lowers it (-0.5, only -0.2 when a request follows it, "danke, schick mir bitte die
+Adresse" is a request with a polite opening); a closer inside a message of up to twelve
+words lowers it a little (-0.3); an explicit "nothing to answer" marker ("FYI", "nur zur
+Info", "no action needed") lowers it by 0.5; emoji and digits are not words, and an
+emoji-only message counts as none (-0.4); a longer message nudges up (+0.1 above four
+words, +0.15 above twelve). A question mark outweighs a closer ("ok?" asks); "wie
+besprochen"-type idioms are not question words; a greeting ("Guten Abend, ...") is skipped
+so that what follows it decides, and an addressee after it ("Hallo Max, danke dir") is told
+by its capital letter; words like "klar", "genau" or "ja" are closers only as the whole
+message or its beginning, a short confirmation ("10 Uhr passt", "Freitag geht bei mir") and
+a goodbye with a day in it at the very end ("bis Freitag" elsewhere is a deadline) count as
+a closer inside, a deferral ("ich sag dir morgen Bescheid", "kann ich dir morgen sagen")
+counts as a closer (-0.5, -0.2 when a request follows it), a chat filler ("ja", "ok",
+"danke") in front of a question or a request is no closer at all ("ja und du" asks), a
+clause that opens like a question ("kommst du", "schaffst du das", "und dir", "ja oder
+nein"), an objection after something ("danke, aber wo genau"; "aber gerne" answers) or a
+problem report ("der Link funktioniert nicht") counts as a request, a salutation to a
+class of people at the very start ("Dear DeepSeek API user,", "Liebe Kundin, lieber Kunde,")
+marks a mass mail, and a template phrase (an order confirmation, "your verification
+code", a list footer) marks an automatic text unless a question mark says a person is
+asking about it. The
+lists are German and English with the thanks and goodbyes a German chat borrows (French,
+Italian, Turkish, Spanish, Japanese, Chinese), each pinned by a test table. A plain greeting or
 statement lands at 0.6 and waits; the configured `inbox_waits_threshold` (default 0.6, not
 in the UI, see [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md)) decides: lower it and more
 chats wait, raise it and fewer do. Mail threads run the newest message's snippet through
-the same rule; rooms wait on unread frames and invitations only.
+the same rule, and a mail from something that reads no answer never waits at all
+(`is_automated_sender`: a no-reply, do-not-reply or notification address, a newsletter, a
+mailer daemon, a status page, by the address's local part or its display name, and any
+message the sync filed under a non-primary Gmail category such as promotions or updates);
+rooms wait on unread frames and invitations only.
 
 ## The marks
 
 The person's own state per messenger chat lives next to the messages, in
 `channel_message_store.chat_marks` (`seen_ts`, `done_ts`, `owner_asked_ts`, keyed on
-username, channel and chat id). Mail keeps IMAP's Seen flag as its read marker and takes the
+username, channel and chat id). On the day the marks table arrives every stored chat counts
+as read (its seen mark is seeded to its newest message), so it waits only from its next
+message on. Mail keeps IMAP's Seen flag as its read marker and takes the
 done mark from the same table (`channel='mail'`, the thread id); a room keeps its cursor as
 the read marker and takes the done mark the same way. `mark_conversation` writes them:
 `seen` on a mail thread marks every unseen message of the thread read (local first, the
@@ -63,6 +95,9 @@ mail window's own rule moved server-side); `seen` on a room is refused, because 
 room moves the cursor. The owner-asked mark is written by the agent itself: in Front Office
 mode a send tool that names no foreign recipient reached the owner, and `Agent._chat_post_dispatch`
 records it on the chat the runner stamped for the turn (`agent._front_office_chat`).
+The inbox lists a mapped WhatsApp `@lid` as its own row, while the WhatsApp window folds it
+into its number and marks both store keys when that merged row is opened; a row opened in
+the inbox marks its own key alone.
 
 ## Identity
 
@@ -104,8 +139,9 @@ a bridge. The tool is not in the Front Office allow-list.
 Preview) with the counts above it; `--channel`, `--view`, `--limit`, `--no-groups`, `--done`,
 `--query` narrow it and `--json` prints one object per line. It runs as the machine owner
 (no `--scope`: the CLI has no authentication) behind the same terminal door as `vaf session`,
-because it prints chats. Read-only by design: marks are set in the inbox window, where the
-person sees what they are closing.
+because it prints chats. Read-only by design: the seen mark is written by opening a
+conversation in a window, and the done mark has no button; a command that flips marks blind
+would be the one place the two surfaces could disagree.
 
 ## Routes
 
@@ -116,12 +152,12 @@ outside network mode); every store read runs off the event loop, and no GET wait
 | Route | Answer |
 |---|---|
 | `GET /api/inbox?channel&view&groups&done&q&limit` | `rows`, `counts` and `channels` as `list_conversations` returns them (`channel` is one name, a comma list or `all`), plus `status` per channel: WhatsApp `linked` and `running`, Telegram and Discord `configured` and `running` (Discord for the local admin only), mail `accounts` and `last_sync_at`. What the process knows about itself, never a round trip |
-| `GET /api/inbox/summary` | `waits`, `unread`, `all` and `waits_per_channel` for the footer badge and the channel windows' own buttons |
+| `GET /api/inbox/summary?groups&done` | the whole inbox's `counts` (`all`, `waits`, `unread`, `agent`, `per_channel`, `waits_per_channel`, `stored_per_channel`) under the group and done toggles, never narrowed by a channel, a view or a query: the footer badge reads `waits` and `unread`, the inbox window's rail reads every number |
 | `GET /api/inbox/history?channel&id&limit` | one conversation in the pane shape (`role`, `content`, `timestamp`, `content_type`, `sender`) |
-| `POST /api/inbox/marks` with `{channel, id, seen?, done?}` | `mark_conversation`; a room's `seen` answers 400, and so does a body that marks nothing |
+| `POST /api/inbox/marks` with `{channel, id, seen?, done?}` | `mark_conversation`; `done` is the primitive without a button; a room's `seen` answers 400, and so do a body that marks nothing and a Discord mark from anybody but the local admin |
 
-There is no send route: a WhatsApp row posts to `POST /api/whatsapp/send`, as the WhatsApp
-window does.
+There is no send route and no compose box: writing happens in the channel window, which
+the draft jump opens.
 
 ## The channel windows
 
@@ -144,11 +180,17 @@ surface), then "Waits for you" (amber; its tooltip says when the agent asked the
 "N waiting for you" button that selects the next waiting chat, round and round; the
 conversation header repeats the chip and says in one amber line when the agent asked the
 person about this chat. Opening a chat posts its seen mark (`POST /api/inbox/marks`, one
-mark per store key behind the row, so an `@lid` merged into its number is read too), the
-pill goes out at once, and "waits" stays, because reading is not answering. The mail
-window shows the same chip on its thread rows and the same header button. The shell
+mark per store key behind the row, so an `@lid` merged into its number is read too), and
+the pill and the "waits for you" chip go out at once: reading takes a chat off "waits",
+because the person has read it and decides for themselves whether to answer (the
+predicates above say the same server-side, so the count in the footer and the "N waiting
+for you" button drop with it). The conversation header keeps its amber sentence until the
+window next fetches (the channel windows fetch on open, on refresh and after an action,
+not on the signal), so the reader still sees why it was flagged; the inbox window keeps it
+while the row is open. The mail window shows the same
+chip on its thread rows and the same header button, and opening a thread clears both. The shell
 exports the pieces the inbox window reads as well (the bubbles, the history hook, the
-compose box, the chips), so nothing is copied a fourth time.
+chips) and the compose box the WhatsApp window uses, so nothing is copied a fourth time.
 
 ## The window
 
@@ -157,7 +199,10 @@ footer, between the calendar and the logs, with a badge: the amber count of conv
 that wait for the person, or a red dot when something is unread and nobody waits. Its
 three panes are the rail (the four views with their counts, the five channels with their
 counts and an amber number where somebody waits, the group and done toggles, the channel
-status lines), the list (a search over every channel, one row per conversation with the
+status lines; the rail's numbers describe the whole inbox from the summary route, whatever
+one channel the list is narrowed to and whatever the search box says, because a rail that
+follows the search cannot show where else somebody waits; they follow the signal, so they
+drop a moment after the chips do), the list (a search over every channel, one row per conversation with the
 channel square on the avatar, the kind tag for groups and rooms, the preview with who said
 it, and the chip line: unread, waits, agent answered, done, and the lane that answers), and
 the preview (the conversation in the shell's bubbles, the amber note when the agent asked
@@ -168,13 +213,18 @@ answer to the invitation"; the channel windows say the same in their conversatio
 "Open in the channel window" closes the inbox and opens Settings on Connections with a jump into the WhatsApp,
 Telegram or Discord window or the mail client (a repeat jump to the same chat fires again,
 because the page hands the jump in once and resets it when Settings consumed it); a room
-opens in the sidebar. "Needs no answer" is offered only on a row that waits and writes the
-done mark (the exchange is over for the person); "Reopen" only on a row marked done. "Write a draft" jumps with the
-draft flag: the WhatsApp window puts the cursor into the Composer's instruction field, the
-mail client opens the thread and its reply composer. The compose box is offered for WhatsApp rows the person writes
-in themselves (`can_compose`, the WhatsApp window's rule) and posts to the WhatsApp send
-route; the other channels have no owner send route yet, which is a named boundary, not an
-omission. Opening a row posts its seen mark like the channel windows do. The window refetches
+opens in the sidebar. There is no "done" or "read" button: opening a row reads it, and a
+read row no longer waits, so in the "waits for you" view it leaves the list while its
+conversation stays open in the preview (the window keeps the opened row, and the amber
+sentence that said why it waited, until another row is chosen). The done mark stays a
+primitive of the marks route and `mark_conversation` without a button; the "show done"
+toggle shows the conversations the person answered last. "Write a draft" jumps with the
+draft flag and the Composer starts writing: the WhatsApp window selects the chat and runs
+the Composer's draft (the person watches the draft land in the compose box and sends or
+rewrites it there), the mail client opens the thread's reply composer and runs the Mail
+Composer's draft. The inbox itself has no input field: it is the place to read and to
+decide, writing happens in the channel window with the Composer beside it (one compose
+box per channel, not a second one in the inbox). Opening a row posts its seen mark like the channel windows do (a room is read by opening it in the sidebar, so a room row keeps waiting until then). The window refetches
 on `inbox_changed` and `rooms_changed` (debounced 400 ms), never on a timer; the footer badge
 reads `GET /api/inbox/summary` on the same signal. Escape closes a running search first (66),
 steps back from the preview to the list on a phone (67), and closes the window last (65).
@@ -183,7 +233,7 @@ with a back button; the desktop markup is unchanged.
 
 ## API (module)
 
-- `list_conversations(username, user_scope_id, *, channels=None, view="all", include_groups=True, include_done=False, query="", limit=200, now=None, mail_account_id=None, mail_folder=None)` returns `{rows, counts, channels}`; `view` is one of `all`, `waits`, `unread`, `agent`; the group and done toggles apply before the counts, the view after them; `query` keeps rows whose name or preview contain it or whose stored messages match (`search_hits`); `mail_account_id` and `mail_folder` narrow the mail lane at the source. `counts` carries `all`, `waits`, `unread`, `agent`, `per_channel` and `waits_per_channel` (after the toggles, before the view) and `stored_per_channel` (what each lane holds before any toggle, filter or cut; the tool says "nothing stored" from that number alone).
+- `list_conversations(username, user_scope_id, *, channels=None, view="all", include_groups=True, include_done=False, query="", limit=200, now=None, mail_account_id=None, mail_folder=None)` returns `{rows, counts, channels}`; `view` is one of `all`, `waits`, `unread`, `agent`; the group and done toggles apply before the counts, the view after them; `query` keeps rows whose name or preview contain it or whose stored messages match (`search_hits`); `mail_account_id` and `mail_folder` narrow the mail lane at the source; the mail lane always reads its newest 200 threads, whatever `limit` says, so the counts cover them. `counts` carries `all`, `waits`, `unread`, `agent`, `per_channel` and `waits_per_channel` (after the toggles, before the view) and `stored_per_channel` (what each lane holds before any toggle, filter or cut; the tool says "nothing stored" from that number alone).
 - `mark_conversation(username, user_scope_id, channel, id, *, seen=False, done=None)`.
 - `conversation_history(username, user_scope_id, channel, id, limit=200)` in the channel windows' pane shape (`role`, `content`, `timestamp`, `content_type`, `sender`).
 - `search_hits(username, user_scope_id, query, channels)`.

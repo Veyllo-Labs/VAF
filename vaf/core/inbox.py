@@ -43,59 +43,276 @@ WAITS_INVITATION = "invitation"
 WAITS_THRESHOLD_DEFAULT = 0.6
 
 # The question marks of every script a chat may arrive in: ASCII, fullwidth CJK, Arabic,
-# Armenian (the voice agent's is_question reads the same set for a spoken reply; it is not
-# imported here because that module carries the whole voice stack).
-_QUESTION_MARKS = "?\uff1f\u061f\u055e"
+# Armenian, and the two emoji marks (the voice agent's is_question reads the same set for a
+# spoken reply; it is not imported here because that module carries the whole voice stack).
+_QUESTION_MARKS = "?？؟՞❓❔"
 
-# A message that closes an exchange rather than opening one: thanks, goodbyes, plain
-# acknowledgements. Matched as the whole message or its beginning after punctuation and
-# emoji are stripped; a question mark anywhere outweighs it (see the weights).
+# What is stripped before anything is read: a link's own "?" is not a question, and a
+# question quoted from somebody else asks nothing of the reader.
+_URL_RE = re.compile(r"https?://\S+|www\.\S+|\b[\w-]+(?:\.[\w-]+)*\.(?:de|com|net|org|io|at|ch|eu|info|app)(?:/\S*)?")
+_QUOTED_RE = re.compile(r"\"[^\"\n]{1,200}\"|„[^“”\n]{1,200}[“”]|“[^”\n]{1,200}”|»[^«\n]{1,200}«")
+# A greeting opens a chat; it is skipped so that what follows it decides.
+_GREETING_RE = re.compile(
+    r"^(?:hallo|hallöchen|hi|hey|huhu|moin moin|moin|servus|grüß dich|grüß gott|grüezi|guten morgen|guten tag|"
+    r"guten abend|mahlzeit|hello|good morning|good afternoon|good evening|dear|liebe|lieber|sehr geehrte|"
+    r"sehr geehrter)(?:\s+(?:frau|herr|mr|mrs|ms|dr))?(?=\s|$)", re.IGNORECASE)
+# The addressee after a greeting ("Hallo Max", "Dear Mrs Smith") is told by its capital letter.
+_ADDRESSEE_RE = re.compile(r"^(?:[A-ZÄÖÜ][^\s]*\s*){1,2}")
+# Chat fillers in front of a clause, skipped before the question-opener test.
+_FILLER_RE = re.compile(r"^(?:(?:und|aber|also|oder|ja|jaa|ok|okay|danke|dankeschön|hallo|hi|hey|so|oh|ach|na|dann|hm+|äh+|well|yes|no|thanks)\s+)+")
+# Idioms that carry a question word without asking: "wie besprochen" is a statement.
+_IDIOM_RE = re.compile(r"\bwie (?:besprochen|gesagt|gewünscht|abgemacht|vereinbart|geplant|immer|üblich|erwartet|versprochen|angekündigt)\b")
+
+# A message that is, or begins with, a thank-you, a goodbye, an acknowledgement or a
+# deferral closes an exchange rather than opening one. The list is German and English
+# plus the thanks and goodbyes of the languages a German chat commonly borrows.
 _CLOSERS = (
-    "danke", "dankeschön", "danke schön", "danke dir", "danke sehr", "vielen dank", "besten dank", "herzlichen dank",
-    "alles klar", "alles gut", "ok", "okay", "okey", "passt", "perfekt", "super", "top", "prima", "gut", "in ordnung",
-    "verstanden", "gerne", "gern", "ja", "jo", "jep", "jup", "nein", "nö", "bis später", "bis dann", "bis morgen",
-    "bis bald", "bis gleich", "tschüss", "tschüß", "ciao", "servus", "schönen tag", "schönes wochenende", "gute nacht",
-    "guten abend", "lg", "vg", "mfg",
-    "thanks", "thank you", "thx", "ty", "cheers", "got it", "noted", "alright", "all right", "sounds good", "great",
-    "perfect", "cool", "nice", "fine", "sure", "yes", "yep", "yeah", "no", "nope", "bye", "goodbye", "see you",
-    "see ya", "later", "take care", "good night", "have a nice day", "will do", "done",
+    # thanks
+    "danke", "dankeschön", "danke schön", "danke dir", "danke sehr", "danke euch", "danke ihnen", "vielen dank",
+    "vielen lieben dank", "lieben dank", "besten dank", "herzlichen dank", "tausend dank", "recht herzlichen dank",
+    "merci", "thanks", "thank you", "thank u", "thx", "ty", "cheers", "much appreciated", "appreciated",
+    "teşekkürler", "teşekkür ederim", "sağ ol", "gracias", "muchas gracias", "merci beaucoup", "grazie",
+    "ありがとう", "ありがとうございます", "ありがとうございました", "どうも", "谢谢", "谢谢你", "多谢", "感谢",
+    # you're welcome
+    "bitte", "bitte schön", "bitteschön", "bitte gerne", "bitte gern", "gern geschehen", "gerne geschehen",
+    "nichts zu danken", "kein problem", "kein ding", "kein thema", "keine ursache", "youre welcome", "gern", "gerne",
+    "you are welcome", "anytime", "my pleasure", "no problem", "no worries", "np", "de nada", "de rien", "rica ederim",
+    # acknowledgements
+    "ok", "okay", "okey", "oki", "k", "kk", "alles klar", "alles gut", "alles gute", "passt", "passt so", "passt schon",
+    "perfekt", "super", "top", "prima", "gut", "sehr gut", "in ordnung", "verstanden", "verstehe", "verstehe ich",
+    "klingt gut", "klingt super", "klingt prima", "hört sich gut an", "sounds great", "sounds like a plan", "machs gut",
+    "mach es gut", "sehr gerne", "notiert", "ist notiert", "läuft", "aber gerne", "aber gern", "aber klar", "aber sicher",
+    "aber natürlich", "aber nein", "but of course", "have a great weekend", "have a nice weekend", "have a good weekend",
+    "have a great week", "have a great day", "have a nice evening", "schönen urlaub", "schöne ferien",
+    "leider nein", "leider nicht", "bestätigt", "bin angekommen", "gut angekommen", "bin zuhause", "bin zu hause",
+    "sehen wir uns", "machen wir so", "machen wir es so", "komm gut heim", "komm gut nach hause", "kommt gut heim",
+    "kommen sie gut", "gute fahrt", "gute heimfahrt",
+    "genau", "stimmt", "richtig", "klar", "geht klar", "mach ich", "mache ich", "machen wir", "wird gemacht",
+    "erledigt", "abgemacht", "einverstanden", "wunderbar", "toll", "cool", "nice", "fine", "sure", "great",
+    "perfect", "awesome", "got it", "gotcha", "noted", "understood", "alright", "all right", "all good", "sounds good",
+    "will do", "on it", "done", "agreed", "deal", "yes", "yep", "yeah", "yup", "no", "nope", "ja", "jaa", "jo",
+    "jep", "jup", "jap", "nein", "nö", "ne", "nee", "tamam", "vale", "daccord", "はい", "了解", "好的", "好",
+    # goodbyes and wishes
+    "bis später", "bis dann", "bis morgen", "bis bald", "bis gleich", "bis nachher", "bis heute abend",
+    "bis montag", "bis dienstag", "bis mittwoch", "bis donnerstag", "bis freitag", "bis samstag", "bis sonntag",
+    "bis nächste woche", "bis zum wochenende", "tschüss", "tschüß", "tschau", "ciao", "ade", "baba",
+    "schönen tag", "schönen tag noch", "schönen abend", "schönen abend noch", "schönen feierabend",
+    "schönes wochenende", "schönen sonntag", "gute nacht", "schlaf gut", "gute besserung", "gute reise",
+    "guten flug", "viel erfolg", "viel spaß", "dir auch", "euch auch", "ihnen auch", "gleichfalls", "ebenso",
+    "lg", "vg", "mfg", "liebe grüße", "viele grüße", "beste grüße", "schöne grüße", "herzliche grüße",
+    "freundliche grüße", "mit freundlichen grüßen", "grüße", "gruß", "bye", "goodbye", "see you", "see ya", "see u",
+    "later", "take care", "good night", "have a nice day", "have a good one", "talk soon", "safe travels",
+    "good luck", "you too", "same to you", "best regards", "kind regards", "regards", "best", "görüşürüz",
+    "hasta luego", "adiós", "au revoir", "bonne journée", "à bientôt", "さようなら", "また", "再见", "拜拜",
+    # reactions and deferrals
+    "haha", "hahaha", "hehe", "lol", "freu mich", "freue mich", "ich bin dann mal weg", "muss los", "muss jetzt los",
+    "melde mich", "meld mich", "ich melde mich", "melden uns", "sag dir bescheid", "sage dir bescheid",
+    "geb dir bescheid", "gebe dir bescheid", "geben bescheid", "bin gleich zurück", "bin gleich wieder da",
+    "get back to you", "ill let you know", "will let you know", "keep you posted",
 )
-# A cue that the writer wants something back: a question word, a request, an offer.
-_REQUEST_CUES = (
-    "kannst du", "könntest du", "könnten wir", "können wir", "könnte", "würdest du", "würde", "bitte", "brauche",
-    "bräuchte", "schick", "schickst", "sende", "melde dich", "sag mir", "sag bescheid", "gib bescheid", "wann", "wie",
-    "wo", "was", "wer", "warum", "wieso", "ob", "hast du", "habt ihr", "gibt es", "ist das", "geht das", "passt das",
-    "vorschlag", "termin",
-    "can you", "could you", "would you", "please", "need", "send", "let me know", "tell me", "when", "what", "where",
-    "how", "why", "who", "do you", "did you", "is it", "are you", "have you", "any chance", "if you", "proposal",
-)
-_CLOSER_START_RE = re.compile(r"^(?:" + "|".join(re.escape(c) for c in sorted(_CLOSERS, key=len, reverse=True)) + r")(?:\s|$)")
-_CLOSER_ANY_RE = re.compile(r"(?<![\w])(?:" + "|".join(re.escape(c) for c in sorted(_CLOSERS, key=len, reverse=True)) + r")(?![\w])")
-_REQUEST_RE = re.compile(r"(?<![\w])(?:" + "|".join(re.escape(c) for c in sorted(_REQUEST_CUES, key=len, reverse=True)) + r")(?![\w])")
+# Closers that count only when the message IS one of them (or begins with one): inside a
+# longer message these words are ordinary words ("Donnerstag passt", "alles gut bei dir?").
+_START_ONLY = frozenset((
+    "passt", "passt so", "passt schon", "gut", "sehr gut", "klar", "genau", "stimmt", "richtig", "super", "top",
+    "prima", "perfekt", "toll", "cool", "nice", "fine", "sure", "great", "perfect", "awesome", "done", "later",
+    "best", "yes", "no", "ja", "nein", "ne", "nee", "jo", "ok", "okay", "k", "kk", "alles klar", "bestätigt",
+    "verstehe", "erledigt", "deal", "bitte", "ade", "baba", "gern", "gerne", "また", "好", "はい",
+    "bis später", "bis dann", "bis morgen", "bis bald", "bis gleich", "bis nachher", "bis heute abend", "bis montag",
+    "bis dienstag", "bis mittwoch", "bis donnerstag", "bis freitag", "bis samstag", "bis sonntag", "bis nächste woche",
+    "bis zum wochenende",
+))
+# A goodbye with a day in it ("bis Freitag") is a deadline inside a message ("das muss bis
+# Freitag fertig sein") and a goodbye only at its end.
+_BIS_END_RE = re.compile(
+    r"\bbis (?:später|dann|morgen|bald|gleich|nachher|heute abend|montag|dienstag|mittwoch|donnerstag|freitag|samstag|"
+    r"sonntag|nächste woche|zum wochenende)(?: dann)?$")
+# Explicit "nothing to answer" markers, anywhere in the message.
+_NO_REPLY_RE = re.compile(
+    r"\b(?:no action (?:needed|required)|no need to (?:reply|respond|answer)|no reply (?:needed|necessary)|"
+    r"just fyi|fyi|for your information|just so you know|just letting you know|nur zur info|zur info|zur kenntnis|"
+    r"kein handlungsbedarf|keine antwort nötig|keine antwort erforderlich|musst nicht antworten|"
+    r"brauchst nicht(?: zu)? antworten|nur damit du es weißt|nur damit ihr es wisst)\b")
+# A deferral is the answer ("ich sag dir morgen Bescheid", "kann ich dir morgen sagen"): the
+# other side will write again, nothing waits.
+_DEFERRAL_RE = re.compile(
+    r"\b(?:(?:sag|sage|geb|gebe|gib) (?:dir|euch|ihnen) (?:\w+ ){0,3}bescheid|"
+    r"sag ich (?:dir|euch|ihnen) (?:\w+ ){0,3}(?:bescheid|später|morgen|heute|nachher|dann|nächste woche|am \w+)|"
+    r"ich melde? mich|melde? mich (?:später|morgen|dann|wieder|nachher|heute|gleich|bei dir|bei euch|sobald|wenn|wegen|nochmal|noch mal)|"
+    r"melden uns|kann ich (?:dir|euch|ihnen) (?:\w+ ){0,3}sagen|get back to you|let you know|keep you posted)\b", re.IGNORECASE)
+# A short confirmation ("10 Uhr passt", "Termin bestätigt", "Montag geht") closes a proposal.
+_CONFIRM_RE = re.compile(
+    r"^(?:\w+ ){1,6}(?:passt(?: (?:mir|uns|bei mir))?(?: gut| super| perfekt| prima)?|geht(?: klar| auch| gut| bei mir)?|ist ok|ist okay|"
+    r"ist in ordnung|bestätigt|klingt gut|ist gut|works(?: for me)?|is fine|is ok|is okay|is good|suits me)$")
+# An automatic reply, a confirmation, a list footer: text nobody wrote for this reader.
+_AUTO_TEXT_RE = re.compile(
+    r"out of (?:the )?office|abwesenheitsnotiz|automatic(?:al)? reply|automatische antwort|"
+    r"auto ?reply|this is an automated|automatically generated|automatisch generiert|automatisch erstellt|"
+    r"do not reply to this|bitte nicht auf diese|not monitored|wird nicht gelesen|you are receiving this|"
+    r"sie erhalten diese|du erhältst diese|unsubscribe here|unsubscribe from this|to unsubscribe|click here to unsubscribe|"
+    r"hier abbestellen|hier abmelden|newsletter abbestellen|vom newsletter abmelden|"
+    r"(?:your|ihr|dein) (?:verification|security|one time|login|access) code|(?:ihr|dein) (?:bestätigungscode|sicherheitscode|anmeldecode)|"
+    r"code lautet|is your (?:\w+ )?code|your code is|reset your password|password reset (?:link|request)|link zum zurücksetzen|"
+    r"(?:your|ihre|deine) (?:order|bestellung) (?:has|was|is|ist|wurde|wird|nr|no|number)|order confirmation|bestellbestätigung|"
+    r"has been shipped|wurde versandt|ist unterwegs|is on its way|sendungsnummer|tracking number|transaction id|"
+    r"transaktionsnummer|ihr paket|your (?:package|parcel)|confirm your e ?mail|bestätigen sie ihre e ?mail|by clicking|"
+    r"klicken sie (?:hier|auf)|thank you for (?:registering|signing up|your (?:order|purchase))|"
+    r"(?:vielen )?dank für (?:ihre|deine) (?:bestellung|registrierung|anmeldung)|"
+    r"your account has|ihr konto wurde|view (?:this |it )?(?:e ?mail )?in (?:your )?browser|im browser (?:ansehen|anzeigen|öffnen)|"
+    r"no longer wish to receive|manage (?:your )?(?:e ?mail )?preferences|this e ?mail was sent to|diese e ?mail wurde an|"
+    r"all rights reserved|alle rechte vorbehalten")
+# A salutation to a class of people opens a mass mail ("Dear DeepSeek API user,", "Liebe
+# Kundin, lieber Kunde,"): at the very start, the class noun right before the comma, and
+# never a title (Herr Leser is a person). Read on the text with its punctuation.
+_MASS_SALUTATION_RE = re.compile(
+    r"^\s*(?:dear|hello|hi|hallo|liebe[rs]?|sehr geehrte[rs]?|guten tag)\s+(?:(?:valued|esteemed|liebe[rs]?|geschätzte[rs]?)\s+)?"
+    r"(?:(?!(?:herr|frau|mr|mrs|ms|dr)\b)[\w-]+\s+){0,2}"
+    r"(?:user|customer|member|subscriber|client|developer|guest|reader|shopper|traveller|traveler|patron|kundin|kunde|kundinnen|kunden|"
+    r"kund[:*_]?innen|nutzerin|nutzer|nutzerinnen|nutzer[:*_]?innen|mitglied|mitglieder|community|abonnentin|abonnent|abonnenten|"
+    r"leserin|leser|leser[:*_]?innen)s?\s*[,!:.\n]", re.IGNORECASE)
+# Question openers at the start of a clause (after a greeting or a filler): the shape a
+# question takes when the writer skipped the question mark.
+_QUESTION_OPENER_RE = re.compile(
+    r"^(?:wann|wie|wo|was|wer|wen|wem|warum|wieso|weshalb|welche[rsnm]?|wieviel|wie viel|wie viele|wohin|woher|"
+    r"when|what|where|how|why|who|whom|which|oder|und du|und ihr|und sie|und dir|und selbst|und bei dir|und bei euch|und ihnen|und bei ihnen|"
+    r"kannst du|könntest du|könnten wir|können wir|können sie|könnten sie|könnt ihr|würdest du|würden sie|"
+    r"willst du|wollt ihr|wollen wir|soll ich|sollen wir|kann ich|darf ich|dürfen wir|kommst du|kommt ihr|"
+    r"hast du|habt ihr|haben sie|gibt es|gibts|ist das|ist es|ist er|ist sie|geht das|geht es|gehts|passt das|passt dir|"
+    r"passt es|passt euch|passt ihnen|bist du|seid ihr|sind sie|magst du|brauchst du|hättest du|hätten sie|"
+    r"do you|did you|does it|does that|is it|is there|is that|are you|are there|will you|would you|could you|"
+    r"can you|can i|shall i|should i|should we|have you|has it|any chance|are we|were you|was it|"
+    r"[a-zäöüß]+st du|[a-zäöüß]+t ihr|[a-zäöüß]+en (?:sie|wir))\b")
+# Requests and offers anywhere in the message.
+_ANY_CUE_RE = re.compile(
+    r"(?<![\w])(?:bitte|please|pls|plz|let me know|lass es mich wissen|melde dich|meldet euch|sag mir|sagt mir|"
+    r"sag bescheid|sagt bescheid|gib bescheid|gebt bescheid|schick mir|schickt mir|schick uns|schickst du|sende mir|"
+    r"send me|send us|send it|eine frage|ne frage|kurze frage|quick question|one question|brauchen?(?! (?:nichts|keine|kein|nix)\b)|"
+    r"bräuchten?|ich hätte gern|ich hätte gerne|hätte lieber|würde gern|würde gerne|könnte|könnten wir|"
+    r"was meinst du|was meint ihr|what do you think|if you could|if you can|if you have|wäre es möglich|"
+    r"is it possible|vorschlag:|termin\?|könntest|könntet|würdest|würdet|"
+    # an objection needs something before it, and "aber gerne" or "danke, aber nein" is an answer
+    r"(?<=\w )(?:aber|but|however|allerdings|jedoch)(?! (?:nein|no|gerne|gern|klar|sicher|natürlich|ja|of course|sure|danke|thanks|nicht nötig|kein problem)\b)|"
+    r"eine sache noch|noch eine sache|noch etwas|noch was|one more thing|funktioniert nicht|geht (?:\w+ ){0,3}nicht|passt (?:\w+ ){0,3}nicht|klappt nicht|"
+    r"doesnt work|does not work|not working|(?:das|ein|the|a) problem|problems?(?: ist| mit| bei| with)|"
+    r"(?:passt|geht|klappt|ok|okay|alles gut|alles klar|in ordnung)(?: \w+){0,3} (?:bei|für) (?:dir|euch|ihnen|dich)$)(?![\w])")
 _WORD_RE = re.compile(r"[^\W\d_]+")
+_REPEAT_RE = re.compile(r"(.)\1{2,}")
+_CLOSER_START_RE = re.compile(r"^(?:" + "|".join(re.escape(c) for c in sorted(_CLOSERS, key=len, reverse=True)) + r")(?:\s|$)")
+_CLOSER_ANY_RE = re.compile(r"(?<![\w])(?:" + "|".join(re.escape(c) for c in sorted((c for c in _CLOSERS if c not in _START_ONLY), key=len, reverse=True)) + r")(?![\w])")
+_CLOSER_SET = frozenset(_CLOSERS)
+
+
+def _normalize(text: str) -> str:
+    """Words only, case kept: apostrophes are joined ("geht's" reads as "gehts"), punctuation
+    and emoji become spaces, letter runs of three or more shrink to one ("dankeee" reads as
+    "danke"), whitespace collapses."""
+    norm = re.sub(r"[^\w\s]", " ", text.replace("'", "").replace("\u2019", ""))
+    norm = _REPEAT_RE.sub(r"\1", norm)
+    return re.sub(r"\s+", " ", norm).strip()
+
+
+def _clause_core(cased: str) -> str:
+    """A normalized clause without its greeting and addressee, lowercased: "Hallo Max, danke
+    dir" reads as "danke dir". Without a greeting the clause is returned as it is; a bare
+    greeting comes back empty."""
+    rest = _GREETING_RE.sub("", cased, count=1).strip()
+    if rest != cased.strip():
+        rest = _ADDRESSEE_RE.sub("", rest, count=1).strip()
+    return rest.lower()
+
+
+def _message_core(body: str) -> str:
+    """The message without its greeting and addressee, normalized and lowercased: "Hallo
+    Max, danke dir" and "Hallo Anna! Ja, ich komme" read as "danke dir" and "ja ich komme".
+    The addressee is read in the head before the first punctuation only, so the capital
+    of the next sentence is not taken for a second name. Without a greeting the whole
+    message comes back; a bare greeting comes back empty."""
+    m = re.match(r"\s*([^,;:.!?\n]*)", body)
+    head, rest = m.group(1), body[m.end():]
+    head_norm = _normalize(head)
+    stripped = _GREETING_RE.sub("", head_norm, count=1).strip()
+    if stripped == head_norm.strip():
+        return _normalize(body).lower()
+    stripped = _ADDRESSEE_RE.sub("", stripped, count=1).strip()
+    return (stripped + " " + _normalize(rest)).strip().lower()
+
+
+def _opens_a_question(body: str) -> bool:
+    """A clause that starts (after a greeting, an addressee or a filler) like a question or
+    a request."""
+    for clause in re.split(r"[,;:.!\n]+", body):
+        c = _IDIOM_RE.sub(" ", _clause_core(_normalize(clause))).strip()
+        if c.endswith(" oder"):
+            return True
+        # "ja und du", "ok oder nein": each filler is dropped in turn, and what follows it
+        # is tested as an opener ("und du", "oder") before the next one goes.
+        parts = c.split(" ")
+        for i in range(min(len(parts), 5)):
+            rest = " ".join(parts[i:])
+            opener = _QUESTION_OPENER_RE.match(rest)
+            if _FILLER_RE.match(parts[i] + " "):
+                # "ja und du": the filler itself may open the question that follows it.
+                if opener:
+                    return True
+                continue
+            # A clause that starts with a closer is not a question ("dann sehen wir uns
+            # morgen", "kommen Sie gut heim"), whatever its verb-pronoun shape; the longer
+            # reading wins where the two overlap ("passt dir Donnerstag" asks).
+            closer = _CLOSER_START_RE.match(rest)
+            if opener and not (closer and closer.end() >= opener.end() + 1):
+                return True
+            break
+    return False
 
 
 def reply_expectation(text: str) -> float:
     """How much an inbound message asks for an answer, 0 to 1, from the text alone.
 
-    No model: a question mark (any script) or a request cue raises the score, a message
-    that is or begins with a thank-you, goodbye or acknowledgement lowers it, emoji and
-    digits are not words, and the length nudges it a little (a long message usually
-    carries something to answer). A plain greeting or statement lands at 0.6: it opened
-    the exchange and waits; "danke", "bis später", "ok" or a lone thumbs-up land near 0.
-    The threshold that turns the number into "waits for you" is `inbox_waits_threshold`."""
+    No model. Links and quoted speech are stripped first; an automatic reply, a
+    confirmation or a list footer scores 0. Then: a question mark in any script (+0.4) or
+    a question opener, a request or an objection (+0.2) raise the score; a message that
+    is or begins with a thank-you, goodbye, acknowledgement or deferral (after a greeting)
+    lowers it (-0.5, or -0.2 when a request follows it); a closer inside a message of up to
+    twelve words lowers it a little (-0.3); an explicit "nothing to answer" marker lowers it
+    (-0.5); a deferral ("ich sag dir morgen Bescheid": the other side will write again)
+    counts as a closer (-0.5, -0.2 when a request follows it), and a chat filler ("ja", "ok",
+    "danke") in front of a question or a request is no closer at all; a short confirmation
+    ("10 Uhr passt", "Freitag geht bei mir") and a goodbye with a day in it at the very end
+    count as a closer inside; emoji and digits are not words, and an emoji-only message
+    counts as none (-0.4); length nudges it up (+0.1 above four words, +0.15 above twelve).
+    A plain
+    greeting or statement lands at 0.6: it opened the exchange and waits; "danke", "bis
+    später", "ok" or a lone thumbs-up land near 0. A question mark outweighs a closer, so
+    "ok?" asks. The threshold that turns the number into "waits for you" is
+    `inbox_waits_threshold`."""
     raw = str(text or "").strip()
     if not raw:
         return 0.0
-    low = raw.lower()
-    words = _WORD_RE.findall(low)
+    body = _QUOTED_RE.sub(" ", _URL_RE.sub(" ", raw))
+    cased = _normalize(body)
+    norm = cased.lower()
+    # A mass mail's salutation settles it; a template word settles it only without a question
+    # mark, because a person asking about their order or their code is a person.
+    if _MASS_SALUTATION_RE.match(body):
+        return 0.0
+    asks = any(m in body for m in _QUESTION_MARKS)
+    if not asks and _AUTO_TEXT_RE.search(norm):
+        return 0.0
+    words = _WORD_RE.findall(norm)
     n = len(words)
-    norm = re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", low)).strip()
+    # The closer test reads past a greeting and an addressee ("Hallo Max, danke dir"); a bare
+    # greeting is its own message.
+    core = _message_core(body) or norm
+    exact_closer = core in _CLOSER_SET
+    no_reply = bool(_NO_REPLY_RE.search(norm))
+    deferred = bool(_DEFERRAL_RE.search(norm))
+    # The request test reads past the deferral itself ("kann ich dir morgen sagen" is not a
+    # "kann ich" question) and past the idioms ("wie besprochen").
+    plain = _IDIOM_RE.sub(" ", _DEFERRAL_RE.sub(" ", norm))
+    cued = (not exact_closer) and (not no_reply) and (_opens_a_question(_DEFERRAL_RE.sub(" ", body)) or bool(_ANY_CUE_RE.search(plain)))
     score = 0.6
-    asks = any(m in raw for m in _QUESTION_MARKS)
     if asks:
         score += 0.4
-    if _REQUEST_RE.search(norm):
+    if cued:
         score += 0.2
     if n == 0:
         score -= 0.4
@@ -104,12 +321,55 @@ def reply_expectation(text: str) -> float:
     elif n > 4:
         score += 0.1
     # A closer with a question mark is a question ("ok?", "passt Donnerstag?"): the mark wins.
-    if norm and not asks:
-        if _CLOSER_START_RE.match(norm):
+    # A closer followed by a request ("danke, schick mir bitte die Adresse") is only the polite
+    # opening: it lowers the score a little, not by half.
+    if not asks:
+        if no_reply:
             score -= 0.5
-        elif n <= 6 and _CLOSER_ANY_RE.search(norm):
+        elif exact_closer or deferred or _CLOSER_START_RE.match(core):
+            # "ja und du", "ok, schick mir die Adresse": a chat filler in front of a question
+            # or a request is not a closer at all.
+            if not (cued and _FILLER_RE.match(core + " ")):
+                score -= 0.2 if cued else 0.5
+        elif n <= 12 and not cued and (_CLOSER_ANY_RE.search(norm) or _CONFIRM_RE.match(core) or _BIS_END_RE.search(norm)):
             score -= 0.3
     return max(0.0, min(1.0, round(score, 3)))
+
+
+# A sender that reads no answer: the address's local part or its display name says so
+# (strong tokens anywhere, role names only as the whole local part, so "info@" and "Max
+# Info" stay people), or the sync filed the mail under a non-primary Gmail category.
+_AUTOMATED_TOKEN_RE = re.compile(
+    r"no[-_.]?reply|do[-_.]?not[-_.]?reply|dont[-_.]?reply|notifications?|newsletters?|mailer[-_.]?daemon|postmaster|"
+    r"auto[-_.]?reply|autoreply|unsubscribe|bounce[-_.]?handler")
+_AUTOMATED_NAME_RE = re.compile(
+    r"\b(?:no[-_. ]?reply|do[-_. ]?not[-_. ]?reply|dont[-_. ]?reply|mailer[-_. ]?daemon|postmaster|auto[-_. ]?reply|"
+    r"notifications?|newsletters?|unsubscribe)\b")
+_AUTOMATED_LOCALS = frozenset((
+    "news", "alerts", "alert", "status", "updates", "update", "digest", "bounce", "bounces", "automated", "robot",
+    "marketing", "promo", "promotions", "system", "daemon", "notify", "mailer", "noreply", "nobody",
+))
+_AUTOMATED_CATEGORIES = frozenset(("promotions", "social", "updates", "forums", "newsletter", "newsletters"))
+
+
+def is_automated_sender(from_addr: str, category: Optional[str] = None) -> bool:
+    """Whether a mail's sender is something that reads no answer: a no-reply, do-not-reply
+    or notification address, a newsletter, a mailer daemon, a status page or an alert
+    feed, by the local part of the address (the strong tokens anywhere in it, the role
+    names such as status or alerts only as the whole local part) or a strong token in its
+    display name ("Do Not Reply", "GitHub Notifications"), or a mail the sync filed under a
+    non-primary Gmail category (promotions, social, updates, forums). "info@", "support@",
+    "Max Info" and "Status Meier" are people."""
+    if (category or "").strip().lower() in _AUTOMATED_CATEGORIES:
+        return True
+    from email.utils import parseaddr
+    name, addr = parseaddr(str(from_addr or "").strip())
+    if not addr and "@" not in (from_addr or ""):
+        name = str(from_addr or "")
+    local = addr.split("@", 1)[0].strip().lower()
+    if local and (local in _AUTOMATED_LOCALS or _AUTOMATED_TOKEN_RE.search(local)):
+        return True
+    return bool(_AUTOMATED_NAME_RE.search(name.lower()))
 
 
 def waits_threshold() -> float:
@@ -161,11 +421,13 @@ def chat_state(row: Dict[str, Any], *, now: Optional[float] = None,
     unread: inbound rows after the seen marker (the overview counted them).
     answered_by_agent: the newest row is the agent's own send.
     done: marked done and nothing newer arrived, or the newest row is the person's own reply.
-    waits: not done, and either the agent asked the person about this chat and neither the
-    person nor the agent has written since, or the newest row is the other side's, nobody
-    answered, and its text asks for an answer (`reply_expectation` at or above the
-    threshold: a "danke" or a "bis später" waits for nobody). The agent's reply lifts "waits"
-    and does not close the row: the person may still want to see what was said in their name.
+    waits: not done, not opened since, and either the agent asked the person about this
+    chat and neither the person nor the agent has written since, or the newest row is the
+    other side's, nobody answered, and its text asks for an answer (`reply_expectation` at
+    or above the threshold: a "danke" or a "bis später" waits for nobody). Opening the chat
+    (the seen mark) takes it off "waits": the person read it and decides for themselves
+    whether to answer; the agent's reply lifts "waits" too and does not close the row, the
+    person may still want to see what was said in their name.
     `waits_threshold_value` defaults to the configured `inbox_waits_threshold`."""
     last_ts = float(row.get("last_ts") or 0.0)
     last_direction = row.get("last_direction") or ""
@@ -177,17 +439,19 @@ def chat_state(row: Dict[str, Any], *, now: Optional[float] = None,
     newest_is_owner = last_direction == "out" and last_sender == OWNER_SENDER
     newest_is_agent = last_direction == "out" and last_sender != OWNER_SENDER
     done = newest_is_owner or (done_ts is not None and float(done_ts) >= last_ts)
-    floor = max(float(done_ts or 0.0), float(last_owner_ts or 0.0), float(last_agent_ts or 0.0))
+    floor = max(float(done_ts or 0.0), float(last_owner_ts or 0.0), float(last_agent_ts or 0.0),
+                float(row.get("seen_ts") or 0.0))
     owner_asked_pending = owner_asked_ts is not None and float(owner_asked_ts) > floor
+    unread = int(row.get("unread") or 0)
     waits_reason = ""
     if not done:
         if owner_asked_pending:
             waits_reason = WAITS_OWNER_ASKED
-        elif last_direction == "in" and expects_answer(row.get("last_body") or "", waits_threshold_value):
+        elif unread > 0 and last_direction == "in" and expects_answer(row.get("last_body") or "", waits_threshold_value):
             waits_reason = WAITS_UNANSWERED
     preview_from = "you" if newest_is_owner else ("agent" if newest_is_agent else "them")
     return {
-        "unread": int(row.get("unread") or 0),
+        "unread": unread,
         "waits": bool(waits_reason),
         "waits_reason": waits_reason,
         "answered_by_agent": newest_is_agent,
@@ -218,9 +482,13 @@ def chat_mode(channel: str, chat_id: str, *, owners: Set[str], contacts: Set[str
 def mail_thread_state(thread: Dict[str, Any], mark: Optional[Dict[str, Any]], *,
                       waits_threshold_value: Optional[float] = None) -> Dict[str, Any]:
     """A mail thread's state: unread is IMAP's count, the last word was ours when the newest
-    message sits in the Sent folder, and the thread waits when it is not done, the last word
-    was the correspondent's, nobody marked it answered, and its text asks for an answer (the
-    newest message's snippet through `reply_expectation`, as a chat message would be)."""
+    message sits in the Sent folder, and the thread waits when it is not done, still unread
+    (opening it marks its messages read, and a read thread is the person's to answer or
+    not), the last word was the correspondent's, nobody marked it answered, the sender is
+    somebody who reads answers (`is_automated_sender`: no-reply, notifications,
+    newsletters, status pages and non-primary Gmail categories never wait), and its text
+    asks for an answer (the newest message's snippet through `reply_expectation`, as a chat
+    message would be)."""
     newest_in_sent = str(thread.get("newest_special_use") or "").lower() == "\\sent"
     # The newest message alone: an older reply in the thread says nothing about the mail
     # that arrived after it.
@@ -228,10 +496,12 @@ def mail_thread_state(thread: Dict[str, Any], mark: Optional[Dict[str, Any]], *,
     last_ts = float(thread.get("last_date_ts") or 0.0)
     done_ts = (mark or {}).get("done_ts")
     done = newest_in_sent or (done_ts is not None and float(done_ts) >= last_ts)
-    waits = (not done) and (not answered) and expects_answer(thread.get("snippet") or thread.get("subject") or "",
-                                                              waits_threshold_value)
+    unread = int(thread.get("unread_count") or 0)
+    waits = ((not done) and (not answered) and unread > 0
+             and not is_automated_sender(thread.get("from_addr") or "", thread.get("category"))
+             and expects_answer(thread.get("snippet") or thread.get("subject") or "", waits_threshold_value))
     return {
-        "unread": int(thread.get("unread_count") or 0),
+        "unread": unread,
         "waits": waits,
         "waits_reason": WAITS_UNANSWERED if waits else "",
         "answered_by_agent": answered,
@@ -321,6 +591,14 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
     rows: List[Dict[str, Any]] = []
     window = reply_window_hours() * 3600.0
     threshold = waits_threshold()
+    # The WhatsApp window's compose rule: the person writes where the agent does not answer,
+    # which is every chat once the channel switch is off.
+    try:
+        from vaf.core.config import Config
+        wc = Config.get("whatsapp_config") or {}
+        whatsapp_off = isinstance(wc, dict) and wc.get("inbound_to_agent", True) is False
+    except Exception:
+        whatsapp_off = False
     for channel in channels:
         if channel not in MESSENGERS:
             continue
@@ -367,7 +645,7 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
                 "is_group": is_group(channel, chat_id),
                 "mode": mode,
                 "reply_window_until": until,
-                "can_compose": channel == "whatsapp" and not needs_assign and mode == "readonly",
+                "can_compose": channel == "whatsapp" and not needs_assign and (mode == "readonly" or whatsapp_off),
                 "session_id": _session_id(channel, chat_id, username),
                 "jump": {"channel": channel, "chat_id": chat_id},
             })
@@ -513,7 +791,9 @@ def list_conversations(username: Optional[str], user_scope_id: Optional[str], *,
     rows.extend(_messenger_rows(username, user_scope_id, wanted, now=now))
     if "mail" in wanted:
         try:
-            rows.extend(_mail_rows(username, user_scope_id, limit=max(int(limit), 50),
+            # The lane's own cap, not the caller's row limit: the counts (and the summary,
+            # which asks for one row) cover the newest 200 threads.
+            rows.extend(_mail_rows(username, user_scope_id, limit=200,
                                    account_id=mail_account_id, folder=mail_folder))
         except Exception:
             pass
@@ -570,6 +850,8 @@ def mark_conversation(username: Optional[str], user_scope_id: Optional[str], cha
     if channel not in CHANNELS or not chat_id:
         raise ValueError("unknown conversation")
     out: Dict[str, Any] = {"channel": channel, "id": chat_id}
+    if channel == "discord" and not _local_admin(username, user_scope_id):
+        raise ValueError("Discord marks belong to the local admin")
     if channel in MESSENGERS:
         row_user = _row_username(channel, username)
         scope = user_scope_id if channel != "discord" else None

@@ -8,9 +8,9 @@ A headless install has the same question the inbox window answers, and the primi
 CLI has no authentication, so there is no `--scope` (the rule of `vaf memory`), and the
 group sits behind the same terminal door as `vaf session`, because it prints chats.
 
-Read-only by design: marking a conversation done is a click in the inbox window, where the
-person sees what they are closing; a command that flips marks blind would be the one place
-the two surfaces could disagree.
+Read-only by design: the seen mark is written by opening a conversation in a window, and the
+done mark has no button (it stays a primitive of the marks route); a command that flips marks
+blind would be the one place the two surfaces could disagree.
 """
 import json
 import sys
@@ -51,7 +51,7 @@ def list_conversations(
     view: str = typer.Option("all", "--view", "-v", help="all, waits, unread or agent"),
     limit: int = typer.Option(50, "--limit", "-n", help="Rows to print"),
     groups: bool = typer.Option(True, "--groups/--no-groups", help="Include group chats and rooms"),
-    done: bool = typer.Option(False, "--done", help="Include conversations marked done"),
+    done: bool = typer.Option(False, "--done", help="Include conversations the person answered last (or marked done through the API)"),
     query: Optional[str] = typer.Option(None, "--query", "-q", help="Only conversations matching this text"),
     json_out: bool = typer.Option(False, "--json", help="One JSON object per line."),
 ) -> None:

@@ -49,7 +49,7 @@ export interface WhatsAppDashboardProps {
     onOpenContacts?: () => void;
     /** Chat to open on arrival (a jump from the contact book or the inbox); null leaves the selection alone. */
     initialChatId?: string | null;
-    /** With a jump: put the cursor into the Composer's instruction field (the inbox's "write a draft"). */
+    /** With a jump: run the Composer's draft for that chat (the inbox's "write a draft"), so the person watches it land. */
     initialDraft?: boolean;
 }
 
@@ -212,24 +212,21 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         setSelectedChatId(initialChatId);
     }, [initialChatId, isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // A draft jump is a pending intent: the cursor goes into the Composer's instruction
-    // field once, as soon as that field is on screen for the jumped-to chat (the column
-    // mounts with the dashboard data), and never again on a refetch, which would pull the
-    // cursor out of whatever the person is typing. No timer: a timer tied to an effect's
-    // cleanup was cancelled by the data landing inside its delay.
+    // A draft jump is a pending intent: the Composer's draft runs once for the jumped-to
+    // chat, as soon as that chat is selected and its column is on screen (the column mounts
+    // with the dashboard data), and never again on a refetch. The run goes through a ref,
+    // because runComposer is defined further down with the state it reads.
     const draftPendingRef = useRef<string | null>(null);
+    const runDraftRef = useRef<((chatId: string) => boolean) | null>(null);
     useEffect(() => {
         if (!isOpen) { draftPendingRef.current = null; return; }
         if (initialDraft && initialChatId) draftPendingRef.current = initialChatId;
     }, [initialDraft, initialChatId, isOpen]);
     useEffect(() => {
         const pending = draftPendingRef.current;
-        if (!isOpen || !pending || pending !== selectedChatId) return;
-        const el = instructionRef.current;
-        if (!el) return;   // the column is not mounted yet; the next render (data, selection) retries
-        draftPendingRef.current = null;
-        el.focus();
-    }, [isOpen, data, selectedChatId, initialDraft, initialChatId]);
+        if (!isOpen || !pending || pending !== selectedChatId || !instructionRef.current) return;
+        if (runDraftRef.current?.(pending)) draftPendingRef.current = null;
+    }, [isOpen, data, selectedChatId, initialDraft, initialChatId, assistBusy]);
 
     useEffect(() => { if (isOpen) fetchDashboard(); }, [isOpen, config?.whatsapp_config, fetchDashboard]);
 
@@ -628,6 +625,15 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             if (abortRef.current === ctrl) abortRef.current = null;
         }
     }, [composeText, assistInstruction, turns, t]);
+
+    // The draft jump's second half: the chat is on screen with its Composer column, so the
+    // draft can start. False when the chat is not one the person writes in (nothing to draft).
+    runDraftRef.current = (chatId: string) => {
+        const s = (data?.sessions || []).find(x => x.chat_id === chatId);
+        if (!s || !canCompose(s) || data?.composer_enabled === false || assistBusy) return false;
+        void runComposer(s, 'draft');
+        return true;
+    };
 
     const badgeFor = (s: WhatsAppSession) => {
         if (s.needs_assign) return { label: t('badgeAssign'), cls: BADGE_CLS.assign };

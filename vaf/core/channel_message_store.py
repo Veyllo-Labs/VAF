@@ -295,7 +295,8 @@ def mark_done(username: str, channel: str, chat_id: str, user_scope_id: Optional
 def mark_owner_asked(username: str, channel: str, chat_id: str, user_scope_id: Optional[str] = None,
                      ts: Optional[float] = None) -> None:
     """The agent asked the person a question about this chat (the Front Office back-channel):
-    the chat waits for the person until they, or the agent writing to the contact again, answer."""
+    the chat waits for the person until they open it or answer, or the agent writes to the
+    contact again."""
     _upsert_mark(username, channel, chat_id, user_scope_id,
                  owner_asked_ts=float(ts) if ts is not None else time.time())
 

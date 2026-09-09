@@ -94,21 +94,26 @@ def test_the_summary_counts_waits_and_unread_for_the_badge(world):
     _msg("+491700000042", "answer", direction="out", ts=NOW - 5, sender="agent", message_id="b2")
     _msg("+491700000050", "moin", ts=NOW - 3, message_id="b3")
     out = asyncio.run(ir.inbox_summary(_request()))
-    assert out == {"waits": 1, "unread": 2, "all": 2,
-                   "waits_per_channel": {"whatsapp": 1, "telegram": 0, "discord": 0, "mail": 0, "room": 0}}
+    assert (out["waits"], out["unread"], out["all"], out["agent"]) == (1, 2, 2, 1)
+    assert out["waits_per_channel"] == {"whatsapp": 1, "telegram": 0, "discord": 0, "mail": 0, "room": 0}
+    assert out["per_channel"]["whatsapp"] == 2 and out["stored_per_channel"]["whatsapp"] == 2
+    # The rail's toggles reach the summary: with done rows shown, the person's own reply counts too.
+    _msg("+491700000060", "bye", direction="out", ts=NOW - 2, sender=store.OWNER_SENDER, message_id="b4")
+    assert asyncio.run(ir.inbox_summary(_request()))["all"] == 2
+    assert asyncio.run(ir.inbox_summary(_request(), done=True))["all"] == 3
 
 
 def test_marks_round_trip_seen_lifts_unread_done_hides_and_a_room_seen_is_refused(world):
     _msg("+491700000042", "hallo", ts=NOW - 10, message_id="c1")
     asyncio.run(ir.inbox_marks(_request(), {"channel": "whatsapp", "id": "+491700000042", "seen": True}))
     row = _list()["rows"][0]
-    assert row["unread"] == 0 and row["waits"] is True, "opening a chat reads it, it does not answer it"
+    assert row["unread"] == 0 and row["waits"] is False, "opening a chat reads it, and a read chat no longer waits for you"
     out = asyncio.run(ir.inbox_marks(_request(), {"channel": "whatsapp", "id": "+491700000042", "done": True}))
     assert out["ok"] is True and out["done"] is True
     assert _list()["rows"] == []
     assert _list(done=True)["rows"][0]["done"] is True
     asyncio.run(ir.inbox_marks(_request(), {"channel": "whatsapp", "id": "+491700000042", "done": False}))
-    assert _list()["rows"][0]["waits"] is True
+    assert _list()["rows"][0]["done"] is False and _list()["rows"][0]["waits"] is False, "reopened, and still read"
     with pytest.raises(HTTPException) as e:
         asyncio.run(ir.inbox_marks(_request(), {"channel": "room", "id": "r1", "seen": True}))
     assert e.value.status_code == 400

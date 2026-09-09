@@ -22,7 +22,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   when they last spoke and what was said; mail thread rows carry the newest message's id,
   folder and answered mark. When the agent asks the owner a question about a contact's chat
   (the Front Office back-channel), that chat is marked as waiting for the owner until they
-  answer or the agent writes to the contact again.
+  open the chat or answer, or the agent writes to the contact again.
   `vaf inbox list` prints the same rows from the terminal, behind the session door.
   The agent has one `inbox` tool for the same rows (`channel`, `view`, `max_chats`, `query`), with
   the next-step hint and the mail IDs block the mail listing carried.
@@ -39,23 +39,33 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   for you" chip (its tooltip says when the agent asked you), "Agent answered" or "Done"; the
   list header's right side turns into an "N waiting for you" button that jumps to the next
   waiting chat; the conversation header repeats the chip; and opening a chat marks it read on
-  every surface. The shell now exports its bubbles, history hook, compose box and chips, so
-  the inbox window reads them instead of copying them.
+  every surface and takes it off "waits for you": you read it, you decide whether to answer.
+  The shell now exports its bubbles, history hook and chips, so
+  the inbox window reads them instead of copying them, and the compose box the WhatsApp
+  window uses.
   And the inbox itself: a fourth row in the sidebar footer, between the calendar and the
   logs, with a badge (the amber count of conversations waiting for you, or a red dot when
   something is unread). The window has a rail (views, channels, group and done toggles,
   channel status), a list (search over every channel, one row per conversation with the chip
   line and the lane that answers there) and a preview (the conversation, the note when the
   agent asked you, "open in the channel window" which lands in the WhatsApp, Telegram or
-  Discord window or on the mail thread, "done", "write a draft", and the compose box for a
-  WhatsApp chat you write in yourself). It refetches on the signal, never on a timer; on a
+  Discord window or on the mail thread, and "write a draft", which opens the channel window
+  on the chat and starts the Composer there; there is no done or read button, reading is
+  the decision). It refetches on the signal, never on a timer; on a
   phone the rail is a chip strip and the panes take turns. Seven catalogues carry the strings.
   Whether the last message asks for an answer is read from its text, without a model: a
   "danke", a "bis später" or a thumbs-up waits for nobody, a question or a request does,
   and `inbox_waits_threshold` (default 0.6) is the line between them. The reason a chat
   waits is said in one sentence in the inbox and in the channel windows ("The last message
-  came from Alice, still unanswered"), and "Needs no answer" is offered only where a chat
-  waits.
+  came from Alice, still unanswered"). A deferral ("ich sag dir morgen Bescheid"), a short
+  confirmation ("10 Uhr passt"), a closer behind a greeting ("Hallo Max, danke dir") and a
+  mass-mail salutation ("Dear DeepSeek API user") wait for nobody either; a question
+  without its mark ("kommst du morgen", "ja und du") and a problem report ("der Link
+  funktioniert nicht") do. The rail's numbers describe the whole inbox whatever one channel the list is
+  narrowed to (they read as 0 for every other channel before). A mail from a no-reply or
+  notification address, a newsletter, a status page or a non-primary Gmail category never
+  waits. The inbox has no input field of its own: "Write a draft" opens the channel window
+  on the chat and the Composer starts writing there.
 - **A messenger chat has its own memory.** What the agent learns inside a chat with a
   contact is stored in that chat's own namespace (`source = chat/<session id>`), which every
   ordinary lookup of your agent leaves out in SQL, in both lanes of the hybrid search. Only

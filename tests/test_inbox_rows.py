@@ -237,7 +237,7 @@ def test_mark_conversation_routes_seen_and_done_per_lane(world):
     assert _row("whatsapp:+491700000042")["unread"] == 1
     out = inbox.mark_conversation("alice", SCOPE, "whatsapp", "+491700000042", seen=True)
     assert out["seen_ts"] >= NOW - 900 and _row("whatsapp:+491700000042")["unread"] == 0
-    assert _row("whatsapp:+491700000042")["waits"], "reading is not answering"
+    assert not _row("whatsapp:+491700000042")["waits"], "reading takes a chat off waits: the reader decides"
     inbox.mark_conversation("alice", SCOPE, "whatsapp", "+491700000042", done=True)
     assert _row("whatsapp:+491700000042")["done"]
     thread = _mail_thread()
@@ -245,6 +245,48 @@ def test_mark_conversation_routes_seen_and_done_per_lane(world):
     assert _row(f"mail:{thread}")["unread"] == 0
     with pytest.raises(ValueError):
         inbox.mark_conversation("alice", SCOPE, "fax", "1", seen=True)
+    with pytest.raises(ValueError, match="local admin"):
+        inbox.mark_conversation("bob", "0000000000000000000000000000000b", "discord", "7", seen=True)
+
+
+def test_can_compose_follows_the_whatsapp_windows_rule(world, monkeypatch):
+    """MUTATION: drop `whatsapp_off` from _messenger_rows and the owner's chat cannot be
+    drafted from the inbox while the WhatsApp window offers the compose box."""
+    _msg("+491700000009", "hi", ts=NOW - 900)
+    _msg("+491700000042", "hallo", ts=NOW - 800)
+    rows = {r["key"]: r for r in _rows()["rows"]}
+    assert rows["whatsapp:+491700000009"]["mode"] == "owner" and rows["whatsapp:+491700000009"]["can_compose"] is False
+    assert rows["whatsapp:+491700000042"]["mode"] == "readonly" and rows["whatsapp:+491700000042"]["can_compose"] is True
+    import vaf.core.config as cfg_mod
+    off = dict(CONFIG, whatsapp_config=dict(CONFIG["whatsapp_config"], inbound_to_agent=False))
+    monkeypatch.setattr(cfg_mod.Config, "get", classmethod(lambda cls, key, default=None: off.get(key, default)))
+    rows = {r["key"]: r for r in _rows()["rows"]}
+    assert rows["whatsapp:+491700000009"]["can_compose"] is True, "the switch off: every chat is the person's to write in"
+
+
+def test_reading_takes_a_conversation_off_waits_for_you(world):
+    """MUTATION: drop `unread > 0` from chat_state (or the seen floor from the owner-asked
+    rule, or `unread > 0` from mail_thread_state) and a read conversation keeps waiting."""
+    _msg("+491700000042", "wann passt es dir?", ts=NOW - 900)
+    assert _row("whatsapp:+491700000042")["waits"] and _rows()["counts"]["waits"] == 1
+    seen = inbox.mark_conversation("alice", SCOPE, "whatsapp", "+491700000042", seen=True)["seen_ts"]
+    row = _row("whatsapp:+491700000042")
+    assert not row["waits"] and row["unread"] == 0 and not row["done"], "read, not done: the person decides"
+    assert _rows()["counts"]["waits"] == 0 and _rows(view="waits")["rows"] == []
+    _msg("+491700000042", "und morgen?", ts=seen + 1)
+    assert _row("whatsapp:+491700000042")["waits"], "a newer question waits again"
+    seen = inbox.mark_conversation("alice", SCOPE, "whatsapp", "+491700000042", seen=True)["seen_ts"]
+    store.mark_owner_asked("alice", "whatsapp", "+491700000042", user_scope_id=SCOPE, ts=seen + 1)
+    assert _row("whatsapp:+491700000042")["waits_reason"] == inbox.WAITS_OWNER_ASKED
+    store.mark_seen("alice", "whatsapp", "+491700000042", user_scope_id=SCOPE, ts=seen + 2)
+    assert not _row("whatsapp:+491700000042")["waits"], "opening the chat after the agent's question reads that too"
+    thread = _mail_thread()
+    assert _row(f"mail:{thread}")["waits"]
+    inbox.mark_conversation("alice", SCOPE, "mail", thread, seen=True)
+    assert not _row(f"mail:{thread}")["waits"], "a read mail thread is the person's to answer or not"
+    unread = {"newest_special_use": "\\Inbox", "newest_answered_at": None, "last_date_ts": 100.0, "unread_count": 1, "snippet": "Können wir telefonieren?"}
+    assert inbox.mail_thread_state(unread, None, waits_threshold_value=0.6)["waits"] is True
+    assert inbox.mail_thread_state(dict(unread, unread_count=0), None, waits_threshold_value=0.6)["waits"] is False
 
 
 def test_conversation_history_is_one_shape_for_the_lanes(world):
@@ -273,12 +315,33 @@ def test_reply_expectation_reads_the_text_without_a_model():
     "ok?" does not; let a closer outweigh the mark and "Danke, und wann?" does not."""
     waits = lambda s: inbox.reply_expectation(s) >= inbox.WAITS_THRESHOLD_DEFAULT
     for closer in ("danke", "Vielen Dank!", "bis später", "ok", "OK 👍", "\U0001F44D", "Alles klar, bis dann", "Super, danke dir!",
-                   "thanks", "see you", "Ja, gerne!", "Vielen Dank für die schnelle Antwort, das hilft mir sehr weiter."):
+                   "thanks", "see you", "Ja, gerne!", "Vielen Dank für die schnelle Antwort, das hilft mir sehr weiter.",
+                   "Danke, morgen dann", "Alles klar, wie besprochen", "Nein danke", "Hallo Max, danke dir", "Hi Bob, thanks!",
+                   "Ich sag dir morgen Bescheid", "Kann ich dir morgen sagen", "10 Uhr passt", "Termin bestätigt",
+                   "Gut, dann sehen wir uns morgen", "FYI: the meeting moved to 3pm", "Nur zur Info, ich bin morgen im Homeoffice",
+                   "Dear DeepSeek API user, DeepSeek plans to officially release the V4.1 Flash model around September 10.",
+                   "Liebe Kundin, lieber Kunde, ab Oktober gelten neue Preise. Alle Rechte vorbehalten.",
+                   "Ich geb dir Bescheid", "Sag ich dir heute Abend", "Kann ich dir erst nächste Woche sagen", "Ich melde mich, sobald ich mehr weiß",
+                   "Dienstag um 9 passt mir", "Freitag geht bei mir", "3pm works", "Aber gerne", "Danke, aber nein", "Hallo Anna! Ja, ich komme",
+                   "Ist notiert 👍", "Das muss bis Montag fertig sein, dann sehen wir uns", "Ich brauche nichts, danke",
+                   # the thanks and goodbyes a German chat borrows
+                   "merci", "grazie", "gracias", "teşekkürler", "ありがとう", "谢谢", "görüşürüz"):
         assert not waits(closer), closer
+    assert inbox.reply_expectation("Schau mal https://example.com/?q=1") == inbox.reply_expectation("Schau mal"), "a link's own ? asks nothing"
     for asks in ("hallo", "Guten Morgen", "Wann kommst du", "ok?", "Danke, und wann?", "Passt Donnerstag 10 Uhr für die Übergabe?",
                  "Hallo, wegen der Übergabe der Wohnung: ich könnte Donnerstag.", "Kannst du mir bitte den Vertrag schicken",
-                 "Thanks! One more thing: can you send the invoice?", "Bin da.", "\u3053\u3093\u306b\u3061\u306f\uff1f"):
+                 "Thanks! One more thing: can you send the invoice?", "Bin da.", "\u3053\u3093\u306b\u3061\u306f\uff1f",
+                 "Vielen Dank für die schnelle Antwort, das hilft mir sehr weiter, was ist mit morgen",
+                 "Ok, schick mir bitte die Adresse", "Ja und du", "Ja oder nein", "Hallo Max wann kommst du",
+                 "Schaffst du das bis Freitag", "Passt dir Donnerstag 15 Uhr", "Alles gut bei dir",
+                 "Super, danke! Eine Sache noch: der Link funktioniert nicht", "Donnerstag wäre mir lieber",
+                 "Gut, und dir", "Ich bin morgen nicht im Büro, können wir telefonieren", "Hallo Max, hat der Kunde schon bezahlt",
+                 "Kannst du mir den Newsletter-Text bis Freitag schicken", "Wir bräuchten bis Freitag eine Antwort",
+                 "Ich geb dir Bescheid, aber schick mir bitte vorher die Adresse", "Dear Customer Service, my order has not arrived, can you check",
+                 "Kannst du mein Passwort zurücksetzen?", "Bitte melde mich für den Kurs an", "Donnerstag passt mir leider nicht"):
         assert waits(asks), asks
+    quoted = 'Er fragte "kommst du?" und ich sagte nein'
+    assert inbox.reply_expectation(quoted) == inbox.reply_expectation("Er fragte und ich sagte nein") < 1.0, "a quoted question mark asks nothing"
     assert inbox.reply_expectation("") == 0.0
     assert 0.0 <= inbox.reply_expectation("?" * 50) <= 1.0
 
@@ -300,10 +363,28 @@ def test_the_threshold_comes_from_the_config_and_reaches_every_lane(world, monke
     doc = (Path(__file__).resolve().parent.parent / "docs" / "setup" / "CONFIG_SCHEMA.md").read_text(encoding="utf-8")
     assert "`inbox_waits_threshold`" in doc
     # The mail rule, at the default threshold (the config above still says 0.0).
-    thread = {"newest_special_use": "\\Inbox", "newest_answered_at": None, "last_date_ts": 100.0, "snippet": "Danke, hat geklappt!"}
+    thread = {"newest_special_use": "\\Inbox", "newest_answered_at": None, "last_date_ts": 100.0, "unread_count": 1, "snippet": "Danke, hat geklappt!"}
     assert inbox.mail_thread_state(thread, None, waits_threshold_value=0.6)["waits"] is False, "mail runs the newest snippet through the same rule"
     assert inbox.mail_thread_state(dict(thread, snippet="Könnten Sie mir das Angebot schicken?"), None, waits_threshold_value=0.6)["waits"] is True
     assert inbox.mail_thread_state(thread, None)["waits"] is True, "and the configured threshold (0.0 here) reaches the mail lane too"
+
+
+def test_an_automated_sender_never_waits():
+    """MUTATION: drop is_automated_sender from mail_thread_state and a status page waits."""
+    automated = ("OpenAI (via incident.io) <no-reply@status.incident.io>", "noreply@github.com", "notifications@slack.com",
+                 "Newsletter <news@shop.example>", "MAILER-DAEMON@mail.example", "Alerts <alerts@monitor.example>",
+                 "do_not_reply@bank.example", "GitHub <noreply@github.com>", '"Do Not Reply" <x@bank.example>', "No Reply <x@bank.example>")
+    for sender in automated:
+        assert inbox.is_automated_sender(sender), sender
+    for person in ("Lena <lena@example.com>", "bob.mueller@firma.example", "Alice Reply <alice@example.com>", "info@firma.example",
+                   "Max Info <max@example.com>", "support@shop.example", "alice.news@example.com", "Status Meier <s.meier@example.com>"):
+        assert not inbox.is_automated_sender(person), person
+    assert inbox.is_automated_sender("news@shop.example") and inbox.is_automated_sender("alerts@monitor.example")
+    assert inbox.is_automated_sender("lena@example.com", "promotions") and not inbox.is_automated_sender("lena@example.com", "primary")
+    thread = {"newest_special_use": "\\Inbox", "newest_answered_at": None, "last_date_ts": 100.0, "unread_count": 1,
+              "snippet": "Incident resolved. Can you confirm?", "from_addr": "OpenAI (via incident.io) <no-reply@status.incident.io>"}
+    assert inbox.mail_thread_state(thread, None, waits_threshold_value=0.6)["waits"] is False, "a status page reads no answer"
+    assert inbox.mail_thread_state(dict(thread, from_addr="Lena <lena@example.com>"), None, waits_threshold_value=0.6)["waits"] is True
 
 
 def test_the_counts_say_what_each_lane_holds_before_any_filter(world):
@@ -337,6 +418,6 @@ def test_the_pure_rules_stand_alone():
     assert inbox.channel_label("whatsapp") == "WhatsApp" and inbox.channel_label("room") == "Room"
     # A thread whose older message was answered still waits when the newest one was not.
     older_answered = {"newest_special_use": "\\Inbox", "newest_answered_at": None, "answered": 1, "last_date_ts": 100.0,
-                      "snippet": "Wann können wir telefonieren?"}
+                      "unread_count": 1, "snippet": "Wann können wir telefonieren?"}
     assert inbox.mail_thread_state(older_answered, None)["waits"] is True
     assert inbox.mail_thread_state(dict(older_answered, newest_answered_at="2026-09-09 10:00:00"), None)["waits"] is False

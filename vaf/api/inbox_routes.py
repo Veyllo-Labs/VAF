@@ -11,7 +11,8 @@ Rules:
 - A GET never waits on a bridge. The per-channel status is what this process knows about
   itself (the linked WhatsApp account, a running bridge, the mail accounts and their last
   sync), never a round trip to a Node process.
-- Sending stays with the channel routes: a WhatsApp row posts to POST /api/whatsapp/send.
+- Sending stays with the channel routes: the inbox opens the channel window (with the draft
+  flag) instead of sending.
 """
 import asyncio
 from typing import Any, Dict, List, Optional
@@ -95,14 +96,15 @@ async def list_inbox(request: Request, channel: Optional[str] = None, view: str 
 
 
 @router.get("/summary")
-async def inbox_summary(request: Request) -> Dict[str, Any]:
-    """The footer badge: how many conversations wait for the person, how many messages are
-    unread, and the waits per channel for the channel windows' own buttons."""
+async def inbox_summary(request: Request, groups: bool = True, done: bool = False) -> Dict[str, Any]:
+    """The whole inbox's counts, whatever one channel the list is narrowed to: the footer
+    badge reads `waits` and `unread`, the inbox window's rail reads every count (per view
+    and per channel) under the same group and done toggles as its list."""
     user = get_current_vaf_user(request)
     from vaf.core.inbox import list_conversations
-    counts = (await asyncio.to_thread(list_conversations, user["username"], user["user_scope_id"], limit=1))["counts"]
-    return {"waits": counts["waits"], "unread": counts["unread"], "all": counts["all"],
-            "waits_per_channel": counts["waits_per_channel"]}
+    counts = (await asyncio.to_thread(list_conversations, user["username"], user["user_scope_id"], limit=1,
+                                      include_groups=groups, include_done=done))["counts"]
+    return dict(counts)
 
 
 @router.get("/history")
@@ -123,8 +125,10 @@ async def inbox_history(request: Request, channel: str, id: str, limit: int = 20
 
 @router.post("/marks")
 async def inbox_marks(request: Request, body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-    """{channel, id, seen?, done?}: the person opened a conversation, or marked it done or
-    open again. A room's seen is refused: opening the room moves its cursor."""
+    """{channel, id, seen?, done?}: the person opened a conversation (`seen`, which takes it
+    off "waits for you"); `done` is the primitive without a button. A room's seen is refused:
+    opening the room moves its cursor. A Discord mark from anybody but the local admin is
+    refused too, as the Discord rows are."""
     user = get_current_vaf_user(request)
     from vaf.core.inbox import mark_conversation
     channel = str(body.get("channel") or "").strip().lower()

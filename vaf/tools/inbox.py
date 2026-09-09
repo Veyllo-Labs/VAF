@@ -120,7 +120,7 @@ class InboxTool(BaseTool):
                 "description": "Optional. Only conversations whose name, preview or stored messages match this text.",
             },
             "include_groups": {"type": "boolean", "description": "Include group chats and rooms (default true)."},
-            "include_done": {"type": "boolean", "description": "Include conversations the user marked done (default false)."},
+            "include_done": {"type": "boolean", "description": "Include conversations the user answered last, or marked done through the API (default false)."},
             "account_id": {"type": "string", "description": "Mail only. Email of one connected account."},
             "folder": {"type": "string", "description": "Mail only. IMAP folder name (default: every folder)."},
         },

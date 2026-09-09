@@ -69,6 +69,11 @@ import { vafLicenseText, thirdPartyLicenses } from '@/lib/licenses_data';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+/** Where the inbox sends the person: a chat in a channel window, or a mail thread in the mail client. */
+export type SettingsChatJump =
+    | { channel: 'whatsapp' | 'telegram' | 'discord'; chatId: string; draft?: boolean }
+    | { channel: 'mail'; threadId: number; draft?: boolean };
+
 export interface SettingsModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -191,6 +196,9 @@ export interface SettingsModalProps {
     apiBase?: string;
     /** When set, open the modal with this tab active (e.g. 'automations'). */
     initialTab?: string;
+    /** A jump from the inbox into a channel window or the mail client; consumed once, the parent resets it to null. */
+    initialChatJump?: SettingsChatJump | null;
+    onChatJumpConsumed?: () => void;
     /** Callback to refresh config (e.g. after OAuth/cloud connection) */
     onRefreshConfig?: () => void;
     /** Connection status for indicator above Logout in sidebar */
@@ -503,7 +511,7 @@ function AccessPresetSection({
     );
 }
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, onCreateCustomTool, onUpdateCustomTool, onDeleteCustomTool, customToolUsers = [], onGetCustomToolUsers, isCustomToolSaving = false, customToolBackendError = null, workflows = [], onCreateWorkflow, onUpdateWorkflow, onDeleteWorkflow, isWorkflowSaving = false, workflowBackendError = null, skills = [], onCreateSkill, onUpdateSkill, onDeleteSkill, onUploadSkill, isSkillSaving = false, skillBackendError = null, skillSavedTick = 0, mcpServers = [], onRefreshMcpServers, onSaveMcpServer, onDeleteMcpServer, isMcpSaving = false, mcpBackendError = null, onTestMcpServer, mcpTestResult = null, isMcpTesting = false, trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar, calendarVersion = 0, speakerProfile = null, onStartVoiceEnrollment, onDeleteSpeakerProfile, onRefreshSpeakerProfile }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, onCreateCustomTool, onUpdateCustomTool, onDeleteCustomTool, customToolUsers = [], onGetCustomToolUsers, isCustomToolSaving = false, customToolBackendError = null, workflows = [], onCreateWorkflow, onUpdateWorkflow, onDeleteWorkflow, isWorkflowSaving = false, workflowBackendError = null, skills = [], onCreateSkill, onUpdateSkill, onDeleteSkill, onUploadSkill, isSkillSaving = false, skillBackendError = null, skillSavedTick = 0, mcpServers = [], onRefreshMcpServers, onSaveMcpServer, onDeleteMcpServer, isMcpSaving = false, mcpBackendError = null, onTestMcpServer, mcpTestResult = null, isMcpTesting = false, trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, initialChatJump = null, onChatJumpConsumed, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar, calendarVersion = 0, speakerProfile = null, onStartVoiceEnrollment, onDeleteSpeakerProfile, onRefreshSpeakerProfile }: SettingsModalProps) {
     const t = useTranslations();
     const tTabs = useTranslations('settings.tabs');
     const tCommon = useTranslations('common');
@@ -1274,15 +1282,35 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showWhatsAppDashboard, setShowWhatsAppDashboard] = useState(false);
     const [showTelegramDashboard, setShowTelegramDashboard] = useState(false);
     const [showContactsDashboard, setShowContactsDashboard] = useState(false);
-    // A jump from the contact book into a channel chat. Cleared once both channel windows
-    // are closed rather than in onClose: the WhatsApp window also closes through
-    // onOpenSetupWizard and onOpenContacts, which never call onClose.
-    const [chatJump, setChatJump] = useState<{ channel: 'whatsapp' | 'telegram'; chatId: string } | null>(null);
-    useEffect(() => {
-        if (!showWhatsAppDashboard && !showTelegramDashboard) setChatJump(null);
-    }, [showWhatsAppDashboard, showTelegramDashboard]);
+    // A jump from the contact book or the inbox into a channel chat. Cleared once the
+    // channel windows are closed rather than in onClose: the WhatsApp window also closes
+    // through onOpenSetupWizard and onOpenContacts, which never call onClose.
+    const [chatJump, setChatJump] = useState<{ channel: 'whatsapp' | 'telegram' | 'discord'; chatId: string; draft?: boolean } | null>(null);
     const [showDiscordDashboard, setShowDiscordDashboard] = useState(false);
     const [showMailClient, setShowMailClient] = useState(false);
+    // The mail thread a jump from the inbox lands on; cleared with the client.
+    const [mailJump, setMailJump] = useState<number | null>(null);
+    useEffect(() => {
+        if (!showWhatsAppDashboard && !showTelegramDashboard && !showDiscordDashboard) setChatJump(null);
+    }, [showWhatsAppDashboard, showTelegramDashboard, showDiscordDashboard]);
+    useEffect(() => {
+        if (!showMailClient) setMailJump(null);
+    }, [showMailClient]);
+    // The inbox's jump: the parent hands it in once and resets it after this effect consumed
+    // it, so a repeat jump to the same chat fires again without a sequence number.
+    useEffect(() => {
+        if (!isOpen || !initialChatJump) return;
+        if (initialChatJump.channel === 'mail') {
+            setMailJump(initialChatJump.threadId);
+            setShowMailClient(true);
+        } else {
+            setChatJump({ channel: initialChatJump.channel, chatId: initialChatJump.chatId, draft: initialChatJump.draft });
+            if (initialChatJump.channel === 'whatsapp') setShowWhatsAppDashboard(true);
+            else if (initialChatJump.channel === 'telegram') setShowTelegramDashboard(true);
+            else setShowDiscordDashboard(true);
+        }
+        onChatJumpConsumed?.();
+    }, [isOpen, initialChatJump]); // eslint-disable-line react-hooks/exhaustive-deps
     const [showCloudWizard, setShowCloudWizard] = useState(false);
     const [showCloudDashboard, setShowCloudDashboard] = useState(false);
     const [cloudDashboardRefresh, setCloudDashboardRefresh] = useState(0);
@@ -8107,6 +8135,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     setShowContactsDashboard(true);
                 }}
                 initialChatId={chatJump?.channel === 'whatsapp' ? chatJump.chatId : null}
+                initialDraft={chatJump?.channel === 'whatsapp' ? !!chatJump.draft : false}
             />
 
             {/* Telegram Dashboard (when configured, Settings opens this) */}
@@ -8141,6 +8170,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onClose={() => setShowDiscordDashboard(false)}
                 config={localConfig}
                 onConfigChange={handleChange}
+                initialChatId={chatJump?.channel === 'discord' ? chatJump.chatId : null}
             />
 
             {/* The mail client (three-pane window opened from the Email tile). Its
@@ -8155,6 +8185,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     setShowMailClient(false);
                     setCloudDashboardRefresh(r => r + 1);
                 }}
+                initialThread={mailJump}
             />
 
             {/* Calendar Setup Wizard (reuses Email OAuth; opened from Connections Calendar cards) */}

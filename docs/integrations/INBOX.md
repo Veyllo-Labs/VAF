@@ -135,6 +135,33 @@ window shows the same chip on its thread rows and the same header button. The sh
 exports the pieces the inbox window reads as well (the bubbles, the history hook, the
 compose box, the chips), so nothing is copied a fourth time.
 
+## The window
+
+The inbox window (`web/components/inbox/InboxWindow.tsx`) is the fourth row of the sidebar
+footer, between the calendar and the logs, with a badge: the amber count of conversations
+that wait for the person, or a red dot when something is unread and nobody waits. Its
+three panes are the rail (the four views with their counts, the five channels with their
+counts and an amber number where somebody waits, the group and done toggles, the channel
+status lines), the list (a search over every channel, one row per conversation with the
+channel square on the avatar, the kind tag for groups and rooms, the preview with who said
+it, and the chip line: unread, waits, agent answered, done, and the lane that answers), and
+the preview (the conversation in the shell's bubbles, the amber note when the agent asked
+the person or a room waits for an invitation answer, and the actions). "Open in the channel
+window" closes the inbox and opens Settings on Connections with a jump into the WhatsApp,
+Telegram or Discord window or the mail client (a repeat jump to the same chat fires again,
+because the page hands the jump in once and resets it when Settings consumed it); a room
+opens in the sidebar. "Done" and "Reopen" write the done mark. "Write a draft" jumps with the
+draft flag: the WhatsApp window puts the cursor into the Composer's instruction field, the
+mail client opens the thread. The compose box is offered for WhatsApp rows the person writes
+in themselves (`can_compose`, the WhatsApp window's rule) and posts to the WhatsApp send
+route; the other channels have no owner send route yet, which is a named boundary, not an
+omission. Opening a row posts its seen mark like the channel windows do. The window refetches
+on `inbox_changed` and `rooms_changed` (debounced 400 ms), never on a timer; the footer badge
+reads `GET /api/inbox/summary` on the same signal. Escape closes a running search first (66),
+steps back from the preview to the list on a phone (67), and closes the window last (65).
+On a phone the rail becomes a chip strip and the list and the preview stack, one at a time,
+with a back button; the desktop markup is unchanged.
+
 ## API (module)
 
 - `list_conversations(username, user_scope_id, *, channels=None, view="all", include_groups=True, include_done=False, query="", limit=200, now=None)` returns `{rows, counts, channels}`; `view` is one of `all`, `waits`, `unread`, `agent`; the group and done toggles apply before the counts, the view after them; `query` keeps rows whose name or preview contain it or whose stored messages match (`search_hits`).

@@ -20,6 +20,8 @@ export interface DiscordDashboardProps {
     onClose: () => void;
     config: any;
     onConfigChange: (key: string, value: any) => void;
+    /** Chat to open on arrival (a jump from the inbox); null leaves the selection alone. */
+    initialChatId?: string | null;
 }
 
 interface ActivityItem {
@@ -53,7 +55,7 @@ interface DashboardData {
     sessions: DiscordSession[];
 }
 
-export default function DiscordDashboard({ isOpen, onClose, config, onConfigChange }: DiscordDashboardProps) {
+export default function DiscordDashboard({ isOpen, onClose, config, onConfigChange, initialChatId }: DiscordDashboardProps) {
     const t = useTranslations('settings.discordDashboard');
     const [data, setData] = useState<DashboardData | null>(null);
     const [loading, setLoading] = useState(false);
@@ -61,6 +63,13 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
     const [toggling, setToggling] = useState(false);
     const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
     const [showSettings, setShowSettings] = useState(false);
+
+    useEffect(() => {
+        // Closing runs this effect before the parent clears the jump; a closed window must
+        // not move the selection.
+        if (!isOpen || !initialChatId) return;
+        setSelectedChatId(initialChatId);
+    }, [initialChatId, isOpen]);
 
     const fetchDashboard = useCallback(async () => {
         setLoading(true);

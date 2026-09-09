@@ -363,7 +363,8 @@
     "stopSpeaking": "Seslendirmeyi durdur",
     "help": "Yardımı göster",
     "notifications": "Günlükler",
-    "calendar": "Takvim"
+    "calendar": "Takvim",
+    "inbox": "Gelen kutusu"
   },
   "notifications": {
     "title": "Günlükler",
@@ -2262,6 +2263,91 @@
     "gateHint": "Arka plan gürültüsü alınmayacak şekilde sürgüyü kaydır.",
     "status_deaf_busy": "Şu anda dinlemiyor - model ana ajan için çalışıyor",
     "resultReady": "Görev tamamlandı. Ayrıntılar sohbette."
+  },
+  "inbox": {
+    "title": "Gelen kutusu",
+    "subtitle": "{waits} yanıt bekliyor · {unread} okunmamış",
+    "refresh": "Yenile",
+    "close": "Kapat",
+    "search": "Tüm kanallarda ara",
+    "listHeader": "{count} sohbet",
+    "newestFirst": "en yeni önce",
+    "loading": "Yükleniyor…",
+    "couldNotLoad": "Gelen kutusu yüklenemedi.",
+    "empty": "Bu seçim için sohbet yok.",
+    "selectRow": "Soldan bir sohbet seç.",
+    "back": "Geri",
+    "noMessages": "Henüz mesaj yok.",
+    "rail": {
+      "view": "Görünüm",
+      "channels": "Kanallar",
+      "filters": "Filtreler"
+    },
+    "view": {
+      "all": "Tümü",
+      "waits": "Yanıt bekliyor",
+      "unread": "Okunmamış",
+      "agent": "Ajan yanıtladı"
+    },
+    "channel": {
+      "whatsapp": "WhatsApp",
+      "telegram": "Telegram",
+      "discord": "Discord",
+      "mail": "E-posta",
+      "room": "Odalar"
+    },
+    "showGroups": "Grupları göster",
+    "showDone": "Tamamlananları göster",
+    "status": {
+      "on": "{channel} bağlı",
+      "off": "{channel} durduruldu",
+      "mail": "{count} e-posta hesabı"
+    },
+    "kind": {
+      "group": "Grup",
+      "room": "A2A"
+    },
+    "from": {
+      "agent": "Ajan: {text}",
+      "you": "Sen: {text}",
+      "other": "{who}: {text}"
+    },
+    "mode": {
+      "owner": "Kendi sohbetin: ajan burada sana yanıt verir",
+      "contact": "Ön büro: ajan bu kişiye yanıt verir",
+      "conversation": "Yanıt penceresi açık: ajan hâlâ yanıt veriyor",
+      "readonly": "Salt okunur: ajan burada yanıt vermez",
+      "needs_assign": "Numara ata: WhatsApp bu sohbeti henüz bir numarayla eşleştirmedi",
+      "admin": "Yönetici: ajan burada sana yanıt verir",
+      "relay": "Aktarma: mesajlar sana iletilir",
+      "mail": "E-posta",
+      "room": "Ajan odası"
+    },
+    "modeChip": {
+      "owner": "Kendi sohbetin",
+      "contact": "Ön büro",
+      "conversation": "Yanıt penceresi",
+      "readonly": "Salt okunur",
+      "needs_assign": "Numara ata",
+      "admin": "Yönetici",
+      "relay": "Aktarma",
+      "mail": "E-posta",
+      "room": "Oda"
+    },
+    "subline": "{mode} · {id} · {when}",
+    "openIn": "{channel} penceresinde aç",
+    "openRoom": "Odayı aç",
+    "markDone": "Tamamlandı",
+    "reopen": "Yeniden aç",
+    "writeDraft": "Taslak yaz",
+    "ownerAsked": "Ajan bu sohbet hakkında sana bir soru sordu; karşı taraf bekliyor.",
+    "invitation": "Bu oda, davete vereceğin yanıtı bekliyor.",
+    "sendFailed": "Mesaj gönderilemedi.",
+    "composePlaceholder": "Mesaj yaz",
+    "send": "Gönder",
+    "sending": "Gönderiliyor…",
+    "members": "{count} ajan",
+    "messagesCount": "{count} mesaj"
   },
   "mailV2": {
     "title": "Posta",

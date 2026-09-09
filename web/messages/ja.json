@@ -363,7 +363,8 @@
     "stopSpeaking": "読み上げを停止",
     "help": "ヘルプを表示",
     "notifications": "ログ",
-    "calendar": "カレンダー"
+    "calendar": "カレンダー",
+    "inbox": "受信箱"
   },
   "notifications": {
     "title": "ログ",
@@ -2262,6 +2263,91 @@
     "gateHint": "雑音が入らないようにスライダーを調整してください。",
     "status_deaf_busy": "いまは聞き取りできません。モデルがメインエージェントの作業に使われています。",
     "resultReady": "タスクが完了しました。詳細はチャットにあります。"
+  },
+  "inbox": {
+    "title": "受信箱",
+    "subtitle": "{waits}件が返信待ち · {unread}件未読",
+    "refresh": "更新",
+    "close": "閉じる",
+    "search": "すべてのチャンネルを検索",
+    "listHeader": "{count}件の会話",
+    "newestFirst": "新しい順",
+    "loading": "読み込み中…",
+    "couldNotLoad": "受信箱を読み込めませんでした。",
+    "empty": "この条件に合う会話はありません。",
+    "selectRow": "左から会話を選んでください。",
+    "back": "戻る",
+    "noMessages": "まだメッセージはありません。",
+    "rail": {
+      "view": "表示",
+      "channels": "チャンネル",
+      "filters": "フィルター"
+    },
+    "view": {
+      "all": "すべて",
+      "waits": "返信待ち",
+      "unread": "未読",
+      "agent": "エージェントが返信済み"
+    },
+    "channel": {
+      "whatsapp": "WhatsApp",
+      "telegram": "Telegram",
+      "discord": "Discord",
+      "mail": "メール",
+      "room": "ルーム"
+    },
+    "showGroups": "グループを表示",
+    "showDone": "完了済みを表示",
+    "status": {
+      "on": "{channel}は接続済み",
+      "off": "{channel}は停止中",
+      "mail": "メールアカウント{count}件"
+    },
+    "kind": {
+      "group": "グループ",
+      "room": "A2A"
+    },
+    "from": {
+      "agent": "エージェント：{text}",
+      "you": "自分：{text}",
+      "other": "{who}：{text}"
+    },
+    "mode": {
+      "owner": "自分のチャット：エージェントはここで返信します",
+      "contact": "フロントオフィス：エージェントはこの連絡先に返信します",
+      "conversation": "返信ウィンドウが開いています：エージェントはまだ返信します",
+      "readonly": "閲覧のみ：エージェントはここでは返信しません",
+      "needs_assign": "番号の割り当て：WhatsAppはこのチャットをまだ番号に結び付けていません",
+      "admin": "管理者：エージェントはここで返信します",
+      "relay": "リレー：メッセージは転送されます",
+      "mail": "メール",
+      "room": "エージェントルーム"
+    },
+    "modeChip": {
+      "owner": "自分のチャット",
+      "contact": "フロントオフィス",
+      "conversation": "返信ウィンドウ",
+      "readonly": "閲覧のみ",
+      "needs_assign": "番号の割り当て",
+      "admin": "管理者",
+      "relay": "リレー",
+      "mail": "メール",
+      "room": "ルーム"
+    },
+    "subline": "{mode} · {id} · {when}",
+    "openIn": "{channel}のウィンドウで開く",
+    "openRoom": "ルームを開く",
+    "markDone": "完了",
+    "reopen": "再開",
+    "writeDraft": "下書きを書く",
+    "ownerAsked": "エージェントがこのチャットについて質問しています。相手が待っています。",
+    "invitation": "このルームは招待への返事を待っています。",
+    "sendFailed": "メッセージを送信できませんでした。",
+    "composePlaceholder": "メッセージを書く",
+    "send": "送信",
+    "sending": "送信中…",
+    "members": "エージェント{count}名",
+    "messagesCount": "{count}件のメッセージ"
   },
   "mailV2": {
     "title": "メール",

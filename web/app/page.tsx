@@ -11,7 +11,7 @@ import { toWav16k } from '@/lib/wav';
 import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, ChevronLeft, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
-    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock,
+    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock, Inbox,
     Folder, FolderOpen, FolderPlus, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X, Users, UserMinus,
     Lock, Unlock, Globe, Code2, MousePointer2, Microscope, PenLine, BookOpen,
     Copy, RotateCcw,
@@ -31,6 +31,8 @@ import { VoiceCallBar } from '@/components/VoiceCallBar';
 import { useVoiceCallStore } from '@/lib/voiceCallStore';
 import { TurnActionsTimeline, type TimelineAction } from '@/components/TurnActionsTimeline';
 import AutomationCalendarModal from '@/components/AutomationCalendarModal';
+import InboxWindow from '@/components/inbox/InboxWindow';
+import type { SettingsChatJump } from '@/components/SettingsModal';
 import CreateAutomationPopup, { type CreateAutomationPayload, type EditAutomationTask } from '@/components/CreateAutomationPopup';
 import NotificationsModal, { type NotificationItem } from '@/components/NotificationsModal';
 import AnnouncementModal from '@/components/AnnouncementModal';
@@ -3201,6 +3203,14 @@ function VAFDashboardContent() {
     const [isAutomationPopupOpen, setIsAutomationPopupOpen] = useState(false);
     // Bumped on every `calendar_changed` frame: both mounts of the calendar window refetch.
     const [calendarVersion, setCalendarVersion] = useState(0);
+    // The inbox (sidebar footer): bumped on every `inbox_changed` and `rooms_changed` frame,
+    // so the open window and the footer badge refetch instead of polling.
+    const [isInboxOpen, setIsInboxOpen] = useState(false);
+    const [inboxVersion, setInboxVersion] = useState(0);
+    const [inboxSummary, setInboxSummary] = useState<{ waits: number; unread: number }>({ waits: 0, unread: 0 });
+    // A jump from the inbox into a channel window or the mail client, handed to Settings
+    // once and reset when it was consumed, so a repeat jump to the same chat fires again.
+    const [settingsChatJump, setSettingsChatJump] = useState<SettingsChatJump | null>(null);
     // When automation calendar opens (footer), load notes and todos for the current user
     useEffect(() => {
         if (!isAutomationPopupOpen || !ws || ws.readyState !== WebSocket.OPEN) return;
@@ -5759,8 +5769,15 @@ function VAFDashboardContent() {
                     // engine does not build the sidebar payload, so it says the answer
                     // changed and the browser asks the question it already knows how
                     // to ask. Without this a new room was invisible until the whole
-                    // interface was reloaded by hand.
+                    // interface was reloaded by hand. The inbox lists rooms too.
                     wsSocketRef.current?.send(JSON.stringify({ type: 'get_sessions' }));
+                    setInboxVersion(v => v + 1);
+                }
+                else if (data.type === 'inbox_changed') {
+                    // A conversation list changed underneath the browser (a stored message,
+                    // a mark, a mail sync). A signal, not the rows: the open inbox window and
+                    // the footer badge refetch, debounced.
+                    setInboxVersion(v => v + 1);
                 }
                 else if (data.type === 'calendar_changed') {
                     // The calendar changed underneath the browser (a tool, a route, a sync
@@ -8328,6 +8345,17 @@ function VAFDashboardContent() {
     const providerName = modelProvider || config?.provider || 'local';
     const isLocalProvider = providerName === 'local';
     const isConnected = status === 'connected';
+    // The footer badge: the inbox's counts, refetched on the signal (debounced) and on a reconnect.
+    useEffect(() => {
+        if (!isConnected) return;
+        const id = setTimeout(() => {
+            fetch(`${getApiBase()}/api/inbox/summary`, { credentials: 'include' })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((data) => { if (data && typeof data.waits === 'number') setInboxSummary({ waits: data.waits, unread: Number(data.unread) || 0 }); })
+                .catch(() => { });
+        }, 400);
+        return () => clearTimeout(id);
+    }, [inboxVersion, isConnected]);
     const showIdleState = isConnected && isLocalProvider && modelLoaded === false;
     const connectionLabel = isConnected ? (showIdleState ? tStatus('idle') : tStatus('connected')) : tStatus('disconnected');
 
@@ -9029,6 +9057,23 @@ function VAFDashboardContent() {
                                 <Calendar size={20} />
                             </div>
                             <span className="overflow-hidden opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">{tNav('calendar')}</span>
+                        </div>
+
+                        <div
+                            onClick={() => setIsInboxOpen(true)}
+                            className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/inbox transition-colors justify-start"
+                            title={tNav('inbox')}
+                            data-agent-hint="nav-inbox"
+                        >
+                            <div className="w-6 flex justify-center shrink-0 relative">
+                                <Inbox size={20} />
+                                {inboxSummary.waits > 0 ? (
+                                    <span className="absolute -top-1.5 -right-2 min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-white text-[10px] font-semibold grid place-items-center border-2 border-white leading-none">{inboxSummary.waits > 99 ? '99+' : inboxSummary.waits}</span>
+                                ) : inboxSummary.unread > 0 ? (
+                                    <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white" />
+                                ) : null}
+                            </div>
+                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">{tNav('inbox')}</span>
                         </div>
 
                         {currentUser?.role === 'admin' && (
@@ -12398,6 +12443,8 @@ function VAFDashboardContent() {
                 }}
                 apiBase={getApiBase()}
                 initialTab={settingsInitialTab ?? undefined}
+                initialChatJump={settingsChatJump}
+                onChatJumpConsumed={() => setSettingsChatJump(null)}
                 onRefreshConfig={() => ws?.send(JSON.stringify({ type: 'get_config' }))}
                 connectionLabel={connectionLabel}
                 isConnected={isConnected}
@@ -12414,6 +12461,22 @@ function VAFDashboardContent() {
                 userTimeFormat={userTimeFormat}
                 calendarVersion={calendarVersion}
                 onOpenAutomationCalendar={() => { if (ws?.readyState === WebSocket.OPEN) { ws.send(JSON.stringify({ type: 'get_automation_notes' })); ws.send(JSON.stringify({ type: 'get_automation_todos' })); } }}
+            />
+            <InboxWindow
+                isOpen={isInboxOpen}
+                onClose={() => setIsInboxOpen(false)}
+                version={inboxVersion}
+                onOpenInChannel={(jump) => {
+                    // The channel windows live inside Settings: open it on Connections with the jump.
+                    setSettingsChatJump(jump);
+                    setSettingsInitialTab('connections');
+                    setIsSettingsOpen(true);
+                }}
+                onOpenRoom={(roomId, name) => {
+                    pendingRoomOpenRef.current = roomId;
+                    if (roomView?.room.roomId !== roomId) setRoomOpening({ roomId, name });
+                    ws?.send(JSON.stringify({ type: 'open_room', room_id: roomId }));
+                }}
             />
             <AutomationCalendarModal
                 isOpen={isAutomationPopupOpen}

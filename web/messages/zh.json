@@ -363,7 +363,8 @@
     "stopSpeaking": "停止朗读",
     "help": "显示帮助",
     "notifications": "日志",
-    "calendar": "日历"
+    "calendar": "日历",
+    "inbox": "收件箱"
   },
   "notifications": {
     "title": "日志",
@@ -2262,6 +2263,91 @@
     "gateHint": "拖动滑块，避免把背景噪音录进来。",
     "status_deaf_busy": "当前未在聆听：模型正在为主智能体工作",
     "resultReady": "任务已完成。详情在对话里。"
+  },
+  "inbox": {
+    "title": "收件箱",
+    "subtitle": "{waits} 个等待回复 · {unread} 条未读",
+    "refresh": "刷新",
+    "close": "关闭",
+    "search": "搜索所有渠道",
+    "listHeader": "{count} 个会话",
+    "newestFirst": "最新在前",
+    "loading": "加载中…",
+    "couldNotLoad": "无法加载收件箱。",
+    "empty": "此筛选下没有会话。",
+    "selectRow": "在左侧选择一个会话。",
+    "back": "返回",
+    "noMessages": "还没有消息。",
+    "rail": {
+      "view": "视图",
+      "channels": "渠道",
+      "filters": "筛选"
+    },
+    "view": {
+      "all": "全部",
+      "waits": "等待回复",
+      "unread": "未读",
+      "agent": "智能体已回复"
+    },
+    "channel": {
+      "whatsapp": "WhatsApp",
+      "telegram": "Telegram",
+      "discord": "Discord",
+      "mail": "邮件",
+      "room": "房间"
+    },
+    "showGroups": "显示群组",
+    "showDone": "显示已完成",
+    "status": {
+      "on": "{channel} 已连接",
+      "off": "{channel} 已停止",
+      "mail": "{count} 个邮件账户"
+    },
+    "kind": {
+      "group": "群组",
+      "room": "A2A"
+    },
+    "from": {
+      "agent": "智能体：{text}",
+      "you": "你：{text}",
+      "other": "{who}：{text}"
+    },
+    "mode": {
+      "owner": "你自己的聊天：智能体在这里回复你",
+      "contact": "前台：智能体回复这位联系人",
+      "conversation": "回复窗口开启：智能体仍会回复",
+      "readonly": "只读：智能体不在这里回复",
+      "needs_assign": "分配号码：WhatsApp 尚未将此聊天与号码匹配",
+      "admin": "管理员：智能体在这里回复你",
+      "relay": "中继：消息会转发给你",
+      "mail": "邮件",
+      "room": "智能体房间"
+    },
+    "modeChip": {
+      "owner": "你的聊天",
+      "contact": "前台",
+      "conversation": "回复窗口",
+      "readonly": "只读",
+      "needs_assign": "分配号码",
+      "admin": "管理员",
+      "relay": "中继",
+      "mail": "邮件",
+      "room": "房间"
+    },
+    "subline": "{mode} · {id} · {when}",
+    "openIn": "在 {channel} 窗口中打开",
+    "openRoom": "打开房间",
+    "markDone": "完成",
+    "reopen": "重新打开",
+    "writeDraft": "写草稿",
+    "ownerAsked": "智能体就此聊天向你提了一个问题，对方正在等待。",
+    "invitation": "此房间在等待你对邀请的答复。",
+    "sendFailed": "消息发送失败。",
+    "composePlaceholder": "写消息",
+    "send": "发送",
+    "sending": "发送中…",
+    "members": "{count} 个智能体",
+    "messagesCount": "{count} 条消息"
   },
   "mailV2": {
     "title": "邮件",

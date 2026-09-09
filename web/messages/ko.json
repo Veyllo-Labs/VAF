@@ -363,7 +363,8 @@
     "stopSpeaking": "읽어주기 중지",
     "help": "도움말 보기",
     "notifications": "로그",
-    "calendar": "캘린더"
+    "calendar": "캘린더",
+    "inbox": "받은 편지함"
   },
   "notifications": {
     "title": "로그",
@@ -2262,6 +2263,91 @@
     "gateHint": "주변 소음이 녹음되지 않도록 슬라이더를 조절해 주세요.",
     "status_deaf_busy": "모델이 메인 에이전트 작업에 쓰이는 중이라 지금은 듣지 못해요",
     "resultReady": "작업이 끝났어요. 자세한 내용은 대화에 있어요."
+  },
+  "inbox": {
+    "title": "받은 편지함",
+    "subtitle": "{waits}개 답장 대기 중 · {unread}개 읽지 않음",
+    "refresh": "새로 고침",
+    "close": "닫기",
+    "search": "모든 채널 검색",
+    "listHeader": "대화 {count}개",
+    "newestFirst": "최신순",
+    "loading": "불러오는 중…",
+    "couldNotLoad": "받은 편지함을 불러오지 못했어요.",
+    "empty": "이 조건에 맞는 대화가 없어요.",
+    "selectRow": "왼쪽에서 대화를 선택하세요.",
+    "back": "뒤로",
+    "noMessages": "아직 메시지가 없어요.",
+    "rail": {
+      "view": "보기",
+      "channels": "채널",
+      "filters": "필터"
+    },
+    "view": {
+      "all": "전체",
+      "waits": "답장 대기 중",
+      "unread": "읽지 않음",
+      "agent": "에이전트가 답장함"
+    },
+    "channel": {
+      "whatsapp": "WhatsApp",
+      "telegram": "Telegram",
+      "discord": "Discord",
+      "mail": "메일",
+      "room": "룸"
+    },
+    "showGroups": "그룹 표시",
+    "showDone": "완료된 대화 표시",
+    "status": {
+      "on": "{channel} 연결됨",
+      "off": "{channel} 중지됨",
+      "mail": "메일 계정 {count}개"
+    },
+    "kind": {
+      "group": "그룹",
+      "room": "A2A"
+    },
+    "from": {
+      "agent": "에이전트: {text}",
+      "you": "나: {text}",
+      "other": "{who}: {text}"
+    },
+    "mode": {
+      "owner": "내 채팅: 에이전트가 여기에서 답해요",
+      "contact": "프런트 오피스: 에이전트가 이 연락처에 답해요",
+      "conversation": "답장 창 열림: 에이전트가 아직 답해요",
+      "readonly": "읽기 전용: 에이전트가 여기에서는 답하지 않아요",
+      "needs_assign": "번호 지정 필요: WhatsApp에서 이 채팅을 아직 번호와 연결하지 않았어요",
+      "admin": "관리자: 에이전트가 여기에서 답해요",
+      "relay": "릴레이: 메시지가 전달돼요",
+      "mail": "메일",
+      "room": "에이전트 룸"
+    },
+    "modeChip": {
+      "owner": "내 채팅",
+      "contact": "프런트 오피스",
+      "conversation": "답장 창",
+      "readonly": "읽기 전용",
+      "needs_assign": "번호 지정",
+      "admin": "관리자",
+      "relay": "릴레이",
+      "mail": "메일",
+      "room": "룸"
+    },
+    "subline": "{mode} · {id} · {when}",
+    "openIn": "{channel} 창에서 열기",
+    "openRoom": "룸 열기",
+    "markDone": "완료",
+    "reopen": "다시 열기",
+    "writeDraft": "초안 쓰기",
+    "ownerAsked": "에이전트가 이 채팅에 대해 질문했어요. 상대가 기다리고 있어요.",
+    "invitation": "이 룸은 초대에 대한 답을 기다리고 있어요.",
+    "sendFailed": "메시지를 보내지 못했어요.",
+    "composePlaceholder": "메시지 쓰기",
+    "send": "보내기",
+    "sending": "보내는 중…",
+    "members": "에이전트 {count}명",
+    "messagesCount": "메시지 {count}개"
   },
   "mailV2": {
     "title": "메일",

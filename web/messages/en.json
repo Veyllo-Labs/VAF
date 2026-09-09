@@ -363,7 +363,8 @@
     "stopSpeaking": "Stop speaking",
     "help": "Show help",
     "notifications": "Logs",
-    "calendar": "Calendar"
+    "calendar": "Calendar",
+    "inbox": "Inbox"
   },
   "notifications": {
     "title": "Logs",
@@ -2262,6 +2263,91 @@
     "gateHint": "Move the slider so background noise is not picked up.",
     "status_deaf_busy": "Not listening right now - the model is working for the main agent",
     "resultReady": "The task is done. The details are in the chat."
+  },
+  "inbox": {
+    "title": "Inbox",
+    "subtitle": "{waits} waiting for an answer · {unread} unread",
+    "refresh": "Refresh",
+    "close": "Close",
+    "search": "Search every channel",
+    "listHeader": "{count} conversations",
+    "newestFirst": "newest first",
+    "loading": "Loading…",
+    "couldNotLoad": "The inbox could not be loaded.",
+    "empty": "No conversations for this selection.",
+    "selectRow": "Select a conversation on the left.",
+    "back": "Back",
+    "noMessages": "No messages yet.",
+    "rail": {
+      "view": "View",
+      "channels": "Channels",
+      "filters": "Filters"
+    },
+    "view": {
+      "all": "All",
+      "waits": "Waiting for an answer",
+      "unread": "Unread",
+      "agent": "Answered by the agent"
+    },
+    "channel": {
+      "whatsapp": "WhatsApp",
+      "telegram": "Telegram",
+      "discord": "Discord",
+      "mail": "Mail",
+      "room": "Rooms"
+    },
+    "showGroups": "Show groups",
+    "showDone": "Show done",
+    "status": {
+      "on": "{channel} connected",
+      "off": "{channel} stopped",
+      "mail": "{count} mail accounts"
+    },
+    "kind": {
+      "group": "Group",
+      "room": "A2A"
+    },
+    "from": {
+      "agent": "Agent: {text}",
+      "you": "You: {text}",
+      "other": "{who}: {text}"
+    },
+    "mode": {
+      "owner": "Your own chat: the agent answers you here",
+      "contact": "Front Office: the agent answers this contact",
+      "conversation": "Reply window open: the agent still answers",
+      "readonly": "Read-only: the agent does not answer here",
+      "needs_assign": "Assign number: WhatsApp has not matched this chat to a number yet",
+      "admin": "Admin: the agent answers you here",
+      "relay": "Relay: messages are passed on to you",
+      "mail": "Mail",
+      "room": "Agent room"
+    },
+    "modeChip": {
+      "owner": "Your chat",
+      "contact": "Front Office",
+      "conversation": "Reply window",
+      "readonly": "Read-only",
+      "needs_assign": "Assign number",
+      "admin": "Admin",
+      "relay": "Relay",
+      "mail": "Mail",
+      "room": "Room"
+    },
+    "subline": "{mode} · {id} · {when}",
+    "openIn": "Open in the {channel} window",
+    "openRoom": "Open room",
+    "markDone": "Done",
+    "reopen": "Reopen",
+    "writeDraft": "Write a draft",
+    "ownerAsked": "The agent asked you a question about this chat; the person is waiting.",
+    "invitation": "This room waits for your answer to the invitation.",
+    "sendFailed": "The message could not be sent.",
+    "composePlaceholder": "Write a message",
+    "send": "Send",
+    "sending": "Sending…",
+    "members": "{count} agents",
+    "messagesCount": "{count} messages"
   },
   "mailV2": {
     "title": "Mail",

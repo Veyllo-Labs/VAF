@@ -363,7 +363,8 @@
     "stopSpeaking": "Sprachausgabe stoppen",
     "help": "Hilfe anzeigen",
     "notifications": "Logs",
-    "calendar": "Kalender"
+    "calendar": "Kalender",
+    "inbox": "Posteingang"
   },
   "notifications": {
     "title": "Logs",
@@ -2262,6 +2263,91 @@
     "gateHint": "Verschiebe den Regler, damit Störgeräusche nicht aufgenommen werden.",
     "status_deaf_busy": "Hört gerade nicht - das Modell arbeitet für den Main-Agent",
     "resultReady": "Die Aufgabe ist fertig. Die Details stehen im Chat."
+  },
+  "inbox": {
+    "title": "Posteingang",
+    "subtitle": "{waits} warten auf Antwort · {unread} ungelesen",
+    "refresh": "Aktualisieren",
+    "close": "Schließen",
+    "search": "Alle Kanäle durchsuchen",
+    "listHeader": "{count} Gespräche",
+    "newestFirst": "neueste zuerst",
+    "loading": "Lädt…",
+    "couldNotLoad": "Der Posteingang konnte nicht geladen werden.",
+    "empty": "Keine Gespräche für diese Auswahl.",
+    "selectRow": "Wähle links ein Gespräch.",
+    "back": "Zurück",
+    "noMessages": "Noch keine Nachrichten.",
+    "rail": {
+      "view": "Ansicht",
+      "channels": "Kanäle",
+      "filters": "Filter"
+    },
+    "view": {
+      "all": "Alle",
+      "waits": "Wartet auf Antwort",
+      "unread": "Ungelesen",
+      "agent": "Vom Agenten beantwortet"
+    },
+    "channel": {
+      "whatsapp": "WhatsApp",
+      "telegram": "Telegram",
+      "discord": "Discord",
+      "mail": "Mail",
+      "room": "Räume"
+    },
+    "showGroups": "Gruppen zeigen",
+    "showDone": "Erledigte zeigen",
+    "status": {
+      "on": "{channel} verbunden",
+      "off": "{channel} gestoppt",
+      "mail": "{count} Mailkonten"
+    },
+    "kind": {
+      "group": "Gruppe",
+      "room": "A2A"
+    },
+    "from": {
+      "agent": "Agent: {text}",
+      "you": "Du: {text}",
+      "other": "{who}: {text}"
+    },
+    "mode": {
+      "owner": "Dein eigener Chat: der Agent antwortet dir hier",
+      "contact": "Front Office: der Agent antwortet dieser Kontaktperson",
+      "conversation": "Antwortfenster offen: der Agent antwortet noch",
+      "readonly": "Nur lesen: der Agent antwortet hier nicht",
+      "needs_assign": "Nummer zuordnen: WhatsApp hat diesen Chat noch keiner Nummer zugeordnet",
+      "admin": "Admin: der Agent antwortet dir hier",
+      "relay": "Relay: Nachrichten werden dir weitergereicht",
+      "mail": "Mail",
+      "room": "Agentenraum"
+    },
+    "modeChip": {
+      "owner": "Dein Chat",
+      "contact": "Front Office",
+      "conversation": "Antwortfenster",
+      "readonly": "Nur lesen",
+      "needs_assign": "Nummer zuordnen",
+      "admin": "Admin",
+      "relay": "Relay",
+      "mail": "Mail",
+      "room": "Raum"
+    },
+    "subline": "{mode} · {id} · {when}",
+    "openIn": "Im {channel}-Fenster öffnen",
+    "openRoom": "Raum öffnen",
+    "markDone": "Erledigt",
+    "reopen": "Wieder öffnen",
+    "writeDraft": "Entwurf schreiben",
+    "ownerAsked": "Der Agent hat dir zu diesem Chat eine Frage gestellt; die Person wartet.",
+    "invitation": "Dieser Raum wartet auf deine Antwort auf die Einladung.",
+    "sendFailed": "Die Nachricht konnte nicht gesendet werden.",
+    "composePlaceholder": "Nachricht schreiben",
+    "send": "Senden",
+    "sending": "Wird gesendet…",
+    "members": "{count} Agenten",
+    "messagesCount": "{count} Nachrichten"
   },
   "mailV2": {
     "title": "Mail",

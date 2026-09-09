@@ -546,7 +546,7 @@ function MessageView({ msg, expanded, onToggle, onRelabeled }: {
     );
 }
 
-export function MailClientView({ onClose }: { onClose?: () => void }) {
+export function MailClientView({ onClose, initialThread }: { onClose?: () => void; initialThread?: number | null }) {
     const t = useTranslations('mailV2');
     const catLabel = (c: string) => (STD_CATEGORIES as readonly string[]).includes(c) ? t(`cat.${c}`) : catDisplay(c);
     const [status, setStatus] = useState<{ accounts?: Account[]; composer_enabled?: boolean } | null>(null);
@@ -685,6 +685,12 @@ export function MailClientView({ onClose }: { onClose?: () => void }) {
             }
         } catch { setThreadMsgs([]); }
     }, [loadFolders]);
+
+    // A jump from the inbox: the thread opens by id, whichever folder the list shows.
+    useEffect(() => {
+        if (!initialThread) return;
+        void openThread({ thread_id: initialThread } as ThreadRow);
+    }, [initialThread, openThread]);
 
     // "N waiting for you" in the list header: the threads whose last word is the
     // correspondent's and nobody answered (the inbox's rule, INBOX.md); the button

@@ -41,6 +41,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   waiting chat; the conversation header repeats the chip; and opening a chat marks it read on
   every surface. The shell now exports its bubbles, history hook, compose box and chips, so
   the inbox window reads them instead of copying them.
+  And the inbox itself: a fourth row in the sidebar footer, between the calendar and the
+  logs, with a badge (the amber count of conversations waiting for you, or a red dot when
+  something is unread). The window has a rail (views, channels, group and done toggles,
+  channel status), a list (search over every channel, one row per conversation with the chip
+  line and the lane that answers there) and a preview (the conversation, the note when the
+  agent asked you, "open in the channel window" which lands in the WhatsApp, Telegram or
+  Discord window or on the mail thread, "done", "write a draft", and the compose box for a
+  WhatsApp chat you write in yourself). It refetches on the signal, never on a timer; on a
+  phone the rail is a chip strip and the panes take turns. Seven catalogues carry the strings.
 - **A messenger chat has its own memory.** What the agent learns inside a chat with a
   contact is stored in that chat's own namespace (`source = chat/<session id>`), which every
   ordinary lookup of your agent leaves out in SQL, in both lanes of the hybrid search. Only

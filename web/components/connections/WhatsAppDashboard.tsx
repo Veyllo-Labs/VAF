@@ -47,8 +47,10 @@ export interface WhatsAppDashboardProps {
     onConfigChange: (key: string, value: any) => void;
     onOpenSetupWizard?: () => void;
     onOpenContacts?: () => void;
-    /** Chat to open on arrival (a jump from the contact book); null leaves the selection alone. */
+    /** Chat to open on arrival (a jump from the contact book or the inbox); null leaves the selection alone. */
     initialChatId?: string | null;
+    /** With a jump: put the cursor into the Composer's instruction field (the inbox's "write a draft"). */
+    initialDraft?: boolean;
 }
 
 interface WhatsAppSession {
@@ -98,7 +100,7 @@ interface ComposerTurn { role: 'user' | 'assistant'; content: string }
 /** What a chat's compose box and Composer held when the person switched away. */
 interface ComposeStash { composeText: string; turns: ComposerTurn[]; meta: ComposerMeta | null; instruction: string; beforeAssist: string | null }
 
-export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigChange, onOpenSetupWizard, onOpenContacts, initialChatId }: WhatsAppDashboardProps) {
+export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigChange, onOpenSetupWizard, onOpenContacts, initialChatId, initialDraft }: WhatsAppDashboardProps) {
     const t = useTranslations('settings.whatsappDashboard');
     const [data, setData] = useState<DashboardData | null>(null);
     const [loading, setLoading] = useState(false);
@@ -209,6 +211,13 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         if (initialChatId !== selectedChatId) switchCompose(selectedChatId, initialChatId);
         setSelectedChatId(initialChatId);
     }, [initialChatId, isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    useEffect(() => {
+        // The Composer column mounts after the dashboard data lands, so the focus waits a beat.
+        if (!isOpen || !initialDraft || !initialChatId) return;
+        const id = setTimeout(() => instructionRef.current?.focus(), 400);
+        return () => clearTimeout(id);
+    }, [initialDraft, initialChatId, isOpen, data]);
 
     useEffect(() => { if (isOpen) fetchDashboard(); }, [isOpen, config?.whatsapp_config, fetchDashboard]);
 

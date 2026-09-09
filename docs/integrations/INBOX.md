@@ -121,6 +121,20 @@ Discord payload carries `sessions` (the admin's store rows). `GET /api/mail/thre
 `waits`, `waits_reason`, `done` and `answered_by_agent` from `mail_thread_state` and the done
 marks, so the mail window and the Posteingang never disagree about who waits.
 
+In the windows themselves (`web/components/connections/ChannelDashboardShell.tsx`, the
+shell WhatsApp, Telegram and Discord are built on), every row carries a chip line under the
+preview: the unread pill (the mail window's red pill, the one unread token on every
+surface), then "Waits for you" (amber; its tooltip says when the agent asked the person),
+"Agent answered" (green) or "Done" (quiet). The list header's right side turns into an
+"N waiting for you" button that selects the next waiting chat, round and round; the
+conversation header repeats the chip and says in one amber line when the agent asked the
+person about this chat. Opening a chat posts its seen mark (`POST /api/inbox/marks`, one
+mark per store key behind the row, so an `@lid` merged into its number is read too), the
+pill goes out at once, and "waits" stays, because reading is not answering. The mail
+window shows the same chip on its thread rows and the same header button. The shell
+exports the pieces the inbox window reads as well (the bubbles, the history hook, the
+compose box, the chips), so nothing is copied a fourth time.
+
 ## API (module)
 
 - `list_conversations(username, user_scope_id, *, channels=None, view="all", include_groups=True, include_done=False, query="", limit=200, now=None)` returns `{rows, counts, channels}`; `view` is one of `all`, `waits`, `unread`, `agent`; the group and done toggles apply before the counts, the view after them; `query` keeps rows whose name or preview contain it or whose stored messages match (`search_hits`).

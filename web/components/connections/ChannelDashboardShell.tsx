@@ -9,11 +9,13 @@
 // judged: label, preview, badge, what the agent does with that chat), where the
 // conversation history comes from, and the cards for its settings. Everything the
 // three channels used to copy from each other (list, bubbles, in-chat search, day
-// separators, Memory Learning counter, keyboard handling) lives here once.
+// separators, Memory Learning counter, keyboard handling) lives here once, and the
+// pieces the inbox window reads too (the bubbles, the history hook, the compose box,
+// the state chips) are exported from here rather than copied a fourth time.
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTranslations } from 'next-intl';
-import { X, Search, RefreshCw, Settings, ChevronUp, ChevronDown, Bot, User } from 'lucide-react';
+import { X, Search, RefreshCw, Settings, ChevronUp, ChevronDown, Bot, User, Loader2, Send } from 'lucide-react';
 import { cn, stripThinkBlocks } from '@/lib/utils';
 import { useEscapeLayer } from '@/hooks/useEscapeLayer';
 import HighlightedText from './HighlightedText';
@@ -39,7 +41,17 @@ export interface ShellChat {
     subline: string;
     /** The footer line of the conversation: which mode answers in this chat. */
     footer: string;
+    /** The inbox's own state of this chat (INBOX.md): what is unread, who waits, whether the agent answered or the person closed it. */
+    unread?: number;
+    waits?: boolean;
+    waitsReason?: string;
+    answeredByAgent?: boolean;
+    done?: boolean;
+    /** The store's chat ids behind this row (an @lid merged into its E.164 keeps its own row); the seen mark goes to each. */
+    markIds?: string[];
 }
+
+export type InboxChannel = 'whatsapp' | 'telegram' | 'discord' | 'mail' | 'room';
 
 export interface ChannelDashboardShellProps {
     isOpen: boolean;
@@ -73,6 +85,8 @@ export interface ChannelDashboardShellProps {
     settingsContent: React.ReactNode;
     settingsOpen: boolean;
     onSettingsOpenChange: (open: boolean) => void;
+    /** The inbox channel of this window. When set, opening a chat posts its seen mark, so the unread count clears on every surface. */
+    channel?: InboxChannel;
 }
 
 export const BADGE_CLS = {
@@ -82,6 +96,179 @@ export const BADGE_CLS = {
     assign: 'bg-[#2b2417] text-[#d4a24e]',
     readOnly: 'bg-[#262626] text-[#b0b0b0]',
 } as const;
+
+// The state tokens, the same on every surface: the unread pill is the mail window's
+// (a red pill with the count), "waits for you" is amber, the agent's answer green,
+// and "done" quiet. Two windows never disagree about what a colour means.
+export const UNREAD_PILL = 'text-[11px] leading-[18px] px-1.5 rounded-full bg-[#e05d44] text-white';
+export const WAITS_CHIP = 'text-[11px] px-1.5 rounded-md bg-[#4a3b1e] text-[#e0b866] whitespace-nowrap';
+export const AGENT_CHIP = 'text-[11px] px-1.5 rounded-md bg-[#1f4d2a] text-[#9fe0b0] whitespace-nowrap';
+export const DONE_CHIP = 'text-[11px] px-1.5 rounded-md bg-[#262626] text-[#9a9a9a] border border-[#2e2e2e] whitespace-nowrap';
+
+/** The unread count, in the mail window's red pill; nothing when there is nothing unread. */
+export function UnreadPill({ count }: { count?: number }) {
+    const t = useTranslations('settings.channelDashboard');
+    if (!count || count <= 0) return null;
+    return <span className={UNREAD_PILL} title={t('unreadCount', { count })}>{count}</span>;
+}
+
+/** "Waits for you": the last word is the other side's and nobody answered, or the agent asked the person about this chat. */
+export function WaitsChip({ reason }: { reason?: string }) {
+    const t = useTranslations('settings.channelDashboard');
+    return <span className={WAITS_CHIP} title={reason === 'owner_asked' ? t('waitsOwnerAsked') : undefined}>{t('waitsForYou')}</span>;
+}
+
+/** The chip line under a row: the unread pill, then one word about where the conversation stands. */
+export function StateChips({ unread, waits, waitsReason, answeredByAgent, done, className }: {
+    unread?: number; waits?: boolean; waitsReason?: string; answeredByAgent?: boolean; done?: boolean; className?: string;
+}) {
+    const t = useTranslations('settings.channelDashboard');
+    if (!unread && !waits && !answeredByAgent && !done) return null;
+    return (
+        <div className={cn('mt-1 flex items-center gap-1.5 flex-wrap', className)}>
+            <UnreadPill count={unread} />
+            {waits ? <WaitsChip reason={waitsReason} />
+                : done ? <span className={DONE_CHIP}>{t('done')}</span>
+                    : answeredByAgent ? <span className={AGENT_CHIP}>{t('agentAnswered')}</span> : null}
+        </div>
+    );
+}
+
+// The compose box a person writes in themselves: one growing field (the caller sizes it
+// through `fieldRef`), Enter sends, Shift+Enter breaks the line, the round button sends.
+export const FIELD = 'bg-[#262626] border border-[#2e2e2e] rounded-2xl px-4 py-2 text-sm leading-5 outline-none focus:border-[#444] resize-none scrollbar-hide';
+export const ROUND_BTN = 'w-9 h-9 rounded-full grid place-items-center shrink-0 bg-[#25a244] text-white hover:bg-[#2db54e] disabled:opacity-40 disabled:hover:bg-[#25a244]';
+
+export function ComposeBox({ value, onChange, onSend, sending, placeholder, sendTitle, error, fieldRef }: {
+    value: string; onChange: (v: string) => void; onSend: () => void; sending: boolean;
+    placeholder: string; sendTitle: string; error?: string | null; fieldRef?: React.RefObject<HTMLTextAreaElement>;
+}) {
+    return (
+        <div className="px-4 py-2.5 border-t border-[#2e2e2e] bg-[#1a1a1a] shrink-0 flex flex-col gap-1">
+            <div className="flex items-end gap-2">
+                <textarea ref={fieldRef} value={value} onChange={e => onChange(e.target.value)}
+                    onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.shiftKey && !sending && value.trim()) {
+                            e.preventDefault();
+                            onSend();
+                        }
+                    }}
+                    placeholder={placeholder} rows={1} disabled={sending}
+                    className={cn(FIELD, 'flex-1')} />
+                <button type="button" onClick={onSend} disabled={sending || !value.trim()} title={sendTitle} className={ROUND_BTN}>
+                    {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4 -ml-0.5" />}
+                </button>
+            </div>
+            {error && <p className="text-xs text-[#e08c8c] px-1">{error}</p>}
+        </div>
+    );
+}
+
+export interface ConversationMessage { role: string; content: string; timestamp?: string; content_type?: string; sender?: string }
+export interface HistoryCompaction { user_turn_count: number; compaction_interval: number; last_compaction_at_turn: number }
+
+/** The conversation pane's fetch, keyed on the history key and the version only. The URL
+ *  builder is an inline arrow in every window, so it is a new function on each render;
+ *  depending on it re-ran the fetch after every response and the conversation loaded
+ *  itself in a loop (and flickered whenever one of the piled-up requests failed). It is
+ *  read through a ref. Another chat drops the previous chat's messages before the fetch,
+ *  or they show under the new header until the answer lands and then vanish (which reads
+ *  as "the chat loaded and disappeared"); a reload of the SAME chat (load older) keeps
+ *  what is on screen while it waits. A request that is not the newest is ignored. */
+export function useConversationHistory(historyKey: string | null, isOpen: boolean, historyUrl: (key: string) => string, historyVersion?: number) {
+    const [sessionHistory, setSessionHistory] = useState<ConversationMessage[]>([]);
+    const [historyCompaction, setHistoryCompaction] = useState<HistoryCompaction | null>(null);
+    const [historyLoading, setHistoryLoading] = useState(false);
+    const historyUrlRef = useRef(historyUrl);
+    historyUrlRef.current = historyUrl;
+    const historyRequest = useRef(0);
+    const historyLoadedKey = useRef<string | null>(null);
+    useEffect(() => {
+        if (!historyKey || !isOpen) {
+            setSessionHistory([]);
+            setHistoryCompaction(null);
+            historyLoadedKey.current = null;
+            return;
+        }
+        if (historyLoadedKey.current !== historyKey) {
+            setSessionHistory([]);
+            setHistoryCompaction(null);
+            historyLoadedKey.current = historyKey;
+        }
+        const requestNo = ++historyRequest.current;
+        setHistoryLoading(true);
+        fetch(api(historyUrlRef.current(historyKey)), { credentials: 'include' })
+            .then((r) => r.json())
+            .then((json) => {
+                if (requestNo !== historyRequest.current) return;   // a newer chat was selected meanwhile
+                setSessionHistory(Array.isArray(json.messages) ? json.messages : []);
+                setHistoryCompaction(
+                    typeof json.user_turn_count === 'number' && typeof json.compaction_interval === 'number' && typeof json.last_compaction_at_turn === 'number'
+                        ? { user_turn_count: json.user_turn_count, compaction_interval: json.compaction_interval, last_compaction_at_turn: json.last_compaction_at_turn }
+                        : null
+                );
+            })
+            .catch(() => {
+                if (requestNo !== historyRequest.current) return;
+                setSessionHistory([]);
+                setHistoryCompaction(null);
+            })
+            .finally(() => { if (requestNo === historyRequest.current) setHistoryLoading(false); });
+    }, [historyKey, isOpen, historyVersion]);
+    return { sessionHistory, historyCompaction, historyLoading };
+}
+
+export interface Bubble { role: string; text: string; timestamp?: string }
+
+/** The bubbles of one conversation: the other side on the left, what left on our behalf
+ *  on the right in the channel's colour, day separators between days, the current search
+ *  match ringed. `currentMatch` is the index of the message the search sits on. */
+export function ConversationBubbles({ messages, iconClass, query, currentMatch }: {
+    messages: Bubble[]; iconClass: string; query: string; currentMatch: number | null;
+}) {
+    const t = useTranslations('settings.channelDashboard');
+    const dayLabel = (iso?: string): string | null => {
+        if (!iso) return null;
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return null;
+        const now = new Date();
+        if (d.toDateString() === now.toDateString()) return t('today');
+        const y = new Date(now.getTime() - 86400_000);
+        if (d.toDateString() === y.toDateString()) return t('yesterday');
+        return d.toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' });
+    };
+    return (
+        <>
+            {messages.map((msg, i) => {
+                const isBot = msg.role === 'assistant';
+                const isCurrentMatch = currentMatch === i;
+                const day = dayLabel(msg.timestamp);
+                const prevDay = i > 0 ? dayLabel(messages[i - 1].timestamp) : null;
+                return (
+                    <React.Fragment key={`${msg.timestamp || 'no-ts'}-${i}`}>
+                        {day && day !== prevDay && (
+                            <span className="self-center text-[11px] text-[#8a8a8a] bg-[#1f1f1f] px-2.5 py-0.5 rounded-full">{day}</span>
+                        )}
+                        <div data-msg-idx={i} className={cn('flex gap-2', isBot ? 'justify-end' : 'justify-start')}>
+                            {!isBot && (
+                                <div className="w-6 h-6 rounded-full bg-[#2e2e2e] grid place-items-center text-[#c8c8c8] shrink-0"><User className="w-3.5 h-3.5" /></div>
+                            )}
+                            <div className={cn('max-w-[62%] px-3 py-2 rounded-2xl text-[13.5px] leading-relaxed',
+                                isBot ? 'bg-[#1f4d2a] rounded-tr-sm' : 'bg-[#262626] rounded-tl-sm',
+                                isCurrentMatch && 'ring-2 ring-[#e0b866]')}>
+                                <p className="whitespace-pre-wrap break-words"><HighlightedText text={msg.text} query={query} /></p>
+                                {msg.timestamp && <div className={cn('text-[10px] text-[#8a8a8a] mt-1', isBot && 'text-right')}>{msg.timestamp}</div>}
+                            </div>
+                            {isBot && (
+                                <div className={cn('w-6 h-6 rounded-full grid place-items-center text-white shrink-0', iconClass)}><Bot className="w-3.5 h-3.5" /></div>
+                            )}
+                        </div>
+                    </React.Fragment>
+                );
+            })}
+        </>
+    );
+}
 
 export function fmtWhen(ts?: number | null): string {
     if (!ts) return '';
@@ -154,19 +341,44 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
     const {
         isOpen, onClose, icon, iconClass, title, subtitle, dot, dotTitle, chats, loading, loadFailed, onRefresh,
         historyUrl, historyVersion, selectedId, onSelect, banner, conversationExtra, conversationNote, conversationTop,
-        composeBar, aside, settingsTitle, settingsContent, settingsOpen, onSettingsOpenChange,
+        composeBar, aside, settingsTitle, settingsContent, settingsOpen, onSettingsOpenChange, channel,
     } = props;
     const t = useTranslations('settings.channelDashboard');
     const [listFilter, setListFilter] = useState('');
-    const [sessionHistory, setSessionHistory] = useState<Array<{ role: string; content: string; timestamp?: string }>>([]);
-    const [historyCompaction, setHistoryCompaction] = useState<{ user_turn_count: number; compaction_interval: number; last_compaction_at_turn: number } | null>(null);
-    const [historyLoading, setHistoryLoading] = useState(false);
     const [chatSearch, setChatSearch] = useState('');
     const [chatSearchIdx, setChatSearchIdx] = useState(0);
     const inlineChatRef = useRef<HTMLDivElement | null>(null);
 
     const selected = selectedId ? chats.find(c => c.id === selectedId) ?? null : null;
     const historyKey = selected?.historyKey ?? null;
+    const { sessionHistory, historyCompaction, historyLoading } = useConversationHistory(historyKey, isOpen, historyUrl, historyVersion);
+
+    // Opening a chat reads it: the seen mark goes to the store (the inbox's unread clears
+    // on every surface), and the row's pill goes out at once instead of waiting for the
+    // next fetch. It stays out while the server still reports the count that was marked;
+    // a different count is news. "Waits" stays: reading is not answering.
+    const [markedUnread, setMarkedUnread] = useState<Map<string, number>>(() => new Map());
+    useEffect(() => { if (!isOpen) setMarkedUnread(new Map()); }, [isOpen]);
+    const selectedUnread = selected?.unread ?? 0;
+    useEffect(() => {
+        if (!channel || !isOpen || !selected || selectedUnread <= 0 || markedUnread.get(selected.id) === selectedUnread) return;
+        setMarkedUnread(prev => new Map(prev).set(selected.id, selectedUnread));
+        for (const id of selected.markIds ?? [selected.id]) {
+            fetch(api('api/inbox/marks'), {
+                method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ channel, id, seen: true }),
+            }).catch(() => {});
+        }
+    }, [channel, isOpen, selected, selectedUnread, markedUnread]);
+    const unreadOf = (c: ShellChat) => (c.id === selectedId || markedUnread.get(c.id) === (c.unread ?? 0)) ? 0 : (c.unread ?? 0);
+
+    // "N waiting for you" in the list header jumps to the next waiting chat, round and round.
+    const waiting = useMemo(() => chats.filter(c => c.waits), [chats]);
+    const jumpToWaiting = () => {
+        if (waiting.length === 0) return;
+        const idx = selectedId ? waiting.findIndex(c => c.id === selectedId) : -1;
+        onSelect(waiting[(idx + 1) % waiting.length].id);
+    };
 
     const chatMessages = useMemo(
         () => sessionHistory
@@ -196,11 +408,12 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
         if (el) el.scrollTop = el.scrollHeight;
     }, [sessionHistory, selectedId, chatSearch]);
 
+    const currentMatch = chatSearch.trim() && searchMatches.length > 0 ? searchMatches[Math.min(chatSearchIdx, searchMatches.length - 1)] : null;
+
     useEffect(() => {
-        if (!chatSearch.trim() || searchMatches.length === 0) return;
-        const target = searchMatches[Math.min(chatSearchIdx, searchMatches.length - 1)];
-        inlineChatRef.current?.querySelector(`[data-msg-idx="${target}"]`)?.scrollIntoView({ block: 'center' });
-    }, [chatSearch, chatSearchIdx, searchMatches]);
+        if (currentMatch === null) return;
+        inlineChatRef.current?.querySelector(`[data-msg-idx="${currentMatch}"]`)?.scrollIntoView({ block: 'center' });
+    }, [currentMatch]);
 
     // Escape, one layer at a time, through the shared registry: the settings overlay
     // covers the window (52), a running in-chat search is the next thing to clear (51),
@@ -210,67 +423,11 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
     useEscapeLayer({ active: isOpen && !settingsOpen && chatSearch !== '', level: 51, onEscape: () => setChatSearch('') });
     useEscapeLayer({ active: isOpen && !settingsOpen && chatSearch === '', level: 50, onEscape: onClose });
 
-    // The URL builder is an inline arrow in every dashboard, so it is a new function on
-    // each render; depending on it re-ran this effect after every response and the
-    // conversation fetched itself in a loop (and flickered whenever one of the piled-up
-    // requests failed). Read it through a ref; only the key and the version trigger.
-    const historyUrlRef = useRef(historyUrl);
-    historyUrlRef.current = historyUrl;
-    const historyRequest = useRef(0);
-    const historyLoadedKey = useRef<string | null>(null);
-    useEffect(() => {
-        if (!historyKey || !isOpen) {
-            setSessionHistory([]);
-            setHistoryCompaction(null);
-            historyLoadedKey.current = null;
-            return;
-        }
-        // Another chat: drop the previous chat's messages before the fetch, or they show
-        // under the new header until the answer lands and then vanish (which reads as
-        // "the chat loaded and disappeared"). A reload of the SAME chat (load older) keeps
-        // what is on screen while it waits.
-        if (historyLoadedKey.current !== historyKey) {
-            setSessionHistory([]);
-            setHistoryCompaction(null);
-            historyLoadedKey.current = historyKey;
-        }
-        const requestNo = ++historyRequest.current;
-        setHistoryLoading(true);
-        fetch(api(historyUrlRef.current(historyKey)), { credentials: 'include' })
-            .then((r) => r.json())
-            .then((json) => {
-                if (requestNo !== historyRequest.current) return;   // a newer chat was selected meanwhile
-                setSessionHistory(Array.isArray(json.messages) ? json.messages : []);
-                setHistoryCompaction(
-                    typeof json.user_turn_count === 'number' && typeof json.compaction_interval === 'number' && typeof json.last_compaction_at_turn === 'number'
-                        ? { user_turn_count: json.user_turn_count, compaction_interval: json.compaction_interval, last_compaction_at_turn: json.last_compaction_at_turn }
-                        : null
-                );
-            })
-            .catch(() => {
-                if (requestNo !== historyRequest.current) return;
-                setSessionHistory([]);
-                setHistoryCompaction(null);
-            })
-            .finally(() => { if (requestNo === historyRequest.current) setHistoryLoading(false); });
-    }, [historyKey, isOpen, historyVersion]);
-
     const filtered = useMemo(() => {
         const q = listFilter.trim().toLowerCase();
         if (!q) return chats;
         return chats.filter(c => [c.label, c.preview, c.id].some(v => (v || '').toLowerCase().includes(q)));
     }, [chats, listFilter]);
-
-    const dayLabel = (iso?: string): string | null => {
-        if (!iso) return null;
-        const d = new Date(iso);
-        if (Number.isNaN(d.getTime())) return null;
-        const now = new Date();
-        if (d.toDateString() === now.toDateString()) return t('today');
-        const y = new Date(now.getTime() - 86400_000);
-        if (d.toDateString() === y.toDateString()) return t('yesterday');
-        return d.toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' });
-    };
 
     if (!isOpen) return null;
 
@@ -312,9 +469,12 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                 <input value={listFilter} onChange={e => setListFilter(e.target.value)} placeholder={t('searchChats')}
                                     className={cn(INPUT, 'w-full pl-9')} />
                             </div>
-                            <div className="px-4 pb-2 text-xs text-[#9a9a9a] flex items-center justify-between">
+                            <div className="px-4 pb-2 text-xs text-[#9a9a9a] flex items-center justify-between gap-2">
                                 <span>{t('chatsHeader', { count: filtered.length })}</span>
-                                <span>{t('newestFirst')}</span>
+                                {waiting.length > 0 ? (
+                                    <button type="button" onClick={jumpToWaiting} title={t('jumpWaiting')}
+                                        className="text-[#e0b866] hover:underline truncate">{t('waitsHeader', { count: waiting.length })}</button>
+                                ) : <span>{t('newestFirst')}</span>}
                             </div>
                         </div>
                         {loading && chats.length === 0 ? (
@@ -335,6 +495,8 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                             <span className="text-[#9a9a9a] flex-shrink-0">{fmtWhen(c.ts)}</span>
                                         </div>
                                         <div className="text-xs text-[#9a9a9a] truncate pr-20 min-h-[1rem]">{c.preview || ''}</div>
+                                        <StateChips unread={unreadOf(c)} waits={c.waits} waitsReason={c.waitsReason}
+                                            answeredByAgent={c.answeredByAgent} done={c.done} className="pr-20" />
                                     </div>
                                 </div>
                                 <span className={cn('absolute right-3 bottom-2 text-[11px] px-1.5 rounded-md', c.badge.cls)}>{c.badge.label}</span>
@@ -356,6 +518,7 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                             <span className="truncate">{selected.label}</span>
                                             {/* nowrap: next to the Composer column the header is narrower, and a badge broken over two lines read as two badges. */}
                                             <span className={cn('text-[11px] px-1.5 rounded-md font-normal whitespace-nowrap', selected.badge.cls)}>{selected.badge.label}</span>
+                                            {selected.waits && <span className="font-normal"><WaitsChip reason={selected.waitsReason} /></span>}
                                         </div>
                                         <div className="text-xs text-[#9a9a9a] truncate">{selected.subline}</div>
                                     </div>
@@ -386,6 +549,9 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                         </div>
                                     </div>
                                     {conversationNote && <p className="w-full text-xs text-[#e08c8c]">{conversationNote}</p>}
+                                    {selected.waits && selected.waitsReason === 'owner_asked' && (
+                                        <p className="w-full text-xs text-[#e0b866]">{t('waitsOwnerAsked')}</p>
+                                    )}
                                 </div>
                                 <div ref={inlineChatRef} className="flex-1 min-h-0 overflow-y-auto bg-[#151515] p-5 flex flex-col gap-2.5">
                                     {conversationTop && !(historyLoading && sessionHistory.length === 0) && (
@@ -395,33 +561,9 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                         <p className="text-sm text-[#9a9a9a]">{t('loadingHistory')}</p>
                                     ) : chatMessages.length === 0 ? (
                                         <p className="text-sm text-[#9a9a9a] self-center">{t('noMessagesInChat')}</p>
-                                    ) : chatMessages.map((msg, i) => {
-                                        const isBot = msg.role === 'assistant';
-                                        const isCurrentMatch = searchMatches.length > 0 && searchMatches[Math.min(chatSearchIdx, searchMatches.length - 1)] === i;
-                                        const day = dayLabel(msg.timestamp);
-                                        const prevDay = i > 0 ? dayLabel(chatMessages[i - 1].timestamp) : null;
-                                        return (
-                                            <React.Fragment key={`${msg.timestamp || 'no-ts'}-${i}`}>
-                                                {day && day !== prevDay && (
-                                                    <span className="self-center text-[11px] text-[#8a8a8a] bg-[#1f1f1f] px-2.5 py-0.5 rounded-full">{day}</span>
-                                                )}
-                                                <div data-msg-idx={i} className={cn('flex gap-2', isBot ? 'justify-end' : 'justify-start')}>
-                                                    {!isBot && (
-                                                        <div className="w-6 h-6 rounded-full bg-[#2e2e2e] grid place-items-center text-[#c8c8c8] shrink-0"><User className="w-3.5 h-3.5" /></div>
-                                                    )}
-                                                    <div className={cn('max-w-[62%] px-3 py-2 rounded-2xl text-[13.5px] leading-relaxed',
-                                                        isBot ? 'bg-[#1f4d2a] rounded-tr-sm' : 'bg-[#262626] rounded-tl-sm',
-                                                        isCurrentMatch && 'ring-2 ring-[#e0b866]')}>
-                                                        <p className="whitespace-pre-wrap break-words"><HighlightedText text={msg.text} query={chatSearch.trim()} /></p>
-                                                        {msg.timestamp && <div className={cn('text-[10px] text-[#8a8a8a] mt-1', isBot && 'text-right')}>{msg.timestamp}</div>}
-                                                    </div>
-                                                    {isBot && (
-                                                        <div className={cn('w-6 h-6 rounded-full grid place-items-center text-white shrink-0', iconClass)}><Bot className="w-3.5 h-3.5" /></div>
-                                                    )}
-                                                </div>
-                                            </React.Fragment>
-                                        );
-                                    })}
+                                    ) : (
+                                        <ConversationBubbles messages={chatMessages} iconClass={iconClass} query={chatSearch.trim()} currentMatch={currentMatch} />
+                                    )}
                                 </div>
                                 {(() => {
                                     // A chat the person writes in themselves ends with its compose box: the

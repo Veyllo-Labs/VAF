@@ -201,7 +201,9 @@ Deliberately deferred, listed so nobody looks for them in the code:
   inbox window reads, see [INBOX.md](INBOX.md)); a read-flag change through
   `PATCH /api/mail/messages/{pk}/flags` and a sync that saw new mail, flag updates or
   vanished messages announce `inbox_changed` to the person's browsers (the sync
-  supervisor's `on_change` observer, registered by the web server).
+  supervisor's `on_change` observer, registered by the web server). The mail window shows
+  the same amber "Waits for you" chip on a thread row as the channel windows and the inbox,
+  and its list header offers the "N waiting for you" button that opens the next waiting thread.
 - `/api/email/*` is the shared OAuth + accounts hub ONLY: oauth start/callback/
   status plus account CRUD/test/verify. It is not mail-specific - the Calendar
   wizard mints its consent through the same `/oauth/start` (calendar_routes has no

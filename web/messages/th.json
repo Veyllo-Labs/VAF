@@ -903,6 +903,13 @@
       "yesterday": "เมื่อวาน",
       "messagesCount": "{count} ข้อความ",
       "untilLearning": "อีก {count} ข้อความจะถึงการเรียนรู้ความจำ",
+      "waitsForYou": "รอคุณตอบ",
+      "waitsOwnerAsked": "เอเจนต์ถามคุณเกี่ยวกับแชตนี้",
+      "waitsHeader": "{count} รายการรอคุณตอบ",
+      "jumpWaiting": "ไปยังแชตถัดไปที่รอคำตอบ",
+      "unreadCount": "{count} ยังไม่อ่าน",
+      "agentAnswered": "เอเจนต์ตอบแล้ว",
+      "done": "เสร็จแล้ว",
       "couldNotLoad": "โหลดแดชบอร์ดไม่ได้"
     },
     "whatsappDashboard": {

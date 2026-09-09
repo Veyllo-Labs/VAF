@@ -15,11 +15,11 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslations } from 'next-intl';
-import { Phone, UserPlus, Trash2, AlertTriangle, BookUser, Send, Sparkles, Loader2 } from 'lucide-react';
+import { Phone, UserPlus, Trash2, AlertTriangle, BookUser, Sparkles, Loader2 } from 'lucide-react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { cn } from '@/lib/utils';
 import MessagesChart from './MessagesChart';
-import ChannelDashboardShell, { BADGE_CLS, BTN, BTN_PRIMARY, INPUT, KvRow, SettingsCard, ShellChat, fmtUntil } from './ChannelDashboardShell';
+import ChannelDashboardShell, { BADGE_CLS, BTN, BTN_PRIMARY, FIELD, INPUT, ComposeBox, KvRow, SettingsCard, ShellChat, fmtUntil } from './ChannelDashboardShell';
 
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
@@ -38,8 +38,6 @@ function growField(el: HTMLTextAreaElement | null, maxRows: number) {
     el.style.height = `${Math.min(el.scrollHeight + border, line * maxRows + padding + border)}px`;
 }
 
-const FIELD = 'bg-[#262626] border border-[#2e2e2e] rounded-2xl px-4 py-2 text-sm leading-5 outline-none focus:border-[#444] resize-none scrollbar-hide';
-const ROUND_BTN = 'w-9 h-9 rounded-full grid place-items-center shrink-0 bg-[#25a244] text-white hover:bg-[#2db54e] disabled:opacity-40 disabled:hover:bg-[#25a244]';
 const QUIET_BTN = 'text-xs text-[#9a9a9a] hover:text-white disabled:opacity-40 disabled:hover:text-[#9a9a9a]';
 
 export interface WhatsAppDashboardProps {
@@ -68,6 +66,12 @@ interface WhatsAppSession {
     contact_name?: string | null;
     reply_window_until?: number | null;
     last_preview?: string;
+    unread?: number;
+    waits?: boolean;
+    waits_reason?: string;
+    answered_by_agent?: boolean;
+    done?: boolean;
+    store_chat_ids?: string[];
 }
 
 interface DashboardData {
@@ -640,6 +644,12 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         badge: badgeFor(s),
         subline: sublineFor(s),
         footer: footerFor(s),
+        unread: s.unread,
+        waits: s.waits,
+        waitsReason: s.waits_reason,
+        answeredByAgent: s.answered_by_agent,
+        done: s.done,
+        markIds: s.store_chat_ids,
     })), [data, t]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const stateText = data?.connected ? t('stateConnected') : data?.running ? t('stateRunning') : t('stateStopped');
@@ -714,24 +724,8 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         if (!s || !canCompose(s)) return null;
         const sending = sendingFor === s.chat_id;
         return (
-            <div className="px-4 py-2.5 border-t border-[#2e2e2e] bg-[#1a1a1a] shrink-0 flex flex-col gap-1">
-                <div className="flex items-end gap-2">
-                    <textarea ref={composeRef} value={composeText} onChange={e => setComposeText(e.target.value)}
-                        onKeyDown={e => {
-                            if (e.key === 'Enter' && !e.shiftKey && !sending && composeText.trim()) {
-                                e.preventDefault();
-                                handleSend(s);
-                            }
-                        }}
-                        placeholder={t('composePlaceholder')} rows={1} disabled={sending}
-                        className={cn(FIELD, 'flex-1')} />
-                    <button type="button" onClick={() => handleSend(s)} disabled={sending || !composeText.trim()}
-                        title={sending ? t('sending') : t('send')} className={ROUND_BTN}>
-                        {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4 -ml-0.5" />}
-                    </button>
-                </div>
-                {sendError && <p className="text-xs text-[#e08c8c] px-1">{sendError}</p>}
-            </div>
+            <ComposeBox fieldRef={composeRef} value={composeText} onChange={setComposeText} onSend={() => handleSend(s)}
+                sending={sending} placeholder={t('composePlaceholder')} sendTitle={sending ? t('sending') : t('send')} error={sendError} />
         );
     };
 
@@ -910,6 +904,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             conversationTop={conversationTop}
             composeBar={composeBar}
             aside={aside}
+            channel="whatsapp"
             conversationNote={note}
             settingsTitle={t('settingsTitle')}
             settingsContent={settingsContent}

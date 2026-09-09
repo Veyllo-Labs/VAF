@@ -95,6 +95,15 @@ def test_whatsapp_rows_carry_the_stores_count_the_state_and_the_reply_window(wor
     assert [s["chat_id"] for s in out["sessions"]] == ["+491700000050", "+491700000042", "+491700000060"]
 
 
+def test_a_lid_row_merged_into_its_number_keeps_both_store_keys_and_the_newer_state():
+    e164 = {"chat_id": "+491700000042", "last_ts": 100, "unread": 1, "waits": False, "done": True, "reply_window_until": None}
+    lid = {"chat_id": "555@lid", "last_ts": 200, "unread": 2, "waits": True, "waits_reason": "unanswered", "done": False,
+           "reply_window_until": 900.0, "last_preview": "later", "preview_from": "them"}
+    routes._merge_chat_state(e164, lid)
+    assert e164["unread"] == 3 and e164["waits"] is True and e164["done"] is False and e164["last_preview"] == "later"
+    assert e164["reply_window_until"] == 900.0 and e164["store_chat_ids"] == ["+491700000042", "555@lid"]
+
+
 def test_the_whatsapp_dashboard_reads_no_session_file_and_no_bridge_rule():
     src = (Path(routes.__file__)).read_text(encoding="utf-8")
     body = src.split("async def get_whatsapp_dashboard(", 1)[1].split("\n@router", 1)[0]

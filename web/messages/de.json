@@ -903,6 +903,13 @@
       "yesterday": "Gestern",
       "messagesCount": "{count} Nachrichten",
       "untilLearning": "{count} bis zum Memory Learning",
+      "waitsForYou": "Wartet auf dich",
+      "waitsOwnerAsked": "Der Agent hat dir zu diesem Chat eine Frage gestellt.",
+      "waitsHeader": "{count} warten auf dich",
+      "jumpWaiting": "Zum nächsten wartenden Chat",
+      "unreadCount": "{count} ungelesen",
+      "agentAnswered": "Agent hat geantwortet",
+      "done": "Erledigt",
       "couldNotLoad": "Das Dashboard konnte nicht geladen werden."
     },
     "whatsappDashboard": {

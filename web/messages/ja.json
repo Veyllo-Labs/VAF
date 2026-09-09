@@ -903,6 +903,13 @@
       "yesterday": "昨日",
       "messagesCount": "{count}件のメッセージ",
       "untilLearning": "メモリ学習まであと{count}件",
+      "waitsForYou": "返信待ち",
+      "waitsOwnerAsked": "エージェントがこのチャットについて質問しています。",
+      "waitsHeader": "{count}件が返信待ち",
+      "jumpWaiting": "次の返信待ちのチャットへ",
+      "unreadCount": "{count}件未読",
+      "agentAnswered": "エージェントが返信済み",
+      "done": "完了",
       "couldNotLoad": "ダッシュボードを読み込めませんでした。"
     },
     "whatsappDashboard": {

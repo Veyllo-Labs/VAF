@@ -33,6 +33,13 @@ interface TelegramSession {
     type: 'admin' | 'relay' | 'unknown';
     last_ts: number;
     message_count: number;
+    name?: string | null;
+    last_preview?: string;
+    unread?: number;
+    waits?: boolean;
+    waits_reason?: string;
+    answered_by_agent?: boolean;
+    done?: boolean;
 }
 
 interface WhitelistEntry {
@@ -169,12 +176,17 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
         return {
             id: s.chat_id,
             historyKey: `telegram_${s.chat_id}`,
-            label: label(s),
-            preview: s.vaf_username ? `${s.telegram_user_id} · ${s.vaf_username}` : s.telegram_user_id,
+            label: s.telegram_username ? label(s) : (s.name || s.telegram_user_id),
+            preview: s.last_preview || (s.vaf_username ? `${s.telegram_user_id} · ${s.vaf_username}` : s.telegram_user_id),
             ts: s.last_ts,
             badge,
             subline: `${s.telegram_user_id} · ${sub}`,
             footer: foot,
+            unread: s.unread,
+            waits: s.waits,
+            waitsReason: s.waits_reason,
+            answeredByAgent: s.answered_by_agent,
+            done: s.done,
         };
     }), [data, t]);
 
@@ -246,6 +258,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
             settingsContent={settingsContent}
             settingsOpen={showSettings}
             onSettingsOpenChange={setShowSettings}
+            channel="telegram"
         />
     );
 }

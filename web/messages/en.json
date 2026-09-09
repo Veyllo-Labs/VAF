@@ -903,6 +903,13 @@
       "yesterday": "Yesterday",
       "messagesCount": "{count} messages",
       "untilLearning": "{count} until Memory Learning",
+      "waitsForYou": "Waits for you",
+      "waitsOwnerAsked": "The agent asked you a question about this chat.",
+      "waitsHeader": "{count} waiting for you",
+      "jumpWaiting": "Jump to the next waiting chat",
+      "unreadCount": "{count} unread",
+      "agentAnswered": "Agent answered",
+      "done": "Done",
       "couldNotLoad": "The dashboard could not be loaded."
     },
     "whatsappDashboard": {

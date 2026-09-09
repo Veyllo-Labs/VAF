@@ -903,6 +903,13 @@
       "yesterday": "어제",
       "messagesCount": "메시지 {count}개",
       "untilLearning": "메모리 학습까지 {count}개 남음",
+      "waitsForYou": "답장 대기 중",
+      "waitsOwnerAsked": "에이전트가 이 채팅에 대해 질문했어요.",
+      "waitsHeader": "{count}개가 답장 대기 중",
+      "jumpWaiting": "다음 대기 중인 채팅으로",
+      "unreadCount": "{count}개 읽지 않음",
+      "agentAnswered": "에이전트가 답장함",
+      "done": "완료",
       "couldNotLoad": "대시보드를 불러오지 못했어요."
     },
     "whatsappDashboard": {

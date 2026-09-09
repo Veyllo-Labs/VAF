@@ -174,6 +174,9 @@ def _merge_chat_state(into: Dict[str, Any], other: Dict[str, Any]) -> None:
     into["unread"] = int(into.get("unread") or 0) + int(other.get("unread") or 0)
     until = max(float(into.get("reply_window_until") or 0.0), float(other.get("reply_window_until") or 0.0))
     into["reply_window_until"] = until or None
+    # The store keeps both rows under their own keys; the seen mark has to reach each.
+    into["store_chat_ids"] = sorted({*(into.get("store_chat_ids") or [into.get("chat_id")]),
+                                     *(other.get("store_chat_ids") or [other.get("chat_id")])} - {None, ""})
 
 
 def _owner_number_for(whitelist: list, username: str, user_scope_id: Optional[str]) -> Optional[str]:

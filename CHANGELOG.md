@@ -34,6 +34,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   asking the bridge, and the Discord payload carries `sessions`. `GET /api/mail/threads` rows
   carry `waits` and `done`, and a mail sync that changed something or a read-flag change
   announces `inbox_changed`.
+  Inside every channel window and the mail window the same signal is visible: each row carries
+  the unread pill (the mail window's red one, now the one token everywhere), the amber "Waits
+  for you" chip (its tooltip says when the agent asked you), "Agent answered" or "Done"; the
+  list header's right side turns into an "N waiting for you" button that jumps to the next
+  waiting chat; the conversation header repeats the chip; and opening a chat marks it read on
+  every surface. The shell now exports its bubbles, history hook, compose box and chips, so
+  the inbox window reads them instead of copying them.
 - **A messenger chat has its own memory.** What the agent learns inside a chat with a
   contact is stored in that chat's own namespace (`source = chat/<session id>`), which every
   ordinary lookup of your agent leaves out in SQL, in both lanes of the hybrid search. Only

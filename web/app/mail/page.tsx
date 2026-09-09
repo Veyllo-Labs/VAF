@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import { MailAccounts } from '@/components/connections/MailAccounts';
+import { WaitsChip } from '@/components/connections/ChannelDashboardShell';
 
 const api = (p: string) => `${getApiBase()}${p.startsWith('/') ? p : `/${p}`}`;
 const jfetch = async (p: string, init?: RequestInit) => {
@@ -45,6 +46,8 @@ interface ThreadRow {
     acct: string; newest_pk: number; subject: string; from_addr: string; snippet: string;
     has_attachments: number; flags: string[]; answered?: number; category?: string;
     suspicious_for_agent?: boolean; suspicious_reasons?: string[];
+    /** The inbox's state of the thread (INBOX.md): the last word is the correspondent's and nobody answered. */
+    waits?: boolean; waits_reason?: string; done?: boolean; answered_by_agent?: boolean;
 }
 interface Msg {
     id: number; subject: string; from_addr: string; to_addrs: string; date_ts?: number;
@@ -549,6 +552,7 @@ export function MailClientView({ onClose }: { onClose?: () => void }) {
     const [status, setStatus] = useState<{ accounts?: Account[]; composer_enabled?: boolean } | null>(null);
     const [statusFailed, setStatusFailed] = useState(false);
     const [showAccounts, setShowAccounts] = useState(false);
+    const tc = useTranslations('settings.channelDashboard');
     const syncedFolders = useRef<Set<string>>(new Set());  // on-open folder sync, once each
     const [folders, setFolders] = useState<Record<string, Folder[]>>({});
     const [sel, setSel] = useState<{ account: string | null; folder: string }>({ account: null, folder: 'INBOX' });
@@ -681,6 +685,16 @@ export function MailClientView({ onClose }: { onClose?: () => void }) {
             }
         } catch { setThreadMsgs([]); }
     }, [loadFolders]);
+
+    // "N waiting for you" in the list header: the threads whose last word is the
+    // correspondent's and nobody answered (the inbox's rule, INBOX.md); the button
+    // opens the next one after the active thread, round and round.
+    const waiting = useMemo(() => threads.filter(r => r.waits), [threads]);
+    const jumpToWaiting = () => {
+        if (waiting.length === 0) return;
+        const idx = activeThread !== null ? waiting.findIndex(r => r.thread_id === activeThread) : -1;
+        void openThread(waiting[(idx + 1) % waiting.length]);
+    };
 
     const threadAction = useCallback(async (row: ThreadRow, action: 'archive' | 'trash') => {
         setThreads(prev => prev.filter(tr => tr.thread_id !== row.thread_id));
@@ -926,8 +940,12 @@ export function MailClientView({ onClose }: { onClose?: () => void }) {
                     {/* Name the folder the list belongs to: without it a list that
                         failed to reload is indistinguishable from the selected
                         folder's real content. */}
-                    <div className="sticky top-0 z-10 px-4 py-2 bg-[#181818] border-b border-[#2e2e2e] text-xs text-[#9a9a9a] truncate">
-                        {searchRows !== null ? t('searchResults') : folderLabel}
+                    <div className="sticky top-0 z-10 px-4 py-2 bg-[#181818] border-b border-[#2e2e2e] text-xs text-[#9a9a9a] flex items-center justify-between gap-2">
+                        <span className="truncate">{searchRows !== null ? t('searchResults') : folderLabel}</span>
+                        {searchRows === null && waiting.length > 0 && (
+                            <button type="button" onClick={jumpToWaiting} title={tc('jumpWaiting')}
+                                className="text-[#e0b866] hover:underline truncate shrink-0">{tc('waitsHeader', { count: waiting.length })}</button>
+                        )}
                     </div>
                     {error && (
                         <div className="m-3 px-3 py-2 rounded-lg bg-[#2b1a1a] border border-[#4a2222] text-[#e08c8c] text-[13px] flex items-center gap-2">
@@ -975,6 +993,7 @@ export function MailClientView({ onClose }: { onClose?: () => void }) {
                                 <div className="text-xs text-[#9a9a9a] truncate pr-14">{row.snippet}</div>
                             </button>
                             <div className="absolute right-3 bottom-2 flex items-center gap-1.5 text-[11px] text-[#9a9a9a] group-hover:hidden">
+                                {row.waits && <WaitsChip reason={row.waits_reason} />}
                                 {row.category && row.category !== 'primary' && (
                                     <span className="px-1.5 rounded-md bg-[#262626] text-[#b0b0b0]">{catLabel(row.category)}</span>
                                 )}

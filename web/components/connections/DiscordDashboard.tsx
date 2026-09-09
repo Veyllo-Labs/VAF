@@ -28,6 +28,20 @@ interface ActivityItem {
     direction: string;
 }
 
+interface DiscordSession {
+    chat_id: string;
+    type: string;
+    name?: string | null;
+    last_ts: number;
+    message_count: number;
+    last_preview?: string;
+    unread?: number;
+    waits?: boolean;
+    waits_reason?: string;
+    answered_by_agent?: boolean;
+    done?: boolean;
+}
+
 interface DashboardData {
     configured: boolean;
     running: boolean;
@@ -35,6 +49,8 @@ interface DashboardData {
     admin_user_id?: string | null;
     enabled: boolean;
     activity: ActivityItem[];
+    /** The chats the message store holds, with the inbox's state (INBOX.md). */
+    sessions: DiscordSession[];
 }
 
 export default function DiscordDashboard({ isOpen, onClose, config, onConfigChange }: DiscordDashboardProps) {
@@ -60,6 +76,7 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
                 admin_user_id: json.admin_user_id ?? null,
                 enabled: json.enabled ?? false,
                 activity: Array.isArray(json.activity) ? json.activity : [],
+                sessions: Array.isArray(json.sessions) ? json.sessions : [],
             });
             if (json.admin_user_id) setSelectedChatId(prev => prev ?? String(json.admin_user_id));
         } catch {
@@ -85,19 +102,40 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
         }
     };
 
+    // The store's rows are the chats (the count, the newest message, unread and waits come
+    // from there); the paired admin's row from the activity log stands in until the store
+    // holds a message.
     const chats: ShellChat[] = useMemo(() => {
         if (!data?.admin_user_id) return [];
+        const adminId = String(data.admin_user_id);
+        const adminLabel = data.admin_username ? `@${data.admin_username}` : adminId;
+        const rows: ShellChat[] = (data.sessions || []).map(s => ({
+            id: s.chat_id,
+            historyKey: `discord_${s.chat_id}`,
+            label: s.chat_id === adminId ? adminLabel : (s.name || s.chat_id),
+            preview: s.last_preview || '',
+            ts: s.last_ts,
+            badge: { label: t('badgeAdmin'), cls: BADGE_CLS.owner },
+            subline: `${s.chat_id} · ${t('subAdmin')}`,
+            footer: t('footAdmin'),
+            unread: s.unread,
+            waits: s.waits,
+            waitsReason: s.waits_reason,
+            answeredByAgent: s.answered_by_agent,
+            done: s.done,
+        }));
+        if (rows.some(r => r.id === adminId)) return rows;
         const newest = data.activity.length ? data.activity[data.activity.length - 1] : null;
         return [{
-            id: String(data.admin_user_id),
-            historyKey: `discord_${data.admin_user_id}`,
-            label: data.admin_username ? `@${data.admin_username}` : String(data.admin_user_id),
+            id: adminId,
+            historyKey: `discord_${adminId}`,
+            label: adminLabel,
             preview: newest ? (newest.direction === 'in' ? t('incoming') : t('outgoing')) : '',
             ts: newest?.ts,
             badge: { label: t('badgeAdmin'), cls: BADGE_CLS.owner },
-            subline: `${data.admin_user_id} · ${t('subAdmin')}`,
+            subline: `${adminId} · ${t('subAdmin')}`,
             footer: t('footAdmin'),
-        }];
+        }, ...rows];
     }, [data, t]);
 
     const stateText = data?.running ? t('stateRunning') : t('stateStopped');
@@ -155,6 +193,7 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
             settingsContent={settingsContent}
             settingsOpen={showSettings}
             onSettingsOpenChange={setShowSettings}
+            channel="discord"
         />
     );
 }

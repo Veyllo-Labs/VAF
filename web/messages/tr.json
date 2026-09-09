@@ -903,6 +903,13 @@
       "yesterday": "Dün",
       "messagesCount": "{count} mesaj",
       "untilLearning": "Bellek Öğrenmesine {count} kaldı",
+      "waitsForYou": "Yanıtını bekliyor",
+      "waitsOwnerAsked": "Ajan bu sohbet hakkında sana bir soru sordu.",
+      "waitsHeader": "{count} sohbet yanıtını bekliyor",
+      "jumpWaiting": "Yanıt bekleyen sonraki sohbete git",
+      "unreadCount": "{count} okunmamış",
+      "agentAnswered": "Ajan yanıtladı",
+      "done": "Tamamlandı",
       "couldNotLoad": "Pano yüklenemedi."
     },
     "whatsappDashboard": {

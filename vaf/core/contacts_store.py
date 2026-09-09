@@ -96,12 +96,12 @@ def _contacts_path_candidates(username: Optional[str] = None, user_scope_id: Opt
     # walks on past an empty or missing file, so with the admin path in every caller's list
     # a tenant without contacts read the admin's whole book, and the next write copied it
     # into the tenant's own file.
-    if _is_local_admin_caller(username, user_scope_id) and data_dir / "contacts.json" not in candidates:
+    if is_local_admin_caller(username, user_scope_id) and data_dir / "contacts.json" not in candidates:
         candidates.append(data_dir / "contacts.json")
     return candidates
 
 
-def _is_local_admin_caller(username: Optional[str], user_scope_id: Optional[str]) -> bool:
+def is_local_admin_caller(username: Optional[str], user_scope_id: Optional[str]) -> bool:
     """Whether this identity is the machine's local admin: by scope when a scope is given,
     by username otherwise (an empty username has always meant the local admin here)."""
     if user_scope_id:
@@ -968,7 +968,7 @@ def decode_timeline_cursor(cursor: Optional[str]) -> Optional[tuple]:
         return None
 
 
-def _message_channel_username(channel: str, username: Optional[str]) -> str:
+def message_channel_username(channel: str, username: Optional[str]) -> str:
     # discord_bridge writes every row as username "admin"; the rows sit in the admin's file,
     # which the local admin caller reads anyway, so the row filter has to use the same name.
     return "admin" if channel == "discord" else ((username or "").strip() or "admin")
@@ -1048,13 +1048,13 @@ def contact_timeline(
             keys = endpoints.get(chan) or []
             if not keys:
                 continue
-            if chan == "discord" and not _is_local_admin_caller(username, user_scope_id):
+            if chan == "discord" and not is_local_admin_caller(username, user_scope_id):
                 continue
             try:
                 from vaf.core.channel_message_store import get_chat_messages, store_exists
                 if not store_exists(username, user_scope_id):
                     continue
-                row_user = _message_channel_username(chan, username)
+                row_user = message_channel_username(chan, username)
                 for key in keys:
                     rows = get_chat_messages(row_user, key, limit=per_source, user_scope_id=user_scope_id,
                                              channel=chan, before_ts=before_ts)
@@ -1115,11 +1115,11 @@ def contact_activity_stats(
     endpoints = contact_endpoints(contact, with_lids=True, lid_map=lid_map)
     for chan in _MESSAGE_CHANNELS:
         keys = endpoints.get(chan) or []
-        if not keys or (chan == "discord" and not _is_local_admin_caller(username, user_scope_id)):
+        if not keys or (chan == "discord" and not is_local_admin_caller(username, user_scope_id)):
             continue
         try:
             from vaf.core.channel_message_store import chat_stats
-            s = chat_stats(_message_channel_username(chan, username), keys, user_scope_id=user_scope_id, channel=chan)
+            s = chat_stats(message_channel_username(chan, username), keys, user_scope_id=user_scope_id, channel=chan)
         except Exception as e:
             logger.debug("contact_activity_stats: %s lane skipped: %s", chan, e)
             continue

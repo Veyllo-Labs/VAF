@@ -439,8 +439,11 @@ When you have one or more messaging connections (e.g. Telegram, Discord), the ag
 ## Channel model
 
 Messaging platforms are **channels**: each contributes a connection config, endpoint
-store entries, and per-channel tools (send/read/find/inbox). The delivery RULE,
-however, is channel-agnostic and exists exactly once:
+store entries, and per-channel tools (send/read/find). The LISTING is channel-agnostic
+too: `vaf/core/inbox.py` builds one list of conversations across every channel (see
+[INBOX.md](INBOX.md)), and `messaging_connections.owner_endpoints` answers which endpoints
+are the person's own on a channel from the same whitelists the bridges pair against. The
+delivery RULE is channel-agnostic and exists exactly once:
 
 - **The rule**: automations and workflows deliver with `send_to_user(message,
   file_path)`. Send steps are deterministic - they deliver their arguments verbatim -

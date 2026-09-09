@@ -81,6 +81,7 @@ Docs are grouped into category folders. Full index by category:
 - [WHATSAPP_INTEGRATION.md](integrations/WHATSAPP_INTEGRATION.md) - WhatsApp bridge (Baileys).
 - [GITHUB_INTEGRATION.md](integrations/GITHUB_INTEGRATION.md) - GitHub OAuth and agent tools.
 - [CALENDAR_INTEGRATION.md](integrations/CALENDAR_INTEGRATION.md) - Google/Microsoft calendar.
+- [INBOX.md](integrations/INBOX.md) - The inbox: one list of conversations across every channel, its rules and marks.
 
 ### web-ui/ - frontend, design, voice
 - [WEB_UI.md](web-ui/WEB_UI.md) - Browser dashboard and WebSocket API.

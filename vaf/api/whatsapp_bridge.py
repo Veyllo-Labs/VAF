@@ -29,7 +29,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from vaf.core.config import Config
 from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
-from vaf.core.messaging_connections import save_whatsapp_chat_jid, whatsapp_enabled_for_scope, whatsapp_session_id
+from vaf.core.messaging_connections import (  # noqa: F401 - reply_window_hours is re-exported for the routes
+    WA_REPLY_WINDOW_HOURS_DEFAULT, reply_window_hours, save_whatsapp_chat_jid, whatsapp_enabled_for_scope,
+    whatsapp_session_id,
+)
 from vaf.core.platform import Platform
 from vaf.core.task_queue import TaskQueue
 from vaf.core.whatsapp_auth import get_linked_phone, get_whatsapp_auth_dir, linked_usernames
@@ -93,20 +96,9 @@ _wa_pending: Dict[str, Dict[str, Any]] = {}
 _wa_pending_lock = threading.Lock()
 WA_DEBOUNCE_SECONDS = 7
 
-# Reply window: a number the agent wrote to may answer for this long without being a
-# contact. `whatsapp_config.reply_window_hours` overrides; 0 switches the window off.
-WA_REPLY_WINDOW_HOURS_DEFAULT = 72.0
-
-
-def reply_window_hours() -> float:
-    """Configured reply window in hours (never negative; 0 = off)."""
-    wc = Config.get("whatsapp_config") or {}
-    raw = wc.get("reply_window_hours", WA_REPLY_WINDOW_HOURS_DEFAULT) if isinstance(wc, dict) else WA_REPLY_WINDOW_HOURS_DEFAULT
-    try:
-        hours = float(raw)
-    except (TypeError, ValueError):
-        hours = WA_REPLY_WINDOW_HOURS_DEFAULT
-    return max(0.0, hours)
+# The reply window (`reply_window_hours`, `WA_REPLY_WINDOW_HOURS_DEFAULT`) lives with the
+# other channel rules in messaging_connections and is imported above: the inbox in vaf/core
+# applies the same window without reaching into the bridge.
 
 
 def conversation_open_until(

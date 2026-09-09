@@ -573,7 +573,7 @@ through only split-horizon names the local resolver does not know.
   structural - no tools on that call - rather than a filter that a crafted body can
   talk its way past.
 - Answered indicator: the store tracks `answered_at` (set when a reply is
-  sent); `store.list_threads` exposes an `answered` count and the client shows
+  sent); `store.list_threads` exposes an `answered` count (plus the newest message's id, folder, special use and answered mark, which the inbox reads to say whether the last word was ours) and the client shows
   a reply marker on answered conversations and "Answered on {date}" in the reader,
   so a mail is not answered twice.
 - Gmail-style categories: Gmail's inbox tabs

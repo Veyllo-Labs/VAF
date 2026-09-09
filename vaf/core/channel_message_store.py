@@ -686,7 +686,7 @@ def get_chat_messages(
             ts_param = [float(before_ts)] if before_ts is not None else []
             cur = conn.execute(
                 f"""
-                SELECT chat_id, chat_name, body, direction, ts, content_type, channel, message_id
+                SELECT chat_id, chat_name, body, direction, ts, content_type, channel, message_id, sender_jid
                 FROM channel_messages
                 WHERE username = ? AND chat_id = ?{chan_clause}{ts_clause}
                 ORDER BY ts DESC

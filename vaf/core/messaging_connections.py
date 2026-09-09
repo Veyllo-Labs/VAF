@@ -31,6 +31,68 @@ ROUTABLE_CHANNELS = ("telegram", "whatsapp", "discord")
 CHANNEL_SEND_TOOLS = {ch: f"send_{ch}" for ch in KNOWN_CHANNELS}
 
 
+# Reply window: a number the agent wrote to may answer for this long without being a
+# contact. `whatsapp_config.reply_window_hours` overrides; 0 switches the window off.
+WA_REPLY_WINDOW_HOURS_DEFAULT = 72.0
+
+
+def reply_window_hours() -> float:
+    """Configured reply window in hours (never negative; 0 = off)."""
+    wc = Config.get("whatsapp_config") or {}
+    raw = wc.get("reply_window_hours", WA_REPLY_WINDOW_HOURS_DEFAULT) if isinstance(wc, dict) else WA_REPLY_WINDOW_HOURS_DEFAULT
+    try:
+        hours = float(raw)
+    except (TypeError, ValueError):
+        hours = WA_REPLY_WINDOW_HOURS_DEFAULT
+    return max(0.0, hours)
+
+
+def _entry_is_mine(entry: Dict[str, Any], username: Optional[str], user_scope_id: Optional[str]) -> bool:
+    """Whether a whitelist entry belongs to this identity: by scope when both carry one, by
+    VAF username otherwise; the local admin sees every entry."""
+    from vaf.core.contacts_store import is_local_admin_caller
+    if is_local_admin_caller(username, user_scope_id):
+        return True
+    scope = str(user_scope_id or "").strip()
+    if scope and str(entry.get("user_scope_id") or "").strip() == scope:
+        return True
+    uname = (username or "").strip()
+    return bool(uname) and (entry.get("vaf_username") or "").strip() == uname
+
+
+def owner_endpoints(channel: str, username: Optional[str], user_scope_id: Optional[str], *,
+                    relay: bool = False) -> set:
+    """The store keys of the endpoints that are THIS person's own on a channel: their
+    registered WhatsApp numbers (E.164 with one leading plus), their Telegram user ids (the
+    relay whitelist with `relay=True`), the Discord admin id. What the inbox calls the
+    `owner` lane, read from the same whitelists the bridges pair against."""
+    out: set = set()
+    channel = (channel or "").strip().lower()
+    if channel == "whatsapp":
+        wc = Config.get("whatsapp_config") or {}
+        for e in (wc.get("whitelist") or []) if isinstance(wc, dict) else []:
+            if not isinstance(e, dict) or not _entry_is_mine(e, username, user_scope_id):
+                continue
+            phone = str(e.get("phone_number") or "").strip()
+            if phone:
+                out.add(phone if phone.startswith("+") else f"+{phone}")
+    elif channel == "telegram":
+        tc = Config.get("telegram_config") or {}
+        key = "relay_whitelist" if relay else "whitelist"
+        for e in (tc.get(key) or []) if isinstance(tc, dict) else []:
+            if not isinstance(e, dict) or not _entry_is_mine(e, username, user_scope_id):
+                continue
+            tid = str(e.get("telegram_user_id") or "").strip()
+            if tid:
+                out.add(tid)
+    elif channel == "discord":
+        dc = Config.get("discord_config") or {}
+        admin_id = str((dc.get("admin_user_id") if isinstance(dc, dict) else "") or "").strip()
+        if admin_id:
+            out.add(admin_id)
+    return out
+
+
 def whatsapp_session_id(username: Optional[str], endpoint: str, *, fallback: str = "self") -> str:
     """The session, and therefore the memory namespace, of one WhatsApp chat:
     `whatsapp_<user>_<digits>`. The recipe was hand-rolled at eight sites, and a drifted

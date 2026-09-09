@@ -354,6 +354,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   an empty file while the bridge had written the rows under the scope.
 
 ### Fixed
+- Front Office: `send_whatsapp` without `to_phone` was blocked while the agent handled a contact's message, so the owner back-channel never arrived when `main_messenger` is WhatsApp (the guard dated from the setup where the agent ran on the owner's own number). In Front Office the tool now sends only to the owner's registered number and refuses every other `to_phone`, which also closes the case where the agent messaged the contact through the tool on top of its reply.
+- WhatsApp bridge: the echo match kept one pending text per chat, so the chunks of one long reply, all written before the first echo arrived, were credited to the person's phone as their own words. Every pending text is kept for the echo window now.
+- `vaf inbox list`: an unknown `--channel` or `--view` is refused with the valid names instead of silently listing every channel.
+- Inbox and channel windows: the search field's magnifier sits centred again; the toolbar move had dropped its vertical offset.
+- Mail window: the draft jump armed the composer's auto draft before the reply prefill, so a failed prefill left it armed for the next composer the person opened by hand.
 - Memory learning: the duplicate check before a learned fact is stored ran through the hybrid search, whose lexical lane admits any existing row sharing a single word, so a new fact could be dropped as a duplicate of an unrelated one. The check is a pure cosine search now, as the `memory_save` check always was.
 - Telegram: a contact whose burst started with a voice message was answered as the owner, with the owner's full tool set, because the voice handler's pending record lacked the contact flag the text handler sets. Both records carry it now.
 - WhatsApp window: the Memory Learning counter appeared under every chat, including read-only chats and chats the person writes in by hand, although only the owner's own chat with the agent answering is ever compacted. The counter now travels only for that chat, and where the compose box is shown it takes the footer's place, so the input sits at the bottom of the conversation.

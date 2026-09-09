@@ -71,14 +71,20 @@ def test_a_telegram_contact_is_front_office_whether_the_burst_starts_with_text_o
     assert src.count("chat_label=_telegram_display_name(user),") == 2, "both image callers pass the label"
 
 
-def test_a_relay_contact_gets_no_learning_counter_in_the_telegram_pane(monkeypatch):
+def test_a_relay_contact_gets_no_learning_counter_in_the_telegram_pane(monkeypatch, tmp_path):
     """A relay contact is answered by nobody and never compacts; a counter there would count
     turns that never learn."""
     import asyncio
     from types import SimpleNamespace
 
+    import vaf.core.session as session_mod
     from vaf.api import telegram_routes as routes
     from vaf.core.config import Config
+
+    # The route loads the session and its compaction state through SessionManager, which
+    # hangs off ~/.vaf and not off Platform.data_dir: redirected here, or the assertions
+    # would read whatever chats the developer's own installation holds under these ids.
+    monkeypatch.setattr(session_mod, "default_sessions_dir", lambda: tmp_path / "sessions")
 
     cfg = {"telegram_config": {"whitelist": [{"telegram_user_id": "7", "user_scope_id": "s"}],
                                "relay_whitelist": [{"telegram_user_id": "9", "user_scope_id": "s"}]},

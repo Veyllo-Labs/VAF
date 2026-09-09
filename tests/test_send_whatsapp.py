@@ -96,3 +96,46 @@ def test_send_whatsapp_tool_relies_on_bridge_helper_not_local_process_state(monk
     )
 
     assert result == "Message sent via WhatsApp."
+
+
+def _front_office_stubs(monkeypatch, sent):
+    monkeypatch.setattr(
+        "vaf.core.messaging_connections.get_whatsapp_chat_jid",
+        lambda user_scope_id, username: "491761234567@s.whatsapp.net",
+    )
+    monkeypatch.setattr(
+        "vaf.api.whatsapp_bridge.send_whatsapp_with_confirmation",
+        lambda username, chat_jid, text, **kwargs: sent.append(chat_jid) or "Message sent via WhatsApp.",
+    )
+    _install_fake_module(monkeypatch, "vaf.core.outbound_sanitizer", sanitize_outgoing_message=lambda text: text)
+    _install_fake_module(monkeypatch, "vaf.core.user_notifications", append_notification=lambda *args, **kwargs: None)
+
+
+def test_in_front_office_the_owner_back_channel_goes_through_and_nobody_else_is_reachable(monkeypatch):
+    """The reply to the contact is delivered by the runner; the tool's one job in a contact's
+    turn is the owner notification (main_messenger = whatsapp). MUTATION: block the send
+    without to_phone in Front Office (the old guard) and the first assertion fails; drop the
+    recipient check and the refusal below never happens."""
+    from types import SimpleNamespace
+
+    from vaf.core.context import tool_result_is_error
+
+    sent = []
+    _front_office_stubs(monkeypatch, sent)
+    agent = SimpleNamespace(_front_office_mode=True)
+    tool = SendWhatsAppTool()
+    assert tool.run(message="Bob asks for the invoice", username="admin", user_scope_id="scope-1", _agent=agent) \
+        == "Message sent via WhatsApp."
+    assert sent == ["491761234567@s.whatsapp.net"], "no to_phone in Front Office is the owner notification"
+    # The owner's own number named explicitly is that same send.
+    assert tool.run(message="again", to_phone="+491761234567", username="admin", user_scope_id="scope-1", _agent=agent) \
+        == "Message sent via WhatsApp."
+    assert sent == ["491761234567@s.whatsapp.net"] * 2
+    # Anyone else is refused: a contact's turn must not become a messenger for third parties.
+    blocked = tool.run(message="hi", to_phone="+491700000099", username="admin", user_scope_id="scope-1", _agent=agent)
+    assert blocked.startswith("[TOOL BLOCKED]") and len(sent) == 2
+    assert tool_result_is_error(blocked), "the refusal reads as an error, so nothing records it as a question to the owner"
+    # Outside Front Office a third party is an ordinary recipient.
+    assert tool.run(message="hi", to_phone="+491700000099", username="admin", user_scope_id="scope-1",
+                    _agent=SimpleNamespace(_front_office_mode=False)) == "Message sent via WhatsApp."
+    assert sent[-1] == "491700000099@s.whatsapp.net"

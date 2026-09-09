@@ -443,7 +443,7 @@ Measured on a real store on 2026-08-30 - 704 chunks, of which 475 (67.5%) were d
   drop old facts.
 
 **Ordinary RAG is unchanged** by this flag. It is off by default, so every other lookup - the chat memory
-block, the `memory_search` tool, librarian, coder, research, voice, mail - searches the whole store
+block, the `memory_search` tool, librarian, coder, research, voice, mail - searches all non-chat memories
 exactly as before, and a question about a document still answers from the document. The one lane every
 ordinary lookup leaves out regardless of this flag is the chat namespaces described in
 [Chat memory namespaces](#chat-memory-namespaces-what-a-contact-chat-teaches-stays-in-that-chat). Verified on the

@@ -33,7 +33,8 @@ def test_the_input_listener_is_attached_after_the_flag_is_consumed():
     assert flag_reset != -1 and listener != -1, "the flag reset or the input listener left the sheet effect"
     assert flag_reset < listener, "the flag must be consumed before the listeners are attached, on the same run"
     between = effect[flag_reset:listener]
-    assert not re.search(r"^\s*return;\s*$", between, re.M), (
+    # Any return statement, standalone or inline (`if (x) return;`), not only one on its own line.
+    assert not re.search(r"\breturn\s*[;}]", between), (
         "an early return between consuming the flag and attaching the input listener "
         "drops the listener after the first keystroke"
     )

@@ -599,17 +599,13 @@ def _session_id(channel: str, chat_id: str, username: Optional[str]) -> str:
     return f"{channel}_{chat_id}"
 
 
-def _lid_needs_assign(chat_id: str) -> bool:
+def _lid_needs_assign(chat_id: str, lid_map: Dict[str, Any]) -> bool:
+    """A WhatsApp chat keyed by a LID that `whatsapp_config.lid_to_e164` (resolved once per
+    listing by the caller) does not map to a number yet."""
     cid = str(chat_id or "")
     if "@lid" not in cid:
         return False
-    try:
-        from vaf.core.config import Config
-        wc = Config.get("whatsapp_config") or {}
-        mapping = dict((wc.get("lid_to_e164") or {}) if isinstance(wc, dict) else {})
-    except Exception:
-        mapping = {}
-    return not (mapping.get(cid) or "").strip()
+    return not str(lid_map.get(cid) or "").strip()
 
 
 # -- lanes ------------------------------------------------------------------------------------
@@ -623,10 +619,12 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
     threshold = waits_threshold()
     # The WhatsApp window's compose rule: the person writes where the agent does not answer,
     # which is every chat once the channel switch is off.
+    lid_map: Dict[str, Any] = {}
     try:
         from vaf.core.config import Config
         wc = Config.get("whatsapp_config") or {}
         whatsapp_off = isinstance(wc, dict) and wc.get("inbound_to_agent", True) is False
+        lid_map = dict((wc.get("lid_to_e164") or {}) if isinstance(wc, dict) else {})
     except Exception:
         whatsapp_off = False
     for channel in channels:
@@ -655,7 +653,7 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
             state = chat_state(o, now=now, waits_threshold_value=threshold)
             until = reply_window_until(o.get("last_agent_ts"), o.get("last_in_within_ts"), window) \
                 if channel == "whatsapp" else None
-            needs_assign = channel == "whatsapp" and _lid_needs_assign(chat_id)
+            needs_assign = channel == "whatsapp" and _lid_needs_assign(chat_id, lid_map)
             mode = chat_mode(channel, chat_id, owners=owners, contacts=contacts, relays=relays,
                              reply_window_until_ts=until, now=now, needs_assign=needs_assign)
             rows.append({

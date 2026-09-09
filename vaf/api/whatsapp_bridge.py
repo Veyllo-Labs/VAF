@@ -1286,7 +1286,10 @@ def _already_stored_outbound(username: str, chat_id: str, body: str, ts: Optiona
     A text is the same text within ten minutes; a media message is the same family (voice,
     document, image) within ten minutes. Only asked for ids of the bridge's own shape: a
     phone-shaped id was never stored by the send path, so a reply from the phone that
-    happens to repeat the agent's words is kept."""
+    happens to repeat the agent's words is kept. Without a timestamp there is no window to
+    match in, so nothing counts as already stored."""
+    if ts is None:
+        return False
     try:
         from vaf.core.channel_message_store import get_chat_messages
         want = " ".join(str(body or "").split())

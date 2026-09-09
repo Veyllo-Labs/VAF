@@ -171,7 +171,8 @@ a bridge. The tool is not in the Front Office allow-list.
 
 `vaf inbox list` prints the same rows as a table (When, Channel, Name, Unread, Waits, Mode,
 Preview) with the counts above it; `--channel`, `--view`, `--limit`, `--no-groups`, `--done`,
-`--bulk`, `--query` narrow it and `--json` prints one object per line. It runs as the machine owner
+`--bulk`, `--query` narrow it and `--json` prints one object per line; an unknown `--channel` or
+`--view` is refused with the valid names, never widened to every channel. It runs as the machine owner
 (no `--scope`: the CLI has no authentication) behind the same terminal door as `vaf session`,
 because it prints chats. Read-only by design: the terminal prints, it does not read for the
 person. The seen mark is written where the person reads (opening a conversation in a window)

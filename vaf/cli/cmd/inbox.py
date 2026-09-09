@@ -62,6 +62,14 @@ def list_conversations(
     """Newest first: who wrote, when, unread, and whether somebody waits for you."""
     from vaf.core import inbox
 
+    # Refused, not widened: list_conversations falls back to every channel and to the
+    # "all" view for a name it does not know, which would print the wrong list quietly.
+    if channel and channel not in inbox.CHANNELS:
+        UI.console.print(f"[red]Unknown channel '{channel}'.[/red] Choose one of: {', '.join(inbox.CHANNELS)}")
+        raise typer.Exit(1)
+    if view not in inbox.VIEWS:
+        UI.console.print(f"[red]Unknown view '{view}'.[/red] Choose one of: {', '.join(inbox.VIEWS)}")
+        raise typer.Exit(1)
     username, scope = _identity()
     result = inbox.list_conversations(
         username, scope, channels=[channel] if channel else None, view=view,

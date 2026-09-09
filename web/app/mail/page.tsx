@@ -734,15 +734,19 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
         } catch { setError(t('actionFailed')); loadThreads(); }
     }, [activeThread, loadThreads, loadFolders, t]);
 
-    const openCompose = useCallback(async (mode: 'new' | 'reply' | 'replyAll' | 'forward') => {
-        if (mode === 'new') { setCompose(null); return; }
+    const openCompose = useCallback(async (mode: 'new' | 'reply' | 'replyAll' | 'forward', autoDraft = false) => {
+        // The auto draft belongs to the jump that asked for it: armed only once the reply
+        // prefill is on screen, and off again for a new mail or a failed prefill, or the next
+        // composer the person opens by hand would draft a mail nobody asked for.
+        if (mode === 'new') { setComposeAutoDraft(false); setCompose(null); return; }
         const newest = threadMsgs[threadMsgs.length - 1];
         if (!newest) return;
         try {
             const params = mode === 'forward' ? 'forward=true' : (mode === 'replyAll' ? 'reply_all=true' : '');
             const pre = await jfetch(`api/mail/messages/${newest.id}/reply-prefill?${params}`);
+            setComposeAutoDraft(autoDraft);
             setCompose(pre);
-        } catch { setError(t('actionFailed')); }
+        } catch { setComposeAutoDraft(false); setError(t('actionFailed')); }
     }, [threadMsgs, t]);
     useEffect(() => {
         // The draft jump's second half: the jumped-to thread's own messages are on screen
@@ -754,8 +758,7 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
         if (activeThread !== pending) { draftPendingRef.current = null; return; }
         if (threadMsgs.length === 0 || threadMsgs.some(m => m.thread_id !== undefined && m.thread_id !== pending)) return;
         draftPendingRef.current = null;
-        setComposeAutoDraft(true);
-        void openCompose('reply');
+        void openCompose('reply', true);
     }, [activeThread, threadMsgs, openCompose]);
 
     const runSearch = useCallback(async () => {

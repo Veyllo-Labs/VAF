@@ -226,7 +226,8 @@ const echoSent = new Map(); // text -> timestamp
 const ECHO_TTL_MS = 90_000;
 
 /** Per-jid: last message we (the bridge) sent, so we don't treat our own echo as owner_sent. */
-const lastSentByUs = new Map(); // jid -> { text?: string, voiceTs?: number, ts: number }
+const lastSentByUs = new Map(); // jid -> { texts: [{ text, ts }], voiceTs?: number, ts: number }
+const SENT_TEXTS_PER_JID = 32;    // pending texts kept per chat: a reply is at most a handful of chunks
 const SENT_BY_US_TTL_MS = 95_000;
 
 /** Normalize for echo match: trim and collapse repeated whitespace so minor differences don't break matching. */
@@ -260,25 +261,38 @@ function isEcho(text) {
   return true;
 }
 
-/** Record that we sent a text message to jid (so we don't emit owner_sent when the echo arrives). */
-function rememberSentToJid(jid, text) {
-  if (!jid) return;
-  const now = Date.now();
-  lastSentByUs.set(jid, { text: normalizeForEcho(text || ""), ts: now });
+function pruneSentByUs(now) {
   for (const [k, v] of lastSentByUs.entries()) {
     if (now - v.ts > SENT_BY_US_TTL_MS) lastSentByUs.delete(k);
   }
+}
+
+/** Record that we sent a text message to jid (so we don't emit owner_sent when the echo arrives).
+ *  Every pending text is kept for the echo window, bounded per chat: the sender writes all
+ *  chunks of one reply before the first echo arrives, and Baileys emits that echo on the next
+ *  tick, before the send promise hands back the id, so a single slot per chat forgot every
+ *  chunk but the last and the store credited them to the person's phone. */
+function rememberSentToJid(jid, text) {
+  if (!jid) return;
+  const now = Date.now();
+  const rec = lastSentByUs.get(jid) || { texts: [], ts: 0 };
+  rec.texts = rec.texts.filter((t) => now - t.ts <= SENT_BY_US_TTL_MS);
+  rec.texts.push({ text: normalizeForEcho(text || ""), ts: now });
+  if (rec.texts.length > SENT_TEXTS_PER_JID) rec.texts.splice(0, rec.texts.length - SENT_TEXTS_PER_JID);
+  rec.ts = now;
+  lastSentByUs.set(jid, rec);
+  pruneSentByUs(now);
 }
 
 /** Record that we sent a voice message to jid. */
 function rememberSentVoiceToJid(jid) {
   if (!jid) return;
   const now = Date.now();
-  const existing = lastSentByUs.get(jid) || { ts: 0 };
-  lastSentByUs.set(jid, { ...existing, voiceTs: now, ts: now });
-  for (const [k, v] of lastSentByUs.entries()) {
-    if (now - v.ts > SENT_BY_US_TTL_MS) lastSentByUs.delete(k);
-  }
+  const rec = lastSentByUs.get(jid) || { texts: [], ts: 0 };
+  rec.voiceTs = now;
+  rec.ts = now;
+  lastSentByUs.set(jid, rec);
+  pruneSentByUs(now);
 }
 
 /** The ids of the messages this bridge sent (Baileys hands the id back with the send), kept
@@ -298,10 +312,11 @@ function rememberSentId(id) {
 function isOurEchoToJid(remoteJid, body, contentType, messageId) {
   if (messageId && sentIds.has(String(messageId))) return true;
   const rec = lastSentByUs.get(remoteJid);
-  if (!rec || (Date.now() - rec.ts) > SENT_BY_US_TTL_MS) return false;
+  const now = Date.now();
+  if (!rec || (now - rec.ts) > SENT_BY_US_TTL_MS) return false;
   const normBody = normalizeForEcho(body || "");
-  if (normBody && rec.text && normBody === rec.text) return true;
-  if ((!normBody || normBody === "<voice>" || normBody === "<media:audio>") && rec.voiceTs && (Date.now() - rec.voiceTs) < SENT_BY_US_TTL_MS) return true;
+  if (normBody && (rec.texts || []).some((t) => t.text === normBody && now - t.ts <= SENT_BY_US_TTL_MS)) return true;
+  if ((!normBody || normBody === "<voice>" || normBody === "<media:audio>") && rec.voiceTs && (now - rec.voiceTs) < SENT_BY_US_TTL_MS) return true;
   return false;
 }
 

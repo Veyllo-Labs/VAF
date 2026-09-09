@@ -510,7 +510,7 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                             </div>
                             <div className="relative px-3 pt-2 pb-2">
                                 {/* Deliberate: cn() is tailwind-merge, so the padding override must come AFTER the shared INPUT classes or px-3 silently wins and the icon sits on the text. */}
-                                <Search className="w-4 h-4 absolute left-6 top-1/2 text-[#9a9a9a] pointer-events-none" />
+                                <Search className="w-4 h-4 absolute left-6 top-1/2 -translate-y-1/2 text-[#9a9a9a] pointer-events-none" />
                                 <input value={listFilter} onChange={e => setListFilter(e.target.value)} placeholder={t('searchChats')}
                                     className={cn(INPUT, 'w-full pl-9')} />
                             </div>

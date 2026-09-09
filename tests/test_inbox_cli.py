@@ -73,3 +73,15 @@ def test_the_group_sits_behind_the_terminal_door_and_has_no_write_command():
         "the inbox prints chats and must sit behind the same door as vaf session"
     names = {c.name for c in inbox_cmd.app.registered_commands}
     assert names == {"list"}
+
+
+def test_an_unknown_channel_or_view_is_refused_instead_of_silently_widened(world):
+    """MUTATION: drop the two checks in vaf/cli/cmd/inbox.py and `--channel fax` prints every
+    channel's rows with exit code 0 (list_conversations falls back to all channels and to the
+    "all" view for names it does not know)."""
+    result = CliRunner().invoke(inbox_cmd.app, ["list", "--json", "--channel", "fax"])
+    assert result.exit_code == 1 and "fax" in result.output and "whatsapp" in result.output, result.output
+    assert not [line for line in result.output.splitlines() if line.startswith("{")], "no rows for a channel that does not exist"
+    result = CliRunner().invoke(inbox_cmd.app, ["list", "--json", "--view", "sideways"])
+    assert result.exit_code == 1 and "sideways" in result.output and "waits" in result.output, result.output
+    assert CliRunner().invoke(inbox_cmd.app, ["list", "--json", "--channel", "whatsapp", "--view", "waits"]).exit_code == 0

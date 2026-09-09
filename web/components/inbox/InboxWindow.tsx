@@ -397,7 +397,7 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                 </button>
                             </div>
                             <div className="relative px-3 pt-2 pb-2">
-                                <Search className="w-4 h-4 absolute left-6 top-1/2 text-[#9a9a9a] pointer-events-none" />
+                                <Search className="w-4 h-4 absolute left-6 top-1/2 -translate-y-1/2 text-[#9a9a9a] pointer-events-none" />
                                 <input value={queryInput} onChange={e => setQueryInput(e.target.value)} placeholder={t('search')} className={cn(INPUT, 'w-full pl-9')} />
                             </div>
                             <div className="px-4 pb-2 text-xs text-[#9a9a9a] flex items-center justify-between gap-2">

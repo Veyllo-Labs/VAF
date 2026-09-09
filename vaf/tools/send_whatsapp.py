@@ -64,35 +64,22 @@ class SendWhatsAppTool(BaseTool):
         username = kwargs.get("username") or "admin"
         user_scope_id = kwargs.get("user_scope_id")
 
-        # GUARD: When the current task is an inbound WhatsApp message from a contact,
-        # the reply is delivered automatically by the headless runner - the agent must
-        # NOT call send_whatsapp in addition (would cause duplicate / wrong-JID sends).
-        # Block the tool when there is no explicit to_phone recipient AND the agent is
-        # currently handling a front-office (from_contact) inbound session.
-        to_phone = (kwargs.get("to_phone") or kwargs.get("phone_number") or "").strip()
-        if not to_phone:
-            # No explicit recipient → sending to the owner's own stored JID.
-            # During an inbound contact session this is redundant - the headless reply
-            # path already delivers the response.  Block to prevent duplicates.
-            try:
-                # The agent exposes _front_office_mode when handling a contact message.
-                # Access it via the tool's owner agent if available (injected as _agent kwarg),
-                # or fall back to checking the global front-office flag on the agent instance.
-                _agent = kwargs.get("_agent")
-                if _agent is not None and getattr(_agent, "_front_office_mode", False):
-                    return (
-                        "[TOOL BLOCKED] You are replying to an inbound WhatsApp message from a contact. "
-                        "Do NOT call send_whatsapp - your reply is delivered automatically. "
-                        "Just write your answer as plain text."
-                    )
-            except Exception:
-                pass
+        # GUARD: in a contact conversation (Front Office) this tool has one legitimate
+        # recipient, the owner's registered number. The reply to the contact is delivered
+        # by the headless runner, so a send to the contact's or any other number would
+        # duplicate it or turn a contact's turn into a messenger for strangers; and the
+        # owner's back-channel (send_whatsapp without to_phone when main_messenger is
+        # whatsapp) must go through. The agent exposes _front_office_mode while it handles
+        # a contact's message (injected as the _agent kwarg).
+        _agent = kwargs.get("_agent")
+        front_office = bool(_agent is not None and getattr(_agent, "_front_office_mode", False))
 
         try:
             from vaf.core.messaging_connections import get_whatsapp_chat_jid
             from vaf.api.whatsapp_bridge import (
                 send_whatsapp_with_confirmation,
                 _e164_to_jid,
+                _phone_digits_canonical,
             )
         except ImportError as e:
             return f"WhatsApp send unavailable: {e}"
@@ -106,6 +93,14 @@ class SendWhatsAppTool(BaseTool):
                     "Invalid phone number for to_phone. Use E.164 format (e.g. +491761234567). "
                     "Get the contact's whatsapp_phone from get_contact(name='...') when the user asks to send to a contact."
                 )
+            if front_office:
+                owner_jid = get_whatsapp_chat_jid(user_scope_id, username)
+                if not owner_jid or _phone_digits_canonical(owner_jid) != _phone_digits_canonical(chat_jid):
+                    return (
+                        "[TOOL BLOCKED] You are handling a contact's message: send_whatsapp reaches only the "
+                        "account owner here. Leave to_phone empty to notify them. Your reply to the contact "
+                        "is delivered automatically, and nobody else can be messaged from this conversation."
+                    )
             allow_contact_send = True
         else:
             chat_jid = get_whatsapp_chat_jid(user_scope_id, username)

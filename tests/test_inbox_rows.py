@@ -343,6 +343,7 @@ def test_mark_all_seen_reads_every_lane_at_once_and_respects_the_selection(world
     assert _rows()["counts"]["invitations"] == 1 and _rows()["counts"]["unread_per_channel"]["room"] == 2
     assert inbox.mark_conversation("alice", SCOPE, "room", "r-inv", seen=True) == {"channel": "room", "id": "r-inv", "seen": False}, \
         "an invitation is read by answering it: a seen moves nothing"
+    rows = {r["key"]: r for r in _rows()["rows"]}
     assert rows["room:r-inv"]["waits"], "and it still waits"
 
 

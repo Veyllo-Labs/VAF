@@ -199,6 +199,29 @@ def _sweep_votes(room, host, human_peers, now: float) -> None:
             continue
 
 
+def _front_office_chat_ref(metadata, username):
+    """Which conversation a Front Office turn belongs to, in the message store's terms, so the
+    agent's question to the person can be recorded on that chat (the inbox's "waits for you,
+    the agent asked"). Read off the task metadata the bridges already carry; an unresolved
+    WhatsApp @lid has no store key and gives None."""
+    meta = metadata or {}
+    try:
+        jid = str(meta.get("whatsapp_chat_jid") or "").strip()
+        if jid:
+            from vaf.api.whatsapp_bridge import _jid_to_chat_id
+            key = _jid_to_chat_id((username or "").strip() or "admin", jid)
+            return {"channel": "whatsapp", "chat_id": key} if key else None
+        tg = str(meta.get("telegram_chat_id") or "").strip()
+        if tg:
+            return {"channel": "telegram", "chat_id": tg}
+        dc = str(meta.get("discord_author_id") or "").strip()
+        if dc:
+            return {"channel": "discord", "chat_id": dc}
+    except Exception:
+        return None
+    return None
+
+
 def _apply_channel_history_window(agent, source: str) -> None:
     """
     Keep only a small recent window for channel sessions (Telegram/WhatsApp/Discord)
@@ -1402,6 +1425,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     _meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
                     if _meta.get("from_contact"):
                         agent._front_office_mode = True
+                        agent._front_office_chat = _front_office_chat_ref(_meta, _meta.get("username"))
                         try:
                             from vaf.core.front_office_tools import FRONT_OFFICE_ALLOWED_TOOLS
                             agent._active_tools = tuple(n for n in FRONT_OFFICE_ALLOWED_TOOLS if n in agent.tools)
@@ -1409,6 +1433,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             agent._active_tools = None
                     else:
                         agent._front_office_mode = False
+                        agent._front_office_chat = None
                         agent._active_tools = None
 
                     # Sidebar documents: inject into this turn only (session history stays clean)
@@ -2679,6 +2704,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         pass
                 finally:
                     agent._front_office_mode = False
+                    agent._front_office_chat = None
                     agent._active_tools = None
                 try:
                     if is_debug_logging_enabled():

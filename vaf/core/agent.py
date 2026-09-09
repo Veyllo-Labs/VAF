@@ -967,6 +967,9 @@ def reload_all_api_backends(*, force: bool = False) -> int:
     return changed
 
 
+#: The send tools that reach the OWNER from a Front Office turn (the back-channel).
+_OWNER_SEND_TOOLS = ("send_whatsapp", "send_telegram", "send_discord", "send_to_user")
+
 class Agent:
     """The VAF engine: one instance = one conversation over one LLM backend.
 
@@ -12803,6 +12806,30 @@ class Agent:
             return _subagent_dup_msg
         return None
 
+    def _record_owner_question(self, name: str, args, result) -> None:
+        """Mark the Front Office chat as waiting for the person when a send to the owner
+        succeeded. A WhatsApp send with an explicit third-party number is not a question to
+        the owner; a failed send (the shared failure detector decides) asked nobody."""
+        ref = getattr(self, "_front_office_chat", None)
+        if not isinstance(ref, dict) or not ref.get("chat_id"):
+            return
+        a = args if isinstance(args, dict) else {}
+        if name == "send_whatsapp" and ((a.get("to_phone") or a.get("phone_number") or "").strip()):
+            return
+        try:
+            from vaf.core.context import tool_result_is_error
+            if not isinstance(result, str) or tool_result_is_error(result):
+                return
+            from vaf.core.channel_message_store import mark_owner_asked
+            from vaf.core.contacts_store import message_channel_username
+            channel = str(ref.get("channel") or "")
+            username = getattr(self, "_current_username", None)
+            scope = getattr(self, "_current_user_scope_id", None)
+            mark_owner_asked(message_channel_username(channel, username), channel, str(ref["chat_id"]),
+                             user_scope_id=(None if channel == "discord" else scope))
+        except Exception:
+            pass
+
     def _chat_post_dispatch(self, name, args, result):
         """Router discovery and the python_exec fallback - both may replace or extend the
         result, and both run before it is truncated."""
@@ -12813,6 +12840,13 @@ class Agent:
 
         emit = _with_subagent_debug_mirror(self._event_sink)
         is_channel_session = self._is_channel_turn()
+        # The agent's question to the person, recorded on the contact's chat: in Front Office
+        # mode a send that names no foreign recipient went to the owner, and the inbox then
+        # shows that chat as waiting for the person until they answer or the agent writes to
+        # the contact again. Recorded here, after the dispatch, because the send tools do not
+        # know which chat the turn belongs to and must not learn it for this.
+        if getattr(self, "_front_office_mode", False) and name in _OWNER_SEND_TOOLS:
+            self._record_owner_question(name, args, result)
         # search_tools post-hook: expand _active_tools with discovered tool names so the
         # model can call them in the very next turn without a router round-trip.
         # The parser is SHARED with the tool module (and its format tests), so the

@@ -20,7 +20,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   person's browsers on every write, throttled so a history sync tells them once and once more
   at the end. A store that already holds history starts with every chat read. Room rows carry
   when they last spoke and what was said; mail thread rows carry the newest message's id,
-  folder and answered mark.
+  folder and answered mark. When the agent asks the owner a question about a contact's chat
+  (the Front Office back-channel), that chat is marked as waiting for the owner until they
+  answer or the agent writes to the contact again.
 - **A messenger chat has its own memory.** What the agent learns inside a chat with a
   contact is stored in that chat's own namespace (`source = chat/<session id>`), which every
   ordinary lookup of your agent leaves out in SQL, in both lanes of the hybrid search. Only

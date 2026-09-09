@@ -46,7 +46,9 @@ done mark from the same table (`channel='mail'`, the thread id); a room keeps it
 the read marker and takes the done mark the same way. `mark_conversation` writes them:
 `seen` on a mail thread marks every unseen message of the thread read (local first, the
 mail window's own rule moved server-side); `seen` on a room is refused, because opening the
-room moves the cursor.
+room moves the cursor. The owner-asked mark is written by the agent itself: in Front Office
+mode a send tool that names no foreign recipient reached the owner, and `Agent._chat_post_dispatch`
+records it on the chat the runner stamped for the turn (`agent._front_office_chat`).
 
 ## Identity
 

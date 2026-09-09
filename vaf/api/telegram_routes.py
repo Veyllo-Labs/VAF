@@ -316,7 +316,10 @@ async def get_telegram_dashboard(request: Request):
         my_chat_ids = {str(e.get("telegram_user_id") or "") for e in admin_whitelist + relay_whitelist}
         activity = [a for a in activity_raw if str(a.get("chat_id") or "") in my_chat_ids]
 
-    # Sessions: one per chat (our bot only = whitelist + relay). Enrich with last_ts and message_count from activity.
+    # Sessions: one per chat (our bot only = whitelist + relay), then the message store's
+    # rows: the count, the newest message and the person's own state (unread, waits, done)
+    # come from the one overview vaf/core/inbox.py reads. The activity log only seeds a
+    # chat the store never saw and feeds the chart.
     sessions_by_chat: Dict[str, Dict[str, Any]] = {}
     for e in admin_whitelist:
         uid = str(e.get("telegram_user_id") or "")
@@ -357,10 +360,48 @@ async def get_telegram_dashboard(request: Request):
         rec = sessions_by_chat[cid]
         ts = a.get("ts") or 0
         rec["last_ts"] = max(rec.get("last_ts") or 0, ts)
-        rec["message_count"] = rec.get("message_count", 0) + 1
+    try:
+        from vaf.core.channel_message_store import chat_overview, store_exists
+        from vaf.core.contacts_store import message_channel_username
+        from vaf.core.inbox import chat_state
+        row_user = message_channel_username("telegram", current_user.get("username"))
+        if store_exists(row_user, user_scope_id):
+            for row in chat_overview(row_user, user_scope_id=user_scope_id, channel="telegram", limit=500):
+                cid = str(row.get("chat_id") or "")
+                if not cid:
+                    continue
+                rec = sessions_by_chat.setdefault(cid, {
+                    "chat_id": cid, "telegram_user_id": cid, "telegram_username": None,
+                    "vaf_username": None, "type": "unknown",
+                })
+                state = chat_state(row)
+                rec["last_ts"] = max(rec.get("last_ts") or 0, int(row.get("last_ts") or 0))
+                rec.update({
+                    "name": (row.get("chat_name") or "").strip() or None,
+                    "message_count": int(row.get("message_count") or 0),
+                    "last_preview": row.get("last_body") or "",
+                    "last_direction": row.get("last_direction") or "",
+                    "preview_from": state["preview_from"],
+                    "unread": state["unread"],
+                    "waits": state["waits"],
+                    "waits_reason": state["waits_reason"],
+                    "answered_by_agent": state["answered_by_agent"],
+                    "done": state["done"],
+                })
+    except Exception:
+        pass
     for rec in sessions_by_chat.values():
         rec.setdefault("last_ts", 0)
         rec.setdefault("message_count", 0)
+        rec.setdefault("name", None)
+        rec.setdefault("last_preview", "")
+        rec.setdefault("last_direction", "")
+        rec.setdefault("preview_from", "")
+        rec.setdefault("unread", 0)
+        rec.setdefault("waits", False)
+        rec.setdefault("waits_reason", "")
+        rec.setdefault("answered_by_agent", False)
+        rec.setdefault("done", False)
     sessions = sorted(sessions_by_chat.values(), key=lambda s: (s.get("last_ts") or 0), reverse=True)
 
     # Stats: messages per 4-hour bucket (last 7 days). Bucket key = floor(ts / 14400) * 14400 (4h = 14400s).

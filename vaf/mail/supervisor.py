@@ -123,6 +123,14 @@ def _sync_one(scope: str, cred_username: Optional[str], acc: Dict[str, Any]) -> 
         _safe_logout(client)
 
 
+def _sync_changed(stats: Dict[str, Any]) -> bool:
+    """Whether a sync changed what a conversation list shows: new mail, flag updates (read,
+    answered) or vanished messages in any folder. The new-mail hook above stays what it is;
+    this is the wider question the inbox asks."""
+    return any(int(s.get("new", 0) or 0) + int(s.get("flag_updates", 0) or 0) + int(s.get("vanished", 0) or 0)
+               for s in stats.values() if isinstance(s, dict))
+
+
 def _drain_sends(scope: str, cred_username: Optional[str], acc: Dict[str, Any]) -> Dict[str, Any]:
     """Deliver queued SEND ops for one account regardless of IMAP availability -
     sends go through the SMTP/API transport and need no IMAP session. Runs AFTER
@@ -220,7 +228,10 @@ class MailSyncSupervisor(SyncSupervisor):
                     and ((acc.get("provider") or "imap").lower() == "imap" or acc.get("imap_ready")))
 
     def sync_one(self, scope: str, cred_username: Optional[str], acc: Dict[str, Any]) -> Dict[str, Any]:
-        return _sync_one(scope, cred_username, acc)
+        out = _sync_one(scope, cred_username, acc)
+        if out.get("ok") and _sync_changed(out.get("stats") or {}):
+            self.notify_change(scope, out.get("account") or "", out.get("stats") or {})
+        return out
 
     async def after_sweep(self, accounts: List[Account], wanted: List[Account], results: List[Any]) -> None:
         # Provider-agnostic send drain AFTER the sync: delivers queued sends for EVERY

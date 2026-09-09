@@ -183,7 +183,9 @@ async def get_verification_status():
 @router.get("/dashboard")
 async def get_discord_dashboard(request: Request):
     """
-    Data for the Discord settings dashboard: status, admin info, activity. No sensitive data (no tokens).
+    Data for the Discord settings dashboard: status, admin info, activity, and the chats the
+    message store holds (`sessions`, with the inbox's unread / waits / done). No sensitive
+    data (no tokens).
     """
     from vaf.core.config import Config
     from vaf.api.discord_bridge import is_bridge_running
@@ -199,6 +201,7 @@ async def get_discord_dashboard(request: Request):
             "admin_user_id": None,
             "enabled": False,
             "activity": [],
+            "sessions": [],
         }
 
     discord_config = Config.get("discord_config") or {}
@@ -223,7 +226,45 @@ async def get_discord_dashboard(request: Request):
         "admin_user_id": discord_config.get("admin_user_id"),
         "enabled": discord_config.get("enabled", False),
         "activity": activity,
+        "sessions": _store_sessions(),
     }
+
+
+def _store_sessions() -> list:
+    """The Discord chats the message store holds, newest first, with the inbox's state. The
+    bridge writes every row under the admin's name with no scope (the integration is
+    admin-only), so the rows are read the way vaf/core/inbox.py reads them."""
+    from vaf.core.channel_message_store import chat_overview, store_exists
+    from vaf.core.contacts_store import message_channel_username
+    from vaf.core.inbox import chat_state
+    row_user = message_channel_username("discord", None)
+    sessions: list = []
+    try:
+        if not store_exists(row_user, None):
+            return sessions
+        for row in chat_overview(row_user, user_scope_id=None, channel="discord", limit=500):
+            cid = str(row.get("chat_id") or "")
+            if not cid:
+                continue
+            state = chat_state(row)
+            sessions.append({
+                "chat_id": cid,
+                "type": "admin",
+                "name": (row.get("chat_name") or "").strip() or None,
+                "last_ts": int(row.get("last_ts") or 0),
+                "message_count": int(row.get("message_count") or 0),
+                "last_preview": row.get("last_body") or "",
+                "last_direction": row.get("last_direction") or "",
+                "preview_from": state["preview_from"],
+                "unread": state["unread"],
+                "waits": state["waits"],
+                "waits_reason": state["waits_reason"],
+                "answered_by_agent": state["answered_by_agent"],
+                "done": state["done"],
+            })
+    except Exception:
+        pass
+    return sessions
 
 
 @router.get("/status")

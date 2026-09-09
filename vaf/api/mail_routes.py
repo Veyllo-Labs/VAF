@@ -89,9 +89,27 @@ async def list_threads(account_id: Optional[str] = None, folder: Optional[str] =
                        limit: int = 50, offset: int = 0,
                        _user: Dict[str, Any] = Depends(_get_current_user)):
     svc = _service(_user)
-    items = await asyncio.to_thread(
-        svc.list_threads, account_id=account_id, folder=folder, limit=limit, offset=offset)
+
+    def _run():
+        items = svc.list_threads(account_id=account_id, folder=folder, limit=limit, offset=offset)
+        return _with_inbox_state(items, _user)
+
+    items = await asyncio.to_thread(_run)
     return {"threads": svc.annotate_visibility(items)}
+
+
+def _with_inbox_state(threads: list, user: Dict[str, Any]) -> list:
+    """`waits`, `waits_reason`, `done` and `answered_by_agent` on each thread row, from the
+    rule and the done marks the inbox reads (`vaf.core.inbox.mail_thread_state`), so the mail
+    window and the Posteingang never disagree about who waits."""
+    from vaf.core.channel_message_store import chat_marks
+    from vaf.core.inbox import mail_thread_state
+    marks = chat_marks(user.get("username") or "", _scope_of(user), channel="mail")
+    for t in threads:
+        state = mail_thread_state(t, marks.get(("mail", str(t.get("thread_id")))))
+        for k in ("waits", "waits_reason", "done", "answered_by_agent"):
+            t[k] = state[k]
+    return threads
 
 
 @router.get("/threads/{thread_id}")
@@ -247,6 +265,10 @@ async def patch_flags(message_pk: int, body: Dict[str, Any] = Body(...),
     flags = await asyncio.to_thread(_run)
     if flags is None:
         raise HTTPException(status_code=404, detail="Message not found")
+    if "read" in body:
+        # A read mark changes the inbox's unread count; a star changes no conversation list.
+        from vaf.core.web_interface import notify_inbox_changed
+        notify_inbox_changed(scope)
     return {"ok": True, "flags": flags}
 
 

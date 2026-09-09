@@ -220,7 +220,8 @@ def test_mail_supervisor_is_a_subclass_with_its_own_filter():
 def test_web_server_starts_both_supervisors_through_the_guard():
     src = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
     assert "asyncio.create_task(MailSyncSupervisor().run())" not in src, "the bare start ran twice under TLS"
-    assert "start_supervisor(MailSyncSupervisor())" in src
+    assert "_mail_sup = MailSyncSupervisor()" in src and "start_supervisor(_mail_sup)" in src
+    assert "_mail_sup.on_change(" in src, "a changed sweep must reach the browser (inbox_changed)"
     assert "CalendarSyncSupervisor()" in src and "start_supervisor(_cal_sup)" in src
     assert "_cal_sup.on_change(" in src, "a changed sweep must reach the browser (calendar_changed)"
     assert "Email auto-sync background task started" not in src, "a log line for a lane that no longer exists"

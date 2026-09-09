@@ -196,6 +196,12 @@ Deliberately deferred, listed so nobody looks for them in the code:
   account CRUD. Object vocabulary follows JMAP (RFC 8621) naming for
   Mailbox/Thread/Email shapes, but VAF does NOT implement the JMAP wire protocol
   (deliberate no-overengineering decision).
+- `GET /api/mail/threads` rows carry the inbox's `waits`, `waits_reason`, `done` and
+  `answered_by_agent` (the rule `vaf.core.inbox.mail_thread_state` and the done marks the
+  inbox window reads, see [INBOX.md](INBOX.md)); a read-flag change through
+  `PATCH /api/mail/messages/{pk}/flags` and a sync that saw new mail, flag updates or
+  vanished messages announce `inbox_changed` to the person's browsers (the sync
+  supervisor's `on_change` observer, registered by the web server).
 - `/api/email/*` is the shared OAuth + accounts hub ONLY: oauth start/callback/
   status plus account CRUD/test/verify. It is not mail-specific - the Calendar
   wizard mints its consent through the same `/oauth/start` (calendar_routes has no

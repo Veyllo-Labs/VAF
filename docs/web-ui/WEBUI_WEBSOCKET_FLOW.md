@@ -325,6 +325,13 @@ Key rules:
   on the same primitive (`notify_user_signal`); see
   [CALENDAR_INTEGRATION.md](../integrations/CALENDAR_INTEGRATION.md).
 
+- `inbox_changed` (no payload): a conversation list of the user changed (a stored message,
+  a read or done mark, a mail sync that saw new mail, flag updates or vanished messages, a
+  read-flag change from the mail window). A signal, not the rows: the inbox window, the
+  footer badge and the channel windows refetch what they show. Emitted by
+  `notify_inbox_changed` on the same primitive, throttled per scope in the message store;
+  see [INBOX.md](../integrations/INBOX.md).
+
 - `browser_interactive_state` (`{ sessionId, status, saving, reason, streamPath }`):
   the interactive-browser lease verdict and lifecycle. `status` is one of `active`
   (streamPath set, the window's iframe loads it), `stopped` (with `reason`: `user`,

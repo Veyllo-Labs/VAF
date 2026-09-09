@@ -156,23 +156,24 @@ def _whatsapp_enabled_for_request(request: Request, whatsapp_config: Dict[str, A
 
 
 def _reply_window_hours() -> float:
-    from vaf.api.whatsapp_bridge import reply_window_hours
+    from vaf.core.messaging_connections import reply_window_hours
     return reply_window_hours()
 
 
-def _conversation_open_until(username: str, chat_id: str, user_scope_id: Optional[str]) -> Optional[float]:
-    """Unix ts until which the agent may keep answering this number (reply window), or None."""
-    from vaf.api.whatsapp_bridge import conversation_open_until
-    try:
-        return conversation_open_until(username, chat_id, user_scope_id)
-    except Exception:
-        return None
+_CHAT_STATE_KEYS = ("last_preview", "last_direction", "preview_from", "waits", "waits_reason",
+                    "answered_by_agent", "done")
 
 
-def _conversation_open(username: str, chat_id: str, user_scope_id: Optional[str]) -> bool:
-    import time as _t
-    until = _conversation_open_until(username, chat_id, user_scope_id)
-    return until is not None and until > _t.time()
+def _merge_chat_state(into: Dict[str, Any], other: Dict[str, Any]) -> None:
+    """Two rows of one person (an E.164 and its @lid) become one: the newer row's last message
+    and state, the unread counts added, the reply window that ends later."""
+    newer = other if (other.get("last_ts") or 0) > (into.get("last_ts") or 0) else into
+    for k in _CHAT_STATE_KEYS:
+        if k in newer:
+            into[k] = newer[k]
+    into["unread"] = int(into.get("unread") or 0) + int(other.get("unread") or 0)
+    until = max(float(into.get("reply_window_until") or 0.0), float(other.get("reply_window_until") or 0.0))
+    into["reply_window_until"] = until or None
 
 
 def _owner_number_for(whitelist: list, username: str, user_scope_id: Optional[str]) -> Optional[str]:
@@ -305,7 +306,6 @@ async def get_whatsapp_dashboard(request: Request):
         rec = sessions_by_chat[cid]
         ts = a.get("ts") or 0
         rec["last_ts"] = max(rec.get("last_ts") or 0, int(ts))
-        rec["message_count"] = rec.get("message_count", 0) + 1
     for e in whitelist:
         phone = (e.get("phone_number") or "").strip()
         if not phone:
@@ -341,25 +341,39 @@ async def get_whatsapp_dashboard(request: Request):
                     }
     except Exception:
         pass
-    # Include chats from message store (persistent inbox: show all chats we have messages for, like mail/Telegram)
+    # The message store is the persistent inbox: every chat it holds is a row, its count is
+    # the count the row shows, and the person's own state (unread, waits, done) and the reply
+    # window come from the one overview vaf/core/inbox.py reads: one statement, no bridge.
     try:
-        from vaf.core.channel_message_store import list_chats_from_store
-        for row in list_chats_from_store(username, limit=500, user_scope_id=user_info.get("user_scope_id")):
+        from vaf.core.channel_message_store import chat_overview
+        from vaf.core.inbox import chat_state, reply_window_until
+        window = _reply_window_hours() * 3600.0
+        for row in chat_overview(username, user_scope_id=user_info.get("user_scope_id"), channel="whatsapp",
+                                 limit=500, reply_window_seconds=window):
             cid = (row.get("chat_id") or "").strip()
             if not cid:
                 continue
             key = _canonical_chat_key(cid)
+            state = chat_state(row)
+            fields = {
+                "message_count": int(row.get("message_count") or 0),
+                "last_preview": row.get("last_body") or "",
+                "last_direction": row.get("last_direction") or "",
+                "preview_from": state["preview_from"],
+                "unread": state["unread"],
+                "waits": state["waits"],
+                "waits_reason": state["waits_reason"],
+                "answered_by_agent": state["answered_by_agent"],
+                "done": state["done"],
+                "reply_window_until": reply_window_until(row.get("last_agent_ts"), row.get("last_in_within_ts"), window),
+            }
             last_ts = int(row.get("last_ts") or 0)
-            msg_count = int(row.get("message_count") or 0)
             if key in sessions_by_chat:
                 rec = sessions_by_chat[key]
                 rec["last_ts"] = max(rec.get("last_ts") or 0, last_ts)
-                rec["message_count"] = max(rec.get("message_count") or 0, msg_count)
                 if not (rec.get("name") or "").strip() and (row.get("chat_name") or "").strip():
                     rec["name"] = (row.get("chat_name") or "").strip()
-                if row.get("last_body"):
-                    rec["last_preview"] = row.get("last_body")
-                    rec["last_direction"] = row.get("last_direction") or ""
+                rec.update(fields)
             else:
                 sessions_by_chat[key] = {
                     "chat_id": key,
@@ -369,9 +383,7 @@ async def get_whatsapp_dashboard(request: Request):
                     "type": "contact",
                     "name": (row.get("chat_name") or "").strip() or None,
                     "last_ts": last_ts,
-                    "message_count": msg_count,
-                    "last_preview": row.get("last_body") or "",
-                    "last_direction": row.get("last_direction") or "",
+                    **fields,
                 }
     except Exception:
         pass
@@ -409,23 +421,15 @@ async def get_whatsapp_dashboard(request: Request):
     for rec in sessions_by_chat.values():
         rec.setdefault("last_ts", 0)
         rec.setdefault("message_count", 0)
-    # Overwrite message_count with actual session size so list and session view match (no "3 msgs" vs "0 Nachrichten")
-    try:
-        from vaf.core.session import SessionManager
-        session_mgr = SessionManager()
-        for rec in sessions_by_chat.values():
-            sid = rec.get("session_id")
-            if not sid or not str(sid).startswith("whatsapp_"):
-                continue
-            try:
-                session = session_mgr.load(sid)
-                rec["message_count"] = len(session.messages or [])
-            except FileNotFoundError:
-                rec["message_count"] = 0
-            except Exception:
-                pass
-    except Exception:
-        pass
+        rec.setdefault("last_preview", "")
+        rec.setdefault("last_direction", "")
+        rec.setdefault("preview_from", "")
+        rec.setdefault("unread", 0)
+        rec.setdefault("waits", False)
+        rec.setdefault("waits_reason", "")
+        rec.setdefault("answered_by_agent", False)
+        rec.setdefault("done", False)
+        rec.setdefault("reply_window_until", None)
     # Resolve LID→E.164 from config + Node so we can merge duplicate rows (same person as +55... and 123@lid)
     node_by_lid: Dict[str, str] = {}
     try:
@@ -463,6 +467,7 @@ async def get_whatsapp_dashboard(request: Request):
         rec = sessions_by_chat[key]
         if e164 in sessions_by_chat:
             ex = sessions_by_chat[e164]
+            _merge_chat_state(ex, rec)
             ex["last_ts"] = max(ex.get("last_ts") or 0, rec.get("last_ts") or 0)
             ex["name"] = (ex.get("name") or "").strip() or (rec.get("name") or "").strip() or None
             ex["message_count"] = max(ex.get("message_count") or 0, rec.get("message_count") or 0)
@@ -570,13 +575,14 @@ async def get_whatsapp_dashboard(request: Request):
                 rec["type"] = "owner"
             elif in_fo:
                 rec["type"] = "contact"
-            elif _conversation_open(username, cid_norm, user_info.get("user_scope_id")):
+            elif (rec.get("reply_window_until") or 0) > now_ts:
                 rec["type"] = "conversation"
-                rec["reply_window_until"] = _conversation_open_until(username, cid_norm, user_info.get("user_scope_id"))
             else:
                 rec["type"] = "unknown"
             rec["answerable"] = rec.get("type") in ("owner", "contact", "conversation")
             rec["needs_assign"] = False
+        if rec.get("type") != "conversation":
+            rec["reply_window_until"] = None
         # display_name: prefer name, then contact name for resolved/phone, then "Unknown chat" for LID, else phone
         disp = (rec.get("name") or "").strip() or None
         if not disp:

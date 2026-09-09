@@ -1052,6 +1052,16 @@ except ImportError as e:
 except Exception as e:
     log("WebServer", f"Failed to mount Contacts routes: {e}")
 
+# Mount the inbox routes (the Posteingang window and the footer badge; INBOX.md)
+try:
+    from vaf.api.inbox_routes import router as inbox_router
+    app.include_router(inbox_router)
+    log("WebServer", "Inbox routes mounted at /api/inbox")
+except ImportError as e:
+    log("WebServer", f"Inbox routes not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount inbox routes: {e}")
+
 # Mount Auth routes (Local Network Authentication)
 try:
     from vaf.api.auth_routes import router as auth_router
@@ -1746,8 +1756,13 @@ async def startup_event():
     # for the second uvicorn server (8001 + 8005 in TLS mode).
     try:
         from vaf.core.sync_supervisor import start_supervisor
+        from vaf.core.web_interface import notify_inbox_changed
         from vaf.mail.supervisor import MailSyncSupervisor
-        if start_supervisor(MailSyncSupervisor()):
+        _mail_sup = MailSyncSupervisor()
+        # A sync that changed a conversation list (new mail, flags, vanished rows) tells
+        # the person's browsers, so the inbox and the mail window refetch instead of polling.
+        _mail_sup.on_change(lambda scope, _account_id, _stats: notify_inbox_changed(scope))
+        if start_supervisor(_mail_sup):
             log("WebServer", "Mail v2 sync supervisor task started")
         else:
             log("WebServer", "Mail v2 sync supervisor already running (other server lifespan)")

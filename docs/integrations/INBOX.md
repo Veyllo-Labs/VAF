@@ -63,7 +63,11 @@ a chat the store never saw has nothing to say about unread or waiting.
 Every writer of the message store, and every mark, announces `inbox_changed` to the person's
 browsers (`web_interface.notify_inbox_changed`, the calendar signal's twin), throttled per
 scope with a trailing edge so a history sync tells them once and once more at the end. The
-`rooms_changed` signal refreshes the inbox as well.
+mail sync supervisor announces it after a sync that saw new mail, flag updates or vanished
+messages (its `on_change` observer, registered by the web server), the mail window's
+read-flag change announces it, and a mail thread's `seen` through the marks route announces
+it itself, because IMAP's flag is no store writer. The `rooms_changed` signal refreshes the
+inbox as well.
 
 ## The agent's tool
 
@@ -87,6 +91,35 @@ Preview) with the counts above it; `--channel`, `--view`, `--limit`, `--no-group
 (no `--scope`: the CLI has no authentication) behind the same terminal door as `vaf session`,
 because it prints chats. Read-only by design: marks are set in the inbox window, where the
 person sees what they are closing.
+
+## Routes
+
+`vaf/api/inbox_routes.py` serves the window and the footer badge as the caller
+`contact_routes.get_current_vaf_user` resolves it (the request's user, or the local admin
+outside network mode); every store read runs off the event loop, and no GET waits on a bridge.
+
+| Route | Answer |
+|---|---|
+| `GET /api/inbox?channel&view&groups&done&q&limit` | `rows`, `counts` and `channels` as `list_conversations` returns them (`channel` is one name, a comma list or `all`), plus `status` per channel: WhatsApp `linked` and `running`, Telegram and Discord `configured` and `running` (Discord for the local admin only), mail `accounts` and `last_sync_at`. What the process knows about itself, never a round trip |
+| `GET /api/inbox/summary` | `waits`, `unread`, `all` and `waits_per_channel` for the footer badge and the channel windows' own buttons |
+| `GET /api/inbox/history?channel&id&limit` | one conversation in the pane shape (`role`, `content`, `timestamp`, `content_type`, `sender`) |
+| `POST /api/inbox/marks` with `{channel, id, seen?, done?}` | `mark_conversation`; a room's `seen` answers 400, and so does a body that marks nothing |
+
+There is no send route: a WhatsApp row posts to `POST /api/whatsapp/send`, as the WhatsApp
+window does.
+
+## The channel windows
+
+The WhatsApp, Telegram and Discord dashboards (`GET /api/<channel>/dashboard`) read the same
+overview: every chat the message store holds is a session, its `message_count` is the store's
+count, and each session carries `last_preview`, `preview_from`, `unread`, `waits`,
+`waits_reason`, `answered_by_agent` and `done` from `chat_state`. The WhatsApp window's
+Conversation badge and `reply_window_until` come from the same rows through
+`reply_window_until`, so the dashboard asks the bridge for the chat list and the names only.
+The Telegram activity log only seeds a chat the store never saw and feeds the chart; the
+Discord payload carries `sessions` (the admin's store rows). `GET /api/mail/threads` rows carry
+`waits`, `waits_reason`, `done` and `answered_by_agent` from `mail_thread_state` and the done
+marks, so the mail window and the Posteingang never disagree about who waits.
 
 ## API (module)
 

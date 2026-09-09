@@ -26,6 +26,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `vaf inbox list` prints the same rows from the terminal, behind the session door.
   The agent has one `inbox` tool for the same rows (`channel`, `view`, `max_chats`, `query`), with
   the next-step hint and the mail IDs block the mail listing carried.
+  `GET /api/inbox` (rows, counts, per-channel status), `GET /api/inbox/summary` (the badge),
+  `GET /api/inbox/history` and `POST /api/inbox/marks` serve the window. The WhatsApp,
+  Telegram and Discord dashboards read the same rows: the count shown per chat is the store's
+  count (no longer the session file's), each chat carries `unread`, `waits`, `done` and the
+  newest message, the WhatsApp Conversation badge is computed from the same rows instead of
+  asking the bridge, and the Discord payload carries `sessions`. `GET /api/mail/threads` rows
+  carry `waits` and `done`, and a mail sync that changed something or a read-flag change
+  announces `inbox_changed`.
 - **A messenger chat has its own memory.** What the agent learns inside a chat with a
   contact is stored in that chat's own namespace (`source = chat/<session id>`), which every
   ordinary lookup of your agent leaves out in SQL, in both lanes of the hybrid search. Only

@@ -27,6 +27,22 @@ def test_prompt_carries_the_sharpened_rules():
     assert "NO_REPLY" in p and 'MEMORY: "fact in English"' in p
 
 
+def test_the_chat_prompt_keeps_every_rule_and_names_the_person():
+    """A messenger chat with a contact learns about THAT person: only the opening changes,
+    the rule block is the one the owner's compaction uses, and the owner is off limits."""
+    from vaf.memory.lanes import ChatNamespace
+
+    p = _build_compaction_prompt("Alice: hi", "2026-07-15", chat=ChatNamespace("whatsapp_a_1", "whatsapp", "Alice"))
+    assert "talking to in this chat: Alice" in p and "labelled 'Alice:'" in p
+    assert "Do NOT store facts about the assistant's owner" in p
+    for anchor in ("GROUNDING", "SELF-CONTAINED", "as of 2026-07-15", "DURABILITY", "NOVELTY", "NO_REPLY"):
+        assert anchor in p
+    assert "user preferences, name, decisions, events" not in p, "the owner opening must not leak into a chat run"
+    owner = _build_compaction_prompt("User: hi", "2026-07-15")
+    rules = lambda text: text.split('Output each fact as:', 1)[1].split('--- Conversation ---', 1)[0]  # noqa: E731
+    assert rules(p) == rules(owner), "the rule block is byte-identical between the two runs"
+
+
 def test_gates_length_and_junk():
     kept, rejected = _apply_fact_gates([
         ("User's name is Alice and his company is Veyllo GmbH.", ["personal"]),

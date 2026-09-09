@@ -1236,19 +1236,39 @@ _FACT_MIN_CHARS = 15
 _FACT_MAX_CHARS = 500
 # Markers that never belong in a durable fact (model meta-output, injected
 # context echoes, nested protocol lines)
-_FACT_JUNK_MARKERS = ("no_reply", "<think", "[source ", "<relevant-memories",
+_FACT_JUNK_MARKERS = ("no_reply", "<think", "[source ", "[chat source ", "<relevant-memories",
                       "as an ai", "final check", "memory:")
 
 
-def _build_compaction_prompt(conversation: str, date_str: str) -> str:
+def _build_compaction_prompt(conversation: str, date_str: str, *,
+                             chat: Optional[ChatNamespace] = None) -> str:
     """The fact-extraction prompt. Rules sharpened after a live review of a
     learning run (2026-07-15): facts must be SELF-CONTAINED (each is retrieved
     alone), volatile facts must be DATED, conversation state is not a memory,
-    and long-known basics should not be re-stored."""
+    and long-known basics should not be re-stored.
+
+    With ``chat`` the same prompt learns about the PERSON in one messenger chat
+    instead of about the user: only the opening changes, the rule block is the
+    same. The opening also forbids facts about the account owner, the assistant
+    and third parties, because a chat namespace holds what one person said, and
+    a fact about the owner learned there would be the one thing that must not
+    live in a lane the owner's own agent never reads."""
+    if chat is None:
+        opening = (
+            "You are storing durable memories from this chat. Read the conversation below and output concrete facts worth remembering: "
+            "user preferences, name, decisions, events, technical choices, or anything the user would want recalled later. "
+        )
+    else:
+        opening = (
+            f"You are storing durable memories about the person the assistant is talking to in this chat: {chat.label}. "
+            f"Their messages are labelled '{chat.label}:', the assistant's replies 'Assistant:'; the assistant's owner is not part of this chat. "
+            "Read the conversation below and output concrete facts worth remembering about this person and what was agreed with them: "
+            "how they want to be addressed, their preferences, decisions, agreed dates and commitments, anything the assistant should know the next time this person writes. "
+            "Name the person in every fact. Do NOT store facts about the assistant's owner, about the assistant itself, or about third parties. "
+        )
     return (
         f"Today is {date_str}. "
-        "You are storing durable memories from this chat. Read the conversation below and output concrete facts worth remembering: "
-        "user preferences, name, decisions, events, technical choices, or anything the user would want recalled later. "
+        + opening +
         'Output each fact as: MEMORY: "fact in English" [tag1, tag2]. '
         "Use 1-3 relevant tags per memory (e.g. preferences, work, personal, project-x, decisions). Tags help filter in the memory graph. "
         "GROUNDING (critical): store ONLY facts the user STATED explicitly or that are directly evidenced in the conversation. "
@@ -1370,27 +1390,21 @@ def _compaction_log(message: str, session_id: str = "", **kwargs: Any) -> None:
     append_domain_log("memory", f"[COMPACTION] {message} session_id={session_id} {extra}".strip())
 
 
-def _build_compaction_conversation_excerpt(agent: Any, max_chars: int = 12000) -> str:
-    """
-    Build a readable transcript for compaction from the agent's session history.
-    Only user prompts and assistant replies are included; no system messages,
-    no tool calls, and no tool results. The model sees only the dialogue.
-    """
-    history = getattr(agent, "history", None) or []
-    if not history:
-        return ""
-    # Only user and assistant messages; ignore system and tool
-    dialogue = [
-        (msg.get("role"), (msg.get("content") or "").strip())
-        for msg in history
-        if (msg.get("role") or "").strip().lower() in ("user", "assistant")
-    ]
-    lines = []
+def _format_compaction_dialogue(dialogue: List[Tuple[Any, Any]], max_chars: int = 12000, *,
+                                user_label: str = "User") -> str:
+    """The transcript a compaction reads: the newest user and assistant lines that fit
+    `max_chars`, oldest first, one line each. `user_label` names the human side - "User"
+    for the account owner, the person's name for a messenger chat with a contact."""
+    lines: List[str] = []
     total = 0
     for role, content in reversed(dialogue):
-        if not content and role != "user":
+        role_l = (role or "").strip().lower()
+        if role_l not in ("user", "assistant"):
             continue
-        prefix = "User: " if (role or "").strip().lower() == "user" else "Assistant: "
+        content = (content or "").strip()
+        if not content and role_l != "user":
+            continue
+        prefix = f"{user_label}: " if role_l == "user" else "Assistant: "
         line = prefix + content.replace("\n", " ").strip()
         if total + len(line) + 2 > max_chars:
             break
@@ -1400,16 +1414,35 @@ def _build_compaction_conversation_excerpt(agent: Any, max_chars: int = 12000) -
     return "\n\n".join(lines) if lines else ""
 
 
-def _is_contact_session(session_id: str) -> bool:
+def _build_compaction_conversation_excerpt(agent: Any, max_chars: int = 12000) -> str:
     """
-    True if this session is a chat with a contact (Telegram/WhatsApp/Discord), not the main user.
-    NOTE: This is a FALLBACK safety check only. The primary GDPR filter is in headless_runner
-    which checks task.metadata["from_contact"]. Main-user Telegram/WhatsApp/Discord sessions
-    (where the user themselves chats) are NOT contact sessions and SHOULD be compacted.
+    Build a readable transcript for compaction from the agent's session history.
+    Only user prompts and assistant replies are included; no system messages,
+    no tool calls, and no tool results. The model sees only the dialogue.
     """
-    # No longer block by prefix — the headless_runner's from_contact check is the authoritative filter.
-    # This function is kept for backward compatibility but always returns False.
-    return False
+    history = getattr(agent, "history", None) or []
+    if not history:
+        return ""
+    return _format_compaction_dialogue(
+        [(msg.get("role"), msg.get("content")) for msg in history], max_chars)
+
+
+def session_dialogue_excerpt(session_id: str, *, user_label: str = "Contact",
+                             max_chars: int = 12000) -> str:
+    """The same transcript, read from the STORED session instead of the live agent.
+
+    A chat with a contact must learn from this and never from `agent.history`: the live
+    history holds the Front Office wrapper around the person's message (the anti-injection
+    preamble and the contact's own file), while the session file holds what the person
+    actually wrote, and the agent is a no-op reload when it already sits on that session.
+    Returns "" when the session cannot be read: no transcript, no learning."""
+    try:
+        from vaf.core.session import SessionManager
+        messages = getattr(SessionManager().load(session_id), "messages", None) or []
+    except Exception:
+        return ""
+    dialogue = [(getattr(m, "role", None), getattr(m, "content", None)) for m in messages]
+    return _format_compaction_dialogue(dialogue, max_chars, user_label=user_label)
 
 
 def _trim_telegram_history_after_compaction(session_id: str, current_turn_count: int, keep_user_turns: int) -> None:
@@ -1470,12 +1503,19 @@ def run_session_compaction_sync(
     *,
     conversation: Optional[str] = None,
     source: Optional[str] = None,
+    chat: Optional[ChatNamespace] = None,
 ) -> None:
     """
     Run session compaction if interval reached: inject prompt, parse MEMORY:/NO_REPLY, ingest to RAG.
     Does not append compaction reply to chat history or UI.
-    Runs for main user sessions (Web, Telegram, WhatsApp, Discord) and for A2A rooms.
-    GDPR: Contact chats are filtered upstream in headless_runner (from_contact metadata).
+    Runs for main user sessions (Web, Telegram, WhatsApp, Discord), for A2A rooms, and with
+    ``chat`` for a messenger chat with a contact, which learns into its own namespace
+    (`source = chat/<session id>`, vaf/memory/lanes.py): the prompt asks about the person in
+    that chat, the dedup check looks only inside the namespace, the user-profile cache is not
+    refreshed (it feeds every system prompt and must not carry a contact's facts), and the
+    transcript MUST come in through ``conversation`` from the stored session. The runner
+    decides who learns where with `ChatNamespace.from_task`; a chat run with no transcript
+    skips without a model call.
 
     ``conversation`` supplies the transcript instead of reading it off the agent. A room
     turn MUST pass it: one process serves every tenant, so `agent.history` at that moment
@@ -1498,6 +1538,11 @@ def run_session_compaction_sync(
     if current_turn_count - last < interval:
         _compaction_log("COMPACTION_SKIP", session_id=session_id, turn_count=str(current_turn_count), last=str(last), interval=str(interval), reason="interval_not_reached")
         return
+    if chat is not None:
+        if not (conversation or "").strip():
+            _compaction_log("COMPACTION_SKIP", session_id=session_id, turn_count=str(current_turn_count), reason="chat_no_transcript")
+            return
+        source = source or chat.source
     _compaction_log("COMPACTION_START", session_id=session_id, turn_count=str(current_turn_count), last=str(last), interval=str(interval))
 
     # Track whether we sent a terminal UI update (completed/error). Finally-block will send one if we didn't, so the UI never stays stuck.
@@ -1523,6 +1568,21 @@ def run_session_compaction_sync(
         except Exception:
             pass
 
+    def _schedule_profile_refresh() -> None:
+        """The known_facts cache of every system prompt is rebuilt after a compaction that
+        learned about the USER. A chat run learned about someone else, into a lane that
+        cache never reads, so a refresh would only be wasted work. Runs in the background so
+        the queue worker is never blocked and the web server never affected."""
+        if chat is not None:
+            return
+
+        def _refresh_bg():
+            try:
+                refresh_user_profile_summary(user_scope_id)
+            except Exception as ex:
+                logger.debug("User profile summary refresh failed: %s", ex)
+        threading.Thread(target=_refresh_bg, daemon=True).start()
+
     try:
         # Broadcast to WebUI: Memory Learning started
         try:
@@ -1541,7 +1601,7 @@ def run_session_compaction_sync(
         conversation = conversation if conversation is not None else \
             _build_compaction_conversation_excerpt(agent)
         if conversation:
-            prompt = _build_compaction_prompt(conversation, date_str)
+            prompt = _build_compaction_prompt(conversation, date_str, chat=chat)
         else:
             prompt = (
                 "Session nearing compaction. Store durable memories now. "
@@ -1572,13 +1632,7 @@ def run_session_compaction_sync(
                 keep_user_turns=interval,
             )
             _notify_ui("completed", "Memory Learning complete! No new facts to remember.", 0)
-            # Run refresh in background so we never block the queue worker or risk affecting the web server
-            def _refresh_bg():
-                try:
-                    refresh_user_profile_summary(user_scope_id)
-                except Exception as ex:
-                    logger.debug("User profile summary refresh failed: %s", ex)
-            threading.Thread(target=_refresh_bg, daemon=True).start()
+            _schedule_profile_refresh()
             return
         _counts = {"ingested": 0, "deduped": 0}
 
@@ -1593,9 +1647,12 @@ def run_session_compaction_sync(
                     # identical chunk in this scope means the fact is already
                     # known ("User's name is Alice" must not accumulate).
                     try:
+                        # A chat run dedups inside its own namespace, never against the
+                        # owner's memories (and the owner's run never against a chat's).
                         existing = await pipeline.search(
                             content.strip(), k=1, threshold=0.95,
                             user_scope_id=user_scope_id,
+                            chat_key=(chat.key if chat is not None else None),
                         )
                         if existing:
                             _counts["deduped"] += 1
@@ -1613,6 +1670,8 @@ def run_session_compaction_sync(
                         meta["tags"] = tags
                     else:
                         meta["tags"] = ["compaction"]  # Fallback so memories are filterable
+                    if chat is not None:
+                        meta.update(chat.as_meta())
                     await pipeline.ingest(
                         content=content.strip(),
                         metadata=meta,
@@ -1664,13 +1723,7 @@ def run_session_compaction_sync(
         )
 
         _notify_ui("completed", f"Memory Learning complete! Saved {len(memory_tuples)} memories.", len(memory_tuples))
-        # Run refresh in background so we never block the queue worker
-        def _refresh_bg():
-            try:
-                refresh_user_profile_summary(user_scope_id)
-            except Exception as ex:
-                logger.debug("User profile summary refresh failed: %s", ex)
-        threading.Thread(target=_refresh_bg, daemon=True).start()
+        _schedule_profile_refresh()
 
     except Exception as e:
         logger.exception("Session compaction failed: %s", e)
@@ -1935,8 +1988,28 @@ def _rag_timing_log(line: str) -> None:
     append_domain_log("rag", line)
 
 
+def _format_sources(sources: List[RagSource], *, include_ids: bool = False,
+                    label: str = "Source") -> str:
+    """The snippet block a prompt is given: `[<label> N] (Relevance: ..)` headers over the
+    text. `label` is "Source" for the general lane and "Chat Source" for what was learned
+    inside the chat a turn runs in, so the model can tell whose facts it is reading."""
+    parts = []
+    for i, s in enumerate(sources):
+        if include_ids:
+            parts.append(f"[{label} {i+1}] (Relevance: {s.score:.0%}, memory_id: {s.memory_id})\n{s.text}")
+        else:
+            parts.append(f"[{label} {i+1}] (Relevance: {s.score:.0%})\n{s.text}")
+    return "\n\n---\n\n".join(parts)
+
+
+def count_sources(block: str) -> int:
+    """How many snippets a retrieval block carries, both headers. The header format is
+    private to this module: a caller that counts by hand encodes it a second time."""
+    return (block or "").count("[Source ") + (block or "").count("[Chat Source ")
+
+
 def turn_memory_context(query: str, *, user_scope_id: Optional[UUID] = None,
-                        caller: str = "") -> str:
+                        caller: str = "", chat_key: Optional[str] = None) -> str:
     """What this account already knows, as the block a turn is given before it answers.
 
     One home for the three lines every lane repeats around `run_memory_search_sync`:
@@ -1954,14 +2027,25 @@ def turn_memory_context(query: str, *, user_scope_id: Optional[UUID] = None,
     matched. Those three are one answer on purpose: a turn has nothing to add to its
     prompt in every one of them, and a caller that told them apart would only be able
     to act on the difference by lying about what it knows.
+
+    ``chat_key`` is the one addition a turn INSIDE a messenger chat makes: a second block,
+    `[Chat Source N]`, from that chat's own namespace, underneath the general snippets.
+    The general call is the same call every other lane makes; the namespace is a second
+    search, so a caller without a key is byte-identical to before.
     """
     try:
         if not Config.get("memory_enabled", True):
             return ""
         k = int(Config.get("memory_rag_k", 5))
         k = max(1, min(20, k))
-        return run_memory_search_sync(query, k=k, user_scope_id=user_scope_id,
-                                      caller=caller or None) or ""
+        general = run_memory_search_sync(query, k=k, user_scope_id=user_scope_id,
+                                         caller=caller or None) or ""
+        if not chat_key:
+            return general
+        chat_block = run_memory_search_sync(query, k=k, user_scope_id=user_scope_id,
+                                            caller=f"{caller or 'turn'}:chat",
+                                            chat_key=chat_key, source_label="Chat Source") or ""
+        return "\n\n---\n\n".join(b for b in (general, chat_block) if b)
     except Exception:
         return ""
 
@@ -1973,6 +2057,8 @@ def run_memory_search_sync(
     caller: Optional[str] = None,
     include_ids: bool = False,
     exclude_documents: bool = False,
+    chat_key: Optional[str] = None,
+    source_label: str = "Source",
 ) -> str:
     """
     Run RAG search synchronously for use from sync code (e.g. headless runner).
@@ -1985,6 +2071,8 @@ def run_memory_search_sync(
         TOOL asks for this so the model can NAME a memory to memory_update; the
         per-turn prompt injection deliberately does not - ids there are noise the
         model would copy into answers.
+    chat_key: search ONE chat namespace instead of the general lane (see
+        `RagPipeline.search`); `source_label` names the snippet headers of that block.
     """
     import time as _time
     _t0 = _time.time()
@@ -2068,6 +2156,7 @@ def run_memory_search_sync(
             sources = await pipeline.search(
                 query, k=k, threshold=threshold, metadata_filter=metadata_filter,
                 user_scope_id=user_scope_id, exclude_documents=exclude_documents,
+                chat_key=chat_key,
             )
             
             # PUSH TO WEB UI (for Hover/Info)
@@ -2100,15 +2189,7 @@ def run_memory_search_sync(
 
             if not sources:
                 return ""
-            parts = []
-            for i, s in enumerate(sources):
-                if include_ids:
-                    parts.append(
-                        f"[Source {i+1}] (Relevance: {s.score:.0%}, memory_id: {s.memory_id})\n{s.text}"
-                    )
-                else:
-                    parts.append(f"[Source {i+1}] (Relevance: {s.score:.0%})\n{s.text}")
-            return "\n\n---\n\n".join(parts)
+            return _format_sources(sources, include_ids=include_ids, label=source_label)
 
     _RAG_TIMEOUT = 15.0  # seconds; avoid blocking chat if DB is down or slow
 

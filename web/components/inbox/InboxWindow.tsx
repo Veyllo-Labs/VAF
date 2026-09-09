@@ -167,6 +167,12 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
     }, [isOpen]);
 
     const selected = useMemo(() => (selectedKey ? rows.find(r => r.key === selectedKey) ?? null : null), [rows, selectedKey]);
+    // The selected row can vanish under the preview (marked done with done rows hidden, a
+    // filter change, a refetch): on a phone the list is hidden behind that preview, so the
+    // pane steps back on its own instead of leaving an empty pane with no way out.
+    useEffect(() => {
+        if (mobilePane === 'preview' && selectedKey && !selected) setMobilePane('list');
+    }, [mobilePane, selectedKey, selected]);
 
     // Opening a row reads it, as in the channel windows: the seen mark goes to the store,
     // the pill goes out at once, and it stays out while the server reports the marked count.

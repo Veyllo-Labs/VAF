@@ -44,9 +44,7 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(contacts, "get_contact_name_by_phone", lambda phone, username=None, user_scope_id=None: "Bob" if phone == "+491700000005" else None)
     import vaf.core.web_interface as wi
     monkeypatch.setattr(wi, "notify_inbox_changed", lambda scope: None)
-    store._reset_announce_state()   # a timer an earlier test left behind must not fire in here
-    monkeypatch.setattr(store, "_announce_last", {})
-    monkeypatch.setattr(store, "_announce_timers", {})
+    store._reset_announce_state()   # cancels the timers an earlier test left behind; the dicts stay the module's own
     rooms = []
     import vaf.core.session as session_mod
     monkeypatch.setattr(session_mod, "_room_rows", lambda scope: list(rooms) if scope == SCOPE else [])
@@ -171,7 +169,8 @@ def test_views_groups_and_the_done_toggle(world):
     assert [r["key"] for r in all_rows["rows"]] == ["telegram:-500", "whatsapp:+491700000043", "whatsapp:+491700000042"]
     assert all_rows["counts"] == {"all": 3, "waits": 2, "unread": 2, "agent": 1,
                                   "per_channel": {"whatsapp": 2, "telegram": 1, "discord": 0, "mail": 0, "room": 0},
-                                  "waits_per_channel": {"whatsapp": 1, "telegram": 1, "discord": 0, "mail": 0, "room": 0}}
+                                  "waits_per_channel": {"whatsapp": 1, "telegram": 1, "discord": 0, "mail": 0, "room": 0},
+                                  "stored_per_channel": {"whatsapp": 3, "telegram": 1, "discord": 0, "mail": 0, "room": 0}}
     assert [r["key"] for r in _rows(include_groups=False)["rows"]] == ["whatsapp:+491700000043", "whatsapp:+491700000042"]
     assert [r["key"] for r in _rows(include_done=True)["rows"]][:1] == ["telegram:-500"]
     assert "whatsapp:123@g.us" in [r["key"] for r in _rows(include_done=True)["rows"]]
@@ -266,6 +265,15 @@ def test_another_scope_sees_nothing(world):
     _mail_thread()
     assert inbox.list_conversations("bob", OTHER, now=NOW + 1)["rows"] == []
     assert inbox.conversation_history("bob", OTHER, "whatsapp", "+491700000042") == []
+
+
+def test_the_counts_say_what_each_lane_holds_before_any_filter(world):
+    _msg("+491700000042", "hi", ts=NOW - 10)
+    _msg("+491700000042", "bye", direction="out", ts=NOW - 5, sender=store.OWNER_SENDER)   # done by the person
+    out = _rows(view="waits")
+    assert out["rows"] == [] and out["counts"]["per_channel"]["whatsapp"] == 0, "the done toggle hid it from the counts"
+    assert out["counts"]["stored_per_channel"]["whatsapp"] == 1, "but the lane holds a chat"
+    assert out["counts"]["stored_per_channel"]["telegram"] == 0
 
 
 def test_owner_endpoints_file_a_formatted_whitelist_number_under_the_store_key(monkeypatch):

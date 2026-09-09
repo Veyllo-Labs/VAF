@@ -348,11 +348,14 @@ async def get_whatsapp_dashboard(request: Request):
     # the count the row shows, and the person's own state (unread, waits, done) and the reply
     # window come from the one overview vaf/core/inbox.py reads: one statement, no bridge.
     try:
+        import asyncio
         from vaf.core.channel_message_store import chat_overview
         from vaf.core.inbox import chat_state, reply_window_until
         window = _reply_window_hours() * 3600.0
-        for row in chat_overview(username, user_scope_id=user_info.get("user_scope_id"), channel="whatsapp",
-                                 limit=500, reply_window_seconds=window):
+        # SQLite off the event loop, as the other dashboards and the inbox routes do.
+        overview = await asyncio.to_thread(chat_overview, username, user_scope_id=user_info.get("user_scope_id"),
+                                           channel="whatsapp", limit=500, reply_window_seconds=window)
+        for row in overview:
             cid = (row.get("chat_id") or "").strip()
             if not cid:
                 continue

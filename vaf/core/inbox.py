@@ -422,6 +422,9 @@ def list_conversations(username: Optional[str], user_scope_id: Optional[str], *,
             rows.extend(_room_lane(username, user_scope_id))
         except Exception:
             pass
+    # What each lane holds before any toggle, filter or cut: the one number that can say
+    # "nothing is stored here" without lying about a view or a query that hid the rows.
+    stored_per_channel = {c: sum(1 for r in rows if r["channel"] == c) for c in CHANNELS}
     if not include_groups:
         rows = [r for r in rows if not r["is_group"]]
     if not include_done:
@@ -440,6 +443,7 @@ def list_conversations(username: Optional[str], user_scope_id: Optional[str], *,
         "agent": sum(1 for r in rows if r["answered_by_agent"]),
         "per_channel": {c: sum(1 for r in rows if r["channel"] == c) for c in CHANNELS},
         "waits_per_channel": {c: sum(1 for r in rows if r["channel"] == c and r["waits"]) for c in CHANNELS},
+        "stored_per_channel": stored_per_channel,
     }
     if view == "waits":
         rows = [r for r in rows if r["waits"]]

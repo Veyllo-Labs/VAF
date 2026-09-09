@@ -99,6 +99,8 @@ def test_mobile_is_additive_and_the_three_panes_stack():
     assert "grid-cols-[320px_1fr] max-md:grid-cols-1" in shell and "gridTemplateColumns" not in shell
     assert "mobilePane === 'preview' && 'max-md:hidden'" in src and "mobilePane === 'list' && 'max-md:hidden'" in src
     assert 'className="md:hidden p-1.5' in src, "the back button exists on a phone only"
+    assert "if (mobilePane === 'preview' && selectedKey && !selected) setMobilePane('list');" in src, \
+        "a row that vanished under the preview steps the phone back to the list"
     assert "max-md:flex-row max-md:flex-nowrap max-md:overflow-x-auto" in src, "the rail becomes a chip strip that scrolls sideways"
 
 

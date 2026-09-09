@@ -83,6 +83,7 @@ def test_the_badge_counts_only_what_the_view_would_show(rooms):
     assert row["unread"] == 1, "the say counts, the check-in must not"
     # "When they last spoke" is the newest conversation frame too: a check-in after the
     # person marked the room done must not reopen it in the inbox.
+    assert row["last"]["text"] == "anyone there?", "the preview is the say, not the check-in"
     assert row["last_ts"] == row["last"]["ts"], "last_ts follows the newest conversation frame, not the ping"
 
 

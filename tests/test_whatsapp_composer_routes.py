@@ -120,6 +120,8 @@ def test_the_composer_lane_forwards_the_namespace_and_the_mail_lane_never_names_
     from vaf.memory import rag
 
     seen = []
+    # The lane is gated on memory_enabled; the defaults, not this machine's config, decide.
+    monkeypatch.setattr(Config, "get", classmethod(lambda cls, k, d=None: Config.DEFAULTS.get(k, d)))
     monkeypatch.setattr(rag, "turn_memory_context", lambda query, **kw: seen.append(kw) or "")
     composer_lane.knowledge(SCOPE, "q", "Bob", caller="whatsapp_composer", chat_key="whatsapp_alice_1")
     composer_lane.knowledge(SCOPE, "q", "Bob", caller="mail_composer")

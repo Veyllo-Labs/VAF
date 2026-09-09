@@ -179,8 +179,12 @@ class InboxTool(BaseTool):
         header += f", query={query!r}" if query else ""
         header += ")"
         lines = [_line(i, r) for i, r in enumerate(rows, 1)]
+        # "Nothing stored" is said only when the lane holds nothing at all; a view, a query,
+        # a toggle or the cut to max_chats hiding a lane's rows is not the same thing, and
+        # the header already says which of those is in force.
+        stored = counts.get("stored_per_channel") or {}
         for ch in channels:
-            if not any(r["channel"] == ch for r in rows):
+            if int(stored.get(ch) or 0) == 0:
                 lines.append(_empty_line(ch))
         out = _NEXT_STEP_HINT + header + "\n" + "\n".join(lines)
         id_lines = []

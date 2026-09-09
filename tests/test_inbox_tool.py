@@ -40,8 +40,14 @@ def listing(monkeypatch):
             rows = [r for r in rows if r["channel"] != "mail" or (r.get("jump") or {}).get("account_id") == kw["mail_account_id"]]
         if kw.get("mail_folder"):
             rows = [r for r in rows if r["channel"] != "mail" or (r.get("jump") or {}).get("folder") == kw["mail_folder"]]
-        return {"rows": rows, "counts": {"all": len(rows), "waits": sum(1 for r in rows if r["waits"]),
-                                          "unread": sum(r["unread"] for r in rows), "agent": 0},
+        stored = {c: sum(1 for r in seen.get("rows", []) if r["channel"] == c) for c in ("whatsapp", "telegram", "discord", "mail", "room")}
+        if kw.get("channels"):
+            rows = [r for r in rows if r["channel"] in kw["channels"]]
+        if kw.get("view") == "waits":
+            rows = [r for r in rows if r["waits"]]
+        return {"rows": rows[: kw.get("limit") or 200],
+                "counts": {"all": len(rows), "waits": sum(1 for r in rows if r["waits"]),
+                           "unread": sum(r["unread"] for r in rows), "agent": 0, "stored_per_channel": stored},
                 "channels": kw.get("channels")}
     monkeypatch.setattr("vaf.core.inbox.list_conversations", fake)
     monkeypatch.setattr("vaf.tools.mail_utils.filter_phishing_messages_for_agent", lambda ms: (ms, 0))
@@ -89,6 +95,16 @@ def test_channel_view_and_toggles_pass_through_and_mail_narrows_by_account_and_f
     assert "name-2" in out and "name-1" not in out
     assert listing["kw"]["mail_folder"] == "Sent" and listing["kw"]["mail_account_id"] is None
     assert "Unknown channel" in InboxTool().run(channel="fax")
+
+
+def test_a_lane_hidden_by_a_view_or_the_cut_is_not_called_empty(listing):
+    listing["rows"] = [_row("whatsapp", "+491700000042", waits=False, unread=0),
+                       _row("telegram", "7", waits=False, unread=0), _row("telegram", "8", waits=False, unread=0)]
+    out = InboxTool().run(username="alice", user_scope_id="s", channel="whatsapp", view="waits")
+    assert "WhatsApp: no stored chats yet" not in out, "the view hid the chat; the lane is not empty"
+    assert "Inbox: 0 conversations" in out and "view=waits" in out
+    out = InboxTool().run(username="alice", user_scope_id="s", channel="telegram", max_chats="1")
+    assert "Telegram: no stored chats yet" not in out and out.count("[Telegram]") == 1
 
 
 def test_suspicious_mail_is_hidden_and_said(listing, monkeypatch):

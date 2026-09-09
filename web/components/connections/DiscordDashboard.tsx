@@ -118,21 +118,26 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
         if (!data) return [];
         const adminId = data.admin_user_id ? String(data.admin_user_id) : null;
         const adminLabel = data.admin_username ? `@${data.admin_username}` : (adminId ?? '');
-        const rows: ShellChat[] = (data.sessions || []).map(s => ({
-            id: s.chat_id,
-            historyKey: `discord_${s.chat_id}`,
-            label: s.chat_id === adminId ? adminLabel : (s.name || s.chat_id),
-            preview: s.last_preview || '',
-            ts: s.last_ts,
-            badge: { label: t('badgeAdmin'), cls: BADGE_CLS.owner },
-            subline: `${s.chat_id} · ${t('subAdmin')}`,
-            footer: t('footAdmin'),
-            unread: s.unread,
-            waits: s.waits,
-            waitsReason: s.waits_reason,
-            answeredByAgent: s.answered_by_agent,
-            done: s.done,
-        }));
+        // Only the paired admin's chat is the admin's; any other row the store holds is
+        // read-only (the bridge answers nobody else).
+        const rows: ShellChat[] = (data.sessions || []).map(s => {
+            const isAdmin = s.chat_id === adminId;
+            return {
+                id: s.chat_id,
+                historyKey: `discord_${s.chat_id}`,
+                label: isAdmin ? adminLabel : (s.name || s.chat_id),
+                preview: s.last_preview || '',
+                ts: s.last_ts,
+                badge: isAdmin ? { label: t('badgeAdmin'), cls: BADGE_CLS.owner } : { label: t('badgeReadOnly'), cls: BADGE_CLS.readOnly },
+                subline: `${s.chat_id} · ${isAdmin ? t('subAdmin') : t('subReadOnly')}`,
+                footer: isAdmin ? t('footAdmin') : t('footReadOnly'),
+                unread: s.unread,
+                waits: s.waits,
+                waitsReason: s.waits_reason,
+                answeredByAgent: s.answered_by_agent,
+                done: s.done,
+            };
+        });
         // No paired admin: the store's rows are all there is; the synthetic admin row needs one.
         if (!adminId || rows.some(r => r.id === adminId)) return rows;
         const newest = data.activity.length ? data.activity[data.activity.length - 1] : null;

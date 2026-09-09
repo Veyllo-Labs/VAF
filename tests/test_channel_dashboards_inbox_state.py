@@ -57,9 +57,7 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(Config, "save", classmethod(lambda cls, cfg: None))
     import vaf.core.web_interface as wi
     monkeypatch.setattr(wi, "notify_inbox_changed", lambda scope: None)
-    store._reset_announce_state()   # a timer an earlier test left behind must not fire in here
-    monkeypatch.setattr(store, "_announce_last", {})
-    monkeypatch.setattr(store, "_announce_timers", {})
+    store._reset_announce_state()   # cancels the timers an earlier test left behind; the dicts stay the module's own
     # WhatsApp: the bridge answers nothing; the rows must come from the store alone.
     monkeypatch.setattr(routes, "_is_whatsapp_admin", lambda req: False)
     monkeypatch.setattr(wa, "get_whatsapp_chats", lambda *a, **k: [])
@@ -110,7 +108,7 @@ def test_the_whatsapp_dashboard_reads_no_session_file_and_no_bridge_rule():
     body = src.split("async def get_whatsapp_dashboard(", 1)[1].split("\n@router", 1)[0]
     assert "SessionManager" not in body and "list_chats_from_store" not in body
     assert "conversation_open_until" not in body and "conversation_open(" not in body
-    assert "chat_overview(" in body and "chat_state(" in body and "reply_window_until(" in body
+    assert "asyncio.to_thread(chat_overview" in body and "chat_state(" in body and "reply_window_until(" in body
 
 
 def test_telegram_sessions_come_from_the_store_and_the_activity_log_only_seeds(world):

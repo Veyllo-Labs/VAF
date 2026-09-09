@@ -32,9 +32,7 @@ def scratch(monkeypatch, tmp_path):
     frames = []
     import vaf.core.web_interface as wi
     monkeypatch.setattr(wi, "notify_inbox_changed", lambda scope: frames.append(scope))
-    store._reset_announce_state()   # a timer an earlier test left behind must not fire in here
-    monkeypatch.setattr(store, "_announce_last", {})
-    monkeypatch.setattr(store, "_announce_timers", {})
+    store._reset_announce_state()   # cancels the timers an earlier test left behind; the dicts stay the module's own
     return frames
 
 

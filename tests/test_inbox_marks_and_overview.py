@@ -183,22 +183,44 @@ def test_another_scope_and_a_missing_store_see_nothing(scratch, tmp_path):
 
 
 def test_writers_announce_once_per_scope_and_once_more_when_the_burst_ends(scratch, monkeypatch):
-    # The interval is wide enough that ten appends finish inside it on a slow CI box (a
-    # burst that outlives the interval announces twice and the assertion below lies).
-    monkeypatch.setattr(store, "_ANNOUNCE_MIN_INTERVAL_S", 0.4)
+    """Deterministic: the throttle reads a clock and arms a timer, and both are handed to the
+    test, so ten appends may take as long as a slow runner needs. The wall-clock version of
+    this test (a 0.4 s interval and real sleeps) went red on the Windows leg when the burst
+    outlived the interval and the trailing announcement fired before the first assertion."""
+    import threading
+    from types import SimpleNamespace
+
+    clock = [1000.0]
+    monkeypatch.setattr(store, "time", SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    armed = []
+
+    class FakeTimer:
+        def __init__(self, delay, fn, args=()):
+            self.delay, self.fn, self.args, self.daemon = delay, fn, args, False
+
+        def start(self):
+            armed.append(self)
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr(store, "threading", SimpleNamespace(Timer=FakeTimer, Lock=threading.Lock))
+    interval = store._ANNOUNCE_MIN_INTERVAL_S
+
     for i in range(10):
         _row("+491700000042", f"m{i}", ts=100.0 + i)
     assert scratch == [SCOPE], "the first write announces at once, the burst collapses"
-    deadline = time.time() + 3.0
-    while len(scratch) < 2 and time.time() < deadline:
-        time.sleep(0.05)
+    assert len(armed) == 1 and abs(armed[0].delay - interval) < 1e-6, "one trailing timer, for the rest of the interval"
+    clock[0] += interval
+    armed[0].fn(*armed[0].args)          # the interval ends: the trailing announcement fires
     assert scratch == [SCOPE, SCOPE], "the trailing announcement carries what the burst appended"
     scratch.clear()
-    time.sleep(0.45)
+    armed.clear()
+    clock[0] += interval
     store.mark_seen("alice", "whatsapp", "+491700000042", user_scope_id=SCOPE)
-    assert scratch == [SCOPE]
-    # A Discord row lives in the admin's file with no scope: it announces to the admin's scope.
+    assert scratch == [SCOPE] and armed == [], "a write after the interval announces at once, nothing pending"
+    # A Discord row lives in the admin's file with no scope: it announces to the admin's
+    # scope, whose own throttle has not fired yet.
     scratch.clear()
-    time.sleep(0.45)
     store.append_message("admin", "1234", "dm", channel="discord", ts=500.0)
     assert scratch == ["admin-scope"]

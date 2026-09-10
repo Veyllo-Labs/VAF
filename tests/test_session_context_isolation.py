@@ -228,7 +228,7 @@ def test_the_parent_never_publishes_a_session_into_the_process_environment() -> 
                         and target.value.attr == "environ"
                         and isinstance(target.slice, ast.Constant)
                         and target.slice.value == "VAF_SESSION_ID"):
-                    offenders.append(f"{path.relative_to(root)}:{node.lineno}")
+                    offenders.append(f"{path.relative_to(root).as_posix()}:{node.lineno}")
     assert not offenders, (
         f"a lane publishes its session into the process environment: {offenders}. "
         "Every other lane in this process shares that variable; pass it in the "

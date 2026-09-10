@@ -453,7 +453,7 @@ def test_a_label_separator_is_never_hardcoded_beside_a_translated_string():
             continue
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if _TRANSLATION_CALL.search(line) and _HARDCODED_SEPARATOR.search(line):
-                offenders.append(f"{path.relative_to(_WEB.parent)}:{number}: labelSeparator")
+                offenders.append(f"{path.relative_to(_WEB.parent).as_posix()}:{number}: labelSeparator")
     assert not offenders, (
         "hardcoded separator after a translated string; use t('common.labelSeparator'):\n"
         + "\n".join(offenders[:10])
@@ -602,7 +602,7 @@ def test_no_en_dash_literal_in_a_component():
             continue
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if _EN_DASH_LITERAL.search(line):
-                offenders.append(f"{path.relative_to(_WEB.parent)}:{number}")
+                offenders.append(f"{path.relative_to(_WEB.parent).as_posix()}:{number}")
     assert not offenders, "en dash as a literal UI value; use a plain hyphen:\n" + "\n".join(offenders[:10])
 
 

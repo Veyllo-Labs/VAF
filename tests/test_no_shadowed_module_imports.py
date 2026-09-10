@@ -118,7 +118,7 @@ def test_no_name_is_read_before_a_local_import_binds_it():
     for path in sorted(PACKAGE.rglob("*.py")):
         for func, name, used, imported in _scan(path):
             offenders.append(
-                f"{path.relative_to(REPO_ROOT)}:{used}: {name!r} is read here, but line "
+                f"{path.relative_to(REPO_ROOT).as_posix()}:{used}: {name!r} is read here, but line "
                 f"{imported} imports it again inside {func}() - that makes {name!r} local "
                 f"for the whole body, so this line raises UnboundLocalError. Move the "
                 f"import to module level, or rename the local one."

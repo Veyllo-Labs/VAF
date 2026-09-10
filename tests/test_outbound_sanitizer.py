@@ -144,11 +144,11 @@ def test_no_tool_imports_the_runner():
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module and \
                     "headless_runner" in node.module:
-                offenders.append(f"{f.relative_to(root)}:{node.lineno}")
+                offenders.append(f"{f.relative_to(root).as_posix()}:{node.lineno}")
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     if "headless_runner" in alias.name:
-                        offenders.append(f"{f.relative_to(root)}:{node.lineno}")
+                        offenders.append(f"{f.relative_to(root).as_posix()}:{node.lineno}")
     assert not offenders, (
         f"tools import the runner again: {offenders} - shared pieces belong in a "
         f"neutral vaf/core module (pattern: outbound_sanitizer)"

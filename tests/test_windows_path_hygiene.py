@@ -41,7 +41,13 @@ that class fail HERE, on any OS, instead of twenty-seven minutes into the
 Windows runner.
 
 The rule: a relative path that is serialized uses `.relative_to(...).as_posix()`,
-never `str(...relative_to(...))`. A call site where the host-native form is the
+never `str(...relative_to(...))` and never a bare `{x.relative_to(...)}` inside an
+f-string, which is the same `str()` in disguise. The Windows leg found that
+second spelling on 2026-09-10 in a spelling guard of the test suite: it rendered
+its hits as `f"{path.relative_to(root)}:{no}"` and compared them with posix
+literals, so every hit read as foreign on the Windows checkout and the leg went
+red 42 minutes in, while eight sibling sites used the same idiom for their
+failure messages only. A call site where the host-native form is the
 CORRECT one (a path shown to something that works on this host's own terms)
 goes into the allowlist below with its reason, so every new hit is a decision,
 not an accident.
@@ -113,6 +119,10 @@ _REPO = Path(__file__).resolve().parent.parent
 
 # `str(<expr>.relative_to(...))` - the serialization idiom this guard bans.
 _STR_RELATIVE_TO = re.compile(r"str\(\s*[\w.\[\]'\"]+\.relative_to\(")
+# `{<expr>.relative_to(...)}` inside an f-string, with a format spec or conversion or
+# nothing after the call: the same str() in disguise. `.as_posix()` after the call
+# does not match, which is the spelling the rule asks for.
+_FSTRING_RELATIVE_TO = re.compile(r"\{[^{}]*\.relative_to\([^()]*\)\s*[}:!]")
 
 # path -> reason the host-native form is deliberate there.
 _ALLOWED = {
@@ -154,14 +164,15 @@ def test_no_str_of_relative_to_outside_the_allowlist():
     for rel, path in _tracked_python_files():
         text = path.read_text(encoding="utf-8", errors="ignore")
         for i, line in enumerate(text.splitlines(), start=1):
-            if _STR_RELATIVE_TO.search(line):
+            if _STR_RELATIVE_TO.search(line) or _FSTRING_RELATIVE_TO.search(line):
                 if rel in _ALLOWED:
                     break
                 hits.append(f"{rel}:{i}: {line.strip()}")
     assert not hits, (
-        "str(...relative_to(...)) renders with the host's separator and breaks "
-        "on Windows when the path is serialized. Use .relative_to(...).as_posix() "
-        "- or add the file to _ALLOWED with the reason the native form is right:\n"
+        "str(...relative_to(...)), and {x.relative_to(...)} in an f-string, render with "
+        "the host's separator and break on Windows when the path is serialized. Use "
+        ".relative_to(...).as_posix() - or add the file to _ALLOWED with the reason the "
+        "native form is right:\n"
         + "\n".join(hits)
     )
 
@@ -173,7 +184,7 @@ def test_the_allowlist_carries_no_dead_entries():
         path = _REPO / rel
         assert path.is_file(), f"allowlisted file no longer exists: {rel}"
         text = path.read_text(encoding="utf-8", errors="ignore")
-        assert _STR_RELATIVE_TO.search(text), (
+        assert _STR_RELATIVE_TO.search(text) or _FSTRING_RELATIVE_TO.search(text), (
             f"allowlisted file no longer contains the pattern, drop it: {rel}"
         )
 

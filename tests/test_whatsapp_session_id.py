@@ -42,7 +42,7 @@ def test_the_spelling_exists_once():
     for path in _VAF.rglob("*.py"):
         for no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if re.search(r'\b(?:[fF][rR]?|[rR][fF])["\']{1,3}whatsapp_\{', line):
-                hits.append(f"{path.relative_to(_VAF.parent)}:{no}")
+                hits.append(f"{path.relative_to(_VAF.parent).as_posix()}:{no}")
     assert sorted(hits) == sorted([
         "vaf/core/messaging_connections.py:" + next(
             str(no) for no, line in enumerate(

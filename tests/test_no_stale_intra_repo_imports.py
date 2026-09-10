@@ -125,7 +125,7 @@ def test_no_import_names_something_its_module_does_not_define():
             if _module_file(f"{node.module}.{alias.name}") is not None:
                 continue
             stale.append(
-                f"{source.relative_to(ROOT)}:{node.lineno} imports "
+                f"{source.relative_to(ROOT).as_posix()}:{node.lineno} imports "
                 f"{alias.name!r} from {node.module}, which does not define it"
             )
     assert not stale, (
@@ -141,7 +141,7 @@ def test_no_import_names_a_vaf_module_that_does_not_exist():
     for source, node in _vaf_import_nodes():
         if _module_file(node.module) is None:
             missing.append(
-                f"{source.relative_to(ROOT)}:{node.lineno} imports from "
+                f"{source.relative_to(ROOT).as_posix()}:{node.lineno} imports from "
                 f"{node.module}, which does not exist"
             )
     assert not missing, (

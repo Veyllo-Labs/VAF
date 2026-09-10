@@ -45,8 +45,6 @@ def bootstrap():
         "typer": "typer",
         "rich": "rich",
         "prompt_toolkit": "prompt_toolkit",
-        "colorama": "colorama",
-        "shellingham": "shellingham",
         "psutil": "psutil",
         # Networking & Web
         "requests": "requests",

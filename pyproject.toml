@@ -42,14 +42,13 @@ classifiers = [
 ]
 dependencies = [
     # CLI & UI
-    "typer>=0.9.0",
+    # >=0.12: typer carries shellingham itself (shell detection for --install-completion)
+    "typer>=0.12.0",
     "rich>=13.0.0",
     "prompt_toolkit>=3.0.0",
     # The full-screen terminal app (vaf run). Pure-Python transitive set; imported
     # lazily inside the command body so the slim import graph stays flat.
     "textual>=8.2.8",
-    "colorama>=0.4.0",
-    "shellingham>=1.5.0",
     "psutil>=5.9.0",
     # API & networking (core)
     "requests>=2.31.0",
@@ -141,7 +140,9 @@ mail = [
     "nh3>=0.2.17",
     "zstandard>=0.22.0",
 ]
-dev = ["pytest>=7.0.0", "pytest-mock>=3.10.0"]
+# setuptools: the wheel guard builds with --no-build-isolation, and a venv on
+# Python 3.12+ ships no setuptools of its own.
+dev = ["pytest>=7.0.0", "setuptools>=77"]
 # `all` = every extra above (parity with requirements.txt / the desktop
 # product). Self-referential on purpose: it cannot drift when an extra's
 # contents change. tests/test_slim_base_import.py enforces that every extra

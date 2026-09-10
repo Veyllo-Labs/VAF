@@ -2,12 +2,10 @@
 # Core Dependencies
 
 # CLI & UI
-typer>=0.9.0
+typer>=0.12.0  # from 0.12 typer carries shellingham itself (shell detection for --install-completion)
 rich>=13.0.0
 prompt_toolkit>=3.0.0
 textual>=8.2.8
-colorama>=0.4.0
-shellingham>=1.5.0
 psutil>=5.9.0
 
 # API & Networking
@@ -116,4 +114,4 @@ zstandard>=0.22.0    # Compression for raw RFC822 blobs in the mail store (BSD)
 
 # Testing
 pytest>=7.0.0
-pytest-mock>=3.10.0
+setuptools>=77  # the wheel guard (tests/test_wheel_ships_runtime_assets.py) builds with --no-build-isolation; a venv on Python 3.12+ ships no setuptools

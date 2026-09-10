@@ -153,6 +153,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Removed
 
+- **`colorama`, `shellingham` and `pytest-mock` are no longer dependencies.** Nothing imported
+  them: typer carries shellingham itself from 0.12 (now the floor), colorama is a Windows-only
+  transitive dependency of typer and tqdm, and pytest-mock was unused since the day it was
+  added. `setuptools` is declared for the wheel guard instead of arriving through torch.
+
 - The four per-channel listing tools `whatsapp_inbox`, `telegram_inbox`, `discord_inbox` and
   `mail_inbox`: one `inbox` tool with a channel filter lists every conversation from the same
   rows the inbox window shows. The per-channel read and search tools stay. The tool-output

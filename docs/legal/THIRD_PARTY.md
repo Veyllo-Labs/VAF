@@ -54,11 +54,9 @@ Also present in `requirements.txt`.
 
 | Package | Min version | License |
 |---|---|---|
-| typer | >=0.9.0 | MIT |
+| typer | >=0.12.0 | MIT |
 | rich | >=13.0.0 | MIT |
 | prompt_toolkit | >=3.0.0 | BSD-3-Clause |
-| colorama | >=0.4.0 | BSD-3-Clause |
-| shellingham | >=1.5.0 | ISC |
 | psutil | >=5.9.0 | BSD-3-Clause |
 | requests | >=2.31.0 | Apache-2.0 |
 | httpx | >=0.27.0 | BSD-3-Clause |
@@ -175,7 +173,7 @@ Not required at runtime.
 | Package | Min version | License |
 |---|---|---|
 | pytest | >=7.0.0 | MIT |
-| pytest-mock | >=3.10.0 | MIT |
+| setuptools | >=77 | MIT |
 
 Note: `ruff` (MIT) is listed under runtime above because VAF invokes it from the
 built-in linter tool at runtime, not only as dev tooling.

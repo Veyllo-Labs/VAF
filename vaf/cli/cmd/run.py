@@ -1760,7 +1760,8 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                 reload_needed = settings.main_menu(agent=agent)
                 
                 # CRITICAL FIX: Restore original stdout handles
-                # Libraries like 'inquirer' (via colorama) wrap stdout, confusing prompt_toolkit.
+                # On Windows tqdm's import-time colorama.init() replaces sys.stdout with a
+                # wrapper, which confuses prompt_toolkit.
                 # We must reset to the raw stream to ensure Win32 APIs work.
                 if hasattr(sys, '__stdout__'):
                     sys.stdout = sys.__stdout__

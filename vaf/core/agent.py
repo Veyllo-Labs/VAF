@@ -1016,7 +1016,6 @@ class Agent:
     }
     
     REQUIRED_PACKAGES = {
-        "colorama": "colorama",
         "huggingface_hub": "huggingface_hub",
         "llama_cpp": "llama-cpp-python"
     }

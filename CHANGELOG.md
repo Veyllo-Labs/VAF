@@ -164,6 +164,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   unsupported `memory_embedding_model` value is refused with an error naming the supported
   ones. `transformers` (the voice turn judge's feature extractor) is declared explicitly.
 
+- **The web UI's top-level `styled-jsx` copy.** It was the leftover of a one-day Babel
+  experiment; Next.js keeps its own pinned copy.
+
 - The four per-channel listing tools `whatsapp_inbox`, `telegram_inbox`, `discord_inbox` and
   `mail_inbox`: one `inbox` tool with a channel filter lists every conversation from the same
   rows the inbox window shows. The per-channel read and search tools stay. The tool-output

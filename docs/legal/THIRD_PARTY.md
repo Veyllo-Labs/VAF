@@ -205,7 +205,6 @@ VAF Web UI is itself licensed AGPL-3.0-or-later (per `web/package.json`).
 | react-pdf | ^10.3.0 | MIT |
 | reactflow | ^11.11.4 | MIT |
 | remark-gfm | ^4.0.1 | MIT |
-| styled-jsx | ^5.1.7 | MIT |
 | tailwind-merge | ^2.2.0 | MIT |
 | zustand | ^5.0.10 | MIT |
 

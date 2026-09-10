@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+from vaf.core.security_events import log_security_event
 from vaf.core.contacts_store import (
     create_contact,
     delete_contact,
@@ -135,6 +136,11 @@ async def post_contact(request: Request, body: ContactCreate) -> Dict[str, Any]:
         role=body.role,
         tags=body.tags,
     )
+    # The flag is the one thing on a contact that opens a door: with it the contact talks
+    # to the agent's Front Office. Recorded in the security log like a channel pairing.
+    if contact and contact.get("allow_as_assistant_user"):
+        log_security_event("contact_access_changed", username=username, path=str(contact.get("id") or ""),
+                           detail=f"granted: {contact.get('name') or contact.get('id')}")
     return contact
 
 
@@ -170,9 +176,15 @@ async def patch_contact(contact_id: str, request: Request, body: ContactUpdate) 
         if not contact:
             raise HTTPException(status_code=404, detail="Contact not found")
         return contact
+    before = get_contact_by_id(contact_id, username, user_scope_id=user_scope_id) \
+        if "allow_as_assistant_user" in updates else None
     contact = update_contact(contact_id, username, user_scope_id=user_scope_id, **updates)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
+    if before is not None and bool(before.get("allow_as_assistant_user")) != bool(contact.get("allow_as_assistant_user")):
+        log_security_event("contact_access_changed", username=username, path=str(contact_id),
+                           detail=f"{'granted' if contact.get('allow_as_assistant_user') else 'revoked'}: "
+                                  f"{contact.get('name') or contact_id}")
     return contact
 
 

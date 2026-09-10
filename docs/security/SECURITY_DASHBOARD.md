@@ -46,7 +46,7 @@ and never takes the others down.
 | `firewall.docker` | `collect_docker_isolation` | ok / warn / null | The inner firewall: Docker network segmentation across all VAF containers, independent of LAN mode. `warn` when any published port binds off loopback (`0.0.0.0`/`::` is LAN exposure) ; also checks the sandbox is off the internal `vaf-network`. `null` when docker is unavailable (no phantom green). Which containers are looked at comes from the framework's service registry (`SERVICES` in `vaf/core/service_stack.py`, kept in step with the compose file by `tests/test_compose_service_registry_sync.py`), and the daemon probe and `docker inspect` call are the framework's too - this module used to carry its own copies of all three. |
 | `firewall.browser_engine` | `collect_browser_engine` -> `derive_browser_engine` | fresh / stale / null | Browser engine freshness: the `vaf-browser` IMAGE's age (resolved through the pinned container name, same helpers as the start-time age gate in `service_stack.py`) against `browser_image_max_age_days`, plus the live Chromium version from CDP's `/json/version` (best-effort). `stale` ambers the firewall card: the engine runs without current Chromium security fixes. `null` when unknowable (no docker, no container) - no phantom green. |
 | `isolation` | `get_admin_isolation_metrics` (vaf/memory/database.py) + `collect_workspace_metrics` | metrics / null | Per-scope memory/chunk counts, DB size, a live RAG latency probe, and per-user workspace folder sizes (bounded walk, `truncated` marks lower bounds). See "The owner DB lane" below. |
-| `channels` | `collect_channels_status` | ok / warn | Messenger ingress perimeter (telegram/whatsapp/discord): enabled state, paired sender counts, ingress policy mode, and today's `channel_rejected` counts. `warn` when any ENABLED channel runs in permissive mode; rejections happening is the perimeter working. |
+| `channels` | `collect_channels_status` | ok / warn | Messenger ingress perimeter (telegram/whatsapp/discord): enabled state, paired sender counts, ingress policy mode. `warn` when any ENABLED channel runs in permissive mode. Senders the agent refused to answer are not counted here: they are the channel's traffic, recorded in its inbound log (see the event log section). |
 | `guardrails` | `collect_guardrails_status` | ok | Gate flags from config, a permission-level inventory of the LIVE agent tool registry, and the persisted trust store (trusted dirs, allow-always tools). Deliberate call: `channel_tools_unrestricted=true` is surfaced as a warning row in the popup but never ambers the module, because it is the shipped default and a banner that is amber on every install teaches alarm fatigue. |
 | `skills` | `collect_skills_status` -> `derive_skills_status` | ok / warn / critical | Scan-level counts across all installed skills plus today's skill events. `critical` when a high-level skill is installed and not quarantined, `warn` on medium. An acknowledged medium is excluded from the banner state (`effective_worst`) but still shown truthfully in the counts and donut. |
 
@@ -95,8 +95,9 @@ Bridge back-channel are designed features (see
 ## The security event log
 
 `vaf/core/security_events.py` is the append-only audit log of blocked and
-rejected access attempts: who tried to reach VAF and was turned away. Two
-sinks are written together per event:
+rejected access attempts, who tried to reach VAF and was turned away, and of
+the doors opened on purpose: a messenger sender paired, a contact given
+assistant access. Two sinks are written together per event:
 
 - `security_events_<date>.jsonl`: structured source of truth, served by
   `GET /api/security/events`.
@@ -145,7 +146,9 @@ undeclared, undocumented here, or unlabelled in the dashboard.
 | `login_failed` | Wrong username/password on `/api/auth/login` | `vaf/api/auth_routes.py` |
 | `twofa_failed` | Wrong/expired 2FA code or temp token | `vaf/api/auth_routes.py` |
 | `ws_rejected` | Rejected NETWORK WebSocket handshake (IP/token); trusted-localhost paths do not emit | `vaf/core/web_server.py` (`_emit_sec_ws`) |
-| `channel_rejected` | Unauthorized messenger sender not answered at ingress; the event covers every rejection, and the message itself is kept for the owner's inbox where the lane keeps it (WhatsApp, Telegram, Discord DMs; a rejected Discord guild message is not kept). `channel` carries the platform, `username` the sender id | `vaf/api/telegram_bridge.py`, `whatsapp_bridge.py`, `discord_bridge.py` |
+| `channel_paired` | A sender was given access on a messenger channel: an owner number (WhatsApp whitelist), a Telegram whitelist or relay entry, the Discord admin, or a LID bound to an allowed number. `channel` carries the platform, `username` who changed it, `path` the paired id (so two changes seconds apart stay two events), `detail` the role and the id. A write that changes nothing (the same number, id or binding sent again) records nothing; a replaced owner number or Discord admin is one `channel_unpaired` for the old id and one `channel_paired` for the new | `vaf/api/whatsapp_routes.py` (whitelist add, lid-assign), `telegram_routes.py` (whitelist-add, relay-whitelist-add), `config_routes.py` (the Discord admin arrives through the generic config PATCH) |
+| `channel_unpaired` | A sender lost that access again; same fields | `vaf/api/whatsapp_routes.py` (whitelist remove), `telegram_routes.py` (relay-whitelist-remove), `config_routes.py` (Discord admin cleared) |
+| `contact_access_changed` | A contact's "can reach your assistant" flag was switched, so the contact may (or may no longer) talk to the agent's Front Office. `username` who changed it, `path` the contact id, `detail` the contact and the new state. Editing the endpoints of an already allowed contact is not an event | `vaf/api/contact_routes.py` (create, patch) |
 | `mail_high_risk_send_blocked` | Outgoing mail stopped as high-risk before sending | `vaf/tools/send_mail.py`, `reply_mail.py`, `manage_mail.py` |
 | `mail_image_proxy_blocked` | Remote image proxy refused a host | `vaf/api/mail_routes.py` |
 | `skill_blocked` | HIGH scan result stopped a skill install/update | `vaf/skills/scanner.py emit_skill_security_event`, called from the `create_skill`/`update_skill` tools and the WebUI editor/zip import |
@@ -169,13 +172,29 @@ Unknown kinds pass through; the registry is a contract for consumers, not a
 validation gate. Auditing must never drop an event because bookkeeping
 disagrees - the guard, not the writer, is what keeps the contract true.
 
+**Not a security event: a messenger sender the agent refused to answer.** Every
+drop at ingress used to be mirrored here as `channel_rejected`. The only reason
+the ingress policy ever refuses is `not_paired`, so the kind meant "someone who
+is not paired wrote to the agent's number", which on a number that receives
+ordinary WhatsApp traffic is the everyday case and the message is kept for the
+owner's inbox on purpose. As a security event it lit the alert dot on every
+stranger's message and buried the login failures and skill blocks between
+hundreds of identical lines. The drop is recorded in the channel's own inbound
+lane instead, `<channel>_inbound_<date>.log` (`log_helper.log_channel_inbound`
+with `always=True`): written with debug logging off too, one line per sender
+and `channel_ingress_policy.throttle_seconds`, 48-hour retention like every
+channel log. "The sender gets no reply" still never means "the attempt goes
+unrecorded". What does belong here from the channels is the other direction of
+the same perimeter, the pairing kinds above: who was let in, by whom, when.
+
 Read endpoints (both admin-gated):
 
 - `GET /api/security/events?date=YYYY-MM-DD&limit=N`: structured events for a
   day, oldest first. Backs the firewall detail popup.
 - `GET /api/security/alert-count`: cheap poll returning today's event count and
   the newest timestamp. Every entry in the log is a rejected/blocked/failed
-  attempt, so all count. Drives the sidebar unread dot.
+  attempt or a door opened on purpose (a pairing), so all count. Drives the
+  sidebar unread dot.
 
 ---
 

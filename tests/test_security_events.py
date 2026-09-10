@@ -93,12 +93,12 @@ def test_firewall_summary_and_derivation():
 
 
 def test_channel_field_and_per_sender_throttle(tmp_path, monkeypatch):
-    """channel_rejected events carry the channel; two different senders on the
-    same channel must BOTH be recorded (throttle is per sender, not per kind)."""
+    """Channel events carry the channel; two different actors on the same channel must
+    BOTH be recorded (throttle is per source, not per kind)."""
     _fresh(tmp_path, monkeypatch)
-    se.log_security_event("channel_rejected", channel="telegram", username="1111", detail="text/not_paired")
-    se.log_security_event("channel_rejected", channel="telegram", username="2222", detail="text/not_paired")
-    se.log_security_event("channel_rejected", channel="telegram", username="1111", detail="text/not_paired")  # throttled
+    se.log_security_event("channel_paired", channel="telegram", username="1111", detail="owner 42")
+    se.log_security_event("channel_paired", channel="telegram", username="2222", detail="owner 42")
+    se.log_security_event("channel_paired", channel="telegram", username="1111", detail="owner 42")  # throttled
 
     day = datetime.now().strftime("%Y-%m-%d")
     events = se.read_security_events(day)

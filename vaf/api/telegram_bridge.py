@@ -141,8 +141,11 @@ def _drop_unauthorized_telegram(
         _store_telegram_message("admin", chat_id, body, "in", content_type=message_kind if message_kind in ("voice", "photo", "document") else "text",
                                 message_id=str(getattr(msg, "message_id", "") or "") or None)
     policy = Config.get("channel_ingress_policy")
-    should_log = should_log_unauthorized("telegram", uid, policy)
-    if should_log:
+    # One REJECT line per sender and throttle window in the channel's own inbound log,
+    # written with debug logging off too: the sender gets no reply, so this is the only
+    # trace of the attempt. Not a security event: a stranger writing to the bot is the
+    # channel's everyday traffic (the message is kept for the owner above).
+    if should_log_unauthorized("telegram", uid, policy):
         logger.warning(
             "Dropped unauthorized Telegram %s message from user_id=%s chat_id=%s reason=%s",
             message_kind,
@@ -150,15 +153,12 @@ def _drop_unauthorized_telegram(
             str(chat_id or ""),
             reason,
         )
-    # Security-event mirror (dashboard + security_<date>.log). Its writer has its
-    # own per-sender throttle - do NOT call should_log_unauthorized again (it is
-    # stateful and a second call would consume the log throttle window).
-    try:
-        from vaf.core.security_events import log_security_event
-        log_security_event("channel_rejected", channel="telegram", username=uid,
-                           detail=f"{message_kind}/{reason}")
-    except Exception:
-        pass
+        try:
+            from vaf.core.log_helper import log_channel_inbound
+            log_channel_inbound("telegram", f"REJECT {reason} user_id={uid} chat_id={str(chat_id or '')} kind={message_kind}",
+                                always=True)
+        except Exception:
+            pass
 
 
 def _whitelist_lookup(telegram_user_id: str) -> Optional[Dict[str, Any]]:

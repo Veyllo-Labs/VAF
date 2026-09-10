@@ -1492,7 +1492,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             return
         # A status update, a newsletter post or a broadcast list is not a sender that could
         # ever be paired; dropping it here keeps it out of the store, the activity and the
-        # security log (live: "channel_rejected user=status@broadcast" every few minutes).
+        # inbound log (live: a REJECT for status@broadcast every few minutes).
         _fj = str(from_jid or "")
         if _fj == "status@broadcast" or _fj.endswith("@newsletter") or _fj.endswith("@broadcast") or _fj.endswith("@g.us"):
             try:
@@ -1587,26 +1587,31 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             contact_match=contact_allow,
             conversation_match=conversation_allow,
         )
+        # An unresolved @lid is not a phone number, so no whitelist or contact can match it;
+        # the note rides on the one REJECT line below instead of being a second line.
+        lid_note = ""
         if (from_jid or "").endswith("@lid") and not from_e164 and not resolved_e164_from_config and not policy_allowed:
+            lid_note = " unresolved @lid (not in whitelist/contacts; assign the LID to a number in the dashboard)"
             try:
-                from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
-                log_whatsapp_inbound(f"REJECT unresolved @lid from={from_jid} (not in whitelist/contacts; LID is not a phone number)")
+                from vaf.core.log_helper import log_whatsapp_qr
                 log_whatsapp_qr(f"[inbound] REJECT unresolved @lid from={from_jid} (not in whitelist/contacts)")
             except Exception:
                 pass
         if not policy_allowed:
             from_digits = _phone_digits_canonical(from_jid or "") or (_phone_digits_canonical(from_e164 or "") if from_e164 else "")
             try:
-                from vaf.core.log_helper import log_whatsapp_inbound, log_whatsapp_qr
-                log_whatsapp_inbound(
-                    f"REJECT not_paired from={from_jid} allowed_count={len(allowed_phones)} reason={policy_reason}"
-                )
+                from vaf.core.log_helper import log_channel_inbound, log_whatsapp_qr
                 log_whatsapp_qr(
                     f"[inbound] REJECT from={from_jid} from_digits={from_digits or '?'} allowed_count={len(allowed_phones)} reason={policy_reason}"
                 )
             except Exception:
                 pass
             sender_for_throttle = str(from_jid or from_e164 or "")
+            # One REJECT line per sender and throttle window, written with debug logging off
+            # too: the sender gets no reply, so this is the only trace of the attempt. It is
+            # the channel's log and not a security event, because a stranger writing to the
+            # agent's number is everyday traffic here (the message is kept for the owner
+            # below); as a security event it lit the alert dot on every such message.
             if should_log_unauthorized("whatsapp", sender_for_throttle, ingress_policy):
                 logger.warning(
                     "WhatsApp: dropped unauthorized inbound from=%s reason=%s explicit=%s contact=%s",
@@ -1615,14 +1620,14 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                     explicit_allow,
                     contact_allow,
                 )
-            # Security-event mirror (dashboard + security_<date>.log); own throttle,
-            # never raises (sync daemon-thread context).
-            try:
-                from vaf.core.security_events import log_security_event
-                log_security_event("channel_rejected", channel="whatsapp",
-                                   username=sender_for_throttle, detail=str(policy_reason or "not_paired"))
-            except Exception:
-                pass
+                try:
+                    log_channel_inbound(
+                        "whatsapp",
+                        f"REJECT not_paired from={from_jid} allowed_count={len(allowed_phones)} reason={policy_reason}{lid_note}",
+                        always=True,
+                    )
+                except Exception:
+                    pass
             # The policy decides whether the AGENT reacts, not whether the OWNER may read
             # their own number's mail: the message is kept in the store like any other
             # inbound (the dashboard shows the chat as read-only, the inbox tools read it,

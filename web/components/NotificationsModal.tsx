@@ -152,7 +152,6 @@ type SecurityEvent = {
 type ChannelsStatus = {
   state: 'ok' | 'warn';
   any_permissive: boolean;
-  rejected_today: number;
   channels: {
     name: string;
     enabled: boolean;
@@ -160,7 +159,6 @@ type ChannelsStatus = {
     contact_fallback: boolean;
     paired: number;
     last_ts: number | null;
-    rejected_today: number;
   }[];
 };
 
@@ -341,6 +339,8 @@ const DOMAIN_COLOR: Record<string, string> = {
   whatsapp_qr:      'bg-emerald-500',
   whatsapp_inbound: 'bg-teal-500',
   whatsapp_reply:   'bg-green-600',
+  telegram_inbound: 'bg-sky-600',
+  discord_inbound:  'bg-violet-600',
 };
 
 // ─── Tool category (vertical list) ────────────────────────────────────────────
@@ -1431,7 +1431,9 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
       case 'login_failed': return t('ovEvLogin');
       case 'twofa_failed': return t('ovEv2fa');
       case 'ws_rejected': return t('ovEvWs');
-      case 'channel_rejected': return t('ovEvChannel');
+      case 'channel_paired': return t('ovEvChannelPaired');
+      case 'channel_unpaired': return t('ovEvChannelUnpaired');
+      case 'contact_access_changed': return t('ovEvContactAccess');
       case 'mail_high_risk_send_blocked': return t('ovEvMailSend');
       case 'mail_image_proxy_blocked': return t('ovEvMailImage');
       case 'skill_blocked': return t('ovEvSkillBlocked');
@@ -1637,7 +1639,6 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
   // of one number, and they must never disagree on the screen.
   const blockedToday =
     (firewall ? firewall.blocked_today + firewall.failed_logins_today : 0)
-    + (channels ? channels.rejected_today : 0)
     + (skills ? skills.blocked_today + skillOverridesToday + skillAlertsToday : 0)
     + (content ? content.blocked_today + content.flagged_today : 0);
   const eventsNeedAttention = skillOverridesToday > 0 || skillAlertsToday > 0
@@ -1804,7 +1805,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
               dot: !channels ? C.textFaint : channels.state === 'warn' ? '#f59e0b' : '#22c55e',
               status: !channels ? noData
                 : channels.state === 'warn' ? t('ovChPermissive')
-                  : t('ovChLocked', { n: channels.rejected_today }),
+                  : t('ovChLocked'),
               statusColor: !channels ? C.textDim : channels.state === 'warn' ? amber : green,
             },
             {
@@ -2655,31 +2656,11 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
                               ch.mode,
                               `${ch.paired} ${t('ovChPaired')}`,
                               ch.last_ts ? `${t('ovChLastUsed')}${tCommon('labelSeparator')}${new Date(ch.last_ts * 1000).toLocaleString(locale, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : null,
-                              ch.rejected_today > 0 ? `${ch.rejected_today}${tCommon('unitSeparator')}${t('ovChRejectedUnit')}` : null,
                             ].filter(Boolean).join(' · ')
                           : t('ovOff');
                         const okDot = !ch.enabled ? null : ch.mode === 'permissive' ? false : true;
                         return factRow(label, parts, okDot);
                       })}
-                      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: C.textFaint, fontWeight: 600, margin: '12px 0 4px' }}>{t('ovChRejectedSenders')}</div>
-                      {secEvents === null ? (
-                        <div style={{ fontSize: 11, color: C.textDim, padding: '6px 0' }}>{t('loading')}</div>
-                      ) : (() => {
-                        const chEvents = secEvents.filter(ev => ev.kind === 'channel_rejected');
-                        return chEvents.length === 0 ? (
-                          <div style={{ fontSize: 11, color: C.textDim, padding: '6px 0' }}>{t('ovChNoRejected')}</div>
-                        ) : (
-                          [...chEvents].reverse().map((ev, i) => (
-                            <div key={`${ev.ts}-${i}`} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '5px 0', borderBottom: `1px solid ${C.borderFaint}` }}>
-                              <span style={{ fontFamily: 'monospace', fontSize: 10, color: C.textFaint, flexShrink: 0 }}>{(ev.ts || '').slice(11, 19)}</span>
-                              <span style={{ fontSize: 11.5, color: C.textStrong, fontWeight: 600, flexShrink: 0 }}>{ev.channel ?? '?'}</span>
-                              <span style={{ fontFamily: 'monospace', fontSize: 10.5, color: C.textMid, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {[ev.username, ev.detail].filter(Boolean).join(' · ')}
-                              </span>
-                            </div>
-                          ))
-                        );
-                      })()}
                       <button
                         type="button"
                         disabled={!securityLogFile}
@@ -2891,9 +2872,8 @@ export default function NotificationsModal({
     if (!s) return 0;
     if (typeof s.security_events_today === 'number') return s.security_events_today;
     const fw = s.firewall ? s.firewall.blocked_today + s.firewall.failed_logins_today : 0;
-    const ch = s.channels ? s.channels.rejected_today : 0;
     const sk = s.skills ? s.skills.blocked_today + s.skills.overrides_today + s.skills.alerts_today : 0;
-    return fw + ch + sk;
+    return fw + sk;
   })();
   const securityLogFilename = logFiles.find(f => f.domain === 'security')?.filename;
   // UNREAD gate: the badge/pulse only shows while there is a security event

@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
+from vaf.core.security_events import log_security_event
 from vaf.core.messaging_connections import whatsapp_session_id
 
 logger = logging.getLogger("vaf.api.whatsapp")
@@ -1182,10 +1183,14 @@ async def remove_whitelist_entry(request: Request, body: WhitelistAddRequest):
         entry = next((e for e in whitelist if isinstance(e, dict) and str(e.get("phone_number", "")).strip() == phone), None)
         if entry and str(entry.get("user_scope_id")) != str(user_scope_id):
             raise HTTPException(status_code=403, detail="You can only remove your own whitelist entry.")
+    before = len(whitelist)
     whitelist = [e for e in whitelist if not (isinstance(e, dict) and str(e.get("phone_number", "")).strip() == phone)]
     wc["whitelist"] = whitelist
     config["whatsapp_config"] = wc
     Config.save(config)
+    if len(whitelist) < before:
+        log_security_event("channel_unpaired", channel="whatsapp", username=str(user_info.get("username") or ""),
+                           path=phone, detail=f"owner {phone}")
     return {"status": "removed", "message": "Whitelist entry removed.", "whitelist_count": len(whitelist)}
 
 
@@ -1224,10 +1229,23 @@ async def add_whitelist_entry(request: Request, body: WhitelistAddRequest):
         if isinstance(e, dict) and (
             str(e.get("user_scope_id")) == str(user_scope_id) or e.get("vaf_username") == vaf_username
         ):
+            old_phone = str(e.get("phone_number") or "").strip()
+            unchanged = (old_phone == phone and str(e.get("user_scope_id")) == str(user_scope_id)
+                         and e.get("vaf_username") == vaf_username)
             whitelist[i] = {**e, "phone_number": phone, "user_scope_id": user_scope_id, "vaf_username": vaf_username}
             wc["whitelist"] = whitelist
             config["whatsapp_config"] = wc
             Config.save(config)
+            # The same number registered again changes nothing and records nothing. A new
+            # number for this account is two changes: the old number lost the owner's
+            # access, the new one gained it (`path` keeps them apart in the throttle).
+            if not unchanged:
+                who = str(user_info.get("username") or "")
+                if old_phone and old_phone != phone:
+                    log_security_event("channel_unpaired", channel="whatsapp", username=who, path=old_phone,
+                                       detail=f"owner {old_phone}")
+                log_security_event("channel_paired", channel="whatsapp", username=who, path=phone,
+                                   detail=f"owner {phone} for {vaf_username}")
             return {"status": "updated", "message": "Whitelist entry updated."}
     whitelist.append({
         "phone_number": phone,
@@ -1239,6 +1257,11 @@ async def add_whitelist_entry(request: Request, body: WhitelistAddRequest):
         wc["enabled"] = True
     config["whatsapp_config"] = wc
     Config.save(config)
+    # The owner number is the one sender that gets the agent's full tool set: recorded
+    # in the security log whoever registered it, so the log answers "who may talk to
+    # the agent, and since when" rather than only "who was turned away".
+    log_security_event("channel_paired", channel="whatsapp", username=str(user_info.get("username") or ""),
+                       path=phone, detail=f"owner {phone} for {vaf_username}")
     return {"status": "added", "message": "Whitelist entry added."}
 
 
@@ -1258,10 +1281,17 @@ async def assign_lid_to_number(request: Request, body: LidAssignRequest):
     if not isinstance(wc, dict):
         wc = {}
     lid_map = dict(wc.get("lid_to_e164") or {})
+    previous = str(lid_map.get(lid_jid) or "").strip()
     lid_map[lid_jid] = phone
     wc["lid_to_e164"] = lid_map
     config["whatsapp_config"] = wc
     Config.save(config)
+    # Binding a LID chat to an allowed number gives that chat the number's access; the
+    # same binding written again changes nothing and records nothing.
+    if previous != phone:
+        log_security_event("channel_paired", channel="whatsapp",
+                           username=str(get_current_vaf_user(request).get("username") or ""),
+                           path=lid_jid, detail=f"lid {lid_jid} as {phone}" + (f" (was {previous})" if previous else ""))
     return {"status": "assigned", "message": f"LID {lid_jid} assigned to {phone}. Bridge will accept messages from this chat.", "lid_jid": lid_jid, "phone_number": phone}
 
 

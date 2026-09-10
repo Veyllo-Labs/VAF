@@ -149,7 +149,7 @@ Request -> RateLimitMiddleware -> IPValidationMiddleware -> AuthMiddleware -> Se
 
 Rejections from the layers above are recorded in an always-on security event log (independent of `debug_logs_enabled`; the writer never raises and never slows the request path):
 
-- **Recorded kinds** (`vaf/core/security_events.py`): `ip_blocked` (Layer 2 403), `unauthenticated_blocked` and `token_rejected` (Layer 3 401s), `login_failed` and `twofa_failed` (failed login/2FA attempts), `ws_rejected` (rejected WebSocket handshakes), and `channel_rejected` (unauthorized messenger senders).
+- **Recorded kinds** (`vaf/core/security_events.py`): `ip_blocked` (Layer 2 403), `unauthenticated_blocked` and `token_rejected` (Layer 3 401s), `login_failed` and `twofa_failed` (failed login/2FA attempts), and `ws_rejected` (rejected WebSocket handshakes). The messenger pairing kinds and the rest of the registry are listed in [SECURITY_DASHBOARD.md](../security/SECURITY_DASHBOARD.md); a messenger sender the agent refused to answer is channel traffic, recorded in that channel's inbound log, not here.
 - **Sinks**: each event is appended to `security_events_<date>.jsonl` (structured) and mirrored human-readably to `security_<date>.log` (the "security" domain in the Logs file rail).
 - **Throttle**: a per-source throttle (kind + ip + username + channel, 5s) prevents floods without letting distinct sources swallow each other's events.
 - **Never logged**: passwords, 2FA codes, or tokens - only the event kind, source, and a short detail.

@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel
 
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
+from vaf.core.security_events import log_security_event
 
 logger = logging.getLogger("vaf.api.telegram")
 
@@ -186,6 +187,7 @@ async def whitelist_add(
 
     # Avoid duplicate telegram_user_id
     telegram_user_id = body.telegram_user_id.strip()
+    previous = next((e for e in whitelist if isinstance(e, dict) and str(e.get("telegram_user_id")) == telegram_user_id), None)
     whitelist = [e for e in whitelist if str(e.get("telegram_user_id")) != telegram_user_id]
 
     entry = {
@@ -201,6 +203,12 @@ async def whitelist_add(
         config["telegram_config"] = {}
     config["telegram_config"]["whitelist"] = whitelist
     Config.save(config)
+    # A whitelisted Telegram user talks to the agent as the owner, with the full tool set.
+    # The same pairing sent again (same id for the same account) changes nothing and
+    # records nothing; a re-pairing to another account is a change.
+    if _pairing_changed(previous, entry):
+        log_security_event("channel_paired", channel="telegram", username=str(current_user.get("username") or ""),
+                           path=telegram_user_id, detail=f"owner {telegram_user_id}")
 
     return {"status": "ok", "whitelist_count": len(whitelist)}
 
@@ -440,6 +448,15 @@ class RelayWhitelistAddRequest(BaseModel):
     telegram_username: Optional[str] = None
 
 
+def _pairing_changed(previous: Optional[Dict[str, Any]], entry: Dict[str, Any]) -> bool:
+    """Whether a whitelist write moved a Telegram id's access: no entry before, or the
+    entry belonged to another account. A display name is not access."""
+    if not previous:
+        return True
+    return (str(previous.get("user_scope_id") or ""), str(previous.get("vaf_username") or "")) != \
+        (str(entry.get("user_scope_id") or ""), str(entry.get("vaf_username") or ""))
+
+
 @router.post("/relay-whitelist-add")
 async def relay_whitelist_add(request: Request, body: RelayWhitelistAddRequest):
     """Add a contact who can only relay messages to the main user (no tools, safe replies only)."""
@@ -451,16 +468,22 @@ async def relay_whitelist_add(request: Request, body: RelayWhitelistAddRequest):
     telegram_config = config.get("telegram_config") or {}
     if not isinstance(telegram_config, dict):
         telegram_config = {}
+    previous = next((e for e in (telegram_config.get("relay_whitelist") or [])
+                     if isinstance(e, dict) and str(e.get("telegram_user_id")) == telegram_user_id), None)
     relay_whitelist = [e for e in (telegram_config.get("relay_whitelist") or []) if str(e.get("telegram_user_id")) != telegram_user_id]
-    relay_whitelist.append({
+    entry = {
         "telegram_user_id": telegram_user_id,
         "telegram_username": (body.telegram_username or "").strip() or None,
         "user_scope_id": current_user["user_scope_id"],
         "vaf_username": current_user["username"],
-    })
+    }
+    relay_whitelist.append(entry)
     telegram_config["relay_whitelist"] = relay_whitelist
     config["telegram_config"] = telegram_config
     Config.save(config)
+    if _pairing_changed(previous, entry):
+        log_security_event("channel_paired", channel="telegram", username=str(current_user.get("username") or ""),
+                           path=telegram_user_id, detail=f"relay {telegram_user_id}")
     return {"status": "ok", "relay_whitelist_count": len(relay_whitelist)}
 
 
@@ -575,6 +598,7 @@ async def relay_whitelist_remove(request: Request, body: WhitelistAddRequest):
     telegram_config = config.get("telegram_config") or {}
     if not isinstance(telegram_config, dict):
         telegram_config = {}
+    before = len(telegram_config.get("relay_whitelist") or [])
     relay_whitelist = []
     for e in (telegram_config.get("relay_whitelist") or []):
         if str(e.get("telegram_user_id") or "").strip() != telegram_user_id:
@@ -590,6 +614,9 @@ async def relay_whitelist_remove(request: Request, body: WhitelistAddRequest):
     telegram_config["relay_whitelist"] = relay_whitelist
     config["telegram_config"] = telegram_config
     Config.save(config)
+    if len(relay_whitelist) < before:
+        log_security_event("channel_unpaired", channel="telegram", username=str(current_user.get("username") or ""),
+                           path=telegram_user_id, detail=f"relay {telegram_user_id}")
     return {"status": "ok", "relay_whitelist_count": len(relay_whitelist)}
 
 

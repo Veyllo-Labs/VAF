@@ -180,7 +180,8 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 def security_alert_count(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Cheap poll for the sidebar Logs notification dot: how many security
     events were recorded today and the timestamp of the newest one. Every entry
-    in the security log is a rejected/blocked/failed attempt, so all count.
+    in the security log is a rejected/blocked/failed attempt or a door opened on
+    purpose (a pairing), so all count.
     The frontend compares latest_ts against a per-user 'last seen' marker to
     show an UNREAD dot that clears when the Logs window is opened."""
     today = datetime.now().strftime("%Y-%m-%d")
@@ -321,25 +322,23 @@ def collect_browser_engine() -> Optional[Dict[str, Any]]:
 _CHANNELS = ("telegram", "whatsapp", "discord")
 
 
-def derive_channels_status(channels: List[Dict[str, Any]],
-                           rejected_by_channel: Dict[str, int]) -> Dict[str, Any]:
+def derive_channels_status(channels: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Pure derivation of the channel-perimeter module.
 
     Input per channel: {name, enabled, paired, last_ts, mode, contact_fallback}.
     warn when any ENABLED channel runs in permissive mode (everyone may reach
     the agent) - that answers the owner's core question "is someone unauthorized
-    able to talk to the bot?". Rejections happening is the perimeter WORKING
-    (ok, with counts).
+    able to talk to the bot?". The module reads the posture only: senders the
+    agent refused to answer are the channel's traffic, recorded in its inbound
+    log, and are not counted here (they used to be, which made every stranger's
+    message a number on the security dashboard).
     """
     out_channels: List[Dict[str, Any]] = []
     any_permissive = False
-    total_rejected = 0
     for ch in channels:
         name = str(ch.get("name") or "")
         enabled = bool(ch.get("enabled"))
         mode = str(ch.get("mode") or "paired_only")
-        rejected = int(rejected_by_channel.get(name, 0))
-        total_rejected += rejected
         if enabled and mode == "permissive":
             any_permissive = True
         out_channels.append({
@@ -349,18 +348,16 @@ def derive_channels_status(channels: List[Dict[str, Any]],
             "contact_fallback": bool(ch.get("contact_fallback")),
             "paired": int(ch.get("paired") or 0),
             "last_ts": ch.get("last_ts"),
-            "rejected_today": rejected,
         })
     return {
         "state": "warn" if any_permissive else "ok",
         "any_permissive": any_permissive,
-        "rejected_today": total_rejected,
         "channels": out_channels,
     }
 
 
 def collect_channels_status() -> Dict[str, Any]:
-    """Read messenger configs + today's channel_rejected events and derive."""
+    """Read the messenger configs and derive the perimeter posture."""
     channels: List[Dict[str, Any]] = []
     try:
         from vaf.core.config import Config
@@ -397,13 +394,7 @@ def collect_channels_status() -> Dict[str, Any]:
             })
     except Exception:
         pass
-    today = datetime.now().strftime("%Y-%m-%d")
-    rejected: Dict[str, int] = {}
-    for ev in read_security_events(today, limit=1000):
-        if ev.get("kind") == "channel_rejected":
-            ch = str(ev.get("channel") or "")
-            rejected[ch] = rejected.get(ch, 0) + 1
-    return derive_channels_status(channels, rejected)
+    return derive_channels_status(channels)
 
 
 # ── Skills scanned / threats blocked ─────────────────────────────────────────

@@ -13,6 +13,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **The security log records who was let in.** Registering an owner number for WhatsApp,
+  binding a LID chat to an allowed number, adding a Telegram whitelist or relay entry,
+  setting the Discord admin, and switching a contact's "can reach your assistant" flag are
+  security events now (`channel_paired`, `channel_unpaired`, `contact_access_changed`),
+  with who made the change and what changed. Removing an entry is recorded the same way.
 - **The inbox, first the ground under it.** The channel message store keeps the person's own
   state per chat next to the messages (`chat_marks`: when they last opened it, when they
   marked it done, when the agent asked them about it), answers every conversation list from
@@ -157,6 +162,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **A stranger's message is no longer a security event.** Every messenger sender the
+  agent refused to answer was mirrored into the security log as `channel_rejected`, and
+  since the only reason the ingress policy ever refuses is "not paired", that meant every
+  ordinary WhatsApp message from someone not on the whitelist lit the red dot on the Logs
+  button and pushed the real signals (failed logins, refused tokens, blocked skills) down
+  between hundreds of identical lines. The drop is now recorded in the channel's own
+  inbound log (`whatsapp_inbound`, `telegram_inbound`, `discord_inbound`), written with
+  debug logging off too, one line per sender and throttle window. The Overview's channel
+  module shows the perimeter's posture (enabled, mode, paired senders) and no longer
+  counts or lists rejected senders; those chats sit in the channel windows and the inbox.
 - **A contact's appointments are calendar events.** "Termin hinzufügen" in the contact
   window creates an event of the user's calendar linked to the contact, with a reminder;
   the contact's card, `get_contact`, the Front Office block and the timeline read them

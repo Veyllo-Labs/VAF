@@ -14,7 +14,7 @@ Who may write IN is decided per message, in this order:
 | your **registered main-user number** (`whatsapp_config.whitelist` entry for your VAF account) | `explicit_pair` | full chat, like Telegram: all tools, session `whatsapp_<user>_<digits>` |
 | a **contact** with "Can reach your assistant" | `contact_fallback` (policy permitting) | Front Office (restricted tools, dedicated prompt); learns into the chat's own memory namespace |
 | a number **your agent wrote to** inside the reply window (`reply_window_hours`, default 72) | `open_conversation` | Front Office; the prompt says there is no contact record and that the agent started the conversation; learns into the chat's own memory namespace |
-| anyone else | `not_paired` | not answered: the message is stored for you (the dashboard shows the chat as read-only, the inbox tools read it), no agent run, security event `channel_rejected`. You can answer such a chat yourself from the dashboard, with or without a draft from the Composer (see Dashboard) |
+| anyone else | `not_paired` | not answered: the message is stored for you (the dashboard shows the chat as read-only, the inbox tools read it), no agent run, one `REJECT` line in `whatsapp_inbound.log` per sender and throttle window (written with debug logging off too; not a security event, a stranger writing to the agent's number is everyday traffic). You can answer such a chat yourself from the dashboard, with or without a draft from the Composer (see Dashboard) |
 
 Registering your own number is optional. Without it the agent is **outbound only**: `send_whatsapp(to_phone=...)` and contact conversations work, but `send_to_user` and `main_messenger = whatsapp` have no endpoint. Each VAF user links their own account; there is no shared credential set (two Baileys sockets on one credential set evict each other).
 
@@ -194,14 +194,14 @@ If the agent wrote to a "number" that is a long digit string and not a real phon
 
 **Logs to check:** Under the VAF log directory (e.g. `logs/` in the project, or `Platform.data_dir()/logs`), see:
 
-- **whatsapp_inbound.log** – each inbound message: `ACCEPT`, `REJECT`, `REJECT unresolved @lid`, `SELF_CHAT`, etc.
-- **whatsapp_qr.log** – QR flow and bridge events.
+- **whatsapp_inbound.log**: each inbound message: `ACCEPT`, `REJECT not_paired` (with `unresolved @lid` appended when the sender is a LID no number is known for), `SELF_CHAT`, etc. The `REJECT` line is written even with debug logging off, one per sender and throttle window; the rest of the lane needs it on.
+- **whatsapp_qr.log**: QR flow and bridge events.
 
-Search for `from=…@lid` or `REJECT unresolved @lid` to confirm rejections. New messages from unknown LIDs are rejected unless you add a manual mapping (see below).
+Search for `from=…@lid` or `unresolved @lid` to confirm rejections. New messages from unknown LIDs are rejected unless you add a manual mapping (see below).
 
 ### Troubleshooting: Bot doesn't reply to a contact (e.g. Bob) – REJECT unresolved @lid
 
-If a **known** Front Office contact (e.g. Bob) uses a chat that WhatsApp sends as **@lid** (e.g. `123456789012345@lid`) and the Node never sends `fromE164`, the bridge **rejects** their messages (`REJECT unresolved @lid from=123456789012345@lid`). To allow that contact again, add a **manual LID→E.164 mapping** in config so the bridge can treat that LID as their phone number:
+If a **known** Front Office contact (e.g. Bob) uses a chat that WhatsApp sends as **@lid** (e.g. `123456789012345@lid`) and the Node never sends `fromE164`, the bridge **rejects** their messages (`REJECT not_paired from=123456789012345@lid ... unresolved @lid` in `whatsapp_inbound.log`). To allow that contact again, add a **manual LID→E.164 mapping** in config so the bridge can treat that LID as their phone number:
 
 1. In **whatsapp_inbound.log** note the rejected JID (e.g. `123456789012345@lid`).
 2. In your VAF config (`~/.vaf/config.json` or `%APPDATA%\\vaf\\config.json`), under `whatsapp_config`, add or extend `lid_to_e164` with that JID as key and the contact’s **real E.164 number** (as in Front Office) as value. Example: `"lid_to_e164": { "123456789012345@lid": "+491702345678" }` (use Bob’s actual number from Contacts).
@@ -317,7 +317,7 @@ Whisper returns the detected language in the STT response. VAF uses it to:
 ### Incoming Messages
 
 1. **Node** emits a JSON line: `{ "type": "message", "from": "<jid>", "body": "...", "voice_path": "<path or omit>", "fromE164": "+49...", "selfChat": false, ... }`.
-2. **Python** (`_dispatch_bridge_event`): Drops `selfChat` messages first (the linked account is the agent), then anything that is not a person (`status@broadcast`, `@newsletter`, `@broadcast`, groups; the Node already filters these, Python once more) before the ingress decision, so such posts never become rejected-sender security events. Then resolves the sender against the registered main-user number (`explicit_pair`), the reply window (`open_conversation`: the store holds an outbound message to this number inside `reply_window_hours`) and Front Office contacts (`contact_fallback`), through `channel_ingress_policy.evaluate_ingress`. A rejected sender is logged and mirrored as a security event; the message is stored for the owner like an accepted one (same chat key, name and message id), and nothing runs on it.
+2. **Python** (`_dispatch_bridge_event`): Drops `selfChat` messages first (the linked account is the agent), then anything that is not a person (`status@broadcast`, `@newsletter`, `@broadcast`, groups; the Node already filters these, Python once more) before the ingress decision, so such posts never become `REJECT` lines. Then resolves the sender against the registered main-user number (`explicit_pair`), the reply window (`open_conversation`: the store holds an outbound message to this number inside `reply_window_hours`) and Front Office contacts (`contact_fallback`), through `channel_ingress_policy.evaluate_ingress`. A rejected sender gets one `REJECT` line in `whatsapp_inbound.log` (written with debug logging off too, one per sender and throttle window) and no security event; the message is stored for the owner like an accepted one (same chat key, name and message id), and nothing runs on it.
 3. **Voice**: If `voice_path` is set and `body === "<voice>"`, Python transcribes the file and replaces `body` with the transcript (or `<media:audio>` on failure); stores language in `_voice_reply_pending` for TTS reply.
 
 #### LID (Linked ID)

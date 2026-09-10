@@ -6,8 +6,13 @@ Append-only security event log: blocked/rejected access attempts.
 
 This is the network/auth slice of the dashboard's "gate events" audit log: who
 tried to reach VAF and was turned away (non-LAN IPs, tokenless or invalid-token
-LAN requests, failed logins/2FA, rejected WebSocket handshakes). Two sinks per
-event, written together:
+LAN requests, failed logins/2FA, rejected WebSocket handshakes), and who was let
+in through a door that stays open (a messenger sender paired, a contact given
+assistant access). Not in here: a messenger sender the agent refused to answer.
+That is the channel's everyday traffic, recorded in the channel's own inbound
+log (log_helper.log_channel_inbound); as a security event it lit the alert dot
+on every stranger's message and buried the real signals. Two sinks per event,
+written together:
 
 - ``security_events_<date>.jsonl`` - structured source of truth for the
   Overview dashboard (``GET /api/security/events``).
@@ -58,8 +63,17 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "login_failed": "Wrong username or password on /api/auth/login",
     "twofa_failed": "Wrong or expired 2FA code or temp token",
     "ws_rejected": "Rejected network WebSocket handshake (IP/token)",
-    "channel_rejected": "Unauthorized messenger sender dropped at ingress; "
-                        "`channel` carries the platform, `username` the sender id",
+    # messenger pairing: who may talk to the agent (the drops themselves are channel traffic)
+    "channel_paired": "A sender was given access on a messenger channel: an owner number, a "
+                      "Telegram whitelist or relay entry, the Discord admin, or a LID bound to "
+                      "an allowed number. `channel` carries the platform, `username` who changed "
+                      "it, `path` the paired id (so two changes seconds apart stay two events), "
+                      "`detail` the role and the id. A write that changes nothing records nothing",
+    "channel_unpaired": "A sender lost that access again; same fields",
+    "contact_access_changed": "A contact's 'can reach your assistant' flag was switched, so the "
+                              "contact may (or may no longer) talk to the agent's Front Office; "
+                              "`username` who changed it, `path` the contact id, `detail` the "
+                              "contact and the new state",
     # mail
     "mail_high_risk_send_blocked": "Outgoing mail stopped as high-risk before sending",
     "mail_image_proxy_blocked": "Remote image proxy refused a host",

@@ -165,15 +165,16 @@ def test_channels_status_derivation():
         {"name": "whatsapp", "enabled": True, "paired": 1, "last_ts": None, "mode": "permissive", "contact_fallback": False},
         {"name": "discord", "enabled": False, "paired": 0, "last_ts": None, "mode": "permissive", "contact_fallback": False},
     ]
-    out = derive_channels_status(channels, {"telegram": 2, "whatsapp": 1})
+    out = derive_channels_status(channels)
     # an ENABLED permissive channel -> warn; a disabled permissive one alone would not
     assert out["state"] == "warn" and out["any_permissive"] is True
-    assert out["rejected_today"] == 3
     tg = next(c for c in out["channels"] if c["name"] == "telegram")
-    assert tg["rejected_today"] == 2 and tg["paired"] == 3
+    assert tg["paired"] == 3 and tg["mode"] == "paired_only"
+    # Posture only: a refused sender is channel traffic, not a number on this module.
+    assert "rejected_today" not in out and all("rejected_today" not in c for c in out["channels"])
 
-    out_ok = derive_channels_status([dict(channels[0])], {})
-    assert out_ok["state"] == "ok" and out_ok["rejected_today"] == 0
+    out_ok = derive_channels_status([dict(channels[0])])
+    assert out_ok["state"] == "ok"
 
 
 def test_guardrails_derivation_shape_and_unrestricted_passthrough():

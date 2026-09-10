@@ -172,69 +172,56 @@ def log_tool_use(
         pass
 
 
-def log_telegram_reply(message: str) -> None:
-    """Append to logs/telegram_reply_YYYY-MM-DD.log when debug_logs_enabled. No-op on error."""
-    if not is_debug_logging_enabled():
+def append_lane_log(lane: str, message: str, *, always: bool = False) -> None:
+    """Append one timestamped line to {lane}_YYYY-MM-DD.log; the Logs window lists the lane
+    under that name. Debug-gated like every diagnostic lane unless `always` is set, which is
+    reserved for the one class of line whose record must not depend on a debug switch: a
+    messenger sender the agent refused to answer (log_channel_inbound). No-op on error.
+    One body for the five channel lanes that used to carry a copy each."""
+    if not always and not is_debug_logging_enabled():
         return
     try:
-        path = get_dated_log_path("telegram_reply", "log")
+        path = get_dated_log_path(lane, "log")
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"{datetime.now().isoformat()} {message}\n")
     except Exception:
         pass
+
+
+def log_channel_inbound(channel: str, message: str, *, always: bool = False) -> None:
+    """The inbound diagnostics of one messenger channel, {channel}_inbound_YYYY-MM-DD.log
+    (ACCEPT, REJECT, SKIP lines). A drop at ingress is written with `always=True`, one line
+    per sender and throttle window (the bridge decides): the sender gets no reply, so this
+    line is the only trace of the attempt, and it belongs in the channel's own log rather
+    than in the security log, because a stranger writing to the agent's number is the
+    channel's everyday traffic and says nothing about anything being unprotected."""
+    append_lane_log(f"{channel}_inbound", message, always=always)
+
+
+def log_telegram_reply(message: str) -> None:
+    """Append to logs/telegram_reply_YYYY-MM-DD.log when debug_logs_enabled. No-op on error."""
+    append_lane_log("telegram_reply", message)
 
 
 def log_discord_reply(message: str) -> None:
     """Append to logs/discord_reply_YYYY-MM-DD.log when debug_logs_enabled. No-op on error."""
-    if not is_debug_logging_enabled():
-        return
-    try:
-        path = get_dated_log_path("discord_reply", "log")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(f"{datetime.now().isoformat()} {message}\n")
-    except Exception:
-        pass
+    append_lane_log("discord_reply", message)
 
 
 def log_whatsapp_qr(message: str) -> None:
     """Append to logs/whatsapp_qr_YYYY-MM-DD.log when debug_logs_enabled. No-op on error."""
-    if not is_debug_logging_enabled():
-        return
-    try:
-        path = get_dated_log_path("whatsapp_qr", "log")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(f"{datetime.now().isoformat()} {message}\n")
-    except Exception:
-        pass
+    append_lane_log("whatsapp_qr", message)
 
 
 def log_whatsapp_inbound(message: str) -> None:
     """Append to logs/whatsapp_inbound_YYYY-MM-DD.log when debug_logs_enabled. No-op on error."""
-    if not is_debug_logging_enabled():
-        return
-    try:
-        path = get_dated_log_path("whatsapp_inbound", "log")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(f"{datetime.now().isoformat()} {message}\n")
-    except Exception:
-        pass
+    log_channel_inbound("whatsapp", message)
 
 
 def log_whatsapp_reply(message: str) -> None:
     """Append to logs/whatsapp_reply_YYYY-MM-DD.log when debug_logs_enabled. No-op on error."""
-    if not is_debug_logging_enabled():
-        return
-    try:
-        path = get_dated_log_path("whatsapp_reply", "log")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(f"{datetime.now().isoformat()} {message}\n")
-    except Exception:
-        pass
+    append_lane_log("whatsapp_reply", message)
 
 
 def append_domain_log(domain: str, message: str) -> None:

@@ -524,17 +524,28 @@ def test_named_numbers_from_the_node_name_the_chats_and_fill_the_contact_book(is
 
 def test_status_updates_and_newsletters_are_not_rejected_senders(isolated, monkeypatch):
     """They are not people who could be paired, so they never reach the ingress decision:
-    no security event, no activity row, no stored message."""
+    no REJECT line, no activity row, no stored message."""
+    import vaf.core.channel_ingress_policy as policy_mod
     monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
-    events = []
-    monkeypatch.setattr("vaf.core.security_events.log_security_event", lambda *a, **k: events.append((a, k)))
+    policy_mod._log_last.clear()
+    lines = []
+    monkeypatch.setattr("vaf.core.log_helper.log_channel_inbound", lambda ch, msg, always=False: lines.append((ch, msg, always)))
+    monkeypatch.setattr("vaf.core.security_events.log_security_event",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("a refused sender is not a security event")))
     for jid in ("status@broadcast", "120363195908196684@newsletter", "123@broadcast"):
         assert _dispatch("alice", jid, body="post") is None
-    assert events == []
+    assert [l for l in lines if "REJECT" in l[1]] == []
     assert store.list_chats_from_store("alice", user_scope_id=SCOPE) == []
-    # A real stranger is still rejected and recorded.
+    # A real stranger is still rejected and recorded, in the channel's own lane, with the
+    # line that survives debug logging being off.
     assert _dispatch("alice", "491700000099@s.whatsapp.net", body="hi") is None
-    assert len(events) == 1 and events[0][1].get("username") == "491700000099@s.whatsapp.net"
+    rejects = [l for l in lines if l[1].startswith("REJECT not_paired")]
+    assert len(rejects) == 1 and rejects[0][0] == "whatsapp" and rejects[0][2] is True
+    assert "from=491700000099@s.whatsapp.net" in rejects[0][1]
+    # A LID no number is known for gets ONE line too, with the hint on it, not a second one.
+    assert _dispatch("alice", "12345678901234@lid", body="hi") is None
+    lid_lines = [l for l in lines if "12345678901234@lid" in l[1] and "REJECT" in l[1]]
+    assert len(lid_lines) == 1 and "unresolved @lid" in lid_lines[0][1] and lid_lines[0][2] is True
 
 
 def test_whitelist_add_refuses_the_agents_own_number(isolated, monkeypatch):

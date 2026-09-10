@@ -273,6 +273,9 @@ def _run_bot() -> None:
         allowed, reason = evaluate_ingress("discord", policy, explicit_match=explicit_match, contact_match=False)
         if not allowed:
             sender_id = str(message.author.id)
+            # One REJECT line per sender and throttle window in the channel's own inbound
+            # log, written with debug logging off too (the only trace of an unanswered
+            # attempt); not a security event, a stranger writing to the bot is everyday traffic.
             if should_log_unauthorized("discord", sender_id, policy):
                 logger.warning(
                     "Dropped unauthorized Discord message author_id=%s channel_id=%s reason=%s",
@@ -280,13 +283,12 @@ def _run_bot() -> None:
                     str(getattr(message.channel, "id", "")),
                     reason,
                 )
-            # Security-event mirror (dashboard + security_<date>.log); own throttle.
-            try:
-                from vaf.core.security_events import log_security_event
-                log_security_event("channel_rejected", channel="discord",
-                                   username=sender_id, detail=str(reason or "not_paired"))
-            except Exception:
-                pass
+                try:
+                    from vaf.core.log_helper import log_channel_inbound
+                    log_channel_inbound("discord", f"REJECT {reason or 'not_paired'} author_id={sender_id} "
+                                        f"channel_id={str(getattr(message.channel, 'id', ''))}", always=True)
+                except Exception:
+                    pass
             _keep_rejected_discord_message(sender_id, message.content or "", str(getattr(message, "id", "") or ""),
                                            isinstance(message.channel, discord.DMChannel))
             return

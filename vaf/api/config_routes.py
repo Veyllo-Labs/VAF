@@ -399,6 +399,26 @@ async def get_provider_models() -> Dict[str, Any]:
     return Config.PROVIDER_MODELS
 
 
+def _note_discord_admin_change(before: Dict[str, Any], after: Dict[str, Any], user: Dict[str, Any]) -> None:
+    """The Discord admin is the one sender that channel answers, and the wizard sets it
+    through this generic route (the verification step only reads the code back), so the
+    pairing event for that channel is recorded here, from the diff of the saved config."""
+    def admin_of(cfg: Any) -> str:
+        dc = cfg.get("discord_config") if isinstance(cfg, dict) else None
+        return str(dc.get("admin_user_id") or "").strip() if isinstance(dc, dict) else ""
+    old, new = admin_of(before), admin_of(after)
+    if old == new:
+        return
+    from vaf.core.security_events import log_security_event
+    who = str(user.get("username") or "")
+    # A replaced admin is two access changes: the old id lost the channel, the new one
+    # gained it. `path` carries each id, so the two never collapse into one throttled line.
+    if old:
+        log_security_event("channel_unpaired", channel="discord", username=who, path=old, detail=f"admin {old}")
+    if new:
+        log_security_event("channel_paired", channel="discord", username=who, path=new, detail=f"admin {new}")
+
+
 @router.patch("/config")
 async def patch_config(
     body: Dict[str, Any],
@@ -431,6 +451,7 @@ async def patch_config(
     from vaf.core.api_keys import absorb_config_keys
     merged = Config.merge_preserving_nonempty_sensitive(current, absorb_config_keys(body))
     Config.save(merged)
+    _note_discord_admin_change(current, merged, _user)
     # Through the same funnel as GET, never raw: `merged` carries everything the file
     # holds - estate API keys, the KEK, other users' connection configs - and this
     # response goes to whoever sent the PATCH, admin or not. Returning it unfiltered was

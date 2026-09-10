@@ -383,6 +383,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   an empty file while the bridge had written the rows under the scope.
 
 ### Fixed
+- Web lock file: dropping the unused top-level `styled-jsx` also took next-intl's nested `@swc/helpers` entry out of `package-lock.json`, so `npm ci` refused the checkout on every platform. The entry is back, and the local pre-push check now validates the lock the way `npm ci` does.
 - Front Office: `send_whatsapp` without `to_phone` was blocked while the agent handled a contact's message, so the owner back-channel never arrived when `main_messenger` is WhatsApp (the guard dated from the setup where the agent ran on the owner's own number). In Front Office the tool now sends only to the owner's registered number and refuses every other `to_phone`, which also closes the case where the agent messaged the contact through the tool on top of its reply.
 - WhatsApp bridge: the echo match kept one pending text per chat, so the chunks of one long reply, all written before the first echo arrived, were credited to the person's phone as their own words. Every pending text is kept for the echo window now.
 - `vaf inbox list`: an unknown `--channel` or `--view` is refused with the valid names instead of silently listing every channel.

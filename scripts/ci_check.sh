@@ -128,6 +128,21 @@ if git rev-parse --verify -q origin/main >/dev/null; then
     WEB_CHANGED="$(git diff --name-only origin/main...HEAD -- web/; git diff --name-only -- web/)"
 fi
 if [ -n "$WEB_CHANGED" ]; then
+    # The lock must describe a tree npm can install from it, the way the CI's
+    # `npm ci` demands: a nested peer entry hand-deleted from the lock (next-intl's
+    # own @swc/helpers, taken for a leftover of a removed top-level package) passed
+    # `npm ci --dry-run` here and failed all three web-build jobs remotely with
+    # "Missing: @swc/helpers@0.5.23 from lock file". `npm ls` over the lock alone
+    # reports that hole as "invalid"; it reads nothing but the two files, so it runs
+    # before the running-app check below and with the app up.
+    echo "  lock consistency (npm ls --package-lock-only)"
+    if ! (cd web && npm ls --package-lock-only --all >/dev/null 2>&1); then
+        echo "ERROR: web/package-lock.json does not describe an installable tree" >&2
+        echo "(npm ci on the CI runner refuses it). Regenerate it from a checkout" >&2
+        echo "of the previous lock or restore the entry npm ls names:" >&2
+        (cd web && npm ls --package-lock-only --all 2>&1 | grep -iE "missing|invalid|error" | head -5 >&2)
+        exit 1
+    fi
     # Building .next under a RUNNING app corrupts the pages it is serving
     # (live incident: every login bounced back to the login screen). Failing
     # loudly beats skipping: a pre-push gate that quietly leaves a stage out

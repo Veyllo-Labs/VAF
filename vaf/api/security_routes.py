@@ -133,6 +133,20 @@ def collect_sandbox_status(
 _BLOCKED_KINDS = ("ip_blocked", "unauthenticated_blocked", "token_rejected", "ws_rejected")
 _LOGIN_KINDS = ("login_failed", "twofa_failed")
 
+# Per-module views of the one log, for a dashboard popup that explains a module's
+# own counter: the list it shows must be drawn from the same kinds the number
+# above it is counted from, or a pairing event turns up under "deflected
+# attempts". Only the firewall has such a popup; the shield badge opens the
+# unfiltered day. Held here next to the counters rather than in the core kind
+# registry because this grouping has exactly one consumer.
+_MODULE_KINDS: Dict[str, tuple] = {"firewall": _BLOCKED_KINDS + _LOGIN_KINDS}
+
+
+def events_for_module(events: List[Dict[str, Any]], module: str) -> List[Dict[str, Any]]:
+    """Pure: the events a module's popup may list, in the order given."""
+    kinds = _MODULE_KINDS[module]
+    return [e for e in events if e.get("kind") in kinds]
+
 
 def summarize_security_events(events: List[Dict[str, Any]]) -> Dict[str, int]:
     """Pure: count blocked-access vs failed-login events for the firewall module."""
@@ -194,17 +208,27 @@ def security_alert_count(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str
 def security_events(
     date: Optional[str] = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     limit: int = Query(default=100, ge=1, le=1000),
+    module: Optional[str] = Query(default=None),
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
-    """Structured blocked/rejected access attempts for a day (admin only).
+    """Structured security events for a day (admin only), oldest first.
 
-    Backs the firewall detail popup; the same data is mirrored human-readably
-    into security_<date>.log (the "security" domain in the Logs file rail).
+    Backs the dashboard popups: without ``module`` the whole day (the shield
+    badge), with ``module=firewall`` only the kinds the firewall counter is
+    built from. The same data is mirrored human-readably into
+    security_<date>.log (the "security" domain in the Logs file rail).
     """
     day = date or datetime.now().strftime("%Y-%m-%d")
     if not _DATE_RE.match(day):
         raise HTTPException(status_code=400, detail="Invalid date")
-    return {"date": day, "events": read_security_events(day, limit=limit)}
+    if module is None:
+        return {"date": day, "events": read_security_events(day, limit=limit)}
+    if module not in _MODULE_KINDS:
+        raise HTTPException(status_code=400, detail="Unknown module")
+    # Filter before the limit, so a busy day of skill or pairing events cannot
+    # push the firewall's own lines out of the window.
+    events = events_for_module(read_security_events(day, limit=1000), module)
+    return {"date": day, "events": events[-limit:]}
 
 
 # ── Docker network isolation (the "inner firewall") ──────────────────────────

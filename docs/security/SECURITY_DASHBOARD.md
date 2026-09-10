@@ -189,8 +189,13 @@ the same perimeter, the pairing kinds above: who was let in, by whom, when.
 
 Read endpoints (both admin-gated):
 
-- `GET /api/security/events?date=YYYY-MM-DD&limit=N`: structured events for a
-  day, oldest first. Backs the firewall detail popup.
+- `GET /api/security/events?date=YYYY-MM-DD&limit=N[&module=firewall]`: structured
+  events for a day, oldest first. Without `module` it backs the shield badge's
+  popup (the whole day); with `module=firewall` it returns only the kinds the
+  firewall counter is built from (`_BLOCKED_KINDS` and `_LOGIN_KINDS` in
+  `vaf/api/security_routes.py`), filtered before the limit, so the firewall
+  popup's "deflected attempts" list and its number agree. An unknown module
+  is a 400.
 - `GET /api/security/alert-count`: cheap poll returning today's event count and
   the newest timestamp. Every entry in the log is a rejected/blocked/failed
   attempt or a door opened on purpose (a pairing), so all count. Drives the

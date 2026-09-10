@@ -931,6 +931,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The firewall popup lists only what its counter counts.** Its "deflected attempts"
+  list showed every security event of the day, so a messenger pairing or a skill scan
+  alert appeared under a heading and a number that never included it. The popup now asks
+  the events endpoint for the firewall module (`module=firewall`); the shield badge's
+  popup keeps the whole day.
+
 - **One growing block of the agent's own briefing no longer crowds out everything else.**
   A summary of facts about you is added to the agent's instructions on every single
   message. Nothing limited how long it could get, and it had grown to more than a third

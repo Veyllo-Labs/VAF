@@ -1409,11 +1409,17 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
 
   // ── Module detail popup ──────────────────────────────────────────────────────
   const [detail, setDetail] = useState<string | null>(null);
-  // Blocked/rejected attempts for the firewall popup, fetched lazily on open.
+  // Today's events for the two popups that list them, fetched lazily on open.
+  // The firewall popup asks for its own module only, so its list is drawn from
+  // the same kinds as the deflected counter above it; the shield badge's popup
+  // takes the whole day. Reset to the loading state on every switch, so the
+  // other popup's list never shows under this popup's heading.
   const [secEvents, setSecEvents] = useState<SecurityEvent[] | null>(null);
   useEffect(() => {
-    if (detail !== 'firewall' && detail !== 'channels' && detail !== 'events') return;
-    fetch(`${getApiBase()}/api/security/events?limit=100`, { credentials: 'include' })
+    if (detail !== 'firewall' && detail !== 'events') return;
+    setSecEvents(null);
+    const scope = detail === 'firewall' ? '&module=firewall' : '';
+    fetch(`${getApiBase()}/api/security/events?limit=100${scope}`, { credentials: 'include' })
       .then(r => (r.ok ? r.json() : null))
       .then(d => setSecEvents(Array.isArray(d?.events) ? d.events : []))
       .catch(() => setSecEvents([]));

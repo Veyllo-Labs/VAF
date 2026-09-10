@@ -11,7 +11,9 @@ import json
 import re
 from datetime import datetime
 
-from vaf.api.security_routes import derive_firewall_status, summarize_security_events
+from vaf.api import security_routes
+from vaf.api.security_routes import (derive_firewall_status, events_for_module,
+                                     summarize_security_events)
 from vaf.core import security_events as se
 
 
@@ -107,3 +109,46 @@ def test_channel_field_and_per_sender_throttle(tmp_path, monkeypatch):
     assert {e["username"] for e in events} == {"1111", "2222"}
     log_line = (tmp_path / f"security_{day}.log").read_text(encoding="utf-8")
     assert "channel=telegram" in log_line
+
+
+def test_firewall_popup_lists_exactly_the_kinds_its_counter_counts():
+    """The firewall popup's list and the deflected counter are drawn from the same kinds.
+
+    Before the module filter the popup rendered every event of the day under
+    "deflected attempts", so a messenger pairing sat under a number that did not
+    include it. The list must be the counter's own population, nothing else.
+    """
+    events = [
+        {"kind": "ip_blocked", "ts": "1"}, {"kind": "channel_paired", "ts": "2"},
+        {"kind": "login_failed", "ts": "3"}, {"kind": "skill_blocked", "ts": "4"},
+        {"kind": "contact_access_changed", "ts": "5"}, {"kind": "ws_rejected", "ts": "6"},
+    ]
+    listed = events_for_module(events, "firewall")
+    assert [e["kind"] for e in listed] == ["ip_blocked", "login_failed", "ws_rejected"]
+    assert len(listed) == sum(summarize_security_events(events).values())
+
+
+def test_events_route_filters_by_module_before_the_limit(monkeypatch):
+    """``module=firewall`` narrows the day, and the limit applies to the narrowed list."""
+    import pytest
+    from fastapi import HTTPException
+
+    day = [{"kind": "channel_paired", "ts": str(i)} for i in range(20)]
+    day += [{"kind": "ip_blocked", "ts": "a"}, {"kind": "twofa_failed", "ts": "b"}]
+    seen = {}
+
+    def _read(date, limit=100):
+        seen["limit"] = limit
+        return day[-limit:]
+
+    monkeypatch.setattr(security_routes, "read_security_events", _read)
+    out = security_routes.security_events(date="2026-01-02", limit=1, module="firewall", _={})
+    assert [e["kind"] for e in out["events"]] == ["twofa_failed"]
+    assert seen["limit"] == 1000, "the module view reads the whole day, then limits"
+
+    out = security_routes.security_events(date="2026-01-02", limit=100, module=None, _={})
+    assert len(out["events"]) == 22, "without a module the day is served as before"
+
+    with pytest.raises(HTTPException) as exc:
+        security_routes.security_events(date="2026-01-02", limit=100, module="skills", _={})
+    assert exc.value.status_code == 400

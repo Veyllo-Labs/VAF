@@ -82,7 +82,8 @@ In chat, retrieval runs in the **input phase** before the LLM is called: the use
 
 - **Docker** (required for PostgreSQL + pgvector + Redis)
 - **Python 3.10-3.13**
-- **sentence-transformers** (auto-installed)
+- **onnxruntime** and **tokenizers** (auto-installed; the embedding engine, see
+  "Embedding Engine" below)
 - **redis** (auto-installed)
 
 ## Quick Start
@@ -651,7 +652,10 @@ VAF uses a highly optimized embedding pipeline to minimize resource usage while 
 3.  **Non-Blocking:** Embedding operations are offloaded to avoid blocking the main event loop, ensuring the UI remains responsive even during heavy indexing.
 
 ### Supported Models
-While `intfloat/multilingual-e5-small` is the default, the system is compatible with other ONNX-exported models.
+The engine loads exactly the models it has an ONNX export mapping for
+(`_ONNX_MODEL_MAP` in `vaf/memory/embeddings.py`); any other
+`memory_embedding_model` value is refused at load time with an error that names
+the supported ones. There is no PyTorch fallback.
 - **English-only:** `all-MiniLM-L6-v2` (the previous default; smaller and slightly faster).
 - Changing `memory_embedding_model` strands existing vectors in the old model's
   space; every row carries an `embedding_model` stamp, and the app start

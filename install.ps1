@@ -893,7 +893,7 @@ if ($coreExit -eq 0) {
 # Install all requirements with progress
 Write-Host ""
 Write-Host "  [i] Installing all requirements..." -ForegroundColor Gray
-Write-Host "      (sentence-transformers, cryptography, etc. - please wait)" -ForegroundColor DarkGray
+Write-Host "      (onnxruntime, cryptography, etc. - please wait)" -ForegroundColor DarkGray
 Write-Host -NoNewline "  [" -ForegroundColor Gray
 $reqStart = Get-Date
 $job = Start-Job -ScriptBlock {

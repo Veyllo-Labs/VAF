@@ -115,7 +115,8 @@ class SemanticTurnJudge:
     finished (or on ANY failure - a broken judge must degrade to the plain timer
     verdict, never hold a turn hostage). Model file arrives via the same lazy
     download/atomic-replace path speaker_id uses; features come from the Whisper
-    feature extractor that the installed transformers package already ships.
+    feature extractor of the transformers package (declared in the speech extra;
+    the extractor runs without torch).
     """
 
     def __init__(self) -> None:

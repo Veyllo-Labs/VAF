@@ -58,7 +58,7 @@ OPTIONAL_PACKAGES = (
     "sherpa_onnx",       # speaker id: also downloads a model on first use
     "faster_whisper",    # speech to text
     "playwright",        # browser automation
-    "sentence_transformers",
+    "transformers",      # speech extra: the Smart Turn judge's feature extractor (fail-open)
     "pytesseract",
     # requirements marker python_version >= "3.11": absent on the 3.10 CI
     # runner, present on every dev machine - the exact gap that shipped an

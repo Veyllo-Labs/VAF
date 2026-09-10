@@ -31,7 +31,7 @@ New dependencies for the memory system:
 - `sqlalchemy[asyncio]` - Async ORM
 - `asyncpg` - PostgreSQL async driver
 - `pgvector` - Vector similarity extension
-- `sentence-transformers` - Text embeddings
+- `onnxruntime` + `tokenizers` - Text embeddings (ONNX, CPU)
 - `cryptography` - AES encryption
 
 ### 3. Initialize the Database

@@ -158,6 +158,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   transitive dependency of typer and tqdm, and pytest-mock was unused since the day it was
   added. `setuptools` is declared for the wheel guard instead of arriving through torch.
 
+- **`sentence-transformers` is gone, and with it torch and the CUDA runtime wheels (about
+  1.5 GB).** It was a fallback that could never succeed: both supported embedding models
+  resolve to ONNX-only repositories, so the ONNX engine is the only path now, and an
+  unsupported `memory_embedding_model` value is refused with an error naming the supported
+  ones. `transformers` (the voice turn judge's feature extractor) is declared explicitly.
+
 - The four per-channel listing tools `whatsapp_inbox`, `telegram_inbox`, `discord_inbox` and
   `mail_inbox`: one `inbox` tool with a channel filter lists every conversation from the same
   rows the inbox window shows. The per-channel read and search tools stay. The tool-output

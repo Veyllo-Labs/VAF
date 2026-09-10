@@ -39,7 +39,7 @@ FORBIDDEN_MODULES = (
     "fastapi", "uvicorn",
     # memory
     "sqlalchemy", "asyncpg", "pgvector", "redis", "numpy",
-    "sentence_transformers", "onnxruntime", "tokenizers",
+    "onnxruntime", "tokenizers",
     # browser
     "playwright", "browser_use",
     # desktop (pywebview's import name is "webview")
@@ -47,7 +47,7 @@ FORBIDDEN_MODULES = (
     # messaging channels
     "discord", "telegram",
     # speech
-    "speech_recognition", "pyaudio", "sherpa_onnx",
+    "speech_recognition", "pyaudio", "sherpa_onnx", "transformers",
     # pdf / office documents
     "PyPDF2", "pdfplumber", "pytesseract", "pdf2image",
     "docx", "openpyxl", "pptx",

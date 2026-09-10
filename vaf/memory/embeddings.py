@@ -4,10 +4,10 @@
 """
 Embedding service for VAF Memory System.
 
-Uses ONNX Runtime (CPU) or sentence-transformers (PyTorch) for text embeddings.
-Default: all-MiniLM-L6-v2 (384-dim).
-
-OPTIMIZED: Prefers ONNX Runtime for <200MB RAM usage and <1s startup.
+ONNX Runtime (CPU) is the only embedding engine: about 200 MB RAM and a
+sub-second startup. The supported models are the keys of _ONNX_MODEL_MAP (the
+configured default is intfloat/multilingual-e5-small, 384-dim); any other value
+is refused at load time. There is no PyTorch fallback.
 """
 
 import asyncio
@@ -15,7 +15,6 @@ from typing import List, Optional, Dict, Any, Union
 from functools import lru_cache
 import hashlib
 import logging
-import os
 import time
 import numpy as np
 import traceback
@@ -199,21 +198,36 @@ class OnnxEmbeddingModel:
         return sum_embeddings / sum_mask
 
 # Models with a known ONNX export compatible with OnnxEmbeddingModel's file
-# layout (onnx/model_quantized.onnx + tokenizer.json + config.json). Keeping a
-# supported model in this map is what keeps the documented ~200 MB RAM profile
-# true for it; an unmapped value falls back to the PyTorch stack (~1.5 GB).
+# layout (onnx/model_quantized.onnx + tokenizer.json + config.json). This map IS
+# the supported set. The repositories it points at ship ONNX weights only, so a
+# PyTorch fallback could never have loaded them (SentenceTransformer on either id
+# raises OSError); an unmapped value is refused with the supported names rather
+# than handed to a download that cannot succeed.
 _ONNX_MODEL_MAP = {
     "all-MiniLM-L6-v2": "Xenova/all-MiniLM-L6-v2",
     "intfloat/multilingual-e5-small": "Xenova/multilingual-e5-small",
 }
 
 
-def _resolve_model(config_value: str) -> tuple:
-    """Resolve a configured model name to (model_id, use_onnx)."""
+def supported_embedding_models() -> tuple:
+    """The `memory_embedding_model` values the engine can load, in map order."""
+    return tuple(_ONNX_MODEL_MAP)
+
+
+def _resolve_model(config_value: str) -> str:
+    """Resolve a configured model name to its ONNX repository id.
+
+    Raises ValueError for a value outside the supported set; the message names
+    the supported values, so a hand-edited config fails with the fix in the
+    error instead of with a download error.
+    """
     onnx_id = _ONNX_MODEL_MAP.get(config_value)
-    if onnx_id:
-        return onnx_id, True
-    return config_value, False
+    if not onnx_id:
+        raise ValueError(
+            f"Unsupported memory_embedding_model {config_value!r}; supported: "
+            + ", ".join(_ONNX_MODEL_MAP)
+        )
+    return onnx_id
 
 
 def get_model(model_id: Optional[str] = None):
@@ -233,7 +247,7 @@ def get_model(model_id: Optional[str] = None):
     global _model, _model_name
 
     config_model = model_id or Config.get("memory_embedding_model", "all-MiniLM-L6-v2")
-    model_id, use_onnx = _resolve_model(config_model)
+    model_id = _resolve_model(config_model)
 
     # Fast path: model already loaded (no lock needed for read)
     if _model is not None and _model_name == model_id:
@@ -252,24 +266,10 @@ def get_model(model_id: Optional[str] = None):
         logger.info(f"Loading embedding model: {model_id} (Memory before: {mem_before:.0f}MB)")
 
         try:
-            if use_onnx:
-                try:
-                    _model = OnnxEmbeddingModel(model_id)
-                    _model_name = model_id
-                    append_domain_log("memory", f"[EMBED] Loaded ONNX {model_id}")
-                    _log_model_access(action="load_onnx", model_id=model_id, reused=False, instance=_model)
-                except Exception as e:
-                    logger.warning(f"ONNX load failed ({e}), falling back to PyTorch...")
-                    use_onnx = False
-
-            if not use_onnx:
-                # Fallback to PyTorch
-                os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
-                os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32")
-                from sentence_transformers import SentenceTransformer
-                _model = SentenceTransformer(model_id, device="cpu")
-                _model_name = model_id
-                _log_model_access(action="load_pytorch", model_id=model_id, reused=False, instance=_model)
+            _model = OnnxEmbeddingModel(model_id)
+            _model_name = model_id
+            append_domain_log("memory", f"[EMBED] Loaded ONNX {model_id}")
+            _log_model_access(action="load_onnx", model_id=model_id, reused=False, instance=_model)
 
             # Log memory AFTER loading
             mem_after = get_memory_usage_mb()

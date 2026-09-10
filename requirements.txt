@@ -48,6 +48,7 @@ tzdata>=2024.1  # IANA tz database for zoneinfo on Windows (no system tz db); us
 # It stays available as the optional `vaf[speech]` extra (setup.py); the runtime import is guarded,
 # so CLI microphone input degrades gracefully without it. Web/desktop mic capture is unaffected.
 SpeechRecognition>=3.10.0
+transformers>=4.40.0  # WhisperFeatureExtractor only: the log-mel front end of the Smart Turn judge (vaf/core/voice_vad.py); needs no torch
 # openai-whisper>=20231117  # Recommended for high-quality offline STT (DE, TR, CN...)
 # openwakeword>=0.6.0  # Wake Word Detection (100% local & free) - DISABLED on Mac due to install issues
 # onnxruntime>=1.16.0  # Required for openWakeWord inference
@@ -87,7 +88,6 @@ qrcode[pil]>=7.4.0         # QR code for 2FA setup
 sqlalchemy[asyncio]>=2.0.0  # Async ORM for database operations
 asyncpg>=0.29.0  # Async PostgreSQL driver
 pgvector>=0.2.0  # pgvector SQLAlchemy integration
-sentence-transformers>=2.2.0  # Text embeddings (all-MiniLM-L6-v2)
 cryptography>=41.0.0  # AES-256-GCM encryption
 onnxruntime>=1.16.0  # Lightweight ONNX Runtime for embeddings
 sherpa-onnx>=1.13  # Speaker ID (Silero VAD + ERes2Net embeddings); live incident: missing dep = every fresh install's enrollment said "no speech"

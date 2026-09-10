@@ -152,6 +152,11 @@ def reembed(
                                     reembed_store)
 
     target = target_model or TARGET_EMBEDDING_MODEL
+    from vaf.memory.embeddings import supported_embedding_models
+    if target not in supported_embedding_models():
+        UI.error(f"Unsupported embedding model '{target}'. Supported: "
+                 + ", ".join(supported_embedding_models()))
+        raise typer.Exit(2)
 
     # One re-embed at a time, across processes (startup hook + manual CLI).
     from filelock import FileLock, Timeout

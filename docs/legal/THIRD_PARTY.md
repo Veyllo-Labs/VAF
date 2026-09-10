@@ -129,7 +129,6 @@ Note: the `desktop` extra intentionally uses **PySide6 (LGPL-3.0)**, not PyQt6
 | sqlalchemy[asyncio] | >=2.0.0 | MIT |
 | asyncpg | >=0.29.0 | Apache-2.0 |
 | pgvector | >=0.2.0 | MIT |
-| sentence-transformers | >=2.2.0 | Apache-2.0 |
 | onnxruntime | >=1.16.0 | MIT |
 | tokenizers | >=0.15.0 | Apache-2.0 |
 | numpy | >=1.24.0 | BSD-3-Clause (AND 0BSD, MIT, Zlib, CC0-1.0 for bundled components) |
@@ -142,6 +141,7 @@ Note: the `desktop` extra intentionally uses **PySide6 (LGPL-3.0)**, not PyQt6
 | pyaudio | >=0.2.14 | MIT |
 | sherpa-onnx | >=1.13 | Apache-2.0 |
 | faster-whisper | >=1.0.0 | MIT |
+| transformers | >=4.40.0 | Apache-2.0 |
 
 ### browser (python_version >= 3.11)
 | Package | Min version | License |

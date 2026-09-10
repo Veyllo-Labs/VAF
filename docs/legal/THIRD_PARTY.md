@@ -57,6 +57,7 @@ Also present in `requirements.txt`.
 | typer | >=0.12.0 | MIT |
 | rich | >=13.0.0 | MIT |
 | prompt_toolkit | >=3.0.0 | BSD-3-Clause |
+| textual | >=8.2.8 | MIT |
 | psutil | >=5.9.0 | BSD-3-Clause |
 | requests | >=2.31.0 | Apache-2.0 |
 | httpx | >=0.27.0 | BSD-3-Clause |
@@ -70,7 +71,10 @@ Also present in `requirements.txt`.
 | google-genai | >=1.0.0 | Apache-2.0 |
 | schedule | >=1.2.0 | MIT |
 | inquirer | >=3.1.0 | MIT |
+| tzdata | >=2024.1 | Apache-2.0 |
 | ruff | >=0.1.0 | MIT |
+| jsonschema | >=4.18.0 | MIT |
+| packaging | >=23.0 | Apache-2.0 OR BSD-2-Clause |
 | argon2-cffi | >=23.1.0 | MIT |
 | keyring | >=24.0.0 | MIT |
 | filelock | >=3.12.0 | MIT (Unlicense / public-domain dedication upstream) |
@@ -191,6 +195,8 @@ VAF Web UI is itself licensed AGPL-3.0-or-later (per `web/package.json`).
 | chart.js | ^4.5.1 | MIT |
 | clsx | ^2.1.0 | MIT |
 | framer-motion | ^10.18.0 | MIT |
+| graphology | ^0.26.0 | MIT |
+| graphology-layout-forceatlas2 | ^0.10.1 | MIT |
 | html2pdf.js | ^0.14.0 | MIT |
 | lucide-react | ^0.300.0 | ISC |
 | mammoth | ^1.11.0 | BSD-2-Clause |
@@ -205,6 +211,7 @@ VAF Web UI is itself licensed AGPL-3.0-or-later (per `web/package.json`).
 | react-pdf | ^10.3.0 | MIT |
 | reactflow | ^11.11.4 | MIT |
 | remark-gfm | ^4.0.1 | MIT |
+| sigma | ^3.0.3 | MIT |
 | tailwind-merge | ^2.2.0 | MIT |
 | zustand | ^5.0.10 | MIT |
 
@@ -219,8 +226,11 @@ VAF Web UI is itself licensed AGPL-3.0-or-later (per `web/package.json`).
 | eslint-config-next | ^16.1.6 | MIT |
 | postcss | ^8 | MIT |
 | tailwindcss | ^3.3.0 | MIT |
+| tailwindcss-animate | ^1.0.7 | MIT |
 | typescript | ^5 | Apache-2.0 |
-| cross-env | (used in `dev:insecure` script) | MIT (well-known; not in `package.json` deps) |
+
+Note: the `dev:insecure` script calls `cross-env` (MIT), which `web/package.json` does not
+declare; it is not part of any install and is listed here only so the script's use is on record.
 
 ---
 

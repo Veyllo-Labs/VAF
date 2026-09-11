@@ -20,6 +20,15 @@ import { useEscapeLayer } from '@/hooks/useEscapeLayer';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import CreateAutomationPopup, { type CreateAutomationPayload } from './CreateAutomationPopup';
 
+// The paper-dot texture behind the to-do list and the notes. The dot colour is a palette
+// variable, not a hex: an inline style bypasses the folding Tailwind palette, so a fixed
+// #d1d5db stayed light in dark mode and the text on top was hard to read. In light mode
+// the variable IS #d1d5db, so nothing changes there.
+const DOT_GRID = {
+    backgroundImage: 'radial-gradient(circle, rgb(var(--sfc-gray-300)) 1.5px, transparent 1.5px)',
+    backgroundSize: '10px 10px',
+} as const;
+
 export type AutomationNoteItem = { id: string; title?: string | null; content: string; created_at: string };
 export type AutomationTodoItem = { id: string; text: string; created_at: string; due_at?: string | null; done: boolean };
 
@@ -532,7 +541,7 @@ export default function AutomationCalendarModal({
             className={compact
                 ? 'rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 p-4 flex flex-col gap-3'
                 : 'shrink-0 mx-4 mb-4 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 p-4 flex flex-row gap-4 h-[160px]'}
-            style={{ backgroundImage: 'radial-gradient(circle, #d1d5db 1.5px, transparent 1.5px)', backgroundSize: '10px 10px' }}
+            style={DOT_GRID}
         >
             <div className="shrink-0 flex flex-col">
                 <h3 className="text-sm font-medium text-gray-700 mb-1.5 shrink-0">{t('notes.title')}</h3>
@@ -635,7 +644,7 @@ export default function AutomationCalendarModal({
                 <div className="flex-1 flex gap-4 min-h-0 p-4 overflow-auto max-md:flex-col max-md:p-3 max-md:flex-none max-md:overflow-visible">
                     <div
                         className="min-w-[220px] w-[220px] shrink-0 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 p-4 flex flex-col min-h-[200px] max-md:w-full max-md:min-w-0"
-                        style={{ backgroundImage: 'radial-gradient(circle, #d1d5db 1.5px, transparent 1.5px)', backgroundSize: '10px 10px' }}
+                        style={DOT_GRID}
                     >
                         <h3 className="text-sm font-medium text-gray-700 mb-1.5 shrink-0">{t('todo.title')}</h3>
                         <p className="text-xs text-gray-500 shrink-0 mb-2">{t('todo.hint')}</p>

@@ -366,6 +366,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **Dependency advisories closed.** Next.js 16.3.5 (two critical advisories against 16.3.0:
+  unauthenticated remote code execution on Windows-hosted servers, and through the image
+  optimisation API with AVIF input), `sharp` 0.35.4 in the web app and in the WhatsApp bridge
+  (libheif advisories), `js-yaml` 4.3.2 in the web build tooling (merge-key CPU exhaustion).
 - **A user without contacts could read the local admin's contact book.** The contact
   store offered the admin's file as a fallback to every caller and walked past an empty
   file, so a user whose own book was missing or empty saw the admin's contacts, and the

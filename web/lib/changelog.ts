@@ -31,6 +31,32 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a29',
+    date: '2026-09-17',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'The local model engine (llama.cpp) is pinned with every VAF release and verified by hash: VAF installs exactly the build the release was tested with, checks the download against the recorded checksum before unpacking it, and never updates the engine on its own. A newer engine arrives with the next VAF release.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'In Settings, "Update now" now sits inside the card that announces the update, directly under the restart warning, instead of at the foot of the page, and the card names the exact version it is offering.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'Updating from Settings refused to run on a desktop install (the app shortcut, run_vaf.sh, or a plain tray start), which is how most installs are launched. It works on macOS, Linux and Windows now, and VAF comes back the way it was started: a windowed app returns with its window and tray icon, a headless service stays headless.',
+          'A fresh install could receive a llama.cpp engine from December 2024 that cannot load current models, because the lookup for the "latest" release stopped returning builds with binaries. The pinned build (b10955) replaces it on the next start; you will see one short download.',
+          'Windows with an NVIDIA GPU got a CUDA runtime that did not match its engine, Windows with an AMD GPU looked for a build under its old name, and Linux on arm64 had no matching build.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a28',
     date: '2026-09-14',
     sections: [

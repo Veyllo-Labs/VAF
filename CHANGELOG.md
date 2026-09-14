@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a29] - 2026-09-17
+
 ### Changed
 
 - **The update button now sits with the update it applies.** In the Update and Repair

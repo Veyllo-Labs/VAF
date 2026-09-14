@@ -31,6 +31,49 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a28',
+    date: '2026-09-14',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'The inbox: every conversation from WhatsApp, Telegram, Discord, mail and your agent rooms in one window. Rows that need you say "waits for you", one button marks everything read, and advertising and newsletter mail stays out unless you ask for it. The same view sits inside every channel window, and the agent has one inbox tool for all channels.',
+          'A contact\'s chat has its own memory: what the agent learns while talking to a contact stays in that chat, and the WhatsApp Composer reads it when it drafts a reply for you.',
+          'Answer WhatsApp chats yourself from the agent\'s number, with a Composer that drafts into your compose box, and undo and redo in every editor.',
+          'The VAF calendar: appointments beside your automations, synced from a connected Google or Outlook calendar, and a contact\'s appointments are calendar events.',
+          'The Contacts window is a small CRM: status, tags, company, dated notes, upcoming events and one timeline per person across messages, mails and notes. Telegram and Discord got the same window as WhatsApp.',
+          'The security log records who was let in: an owner number registered, a Telegram or Discord pairing, a contact given access to your assistant.',
+          'Since the last announcement: reactions and emoji-triggered automations, group chats you can invite people with a VAF account into, a live server dashboard in the terminal (vaf top), and the interface in Thai, Korean, Japanese, Simplified Chinese and Turkish.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'Messages from senders the agent does not answer are channel logs now, not security events, so the red dot on the Logs button lights for real incidents only.',
+          'WhatsApp runs on the agent\'s own number, status updates and newsletters no longer count as rejected senders, and a rejected sender\'s message is still yours to read.',
+          'Five dependencies fewer: embeddings run on ONNX alone, so torch and its GPU packages left the install.',
+          'The agent gives "what can you do?" a real answer, waits longer before it asks again, and a reply may be twice as long.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'The Front Office notification to you over WhatsApp never arrived: a guard from the time the agent ran on your own number blocked it. It reaches you now, and a contact\'s turn can message nobody else.',
+          'A long reply the agent sent in several parts was shown in the chat as your own words from your phone.',
+          'The HTML document editor could lose what you typed after the first keystroke.',
+          'Calendar: times were forced to UTC, Microsoft all-day events were dropped, and the dotted texture behind the to-do list and the notes outshone the text in dark mode.',
+          'Two critical Next.js advisories and the sharp and js-yaml advisories are closed.',
+        ],
+      },
+      {
+        kind: 'removed',
+        items: [
+          'The four per-channel inbox tools; the one inbox tool replaces them.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a26',
     date: '2026-08-25',
     sections: [

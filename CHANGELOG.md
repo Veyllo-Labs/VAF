@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a28] - 2026-09-14
+
 ### Added
 
 - **The security log records who was let in.** Registering an owner number for WhatsApp,

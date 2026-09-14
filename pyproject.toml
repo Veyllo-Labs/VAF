@@ -184,6 +184,9 @@ vaf = [
     # data/<key>.json). Without it the agent falls back to its built-in
     # patterns and speaks English-only defaults.
     "core/vocab/data/*.json",
+    # The llama.cpp build the release ships with and the digest of every asset the
+    # launcher may download (scripts/pin_llama_cpp.py writes it).
+    "core/llama_server_pin.json",
     # The coder's project scaffolds (TemplateManager reads them from disk).
     "tools/coder_templates/**/*",
     # Seeded tool-usage knowledge cards for the learning system.

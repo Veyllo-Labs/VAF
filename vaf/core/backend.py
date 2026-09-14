@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
+import json
 import logging
 import os
 import sys
 import platform
+import re
 import shutil
 import subprocess
 import zipfile
@@ -465,16 +467,53 @@ def _server_ready_budget() -> float:
         return 600.0
 
 
+# ── The llama.cpp build a VAF release ships with ────────────────────────────────────
+#
+# VAF never updates llama.cpp on its own. A release carries a pin manifest
+# (vaf/core/llama_server_pin.json, written by scripts/pin_llama_cpp.py): the build tag and
+# the SHA-256 of every release asset the launcher may pick. The launcher installs that
+# build, and only bytes that hash to the recorded digest (vaf/core/verified_download.py),
+# so a release asset replaced after the pin, a truncated transfer or a poisoned mirror
+# never runs. A newer llama.cpp arrives with the VAF release that carries a new manifest.
+LLAMA_REPO = "ggml-org/llama.cpp"
+LLAMA_REPO_ID = 612354784          # what the provenance attestation must name
+PIN_PATH = Path(__file__).with_name("llama_server_pin.json")
+# The assets the launcher can pick, per platform and GPU: macOS (arm64, x64), Linux (CPU
+# and Vulkan, x64 and arm64), Windows (Vulkan, CPU, SYCL, CUDA and ROCm with their
+# version in the name) and the CUDA runtime archives. Everything else a release ships
+# (Android, s390x, OpenVINO, the web UI, the xcframework) is not pinned.
+LLAMA_ASSET_PATTERN = re.compile(
+    r"(llama-b\d+-bin-(macos-(arm64|x64)\.tar\.gz|ubuntu-(vulkan-)?(x64|arm64)\.tar\.gz"
+    r"|win-(vulkan|cpu|sycl)-x64\.zip|win-(cuda|rocm)-[\d.]+-x64\.zip)"
+    r"|cudart-llama-bin-win-cuda-[\d.]+-x64\.zip)"
+)
+
+
+def load_llama_pin() -> dict:
+    """The pin manifest: {"tag": "bNNNN", "assets": {name: {"sha256", "size"}}, ...}.
+    Raises RuntimeError when it is missing or malformed: a launcher without a pin has
+    nothing it may download."""
+    try:
+        data = json.loads(PIN_PATH.read_bytes().decode("utf-8"))
+    except Exception as e:
+        raise RuntimeError(f"llama.cpp pin manifest unreadable at {PIN_PATH}: {e}") from e
+    tag = str(data.get("tag") or "")
+    assets = data.get("assets")
+    if not re.fullmatch(r"b\d+", tag) or not isinstance(assets, dict) or not assets:
+        raise RuntimeError(f"llama.cpp pin manifest at {PIN_PATH} is malformed")
+    for name, meta in assets.items():
+        digest = str((meta or {}).get("sha256") or "").lower()
+        if not LLAMA_ASSET_PATTERN.fullmatch(name) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise RuntimeError(f"llama.cpp pin manifest: bad entry {name!r}")
+    return data
+
+
 class ServerManager:
     """
     Manages the lifecycle of the standalone llama-server executable.
     This bypasses python bindings for robust GPU support.
     """
     
-    # We pin a stable version to ensure predictable asset names
-    # Using b4320 as a recent stable reference or we could try to resolve "latest"
-    # For reliability, let's use a specific build tag that we know exists
-    LLAMA_TAG = "b4320" 
     
     def __init__(self, skip_cleanup: bool = False):
         self.base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -761,217 +800,197 @@ class ServerManager:
         except Exception:
             pass
 
-    def resolve_latest_release(self):
-        """Fetches the latest release data from GitHub API to avoid 404s."""
+    def installed_build(self):
+        """The build number of the llama-server on disk, or None when there is no server
+        or it does not say. `llama-server --version` prints "version: 10021 (33a75f41c)"
+        up to the b10xxx builds and "version: 0.4.0-dev (build 10955, commit 2f539596c)"
+        since llama.cpp took semver names; the build number is the part VAF pins."""
+        if not os.path.exists(self.server_path):
+            return None
         try:
-            # Simple timeout to prevent hanging
-            resp = requests.get("https://api.github.com/repos/ggerganov/llama.cpp/releases/latest", timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                tag = data.get("tag_name", "b4400") 
-                assets = data.get("assets", [])
-                return tag, assets
-        except:
-            pass
-        return None, []
+            out = subprocess.run([self.server_path, "--version"], capture_output=True, text=True, timeout=20)
+            return self.parse_build_number((out.stdout or "") + (out.stderr or ""))
+        except Exception:
+            return None
 
-    def get_asset_url(self):
-        """Returns main binary asset and optional dependency asset URLs dynamically."""
-        
-        # 1. Try Dynamic Resolution
-        tag, assets = self.resolve_latest_release()
-        
-        main_url = None
-        main_name = None
-        dep_url = None
-        dep_name = None
+    @staticmethod
+    def parse_build_number(version_output: str):
+        """10955 from either shape of the version line, None from anything else."""
+        text = version_output or ""
+        m = re.search(r"\(build\s+(\d+)", text)
+        if m:
+            return int(m.group(1))
+        m = re.search(r"version:\s*(\d{3,})\s*\(", text)
+        return int(m.group(1)) if m else None
 
-        if tag and assets:
-            self.LLAMA_TAG = tag
-            
-            # Helper to find asset by partial name
-            def find_asset(keywords, exclude=None):
-                for a in assets:
-                    name = a["name"]
-                    if exclude and any(e in name for e in exclude): continue
-                    if all(k in name for k in keywords):
-                        return a["browser_download_url"], name
-                return None, None
+    @staticmethod
+    def pinned_build(pin: dict | None = None) -> int:
+        """The build number the manifest pins (b10955 -> 10955)."""
+        return int(str((pin or load_llama_pin())["tag"])[1:])
 
-            # Detect GPU to choose appropriate binary
-            primary_gpu = get_primary_gpu()
-            gpu_type = primary_gpu.vendor if primary_gpu else None
-            
-            if self.system == "Windows":
-                # Try GPU-specific binaries first
-                if gpu_type == "amd":
-                    # AMD - HIP/Radeon binary
-                    main_url, main_name = find_asset(["bin-win-hip-radeon", "x64.zip"])
-                    if not main_url:
-                        # Fallback to Vulkan (works with AMD too)
-                        main_url, main_name = find_asset(["bin-win-vulkan", "x64.zip"])
-                elif gpu_type == "intel":
-                    # Intel - SYCL binary
-                    main_url, main_name = find_asset(["bin-win-sycl", "x64.zip"])
-                    if not main_url:
-                        # Fallback to Vulkan
-                        main_url, main_name = find_asset(["bin-win-vulkan", "x64.zip"])
-                elif gpu_type == "nvidia":
-                    # NVIDIA - CUDA binary (prefer CUDA 13, fallback to CUDA 12)
-                    main_url, main_name = find_asset(["bin-win-cuda-13", "x64.zip"], exclude=["cudart"])
-                    if not main_url:
-                        main_url, main_name = find_asset(["bin-win-cuda-12", "x64.zip"], exclude=["cudart"])
-                    if main_url:
-                        dep_url, dep_name = find_asset(["cudart-llama", "bin-win-cuda", "x64.zip"])
-                else:
-                    # No GPU or unknown - try Vulkan (universal), then CPU
-                    main_url, main_name = find_asset(["bin-win-vulkan", "x64.zip"])
-                    if not main_url:
-                        main_url, main_name = find_asset(["bin-win-cpu", "x64.zip"])
+    def pinned_assets(self, pin: dict | None = None):
+        """The pinned asset for this platform and GPU, with its digest, or None when the
+        manifest holds nothing for it (the launcher then refuses rather than guessing):
+        {"tag", "main": {"name", "url", "sha256"}, "dep": {...} | None}. `dep` is the CUDA
+        runtime archive Windows NVIDIA needs, of the same CUDA version as the binary."""
+        pin = pin or load_llama_pin()
+        tag = pin["tag"]
+        names = list(pin["assets"])
+        is_arm = "arm64" in self.machine or "aarch64" in self.machine
+        arch = "arm64" if is_arm else "x64"
 
-            elif self.system == "Darwin":
-                 # macOS binaries are .tar.gz, not .zip
-                 keyword = "bin-macos-arm64.tar.gz" if ("arm64" in self.machine or "aarch64" in self.machine) else "bin-macos-x64.tar.gz"
-                 main_url, main_name = find_asset([keyword])
+        def pick(keywords, exclude=()):
+            for name in names:
+                if any(e in name for e in exclude):
+                    continue
+                if all(k in name for k in keywords):
+                    return name
+            return None
 
-            elif self.system == "Linux":
-                # Linux: Use Vulkan for GPU (NVIDIA + AMD both support it, no CUDA toolkit needed).
-                # CUDA binary requires libcudart (CUDA toolkit), which is often not installed even
-                # when the NVIDIA driver is present. Vulkan only needs libvulkan (always available
-                # with any modern NVIDIA/AMD driver).
-                if gpu_type in ("nvidia", "amd", "intel"):
-                    main_url, main_name = find_asset(["bin-ubuntu-vulkan", "x64.tar.gz"])
-
-                # Fallback to CPU if GPU-specific not found
-                if not main_url:
-                    main_url, main_name = find_asset(["bin-ubuntu-x64.tar.gz"])
-
-        # 2. Check if we found it. If NOT, Fallback.
-        if main_url:
-            return main_url, main_name, dep_url, dep_name
-            
-        # FALLBACK LOGIC (Offline / Rate Limit / Parse Failure)
-        tag = "b4320" # Known stable
-        self.LLAMA_TAG = tag
-        base_url = f"https://github.com/ggerganov/llama.cpp/releases/download/{tag}"
-        
+        primary_gpu = get_primary_gpu()
+        gpu_type = primary_gpu.vendor if primary_gpu else None
+        main = dep = None
         if self.system == "Windows":
-            # Fallback: Use GPU detection to choose binary
-            primary_gpu = get_primary_gpu()
-            gpu_type = primary_gpu.vendor if primary_gpu else None
-            
             if gpu_type == "amd":
-                # AMD - HIP/Radeon
-                main_name = f"llama-{tag}-bin-win-hip-radeon-x64.zip"
+                main = pick(["bin-win-rocm", "x64.zip"]) or pick(["bin-win-hip-radeon", "x64.zip"]) \
+                    or pick(["bin-win-vulkan", "x64.zip"])
             elif gpu_type == "intel":
-                # Intel - SYCL
-                main_name = f"llama-{tag}-bin-win-sycl-x64.zip"
+                main = pick(["bin-win-sycl", "x64.zip"]) or pick(["bin-win-vulkan", "x64.zip"])
             elif gpu_type == "nvidia":
-                # NVIDIA - CUDA 12.4 (most common)
-                main_name = f"llama-{tag}-bin-win-cuda-12.4-x64.zip"
-                dep_name = f"cudart-llama-bin-win-cuda-12.4-x64.zip"
-                dep_url = f"{base_url}/{dep_name}"
+                # CUDA 13 preferred, 12 as the fallback, and the runtime archive of the SAME
+                # CUDA version: the 12.4 runtime next to a 13.3 binary leaves it without DLLs.
+                main = pick(["llama-", "bin-win-cuda-13", "x64.zip"]) or pick(["llama-", "bin-win-cuda-12", "x64.zip"])
+                if main:
+                    ver = re.search(r"cuda-(\d+\.\d+)", main)
+                    dep = pick(["cudart-llama", f"cuda-{ver.group(1)}", "x64.zip"]) if ver else None
+                    if not dep:
+                        main = None       # a binary without its runtime is not an install
             else:
-                # No GPU or unknown - Vulkan (universal)
-                main_name = f"llama-{tag}-bin-win-vulkan-x64.zip"
-            
-            main_url = f"{base_url}/{main_name}"
-            return main_url, main_name, dep_url if gpu_type == "nvidia" else None, dep_name if gpu_type == "nvidia" else None
-             
+                main = pick(["bin-win-vulkan", "x64.zip"]) or pick(["bin-win-cpu", "x64.zip"])
         elif self.system == "Darwin":
-             is_arm = "arm64" in self.machine or "aarch64" in self.machine
-             # macOS binaries are .tar.gz, not .zip
-             main_name = f"llama-{tag}-bin-macos-{'arm64' if is_arm else 'x64'}.tar.gz"
-             main_url = f"{base_url}/{main_name}"
-             return main_url, main_name, None, None
-             
+            main = pick([f"bin-macos-{arch}.tar.gz"])
         elif self.system == "Linux":
-             # Prefer Vulkan for GPU systems; CPU fallback for headless/no-GPU
-             primary_gpu = get_primary_gpu()
-             if primary_gpu and primary_gpu.vendor in ("nvidia", "amd", "intel"):
-                 main_name = f"llama-{tag}-bin-ubuntu-vulkan-x64.tar.gz"
-             else:
-                 main_name = f"llama-{tag}-bin-ubuntu-x64.tar.gz"
-             main_url = f"{base_url}/{main_name}"
-             return main_url, main_name, None, None
-             
-        return None, None, None, None
+            # Vulkan for any GPU vendor (no CUDA toolkit needed, and llama.cpp ships no
+            # Linux CUDA binary at all), the CPU build otherwise.
+            if gpu_type in ("nvidia", "amd", "intel"):
+                main = pick(["bin-ubuntu-vulkan", f"{arch}.tar.gz"])
+            if not main:
+                main = pick([f"bin-ubuntu-{arch}.tar.gz"])
+        if not main:
+            return None
+        base = f"https://github.com/{LLAMA_REPO}/releases/download/{tag}"
+
+        def entry(name):
+            return {"name": name, "url": f"{base}/{name}", "sha256": pin["assets"][name]["sha256"]}
+
+        return {"tag": tag, "main": entry(main), "dep": entry(dep) if dep else None}
+
+    def _extract_archive(self, archive_path: str, into: str) -> None:
+        """Unpack a release archive into `into` and lift a nested folder's files to its top."""
+        if archive_path.endswith(".tar.gz") or archive_path.endswith(".tgz"):
+            with tarfile.open(archive_path, "r:gz") as tar_ref:
+                try:
+                    tar_ref.extractall(into, filter="data")
+                except TypeError:          # a Python without the filter argument
+                    tar_ref.extractall(into)
+        else:
+            with zipfile.ZipFile(archive_path, "r") as zip_ref:
+                zip_ref.extractall(into)
+        os.remove(archive_path)
+        # GitHub archives often carry a top-level folder; the launcher expects the files
+        # directly at the top.
+        found_path = None
+        for root, dirs, files in os.walk(into):
+            if root != into and self.server_exe in files:
+                found_path = os.path.join(root, self.server_exe)
+                break
+        if found_path:
+            parent_dir = os.path.dirname(found_path)
+            for item in os.listdir(parent_dir):
+                src = os.path.join(parent_dir, item)
+                dst = os.path.join(into, item)
+                if os.path.exists(dst):
+                    if os.path.isdir(dst): shutil.rmtree(dst)
+                    else: os.remove(dst)
+                shutil.move(src, dst)
+            try:
+                os.rmdir(parent_dir)
+            except OSError:
+                pass
 
     def ensure_server_exists(self):
-        if not os.path.exists(self.bin_dir):
-            os.makedirs(self.bin_dir)
+        """The pinned llama-server is on disk, or it is installed now, or this is False.
 
-        # 0. Check if already installed (Fast Path / Offline Support)
-        if os.path.exists(self.server_path):
-             return True
-            
-        url, filename, dep_url, dep_filename = self.get_asset_url()
-        
-        # Verify if we actually need to download
-        if not url:
-             UI.error("Could not resolve backend URLs.")
-             return False
-            
-        zip_path = os.path.join(self.bin_dir, filename)
-        
-        UI.event("System", f"Downloading Backend ({filename})...", style="warning")
+        The binary on disk is compared with the pinned build by number: a VAF update that
+        carries a new manifest replaces the old build on the next start, an install that
+        already runs the pinned build downloads nothing. Every download is verified
+        against the pinned digest before it is unpacked; a mismatch leaves whatever was
+        installed untouched and reports, it never runs unverified bytes."""
+        from vaf.core.verified_download import DownloadIntegrityError, download_verified
+
         try:
-            with requests.get(url, stream=True) as r:
-                r.raise_for_status()
-                with open(zip_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                        
-            UI.event("System", "Extracting backend...", style="dim")
-            # Handle both .zip and .tar.gz files
-            if filename.endswith('.tar.gz') or filename.endswith('.tgz'):
-                with tarfile.open(zip_path, 'r:gz') as tar_ref:
-                    tar_ref.extractall(self.bin_dir)
-            else:
-                # Assume .zip
-                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                    zip_ref.extractall(self.bin_dir)
-            
-            # Cleanup
-            os.remove(zip_path)
-            
-            # Post-Extraction: Check for nested directory (common in GitHub releases)
-            # If server_path doesn't exist, search for it in subfolders
-            if not os.path.exists(self.server_path):
-                found_path = None
-                for root, dirs, files in os.walk(self.bin_dir):
-                    if self.server_exe in files:
-                        found_path = os.path.join(root, self.server_exe)
-                        break
-                
-                if found_path and found_path != self.server_path:
-                    UI.event("System", f"Found backend in subfolder, moving files...", style="dim")
-                    parent_dir = os.path.dirname(found_path)
-                    
-                    # Move all files from subfolder to bin_dir
-                    for item in os.listdir(parent_dir):
-                        src = os.path.join(parent_dir, item)
-                        dst = os.path.join(self.bin_dir, item)
-                        if os.path.exists(dst):
-                            if os.path.isdir(dst): shutil.rmtree(dst)
-                            else: os.remove(dst)
-                        shutil.move(src, dst)
-                    
-                    # Remove the now empty subfolder
-                    try:
-                        os.rmdir(parent_dir)
-                    except:
-                        pass # Might not be empty if hidden files exist
-            
-            if self.system != "Windows":
-                 os.chmod(self.server_path, 0o755)
-                 
-            UI.event("System", "Backend installed successfully.", style="success")
+            pin = load_llama_pin()
+        except RuntimeError as e:
+            UI.error(str(e))
+            return False
+        want = self.pinned_build(pin)
+        have = self.installed_build()
+        if os.path.exists(self.server_path) and have == want:
             return True
-            
+        if os.path.exists(self.server_path):
+            UI.event("System", f"Backend build b{have or '?'} differs from the pinned b{want}: installing the pinned build",
+                     style="warning")
+
+        assets = self.pinned_assets(pin)
+        if not assets:
+            UI.error(f"No pinned llama.cpp build for {self.system}/{self.machine} in {PIN_PATH.name}; "
+                     "the backend stays uninstalled rather than downloading an unverified one.")
+            return False
+
+        # Downloaded and unpacked next to bin_dir, then swapped in whole: a re-install
+        # leaves nothing of the old build behind (its libraries would otherwise stay next
+        # to the new ones), and a failure at any point before the swap leaves the old
+        # install exactly as it was.
+        staging = self.bin_dir + ".staging"
+        previous = self.bin_dir + ".previous"
+        for leftover in (staging, previous):
+            if os.path.isdir(leftover):
+                shutil.rmtree(leftover, ignore_errors=True)
+        os.makedirs(staging, exist_ok=True)
+        try:
+            downloaded = []
+            for part in (assets["main"], assets["dep"]):
+                if not part:
+                    continue
+                UI.event("System", f"Downloading backend {part['name']} (b{want}, verifying SHA-256)...", style="warning")
+                downloaded.append(str(download_verified(part["url"], part["sha256"], os.path.join(staging, part["name"]))))
+            UI.event("System", "Extracting backend...", style="dim")
+            for archive in downloaded:
+                self._extract_archive(archive, staging)
+            staged_exe = os.path.join(staging, self.server_exe)
+            if not os.path.exists(staged_exe):
+                raise RuntimeError(f"the archive holds no {self.server_exe}")
+            if self.system != "Windows":
+                os.chmod(staged_exe, 0o755)
+            if os.path.isdir(self.bin_dir):
+                os.rename(self.bin_dir, previous)
+            os.rename(staging, self.bin_dir)
+            shutil.rmtree(previous, ignore_errors=True)
+        except DownloadIntegrityError as e:
+            shutil.rmtree(staging, ignore_errors=True)
+            UI.error(f"Backend download refused: {e}")
+            return False
         except Exception as e:
+            shutil.rmtree(staging, ignore_errors=True)
             UI.error(f"Backend download failed: {e}")
             return False
+
+        got = self.installed_build()
+        if got != want:
+            UI.error(f"Backend installed but reports build b{got or '?'} instead of the pinned b{want}.")
+            return False
+        UI.event("System", f"Backend b{want} installed and verified.", style="success")
+        return True
 
     def start_server(self, model_path, n_gpu_layers=99, n_ctx=32768, port=8080,
                      skip_provider_gate=False):

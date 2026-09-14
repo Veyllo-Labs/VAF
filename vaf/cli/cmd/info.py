@@ -30,6 +30,16 @@ def info():
         UI.print(f"[bold]llama-cpp-python:[/bold] {llama_ver}")
     except:
         UI.print("[bold]llama-cpp-python:[/bold] [red]Not Installed[/red]")
+    # The server binary: the build on disk against the one the release pins.
+    try:
+        from vaf.core.backend import ServerManager, load_llama_pin
+        _mgr = ServerManager(skip_cleanup=True)
+        _have = _mgr.installed_build()
+        _want = ServerManager.pinned_build(load_llama_pin())
+        _state = "matches the pin" if _have == _want else "installs the pinned build on the next start"
+        UI.print(f"[bold]llama-server:[/bold] {'b%d' % _have if _have else '[red]not installed[/red]'} (release pins b{_want}, {_state})")
+    except Exception as e:
+        UI.print(f"[bold]llama-server:[/bold] [red]{e}[/red]")
 
     # GPU Check - Enhanced with multi-vendor support
     UI.print("\n[bold cyan]--- GPU Detection ---[/bold cyan]")

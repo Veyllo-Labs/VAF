@@ -1,0 +1,64 @@
+{
+  "tag": "b10955",
+  "repository": "ggml-org/llama.cpp",
+  "recorded": "2026-09-14",
+  "provenance": "SLSA v1 statement by https://github.com/ggml-org/llama.cpp .github/workflows/release.yml (repository id 612354784) lists every digest below; recorded by scripts/pin_llama_cpp.py from the release API",
+  "assets": {
+    "cudart-llama-bin-win-cuda-12.4-x64.zip": {
+      "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+      "size": 391443627
+    },
+    "cudart-llama-bin-win-cuda-13.3-x64.zip": {
+      "sha256": "1462a050eb4c684921ba51dcc4cc488a036674c3e73e9945ee705b854808d03e",
+      "size": 390970417
+    },
+    "llama-b10955-bin-macos-arm64.tar.gz": {
+      "sha256": "9e7f68aa43afbb489952b1d2eb3297b185ee367968b7ccfe972d3aafabe6218b",
+      "size": 11145618
+    },
+    "llama-b10955-bin-macos-x64.tar.gz": {
+      "sha256": "fb80fe1c0495d9f13a848bb6c319a42497ddce512726f953f528c06c62669689",
+      "size": 11194422
+    },
+    "llama-b10955-bin-ubuntu-arm64.tar.gz": {
+      "sha256": "9d7a86ac5430a96abef54c13147f91178178b721e53c584275f09c2b01223e5f",
+      "size": 13448880
+    },
+    "llama-b10955-bin-ubuntu-vulkan-arm64.tar.gz": {
+      "sha256": "e0e929cac9bdecdae198c8470c296a4919accd3df6487fc51d8bff1428dbd151",
+      "size": 24210830
+    },
+    "llama-b10955-bin-ubuntu-vulkan-x64.tar.gz": {
+      "sha256": "cb8a816fbf3ef35899abbb49b18d4b6395bccaafd018a349d95668ff18ab5620",
+      "size": 30163633
+    },
+    "llama-b10955-bin-ubuntu-x64.tar.gz": {
+      "sha256": "776653023397a45526c0e5424b8925653a265b922aebd0601d906189394986c8",
+      "size": 16821434
+    },
+    "llama-b10955-bin-win-cpu-x64.zip": {
+      "sha256": "1a615c5461e8f01c74b69d4af17f71e80190d5841cba235aee182e9053547cc9",
+      "size": 18426429
+    },
+    "llama-b10955-bin-win-cuda-12.4-x64.zip": {
+      "sha256": "f35af2d7b10632cac34372a136c98345accf7151977e581d47d97f1a344f9dcd",
+      "size": 254078862
+    },
+    "llama-b10955-bin-win-cuda-13.3-x64.zip": {
+      "sha256": "da8a2d5dcf5daaa51e5a58095fd932f100cf896f67f7630545815f8241d24f73",
+      "size": 149703334
+    },
+    "llama-b10955-bin-win-rocm-10.0-x64.zip": {
+      "sha256": "2be66761c3b819b0f14a59d893918bbe4dc65ab62293e85052de3cf5f996a832",
+      "size": 255996535
+    },
+    "llama-b10955-bin-win-sycl-x64.zip": {
+      "sha256": "9cf5af38ff25454e9d8ae1e4078e8de31afa2be5d9f60be332ec9eb9c07335e4",
+      "size": 119785886
+    },
+    "llama-b10955-bin-win-vulkan-x64.zip": {
+      "sha256": "9ab71d54313323c9885ef87f97d62e0d40b85e0989bae24deccf28211162d70f",
+      "size": 31673577
+    }
+  }
+}

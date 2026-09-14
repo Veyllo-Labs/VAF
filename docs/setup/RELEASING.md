@@ -112,6 +112,13 @@ waiting for a stable `X.Y.Z`.
    A fourth place is not a version but moves with one: `web/lib/changelog.ts`
    needs an entry whose `version` matches the new full version exactly, or the
    in-app "what's new" announcement still describes the previous release.
+   The llama.cpp build ships pinned as well (`vaf/core/llama_server_pin.json`):
+   VAF never updates it on its own, so moving to a newer build is a release
+   decision. Run `venv/bin/python scripts/pin_llama_cpp.py b<build>` (it records
+   the SHA-256 of every asset the launcher may pick from the release API and
+   cross-checks them against llama.cpp's provenance attestation; `--download`
+   additionally hashes every asset locally), start VAF once so the pinned build
+   installs and runs, then commit the manifest with the release.
 3. In `CHANGELOG.md`, move the relevant `[Unreleased]` notes into a new
    `## [X.Y.Z] - YYYY-MM-DD` section.
 4. Commit (on request) and push to `main`.

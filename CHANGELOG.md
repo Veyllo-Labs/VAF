@@ -12,6 +12,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Changed
+
 - **The update button now sits with the update it applies.** In the Update and Repair
   dialog the "Update now" button was pinned to the foot of the version column, a full
   screen below the card that announces the new version, its release notes and the
@@ -23,7 +24,27 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the installed-version card already does: during a prerelease series every version
   reads "v0.1" otherwise, so the line did not say which update it was offering.
 
+### Security
+
+- **The local backend runs the llama.cpp build pinned with the release, verified by hash.**
+  `vaf/core/llama_server_pin.json` names the build and the SHA-256 of every release asset
+  the launcher may pick (recorded by `scripts/pin_llama_cpp.py` from the release API and
+  cross-checked against llama.cpp's provenance attestation); the download streams through
+  a verified-download primitive and bytes that hash differently are refused before anything
+  is unpacked, so a release asset replaced after the pin or a poisoned mirror never runs.
+  VAF never updates llama.cpp on its own any more: a newer build arrives with the VAF release
+  that carries a new manifest, and an installed build whose number differs from the pin is
+  replaced on the next start. `vaf info` shows the installed and the pinned build.
+
 ### Fixed
+
+- **A fresh install downloaded a llama.cpp build from 2024.** The launcher used to ask GitHub
+  for the "latest" llama.cpp release; since September 2026 that is a semver release without
+  binaries, so it found nothing and fell back, silently, to a pinned `b4320` from December
+  2024, which cannot load current models. The pin above replaces that lookup. Along the way:
+  Windows NVIDIA gets the CUDA runtime archive of the same version as its binary (the 12.4
+  runtime next to a 13.3 binary left it without DLLs), Windows AMD finds the renamed ROCm
+  build, and Linux on arm64 gets its own builds.
 - **The desktop app can update itself from Settings on every platform, and comes back
   the way it was started.** The update button refused any VAF without a service pid
   record, which is every desktop launch on macOS, Linux and Windows: the app shortcut,

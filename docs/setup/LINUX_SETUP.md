@@ -203,7 +203,7 @@ No manual configuration needed - these are applied automatically.
 
 **Cause:** llama-server build `b4320` crashed in `common_chat_templates_support_enable_thinking` when processing the model's embedded Jinja chat template with `--jinja` enabled. Jinja was enabled by default in that build even without the flag.
 
-**Status:** Fixed - VAF now downloads `b9058+` (Vulkan binary) which handles the native template correctly. The `--jinja` flag is kept (required for tool calling); `--chat-template chatml` is NOT used so the model's native tool-call format is preserved.
+**Status:** Fixed - VAF installs the llama.cpp build pinned with its release (`vaf/core/llama_server_pin.json`, the Vulkan build on Linux), which handles the native template correctly, and replaces an older build in `bin/` on the next start after an update. The `--jinja` flag is kept (required for tool calling); `--chat-template chatml` is NOT used so the model's native tool-call format is preserved.
 
 ### Docker permission error
 

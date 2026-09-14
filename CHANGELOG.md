@@ -58,6 +58,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   sweep, which used to reach the process doing the stopping, the updater included, and
   the liveness probe behind `vaf status` no longer uses a call that terminates the
   process on Windows.
+- **Inbox rail: the view rows line up again.** "Waits for you" carried a leading amber dot
+  that none of its three sibling rows had, so its label sat further right than theirs, and
+  the dot was drawn even while nothing was waiting. The count on the right carries that
+  signal on its own, amber while somebody waits.
+- **An inbox row without a preview is as tall as its neighbours.** A room invitation, and a
+  room nobody has spoken in, carry no preview text, and that row lost the whole line: it
+  stood 17px shorter than the rows around it with its name and its chips riding up. The
+  preview line keeps its height now, the way the same row in the channel windows always has.
 
 ## [0.1.0a28] - 2026-09-14
 

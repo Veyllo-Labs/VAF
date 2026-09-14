@@ -345,10 +345,13 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                         <div className={RAIL_HEAD}>{t('rail.view')}</div>
                         {VIEWS.map(v => (
                             <button key={v} type="button" onClick={() => setView(v)} className={cn(RAIL_BTN, view === v ? 'bg-[#2a2a2a]' : 'hover:bg-[#262626]')}>
-                                <span className="flex items-center gap-2 min-w-0">
-                                    {v === 'waits' && <span className="w-1.5 h-1.5 rounded-full bg-[#e0b866] shrink-0" />}
-                                    <span className="truncate">{t(`view.${v}`)}</span>
-                                </span>
+                                {/* No marker in front of a single view: one dot on one of four rows
+                                    indents that row's label against the others, and it was drawn
+                                    even at zero, where there is nothing to point at. The count on
+                                    the right carries the signal instead, amber while somebody
+                                    waits, and every label starts at the same x. The channel rows
+                                    below mark EVERY row, which is why they line up. */}
+                                <span className="truncate min-w-0">{t(`view.${v}`)}</span>
                                 <span className={cn('text-xs', v === 'waits' && viewCount(v) > 0 ? 'text-[#e0b866] font-medium' : 'text-[#9a9a9a]')}>{viewCount(v)}</span>
                             </button>
                         ))}
@@ -426,7 +429,12 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                                 {r.is_group && <span className="text-[10px] text-[#9a9a9a] shrink-0">{t(r.channel === 'room' ? 'kind.room' : 'kind.group')}</span>}
                                                 <span className="ml-auto text-[11px] text-[#9a9a9a] shrink-0">{fmtWhen(r.last_ts)}</span>
                                             </div>
-                                            <div className={cn('text-xs truncate', unreadOf(r) > 0 ? 'text-[#e8e8e8]' : 'text-[#9a9a9a]')}>{r.channel === 'mail' && r.subject ? r.subject : previewLine(r)}</div>
+                                            {/* The preview line keeps its height when there is no preview: a room
+                                                invitation and a room nobody has spoken in carry an empty one
+                                                (vaf/core/inbox.py), and without the floor that row is 16px shorter
+                                                than its neighbours, with its name and its chips riding up. The
+                                                channel window's row has carried this floor from the start. */}
+                                            <div className={cn('text-xs truncate min-h-[1rem]', unreadOf(r) > 0 ? 'text-[#e8e8e8]' : 'text-[#9a9a9a]')}>{r.channel === 'mail' && r.subject ? r.subject : previewLine(r)}</div>
                                             <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                                                 <StateChips unread={unreadOf(r)} waits={waitsOf(r)} waitsReason={r.waits_reason} answeredByAgent={r.answered_by_agent} done={r.done} className="mt-0" />
                                                 {r.channel !== 'mail' && <span className={MODE_CHIP}>{t(`modeChip.${r.mode}`)}</span>}

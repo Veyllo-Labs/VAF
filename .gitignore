@@ -102,6 +102,8 @@ memory_report_20231015.txt
 
 # Internal AI working-rules (kept local, not public)
 CLAUDE.md
+AGENTS.md
+.agents/
 
 # Internal LLM backend/provider probing notes (kept local, not public)
 docs/llm/LLM_BACKEND_FACTS.md

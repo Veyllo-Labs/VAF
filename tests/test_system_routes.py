@@ -265,13 +265,45 @@ def test_server_mode_is_never_blocked(monkeypatch):
     assert sr._restart_blocker() is None
 
 
-def test_desktop_mode_without_a_pidfile_is_blocked(monkeypatch, tmp_path):
+def test_desktop_mode_with_no_identifiable_instance_is_blocked(monkeypatch, tmp_path):
+    """No service pid record, no instance record, nothing in the process table:
+    the stop step would do nothing and the start step would add a second
+    server, so refuse. The table lookup is patched, or the developer's own
+    running VAF would answer."""
     import vaf.core.config as cfg
+    import vaf.core.instance as inst
     monkeypatch.setattr(cfg.Config, "get",
                         staticmethod(lambda k, d=None: False if k == "server_mode" else d))
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr("pathlib.Path.home", staticmethod(lambda: tmp_path))
-    assert "background service" in (sr._restart_blocker() or "")
+    monkeypatch.setattr(inst, "find_running", lambda: None)
+    assert "vaf update" in (sr._restart_blocker() or "")
+
+
+def test_desktop_mode_with_a_recorded_desktop_app_is_fine(monkeypatch, tmp_path):
+    """The desktop launch (app shortcut, run_vaf.sh, a bare tray) writes no
+    service pid file and was refused for it on every platform. The running VAF
+    records itself now, so the updater can stop it and bring it back windowed."""
+    import vaf.core.config as cfg
+    import vaf.core.instance as inst
+    monkeypatch.setattr(cfg.Config, "get",
+                        staticmethod(lambda k, d=None: False if k == "server_mode" else d))
+    monkeypatch.setattr("pathlib.Path.home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(inst, "find_running", lambda: inst.Instance(pid=1234, mode="tray"))
+    assert sr._restart_blocker() is None
+
+
+def test_a_service_found_only_in_the_process_table_is_fine(monkeypatch, tmp_path):
+    """Started by a version that kept no record: still identifiable by the
+    singleton port it holds."""
+    import vaf.core.config as cfg
+    import vaf.core.instance as inst
+    monkeypatch.setattr(cfg.Config, "get",
+                        staticmethod(lambda k, d=None: False if k == "server_mode" else d))
+    monkeypatch.setattr("pathlib.Path.home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(inst, "find_running",
+                        lambda: inst.Instance(pid=1234, mode="headless", recorded=False))
+    assert sr._restart_blocker() is None
 
 
 def test_desktop_mode_with_a_pidfile_is_fine(monkeypatch, tmp_path):

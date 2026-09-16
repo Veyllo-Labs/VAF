@@ -25,6 +25,7 @@ import typer
 
 from vaf import __version__
 from vaf.cli.cmd import service
+from vaf.core import instance
 from vaf.cli.cmd.git import is_git_repo, run_git
 from vaf.cli.ui import UI
 # The check half of updating (is a newer release published, when was that last
@@ -83,17 +84,25 @@ def _git(root: Path, *args):
 
 # ── update steps (each effect goes through a mockable seam) ───────────────────
 
-def _stop_service() -> None:
+def _stop_service():
+    """Stop the running VAF and return what it was (vaf/core/instance.py), so
+    the restart after the checkout swap brings back the same kind: a windowed
+    desktop app returns windowed, a headless service stays headless. Asked
+    BEFORE the stop, while the instance can still be identified."""
+    previous = instance.find_running()
     try:
         service.cmd_stop()
     except typer.Exit as e:  # server mode delegates to systemctl and raises Exit(rc)
         if e.exit_code not in (0, None):
             raise _UpdateError("failed to stop the VAF service")
+    return previous
 
 
-def _start_service() -> None:
+def _start_service(previous=None) -> None:
+    """Start VAF again the way `previous` ran; headless when nothing was
+    running (the documented default of `vaf start`)."""
     try:
-        service.cmd_start()
+        service.relaunch(previous)
     except typer.Exit as e:
         if e.exit_code not in (0, None):
             raise _UpdateError("failed to start the VAF service")
@@ -282,10 +291,11 @@ def _verify(target_version: str) -> None:
         raise _UpdateError(f"post-update version check failed (expected {target_version}, got: {out[:80]})")
 
 
-def _rollback(root: Path, anchor: str) -> bool:
+def _rollback(root: Path, anchor: str, previous=None) -> bool:
     """Best-effort restore to `anchor`. Returns True only when the checkout actually succeeded; a
     failed rollback checkout is surfaced loudly (not reported as success) so the caller can keep the
-    breadcrumb and the user knows the tree may be in a mixed state."""
+    breadcrumb and the user knows the tree may be in a mixed state. `previous` is the instance the
+    run stopped, so the old version comes back the way it ran."""
     UI.info("Rolling back to the previous version...")
     code, _, err = _git(root, "checkout", anchor)
     if code != 0:
@@ -301,7 +311,7 @@ def _rollback(root: Path, anchor: str) -> bool:
     _install_bridge_deps()
     _invalidate_web_build(root)
     try:
-        _start_service()
+        _start_service(previous)
     except Exception:
         UI.warning("VAF service did not restart after rollback; run `vaf start` "
                    "(or check `systemctl --user status vaf` in server mode).")
@@ -487,9 +497,10 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
     # says so); every exit below writes exactly one.
     update_check.clear_update_result()
 
+    previous = None
     try:
         UI.info("Stopping VAF service...")
-        _stop_service()
+        previous = _stop_service()
 
         UI.info(f"Fetching and checking out {target}...")
         # --force on tags: if a release tag was ever recreated on the remote
@@ -528,7 +539,7 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
         _run_migrations()
 
         UI.info("Restarting VAF service...")
-        _start_service()
+        _start_service(previous)
         _verify(target_version)
 
         update_check.clear_breadcrumb()
@@ -546,7 +557,7 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
                      "git checkout, so re-run `vaf update` to retry.")
             update_check.clear_breadcrumb()
             update_check.write_update_result("failed", __version__, target_version, error=str(e))
-        elif _rollback(root, cur_sha or cur_branch or "HEAD"):
+        elif _rollback(root, cur_sha or cur_branch or "HEAD", previous):
             update_check.clear_breadcrumb()
             update_check.write_update_result("rolled_back", __version__, target_version, error=str(e))
         else:
@@ -579,7 +590,7 @@ def _recover() -> None:
     target_tag = str(data.get("target_tag") or "")
     target_version = target_tag[1:] if target_tag.startswith("v") else target_tag
     UI.info(f"Recovering an interrupted update — restoring {str(anchor)[:12]}...")
-    if not _rollback(root, anchor):
+    if not _rollback(root, anchor, instance.find_running()):
         # Keep the breadcrumb so `--recover` can be retried after the user resolves the conflict.
         UI.error("Recovery did not complete; the update breadcrumb is kept. "
                  "Resolve the issue and re-run `vaf update --recover`.")

@@ -202,6 +202,11 @@ Quit**, all via Spotlight. Notes:
   (Automation) - the user must approve it once.
 - The minimised Terminal window keeps VAF alive; closing it hard-kills VAF. The
   clean way to quit is the tray **Quit**.
+- A self-update (Update now in the web UI, or `vaf update` in another terminal)
+  stops this VAF and starts it again detached, window and menu-bar icon
+  included. The dashboard in the minimised Terminal window ends with the old
+  process (the tray's shutdown sweep reaches it); reattach with `vaf top` or
+  close that window. Quit keeps working from the tray.
 
 **Alternative (built, not wired into the installer):** the native Swift menu-bar
 app `scripts/macos/VAFTray` (+ `scripts/macos/build_app.sh`) owns the main thread
@@ -212,6 +217,16 @@ not `build_app.sh`.
 
 ### Cross-platform
 
+- **The instance record.** Once its singleton check passes, the running VAF
+  records itself in `~/.vaf/instance.json` (pid, mode `tray` or `headless`,
+  interpreter, working directory; `vaf/core/instance.py`) and removes the record
+  on Quit. It complements the service pid file a launcher writes
+  (`~/.vaf/service.pid`: `vaf start`, the tray dashboard, the updater's relaunch)
+  and covers the launches that write none (the app shortcut, `run_vaf.sh`,
+  `vaf tray --no-top`). `vaf stop`, `vaf status`, `vaf restart` and the
+  self-updater address that process and start it again in the same mode. The
+  identity rule (the singleton-port owner, else `vaf.main tray` by exact argv
+  elements) lives in `vaf/core/instance.py` and serves the CLI's finder too.
 - Prefer `vaf.core.platform.Platform` helpers for OS checks and paths (instead of direct `platform.system()` checks in new code).
 - Tray callbacks accept `(icon, item)` (pystray convention) on all platforms.
 - Desktop window API: `vaf.core.desktop_window` - `init()`, `start()`, `show()`, `hide()`, `navigate()`, `destroy()`.

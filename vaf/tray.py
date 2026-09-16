@@ -1108,6 +1108,15 @@ def quit_app(icon=None, item=None):
     print("Shutting down...")
     tray_context.should_exit = True
 
+    # The record is this process's; a clean exit takes it along. (A killed
+    # process cannot, which is why readers verify the pid and the stopper
+    # removes the record for the pid it killed.)
+    try:
+        from vaf.core import instance as _instance
+        _instance.unregister()
+    except Exception:
+        pass
+
     # Stop pystray icon so the tray menu disappears immediately.
     if icon is not None:
         try:
@@ -1361,6 +1370,12 @@ def run_headless():
     if not lock_socket:
         print("[VAF] Singleton check failed (another instance running)")
         return
+
+    # This process is the instance now: record it for `vaf stop`, `vaf status`
+    # and the updater's restart (vaf/core/instance.py). After the singleton
+    # check, so a refused second instance never overwrites the first's record.
+    from vaf.core import instance as _instance
+    _instance.register(_instance.MODE_HEADLESS)
     
     # Start Memory stack
     threading.Thread(target=ensure_memory_stack_up, daemon=True).start()
@@ -1446,6 +1461,13 @@ def run_app():
 
     print("[Tray] Singleton check passed")
     log("Tray", "Singleton check passed")
+
+    # This process is the instance now: record it for `vaf stop`, `vaf status`
+    # and the updater's restart, which brings a windowed VAF back windowed
+    # (vaf/core/instance.py). After the singleton check, so a refused second
+    # instance never overwrites the first's record.
+    from vaf.core import instance as _instance
+    _instance.register(_instance.MODE_TRAY)
 
     # Start Memory stack (Postgres, Redis, Sandbox) automatically if Docker is available
     threading.Thread(target=ensure_memory_stack_up, daemon=True).start()

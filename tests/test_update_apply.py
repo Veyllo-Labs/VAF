@@ -51,9 +51,19 @@ def patched(monkeypatch, tmp_path):
     # its own dedicated tests below.
     monkeypatch.setattr(uc, "is_source_tree", lambda p: True)
 
-    events = {"stopped": 0, "started": 0}
+    events = {"stopped": 0, "started": 0, "modes": []}
     monkeypatch.setattr(upd.service, "cmd_stop", lambda: events.__setitem__("stopped", events["stopped"] + 1))
-    monkeypatch.setattr(upd.service, "cmd_start", lambda: events.__setitem__("started", events["started"] + 1))
+
+    def fake_relaunch(previous=None):
+        events["started"] += 1
+        events["modes"].append(previous.mode if previous is not None else None)
+        return 4242
+
+    monkeypatch.setattr(upd.service, "relaunch", fake_relaunch)
+    # Nothing is running as far as the updater can tell. Patched, not left to
+    # the real lookup: that one scans the process table and would find the
+    # developer's own VAF.
+    monkeypatch.setattr(upd.instance, "find_running", lambda: None)
 
     state = {"verify_version": "9.9.9", "pip_fail": False}
 
@@ -282,3 +292,35 @@ def test_apply_refuses_non_source_layout(monkeypatch, tmp_path, capsys):
     assert ei.value.exit_code == 1
     out = capsys.readouterr().out
     assert "pip install -U --pre vaf" in out
+
+
+# ── the restart keeps the kind of VAF that was running ───────────────────────
+
+def _tray_instance():
+    from vaf.core.instance import Instance
+    return Instance(pid=77, mode="tray", python="/venv/bin/python", cwd="/checkout")
+
+
+def test_apply_restarts_the_kind_of_vaf_that_was_running(patched, monkeypatch):
+    """A windowed desktop app is stopped and comes back windowed. The mode is
+    asked BEFORE the stop, while the instance can still be identified; a
+    restart that always chose headless took the window and tray icon away."""
+    monkeypatch.setattr(upd.instance, "find_running", _tray_instance)
+    upd._apply(dry_run=False, assume_yes=True, target_tag=None)
+    assert patched.events["stopped"] == 1
+    assert patched.events["modes"] == ["tray"]
+
+
+def test_rollback_restarts_the_same_kind_too(patched, monkeypatch):
+    """The old version comes back the way it ran, not as a headless service."""
+    monkeypatch.setattr(upd.instance, "find_running", _tray_instance)
+    patched.git.fail_checkout_to = "v9.9.9"
+    with pytest.raises(typer.Exit):
+        upd._apply(dry_run=False, assume_yes=True, target_tag=None)
+    assert patched.events["modes"] == ["tray"]
+
+
+def test_apply_with_nothing_running_starts_headless(patched):
+    """No instance to copy: the documented default of `vaf start`."""
+    upd._apply(dry_run=False, assume_yes=True, target_tag=None)
+    assert patched.events["modes"] == [None]

@@ -21,6 +21,15 @@ git checkout is refused there and sent to a terminal, because adopting it means
 a `git reset --hard` and `vaf update` asks about that in a prompt an unattended
 run would answer by itself.
 
+On both paths the restart keeps the kind of VAF that was running. The running
+VAF records itself (`~/.vaf/instance.json`, see `vaf/core/instance.py`); the
+updater reads that record before the stop, stops that process, and after the
+checkout swap starts it again in the same mode, so a windowed desktop app comes
+back with its window and tray icon and a headless `vaf start` service stays
+headless. Server mode leaves both ends to systemd. The one thing refused is an
+interactive `vaf run` session hosting the dashboard, because nobody but the
+person at that terminal can start it again.
+
 Because the spawned updater outlives the server that started it, every run also
 records how it ENDED in `~/.vaf/update_result.json` (outcome `succeeded`,
 `rolled_back`, `recover_needed`, or `failed` for aborts that changed nothing,

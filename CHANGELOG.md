@@ -627,6 +627,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   output), and `vaf start` opens the dashboard after starting (`--no-watch` suppresses
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
+### Fixed
+- **The desktop app can update itself from Settings on every platform, and comes back
+  the way it was started.** The update button refused any VAF without a service pid
+  record, which is every desktop launch on macOS, Linux and Windows: the app shortcut,
+  `run_vaf.sh` and a bare `vaf tray --no-top` write none. The advice it gave would have
+  brought the app back without its window and tray icon, as `vaf restart` also did. The
+  running VAF now records how it was started, so `vaf stop`, `vaf status`, `vaf restart`
+  and the updater address that process and start it again in the same mode: windowed
+  stays windowed, headless stays headless. The stop also survives the tray's own shutdown
+  sweep, which used to reach the process doing the stopping, the updater included, and
+  the liveness probe behind `vaf status` no longer uses a call that terminates the
+  process on Windows.
 - **Messages in a room can now carry proof of who wrote them.** Until now a room recorded
   the author by assigning it: the machine holding the room knew who was connected and
   wrote that down, which says nothing to anybody reading the conversation somewhere else.

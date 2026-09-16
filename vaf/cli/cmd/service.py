@@ -4,25 +4,40 @@
 """
 vaf start / stop / restart / status
 
-Desktop mode  → manages the VAF background process directly (PID file)
-Server mode   → delegates to systemctl --user (systemd service)
+Desktop mode  -> manages the VAF process through two records: the service pid
+                 file a launcher writes (`vaf start`, the tray dashboard, the
+                 updater's relaunch) and the record the running VAF keeps about
+                 itself (vaf/core/instance.py), which also says HOW it was
+                 started, so a restart brings back the same kind of VAF
+Server mode   -> delegates to systemctl --user (systemd service)
+
+The launch primitive here, start_instance(), is also what the self-updater
+uses to bring VAF back after a checkout swap: in the mode the stopped instance
+ran in, so a windowed desktop app returns with its window and tray icon and a
+headless service stays headless.
 """
 
+import contextlib
 import os
-import sys
+import platform
 import signal
 import subprocess
+import sys
 from pathlib import Path
+from typing import List, Optional
 
 import typer
 
 from vaf.cli.ui import UI
+from vaf.core import instance
+from vaf.core.instance import Instance
 
 app = typer.Typer(hidden=True)  # commands registered directly on main app, not as subgroup
 
 # The tray's singleton listener (vaf/tray.py check_singleton). Owning this port
 # is what makes a process THE service, whatever its command line looks like.
-TRAY_SINGLETON_PORT = 8002
+# The rule lives in vaf/core/instance.py; the name stays here for its readers.
+TRAY_SINGLETON_PORT = instance.TRAY_SINGLETON_PORT
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -38,81 +53,56 @@ def _log_file() -> Path:
     return Path.home() / ".vaf" / "logs" / "vaf_run.log"
 
 def _running_pid() -> int | None:
-    """Return PID if VAF is running, else None (cleans up stale PID file)."""
+    """Return PID if VAF is running, else None (cleans up stale PID file).
+
+    Two records answer. The service pid file is written by whoever LAUNCHED
+    VAF detached (`vaf start`, the tray dashboard, the updater's relaunch).
+    The launches that write none (the app shortcut, run_vaf.sh, a bare
+    `vaf tray --no-top`) are covered by the record the running VAF writes for
+    itself (vaf/core/instance.py), so status, the dashboard and the updater
+    see a desktop-launched VAF too.
+    """
     pf = _pid_file()
-    if not pf.exists():
-        return None
-    try:
-        pid = int(pf.read_text().strip())
-        os.kill(pid, 0)  # raises if the pid is gone entirely
-        if _is_zombie(pid):
-            # A zombie has exited; only its table entry survives until the parent
-            # reaps it, and kill(pid, 0) succeeds for it. Treating that as "running"
-            # made stop send signals into the void and then report success, while
-            # the real VAF kept going - and with it a frontend serving a stale build.
-            pf.unlink(missing_ok=True)
-            return None
-        return pid
-    except (ValueError, ProcessLookupError, PermissionError):
+    if pf.exists():
+        try:
+            pid = int(pf.read_text().strip())
+        except ValueError:
+            pid = None
+        if pid and _alive(pid):
+            return pid
+        # Gone, a zombie (exited, table entry not yet reaped: treating that as
+        # "running" made stop signal into the void and report success while the
+        # real VAF kept going), or unreadable: a stale record either way.
         pf.unlink(missing_ok=True)
-        return None
+    recorded = instance.read_record()
+    return recorded.pid if recorded is not None else None
 
 
-def _is_zombie(pid: int) -> bool:
-    """True when the pid exists only as an unreaped exit status. Never raises."""
+def _alive(pid: int) -> bool:
+    """True when the pid exists and is not a zombie. Never raises.
+
+    Not os.kill(pid, 0): on Windows that is not a probe but TerminateProcess
+    with exit code 0, so a status check would have ended the very service it
+    was asked about.
+    """
     try:
         import psutil
-        return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+        return psutil.pid_exists(pid) and psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
     except Exception:
         return False
 
 
 def _find_vaf_processes() -> list:
-    """Running VAF processes, found by command line rather than by pid file.
+    """Running VAF processes, found by the singleton port they hold or by
+    command line rather than by pid file.
 
-    The pid file is only written by `vaf server start`. Every other way of
-    starting - the tray, run_vaf.sh, the app bundle - leaves none, so a pid-file
-    lookup alone answers "not running" while VAF is plainly running. Never raises.
+    The pid file is only written by the launchers that start VAF detached.
+    Every other way of starting - the app shortcut, run_vaf.sh, a bare tray -
+    leaves none, so a pid-file lookup alone answers "not running" while VAF is
+    plainly running. The rule lives in vaf/core/instance.py; this is its CLI
+    name. Never raises.
     """
-    try:
-        import psutil
-    except Exception:
-        return []
-
-    # The tray holds a singleton listener (tray.py check_singleton), so the
-    # process owning that port IS the service - an identity no command line can
-    # fake. Preferred over scanning argv, which cannot tell the service from a
-    # dashboard wrapper watching it (both run "-m vaf.main tray").
-    me = os.getpid()
-    try:
-        for conn in psutil.net_connections(kind="tcp"):
-            if (conn.status == psutil.CONN_LISTEN and conn.laddr
-                    and conn.laddr.port == TRAY_SINGLETON_PORT and conn.pid
-                    and conn.pid != me):
-                return [psutil.Process(conn.pid)]
-    except Exception:
-        pass
-
-    found = []
-    try:
-        for proc in psutil.process_iter(["pid", "cmdline"]):
-            try:
-                if proc.info["pid"] == me:
-                    continue
-                # Match on exact argv ELEMENTS, not the joined string: a shell
-                # whose -c payload merely QUOTES "vaf.main tray" (a supervisor
-                # line, a grep, a script wrapper) must never count as VAF -
-                # stop would kill it and the dashboard would "attach" to it.
-                # Deliberately tray-only: `vaf run` is somebody's interactive
-                # session, not the background service, and stop must not end it.
-                parts = list(proc.info["cmdline"] or [])
-                if "vaf.main" in parts and "tray" in parts:
-                    found.append(proc)
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return found
+    return instance.locate_processes()
 
 def _is_server_mode() -> bool:
     try:
@@ -124,6 +114,193 @@ def _is_server_mode() -> bool:
 def _systemctl(action: str):
     result = subprocess.run(["systemctl", "--user", action, "vaf"])
     raise typer.Exit(result.returncode)
+
+
+def _psutil():
+    import psutil
+    return psutil
+
+
+def _describe(inst: Instance) -> str:
+    return f"PID {inst.pid}, {inst.mode}"
+
+
+@contextlib.contextmanager
+def _surviving_the_shutdown():
+    """Ignore SIGTERM while VAF shuts down, and restore the disposition after.
+
+    The tray's quit broadcasts `pkill -TERM -f "python.*vaf.main"` to sweep
+    up its children, and that pattern matches the process doing the stopping
+    as well: `vaf stop`, `vaf restart` and the self-updater are all
+    `python -m vaf.main <verb>`. Measured with pgrep against a process started
+    the way the updater is: it is on the list. Without this, the stop step
+    would kill the updater in the middle of its own update, with VAF down and
+    nothing left to start it again. POSIX only; there is no pkill on Windows,
+    and the broadcast is skipped there.
+    """
+    if platform.system() == "Windows":
+        yield
+        return
+    try:
+        previous = signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    except (ValueError, OSError):        # not the main thread: nothing to shield
+        yield
+        return
+    try:
+        yield
+    finally:
+        try:
+            signal.signal(signal.SIGTERM, previous)
+        except (ValueError, OSError):
+            pass
+
+
+# ── the launch primitive ─────────────────────────────────────────────────────
+
+def start_instance(mode: str = instance.MODE_HEADLESS, python: Optional[str] = None,
+                   cwd: Optional[str] = None) -> int:
+    """Start a detached VAF in `mode`, record its pid in the service pid file,
+    and return the pid.
+
+    headless is what `vaf start` documents: no window, no tray icon, the web UI
+    in a browser. tray is the desktop app the way run_vaf.sh, the app shortcut
+    and `vaf tray` start it: window plus tray icon. Both run the same entry
+    point (`vaf.main tray --no-top`); the environment variable decides, as it
+    does for the systemd unit and the native wrapper.
+
+    The interpreter and working directory default to this process's. A relaunch
+    passes the ones the previous instance recorded, so a pythonw.exe launch
+    stays console-less and a checkout-relative start keeps its directory.
+
+    Detached on every platform: a new session on POSIX, a detached process
+    group on Windows (where a child left in the console's group dies with the
+    console, which is also how the updater spawns itself). The instance records
+    itself once up (vaf/core/instance.py); this only knows the pid it was given.
+    """
+    if mode not in instance.MODES:
+        raise ValueError(f"cannot start VAF in mode {mode!r}")
+    log = _log_file()
+    log.parent.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    if mode == instance.MODE_HEADLESS:
+        env[instance.HEADLESS_ENV] = "1"
+    else:
+        env.pop(instance.HEADLESS_ENV, None)
+
+    argv = [python or sys.executable, "-m", "vaf.main", "tray", "--no-top"]
+    kwargs = {"stdin": subprocess.DEVNULL, "env": env}
+    if cwd and os.path.isdir(cwd):
+        kwargs["cwd"] = cwd
+    if platform.system() == "Windows":
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | \
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        if flags:
+            kwargs["creationflags"] = flags
+    else:
+        kwargs["start_new_session"] = True
+
+    with open(log, "a") as lf:
+        proc = subprocess.Popen(argv, stdout=lf, stderr=subprocess.STDOUT, **kwargs)
+    try:
+        _pid_file().write_text(str(proc.pid))
+    except Exception:
+        pass
+    return proc.pid
+
+
+def relaunch(previous: Optional[Instance]) -> Optional[int]:
+    """Start VAF again the way `previous` ran: its mode, interpreter and working
+    directory. Returns the new pid.
+
+    No previous instance means the documented default of `vaf start`, headless.
+    A recorded interpreter that no longer exists, or none (an instance found
+    in the process table), means this one. In server mode the lifecycle is
+    systemd's, as for `vaf start`.
+    """
+    if _is_server_mode():
+        _systemctl("start")             # raises typer.Exit with systemctl's code
+        return None
+    mode = instance.MODE_HEADLESS
+    python = cwd = None
+    if previous is not None:
+        if previous.mode in instance.MODES:
+            mode = previous.mode
+        python = previous.python or None
+        cwd = previous.cwd or None
+    if python and not os.path.exists(python):
+        python = None
+    return start_instance(mode, python=python, cwd=cwd)
+
+
+def stop_instance() -> Optional[Instance]:
+    """Stop the running VAF and return what was stopped, or None when nothing
+    ran. Terminates, waits up to 10 s, then kills.
+
+    Targets, in order: the recorded instance; without a record, every process
+    the finder returns (the singleton-port owner, or every `vaf.main tray` by
+    argv); without either, the pid in the service pid file. A clean exit
+    removes its records itself; a killed process cannot, so both records are
+    dropped here for the pids that were stopped.
+    """
+    psutil = _psutil()
+    running = instance.find_running()
+    if running is not None and running.recorded:
+        pids = [running.pid]
+    else:
+        pids = [int(p.pid) for p in _find_vaf_processes()]
+        if not pids:
+            pid = _running_pid()
+            pids = [pid] if pid else []
+        if running is None and pids:
+            running = Instance(pid=pids[0], mode=instance.MODE_HEADLESS, recorded=False)
+    if not pids:
+        return None
+
+    me = os.getpid()
+    procs = []
+    for pid in pids:
+        if pid == me:
+            continue
+        try:
+            procs.append(psutil.Process(pid))
+        except psutil.Error:
+            continue
+    if not procs:
+        _drop_records(pids)
+        return None
+
+    UI.info(f"Stopping VAF ({_describe(running)})...")
+    with _surviving_the_shutdown():
+        for proc in procs:
+            try:
+                proc.terminate()
+            except psutil.Error:
+                pass
+        _, alive = psutil.wait_procs(procs, timeout=10)
+        for proc in alive:
+            try:
+                proc.kill()
+            except psutil.Error:
+                pass
+    _drop_records(pids)
+    return running
+
+
+def _drop_records(pids: List[int]) -> None:
+    """Forget the records that name a pid that was just stopped: the
+    instance's own, and the launcher's pid file only if it names one of them
+    (another terminal may have started a newer service meanwhile, and deleting
+    that record would make status lie and let the next start double-launch)."""
+    for pid in pids:
+        instance.forget(pid)
+    try:
+        pf = _pid_file()
+        if pf.exists() and pf.read_text().strip() in {str(p) for p in pids}:
+            pf.unlink(missing_ok=True)
+    except Exception:
+        pass
+
 
 # ── commands ──────────────────────────────────────────────────────────────────
 
@@ -168,24 +345,9 @@ def cmd_start(
             return
         raise typer.Exit(0)
 
-    log = _log_file()
-    log.parent.mkdir(parents=True, exist_ok=True)
-
-    env = os.environ.copy()
-    env["VAF_NATIVE_WRAPPER"] = "1"
-
-    with open(log, "a") as lf:
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "vaf.main", "tray"],
-            stdout=lf,
-            stderr=subprocess.STDOUT,
-            env=env,
-            start_new_session=True,
-        )
-
-    _pid_file().write_text(str(proc.pid))
-    UI.success(f"VAF started (PID {proc.pid})")
-    UI.info(f"Log:  {log}")
+    pid = start_instance(instance.MODE_HEADLESS)
+    UI.success(f"VAF started (PID {pid})")
+    UI.info(f"Log:  {_log_file()}")
     UI.info("Open: http://localhost:3000")
     if watch:
         _open_dashboard()
@@ -196,56 +358,13 @@ def cmd_start(
 def cmd_stop():
     """Stop the running VAF background service."""
     if _is_server_mode():
-        _systemctl("stop")
+        with _surviving_the_shutdown():   # the unit's ExecStop runs the same quit
+            _systemctl("stop")
         return
 
-    pid = _running_pid()
-    if not pid:
-        # No pid file does NOT mean nothing is running: only `vaf server start`
-        # writes one. Look for the processes themselves before giving up, so the
-        # command tells the truth for a tray-started VAF too.
-        procs = _find_vaf_processes()
-        if not procs:
-            UI.warning("VAF is not running")
-            return
-        UI.info(f"Stopping VAF ({len(procs)} process(es), no pid file)...")
-        for proc in procs:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
-        import psutil
-        gone, alive = psutil.wait_procs(procs, timeout=10)
-        for proc in alive:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-        UI.success("VAF stopped")
+    if stop_instance() is None:
+        UI.warning("VAF is not running")
         return
-
-    UI.info(f"Stopping VAF (PID {pid})...")
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-
-    # Wait up to 10 s for clean shutdown
-    import time
-    for _ in range(10):
-        time.sleep(1)
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            break
-    else:
-        # Force-kill if still alive
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-
-    _pid_file().unlink(missing_ok=True)
     UI.success("VAF stopped")
 
 
@@ -255,8 +374,13 @@ def cmd_restart():
         _systemctl("restart")
         return
 
-    cmd_stop()
-    cmd_start()
+    previous = stop_instance()
+    if previous is None:
+        UI.warning("VAF was not running; starting it")
+    pid = relaunch(previous)
+    mode = previous.mode if previous is not None else instance.MODE_HEADLESS
+    UI.success(f"VAF started (PID {pid}, {mode})")
+    UI.info("Watch it live: vaf top")
 
 
 def cmd_status():
@@ -265,9 +389,13 @@ def cmd_status():
         _systemctl("status")
         return
 
-    pid = _running_pid()
-    if pid:
-        UI.success(f"VAF is running (PID {pid})")
+    running = instance.find_running()
+    if running is None:
+        pid = _running_pid()
+        if pid:
+            running = Instance(pid=pid, mode=instance.MODE_HEADLESS, recorded=False)
+    if running is not None:
+        UI.success(f"VAF is running ({_describe(running)})")
         UI.info("Web UI: http://localhost:3000")
     else:
         UI.warning("VAF is not running")

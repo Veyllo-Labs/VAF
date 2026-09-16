@@ -209,12 +209,15 @@ def update_apply(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
 def _restart_blocker() -> Optional[str]:
     """Why an update started from here would not come back, or None.
 
-    In desktop mode the updater stops VAF through the pidfile `vaf start`
-    writes. Started any other way (`vaf tray` by hand, the crash supervisor,
-    a desktop entry), there is no pidfile: the stop step would quietly do
-    nothing, the checkout would be swapped under a running server, and the
-    start step would add a SECOND instance. Saying so beats handing someone a
-    button that promises a restart and delivers two servers.
+    In desktop mode the updater stops the running VAF and starts it again the
+    way it ran. It can do that for any VAF it can identify: one with a service
+    pid record (`vaf start`, the tray dashboard), one that recorded itself
+    (vaf/core/instance.py: the app shortcut, run_vaf.sh, a bare tray), or one
+    found in the process table by the singleton port it holds. A VAF it cannot
+    identify at all is refused: the stop step would quietly do nothing, the
+    checkout would be swapped under a running server, and the start step would
+    add a SECOND instance. Saying so beats handing someone a button that
+    promises a restart and delivers two servers.
     """
     try:
         from vaf.core.config import Config
@@ -231,6 +234,12 @@ def _restart_blocker() -> Optional[str]:
             return None
     except Exception:
         return None
-    return ("This VAF was not started as a background service, so the updater cannot "
-            "stop and start it for you. Update it from a terminal with `vaf update`, "
-            "or start VAF with `vaf start` once and try again.")
+    try:
+        from vaf.core.instance import find_running
+        if find_running() is not None:
+            return None
+    except Exception:
+        pass
+    return ("The updater cannot tell which process this VAF is, so it could not stop "
+            "and start it for you. Update it from a terminal with `vaf update`, or "
+            "start VAF with `vaf tray` or `vaf start` and try again.")

@@ -11,6 +11,31 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Changed
+- **The update button now sits with the update it applies.** In the Update and Repair
+  dialog the "Update now" button was pinned to the foot of the version column, a full
+  screen below the card that announces the new version, its release notes and the
+  restart warning; on a laptop the empty space between the two was taller than the
+  card itself. The button, and the confirmation step it opens, now sit inside that card
+  directly under the warning, and only "Check for updates" stays at the foot, where it
+  is the action for the case that there is no update card at all. The card also prints
+  the exact version of the update (for example 0.1.0a28) under the short one, the way
+  the installed-version card already does: during a prerelease series every version
+  reads "v0.1" otherwise, so the line did not say which update it was offering.
+
+### Fixed
+- **The desktop app can update itself from Settings on every platform, and comes back
+  the way it was started.** The update button refused any VAF without a service pid
+  record, which is every desktop launch on macOS, Linux and Windows: the app shortcut,
+  `run_vaf.sh` and a bare `vaf tray --no-top` write none. The advice it gave would have
+  brought the app back without its window and tray icon, as `vaf restart` also did. The
+  running VAF now records how it was started, so `vaf stop`, `vaf status`, `vaf restart`
+  and the updater address that process and start it again in the same mode: windowed
+  stays windowed, headless stays headless. The stop also survives the tray's own shutdown
+  sweep, which used to reach the process doing the stopping, the updater included, and
+  the liveness probe behind `vaf status` no longer uses a call that terminates the
+  process on Windows.
+
 ## [0.1.0a28] - 2026-09-14
 
 ### Added
@@ -628,17 +653,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
-- **The desktop app can update itself from Settings on every platform, and comes back
-  the way it was started.** The update button refused any VAF without a service pid
-  record, which is every desktop launch on macOS, Linux and Windows: the app shortcut,
-  `run_vaf.sh` and a bare `vaf tray --no-top` write none. The advice it gave would have
-  brought the app back without its window and tray icon, as `vaf restart` also did. The
-  running VAF now records how it was started, so `vaf stop`, `vaf status`, `vaf restart`
-  and the updater address that process and start it again in the same mode: windowed
-  stays windowed, headless stays headless. The stop also survives the tray's own shutdown
-  sweep, which used to reach the process doing the stopping, the updater included, and
-  the liveness probe behind `vaf status` no longer uses a call that terminates the
-  process on Windows.
 - **Messages in a room can now carry proof of who wrote them.** Until now a room recorded
   the author by assigning it: the machine holding the room knew who was connected and
   wrote that down, which says nothing to anybody reading the conversation somewhere else.
@@ -948,16 +962,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   provider whose own ceiling is lower refuses the figure once, the request is repeated
   immediately at a value known to work everywhere, and the lower figure is kept for the
   rest of the session, so no model can be broken by the setting.
-- **The update button now sits with the update it applies.** In the Update and Repair
-  dialog the "Update now" button was pinned to the foot of the version column, a full
-  screen below the card that announces the new version, its release notes and the
-  restart warning; on a laptop the empty space between the two was taller than the
-  card itself. The button, and the confirmation step it opens, now sit inside that card
-  directly under the warning, and only "Check for updates" stays at the foot, where it
-  is the action for the case that there is no update card at all. The card also prints
-  the exact version of the update (for example 0.1.0a28) under the short one, the way
-  the installed-version card already does: during a prerelease series every version
-  reads "v0.1" otherwise, so the line did not say which update it was offering.
 
 ### Fixed
 

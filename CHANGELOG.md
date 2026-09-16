@@ -936,6 +936,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   provider whose own ceiling is lower refuses the figure once, the request is repeated
   immediately at a value known to work everywhere, and the lower figure is kept for the
   rest of the session, so no model can be broken by the setting.
+- **The update button now sits with the update it applies.** In the Update and Repair
+  dialog the "Update now" button was pinned to the foot of the version column, a full
+  screen below the card that announces the new version, its release notes and the
+  restart warning; on a laptop the empty space between the two was taller than the
+  card itself. The button, and the confirmation step it opens, now sit inside that card
+  directly under the warning, and only "Check for updates" stays at the foot, where it
+  is the action for the case that there is no update card at all. The card also prints
+  the exact version of the update (for example 0.1.0a28) under the short one, the way
+  the installed-version card already does: during a prerelease series every version
+  reads "v0.1" otherwise, so the line did not say which update it was offering.
 
 ### Fixed
 

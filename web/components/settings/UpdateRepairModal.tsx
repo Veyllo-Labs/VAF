@@ -748,6 +748,12 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                                     <div className="text-sm font-semibold text-gray-800">{tM('updateAvailable')}</div>
                                     <div className="text-sm text-gray-600">
                                         {tM('newVersion', { version: formatVersion(phase.latest).display || phase.latest })}
+                                        {/* major.minor cannot tell one prerelease from the next (0.1.0a26 and
+                                            0.1.0a28 both read "v0.1", see lib/version.ts), so the exact
+                                            version follows, the way the installed-version card prints it. */}
+                                        {formatVersion(phase.latest).display && (
+                                            <span className="block text-xs text-gray-400 font-mono mt-0.5">{phase.latest}</span>
+                                        )}
                                     </div>
                                     {phase.releaseUrl && (
                                         <a
@@ -770,6 +776,36 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                                             {applyReason && <span className="block mt-1 text-gray-400">{applyReason}</span>}
                                         </div>
                                     )}
+                                    {/* The primary action sits with the card it acts on. Pinned to the
+                                        foot of the column (mt-auto below), "Update now" stood a full
+                                        screen under the version, notes and warning it belongs to; the
+                                        empty space between them was taller than the card. Only "Check
+                                        for updates" stays at the foot: it is the action for the case
+                                        that there is no update card at all. */}
+                                    {canApply && phase.kind === 'available' && (
+                                        <button
+                                            onClick={() => setPhase({ kind: 'confirm', latest: phase.latest, releaseUrl: phase.releaseUrl })}
+                                            className="w-full h-10 px-4 rounded-lg bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none text-sm font-medium transition-colors"
+                                        >
+                                            {tM('updateNow')}
+                                        </button>
+                                    )}
+                                    {canApply && phase.kind === 'confirm' && (
+                                        <div className="flex flex-col gap-2">
+                                            <button
+                                                onClick={() => applyUpdate(phase.latest)}
+                                                className="w-full h-10 px-4 rounded-lg bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none text-sm font-medium transition-colors"
+                                            >
+                                                {tM('confirmUpdate')}
+                                            </button>
+                                            <button
+                                                onClick={() => setPhase({ kind: 'available', latest: phase.latest, releaseUrl: phase.releaseUrl })}
+                                                className="text-xs text-gray-500 hover:text-gray-700"
+                                            >
+                                                {tCommon('cancel')}
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             )}
 
@@ -787,31 +823,6 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                                         <><RefreshCw size={14} /> {tM('checkForUpdates')}</>
                                     )}
                                 </button>
-
-                                {canApply && phase.kind === 'available' && (
-                                    <button
-                                        onClick={() => setPhase({ kind: 'confirm', latest: phase.latest, releaseUrl: phase.releaseUrl })}
-                                        className="h-10 px-4 rounded-lg bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none text-sm font-medium transition-colors"
-                                    >
-                                        {tM('updateNow')}
-                                    </button>
-                                )}
-                                {canApply && phase.kind === 'confirm' && (
-                                    <>
-                                        <button
-                                            onClick={() => applyUpdate(phase.latest)}
-                                            className="h-10 px-4 rounded-lg bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none text-sm font-medium transition-colors"
-                                        >
-                                            {tM('confirmUpdate')}
-                                        </button>
-                                        <button
-                                            onClick={() => setPhase({ kind: 'available', latest: phase.latest, releaseUrl: phase.releaseUrl })}
-                                            className="text-xs text-gray-500 hover:text-gray-700"
-                                        >
-                                            {tCommon('cancel')}
-                                        </button>
-                                    </>
-                                )}
                             </div>
                         </div>
 

@@ -368,6 +368,22 @@ never restricted, a raising registered resolver refuses). Guard:
 7. **Bounded execution** - per-tool timeout and stop polling; see [TOOL_SUPERVISION.md](TOOL_SUPERVISION.md).
 8. **`tool_end` event**, then truncation of the result (the chat lane cuts at 2000 chars; the workflow engine passes `max_result_chars=None`, because step outputs are chained into later steps).
 
+**An unknown tool name is answered, not only refused.** A name no registered tool carries
+passes the policy stages with nothing to evaluate, emits the `tool_start`/`tool_end` pair
+with `ok=False`, and returns `Error: Unknown tool '<name>'`. That prefix is pinned by the
+dispatch baseline and stays byte-identical when nothing below applies. After it,
+`unknown_tool_hint` (`vaf/core/tool_dispatch.py`) appends a correction, tried in this order:
+`<name>` is a PARAMETER of a registered tool, so the owner and the exact call are spelled
+out with the value the model passed (`'mark_task_done' is a parameter of
+update_working_memory, not a tool: call update_working_memory(mark_task_done=0) instead`;
+several owners are listed, capped at three); `<name>` is a near miss of a tool name, so the
+closest names follow with the same `format_tool_signature` rendering `search_tools` gives a
+discovered tool; nothing is near, so the model is pointed at `search_tools` if registered.
+The live incident behind it: a model that had just been told by a tool result to "call
+mark_task_done on it" did exactly that, was refused twice with nothing else, and confirmed a
+wipe of its task list as the other way out. Every lane on the pipeline gets the hint,
+embedders included. Guard: `tests/test_unknown_tool_hint.py`.
+
 **What the chat lane adds**, each at the position where it belongs:
 
 - After the policy check and **before** the confirmation gate, so a refusal cannot be replaced by a gate prompt: the **plan gate** (`write`/`dangerous` tools except `python_sandbox` need a plan in working memory first, answered with `[PLAN REQUIRED]`; skipped for sub-agents and non-interactive runs - see [CONTEXT_MANAGEMENT.md](../memory/CONTEXT_MANAGEMENT.md)), the **working-memory note firewall**, the **proactive-reply mutation gate** (`[CONFIRM REQUIRED]` for stored-state mutations and destructive delegation while the turn is a pickup of a reply that is not a clear affirmative; kill-switch `proactive_reply_mutation_gate_enabled`) and the **ask-first gate** (`[AWAITING USER]` for new `write`/`dangerous` tools and delegations on synthetic drain turns while a blocking question is pending; kill-switch `ask_first_drain_gate_enabled`).

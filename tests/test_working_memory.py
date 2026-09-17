@@ -215,3 +215,26 @@ def test_mark_already_done_when_all_complete_is_positive(tmp_path):
     r = tool.run(base_dir=base, mark_task_done=0)      # already done + all complete
     assert "all tasks are complete" in r.lower()
     assert "⚠️" not in r                                # positive close-out, not a warning
+
+
+def test_overwrite_guard_names_the_real_call_not_a_phantom_tool(tmp_path):
+    """The bounce used to say "call mark_task_done on it". A model took that literally,
+    called a tool of that name, was refused twice with "Unknown tool", and then took
+    option (c) instead: it confirmed the wipe of two steps it had actually finished.
+    The bounce now spells out the parameter call for one step, with the index from its
+    own list, and the bulk call for all of them.
+    """
+    import vaf.tools.context_tools as ct
+    ct._TASK_OVERWRITE_CONFIRM.clear()
+    tool = ct.UpdateWorkingMemoryTool()
+    base = str(tmp_path)
+
+    tool.run(base_dir=base, add_task="first step")
+    tool.run(base_dir=base, add_task="second step")
+    tool.run(base_dir=base, mark_task_done=0)                       # the first is done
+    bounce = tool.run(base_dir=base, tasks=[])                      # wipe while [1] is pending
+
+    assert "update_working_memory(mark_task_done=1)" in bounce, "the pending step's own index"
+    assert "update_working_memory(mark_all_done=true)" in bounce
+    assert "is a parameter of update_working_memory, not a tool" in bounce
+    assert "call mark_task_done on it" not in bounce

@@ -363,7 +363,7 @@ update_working_memory(add_notes=["Step 1 result: ..."], mark_task_done=0)
 ```
 
 ### 3. SUMMARIZE - After completing a step
-- **Mark the finished step done immediately** with `mark_task_done` - never leave a completed step pending, and never replace the whole task list just to "clean up". If a tool warns that pending tasks would be dropped, that is NOT an internal note you may ignore: handle it (mark the finished one done, or keep the others in the list).
+- **Mark the finished step done immediately** with `update_working_memory(mark_task_done=<index>)` (a parameter, not a tool of its own) - never leave a completed step pending, and never replace the whole task list just to "clean up". If a tool warns that pending tasks would be dropped, that is NOT an internal note you may ignore: handle it (mark the finished one done, or keep the others in the list).
 - If context is getting large, your older messages will be compressed automatically -
   but your plan and notes in working_memory survive compression
 - Continue with the next step
@@ -686,7 +686,7 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
             tp.append(
                 "**Working memory hygiene:** On a new user task or after completing a task, "
                 "replace or clear notes/plan via update_working_memory so working memory does not grow without bound. "
-                "Use tasks (update_working_memory(add_task='...'), mark_task_done) for checkable steps; done tasks are auto-removed after 12h. "
+                "Use tasks for checkable steps: update_working_memory(add_task='...') adds one, update_working_memory(mark_task_done=<index>) finishes one - both are parameters of that tool, not tools; done tasks are auto-removed after 12h. "
                 "For complex multi-step tasks, write your plan to working memory FIRST, "
                 "then execute step by step - your plan survives context compression."
             )

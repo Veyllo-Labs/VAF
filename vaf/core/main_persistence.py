@@ -693,7 +693,7 @@ Tasks (the concrete steps that carry out the plan; pending/done, done removed af
 
 Use the update_working_memory tool to keep these current; they persist across turns and appear here.
 - plan = your high-level approach (a line or two: how you will tackle the intent). Keep it short and stable; replace it when the approach changes. The plan gate only needs this approach, not a full step list.
-- tasks = the concrete, ordered steps that carry out the plan. add_task to add a step, mark_task_done(index) when it is finished; the current step is shown above and done tasks drop after 12h. This is where multi-step work is tracked and kept on course — put the steps here, not in plan. (If you set a plan but no tasks, you'll be reminded to break it into tasks.)
+- tasks = the concrete, ordered steps that carry out the plan. update_working_memory(add_task="...") adds a step, update_working_memory(mark_task_done=<index>) marks it finished (add_task and mark_task_done are parameters of that tool, not tools of their own); the current step is shown above and done tasks drop after 12h. This is where multi-step work is tracked and kept on course - put the steps here, not in plan. (If you set a plan but no tasks, you'll be reminded to break it into tasks.)
 - notes = facts/observations worth remembering; add_notes to append.
 - On a new user task, reset what no longer applies (e.g. update_working_memory(plan=[], notes=[])).
 

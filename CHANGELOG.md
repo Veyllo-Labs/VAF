@@ -11,6 +11,25 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **A tool name the model made up is answered with the right call, not only refused.** A
+  model called `mark_task_done` as a tool; it is a parameter of `update_working_memory`, and
+  the tool result it had just read told it to "call mark_task_done on it". The dispatch
+  pipeline answered "Unknown tool" and nothing else, so the model took the other way out
+  and confirmed a wipe of its task list instead of marking two finished steps done. The
+  refusal now says which tool carries that parameter and spells out the call with the value
+  the model passed, a misspelt tool name gets the closest names with their signatures, and
+  a name nowhere near is pointed at `search_tools`. The task-list guard names the real call
+  for one step and for all of them, and the prompt texts that wrote the parameter like a
+  tool were reworded the same way. Every lane on the shared pipeline gets this, embedders
+  included.
+- **A tool call the model wrote as text with a space after DeepSeek's special token ran
+  nothing and was shown raw.** The recovery for `<｜｜DSML｜｜invoke ...>` expected the tag name
+  to follow the token directly and the batch to be wrapped in `tool_calls`; a reply with
+  `<｜｜DSML｜｜ invoke ...>` and a bare `calls` wrapper matched no dialect, so three mail
+  searches were never run and the user got the markup as the answer. Both forms are read
+  and stripped now.
+
 ## [0.1.0a29] - 2026-09-17
 
 ### Changed

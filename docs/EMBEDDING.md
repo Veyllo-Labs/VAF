@@ -938,10 +938,23 @@ to `None` does not put an unbounded blob on your event sink.
 
 It never raises for a tool failure and never blocks on a human. Everything comes
 back as a string: `Security Error: ...` for a policy block, `Tool Error: ...`
-for a schema failure or an exception inside the tool, and the
+for a schema failure or an exception inside the tool, `Error: Unknown tool
+'<name>'` for a name no registered tool carries, and the
 `vaf.markers.TOOL_CONFIRMATION_REQUIRED` marker when a gated tool had nobody to
 ask. A hard block emits **no events at all**, so an observer never sees a
 blocked tool reported as having run.
+
+The unknown-tool refusal carries a correction after its prefix whenever the
+registry allows one, because a model told only "no such tool" guesses again and
+the second guess is the expensive one (in the live incident behind this, it
+confirmed a wipe of its task list instead of marking two finished steps done).
+In order: if `<name>` is a *parameter* of one of your tools, the answer names
+that tool and spells out the call, with the value the model passed (`call
+update_working_memory(mark_task_done=0) instead`); if it is a near miss of a
+tool name, the closest names follow with their call signatures; if nothing is
+near and you registered `search_tools`, the model is pointed there. The prefix
+is the contract and stays byte-identical when no correction applies; the
+wording of the correction is not something to parse.
 
 The supported arguments:
 

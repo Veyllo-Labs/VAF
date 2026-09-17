@@ -9,6 +9,13 @@ or wrapped in their own special tokens (``<｜｜DSML｜｜invoke name="X">…``
 structured ``tool_calls`` field. Without recovery the raw markup is shown to the user and the
 call never runs. Both the coding agent and the main agent route content through this on their
 "no structured tool_calls" fallback path.
+
+The token form varies by serving stack. One live leak (a Veyllo-served model) put a SPACE
+between the token and the tag name, ``<｜｜DSML｜｜ invoke name="X">`` with ``</｜｜DSML｜｜ parameter>``
+closers, and wrapped the batch in a bare ``calls`` instead of ``tool_calls``. Stripping the
+token alone left ``< invoke ...>``, which no dialect matched: three calls never ran and the
+raw block was the reply the user saw. The token regex therefore swallows the whitespace
+after the token, and the wrapper strip knows ``calls`` and ``function_calls`` too.
 """
 from __future__ import annotations
 
@@ -26,7 +33,10 @@ _TOOL_USE_RE = re.compile(r'<tool_use\b[^>]*\bname="([^"]+)"[^>]*>(.*?)</tool_us
 # Direct child tags used as parameters in Dialects 2 & 3 (tag name = parameter name).
 _CHILD_TAG_RE = re.compile(r"<([A-Za-z_][\w-]*)\s*>(.*?)</\1>", re.DOTALL)
 # DeepSeek wraps tags in its special-token delimiter (fullwidth pipe U+FF5C): <｜｜DSML｜｜invoke ...>.
-_DSML_TOKEN_RE = re.compile(r"[｜|]{1,2}\s*DSML\s*[｜|]{1,2}")
+# The trailing \s* eats the space some stacks put between the token and the tag name
+# (<｜｜DSML｜｜ invoke ...>, </｜｜DSML｜｜ parameter>): without it the plain-XML regexes below see
+# "< invoke" and match nothing. Only whitespace directly after the token is consumed.
+_DSML_TOKEN_RE = re.compile(r"[｜|]{1,2}\s*DSML\s*[｜|]{1,2}\s*")
 
 
 def _coerce(raw: str, force_string: bool = False) -> Any:
@@ -213,7 +223,10 @@ def extract_wire_json_tool_calls(content: str, valid_names=None):
     return out
 
 
-_TOOL_CALLS_WRAP_RE = re.compile(r"</?tool_calls\b[^>]*>")
+# The batch wrapper: DeepSeek's `tool_calls`, Anthropic's `function_calls`, and the bare
+# `calls` one live leak used. Only reached when the content carries call markup (the guard
+# in strip_tool_call_markup), so a `<calls>` tag in ordinary prose is never touched.
+_TOOL_CALLS_WRAP_RE = re.compile(r"</?(?:tool_calls|function_calls|calls)\b[^>]*>")
 
 
 def strip_tool_call_markup(content: str) -> str:

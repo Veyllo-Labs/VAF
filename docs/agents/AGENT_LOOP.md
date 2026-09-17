@@ -131,7 +131,7 @@ once nothing above it matched:
 | # | Dialect | Parser |
 |---|---|---|
 | 1-4 | streamed / paren / Qwen-Hermes / Gemma | `_parse_paren_tool_calls`, `_parse_qwen_tool_calls`, `_parse_gemma4_tool_calls` (`agent.py`) |
-| 5 | Anthropic `<invoke name>` + `<parameter name>`, including DeepSeek's `<｜｜DSML｜｜invoke …>` token-wrapped form; Morph `<tool_use name>`; tool-as-tag `<write_to_file>…` | `extract_xml_tool_calls` |
+| 5 | Anthropic `<invoke name>` + `<parameter name>`, including DeepSeek's `<｜｜DSML｜｜invoke …>` token-wrapped form and its spaced variant `<｜｜DSML｜｜ invoke …>` with a bare `calls` wrapper (one Veyllo-served leak; stripping the token alone left `< invoke`, which matched nothing, so three calls never ran and the raw block was the reply); Morph `<tool_use name>`; tool-as-tag `<write_to_file>…` | `extract_xml_tool_calls` |
 | 6 | Bare OpenAI wire JSON `{"tool_calls": [...]}` leaked as content | `extract_wire_json_tool_calls` |
 
 Whatever is recovered is dispatched, and `strip_tool_call_markup` removes the raw markup from

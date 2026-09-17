@@ -29,6 +29,7 @@ size cannot be reviewed by reading it.
 """
 from __future__ import annotations
 
+import difflib
 import json
 import uuid as _uuid
 from pathlib import Path
@@ -856,6 +857,75 @@ def resolve_agent_display_name(username) -> str:
     return str(fn(str(username)) or "").strip()
 
 
+def _sole_value(args) -> str | None:
+    """The one argument value as JSON text when the call carried exactly one, else None."""
+    if not isinstance(args, dict) or len(args) != 1:
+        return None
+    (value,) = args.values()
+    try:
+        return json.dumps(make_json_serializable(value), ensure_ascii=False)
+    except Exception:
+        return None
+
+
+def unknown_tool_hint(name, tools, args=None, *, limit: int = 3) -> str:
+    """The correction that follows ``Error: Unknown tool '<name>'``, or "" when there is none.
+
+    A bare refusal leaves the model to guess again, and the next guess is the expensive
+    one. In the live incident behind this, a model called ``mark_task_done`` as a tool (it
+    is a PARAMETER of ``update_working_memory``), was told only that no such tool exists,
+    and took the other way out its previous tool result had offered: it confirmed a full
+    wipe of its task list instead of marking two finished steps done. Three shapes of
+    mistake get three answers, tried in this order:
+
+    1. the name is a parameter of a registered tool - name the owner and spell out the
+       exact call, with the value the model already passed when it passed exactly one
+       (``call update_working_memory(mark_task_done=0) instead``); several owners are
+       listed, capped at ``limit``;
+    2. the name is a near miss of a tool name (case-insensitive) - the closest names, each
+       rendered with the same call signature ``search_tools`` gives a discovered tool;
+    3. nothing is near - point at ``search_tools`` when the registry has it.
+
+    Pure and fail-safe: it reads only ``tool.parameters`` and the registry's keys, and any
+    exception inside answers "" so the refusal itself is never lost to its hint. The
+    ``Error: Unknown tool`` prefix stays the contract (the event ``ok`` flag and the dispatch
+    baseline pin it); the wording here is not.
+    """
+    try:
+        wanted = str(name or "").strip()
+        if not wanted or not tools:
+            return ""
+        owners = []
+        for tname, tool in tools.items():
+            params = getattr(tool, "parameters", None)
+            props = params.get("properties") if isinstance(params, dict) else None
+            if isinstance(props, dict) and wanted in props:
+                owners.append(str(tname))
+        if owners:
+            owners.sort()
+            if len(owners) == 1:
+                value = _sole_value(args)
+                return (f"'{wanted}' is a parameter of {owners[0]}, not a tool: call "
+                        f"{owners[0]}({wanted}={value if value is not None else '...'}) instead.")
+            more = f" and {len(owners) - limit} more" if len(owners) > limit else ""
+            return (f"'{wanted}' is a parameter of {', '.join(owners[:limit])}{more}, not a tool: "
+                    f"call one of those with {wanted}=... instead.")
+        by_lower: dict = {}
+        for tname in tools:
+            by_lower.setdefault(str(tname).lower(), str(tname))
+        close = difflib.get_close_matches(wanted.lower(), list(by_lower), n=limit, cutoff=0.6)
+        if close:
+            from vaf.tools.base import format_tool_signature
+            rendered = [format_tool_signature(tools[by_lower[key]]) or by_lower[key] for key in close]
+            return "Did you mean " + " or ".join(rendered) + "?"
+        if "search_tools" in tools:
+            return ('No registered tool has a similar name: call search_tools(query="...") '
+                    "to find the right one.")
+        return ""
+    except Exception:
+        return ""
+
+
 class ToolCaller:
     """Run a tool through the full pipeline, configured for one caller.
 
@@ -1114,7 +1184,11 @@ class ToolCaller:
 
     def _dispatch(self, name, tool, args):
         if tool is None:
-            return f"Error: Unknown tool '{name}'"
+            # The prefix is contract; the correction after it is what turns the refusal
+            # into a retry the model can get right (see unknown_tool_hint).
+            refusal = f"Error: Unknown tool '{name}'"
+            hint = unknown_tool_hint(name, self.tools, args)
+            return f"{refusal}. {hint}" if hint else refusal
         tool_args = dict(args) if args else {}
         tool_args, errors = repair_arguments(tool, tool_args, tool_name=name,
                                              model_name=self.model_name)

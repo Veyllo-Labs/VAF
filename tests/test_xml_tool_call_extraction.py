@@ -220,3 +220,55 @@ def test_the_main_agent_takes_the_whole_batch():
     assert "extract_xml_tool_calls(full_content, _names)" in lib, (
         "every recovery lane knows every dialect - and recovers the same amount of it"
     )
+
+
+def test_a_spaced_dsml_leak_with_a_bare_calls_wrapper_is_recovered_and_stripped():
+    """Live incident: a Veyllo-served model put a SPACE between DeepSeek's special token
+    and the tag name, closed with ``</｜｜DSML｜｜ parameter>``, and wrapped the batch in a
+    bare ``calls`` instead of ``tool_calls``. Stripping the token alone left
+    ``< invoke name=...>``, which no dialect matched: three searches never ran, nothing
+    was stripped, and the raw block was the reply the user saw.
+    """
+    from vaf.core.tool_call_recovery import extract_xml_tool_calls, strip_tool_call_markup
+
+    content = (
+        "<think>Let me batch a few.</think>\n\n"
+        "<｜｜DSML｜｜ calls>\n"
+        '<｜｜DSML｜｜ invoke name="find_mail">\n'
+        '<｜｜DSML｜｜ parameter name="limit" string="false">30</｜｜DSML｜｜ parameter>\n'
+        '<｜｜DSML｜｜ parameter name="query" string="true">NVIDIA</｜｜DSML｜｜ parameter>\n'
+        "</｜｜DSML｜｜ invoke>\n"
+        '<｜｜DSML｜｜ invoke name="find_mail">\n'
+        '<｜｜DSML｜｜ parameter name="limit" string="false">20</｜｜DSML｜｜ parameter>\n'
+        '<｜｜DSML｜｜ parameter name="query" string="true">Wg:</｜｜DSML｜｜ parameter>\n'
+        "</｜｜DSML｜｜ invoke>\n"
+        '<｜｜DSML｜｜ invoke name="inbox">\n'
+        '<｜｜DSML｜｜ parameter name="channel" string="true">mail</｜｜DSML｜｜ parameter>\n'
+        '<｜｜DSML｜｜ parameter name="include_bulk" string="false">true</｜｜DSML｜｜ parameter>\n'
+        '<｜｜DSML｜｜ parameter name="max_chats" string="false">10</｜｜DSML｜｜ parameter>\n'
+        "</｜｜DSML｜｜ invoke>\n"
+        "</｜｜DSML｜｜ calls>"
+    )
+
+    calls = extract_xml_tool_calls(content, {"find_mail", "inbox"})
+    assert [c["function"]["name"] for c in calls] == ["find_mail", "find_mail", "inbox"]
+    first, second, third = (json.loads(c["function"]["arguments"]) for c in calls)
+    assert first == {"limit": 30, "query": "NVIDIA"}, "string=false is coerced, string=true kept"
+    assert second == {"limit": 20, "query": "Wg:"}
+    assert third == {"channel": "mail", "include_bulk": True, "max_chats": 10}
+
+    assert strip_tool_call_markup(content) == "<think>Let me batch a few.</think>", \
+        "the bare calls wrapper goes with the blocks; nothing of the markup reaches the user"
+
+
+def test_the_unspaced_dsml_form_still_reads_the_same():
+    """The whitespace the token regex now swallows is only what FOLLOWS the token, so the
+    original form and the spacing between sibling blocks are untouched."""
+    from vaf.core.tool_call_recovery import extract_xml_tool_calls, strip_tool_call_markup
+
+    content = ('<｜｜DSML｜｜tool_calls> <｜｜DSML｜｜invoke name="read_file"> '
+               '<｜｜DSML｜｜parameter name="path" string="true">/home/user/a.txt</｜｜DSML｜｜parameter> '
+               "</｜｜DSML｜｜invoke> </｜｜DSML｜｜tool_calls> Done.")
+    calls = extract_xml_tool_calls(content, {"read_file"})
+    assert [json.loads(c["function"]["arguments"]) for c in calls] == [{"path": "/home/user/a.txt"}]
+    assert strip_tool_call_markup(content) == "Done."

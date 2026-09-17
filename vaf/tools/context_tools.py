@@ -111,7 +111,7 @@ class UpdateWorkingMemoryTool(BaseTool):
         "Update working memory (notes, plan, tasks) that persists across turns and appears in <working_memory>. "
         "plan = your high-level approach (short); tasks = the concrete steps that carry it out (tracked and kept on course). "
         "Set notes/plan to replace the list, add_notes/add_plan to append. "
-        "Tasks: add_task to add a step (pending), mark_task_done(index) to mark ONE done (pass the index of the step you actually finished — the open step shown in your context; marking an already-done or out-of-range index does nothing and you are told the correct index), or mark_all_done=true to mark EVERY pending task done at once (use this when the user says they are finished / 'mark everything done'). For multi-step work put the steps in tasks, not plan. Done tasks auto-removed after 12h."
+        "Tasks: add_task='<text>' adds a step (pending); mark_task_done=<index> marks ONE done (pass the index of the step you actually finished - the open step shown in your context; marking an already-done or out-of-range index does nothing and you are told the correct index); mark_all_done=true marks EVERY pending task done at once (use this when the user says they are finished / 'mark everything done'). All of these are parameters of THIS tool, not tools of their own. For multi-step work put the steps in tasks, not plan. Done tasks auto-removed after 12h."
     )
     
     parameters = {
@@ -214,11 +214,14 @@ class UpdateWorkingMemoryTool(BaseTool):
                                 for i, t in pending[:5]
                             )
                             return (
-                                f"⚠️ STOP — this is NOT an internal note to ignore; act on it. Your task "
+                                f"⚠️ STOP - this is NOT an internal note to ignore; act on it. Your task "
                                 f"replacement was NOT applied: {len(pending)} step(s) are still pending: {listed}. "
                                 f"Do ONE of these NOW (do not just reply to the user without it): "
-                                f"(a) if you just FINISHED a step, call mark_task_done on it; "
-                                f"(b) keep the pending steps — include them in the new tasks=[...]; or "
+                                f"(a) if you FINISHED them, mark them done: "
+                                f"update_working_memory(mark_task_done={pending[0][0]}) for that one step "
+                                f"(the index from the list above), or update_working_memory(mark_all_done=true) "
+                                f"for all of them - mark_task_done is a parameter of update_working_memory, not a tool; "
+                                f"(b) keep the pending steps - include them in the new tasks=[...]; or "
                                 f"(c) if you truly mean to drop them, call update_working_memory(tasks=[...]) again "
                                 f"to confirm. Ignoring this leaves the user's tracked tasks in a wrong state."
                             )

@@ -1440,6 +1440,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
       case 'channel_paired': return t('ovEvChannelPaired');
       case 'channel_unpaired': return t('ovEvChannelUnpaired');
       case 'contact_access_changed': return t('ovEvContactAccess');
+      case 'front_office_changed': return t('ovEvFrontOffice');
       case 'mail_high_risk_send_blocked': return t('ovEvMailSend');
       case 'mail_image_proxy_blocked': return t('ovEvMailImage');
       case 'skill_blocked': return t('ovEvSkillBlocked');

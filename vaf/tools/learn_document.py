@@ -204,6 +204,11 @@ async def ingest_document_knowledge(
     extra_tags = [str(t).strip().lower() for t in (extra_tags or []) if str(t).strip()]
     origin = "attachment" if attachment_name else "document"
     pipeline = RagPipeline(db)
+    # The Front Office lane is pinned at ingest like a chat namespace (lanes.pin_namespace
+    # strips it from every ordinary writer); this learn is the one writer that means it.
+    from vaf.memory.lanes import FRONT_OFFICE_SOURCE
+    # Passed only when it matters, so the long-term lane's call stays what it was.
+    lane_kw = {"keep_namespace": True} if source == FRONT_OFFICE_SOURCE else {}
 
     content_markdown = _strip_librarian_wrapper(content_markdown or "")
     sections = _split_into_sections(content_markdown, 500, 5000)
@@ -268,7 +273,8 @@ async def ingest_document_knowledge(
         if session_id:
             meta["attachment_session_id"] = session_id
         body = f"{context}\n\n{sec_text}"
-        await pipeline.ingest(content=body, metadata=meta, auto_connect=True, user_scope_id=user_scope_id)
+        await pipeline.ingest(content=body, metadata=meta, auto_connect=True, user_scope_id=user_scope_id,
+                              **lane_kw)
         created += 1
         append_domain_log("memory", (
             f"[LEARN] store section {sec_index} '{doc_title}': "
@@ -308,7 +314,7 @@ async def ingest_document_knowledge(
             if doc_summary:
                 index_meta["doc_summary"] = doc_summary
             await pipeline.ingest(content=index_content, metadata=index_meta,
-                                  user_scope_id=user_scope_id, auto_connect=False)
+                                  user_scope_id=user_scope_id, auto_connect=False, **lane_kw)
         append_domain_log("memory", (
             f"[LEARN] doc-index '{doc_title}' doc_tag={doc_tag} sections={created} "
             f"summary={doc_summary[:80]!r}"

@@ -1322,6 +1322,85 @@ def contact_endpoints(
     return out
 
 
+def find_contact_by_channel(
+    channel: str,
+    value: str,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """The contact carrying this store key on one channel, whatever its Front Office flag
+    says: the ingress question "is this sender opted out?" needs the record with the flag
+    OFF, which get_contact_by_whatsapp_phone and get_contact_by_telegram_user_id never
+    return. Keys are the ones contact_endpoints builds (`+<digits>` for WhatsApp, the
+    numeric id for Telegram), so a JID or a formatted number is normalised first."""
+    chan = (channel or "").strip().lower()
+    raw = str(value or "").strip()
+    if not chan or not raw:
+        return None
+    if chan == "whatsapp":
+        key = whatsapp_store_key(raw.split("@")[0] if "@" in raw else raw)
+    else:
+        key = raw
+    if not key:
+        return None
+    with _LOCK:
+        for c in _load_all(username, user_scope_id):
+            if key in (contact_endpoints(c).get(chan) or []):
+                return _contact_ensure_channels(dict(c))
+    return None
+
+
+def grant_assistant_for_channel(
+    channel: str,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> int:
+    """Switch "Can reach your assistant" ON for every contact that has a store key on this
+    channel: what switching a channel's Front Office on means for the people already in
+    the book (a new sender is enrolled by the bridge when they write). One load, one save;
+    returns how many records changed. Switching the channel off leaves the flags alone:
+    with the door shut they decide nothing, and the owner's per-person choices survive."""
+    chan = (channel or "").strip().lower()
+    changed = 0
+    with _LOCK:
+        contacts = _load_all(username, user_scope_id)
+        for c in contacts:
+            if c.get("allow_as_assistant_user"):
+                continue
+            if contact_endpoints(c).get(chan):
+                c["allow_as_assistant_user"] = True
+                changed += 1
+        if changed:
+            _save_all(contacts, username, user_scope_id)
+    return changed
+
+
+def enrol_front_office_contact(
+    channel: str,
+    value: str,
+    name: Optional[str],
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The record a bridge creates for a sender the open Front Office let in: the name the
+    channel showed (or the id), the one channel value, the flag ON so the owner can switch
+    this person off later, `source = "front_office"` so the book says where the record came
+    from. Idempotent: an existing record on that channel is returned unchanged."""
+    existing = find_contact_by_channel(channel, value, username, user_scope_id)
+    if existing is not None:
+        return existing
+    chan = (channel or "").strip().lower()
+    key = str(value or "").strip()
+    if chan == "whatsapp":
+        key = whatsapp_store_key(key.split("@")[0] if "@" in key else key) or key
+    label = (name or "").strip() or key
+    return create_contact(
+        label, username, user_scope_id=user_scope_id,
+        channels=[{"type": chan, "value": key}],
+        allow_as_assistant_user=True, source="front_office",
+    )
+
+
 def front_office_endpoints(
     username: Optional[str] = None,
     user_scope_id: Optional[str] = None,

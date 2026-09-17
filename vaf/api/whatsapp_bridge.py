@@ -1580,12 +1580,24 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             username, chat_id, user_scope_id, direction="out"
         )
         ingress_policy = Config.get("channel_ingress_policy")
+        # An open Front Office (Settings, Connections) answers every sender on this number
+        # except a person the owner switched off: the contact record with the flag OFF is
+        # that opt-out, so it is looked up regardless of the flag.
+        opted_out = False
+        if not explicit_allow and not contact_allow and raw:
+            try:
+                from vaf.core.contacts_store import find_contact_by_channel
+                _rec = find_contact_by_channel("whatsapp", chat_id, username, user_scope_id)
+                opted_out = bool(_rec) and not bool(_rec.get("allow_as_assistant_user"))
+            except Exception:
+                opted_out = False
         policy_allowed, policy_reason = evaluate_ingress(
             "whatsapp",
             ingress_policy,
             explicit_match=explicit_allow,
             contact_match=contact_allow,
             conversation_match=conversation_allow,
+            sender_opted_out=opted_out,
         )
         # An unresolved @lid is not a phone number, so no whitelist or contact can match it;
         # the note rides on the one REJECT line below instead of being a second line.
@@ -1660,6 +1672,22 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             # The owner's endpoint for proactive sends is the registered main-user number
             # only; a contact's message must never become "where the owner is".
             save_whatsapp_chat_jid(user_scope_id, username, from_jid)
+        if policy_reason == "front_office_open" and raw and chat_id.startswith("+"):
+            # A sender the open Front Office let in becomes a contact with the flag ON, so
+            # the owner sees them in the book and the WhatsApp window and can switch them
+            # off there. Recorded like a pairing; the bridge never repeats it for a record
+            # that exists.
+            try:
+                from vaf.core.contacts_store import enrol_front_office_contact, find_contact_by_channel
+                from vaf.core.security_events import log_security_event
+                if find_contact_by_channel("whatsapp", chat_id, username, user_scope_id) is None:
+                    _new = enrol_front_office_contact(
+                        "whatsapp", chat_id, str(obj.get("pushName") or ""), username, user_scope_id)
+                    log_security_event("contact_access_changed", channel="whatsapp", username=username,
+                                       path=str(_new.get("id") or ""),
+                                       detail=f"granted by the open Front Office: {_new.get('name') or chat_id}")
+            except Exception:
+                pass
         if raw:
             resolved_digits = _normalize_phone(raw)
         elif (from_jid or "").endswith("@lid"):

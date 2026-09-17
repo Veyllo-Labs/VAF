@@ -1049,6 +1049,16 @@ except ImportError as e:
 except Exception as e:
     log("WebServer", f"Failed to mount Contacts routes: {e}")
 
+# Mount the Front Office switch (Settings, Connections: which channels let contacts in)
+try:
+    from vaf.api.front_office_routes import router as front_office_router
+    app.include_router(front_office_router)
+    log("WebServer", "Front Office routes mounted at /api/front-office")
+except ImportError as e:
+    log("WebServer", f"Front Office routes not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount Front Office routes: {e}")
+
 # Mount the inbox routes (the Posteingang window and the footer badge; INBOX.md)
 try:
     from vaf.api.inbox_routes import router as inbox_router

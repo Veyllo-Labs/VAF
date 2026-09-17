@@ -17,7 +17,7 @@ from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from vaf.memory.models import Memory, Connection, Chunk, EMBEDDING_DIM
-from vaf.memory.lanes import ChatNamespace, is_chat_source, not_attachment_lane, not_chat_lane
+from vaf.memory.lanes import ChatNamespace, is_chat_source, not_attachment_lane, not_chat_lane, not_front_office_lane
 from vaf.core.config import Config
 import logging
 
@@ -491,6 +491,9 @@ class GraphManager:
         # Never wire an ordinary memory to what was learned inside a messenger chat: the
         # graph edge would be the one path that crosses the lane.
         scope_filters.append(not_chat_lane())
+        # The same for the Front Office knowledge: it is read by strangers' turns, and an
+        # edge into the owner's own memory would be the one path across that lane.
+        scope_filters.append(not_front_office_lane())
 
         query = select(Memory, Memory.embedding.cosine_distance(memory.embedding).label("distance")).where(
             and_(*scope_filters)

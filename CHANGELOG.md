@@ -11,7 +11,32 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **Inbound has a home in Settings.** Under Connections, right below Contacts, an "Inbound"
+  card opens the window for the agent's answers to incoming requests (the Front Office). On the right, a switch per channel: switching WhatsApp or Telegram on means everyone
+  who writes there is answered in Front Office mode, every contact of that channel in your
+  book is allowed at that moment, and a new sender is added to the book when they write;
+  one person is kept out by switching "Let the agent reply" off for them in the channel
+  window or the contact book (switching on asks once; every change is a
+  `front_office_changed` entry in the security log). On the left, your instructions for
+  those answers (who the agent speaks for, the tone, what it may promise, what it must never
+  say) and the knowledge: PDF, TXT or MD documents learned into a lane of the memory store
+  that only a contact's answer reads. Until now the agent answered only contacts with the
+  flag, and only after the door had been opened by hand in `config.json`
+  (`channel_ingress_policy`), while the contact book said the agent answers them; that hint
+  now says when Front Office is off.
+
+### Security
+- **A contact's answer no longer draws on your whole memory.** A Front Office turn used to
+  search the owner's general memory, learned documents included, and relied on the prompt
+  to keep private details back. It now reads the Front Office knowledge and what it learned
+  inside that chat, and your general memory only when you switch "Also use my general
+  memory" on in the Front Office window.
+
 ### Fixed
+- **A contact saved by a LAN account could not reach the agent on Telegram.** The Telegram
+  lookup read contact books by username only, so a book saved under the account's scope was
+  never consulted; it reads the same keys as WhatsApp and the dashboards now.
 - **A tool name the model made up is answered with the right call, not only refused.** A
   model called `mark_task_done` as a tool; it is a parameter of `update_working_memory`, and
   the tool result it had just read told it to "call mark_task_done on it". The dispatch

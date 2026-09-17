@@ -17,6 +17,8 @@ export { default as WhatsAppSetupWizard } from './WhatsAppSetupWizard';
 export { default as WhatsAppDashboard } from './WhatsAppDashboard';
 export { default as ContactsDashboard } from './ContactsDashboard';
 export type { Contact, ChannelEntry, ContactsDashboardProps } from './ContactsDashboard';
+export { default as FrontOfficeDashboard } from './FrontOfficeDashboard';
+export type { FrontOfficeDashboardProps, FrontOfficeState } from './FrontOfficeDashboard';
 export { default as CalendarSetupWizard } from './CalendarSetupWizard';
 export { default as CalendarDashboard } from './CalendarDashboard';
 export type { CalendarDashboardProps } from './CalendarDashboard';

@@ -1348,6 +1348,18 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             # A turn inside a chat with a contact also reads what the agent learned
                             # in THAT chat; the owner's own chats read only the general lane.
                             _chat_ns = ChatNamespace.from_task(task.session_id, task.metadata or {})
+                            # A CONTACT's turn (Front Office) reads the Front Office knowledge the
+                            # owner handed the agent, and the owner's general memory only when the
+                            # profile says so: a stranger is driving this turn.
+                            _fo_turn = bool((task.metadata or {}).get("from_contact"))
+                            _fo_general = True
+                            if _fo_turn:
+                                try:
+                                    from vaf.core.front_office_profile import load_front_office_profile
+                                    _fo_general = bool(load_front_office_profile(
+                                        (task.metadata or {}).get("username")).get("use_general_memory"))
+                                except Exception:
+                                    _fo_general = False
                             try:
                                 _rag_t0 = time.time()
                                 if is_debug_logging_enabled():
@@ -1358,7 +1370,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 _rag_t0 = time.time()
                             memory_context = turn_memory_context(
                                 task.input_text, user_scope_id=user_scope_id,
-                                caller="headless", chat_key=(_chat_ns.key if _chat_ns else None))
+                                caller="headless", chat_key=(_chat_ns.key if _chat_ns else None),
+                                front_office=_fo_turn, use_general_memory=_fo_general)
                             try:
                                 _rag_dur = time.time() - _rag_t0
                                 if is_debug_logging_enabled():

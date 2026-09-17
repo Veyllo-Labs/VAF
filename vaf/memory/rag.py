@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # import this module); the constant is re-exported here for its existing importers.
 from vaf.memory.lanes import (  # noqa: E402
     ATTACHMENT_EPHEMERAL_SOURCE, ChatNamespace, chat_source, clean_label, in_chat_lane,
-    not_attachment_lane, not_chat_lane, pin_namespace,
+    in_front_office_lane, not_attachment_lane, not_chat_lane, not_front_office_lane, pin_namespace,
 )
 
 # Memory types whose content is DOCUMENT text, not something about the person. A learned PDF
@@ -424,9 +424,14 @@ class RagPipeline:
         hybrid: Optional[bool] = None,
         exclude_documents: bool = False,
         chat_key: Optional[str] = None,
+        front_office: bool = False,
     ) -> List[RagSource]:
         """
         Search for relevant memories using vector similarity.
+
+        front_office: search the Front Office knowledge lane (`source = front_office`)
+        and nothing else; an ordinary lookup leaves that lane out the way it leaves the
+        chat namespaces out (vaf/memory/lanes.py), in both lanes of the hybrid search.
 
         Args:
             query: Search query
@@ -503,8 +508,11 @@ class RagPipeline:
         # caller that names one sees; both lanes carry the predicate, in SQL.
         if chat_key:
             filters.append(in_chat_lane(chat_key))
+        elif front_office:
+            filters.append(in_front_office_lane())
         else:
             filters.append(not_chat_lane())
+            filters.append(not_front_office_lane())
         if exclude_documents:
             filters.append(_not_document_memory())
 
@@ -604,8 +612,11 @@ class RagPipeline:
             lexical_filters.append(not_attachment_lane())
         if chat_key:
             lexical_filters.append(in_chat_lane(chat_key))
+        elif front_office:
+            lexical_filters.append(in_front_office_lane())
         else:
             lexical_filters.append(not_chat_lane())
+            lexical_filters.append(not_front_office_lane())
         # Scope is guaranteed here (the vector lane above already fails closed on an empty scope), but
         # filter unconditionally so the lexical lane can never widen past the caller's scope.
         lexical_filters.append(Memory.user_scope_id == user_scope_id)
@@ -2022,7 +2033,8 @@ def count_sources(block: str) -> int:
 
 
 def turn_memory_context(query: str, *, user_scope_id: Optional[UUID] = None,
-                        caller: str = "", chat_key: Optional[str] = None) -> str:
+                        caller: str = "", chat_key: Optional[str] = None,
+                        front_office: bool = False, use_general_memory: bool = False) -> str:
     """What this account already knows, as the block a turn is given before it answers.
 
     One home for the three lines every lane repeats around `run_memory_search_sync`:
@@ -2045,12 +2057,22 @@ def turn_memory_context(query: str, *, user_scope_id: Optional[UUID] = None,
     `[Chat Source N]`, from that chat's own namespace, underneath the general snippets,
     out of the same call (one snippet push to the owner's panel, one timeout). A caller
     without a key makes the call every other lane makes, byte-identical to before.
+
+    ``front_office`` is what a turn answering a CONTACT makes: the Front Office knowledge
+    lane (`[Front Office Source N]`, the documents the owner handed the agent for exactly
+    these people) is searched, and the owner's general lane only when
+    ``use_general_memory`` says so (the profile's switch, off by default): a stranger is
+    driving the turn, and what the owner told their own agent is not theirs to read.
     """
     try:
         if not Config.get("memory_enabled", True):
             return ""
         k = int(Config.get("memory_rag_k", 5))
         k = max(1, min(20, k))
+        if front_office:
+            return run_memory_search_sync(query, k=k, user_scope_id=user_scope_id,
+                                          caller=caller or None, chat_key=chat_key,
+                                          front_office=True, use_general=bool(use_general_memory)) or ""
         if chat_key:
             return run_memory_search_sync(query, k=k, user_scope_id=user_scope_id,
                                           caller=caller or None, chat_key=chat_key) or ""
@@ -2069,6 +2091,8 @@ def run_memory_search_sync(
     exclude_documents: bool = False,
     chat_key: Optional[str] = None,
     source_label: str = "Chat Source",
+    front_office: bool = False,
+    use_general: bool = True,
 ) -> str:
     """
     Run RAG search synchronously for use from sync code (e.g. headless runner).
@@ -2084,6 +2108,10 @@ def run_memory_search_sync(
     chat_key: ALSO search that chat's namespace: the general lane as always, then the
         namespace, in one call, so the snippet push to the owner's panel carries both
         and the timeout is paid once. `source_label` heads the namespace's block.
+    front_office: ALSO search the Front Office knowledge lane (`[Front Office Source N]`).
+    use_general: False leaves the general lane out entirely (a Front Office turn whose
+        owner keeps their own memory to themselves); the default keeps every other caller
+        byte-identical.
     """
     import time as _time
     _t0 = _time.time()
@@ -2164,10 +2192,20 @@ def run_memory_search_sync(
         # for this transaction as defense-in-depth, not just the SQLAlchemy filter.
         async with get_db(user_scope_id=user_scope_id) as db:
             pipeline = RagPipeline(db)
-            sources = await pipeline.search(
-                query, k=k, threshold=threshold, metadata_filter=metadata_filter,
-                user_scope_id=user_scope_id, exclude_documents=exclude_documents,
-            )
+            sources: List[RagSource] = []
+            if use_general:
+                sources = await pipeline.search(
+                    query, k=k, threshold=threshold, metadata_filter=metadata_filter,
+                    user_scope_id=user_scope_id, exclude_documents=exclude_documents,
+                )
+            front_office_sources: List[RagSource] = []
+            if front_office:
+                front_office_sources = await pipeline.search(
+                    query, k=k, threshold=threshold, metadata_filter=metadata_filter,
+                    user_scope_id=user_scope_id, exclude_documents=exclude_documents,
+                    front_office=True,
+                )
+                _rag_timing_log(f"RAG_FRONT_OFFICE_LANE results={len(front_office_sources)}")
             chat_sources: List[RagSource] = []
             if chat_key:
                 chat_sources = await pipeline.search(
@@ -2181,7 +2219,7 @@ def run_memory_search_sync(
             try:
                 from vaf.core.web_interface import get_web_interface
                 web_sources = []
-                for s in list(sources) + list(chat_sources):
+                for s in list(sources) + list(front_office_sources) + list(chat_sources):
                     web_sources.append({
                         "text": s.text[:200] + "..." if len(s.text) > 200 else s.text,
                         "full_text": s.text,
@@ -2205,7 +2243,10 @@ def run_memory_search_sync(
                 # Don't break RAG if UI push fails
                 logger.warning(f"Failed to push RAG results to UI: {e}")
 
-            blocks = [_format_sources(sources, include_ids=include_ids)]
+            blocks = [_format_sources(sources, include_ids=include_ids)] if sources else []
+            if front_office_sources:
+                blocks.append(_format_sources(front_office_sources, include_ids=include_ids,
+                                              label="Front Office Source"))
             if chat_sources:
                 blocks.append(_format_sources(chat_sources, include_ids=include_ids, label=source_label))
             return "\n\n---\n\n".join(b for b in blocks if b)

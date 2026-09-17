@@ -60,7 +60,7 @@ import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_default
 import { useLocaleStore } from '@/lib/localeStore';
 import { useCursorStore } from '@/lib/cursorStore';
 import { useThemeStore } from '@/lib/themeStore';
-import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, MailClient, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard, CalendarSetupWizard, CalendarDashboard, GitHubSetupWizard, GitHubDashboard } from './connections';
+import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, MailClient, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard, FrontOfficeDashboard, CalendarSetupWizard, CalendarDashboard, GitHubSetupWizard, GitHubDashboard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
 import TrainingDashboard from './TrainingDashboard';
@@ -1282,6 +1282,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showWhatsAppDashboard, setShowWhatsAppDashboard] = useState(false);
     const [showTelegramDashboard, setShowTelegramDashboard] = useState(false);
     const [showContactsDashboard, setShowContactsDashboard] = useState(false);
+    const [showFrontOfficeDashboard, setShowFrontOfficeDashboard] = useState(false);
     // A jump from the contact book or the inbox into a channel chat. Cleared once the
     // channel windows are closed rather than in onClose: the WhatsApp window also closes
     // through onOpenSetupWizard and onOpenContacts, which never call onClose.
@@ -4581,6 +4582,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     setShowCloudWizard(true);
                                 }}
                                 onOpenContactsDashboard={() => setShowContactsDashboard(true)}
+                                onOpenFrontOfficeDashboard={() => setShowFrontOfficeDashboard(true)}
                                 onOpenCalendarWizard={(provider?: 'google_calendar' | 'outlook_calendar') => {
                                     setCalendarWizardProvider(provider);
                                     setShowCalendarWizard(true);
@@ -8162,6 +8164,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     setCalendarInitialDayTs(ts);
                     setShowCreateAutomationModal(true);
                 }}
+            />
+
+            {/* Front Office (which channels let contacts reach the agent, from Connections) */}
+            <FrontOfficeDashboard
+                isOpen={showFrontOfficeDashboard}
+                onClose={() => setShowFrontOfficeDashboard(false)}
+                onOpenContacts={() => { setShowFrontOfficeDashboard(false); setShowContactsDashboard(true); }}
+                // The card in Connections refetches on refreshTrigger, so a change made in the
+                // window shows on the card the moment the window closes.
+                onChanged={() => setCloudDashboardRefresh(v => v + 1)}
             />
 
             {/* Discord Dashboard (when configured, Settings opens this) */}

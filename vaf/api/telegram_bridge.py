@@ -34,7 +34,7 @@ for _noisy in ("httpx", "httpcore"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 from vaf.core.config import Config
-from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
+from vaf.core.channel_ingress_policy import evaluate_ingress, resolve_channel_policy, should_log_unauthorized
 from vaf.core.task_queue import TaskQueue
 from vaf.core.telegram_reply import set_telegram_reply_callback
 from vaf.core.tray_context import TrayContext
@@ -185,8 +185,11 @@ def _relay_whitelist_lookup(telegram_user_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _resolve_telegram_user(telegram_user_id: str) -> Tuple[Optional[Dict[str, Any]], bool]:
-    """Resolve telegram_user_id to (whitelist/relay/contact entry, is_relay). Returns (None, False) if not allowed."""
+def _resolve_telegram_user(telegram_user_id: str, sender: Any = None) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """Resolve telegram_user_id to (whitelist/relay/contact entry, is_relay). Returns (None, False) if not allowed.
+
+    `sender` is the Telegram user object when the caller has one: the name an open Front
+    Office gives the contact record it creates for a new sender."""
     policy = Config.get("channel_ingress_policy")
     entry = _whitelist_lookup(telegram_user_id)
     if entry:
@@ -209,7 +212,50 @@ def _resolve_telegram_user(telegram_user_id: str) -> Tuple[Optional[Dict[str, An
                 return (entry, False)
     except Exception:
         pass
-    return (None, False)
+    return _open_front_office_entry(telegram_user_id, policy, sender)
+
+
+def _open_front_office_entry(telegram_user_id: str, policy: Any, sender: Any) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """A sender the open Front Office on Telegram lets in (Settings, Connections): answered
+    as a Front Office contact of the ONE owner this bot serves, enrolled in that owner's
+    book with the flag ON so they can be switched off there. Named boundary: the bot is
+    shared by every account on the install, a WhatsApp number is not; with several owners
+    on the whitelist a stranger cannot be attributed to one of them and stays out."""
+    try:
+        if not resolve_channel_policy("telegram", policy)["open_to_new_senders"]:
+            return (None, False)
+        tc = Config.get("telegram_config") or {}
+        whitelist = tc.get("whitelist") or [] if isinstance(tc, dict) else []
+        owners = {(str(e.get("user_scope_id") or ""), str(e.get("vaf_username") or "admin").strip())
+                  for e in whitelist if isinstance(e, dict)}
+        if len(owners) != 1:
+            return (None, False)
+        scope, uname = next(iter(owners))
+        from vaf.core.contacts_store import enrol_front_office_contact, find_contact_by_channel
+        rec = find_contact_by_channel("telegram", telegram_user_id, uname, scope or None)
+        opted_out = bool(rec) and not bool(rec.get("allow_as_assistant_user"))
+        allowed, reason = evaluate_ingress("telegram", policy, explicit_match=False, contact_match=False,
+                                           sender_opted_out=opted_out)
+        if not allowed or reason != "front_office_open":
+            return (None, False)
+        if rec is None:
+            name = str(getattr(sender, "full_name", None) or getattr(sender, "username", None) or "").strip()
+            rec = enrol_front_office_contact("telegram", telegram_user_id, name, uname, scope or None)
+            try:
+                from vaf.core.security_events import log_security_event
+                log_security_event("contact_access_changed", channel="telegram", username=uname,
+                                   path=str(rec.get("id") or ""),
+                                   detail=f"granted by the open Front Office: {rec.get('name') or telegram_user_id}")
+            except Exception:
+                pass
+        return ({
+            "user_scope_id": scope or None,
+            "vaf_username": uname,
+            "telegram_user_id": str(telegram_user_id),
+            "from_contact": True,
+        }, False)
+    except Exception:
+        return (None, False)
 
 
 def _append_chat_activity(chat_id: str, user_scope_id: Any, direction: str = "in") -> None:
@@ -892,7 +938,7 @@ def _run_bot():
             return
         telegram_user_id = str(user.id)
         chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
-        entry, is_relay = _resolve_telegram_user(telegram_user_id)
+        entry, is_relay = _resolve_telegram_user(telegram_user_id, user)
         if not entry:
             _drop_unauthorized_telegram(telegram_user_id, chat_id, "text", update=update)
             return
@@ -939,7 +985,7 @@ def _run_bot():
             return
         telegram_user_id = str(user.id)
         chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
-        entry, _is_relay = _resolve_telegram_user(telegram_user_id)
+        entry, _is_relay = _resolve_telegram_user(telegram_user_id, user)
         if not entry:
             _drop_unauthorized_telegram(telegram_user_id, chat_id, "edited", update=update)
             return
@@ -970,7 +1016,7 @@ def _run_bot():
         chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
 
         # Check authorization
-        entry, is_relay = _resolve_telegram_user(telegram_user_id)
+        entry, is_relay = _resolve_telegram_user(telegram_user_id, user)
         if not entry:
             _drop_unauthorized_telegram(telegram_user_id, chat_id, "voice", update=update)
             return
@@ -1033,7 +1079,7 @@ def _run_bot():
         telegram_user_id = str(user.id)
         chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
 
-        entry, is_relay = _resolve_telegram_user(telegram_user_id)
+        entry, is_relay = _resolve_telegram_user(telegram_user_id, user)
         if not entry:
             _drop_unauthorized_telegram(telegram_user_id, chat_id, "document", update=update)
             return
@@ -1158,7 +1204,7 @@ def _run_bot():
             return
         telegram_user_id = str(user.id)
         chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
-        entry, is_relay = _resolve_telegram_user(telegram_user_id)
+        entry, is_relay = _resolve_telegram_user(telegram_user_id, user)
         if not entry:
             _drop_unauthorized_telegram(telegram_user_id, chat_id, "photo", update=update)
             return
@@ -1184,7 +1230,7 @@ def _run_bot():
             if user:
                 telegram_user_id = str(user.id)
                 chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
-                entry, _ = _resolve_telegram_user(telegram_user_id)
+                entry, _ = _resolve_telegram_user(telegram_user_id, user)
                 if not entry:
                     _drop_unauthorized_telegram(telegram_user_id, chat_id, "command_start", update=update)
                     return

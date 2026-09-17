@@ -663,9 +663,10 @@ def get_contact_whitelist_telegram_entry(telegram_user_id: str) -> Optional[Dict
     whitelist = telegram_config.get("whitelist") or []
     seen: set = set()
     try:
-        from vaf.core.contacts_store import get_contacts_allowing_assistant, _contact_telegram_values
+        from vaf.core.contacts_store import front_office_endpoints
     except Exception:
         return None
+    wanted = str(telegram_user_id or "").strip()
     for entry in whitelist:
         if not isinstance(entry, dict):
             continue
@@ -675,13 +676,15 @@ def get_contact_whitelist_telegram_entry(telegram_user_id: str) -> Optional[Dict
         if key in seen:
             continue
         seen.add(key)
-        for c in get_contacts_allowing_assistant(uname):
-            for val in _contact_telegram_values(c):
-                if (val or "").strip() == str(telegram_user_id).strip():
-                    return {
-                    "user_scope_id": scope,
-                    "vaf_username": uname,
-                    "telegram_user_id": str(telegram_user_id),
-                    "from_contact": True,  # So bridge/headless can treat as front-office (not the account owner)
-                }
+        # The owner's book by username AND scope, the keys the WhatsApp bridge and the
+        # dashboards read: a book saved under scopes/<uuid> was invisible to the
+        # username-only lookup this replaced, so a tenant's contacts were counted as
+        # reachable everywhere and never admitted here.
+        if wanted and wanted in front_office_endpoints(uname, scope or None, "telegram"):
+            return {
+                "user_scope_id": scope,
+                "vaf_username": uname,
+                "telegram_user_id": wanted,
+                "from_contact": True,  # So bridge/headless can treat as front-office (not the account owner)
+            }
     return None

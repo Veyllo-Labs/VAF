@@ -42,9 +42,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from vaf.core.learn_ledger import LearnBatch, LearnLedger, file_sha256
 
@@ -72,12 +73,15 @@ class LearnJobSpec:
     doc_tag: str = ""
     resume: bool = True
     force_relearn: bool = False
+    # The memory lane the sections land in: the owner's long-term lane, or the Front
+    # Office knowledge (`vaf.memory.lanes.FRONT_OFFICE_SOURCE`) a contact's turn reads.
+    source: str = "learn_document"
 
     def to_json(self) -> str:
         return json.dumps({
             "path": self.path, "document_title": self.document_title,
             "doc_tag": self.doc_tag, "resume": bool(self.resume),
-            "force_relearn": bool(self.force_relearn),
+            "force_relearn": bool(self.force_relearn), "source": self.source,
         })
 
     @classmethod
@@ -87,7 +91,8 @@ class LearnJobSpec:
                    document_title=d.get("document_title"),
                    doc_tag=str(d.get("doc_tag") or ""),
                    resume=bool(d.get("resume", True)),
-                   force_relearn=bool(d.get("force_relearn", False)))
+                   force_relearn=bool(d.get("force_relearn", False)),
+                   source=str(d.get("source") or "learn_document"))
 
 
 @dataclass
@@ -146,7 +151,7 @@ class LearnOutcome:
     _path_hint: str = ""
 
 
-async def find_completed_learn(content_sha256: str, user_scope_id):
+async def find_completed_learn(content_sha256: str, user_scope_id, source: Optional[str] = None):
     """The durable already-learned lookup, keyed on CONTENT.
 
     The ledger dies on completion (the document_index root is the durable
@@ -154,7 +159,10 @@ async def find_completed_learn(content_sha256: str, user_scope_id):
     complete means this exact document is already in long-term memory - even
     under a different filename (every upload persists under a fresh
     timestamped name, so a path or tag comparison would miss the duplicate).
-    Returns {doc_title, doc_tag, sections, total_pages} or None.
+    Returns {doc_title, doc_tag, sections, total_pages} or None. `source` names one lane;
+    without it the lookup covers the owner's own lanes and leaves the Front Office
+    knowledge out: the same file learned for the owner and for the Front Office are two
+    documents, not a duplicate.
     """
     from sqlalchemy import and_, select
     from vaf.memory.database import get_db
@@ -166,6 +174,13 @@ async def find_completed_learn(content_sha256: str, user_scope_id):
         Memory.meta["content_sha256"].as_string() == content_sha256,
         Memory.meta["learn_status"].as_string() == "complete",
     ]
+    from sqlalchemy import or_
+    from vaf.memory.lanes import FRONT_OFFICE_SOURCE
+    if source:
+        conditions.append(Memory.meta["source"].as_string() == source)
+    else:
+        conditions.append(or_(Memory.meta["source"].as_string().is_(None),
+                              Memory.meta["source"].as_string() != FRONT_OFFICE_SOURCE))
     if user_scope_id is not None:
         conditions.append(Memory.user_scope_id == user_scope_id)
     async with get_db(user_scope_id=user_scope_id) as db:
@@ -322,7 +337,11 @@ async def _learn_batches_async(
             # proceeds and the ingest path reports the real problem honestly
             # - failing HERE would wear the lookup's error as the outcome.
             try:
-                done = await find_completed_learn(sha, user_scope_id)
+                from vaf.memory.lanes import FRONT_OFFICE_SOURCE
+                if (spec.source or "learn_document") == FRONT_OFFICE_SOURCE:
+                    done = await find_completed_learn(sha, user_scope_id, source=FRONT_OFFICE_SOURCE)
+                else:
+                    done = await find_completed_learn(sha, user_scope_id)
             except Exception:
                 done = None
             if done:
@@ -392,7 +411,7 @@ async def _learn_batches_async(
                         content_markdown=markdown,
                         doc_title=doc_title,
                         doc_tag=doc_tag,
-                        source="learn_document",
+                        source=spec.source or "learn_document",
                         mem_type="document",
                         generate_fn=generate_fn,
                         user_scope_id=user_scope_id,
@@ -429,7 +448,8 @@ async def _learn_batches_async(
         if outcome.status == "complete":
             await _finalize_root(
                 doc_tag=doc_tag, doc_title=doc_title, ledger=ledger,
-                generate_fn=generate_fn, user_scope_id=user_scope_id)
+                generate_fn=generate_fn, user_scope_id=user_scope_id,
+                source=spec.source or "learn_document")
             ledger.status = "complete"
             ledger.save()
             ledger.delete()  # the document_index root is the durable record
@@ -455,7 +475,7 @@ async def _learn_batches_async(
 
 
 async def _finalize_root(*, doc_tag: str, doc_title: str, ledger: LearnLedger,
-                         generate_fn, user_scope_id) -> None:
+                         generate_fn, user_scope_id, source: str = "learn_document") -> None:
     """ONE document_index root upsert for the whole job. Built from the STORED
     section titles so it is correct after a resume, and stamped with the
     coverage facts the UI's learn-status reads."""
@@ -498,14 +518,16 @@ async def _finalize_root(*, doc_tag: str, doc_title: str, ledger: LearnLedger,
             if doc_summary:
                 content += f" {doc_summary}"
             content += f" Contains {ledger.section_count} section(s) of knowledge from a document."
-            meta = {"type": "document_index", "source": "learn_document",
+            meta = {"type": "document_index", "source": source,
                     "title": doc_title, "doc_tag": doc_tag,
                     "tags": list(dict.fromkeys([doc_tag, "knowledge"] + doc_tags)),
                     **stamp}
             if doc_summary:
                 meta["doc_summary"] = doc_summary
+            from vaf.memory.lanes import FRONT_OFFICE_SOURCE
+            lane_kw = {"keep_namespace": True} if source == FRONT_OFFICE_SOURCE else {}
             await RagPipeline(db).ingest(content=content, metadata=meta,
-                                         user_scope_id=user_scope_id, auto_connect=False)
+                                         user_scope_id=user_scope_id, auto_connect=False, **lane_kw)
 
 
 def _child_generate_fn() -> Callable[[str], str]:
@@ -582,6 +604,70 @@ def run_learn_job(spec_json: str) -> str:
                 flag.unlink(missing_ok=True)
             except Exception:
                 pass
+
+
+# ── In-process background learn ─────────────────────────────────────────────
+#
+# The learn button in a chat spawns a learn_agent child whose result reaches the chat
+# through the runner drain. A learn started from Settings belongs to no chat, so it runs
+# on a daemon thread of this process instead: `_learn_batches` owns one event loop for the
+# whole job, and vaf/memory/database.py hands a thread with its own loop a throwaway
+# NullPool engine, which is exactly the case this is. Progress is the ledger
+# (`GET /api/memory/learn-status/<doc_tag>` reads it), the completion is the root's stamp.
+
+_BACKGROUND_LEARNS: Dict[str, Dict[str, Any]] = {}
+_BACKGROUND_LOCK = threading.Lock()
+
+
+def _background_key(doc_tag: str, user_scope_id) -> str:
+    return f"{str(user_scope_id or '')}:{doc_tag}"
+
+
+def background_learn_running(doc_tag: str, user_scope_id) -> bool:
+    with _BACKGROUND_LOCK:
+        entry = _BACKGROUND_LEARNS.get(_background_key(doc_tag, user_scope_id))
+    return bool(entry and entry["thread"].is_alive())
+
+
+def cancel_background_learn(doc_tag: str, user_scope_id) -> bool:
+    """Ask a running background learn to stop at its next batch boundary."""
+    with _BACKGROUND_LOCK:
+        entry = _BACKGROUND_LEARNS.get(_background_key(doc_tag, user_scope_id))
+    if not entry or not entry["thread"].is_alive():
+        return False
+    entry["cancel"].set()
+    return True
+
+
+def start_background_learn(spec: LearnJobSpec, *, user_scope_id,
+                           on_done: Optional[Callable[[LearnOutcome], None]] = None) -> bool:
+    """Run one document's batched learn on a daemon thread. False when the same document
+    (tag and scope) is already being learned; never raises, the outcome carries failures."""
+    key = _background_key(spec.doc_tag, user_scope_id)
+    cancel = threading.Event()
+    with _BACKGROUND_LOCK:
+        live = _BACKGROUND_LEARNS.get(key)
+        if live and live["thread"].is_alive():
+            return False
+
+        def _run() -> None:
+            try:
+                outcome = _learn_batches(
+                    spec, generate_fn=_child_generate_fn(), user_scope_id=user_scope_id,
+                    session_id=None, cancel_cb=cancel.is_set)
+            except Exception as e:  # _learn_batches never raises; belt and braces for the thread
+                outcome = LearnOutcome(status="failed", doc_tag=spec.doc_tag,
+                                       doc_title=spec.document_title or "", error=str(e))
+            if on_done is not None:
+                try:
+                    on_done(outcome)
+                except Exception:
+                    pass
+
+        thread = threading.Thread(target=_run, name=f"vaf-learn-{spec.doc_tag}", daemon=True)
+        _BACKGROUND_LEARNS[key] = {"thread": thread, "cancel": cancel}
+        thread.start()
+    return True
 
 
 def _scope_from_env():

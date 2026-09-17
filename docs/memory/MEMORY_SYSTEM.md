@@ -500,6 +500,32 @@ The contract, implemented once in `vaf/memory/lanes.py` and applied by `RagPipel
 Who writes into a namespace, who reads it inside a chat, and how it looks in the graph is
 described under [Session Compaction](#session-compaction-background) and the graph section.
 
+### The Front Office lane: what the agent knows when it answers a contact
+
+The documents the owner hands the agent for the people it answers on their behalf (Settings →
+Connections → Front Office → Knowledge) are ordinary `document` rows whose `meta.source` is
+`front_office` (`vaf.memory.lanes.FRONT_OFFICE_SOURCE`), learned by the same batched pipeline as
+`learn_document` with `LearnJobSpec.source = "front_office"` and a `fo-<title>` tag. The lane
+follows the chat-namespace contract, implemented in `vaf/memory/lanes.py`:
+
+- **Every ordinary lookup leaves the lane out**, in SQL, in both lanes of the hybrid search
+  (`source IS NULL OR source != 'front_office'`); rows without a source are kept. A lookup that
+  asks for it (`RagPipeline.search(front_office=True)`) sees exactly that source.
+- **A contact's turn reads it instead of the owner's memory.** `turn_memory_context(front_office=True)`
+  searches the Front Office lane (`[Front Office Source N]`) and the chat's namespace, and the
+  general lane only with `use_general_memory=True`, the profile switch **Also use my general
+  memory** (off by default): a stranger is driving that turn. Before this lane a contact's turn
+  searched the owner's whole memory, learned documents included.
+- **The lane is set at ingest and an update cannot move it.** `pin_namespace` keeps `source` on a
+  Front Office row and strips `source = front_office` from every other writer; the learn passes
+  `keep_namespace=True`. Auto-connect never crosses the lane either.
+- **The duplicate check keeps the lanes apart.** `find_completed_learn` without a source covers
+  the owner's lanes and leaves the Front Office out, so the same file learned for both is two
+  documents.
+- **The graph and the list are the owner's admin view** and show the documents like any other
+  learned document; removing one in the window soft-deletes its tag (`delete_by_tag`), drops the
+  ledger and the stored file.
+
 ## Encryption
 
 Memory TEXT is encrypted at rest using AES-256-GCM - both the parent content

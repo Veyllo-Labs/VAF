@@ -7,9 +7,12 @@ One `memories` table holds rows that must never mix on retrieval. The long-term 
 what the user's agent knows. The attachment lane (`source = attachment_ephemeral`) is a
 session's uploaded documents, with a lifetime. The chat lanes (`source = chat/<session id>`)
 are what the agent learned inside ONE messenger chat with a contact: facts about that person
-and what was agreed with them, which belong to that chat and to nothing else. An ordinary
-lookup leaves both special lanes out, in SQL, in every lane of the hybrid search, and a
-caller that wants one of them names it explicitly.
+and what was agreed with them, which belong to that chat and to nothing else. The Front
+Office lane (`source = front_office`) is the knowledge the owner hands the agent for the
+people it answers on their behalf: documents learned in Settings, read only by a Front
+Office turn, which in return does not read the owner's own memory unless the owner says so.
+An ordinary lookup leaves every special lane out, in SQL, in every lane of the hybrid
+search, and a caller that wants one of them names it explicitly.
 
 Why a leaf module: `rag.py` imports `graph.py`, and both apply the same predicates, so the
 predicates cannot live in either. And why predicates rather than a `metadata_filter` entry:
@@ -31,6 +34,7 @@ from vaf.memory.models import Memory
 
 ATTACHMENT_EPHEMERAL_SOURCE = "attachment_ephemeral"
 CHAT_SOURCE_PREFIX = "chat/"
+FRONT_OFFICE_SOURCE = "front_office"
 
 _NAMESPACE_KEYS = ("chat_key", "chat_channel", "chat_label")
 _CHANNEL_NAMES = {"whatsapp": "WhatsApp", "telegram": "Telegram", "discord": "Discord"}
@@ -75,6 +79,23 @@ def in_chat_lane(chat_key: str):
     return Memory.meta["source"].astext == chat_source(chat_key)
 
 
+def is_front_office_source(source: Any) -> bool:
+    return isinstance(source, str) and source == FRONT_OFFICE_SOURCE
+
+
+def not_front_office_lane():
+    """SQL: not the Front Office knowledge. Rows without a source pass (legacy store)."""
+    return or_(
+        Memory.meta["source"].astext.is_(None),
+        Memory.meta["source"].astext != FRONT_OFFICE_SOURCE,
+    )
+
+
+def in_front_office_lane():
+    """SQL: the Front Office knowledge and nothing else."""
+    return Memory.meta["source"].astext == FRONT_OFFICE_SOURCE
+
+
 def pin_namespace(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
     """A memory's lane is set once, at ingest, and an update cannot move it.
 
@@ -93,7 +114,12 @@ def pin_namespace(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, An
         return pinned
     for key in _NAMESPACE_KEYS:
         pinned.pop(key, None)
-    if is_chat_source(pinned.get("source")):
+    # The Front Office lane is pinned the same way, without namespace keys: a document the
+    # owner handed the Front Office stays there, and an ordinary row cannot be moved in.
+    if is_front_office_source(before.get("source")):
+        pinned["source"] = before["source"]
+        return pinned
+    if is_chat_source(pinned.get("source")) or is_front_office_source(pinned.get("source")):
         if "source" in before:
             pinned["source"] = before["source"]
         else:

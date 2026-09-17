@@ -8,7 +8,7 @@ import {
     MessageCircle, Phone, Mail, Slack, Plus, Settings,
     CheckCircle2, XCircle, Loader2, Trash2, Power,
     Calendar, Cloud, HardDrive, FolderSync, Users,
-    Video, Gamepad2, Building2, ShoppingBag, Briefcase, Code2, Search
+    Video, Gamepad2, Building2, ShoppingBag, Briefcase, Code2, Search, Headphones
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
@@ -34,8 +34,9 @@ function GitHubLogo({ className }: { className?: string }) {
 interface ConnectionsPanelProps {
     config: any;
     onConfigChange: (key: string, value: any) => void;
-    /** Current user for per-user cloud config (admin uses cloud_config, others use cloud_config_by_user) */
-    currentUser?: { username?: string } | null;
+    /** Current user for per-user cloud config (admin uses cloud_config, others use cloud_config_by_user);
+     *  the role decides whether the Front Office card is shown (its policy is an admin key). */
+    currentUser?: { username?: string; role?: string } | null;
     /** Bump to refetch cloud accounts (e.g. when cloud wizard completes) */
     refreshTrigger?: number;
     onOpenDiscordWizard: () => void;
@@ -48,6 +49,8 @@ interface ConnectionsPanelProps {
     onOpenCloudDashboard?: () => void;
     onOpenCloudWizard?: (provider?: string) => void;
     onOpenContactsDashboard?: () => void;
+    /** Open the Front Office window (which channels let contacts reach the agent). */
+    onOpenFrontOfficeDashboard?: () => void;
     /** Open the calendar setup wizard (it mints its consent through the shared OAuth hub). */
     onOpenCalendarWizard?: (provider?: 'google_calendar' | 'outlook_calendar') => void;
     /** Open calendar dashboard (accounts left, events in the middle). When provided and calendar is configured, Settings opens this. */
@@ -82,6 +85,17 @@ export const CONNECTION_APPS: ConnectionApp[] = [
         available: true,
         comingSoon: false,
         iconColor: 'bg-gray-600',
+    },
+    {
+        id: 'front_office',
+        name: 'Inbound',
+        icon: Headphones,
+        category: 'contacts',
+        description: 'Lets your agent answer incoming requests',
+        configKey: 'channel_ingress_policy',
+        available: true,
+        comingSoon: false,
+        iconColor: 'bg-amber-600',
     },
 
     // ============ Communication ============
@@ -434,8 +448,11 @@ export const CATEGORIES = [
 /** Use relative /api/ so Next.js rewrites to backend. */
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
-export default function ConnectionsPanel({ config, onConfigChange, currentUser, refreshTrigger = 0, onOpenDiscordWizard, onOpenDiscordDashboard, onOpenTelegramWizard, onOpenWhatsAppWizard, onOpenWhatsAppDashboard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenCloudDashboard, onOpenCloudWizard, onOpenContactsDashboard, onOpenCalendarWizard, onOpenCalendarDashboard, onOpenGitHubWizard, onOpenGitHubDashboard }: ConnectionsPanelProps) {
+export default function ConnectionsPanel({ config, onConfigChange, currentUser, refreshTrigger = 0, onOpenDiscordWizard, onOpenDiscordDashboard, onOpenTelegramWizard, onOpenWhatsAppWizard, onOpenWhatsAppDashboard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenCloudDashboard, onOpenCloudWizard, onOpenContactsDashboard, onOpenFrontOfficeDashboard, onOpenCalendarWizard, onOpenCalendarDashboard, onOpenGitHubWizard, onOpenGitHubDashboard }: ConnectionsPanelProps) {
     const t = useTranslations('settings.connectionsPanel');
+    const tf = useTranslations('settings.frontOffice');
+    /** The Front Office state (GET /api/front-office) for the card's status line; the switch lives in the window. */
+    const [frontOffice, setFrontOffice] = useState<{ enabled: boolean; channels: Record<string, boolean>; reachable_contacts: number }>({ enabled: false, channels: {}, reachable_contacts: 0 });
     const [connectionSearchQuery, setConnectionSearchQuery] = useState('');
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'linked' | 'disconnected' | 'checking'>>({});
     const [whatsappInfo, setWhatsappInfo] = useState<{ linked_phone: string | null; owner_number: string | null }>({ linked_phone: null, owner_number: null });
@@ -557,6 +574,17 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         await fetchCloudAccounts();
         await fetchCalendarStatus();
         await fetchGitHubStatus();
+        await fetchFrontOffice();
+    };
+
+    const fetchFrontOffice = async () => {
+        try {
+            const res = await fetch(api('api/front-office'), { credentials: 'include' });
+            if (res.ok) {
+                const data = await res.json();
+                setFrontOffice({ enabled: !!data.enabled, channels: data.channels || {}, reachable_contacts: Number(data.reachable_contacts) || 0 });
+            }
+        } catch { /* the card keeps its last state */ }
     };
 
     const handleToggleConnection = async (appId: string, enabled: boolean) => {
@@ -747,7 +775,9 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
     };
 
     const getAppsByCategory = (category: string) => {
-        return CONNECTION_APPS.filter(app => app.category === category);
+        return CONNECTION_APPS.filter(app => app.category === category)
+            // The Front Office switch writes an instance-wide policy key: admin only.
+            .filter(app => app.id !== 'front_office' || currentUser?.role === 'admin');
     };
 
     /** Filter apps by search query (name, id, description, category label). */
@@ -786,6 +816,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
 
     const isConfigured = (app: ConnectionApp) => {
         if (app.id === 'contacts') return true;
+        if (app.id === 'front_office') return true;
         if (app.id === 'email') {
             const fromApi = emailAccountsFromApi.length > 0;
             const fromConfig = Array.isArray(config?.email_config?.accounts) && config.email_config.accounts.length > 0;
@@ -827,6 +858,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
 
     const isEnabled = (app: ConnectionApp) => {
         if (app.id === 'contacts') return true;
+        if (app.id === 'front_office') return frontOffice.enabled;
         if (app.id === 'email') {
             const accounts = emailAccountsFromApi.length > 0 ? emailAccountsFromApi : (config?.email_config?.accounts ?? []);
             return Array.isArray(accounts) && accounts.length > 0 && (accounts as any[]).some((a: any) => a.enabled !== false);
@@ -900,6 +932,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                             const openApp = () => {
                                 if (app.comingSoon) return;
                                 if (app.id === 'contacts') onOpenContactsDashboard?.();
+                                if (app.id === 'front_office') onOpenFrontOfficeDashboard?.();
                                 if (app.id === 'discord') {
                                     if (onOpenDiscordDashboard && configured) onOpenDiscordDashboard();
                                     else onOpenDiscordWizard();
@@ -965,7 +998,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                             Coming Soon
                                                         </span>
                                                     )}
-                                                    {configured && app.id !== 'contacts' && (
+                                                    {configured && !['contacts', 'front_office'].includes(app.id) && (
                                                         <span className={cn(
                                                             "text-xs px-2 py-0.5 rounded-full",
                                                             status === 'connected' ? "bg-green-100 text-green-700" :
@@ -1001,6 +1034,16 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                             : 'Outbound only: register your own number in the dashboard to be reachable.'}
                                                     </p>
                                                 )}
+                                                {app.id === 'front_office' && (
+                                                    <p className="text-xs text-gray-600 mt-1">
+                                                        {frontOffice.enabled
+                                                            ? tf('cardOn', {
+                                                                channels: ['whatsapp', 'telegram'].filter(c => frontOffice.channels[c]).map(c => c === 'whatsapp' ? 'WhatsApp' : 'Telegram').join(', '),
+                                                                count: frontOffice.reachable_contacts,
+                                                            })
+                                                            : tf('cardOff')}
+                                                    </p>
+                                                )}
                                                 {configured && app.id === 'email' && (
                                                     <p className="text-xs text-gray-600 mt-1">
                                                         {(emailAccountsFromApi.length || (config?.email_config?.accounts?.length ?? 0))} account(s) connected. Open Settings to add or remove.
@@ -1025,6 +1068,14 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                     onClick={openApp}
                                                     className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                                                     title="Open contacts"
+                                                >
+                                                    <Settings className="w-4 h-4 text-gray-500" />
+                                                </button>
+                                            ) : app.id === 'front_office' ? (
+                                                <button
+                                                    onClick={openApp}
+                                                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                                                    title={tf('open')}
                                                 >
                                                     <Settings className="w-4 h-4 text-gray-500" />
                                                 </button>

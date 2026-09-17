@@ -298,6 +298,7 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
     const [saving, setSaving] = useState(false);
     const [confirm, setConfirm] = useState<Confirm | null>(null);
     const [fileError, setFileError] = useState<string | null>(null);
+    const [frontOffice, setFrontOffice] = useState<{ channels: Record<string, boolean> } | null>(null);
 
     const composerRef = useRef<HTMLInputElement>(null);
     const menuRef = useRef<HTMLDivElement>(null);
@@ -339,9 +340,20 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
         } catch { /* suggestions only */ }
     }, []);
 
+    // The Front Office door per channel (Settings, Connections). The reach switch alone does
+    // not make the agent answer: with the door shut the person is still turned away, and the
+    // hint under the switch says so instead of promising an answer.
+    const fetchFrontOffice = useCallback(async () => {
+        try {
+            const res = await fetch(api('api/front-office'), { credentials: 'include' });
+            const json = await res.json();
+            if (res.ok && json && typeof json.channels === 'object') setFrontOffice({ channels: json.channels || {} });
+        } catch { /* the hint falls back to the flag alone */ }
+    }, []);
+
     useEffect(() => {
         if (isOpen) {
-            fetchContacts(); fetchStatusValues(); fetchTagValues();
+            fetchContacts(); fetchStatusValues(); fetchTagValues(); fetchFrontOffice();
             setTimelineVersion(v => v + 1);           // a reopened window shows what arrived meanwhile
             return;
         }
@@ -349,7 +361,7 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
         setMenuOpen(false); setStatusEditing(false); setTagEditing(false); setShowEventForm(false);
         setSelectedIds(new Set()); setBulkStatus(''); setBulkTag(''); setBulkError(null);
         setConfirm(null); setFileError(null);
-    }, [isOpen, fetchContacts, fetchStatusValues, fetchTagValues]);
+    }, [isOpen, fetchContacts, fetchStatusValues, fetchTagValues, fetchFrontOffice]);
 
     useEffect(() => {
         if (!menuOpen) return;
@@ -937,6 +949,11 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
         const created = overview?.created ?? (c.created_at ? { ts: c.created_at, source: c.source || 'manual' } : null);
         const bdays = c.birthday ? birthdayInDays(c.birthday) : null;
         const reachOn = !!c.allow_as_assistant_user;
+        // "On" is only true when at least one of this person's messenger channels has its
+        // Front Office door open; a WhatsApp-only contact under a closed WhatsApp door is
+        // turned away however the switch stands.
+        const foTypes = channelTypes(c).filter(ty => ty === 'whatsapp' || ty === 'telegram');
+        const doorClosed = frontOffice !== null && foTypes.length > 0 && !foTypes.some(ty => !!frontOffice.channels[ty]);
         const statusValue = (c.status || '').trim();
         const notesCount = (c.notes_log || []).length;
         const eventsCount = (c.events || []).length;
@@ -1046,7 +1063,7 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
                                 <div className={cn('absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform', reachOn ? 'translate-x-6 dark:bg-[#1a1a1a]' : 'translate-x-1 dark:bg-[#e8e8e8]')} />
                             </button>
                         </label>
-                        <p className="text-[11px] text-gray-500 text-right max-w-[300px] max-md:text-left">{reachOn ? tc('reachHintOn') : tc('reachHintOff')}</p>
+                        <p className="text-[11px] text-gray-500 text-right max-w-[300px] max-md:text-left">{reachOn ? (doorClosed ? tc('reachHintOnDoorClosed') : tc('reachHintOn')) : tc('reachHintOff')}</p>
                     </div>
                 </div>
 

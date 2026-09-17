@@ -462,9 +462,9 @@ Most of these are populated by the setup wizard / Connections UI, not hand-edite
 | `cloud_sync_interval_minutes` | `15` | Cloud sync interval. |
 | `cloud_sync_max_file_size_mb` | `100` | Max synced file size. |
 | `cloud_sync_conflict_resolution` | `"last_write_wins"` | Conflict policy. |
-| `channel_ingress_policy` | `{...}` | Inbound-channel pairing/throttle policy. |
+| `channel_ingress_policy` | `{...}` | Inbound-channel pairing policy: `mode` (`paired_only`, the default, or `permissive`), `throttle_seconds` (`60`) for the REJECT log lines, and per channel (`telegram`, `whatsapp`, `discord`) a `mode` (`inherit`), `allow_contact_fallback` (`False`) and `open_to_new_senders` (`False`). `open_to_new_senders` is the Front Office switch of that channel in Settings → Connections (every sender answered in Front Office mode unless their contact record says no; inert outside WhatsApp and Telegram), `allow_contact_fallback` the narrower expert door for contacts with the flag only (`front_office_state` and `set_front_office` in `vaf/core/channel_ingress_policy.py`); `permissive` opens the contact door everywhere and is reported by `vaf security doctor` and the security overview. Admin-only. |
 | `connection_enabled_by_scope` | `None` | Per-scope connection toggles. |
-| `front_office_contact_reply_require_approval` | `False` | Require approval before auto-replying to contacts. |
+| `front_office_contact_reply_require_approval` | `False` | Reserved: not read by any code at the moment, every Front Office reply is sent directly (see FRONT_OFFICE.md, Reply approval). |
 
 ## Internal / managed (do not hand-edit)
 

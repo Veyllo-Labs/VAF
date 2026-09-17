@@ -74,6 +74,12 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
                               "contact may (or may no longer) talk to the agent's Front Office; "
                               "`username` who changed it, `path` the contact id, `detail` the "
                               "contact and the new state",
+    "front_office_changed": "Front Office was switched on or off for a messenger channel in "
+                            "Settings: on, everyone who writes there is answered in Front Office "
+                            "mode and the channel's contacts in the book are allowed; `channel` "
+                            "the platform, `username` who switched it, `detail` the new state and "
+                            "the number of contacts granted. One event per channel that really "
+                            "changed",
     # mail
     "mail_high_risk_send_blocked": "Outgoing mail stopped as high-risk before sending",
     "mail_image_proxy_blocked": "Remote image proxy refused a host",

@@ -808,10 +808,21 @@ class ServerManager:
         if not os.path.exists(self.server_path):
             return None
         try:
-            out = subprocess.run([self.server_path, "--version"], capture_output=True, text=True, timeout=20)
-            return self.parse_build_number((out.stdout or "") + (out.stderr or ""))
+            return self.parse_build_number(self._version_output())
         except Exception:
             return None
+
+    def _version_output(self) -> str:
+        """What `llama-server --version` writes, both streams together.
+
+        The one step of installed_build that starts a program, and the only reason its
+        tests would need a real executable: a stand-in binary is a shell script, which
+        Linux and macOS run and Windows does not accept as a program at all, while the
+        decisions the build number drives have to hold on every host. Standing in for
+        this method keeps those tests host-independent.
+        """
+        out = subprocess.run([self.server_path, "--version"], capture_output=True, text=True, timeout=20)
+        return (out.stdout or "") + (out.stderr or "")
 
     @staticmethod
     def parse_build_number(version_output: str):

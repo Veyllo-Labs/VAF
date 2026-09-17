@@ -16,6 +16,7 @@ goes red.
 """
 import hashlib
 import io
+import os
 import re
 import tarfile
 from pathlib import Path
@@ -137,14 +138,24 @@ def test_matching_bytes_land_and_mismatching_bytes_never_touch_the_target(monkey
 
 # ── the install ───────────────────────────────────────────────────────────────────
 
+_VERSION_LINE = "version: {build} (deadbeef)\nbuilt with GNU 11.4.0 for Linux x86_64\n"
+
+
+def _stub_server(path, build: int) -> None:
+    """A stand-in for the binary whose BYTES are the version line the real one prints.
+    The fixture's probe reads it, so nothing here has to be a program: a shell stub is
+    one on Linux and macOS and is not one on Windows."""
+    Path(path).write_text(_VERSION_LINE.format(build=build), encoding="utf-8")
+
+
 def _archive_with_server(build: int) -> bytes:
     """A tar.gz shaped like a release archive: a top-level folder holding a llama-server
-    script that answers --version with the given build."""
+    that answers --version with the given build (a stand-in, see _stub_server)."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        script = f"#!/bin/sh\necho 'version: {build} (deadbeef)'\n".encode()
+        script = _VERSION_LINE.format(build=build).encode()
         info = tarfile.TarInfo(name="build/bin/llama-server")
-        info.size = len(script); info.mode = 0o755
+        info.size = len(script)
         tar.addfile(info, io.BytesIO(script))
     return buf.getvalue()
 
@@ -158,19 +169,25 @@ def linux_install(monkeypatch, tmp_path):
     monkeypatch.setattr(backend, "get_primary_gpu", lambda: None)
     monkeypatch.setattr(backend.UI, "event", lambda *a, **k: None)
     monkeypatch.setattr(backend.UI, "error", lambda *a, **k: None)
+    # `llama-server --version` without starting a program: the stand-in binary is not
+    # executable on every host, and what these tests are about is the decision the build
+    # number drives. test_the_version_probe_really_runs_the_binary covers the exec where
+    # a host can perform it.
+    monkeypatch.setattr(backend.ServerManager, "_version_output",
+                        lambda self: Path(self.server_path).read_text(encoding="utf-8", errors="replace"))
     return _manager("Linux", tmp_path=tmp_path), payload
 
 
 def test_the_pinned_build_on_disk_downloads_nothing(linux_install, monkeypatch):
     m, _ = linux_install
-    Path(m.bin_dir).mkdir(); Path(m.server_path).write_text("#!/bin/sh\necho 'version: 10955 (x)'\n"); Path(m.server_path).chmod(0o755)
+    Path(m.bin_dir).mkdir(); _stub_server(m.server_path, 10955)
     monkeypatch.setattr("vaf.core.verified_download.requests.get", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no download")))
     assert m.ensure_server_exists() is True
 
 
 def test_an_older_build_on_disk_is_replaced_whole_by_the_pinned_one(linux_install, monkeypatch):
     m, payload = linux_install
-    Path(m.bin_dir).mkdir(); Path(m.server_path).write_text("#!/bin/sh\necho 'version: 10021 (old)'\n"); Path(m.server_path).chmod(0o755)
+    Path(m.bin_dir).mkdir(); _stub_server(m.server_path, 10021)
     (Path(m.bin_dir) / "libggml-base.so.0.16.0").write_bytes(b"old library")
     assert m.installed_build() == 10021
     _fake_get(monkeypatch, payload)
@@ -188,6 +205,36 @@ def test_a_fresh_install_has_no_bin_dir_yet(linux_install, monkeypatch):
     assert m.ensure_server_exists() is True and m.installed_build() == 10955
 
 
+@pytest.mark.skipif(os.name == "nt", reason="a shell stub is not a program on Windows")
+def test_the_version_probe_really_runs_the_binary(tmp_path):
+    """The one step the install tests above stand in for, exercised on a host that can
+    perform it: _version_output starts the binary and installed_build reads its number.
+    On Windows the stub cannot be started, which is why the other tests do not rely on
+    it and why installed_build answers None there rather than raising
+    (test_a_binary_that_cannot_be_started_reads_as_no_build)."""
+    m = _manager("Linux", tmp_path=tmp_path)
+    Path(m.bin_dir).mkdir()
+    Path(m.server_path).write_text("#!/bin/sh\necho 'version: 0.4.0-dev (build 10955, commit abc)'\n", encoding="utf-8")
+    Path(m.server_path).chmod(0o755)
+    assert "build 10955" in m._version_output()
+    assert m.installed_build() == 10955
+
+
+def test_a_binary_that_cannot_be_started_reads_as_no_build(linux_install, monkeypatch):
+    """A binary that will not start answers no build: what Windows does with a shell stub,
+    and what a truncated binary or one missing its CUDA runtime does anywhere. The number
+    is unknown rather than wrong, so the pinned build is installed over it, and a launcher
+    that still cannot read a number afterwards reports failure instead of starting
+    something it cannot identify."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(); _stub_server(m.server_path, 10021)
+    monkeypatch.setattr(backend.ServerManager, "_version_output",
+                        lambda self: (_ for _ in ()).throw(OSError("Exec format error")))
+    assert m.installed_build() is None
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is False, "an unidentifiable binary is not a green light"
+
+
 def test_both_shapes_of_the_version_line_yield_the_build_number():
     parse = backend.ServerManager.parse_build_number
     assert parse("version: 10021 (33a75f41c)\nbuilt with GNU 11.4.0 for Linux x86_64\n") == 10021
@@ -198,7 +245,7 @@ def test_both_shapes_of_the_version_line_yield_the_build_number():
 
 def test_bytes_that_do_not_hash_to_the_pin_leave_the_old_build_alone(linux_install, monkeypatch):
     m, payload = linux_install
-    Path(m.bin_dir).mkdir(); Path(m.server_path).write_text("#!/bin/sh\necho 'version: 10021 (old)'\n"); Path(m.server_path).chmod(0o755)
+    Path(m.bin_dir).mkdir(); _stub_server(m.server_path, 10021)
     _fake_get(monkeypatch, payload + b"tampered")
     assert m.ensure_server_exists() is False
     assert m.installed_build() == 10021 and not list(Path(m.bin_dir).glob("*.part")) and not list(Path(m.bin_dir).glob("*.tar.gz"))

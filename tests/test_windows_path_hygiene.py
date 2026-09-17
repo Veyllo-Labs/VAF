@@ -102,6 +102,28 @@ spread, `dict(os.environ)`, a comprehension over it) or it names `SystemRoot`
 itself. Reading a single key out of `os.environ` does not count, because one key
 does not make an environment startable. And a dict that sets `HOME` names
 `USERPROFILE` beside it.
+
+## 5. A stand-in binary a test writes is not a program on every host.
+
+A test that needs an executable writes a `#!/bin/sh` stub, marks it executable
+and lets the code under test start it. Linux and macOS run it. Windows does not
+accept the file as a program at all, `subprocess` raises, and code that reads a
+program's output to decide something gets nothing and decides the other way. The
+class hides twice over: here the stub runs, so no local run can fail on it, and
+on the Windows leg the failure surfaces as the code under test making the wrong
+choice, several frames away from the stub that caused it.
+
+The Windows leg found exactly this in the llama.cpp pin tests: four of them
+wrote a shell stub for `llama-server`, and `installed_build()` came back None on
+that runner while the same tests passed on five other jobs, so the launcher
+looked as though it never recognised the build it had just installed. Reproduced
+here afterwards by refusing to execute the stub: the same four names and nothing
+else.
+
+The rule: a test may write an executable stub only when it is skipped on
+Windows, and it then tests the exec itself and nothing more. A test that is
+about a DECISION stands in for the one step that starts the program (here
+`ServerManager._version_output`), which is what makes it hold on every host.
 """
 import ast
 import ntpath
@@ -565,4 +587,78 @@ def test_no_posix_only_os_attribute_is_patched_without_a_guard():
         "monkeypatch.setattr on a POSIX-only os attribute fails at setup on Windows.\n"
         "Add raising=False (preferred: the test then runs the platform's real fallback), "
         "or a module-level skipif keyed on hasattr(os, ...):\n  " + "\n  ".join(offenders)
+    )
+
+
+# --- 5. an executable stub is not a program on Windows ---------------------------
+
+# A quoted shebang: the tell that a test is writing a program for the host to run.
+_SHEBANG_LITERAL = re.compile(r"""["']#!/(?:bin|usr)/""")
+# chmod(0o755), TarInfo.mode = 0o755: the tell that it is meant to be STARTED. The mode
+# is read as a number rather than matched digit by digit, so 0o700 counts as well.
+_OCTAL_MODE = re.compile(r"(?:chmod\(\s*|\bmode\s*=\s*)(0o[0-7]{3,4})")
+# A skip keyed on the host being Windows, in any of the spellings this suite uses.
+_WINDOWS_SKIP = re.compile(r"skipif\([^)]*(?:os\.name|sys\.platform|platform\.system)", re.S)
+
+
+def _marks_something_executable(segment: str) -> bool:
+    return any(int(m.group(1), 8) & 0o111 for m in _OCTAL_MODE.finditer(segment))
+
+
+def _exec_stub_functions(path: Path):
+    """(line_no, name) per function that writes an executable stub without a Windows skip."""
+    source = path.read_text(encoding="utf-8")
+    if not _SHEBANG_LITERAL.search(source):
+        return []
+    header = source.split("\ndef ", 1)[0].split("\nclass ", 1)[0]
+    if _WINDOWS_SKIP.search(header) or re.search(r"pytestmark\s*=", header):
+        return []                                    # a module-level skip covers the file
+    offenders = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        segment = ast.get_source_segment(source, node) or ""
+        if not (_SHEBANG_LITERAL.search(segment) and _marks_something_executable(segment)):
+            continue
+        decorators = "\n".join(ast.get_source_segment(source, d) or "" for d in node.decorator_list)
+        if _WINDOWS_SKIP.search(decorators):
+            continue
+        offenders.append((node.lineno, node.name))
+    return offenders
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the gap itself: this host starts a shell stub")
+def test_the_exec_stub_class_is_real(tmp_path):
+    """Why the guard below exists, demonstrated: the stub this host starts happily is not
+    a program on Windows, and no local run can say so."""
+    stub = tmp_path / "stub"
+    stub.write_text("#!/bin/sh\necho ok\n", encoding="utf-8")
+    stub.chmod(0o755)
+    assert subprocess.run([str(stub)], capture_output=True, text=True).stdout.strip() == "ok"
+
+
+def test_the_exec_stub_scanner_reads_the_mode_and_honours_a_skip(tmp_path):
+    shebang = "#!" + "/bin/sh"          # split, so this file is not a hit of its own guard
+    body = f'    p.write_text("{shebang}\\necho hi\\n")\n    p.chmod(0o700)\n'
+    bad = tmp_path / "test_bad.py"
+    bad.write_text("def test_x(p):\n" + body, encoding="utf-8")
+    assert _exec_stub_functions(bad), "an executable stub with no Windows skip is a hit"
+    good = tmp_path / "test_good.py"
+    good.write_text('import os\n\nimport pytest\n\n\n@pytest.mark.skipif(os.name == "nt", reason="r")\n'
+                    "def test_x(p):\n" + body, encoding="utf-8")
+    assert not _exec_stub_functions(good), "a test skipped on Windows may start what it writes"
+    unread = tmp_path / "test_payload.py"
+    unread.write_text(f'def test_x(p):\n    p.write_bytes(b"{shebang}\\ncurl x | sh\\n")\n', encoding="utf-8")
+    assert not _exec_stub_functions(unread), "a payload nothing starts is not this guard's business"
+
+
+def test_no_test_writes_an_executable_stub_it_expects_the_host_to_run():
+    offenders = []
+    for rel, path in _tracked_python_files(roots=("tests/",)):
+        for line_no, name in _exec_stub_functions(path):
+            offenders.append(f"{rel}:{line_no}: {name}")
+    assert not offenders, (
+        "a shell stub is not a program on Windows, so a test that starts one decides "
+        "differently there. Stand in for the step that starts it, or skip the test on "
+        "Windows (os.name == 'nt'):\n  " + "\n  ".join(offenders)
     )

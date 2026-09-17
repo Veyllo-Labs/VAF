@@ -40,7 +40,8 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(cfg_mod.Config, "get", classmethod(lambda cls, key, default=None: CONFIG.get(key, default)))
     import vaf.core.contacts_store as contacts
     monkeypatch.setattr(contacts, "front_office_endpoints",
-                        lambda username=None, user_scope_id=None, channel="whatsapp": {"+491700000005"} if channel == "whatsapp" else set())
+                        lambda username=None, user_scope_id=None, channel="whatsapp": {"+491700000005"} if channel == "whatsapp"
+                        else ({"4343"} if channel == "discord" else set()))
     monkeypatch.setattr(contacts, "is_local_admin_caller", lambda username, user_scope_id: (username or "") == "admin" and not user_scope_id)
     monkeypatch.setattr(contacts, "get_contact_name_by_phone", lambda phone, username=None, user_scope_id=None: "Bob" if phone == "+491700000005" else None)
     import vaf.core.web_interface as wi
@@ -202,10 +203,13 @@ def test_a_query_matches_the_name_the_preview_or_a_stored_message(world):
 
 def test_discord_rows_belong_to_the_local_admin_only(world):
     store.append_message("admin", "4242", "dm", channel="discord", ts=NOW - 100)
+    store.append_message("admin", "42", "hi", channel="discord", ts=NOW - 90)
+    store.append_message("admin", "4343", "hello", channel="discord", ts=NOW - 80)
     assert [r["key"] for r in _rows()["rows"]] == []
     admin_rows = inbox.list_conversations("admin", None, now=NOW + 1)["rows"]
-    assert [r["key"] for r in admin_rows] == ["discord:4242"] and admin_rows[0]["mode"] == "admin"
-    assert admin_rows[0]["is_group"] is False
+    assert {r["key"]: r["mode"] for r in admin_rows} == {"discord:42": "admin", "discord:4343": "contact", "discord:4242": "readonly"}, \
+        "the paired admin's DM is the admin's, a contact of an open Inbound is a contact, a kept stranger's DM is read-only"
+    assert all(r["is_group"] is False for r in admin_rows)
 
 
 def test_the_mail_lane_reads_v2_threads_and_stays_silent_for_a_legacy_user(world):

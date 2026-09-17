@@ -12,6 +12,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Inbound on Discord.** The Inbound window switches Discord like the other channels:
+  with it on, anyone who writes the bot a direct message is answered in Front Office mode
+  as a contact of the admin's book (added there when they write, switched off there to
+  keep them out); the paired admin's DM stays the full agent and guild channels are never
+  answered. The Discord window badges such a chat as Contact, and the inbox's mode says
+  `contact` for it and `readonly` for a kept stranger's DM instead of `admin` for every row.
+  The admission a bridge makes (the record whatever its flag, the policy's answer, the
+  enrolment with its event) is one shared function now, used by Discord and by Telegram's
+  stranger path.
 - **The contact is the hub, not the channel.** While answering a contact, the agent has one
   read tool, `contact_history`: what that person wrote to you before and what went to them,
   across WhatsApp, Telegram, Discord and mail, newest first, with a channel filter and a
@@ -83,7 +92,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   bounce report (and a bounce forwarded inside a mail is not this mail's report); the
   reply cap counts whole mailboxes and honours `0`; the `none` verification profile
   trusts no header whatever id the account remembers; no graph edge crosses the Front
-  Office lane on any write path.
+  Office lane on any write path. The Inbound window no longer explains the WhatsApp reply
+  window under the switches; that door is the WhatsApp window's own setting.
 - **A mail the agent sent for you now has a Sent copy and marks the mail it answered.**
   `send_mail`, `reply_mail` and `forward_mail` built and sent the wire bytes themselves,
   so on a plain IMAP account nothing was filed in Sent and the answered mail kept

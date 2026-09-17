@@ -237,13 +237,22 @@ def _store_sessions() -> list:
     bridge writes every row under the admin's name with no scope (the integration is
     admin-only), so the rows are read the way vaf/core/inbox.py reads them."""
     from vaf.core.channel_message_store import chat_overview, store_exists
-    from vaf.core.contacts_store import message_channel_username
-    from vaf.core.inbox import chat_state
+    from vaf.core.contacts_store import front_office_endpoints, local_admin_identity, message_channel_username
+    from vaf.core.inbox import chat_mode, chat_state
+    from vaf.core.messaging_connections import owner_endpoints
     row_user = message_channel_username("discord", None)
     sessions: list = []
     try:
         if not store_exists(row_user, None):
             return sessions
+        # The lane is the local admin's: the paired admin's own DM ("admin"), the contacts
+        # of the admin's book an open Inbound answers ("contact"), the rest kept read-only.
+        uname, scope = local_admin_identity()
+        owners = owner_endpoints("discord", uname, scope)
+        try:
+            contacts = set(front_office_endpoints(uname, scope, "discord") or ())
+        except Exception:
+            contacts = set()
         for row in chat_overview(row_user, user_scope_id=None, channel="discord", limit=500):
             cid = str(row.get("chat_id") or "")
             if not cid:
@@ -251,7 +260,8 @@ def _store_sessions() -> list:
             state = chat_state(row)
             sessions.append({
                 "chat_id": cid,
-                "type": "admin",
+                "type": chat_mode("discord", cid, owners=owners, contacts=contacts, relays=set(),
+                                  reply_window_until_ts=None, now=0.0),
                 "name": (row.get("chat_name") or "").strip() or None,
                 "last_ts": int(row.get("last_ts") or 0),
                 "message_count": int(row.get("message_count") or 0),

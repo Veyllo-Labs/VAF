@@ -376,8 +376,8 @@ def test_the_front_office_state_and_the_reply_mode_route(world, monkeypatch):
 
 def test_the_inbound_window_switches_mail_and_offers_the_reply_mode():
     src = (REPO / "web" / "components" / "connections" / "FrontOfficeDashboard.tsx").read_text(encoding="utf-8")
-    assert "{ id: 'email', label: 'E-Mail', icon: Mail, color: 'bg-amber-500', frontOffice: true }" in src
-    assert "type FrontOfficeChannel = 'whatsapp' | 'telegram' | 'email';" in src
+    assert "{ id: 'email', label: 'E-Mail', icon: Mail, color: 'bg-amber-500' }" in src
+    assert "type FrontOfficeChannel = 'whatsapp' | 'telegram' | 'discord' | 'email';" in src
     assert "api/front-office/mail" in src and "t('mailModeDraft')" in src and "t('mailModeSend')" in src and "t('mailModeHint')" in src
     assert "t('confirmBodyMail'" in src
 

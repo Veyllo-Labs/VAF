@@ -25,7 +25,7 @@ One shape for five sources:
 | `answered_by_agent` | the newest message is the agent's own send (WhatsApp: a message sent from the agent number's own phone is the person's, labelled `OWNER_SENDER` by the bridge, not the agent's; mail: the newest message carries the answered mark; an older reply in the thread says nothing about the mail that arrived after it) |
 | `done` | marked done and nothing newer arrived, or the newest message is the person's own reply (mail: the newest message sits in the Sent folder). A newer message reopens |
 | `is_group` | WhatsApp `@g.us`, a negative Telegram id, every room |
-| `mode` | which lane answers: `owner`, `contact` (Front Office), `conversation` (WhatsApp reply window open), `readonly`, `needs_assign` (an unresolved WhatsApp `@lid`), `admin` (Discord), `relay` (Telegram), `mail`, `room` |
+| `mode` | which lane answers: `owner`, `contact` (Front Office), `conversation` (WhatsApp reply window open), `readonly`, `needs_assign` (an unresolved WhatsApp `@lid`), `admin` (the paired Discord admin's direct message; a Discord contact of an open Inbound is `contact`, a kept stranger's DM `readonly`), `relay` (Telegram), `mail`, `room` |
 | `reply_window_until` | the WhatsApp reply window, computed from the store with the bridge's rule (a test pins that the two agree) |
 | `bulk` | mail only: the thread is bulk mail (`is_bulk_mail`, see the rules), listed only when the bulk toggle asks |
 | `draft` | mail only: the agent's held answer to the thread (`op_id`, `to`, `subject`, `body`, `created_at`) or null; the window shows it with Send and Discard, the routes are `POST /api/mail/drafts/{op_id}/send` and `DELETE /api/mail/drafts/{op_id}` |

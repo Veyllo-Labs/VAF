@@ -513,7 +513,11 @@ def chat_mode(channel: str, chat_id: str, *, owners: Set[str], contacts: Set[str
               reply_window_until_ts: Optional[float], now: float, needs_assign: bool = False) -> str:
     """Which lane answers in this chat, the words the channel windows already use."""
     if channel == "discord":
-        return "admin"
+        # The paired admin's direct message is the admin's own chat ("admin", the Discord
+        # window's word for it); a person an open Inbound answers is a contact; every other
+        # kept DM is read-only.
+        cid = str(chat_id or "")
+        return "admin" if cid in owners else ("contact" if cid in contacts else "readonly")
     if needs_assign:
         return "needs_assign"
     cid = str(chat_id or "")

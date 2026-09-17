@@ -11,7 +11,7 @@ import logging
 import threading
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 from vaf.core.platform import Platform
@@ -1446,6 +1446,60 @@ def enrol_front_office_contact(
         channels=[{"type": chan, "value": key}],
         allow_as_assistant_user=True, source="front_office",
     )
+
+
+def local_admin_identity() -> Tuple[str, Optional[str]]:
+    """The identity the local admin's own contact book is reached by: (username, scope).
+    A lane that runs for the local admin alone (the Discord bridge writes every row under
+    the literal name "admin" and no scope) must not read the book with that literal: on an
+    install whose admin has another name, that is another user's book."""
+    scope = _local_admin_scope_id()
+    return (_local_admin(), scope or None)
+
+
+def admit_front_office_sender(
+    channel: str,
+    value: str,
+    *,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+    raw_policy: Any = None,
+    display_name: str = "",
+    explicit_match: bool = False,
+    conversation_match: bool = False,
+) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+    """The admission of one sender on a Front Office channel, the same for every bridge:
+    the sender's record whatever its flag (a record with "Can reach your assistant" OFF is
+    the owner's opt-out), the ingress policy's answer with that record as the contact
+    match, and for a stranger the open channel let in the enrolment with the flag ON plus
+    its `contact_access_changed` event, once. Returns (allowed, reason, record): the record
+    is the contact who may reach the assistant, None for a refusal and for a sender the
+    reply window let in. Called by the Discord bridge and the Telegram bridge's stranger
+    path. Named boundary: the WhatsApp bridge still decides inline, because its admission
+    interleaves the LID resolution, the whitelist and the reply window in one block, and
+    the Telegram bridge's flagged-contact branch attributes the owner from the record
+    first; both convert in a change of their own."""
+    from vaf.core.channel_ingress_policy import evaluate_ingress
+    chan = (channel or "").strip().lower()
+    key = str(value or "").strip()
+    rec = find_contact_by_channel(chan, key, username, user_scope_id) if key else None
+    reaches = bool(rec) and bool(rec.get("allow_as_assistant_user"))
+    allowed, reason = evaluate_ingress(
+        chan, raw_policy, explicit_match=bool(explicit_match), contact_match=reaches,
+        conversation_match=bool(conversation_match), sender_opted_out=bool(rec) and not reaches)
+    if not allowed:
+        return False, reason, None
+    if reason == "front_office_open" and rec is None:
+        rec = enrol_front_office_contact(chan, key, display_name, username, user_scope_id)
+        try:
+            from vaf.core.security_events import log_security_event
+            log_security_event("contact_access_changed", channel=chan, username=str(username or ""),
+                               path=str(rec.get("id") or ""),
+                               detail=f"granted by the open Front Office: {rec.get('name') or key}")
+        except Exception:
+            pass
+        reaches = True
+    return True, reason, (rec if reaches else None)
 
 
 def front_office_endpoints(

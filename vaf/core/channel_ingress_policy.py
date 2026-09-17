@@ -12,14 +12,15 @@ from typing import Any, Dict, Optional, Tuple
 
 _SUPPORTED_CHANNELS = ("telegram", "whatsapp", "discord")
 _SUPPORTED_MODES = ("paired_only", "permissive")
-# The channels whose bridge reports a contact match to evaluate_ingress, so a contact with
-# "Can reach your assistant" can be let in there at all, and whose bridge can enrol a new
-# sender as a contact when the channel's Front Office is on. Discord's bridge passes
-# contact_match=False (its one sender is the admin's own DM), so a Front Office switch for
-# it would switch nothing, and the open door below never applies to it. A separate tuple
-# on purpose: _SUPPORTED_CHANNELS is every routable channel and stays equal to
-# ROUTABLE_CHANNELS. tests/test_front_office_settings.py holds this tuple against the
-# bridges' call sites.
+# The channels whose bridge admits a contact (contacts_store.admit_front_office_sender, or
+# a contact match handed to evaluate_ingress), so a contact with "Can reach your assistant"
+# can be let in there at all, and whose bridge enrols a new sender as a contact when the
+# channel's Front Office is on. Discord's lane is the local admin's alone and answers
+# direct messages only (the bot sees every guild channel it sits in); a stranger's DM is
+# admitted as a contact of the admin's book. A separate tuple on purpose: _SUPPORTED_CHANNELS
+# is every routable channel and stays equal to ROUTABLE_CHANNELS, and a channel that gains
+# a bridge without a contact lane must not become a Front Office channel by being routable.
+# tests/test_front_office_settings.py holds this tuple against the bridges' call sites.
 #
 # Mail is a Front Office channel without being a messenger: it is an INGRESS lane (the
 # mail sync hands new mail to the answering lane in vaf/mail/inbound.py) and never a
@@ -29,7 +30,7 @@ _SUPPORTED_MODES = ("paired_only", "permissive")
 # the channel was switched on; mail sent before it is never answered, so switching on
 # never answers a backlog).
 MAIL_CHANNEL = "email"
-MESSENGER_FRONT_OFFICE_CHANNELS = ("whatsapp", "telegram")
+MESSENGER_FRONT_OFFICE_CHANNELS = ("whatsapp", "telegram", "discord")
 FRONT_OFFICE_CHANNELS = MESSENGER_FRONT_OFFICE_CHANNELS + (MAIL_CHANNEL,)
 _POLICY_CHANNELS = _SUPPORTED_CHANNELS + (MAIL_CHANNEL,)
 MAIL_REPLY_MODES = ("draft", "send")

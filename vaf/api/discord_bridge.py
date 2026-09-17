@@ -10,7 +10,7 @@ import logging
 import queue
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from vaf.core.config import Config
 from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
@@ -97,6 +97,34 @@ def _keep_rejected_discord_message(author_id: str, content: str, message_id: str
     return True
 
 
+def _admit_sender(author_id: str, is_dm: bool, admin_user_id: str, display_name: str,
+                  policy: Any) -> Tuple[bool, str, Dict[str, Any]]:
+    """Who the bridge answers: the paired admin's direct message as the full agent, and with
+    Inbound switched on for Discord (Settings, Connections) anybody else who writes the bot
+    a direct message, as a Front Office contact of the local admin, the one account this
+    integration serves: enrolled in the admin's book with the flag ON and kept out once the
+    owner switches them off there (contacts_store.admit_front_office_sender, the admission
+    the Telegram bridge shares). A guild message is never answered: the bot sees every
+    channel it sits in. Returns (allowed, reason, the extra task metadata of a contact's
+    turn)."""
+    aid = str(author_id or "").strip()
+    if not is_dm:
+        return (False, "not_paired", {})
+    if aid and aid == str(admin_user_id or "").strip():
+        allowed, reason = evaluate_ingress("discord", policy, explicit_match=True, contact_match=False)
+        return (allowed, reason, {})
+    try:
+        from vaf.core.contacts_store import admit_front_office_sender, local_admin_identity
+        uname, scope = local_admin_identity()
+        allowed, reason, rec = admit_front_office_sender(
+            "discord", aid, username=uname, user_scope_id=scope, raw_policy=policy, display_name=display_name)
+    except Exception:
+        return (False, "not_paired", {})
+    if not allowed or rec is None:
+        return (False, reason if not allowed else "not_paired", {})
+    return (True, reason, {"from_contact": True, "ingress_reason": reason})
+
+
 def _store_discord_message(chat_id, body, direction, content_type="text", message_id=None) -> None:
     """Record a Discord message in the shared channel store (channel_message_store, channel='discord')
     so the agent's read_discord_chat / find_discord_messages tools can read history. Discord is
@@ -118,7 +146,7 @@ def _store_discord_message(chat_id, body, direction, content_type="text", messag
 _discord_session_documents: Dict[str, list] = {}
 
 
-async def _enqueue_discord_image(message, attachment, session_id, caption) -> bool:
+async def _enqueue_discord_image(message, attachment, session_id, caption, extra_meta=None) -> bool:
     """Route a Discord image attachment to the vision pipeline (mirror of the Telegram image path):
     download -> persist into the user's attachments folder -> metadata['images'] -> agent turn."""
     import base64 as _b64
@@ -146,13 +174,14 @@ async def _enqueue_discord_image(message, attachment, session_id, caption) -> bo
         "images": attached_images,  # -> vision pipeline (headless_runner reads metadata['images'])
     }
     user_message = f"[Photo] (User: {caption})" if caption else "[Photo]"
+    metadata.update(extra_meta or {})
     TaskQueue().add(session_id=session_id, input_text=user_message, source="discord", metadata=metadata)
     _store_discord_message(author_id, user_message, "in", "image", str(message.id))
     logger.info("Discord image enqueued for vision from %s", message.author.name)
     return True
 
 
-async def _handle_discord_document(message, attachment, session_id, caption) -> bool:
+async def _handle_discord_document(message, attachment, session_id, caption, extra_meta=None) -> bool:
     """Extract text from a Discord document attachment, enqueue it inline, and index it for RAG
     (mirror of the Telegram document path)."""
     import os as _os
@@ -198,6 +227,7 @@ async def _handle_discord_document(message, attachment, session_id, caption) -> 
         "discord_channel_id": str(message.channel.id), "discord_author_id": author_id,
         "origin_channel": "discord", "task_class": "interactive",
     }
+    metadata.update(extra_meta or {})
     TaskQueue().add(session_id=session_id, input_text=user_message, source="discord", metadata=metadata)
     _store_discord_message(author_id, f"[Document: {file_name}]" + (f" {caption}" if caption else ""),
                            "in", "document", str(message.id))
@@ -269,8 +299,9 @@ def _run_bot() -> None:
         if message.author == client.user:
             return
         policy = Config.get("channel_ingress_policy")
-        explicit_match = str(message.author.id) == admin_user_id and isinstance(message.channel, discord.DMChannel)
-        allowed, reason = evaluate_ingress("discord", policy, explicit_match=explicit_match, contact_match=False)
+        display_name = str(getattr(message.author, "display_name", None) or getattr(message.author, "name", None) or "").strip()
+        allowed, reason, fo_meta = _admit_sender(str(message.author.id), isinstance(message.channel, discord.DMChannel),
+                                                admin_user_id, display_name, policy)
         if not allowed:
             sender_id = str(message.author.id)
             # One REJECT line per sender and throttle window in the channel's own inbound
@@ -311,9 +342,9 @@ def _run_bot() -> None:
                 ext = fname[fname.rfind("."):] if "." in fname else ""
                 try:
                     if mime.startswith("image/") or ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"):
-                        await _enqueue_discord_image(message, att, session_id, text)
+                        await _enqueue_discord_image(message, att, session_id, text, extra_meta=fo_meta)
                     else:
-                        await _handle_discord_document(message, att, session_id, text)
+                        await _handle_discord_document(message, att, session_id, text, extra_meta=fo_meta)
                 except Exception as e:
                     logger.warning("Discord attachment handling failed: %s", e)
             return  # the message text is carried as the attachment caption
@@ -329,6 +360,7 @@ def _run_bot() -> None:
             "origin_channel": "discord",
             "task_class": "interactive",
         }
+        metadata.update(fo_meta)   # a contact's turn runs in Front Office mode (headless_runner)
 
         try:
             _append_discord_activity(channel_id, "in")

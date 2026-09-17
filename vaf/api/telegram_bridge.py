@@ -231,23 +231,13 @@ def _open_front_office_entry(telegram_user_id: str, policy: Any, sender: Any) ->
         if len(owners) != 1:
             return (None, False)
         scope, uname = next(iter(owners))
-        from vaf.core.contacts_store import enrol_front_office_contact, find_contact_by_channel
-        rec = find_contact_by_channel("telegram", telegram_user_id, uname, scope or None)
-        opted_out = bool(rec) and not bool(rec.get("allow_as_assistant_user"))
-        allowed, reason = evaluate_ingress("telegram", policy, explicit_match=False, contact_match=False,
-                                           sender_opted_out=opted_out)
-        if not allowed or reason != "front_office_open":
+        from vaf.core.contacts_store import admit_front_office_sender
+        name = str(getattr(sender, "full_name", None) or getattr(sender, "username", None) or "").strip()
+        allowed, _reason, rec = admit_front_office_sender(
+            "telegram", telegram_user_id, username=uname, user_scope_id=scope or None,
+            raw_policy=policy, display_name=name)
+        if not allowed or rec is None:
             return (None, False)
-        if rec is None:
-            name = str(getattr(sender, "full_name", None) or getattr(sender, "username", None) or "").strip()
-            rec = enrol_front_office_contact("telegram", telegram_user_id, name, uname, scope or None)
-            try:
-                from vaf.core.security_events import log_security_event
-                log_security_event("contact_access_changed", channel="telegram", username=uname,
-                                   path=str(rec.get("id") or ""),
-                                   detail=f"granted by the open Front Office: {rec.get('name') or telegram_user_id}")
-            except Exception:
-                pass
         return ({
             "user_scope_id": scope or None,
             "vaf_username": uname,

@@ -1552,6 +1552,16 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 if _addr:
                                     _rec = find_contact_by_channel("email", _addr, _username, user_scope_id=_user_scope)
                                     contact = _rec if (_rec and _rec.get("allow_as_assistant_user")) else None
+                            elif task_source == "discord":
+                                from vaf.core.contacts_store import find_contact_by_channel, local_admin_identity
+                                _aid = str(_meta.get("discord_author_id") or "").strip()
+                                if _aid:
+                                    # The Discord lane is the local admin's alone and its tasks carry
+                                    # the literal "admin" identity; the book, the calendar and the
+                                    # contact's own view are the admin's real one.
+                                    _username, _user_scope = local_admin_identity()
+                                    _rec = find_contact_by_channel("discord", _aid, _username, user_scope_id=_user_scope)
+                                    contact = _rec if (_rec and _rec.get("allow_as_assistant_user")) else None
                         except Exception:
                             pass
                         # The contact of THIS turn, pinned on the agent: contact_history reads
@@ -1563,7 +1573,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         # with "Can reach your assistant". Tell the model exactly that, so it
                         # neither invents a relationship nor treats them as the owner.
                         _sender_ref = str(
-                            _meta.get("whatsapp_chat_jid") or _meta.get("telegram_user_id") or ""
+                            _meta.get("whatsapp_chat_jid") or _meta.get("telegram_user_id")
+                            or _meta.get("discord_author_id") or ""
                         ).split("@", 1)[0].split(":", 1)[0]
                         if _meta.get("email_from"):
                             _sender_ref = str(_meta.get("email_from") or "").strip()

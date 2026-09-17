@@ -71,16 +71,16 @@ const SWITCH_KNOB = 'absolute top-1 w-4 h-4 rounded-full bg-white shadow transit
 const CARD = 'rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3';
 const BTN = 'px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white hover:bg-gray-100 text-gray-900 transition-colors shrink-0 disabled:opacity-50';
 
-type FrontOfficeChannel = 'whatsapp' | 'telegram' | 'email';
+type FrontOfficeChannel = 'whatsapp' | 'telegram' | 'discord' | 'email';
 type Confirm = { kind: 'open'; channel: FrontOfficeChannel } | { kind: 'remove'; doc: FrontOfficeKnowledge } | null;
 
-/** The channels the panel lists: the two with a Front Office lane, then the ones without,
- *  so the reader sees at a glance where the agent can answer for them and where not. */
-const CHANNEL_ROWS: Array<{ id: string; label: string; icon: React.ElementType; color: string; frontOffice: boolean }> = [
-    { id: 'whatsapp', label: 'WhatsApp', icon: Phone, color: 'bg-green-600', frontOffice: true },
-    { id: 'telegram', label: 'Telegram', icon: MessageCircle, color: 'bg-sky-500', frontOffice: true },
-    { id: 'discord', label: 'Discord', icon: MessageCircle, color: 'bg-indigo-600', frontOffice: false },
-    { id: 'email', label: 'E-Mail', icon: Mail, color: 'bg-amber-500', frontOffice: true },
+/** The channels the panel lists, every one with a Front Office lane: the three bridges
+ *  (Discord's is the local admin's and covers direct messages) and the mail answering lane. */
+const CHANNEL_ROWS: Array<{ id: string; label: string; icon: React.ElementType; color: string }> = [
+    { id: 'whatsapp', label: 'WhatsApp', icon: Phone, color: 'bg-green-600' },
+    { id: 'telegram', label: 'Telegram', icon: MessageCircle, color: 'bg-sky-500' },
+    { id: 'discord', label: 'Discord', icon: MessageCircle, color: 'bg-indigo-600' },
+    { id: 'email', label: 'E-Mail', icon: Mail, color: 'bg-amber-500' },
 ];
 
 function Switch({ on, disabled, label, onClick }: { on: boolean; disabled?: boolean; label: string; onClick: () => void }) {
@@ -229,7 +229,6 @@ export default function FrontOfficeDashboard({ isOpen, onClose, onOpenContacts, 
 
     if (!isOpen) return null;
 
-    const hours = data ? Math.round(data.reply_window_hours) : 0;
     const docStatus = (k: FrontOfficeKnowledge) => {
         if (k.status === 'running') return t('learning', { done: k.batches_done, total: k.batches_total });
         if (k.status === 'complete' || k.status === 'partial') return t('learned', { sections: k.sections });
@@ -384,15 +383,13 @@ export default function FrontOfficeDashboard({ isOpen, onClose, onOpenContacts, 
                                 const on = !!data?.channels[row.id];
                                 const connected = !!data?.channels_connected[row.id];
                                 const counts = data?.channel_contacts[row.id];
-                                const note = !row.frontOffice
-                                    ? t('channelNoFrontOffice')
-                                    : !connected
-                                        ? t('channelNotConnected')
-                                        : on
-                                            ? t('channelOn', { count: counts?.allowed ?? 0 })
-                                            : t('channelOff', { count: counts?.total ?? 0 });
+                                const note = !connected
+                                    ? t('channelNotConnected')
+                                    : on
+                                        ? t('channelOn', { count: counts?.allowed ?? 0 })
+                                        : t('channelOff', { count: counts?.total ?? 0 });
                                 return (
-                                    <div key={row.id} className={cn('rounded-xl border border-gray-200 bg-white p-4 flex items-start justify-between gap-4', !row.frontOffice && 'opacity-60')}>
+                                    <div key={row.id} className="rounded-xl border border-gray-200 bg-white p-4 flex items-start justify-between gap-4">
                                         <div className="flex items-start gap-3 min-w-0">
                                             <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center text-white shrink-0', row.color)}>
                                                 <Icon className="w-4 h-4" />
@@ -400,7 +397,7 @@ export default function FrontOfficeDashboard({ isOpen, onClose, onOpenContacts, 
                                             <div className="min-w-0">
                                                 <div className="text-sm font-medium text-gray-900">{row.label}</div>
                                                 <div className="text-xs text-gray-500">{note}</div>
-                                                {row.frontOffice && row.id === 'whatsapp' && connected && data && !data.whatsapp_inbound_to_agent && (
+                                                {row.id === 'whatsapp' && connected && data && !data.whatsapp_inbound_to_agent && (
                                                     <div className="text-xs text-gray-500 mt-1">{t('inboundOff')}</div>
                                                 )}
                                                 {row.id === 'email' && on && data && (
@@ -426,14 +423,12 @@ export default function FrontOfficeDashboard({ isOpen, onClose, onOpenContacts, 
                                                 )}
                                             </div>
                                         </div>
-                                        {row.frontOffice && (
-                                            <Switch
-                                                on={on}
-                                                disabled={busy || !data || !data.admin}
-                                                label={row.label}
-                                                onClick={() => on ? setChannel(row.id as FrontOfficeChannel, false) : setConfirm({ kind: 'open', channel: row.id as FrontOfficeChannel })}
-                                            />
-                                        )}
+                                        <Switch
+                                            on={on}
+                                            disabled={busy || !data || !data.admin}
+                                            label={row.label}
+                                            onClick={() => on ? setChannel(row.id as FrontOfficeChannel, false) : setConfirm({ kind: 'open', channel: row.id as FrontOfficeChannel })}
+                                        />
                                     </div>
                                 );
                             })}
@@ -448,14 +443,6 @@ export default function FrontOfficeDashboard({ isOpen, onClose, onOpenContacts, 
                             )}
                         </div>
                         <p className="text-xs text-gray-500 leading-relaxed">{t('optOutHint')}</p>
-                        {/* The reply window is the one door that stays open with WhatsApp Inbound off;
-                            with it on, everyone who writes is answered anyway, so the note would only
-                            contradict the switch above it. */}
-                        {data && !data.channels.whatsapp && (
-                            <p className="text-xs text-gray-500 leading-relaxed">
-                                {hours > 0 ? t('offNote', { hours }) : t('offNoteClosed')}
-                            </p>
-                        )}
                       </div>
                       </div>
                     </div>

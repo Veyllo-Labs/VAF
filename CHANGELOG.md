@@ -74,6 +74,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   memory" on in the Front Office window.
 
 ### Fixed
+- **Inbound, after review.** An unresolved WhatsApp LID is no longer answered by an open
+  Inbound (no contact record could carry the opt-out for it); switching a channel on
+  grants the contacts of every book on the instance, not only the admin's; a mail answer
+  in send mode counts as answered only once it left; editing the agent's held draft
+  replaces it instead of letting both leave; the inbox's draft buttons report a failed
+  send instead of reloading as if it had left; a forwarded mail is no longer read as a
+  bounce report; the reply cap counts whole mailboxes and honours `0`; the `none`
+  verification profile trusts no header whatever id the account remembers.
 - **A mail the agent sent for you now has a Sent copy and marks the mail it answered.**
   `send_mail`, `reply_mail` and `forward_mail` built and sent the wire bytes themselves,
   so on a plain IMAP account nothing was filed in Sent and the answered mail kept

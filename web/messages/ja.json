@@ -2419,7 +2419,8 @@
     "draftTitle": "エージェントの下書き",
     "draftWaiting": "まだ送信していません。編集するにはメールウィンドウを開いてください。",
     "draftSend": "送信",
-    "draftDiscard": "破棄"
+    "draftDiscard": "破棄",
+    "draftFailed": "実行できませんでした（{error}）。下書きは残ります。"
   },
   "mailV2": {
     "title": "メール",

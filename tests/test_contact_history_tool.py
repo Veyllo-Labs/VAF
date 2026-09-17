@@ -109,6 +109,15 @@ def test_an_unverified_but_harmless_mail_is_marked(world, monkeypatch):
     assert "(sender unknown)" in out and 'subject "Lunch"' in out
 
 
+def test_a_mail_behind_a_long_chat_is_still_found(world):
+    bob = _bob(world)
+    for i in range(130):
+        cms.append_message("alice", "+491700000042", f"ping {i}", "in", chat_name="Bob", ts=int(NOW) - 400 + i,
+                           user_scope_id=SCOPE, channel="whatsapp")
+    out = _run(bob, channel="mail", limit=5)
+    assert 'subject "Angebot xyz"' in out, "the timeline is paged past the chat until the filter is satisfied"
+
+
 def test_without_a_pin_the_tool_refuses(world):
     out = ContactHistoryTool().run(_agent=SimpleNamespace(_front_office_contact=None), username="alice", user_scope_id=SCOPE)
     assert "no contact pinned" in out

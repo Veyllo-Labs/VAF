@@ -287,6 +287,17 @@ def test_the_runner_holds_the_answer_in_draft_mode_and_sends_it_in_send_mode(wor
         sent = [r for r in svc.store.sent_ids_for_case(apk, case_id) if r["delivery"] == "sent"]
         assert len(sent) == 1 and svc.store.get_message(pk)["answered_at"]
         assert svc.store.get_op(sent[0]["op_id"])["payload"]["references"].split()[0] == drafts[0]["message_id"], "the root anchor rides on every later mail"
+        # A send that does not leave (the wire refuses) leaves the case as it was, and so
+        # does a missing account: answered means the mail left.
+        case2 = case_token.mint_case_id()
+        svc.store.open_case(apk, case2, thread_id=thread_id, correspondent="lena@example.org")
+        monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(False, "wire refused"))
+        hr._deliver_email_reply(task, _runner_meta(pk, thread_id, case2, "send"), "Dritte Antwort")
+        assert svc.store.case_by_id(apk, case2)["status"] == "open", "answered only once the mail left"
+        import vaf.core.email_accounts as ea
+        monkeypatch.setattr(ea, "get_account", lambda *a, **k: None)
+        hr._deliver_email_reply(task, _runner_meta(pk, thread_id, case2, "send"), "Vierte Antwort")
+        assert svc.store.case_by_id(apk, case2)["status"] == "open"
     finally:
         svc.store.close()
 
@@ -380,6 +391,10 @@ def test_the_mail_window_and_the_inbox_show_the_held_draft():
     for key in ("draftTitle", "draftWaiting", "draftSend", "draftDiscard"):
         assert f"t('{key}')" in inbox, key
     assert "api/mail/drafts/${r.draft.op_id}/send" in inbox
+    assert "res.ok && (action === 'discard' || data.state === 'done')" in inbox and "t('draftFailed'" in inbox, \
+        "the inbox reloads only when the outbox says the mail left"
+    assert "api/mail/drafts?thread_id=${threadId}" in page and "editingDraftRef.current = heldOpId ?? null" in page, \
+        "a jumped-to thread fetches its draft by id; an edited draft consumes the held op"
     shell = (REPO / "web" / "components" / "connections" / "ChannelDashboardShell.tsx").read_text(encoding="utf-8")
     assert "reason === 'draft' ? t('waitsDraft')" in shell
     for path in sorted((REPO / "web" / "messages").glob("*.json")):
@@ -387,5 +402,5 @@ def test_the_mail_window_and_the_inbox_show_the_held_draft():
         assert {"mailModeLabel", "mailModeDraft", "mailModeSend", "mailModeHint", "confirmBodyMail"} <= set(d["settings"]["frontOffice"]), path.name
         assert "waitsDraft" in d["settings"]["channelDashboard"], path.name
         assert set(d["mailV2"]["draft"]) == {"title", "hint", "send", "edit", "discard", "sent", "failed"}, path.name
-        assert {"draftTitle", "draftWaiting", "draftSend", "draftDiscard"} <= set(d["inbox"]), path.name
+        assert {"draftTitle", "draftWaiting", "draftSend", "draftDiscard", "draftFailed"} <= set(d["inbox"]), path.name
         assert {"ovEvMailSpoof", "ovEvMailToken", "ovEvMailCapped"} <= set(d["notifications"]), path.name

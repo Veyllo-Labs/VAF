@@ -2419,7 +2419,8 @@
     "draftTitle": "Entwurf deines Agenten",
     "draftWaiting": "Noch nicht gesendet; zum Bearbeiten im Mail-Fenster öffnen.",
     "draftSend": "Senden",
-    "draftDiscard": "Verwerfen"
+    "draftDiscard": "Verwerfen",
+    "draftFailed": "Das hat nicht geklappt ({error}); der Entwurf bleibt."
   },
   "mailV2": {
     "title": "Mail",

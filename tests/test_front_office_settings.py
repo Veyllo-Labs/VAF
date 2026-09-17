@@ -517,7 +517,7 @@ def test_the_open_door_never_applies_outside_the_front_office_channels():
     assert evaluate_ingress("whatsapp", policy, explicit_match=False, contact_match=False) == (True, "front_office_open")
 
 
-def test_switching_a_channel_on_grants_every_contact_of_that_channel_in_the_callers_book(config, monkeypatch):
+def test_switching_a_channel_on_grants_every_contact_of_that_channel_in_every_book_on_the_instance(config, monkeypatch):
     from vaf.api import front_office_routes as routes
     from vaf.core import contacts_store
     events = _events(monkeypatch)
@@ -535,8 +535,9 @@ def test_switching_a_channel_on_grants_every_contact_of_that_channel_in_the_call
     assert out["channel_contacts"]["telegram"] == {"total": 1, "allowed": 0}, "Dave has no WhatsApp key"
     assert contacts_store.get_contact_by_id(carol["id"], "alice", user_scope_id=SCOPE)["allow_as_assistant_user"] is True
     assert contacts_store.get_contact_by_id(dave["id"], "alice", user_scope_id=SCOPE)["allow_as_assistant_user"] is False
-    assert contacts_store.list_contacts("bob", user_scope_id=TENANT)[0]["allow_as_assistant_user"] is False, "another book is not the admin's to grant"
-    assert events == [("front_office_changed", {"channel": "whatsapp", "username": "alice", "detail": "on, 1 contacts granted"})]
+    assert contacts_store.list_contacts("bob", user_scope_id=TENANT)[0]["allow_as_assistant_user"] is True, \
+        "the switch is instance-wide: left off, Frank would read as an opt-out while strangers writing to Bob get through"
+    assert events == [("front_office_changed", {"channel": "whatsapp", "username": "alice", "detail": "on, 2 contacts granted"})]
 
     # The owner switches Carol off; switching the channel off and on again does not undo
     # that on its own, and off leaves every flag alone.
@@ -562,6 +563,12 @@ def test_the_store_finds_a_sender_regardless_of_the_flag_and_enrols_a_new_one_on
     assert again["id"] == new["id"], "enrolment is idempotent"
     nameless = contacts_store.enrol_front_office_contact("telegram", "778", "", "alice", SCOPE)
     assert nameless["name"] == "778"
+    # Mail addresses match whatever their spelling: the book lowercases them, so must the lookup and the enrolment.
+    contacts_store.create_contact("Hans", "alice", user_scope_id=SCOPE, email="Hans@Example.org")
+    assert contacts_store.find_contact_by_channel("email", "HANS@example.org", "alice", SCOPE)["name"] == "Hans"
+    mailed = contacts_store.enrol_front_office_contact("email", "New@Example.org", "", "alice", SCOPE)
+    assert [ch["value"] for ch in mailed["channels"]] == ["new@example.org"] and mailed["name"] == "new@example.org"
+    assert contacts_store.enrol_front_office_contact("email", "NEW@EXAMPLE.ORG", "again", "alice", SCOPE)["id"] == mailed["id"]
 
 
 def test_the_bridges_ask_the_opt_out_question_and_enrol_who_the_open_door_let_in():

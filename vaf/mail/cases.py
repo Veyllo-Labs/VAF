@@ -211,7 +211,8 @@ def decide(*, trust: str, attribution: Attribution, raw_policy: Any, reply_mode:
         return Decision("ignore", ingress_reason, ingress_reason)
     if opted_out and ingress_reason != "open_conversation":
         return Decision("ignore", "opted_out", ingress_reason)
-    if replies_last_hour >= max(1, int(max_per_hour)) or replies_last_day >= max(1, int(max_per_day)):
+    # A cap of 0 is honoured as written: no automatic answer, every mail waits for the owner.
+    if replies_last_hour >= max(0, int(max_per_hour)) or replies_last_day >= max(0, int(max_per_day)):
         return Decision("ignore", "capped", ingress_reason)
     action = "answer" if str(reply_mode or "draft").lower() == "send" else "draft"
     return Decision(action, "ok", ingress_reason)

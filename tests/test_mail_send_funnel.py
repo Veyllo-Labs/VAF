@@ -124,6 +124,15 @@ def test_a_failed_and_an_ambiguous_send_stamp_the_ledger(svc, monkeypatch):
     assert not svc.store.get_message(pk)["answered_at"], "nothing left, nothing answered"
 
 
+def test_the_rate_cap_counts_whole_mailboxes_not_substrings(svc):
+    apk, _fpk, _pk = _seed(svc)
+    for to in ("Ann <ann@example.org>", "hann@example.org", "ANN@example.org, bob@example.org"):
+        svc.queue_send("bob@example.com", to, "s", "b", undo_seconds=0, sent_by="front_office", hold=True)
+    assert svc.store.front_office_replies_since(apk, "ann@example.org", "2000-01-01T00:00:00") == 2, "a mailbox, never a substring"
+    assert svc.store.front_office_replies_since(apk, "hann@example.org", "2000-01-01T00:00:00") == 1
+    assert svc.store.front_office_replies_since(apk, "bob@example.org", "2000-01-01T00:00:00") == 1
+
+
 def test_a_held_draft_never_leaves_until_approved_and_a_discard_records_itself(svc, monkeypatch):
     apk, fpk, pk = _seed(svc)
     sent = []

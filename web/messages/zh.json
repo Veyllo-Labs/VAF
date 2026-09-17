@@ -918,7 +918,7 @@
       "mailModeDraft": "先生成草稿",
       "mailModeSend": "立即发送",
       "mailModeHint": "草稿会在收件箱和邮件窗口等待你的批准。只有邮件服务商验证过的发件人才会收到回复；简报、自动邮件和未验证的发件人永远不会。",
-      "confirmBodyMail": "之后你的代理会以入站模式自行回复来信：作为你的助手，只回复邮件服务商验证过的发件人，并先生成由你批准的草稿。通讯录里有邮箱地址的 {count} 位联系人现在获得许可；新来信的人会被加入通讯录。"
+      "confirmBodyMail": "之后你的智能体会以入站模式自行回复来信：作为你的助手，只回复邮件服务商验证过的发件人，并先生成由你批准的草稿。通讯录里有邮箱地址的 {count} 位联系人现在获得许可；新来信的人会被加入通讯录。"
     },
     "whatsappWizard": {
       "title": "设置 WhatsApp",
@@ -975,7 +975,7 @@
       "agentAnswered": "智能体已回复",
       "done": "已完成",
       "couldNotLoad": "无法加载仪表板。",
-      "waitsDraft": "你的代理准备了一封回复，正在等待你的批准。"
+      "waitsDraft": "你的智能体准备了一封回复，正在等待你的批准。"
     },
     "whatsappDashboard": {
       "title": "WhatsApp",
@@ -2416,10 +2416,11 @@
     "invitation": "此房间在等待你对邀请的答复。",
     "members": "{count} 个智能体",
     "messagesCount": "{count} 条消息",
-    "draftTitle": "代理的草稿",
+    "draftTitle": "智能体的草稿",
     "draftWaiting": "尚未发送；打开邮件窗口即可编辑。",
     "draftSend": "发送",
-    "draftDiscard": "丢弃"
+    "draftDiscard": "丢弃",
+    "draftFailed": "操作失败（{error}），草稿仍保留。"
   },
   "mailV2": {
     "title": "邮件",
@@ -2592,7 +2593,7 @@
       "learnFailed": "学习失败。"
     },
     "draft": {
-      "title": "代理的草稿",
+      "title": "智能体的草稿",
       "hint": "尚未发送。请先阅读，再发送、编辑或丢弃。",
       "send": "发送",
       "edit": "编辑",

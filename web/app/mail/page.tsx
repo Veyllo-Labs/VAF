@@ -718,11 +718,25 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
     const [draftBusy, setDraftBusy] = useState(false);
     const [draftNote, setDraftNote] = useState<string>('');
     const activeRow = useMemo(() => threads.find(x => x.thread_id === activeThread) || null, [threads, activeThread]);
+    // The held answer of the open thread, fetched by thread id: a thread opened by a jump
+    // from the inbox need not be a row of the list on screen.
+    const [activeDraft, setActiveDraft] = useState<DraftRow | null>(null);
+    const loadActiveDraft = useCallback(async (threadId: number) => {
+        try {
+            const d = await jfetch(`api/mail/drafts?thread_id=${threadId}`);
+            setActiveDraft(((d.drafts || []) as DraftRow[])[0] || null);
+        } catch { setActiveDraft(null); }
+    }, []);
+    const draft = activeRow?.draft ?? activeDraft;
+    // The held op whose text is being edited in the composer: consumed when the edited
+    // mail is queued, so the agent's version does not leave as well.
+    const editingDraftRef = useRef<number | null>(null);
     const sendDraft = useCallback(async (d: DraftRow) => {
         setDraftBusy(true); setDraftNote('');
         try {
             const r = await jpost(`api/mail/drafts/${d.op_id}/send`, {});
             setDraftNote(r?.state === 'done' ? t('draft.sent') : t('draft.failed', { error: r?.error || r?.state || '' }));
+            setActiveDraft(null);
             await loadThreads();
         } catch (e) {
             setDraftNote(t('draft.failed', { error: e instanceof Error ? e.message : '' }));
@@ -730,7 +744,7 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
     }, [loadThreads, t]);
     const discardDraft = useCallback(async (d: DraftRow) => {
         setDraftBusy(true); setDraftNote('');
-        try { await jpost(`api/mail/drafts/${d.op_id}`, undefined, 'DELETE'); await loadThreads(); }
+        try { await jpost(`api/mail/drafts/${d.op_id}`, undefined, 'DELETE'); setActiveDraft(null); await loadThreads(); }
         catch { setDraftNote(t('actionFailed')); }
         finally { setDraftBusy(false); }
     }, [loadThreads, t]);
@@ -759,6 +773,8 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
     const openThread = useCallback(async (row: ThreadRow) => {
         setActiveThread(row.thread_id);
         setShowOlder(false);
+        setActiveDraft(null);
+        void loadActiveDraft(row.thread_id);
         try {
             const data = await jfetch(`api/mail/threads/${row.thread_id}`);
             const msgs: Msg[] = data.messages || [];
@@ -776,7 +792,7 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                 loadFolders();   // the folder badge must drop along with the row
             }
         } catch { setThreadMsgs([]); }
-    }, [loadFolders]);
+    }, [loadFolders, loadActiveDraft]);
 
     // A jump from the inbox: the thread opens by id, whichever folder the list shows. The id
     // is remembered so a new openThread identity (the folder list reloaded) does not open it
@@ -814,10 +830,13 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
         } catch { setError(t('actionFailed')); loadThreads(); }
     }, [activeThread, loadThreads, loadFolders, t]);
 
-    const openCompose = useCallback(async (mode: 'new' | 'reply' | 'replyAll' | 'forward', autoDraft = false, bodyOverride?: string) => {
+    const openCompose = useCallback(async (mode: 'new' | 'reply' | 'replyAll' | 'forward', autoDraft = false, bodyOverride?: string, heldOpId?: number) => {
         // The auto draft belongs to the jump that asked for it: armed only once the reply
         // prefill is on screen, and off again for a new mail or a failed prefill, or the next
-        // composer the person opens by hand would draft a mail nobody asked for.
+        // composer the person opens by hand would draft a mail nobody asked for. The same
+        // for the held op under edit: only a composer that really opened with its text may
+        // consume it.
+        editingDraftRef.current = null;
         if (mode === 'new') { setComposeAutoDraft(false); setCompose(null); return; }
         const newest = threadMsgs[threadMsgs.length - 1];
         if (!newest) return;
@@ -825,6 +844,7 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
             const params = mode === 'forward' ? 'forward=true' : (mode === 'replyAll' ? 'reply_all=true' : '');
             const pre = await jfetch(`api/mail/messages/${newest.id}/reply-prefill?${params}`);
             setComposeAutoDraft(autoDraft);
+            editingDraftRef.current = heldOpId ?? null;
             // The agent's held draft, edited by hand: its text above the quoted original.
             setCompose(bodyOverride !== undefined ? { ...pre, body: `${bodyOverride}${pre?.body || ''}` } : pre);
         } catch { setComposeAutoDraft(false); setError(t('actionFailed')); }
@@ -1156,20 +1176,20 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                                 <button type="button" title={t('forward')} onClick={() => openCompose('forward')}
                                     className="p-2 rounded-lg bg-[#262626] border border-[#2e2e2e] hover:border-[#444]"><CornerUpRight className="w-4 h-4" /></button>
                             </div>
-                            {activeRow?.draft && (
+                            {draft && (
                                 <div className="mx-5 my-3 rounded-xl border border-[#4a3b1e] bg-[#2b2417] p-3 text-[13px]">
                                     <div className="flex items-center gap-2 text-[#e0b866] font-medium">
                                         <Sparkles className="w-4 h-4" />
                                         <span>{t('draft.title')}</span>
                                     </div>
                                     <p className="text-xs text-[#c8b58a] mt-0.5">{t('draft.hint')}</p>
-                                    <pre className="mt-2 whitespace-pre-wrap font-sans text-[#e8e8e8] max-h-64 overflow-y-auto">{activeRow.draft.body}</pre>
+                                    <pre className="mt-2 whitespace-pre-wrap font-sans text-[#e8e8e8] max-h-64 overflow-y-auto">{draft.body}</pre>
                                     <div className="mt-2 flex items-center gap-2 flex-wrap">
-                                        <button type="button" disabled={draftBusy} onClick={() => sendDraft(activeRow.draft as DraftRow)}
+                                        <button type="button" disabled={draftBusy} onClick={() => sendDraft(draft)}
                                             className="px-3 py-1.5 rounded-md bg-[#e05d44] text-white text-xs font-medium hover:bg-[#e8735d] disabled:opacity-50">{t('draft.send')}</button>
-                                        <button type="button" disabled={draftBusy} onClick={() => openCompose('reply', false, (activeRow.draft as DraftRow).body)}
+                                        <button type="button" disabled={draftBusy} onClick={() => openCompose('reply', false, draft.body, draft.op_id)}
                                             className="px-3 py-1.5 rounded-md border border-[#4a3b1e] text-xs hover:bg-[#332a1a] disabled:opacity-50">{t('draft.edit')}</button>
-                                        <button type="button" disabled={draftBusy} onClick={() => discardDraft(activeRow.draft as DraftRow)}
+                                        <button type="button" disabled={draftBusy} onClick={() => discardDraft(draft)}
                                             className="px-3 py-1.5 rounded-md text-xs hover:bg-[#332a1a] disabled:opacity-50">{t('draft.discard')}</button>
                                         {draftNote && <span className="text-xs text-[#c8b58a]">{draftNote}</span>}
                                     </div>
@@ -1205,8 +1225,18 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                     threadId={activeThread} anchorPk={threadMsgs[threadMsgs.length - 1]?.id ?? null}
                     composerEnabled={status.composer_enabled !== false}
                     autoDraft={composeAutoDraft}
-                    onClose={() => { setCompose(false); setComposeAutoDraft(false); }}
-                    onQueued={(opId, seconds) => setUndoState({ opId, seconds })} />
+                    onClose={() => { setCompose(false); setComposeAutoDraft(false); editingDraftRef.current = null; }}
+                    onQueued={(opId, seconds) => {
+                        setUndoState({ opId, seconds });
+                        const held = editingDraftRef.current;
+                        editingDraftRef.current = null;
+                        if (held !== null) {
+                            // The edited mail replaces the agent's held answer: the held op is
+                            // discarded, or both versions would leave.
+                            jpost(`api/mail/drafts/${held}`, undefined, 'DELETE').catch(() => undefined)
+                                .then(() => { setActiveDraft(null); loadThreads(); });
+                        }
+                    }} />
             )}
             {undoState && (
                 <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2.5 rounded-xl bg-[#262626] border border-[#2e2e2e] shadow-xl text-sm">

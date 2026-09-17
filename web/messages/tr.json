@@ -2419,7 +2419,8 @@
     "draftTitle": "Ajanının taslağı",
     "draftWaiting": "Henüz gönderilmedi; düzenlemek için posta penceresini aç.",
     "draftSend": "Gönder",
-    "draftDiscard": "At"
+    "draftDiscard": "At",
+    "draftFailed": "Olmadı ({error}); taslak duruyor."
   },
   "mailV2": {
     "title": "Posta",

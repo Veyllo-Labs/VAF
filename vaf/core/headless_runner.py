@@ -266,13 +266,20 @@ def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
             root_anchor=root_anchor, reply_to_pk=int(pk), thread_id=meta.get("email_thread_id"))
         if apk is not None and case_id:
             svc.store.touch_case(apk, case_id, outbound=True)
-            svc.store.set_case_status(apk, case_id, "held" if hold else "answered")
+            if hold:
+                svc.store.set_case_status(apk, case_id, "held")
+        delivered = False
         if not hold:
             acc = get_account(account_id, meta.get("username"), user_scope_id=scope)
             if acc:
                 deliver_queued_sends(scope, acc, meta.get("username"), account_id, service=svc)
+                delivered = svc.send_outcome(int(queued.get("op_id") or 0)).get("state") == "done"
+            # Answered only once the mail really left: a queued or failed send leaves the
+            # case as it was, and the sweep that delivers it later marks the message.
+            if delivered and apk is not None and case_id:
+                svc.store.set_case_status(apk, case_id, "answered")
         append_lane_log("email_inbound",
-                        f"REPLY {'HELD' if hold else 'SENT'} pk={pk} op={queued.get('op_id')} case={case_id or '-'} to={str(pre['to'])[:3]}***",
+                        f"REPLY {'HELD' if hold else ('SENT' if delivered else 'QUEUED')} pk={pk} op={queued.get('op_id')} case={case_id or '-'} to={str(pre['to'])[:3]}***",
                         always=True)
     except Exception as e:
         append_lane_log("email_inbound", f"REPLY FAILED pk={pk}: {e}", always=True)

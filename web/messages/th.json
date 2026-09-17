@@ -2419,7 +2419,8 @@
     "draftTitle": "ร่างของเอเจนต์",
     "draftWaiting": "ยังไม่ได้ส่ง เปิดหน้าต่างอีเมลเพื่อแก้ไข",
     "draftSend": "ส่ง",
-    "draftDiscard": "ทิ้ง"
+    "draftDiscard": "ทิ้ง",
+    "draftFailed": "ทำไม่สำเร็จ ({error}) ฉบับร่างยังอยู่"
   },
   "mailV2": {
     "title": "อีเมล",

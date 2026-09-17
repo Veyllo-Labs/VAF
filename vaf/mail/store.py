@@ -28,6 +28,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from vaf.mail.addressing import header_addresses
 from vaf.mail.parser import ParsedMessage
 
 SCHEMA_VERSION = 2
@@ -1149,15 +1150,16 @@ class MailStore:
 
     def front_office_replies_since(self, account_pk: int, address: str, since_iso: str) -> int:
         """How many Front Office answers went to this address since `since_iso` (the
-        rate cap's ledger: sent_ids, no second table)."""
+        rate cap's ledger: sent_ids, no second table). The To header is parsed into
+        mailboxes, so ann@example.org never counts a mail to joann@example.org."""
         addr = (address or "").strip().lower()
         if not addr:
             return 0
-        row = self._conn().execute(
-            "SELECT COUNT(*) AS n FROM sent_ids WHERE account_id=? AND sent_by='front_office' "
-            "AND lower(to_addrs) LIKE ? AND enqueued_at >= ? AND delivery != 'discarded'",
-            (int(account_pk), f"%{addr}%", since_iso)).fetchone()
-        return int(row["n"] or 0)
+        rows = self._conn().execute(
+            "SELECT to_addrs FROM sent_ids WHERE account_id=? AND sent_by='front_office' "
+            "AND enqueued_at >= ? AND delivery != 'discarded'",
+            (int(account_pk), since_iso)).fetchall()
+        return sum(1 for r in rows if addr in header_addresses(r["to_addrs"]))
 
     def inbound_from_address_since(self, account_pk: int, address: str, since_ts: int) -> int:
         addr = (address or "").strip().lower()

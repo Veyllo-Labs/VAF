@@ -2419,7 +2419,8 @@
     "draftTitle": "에이전트의 초안",
     "draftWaiting": "아직 보내지 않았어요. 수정하려면 메일 창을 여세요.",
     "draftSend": "보내기",
-    "draftDiscard": "버리기"
+    "draftDiscard": "버리기",
+    "draftFailed": "실패했습니다({error}). 초안은 그대로 남아 있습니다."
   },
   "mailV2": {
     "title": "메일",

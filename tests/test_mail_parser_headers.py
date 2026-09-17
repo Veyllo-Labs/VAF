@@ -123,6 +123,36 @@ def test_a_bounce_reports_its_action_and_the_original_id_and_keeps_its_own_body(
     assert p.attachments == [] and not p.has_attachments
 
 
+_FWD = b"""From: bob@example.com
+To: carol@example.org
+Subject: Fwd: hi
+Message-ID: <fwd1@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="F"
+
+--F
+Content-Type: text/plain
+
+see below
+--F
+Content-Type: message/rfc822
+
+From: dave@example.net
+To: bob@example.com
+Subject: hi
+Message-ID: <orig7@example.net>
+
+the forwarded words
+--F--
+"""
+
+
+def test_a_forwarded_mail_is_not_read_as_a_report():
+    p = parse_message(_FWD)
+    assert p.report_type == "" and p.dsn_action == "" and p.original_message_id == "", "message/rfc822 outside a report is a forward"
+    assert "see below" in p.body_text
+
+
 _MDN = b"""From: carol@example.org
 To: bob@example.com
 Subject: Read: hi

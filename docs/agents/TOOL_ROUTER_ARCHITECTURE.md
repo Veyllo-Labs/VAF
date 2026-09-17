@@ -369,7 +369,9 @@ never restricted, a raising registered resolver refuses). Guard:
 8. **`tool_end` event**, then truncation of the result (the chat lane cuts at 2000 chars; the workflow engine passes `max_result_chars=None`, because step outputs are chained into later steps).
 
 **An unknown tool name is answered, not only refused.** A name no registered tool carries
-passes the policy stages with nothing to evaluate, emits the `tool_start`/`tool_end` pair
+passes the policy stages with nothing to evaluate, but not the account allowlist: an
+account restricted to a list refuses the unknown name with the allowlist's `Security Error`
+before any event is emitted. Past that stage it emits the `tool_start`/`tool_end` pair
 with `ok=False`, and returns `Error: Unknown tool '<name>'`. That prefix is pinned by the
 dispatch baseline and stays byte-identical when nothing below applies. After it,
 `unknown_tool_hint` (`vaf/core/tool_dispatch.py`) appends a correction, tried in this order:

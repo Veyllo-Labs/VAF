@@ -138,10 +138,15 @@ def assess(parsed: ParsedMessage, *, policy: Optional[Dict[str, Any]] = None,
         row["machine_reason"] = mv.reason
     except Exception as e:  # pragma: no cover - a verdict row must exist whatever happened
         row["reasons"].append(f"classify_failed:{type(e).__name__}")
+    profile = str(pol.get("auth_profile") or "rfc8601").strip().lower()
+    trusted = str(pol.get("trusted_authserv_id") or "")
+    if profile == "none":
+        # The provider writes no Authentication-Results: nothing is trusted, whatever id
+        # the account still carries from before the profile was set.
+        trusted, profile = "", "rfc8601"
     try:
         av = authenticity.verdict(
-            parsed, trusted_authserv_id=str(pol.get("trusted_authserv_id") or ""),
-            auth_profile=str(pol.get("auth_profile") or "rfc8601"),
+            parsed, trusted_authserv_id=trusted, auth_profile=profile,
             own_domains=pol.get("own_domains") or ())
         row.update({
             "auth_state": av.state, "auth_source": av.source, "authserv_id": av.authserv_id,

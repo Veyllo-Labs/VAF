@@ -659,9 +659,12 @@ class ContextManager:
             head_lines = 20 if is_small_context else 40
             tail_lines = 15 if is_small_context else 30
             
+            # The tail starts where the head ends at the earliest, so an output a few lines
+            # over the raw limit is never shown twice around a "0 lines hidden" seam.
+            tail_start = max(head_lines, line_count - tail_lines)
             head = "\n".join(lines[:head_lines])
-            tail = "\n".join(lines[-tail_lines:])
-            hidden_count = max(0, line_count - (head_lines + tail_lines))
+            tail = "\n".join(lines[tail_start:])
+            hidden_count = max(0, tail_start - head_lines)
             return f"{pruned_msg}\n{head}\n\n[... {hidden_count} lines hidden ...]\n\n{tail}\n\nNOTE: The facts from this output are stored in the State Context."
         
         # Default pruning - preserved more content (1500 chars)

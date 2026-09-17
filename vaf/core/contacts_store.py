@@ -161,30 +161,52 @@ def _sync_legacy_from_channels(contact: Dict[str, Any]) -> None:
     contact["email"] = next((ch["value"] for ch in channels if ch.get("type") == "email" and ch.get("value")), None)
 
 
+def _load_path(path: Path) -> List[Dict[str, Any]]:
+    """One book file as its list: [] for a missing, empty or unreadable file."""
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            raw = data
+        elif isinstance(data, dict) and "contacts" in data:
+            raw = data["contacts"] if isinstance(data["contacts"], list) else []
+        else:
+            raw = []
+        return [_contact_ensure_channels(c) for c in raw]
+    except Exception as e:
+        logger.warning("contacts_store load failed for %s: %s", path, e)
+        return []
+
+
 def _load_all(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Load contacts; try candidate paths (scope, username, local) so we find them regardless of save path."""
     for path in _contacts_path_candidates(username, user_scope_id):
-        if not path.exists():
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, list):
-                raw = data
-            elif isinstance(data, dict) and "contacts" in data:
-                raw = data["contacts"] if isinstance(data["contacts"], list) else []
-            else:
-                raw = []
-            if raw:
-                return [_contact_ensure_channels(c) for c in raw]
-        except Exception as e:
-            logger.warning("contacts_store load failed for %s: %s", path, e)
+        rows = _load_path(path)
+        if rows:
+            return rows
     return []
 
 
-def _save_all(contacts: List[Dict[str, Any]], username: Optional[str] = None, user_scope_id: Optional[str] = None) -> None:
-    path = _contacts_path(username, user_scope_id)
+def _every_book_path() -> List[Path]:
+    """Every contact book on this instance, each once: the admin's file and one per scope
+    and per user directory (the three places _contacts_path writes)."""
+    data_dir = Platform.data_dir()
+    paths = [data_dir / "contacts.json"]
+    for sub in ("scopes", "users"):
+        base = data_dir / sub
+        if base.is_dir():
+            paths.extend(sorted(p for p in base.glob("*/contacts.json") if p.is_file() and p not in paths))
+    return paths
+
+
+def _save_path(path: Path, contacts: List[Dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(contacts, indent=2), encoding="utf-8")
+
+
+def _save_all(contacts: List[Dict[str, Any]], username: Optional[str] = None, user_scope_id: Optional[str] = None) -> None:
+    _save_path(_contacts_path(username, user_scope_id), contacts)
 
 
 def list_contacts(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1339,6 +1361,9 @@ def find_contact_by_channel(
         return None
     if chan == "whatsapp":
         key = whatsapp_store_key(raw.split("@")[0] if "@" in raw else raw)
+    elif chan == "email":
+        # contact_endpoints lowercases mail addresses; the sender's spelling must not decide.
+        key = raw.lower()
     else:
         key = raw
     if not key:
@@ -1354,24 +1379,44 @@ def grant_assistant_for_channel(
     channel: str,
     username: Optional[str] = None,
     user_scope_id: Optional[str] = None,
+    *,
+    every_book: bool = False,
 ) -> int:
     """Switch "Can reach your assistant" ON for every contact that has a store key on this
     channel: what switching a channel's Front Office on means for the people already in
-    the book (a new sender is enrolled by the bridge when they write). One load, one save;
-    returns how many records changed. Switching the channel off leaves the flags alone:
-    with the door shut they decide nothing, and the owner's per-person choices survive."""
+    the book (a new sender is enrolled by the bridge when they write). One load, one save
+    per book; returns how many records changed. Switching the channel off leaves the flags
+    alone: with the door shut they decide nothing, and the owner's per-person choices
+    survive. `every_book` grants in every contact book on this instance instead of the
+    caller's: the switch is instance-wide (one policy key), so with the channel open a
+    tenant's contact left with the flag OFF would read as an opt-out while a stranger
+    writing to that tenant is answered."""
     chan = (channel or "").strip().lower()
-    changed = 0
-    with _LOCK:
-        contacts = _load_all(username, user_scope_id)
+
+    def _grant(contacts: List[Dict[str, Any]]) -> int:
+        n = 0
         for c in contacts:
             if c.get("allow_as_assistant_user"):
                 continue
             if contact_endpoints(c).get(chan):
                 c["allow_as_assistant_user"] = True
-                changed += 1
-        if changed:
-            _save_all(contacts, username, user_scope_id)
+                n += 1
+        return n
+
+    changed = 0
+    with _LOCK:
+        if every_book:
+            for path in _every_book_path():
+                contacts = _load_path(path)
+                n = _grant(contacts)
+                if n:
+                    _save_path(path, contacts)
+                changed += n
+        else:
+            contacts = _load_all(username, user_scope_id)
+            changed = _grant(contacts)
+            if changed:
+                _save_all(contacts, username, user_scope_id)
     return changed
 
 
@@ -1393,6 +1438,8 @@ def enrol_front_office_contact(
     key = str(value or "").strip()
     if chan == "whatsapp":
         key = whatsapp_store_key(key.split("@")[0] if "@" in key else key) or key
+    elif chan == "email":
+        key = key.lower()
     label = (name or "").strip() or key
     return create_contact(
         label, username, user_scope_id=user_scope_id,

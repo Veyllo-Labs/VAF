@@ -219,6 +219,8 @@ def test_the_caps_park_the_rest_of_the_day():
     assert cases.decide(trust="T2", attribution=new, raw_policy=opened, replies_last_hour=3).reason == "capped"
     assert cases.decide(trust="T2", attribution=new, raw_policy=opened, replies_last_day=10).reason == "capped"
     assert cases.decide(trust="T2", attribution=new, raw_policy=opened, replies_last_day=10, max_per_day=20).action == "draft"
+    assert cases.decide(trust="T2", attribution=new, raw_policy=opened, max_per_hour=0).reason == "capped", "0 is 0: nothing is answered"
+    assert cases.decide(trust="T2", attribution=new, raw_policy=opened, max_per_day=0).reason == "capped"
 
 
 def test_the_lock_window():

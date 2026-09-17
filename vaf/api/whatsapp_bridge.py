@@ -1584,13 +1584,19 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
         # except a person the owner switched off: the contact record with the flag OFF is
         # that opt-out, so it is looked up regardless of the flag.
         opted_out = False
-        if not explicit_allow and not contact_allow and raw:
-            try:
-                from vaf.core.contacts_store import find_contact_by_channel
-                _rec = find_contact_by_channel("whatsapp", chat_id, username, user_scope_id)
-                opted_out = bool(_rec) and not bool(_rec.get("allow_as_assistant_user"))
-            except Exception:
-                opted_out = False
+        if not explicit_allow and not contact_allow:
+            if not raw:
+                # An unresolved @lid carries no number, so no contact record can hold the
+                # owner's opt-out for it and none is enrolled: the open door does not apply
+                # until the LID is assigned to a number (REJECT not_paired, with the note).
+                opted_out = True
+            else:
+                try:
+                    from vaf.core.contacts_store import find_contact_by_channel
+                    _rec = find_contact_by_channel("whatsapp", chat_id, username, user_scope_id)
+                    opted_out = bool(_rec) and not bool(_rec.get("allow_as_assistant_user"))
+                except Exception:
+                    opted_out = False
         policy_allowed, policy_reason = evaluate_ingress(
             "whatsapp",
             ingress_policy,

@@ -2419,7 +2419,8 @@
     "draftTitle": "Your agent's draft",
     "draftWaiting": "Not sent yet; open the mail window to edit it.",
     "draftSend": "Send",
-    "draftDiscard": "Discard"
+    "draftDiscard": "Discard",
+    "draftFailed": "That did not work ({error}); the draft stays."
   },
   "mailV2": {
     "title": "Mail",

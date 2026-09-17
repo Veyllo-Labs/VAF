@@ -292,15 +292,21 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
     })();
 
     // A held mail answer: approve or discard from here; editing happens in the mail window.
+    // A send answers with the outbox's state, and only "done" means the mail left: anything
+    // else keeps the row and says so, instead of reloading as if it had.
     const [draftBusy, setDraftBusy] = useState(false);
+    const [draftNote, setDraftNote] = useState('');
+    useEffect(() => { setDraftNote(''); }, [selectedKey]);
     const actOnDraft = async (r: InboxRow, action: 'send' | 'discard') => {
         if (!r.draft) return;
-        setDraftBusy(true);
+        setDraftBusy(true); setDraftNote('');
         try {
-            await fetch(api(action === 'send' ? `api/mail/drafts/${r.draft.op_id}/send` : `api/mail/drafts/${r.draft.op_id}`),
+            const res = await fetch(api(action === 'send' ? `api/mail/drafts/${r.draft.op_id}/send` : `api/mail/drafts/${r.draft.op_id}`),
                 { method: action === 'send' ? 'POST' : 'DELETE', credentials: 'include' });
-            await load();
-        } catch { /* the row keeps its draft; the next refresh tells */ }
+            const data = res.ok ? await res.json().catch(() => ({})) : {};
+            if (res.ok && (action === 'discard' || data.state === 'done')) await load();
+            else setDraftNote(t('draftFailed', { error: String(data.error || data.state || res.status) }));
+        } catch { setDraftNote(t('draftFailed', { error: '' })); }
         finally { setDraftBusy(false); }
     };
 
@@ -530,6 +536,7 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                                     className={cn('flex items-center gap-1.5', BTN_PRIMARY)}>{t('draftSend')}</button>
                                                 <button type="button" disabled={draftBusy} onClick={() => actOnDraft(selected, 'discard')}
                                                     className={cn('flex items-center gap-1.5', BTN)}>{t('draftDiscard')}</button>
+                                                {draftNote && <span className="text-xs text-[#c8b58a]">{draftNote}</span>}
                                             </div>
                                         </div>
                                     )}

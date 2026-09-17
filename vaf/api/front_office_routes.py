@@ -285,12 +285,14 @@ async def put_front_office(
         from vaf.core.contacts_store import grant_assistant_for_channel
         # One event per channel that really changed, like a pairing: the throttle keys
         # on the channel, so both channels of one switch stay two events. Switching a
-        # channel on also grants every contact of that channel in the caller's book (a new
-        # sender is enrolled by the bridge when they write); switching it off leaves the
-        # flags alone, so the owner's per-person choices survive a round trip.
+        # channel on also grants every contact of that channel in every contact book on
+        # this instance (the policy is instance-wide, so a tenant's contact left with the
+        # flag off would be an opt-out while strangers get through; a new sender is
+        # enrolled by the bridge when they write); switching it off leaves the flags
+        # alone, so the owner's per-person choices survive a round trip.
         for ch in changed:
             if after["channels"][ch]:
-                granted = grant_assistant_for_channel(ch, caller["username"], caller["user_scope_id"])
+                granted = grant_assistant_for_channel(ch, caller["username"], caller["user_scope_id"], every_book=True)
                 log_security_event("front_office_changed", channel=ch, username=str(caller["username"]),
                                    detail=f"on, {granted} contacts granted")
             else:

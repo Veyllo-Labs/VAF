@@ -214,6 +214,7 @@ def test_auto_connect_never_wires_into_the_lane():
     fn = source[source.index("async def auto_connect_memory"):]
     fn = fn[:fn.index("\n    async def ")] if "\n    async def " in fn else fn
     assert "scope_filters.append(not_front_office_lane())" in fn
+    assert "is_chat_source(source) or is_front_office_source(source)" in fn, "a Front Office memory initiates no edge either"
 
 
 # ── the turn: what a contact's turn reads ───────────────────────────────────────────────

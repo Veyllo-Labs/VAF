@@ -17,7 +17,8 @@ from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from vaf.memory.models import Memory, Connection, Chunk, EMBEDDING_DIM
-from vaf.memory.lanes import ChatNamespace, is_chat_source, not_attachment_lane, not_chat_lane, not_front_office_lane
+from vaf.memory.lanes import (ChatNamespace, is_chat_source, is_front_office_source, not_attachment_lane,
+                              not_chat_lane, not_front_office_lane)
 from vaf.core.config import Config
 import logging
 
@@ -468,8 +469,9 @@ class GraphManager:
         if memory.embedding is None:
             logger.warning(f"Memory {memory.id} has no embedding, skipping auto-connect")
             return []
-        if is_chat_source((getattr(memory, "meta", None) or {}).get("source")):
-            return []   # a chat memory never initiates an edge either; the lane stays closed both ways
+        source = (getattr(memory, "meta", None) or {}).get("source")
+        if is_chat_source(source) or is_front_office_source(source):
+            return []   # a chat or Front Office memory never initiates an edge either; both lanes stay closed both ways
 
         threshold = threshold or self.auto_connect_threshold
         

@@ -21,6 +21,9 @@ from typing import Any, Dict, List, Optional
 from vaf.tools.base import BaseTool
 
 _CHANNELS = ("whatsapp", "telegram", "discord", "mail", "all")
+# Timeline pages read at most per call (each up to 3x the limit, 60 at least): bounded
+# work for a contact with years of chat, enough to reach a mail behind a long conversation.
+_MAX_PAGES = 5
 _LABEL = {"whatsapp": "WhatsApp", "telegram": "Telegram", "discord": "Discord", "email": "Mail"}
 
 
@@ -104,26 +107,34 @@ class ContactHistoryTool(BaseTool):
         from vaf.tools.mail_utils import filter_phishing_messages_for_agent
 
         # Messages and mail only: the notes are the owner's remarks about the person, the
-        # events sit in the contact block already, and both stay with the owner.
-        page = contact_timeline(contact, username, user_scope_id, limit=max(limit * 3, 60), kinds=("message", "mail"))
-        items = list(page.get("items") or [])
+        # events sit in the contact block already, and both stay with the owner. The
+        # timeline is paged with its own cursor until `limit` entries survive the channel,
+        # word and phishing filters, so a mail behind a long chat is still found.
         wanted = None if channel == "all" else ("email" if channel == "mail" else channel)
-        if wanted:
-            items = [it for it in items if it.get("channel") == wanted]
-        verdicts = _mail_verdicts(items, user_scope_id)
         kept: List[Dict[str, Any]] = []
-        for it in items:
-            if it.get("kind") == "mail" and it.get("direction") == "in":
-                ref = it.get("ref") or {}
-                row = {"from": ref.get("from") or "", "subject": it.get("title") or "", "body_snippet": it.get("body") or "",
-                       "category": "", "auth": verdicts.get(it["id"]) or {}}
-                safe, _blocked = filter_phishing_messages_for_agent([row])
-                if not safe:
+        cursor = None
+        for _ in range(_MAX_PAGES):
+            page = contact_timeline(contact, username, user_scope_id, limit=max(limit * 3, 60),
+                                    cursor=cursor, kinds=("message", "mail"))
+            items = list(page.get("items") or [])
+            if wanted:
+                items = [it for it in items if it.get("channel") == wanted]
+            verdicts = _mail_verdicts(items, user_scope_id)
+            for it in items:
+                if it.get("kind") == "mail" and it.get("direction") == "in":
+                    ref = it.get("ref") or {}
+                    row = {"from": ref.get("from") or "", "subject": it.get("title") or "", "body_snippet": it.get("body") or "",
+                           "category": "", "auth": verdicts.get(it["id"]) or {}}
+                    safe, _blocked = filter_phishing_messages_for_agent([row])
+                    if not safe:
+                        continue
+                text = f"{it.get('title') or ''} {it.get('body') or ''}".lower()
+                if query and query not in text:
                     continue
-            text = f"{it.get('title') or ''} {it.get('body') or ''}".lower()
-            if query and query not in text:
-                continue
-            kept.append(it)
+                kept.append(it)
+            cursor = page.get("next_cursor")
+            if len(kept) >= limit or not cursor:
+                break
         kept = kept[:limit]
         name = str(contact.get("name") or "the contact")
         if not kept:

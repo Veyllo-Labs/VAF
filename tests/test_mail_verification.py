@@ -298,6 +298,15 @@ def test_the_inbox_keeps_machine_mail_off_waits_and_lists_it_as_bulk():
     assert inbox.mail_thread_state(thread, None, waits_threshold_value=0.6)["waits"] is True
 
 
+def test_the_none_profile_trusts_nothing_even_with_a_remembered_id():
+    from vaf.mail.verification import assess
+    p = parse_message(b"Authentication-Results: mx.google.com; dmarc=pass header.from=example.org\n"
+                      b"From: bob@example.org\nTo: alice@example.com\nSubject: x\nMessage-ID: <n1@example.org>\n\nhi\n")
+    assert assess(p, policy={"trusted_authserv_id": "mx.google.com", "auth_profile": "rfc8601"})["auth_state"] == "verified"
+    assert assess(p, policy={"trusted_authserv_id": "mx.google.com", "auth_profile": "none"})["auth_state"] == "unknown", \
+        "a provider that writes no Authentication-Results: the remembered id decides nothing"
+
+
 def test_the_policy_of_an_account_and_its_key():
     pol = auth_policy_for_account({"email": "Bob@Example.com", "account_id": "bob@example.com",
                                    "aliases": ["info@example.com"], "trusted_authserv_id": "MX.Google.com"})

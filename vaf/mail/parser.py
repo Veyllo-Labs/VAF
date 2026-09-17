@@ -359,8 +359,11 @@ def parse_message(raw: bytes) -> ParsedMessage:
                 if id(part) in skip:
                     continue
                 ctype = part.get_content_type()
-                if ctype in ("message/delivery-status", "message/disposition-notification",
-                             "message/rfc822", "text/rfc822-headers"):
+                if ctype in ("message/delivery-status", "message/disposition-notification") or (
+                        ctype in ("message/rfc822", "text/rfc822-headers") and out.report_type):
+                    # The embedded original is a report part only inside a report (a bounce,
+                    # a receipt); a forwarded mail carries the same content type and stays in
+                    # the ordinary walk.
                     skip |= _report_parts(part, out)
                     continue
                 if part.is_multipart():

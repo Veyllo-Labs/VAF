@@ -215,6 +215,52 @@ def test_auto_connect_never_wires_into_the_lane():
     fn = fn[:fn.index("\n    async def ")] if "\n    async def " in fn else fn
     assert "scope_filters.append(not_front_office_lane())" in fn
     assert "is_chat_source(source) or is_front_office_source(source)" in fn, "a Front Office memory initiates no edge either"
+    graph = source[source.index("async def get_graph_data"):source.index("async def _crosses_front_office_lane")]
+    assert "in front_office_ids) != (" in graph, "an edge across the lane is never drawn"
+
+
+def test_no_write_path_connects_across_the_lane():
+    """MUTATION: drop the _crosses_front_office_lane check from create_connection and the
+    manual edge from the owner's memory into the lane is written."""
+    import asyncio
+    from uuid import uuid4
+    from vaf.memory.graph import GraphManager
+    fo1, fo2, own = uuid4(), uuid4(), uuid4()
+    rows = [(fo1, {"source": "front_office"}), (fo2, {"source": "front_office"}), (own, {"source": "learn_document"})]
+
+    class _Result:
+        def all(self):
+            return rows
+
+        def scalar_one_or_none(self):
+            return None
+
+        def scalars(self):
+            return self
+
+    class _Db:
+        def __init__(self):
+            self.added = []
+
+        async def execute(self, stmt, params=None):
+            return _Result()
+
+        def add(self, obj):
+            self.added.append(obj)
+
+        async def flush(self):
+            pass
+
+        async def delete(self, obj):
+            pass
+
+    db = _Db()
+    gm = GraphManager(db)
+    assert asyncio.run(gm.create_connection(own, fo1)) is None and asyncio.run(gm.create_connection(fo1, own)) is None
+    assert db.added == [], "nothing crosses the lane, in either direction"
+    assert asyncio.run(gm.create_connection(fo1, fo2)) is not None, "an edge inside the lane is fine"
+    assert asyncio.run(gm.update_connections(own, [str(fo1), str(fo2)])) == [], "the Memory page's manual edges go through the same door"
+    assert len(db.added) == 1
 
 
 # ── the turn: what a contact's turn reads ───────────────────────────────────────────────

@@ -118,6 +118,9 @@ class GraphManager:
         }
         default_stroke = "#9ca3af"
         memory_id_to_type = {str(m.id): (m.meta or {}).get("type", "note") for m in memories}
+        # An edge that crosses the Front Office lane is never drawn, whatever an older
+        # store still holds (the write path refuses it, see _crosses_front_office_lane).
+        front_office_ids = {str(m.id) for m in memories if is_front_office_source((m.meta or {}).get("source"))}
         
         memory_ids = [m.id for m in memories]
         
@@ -174,6 +177,8 @@ class GraphManager:
         # Build edges from connections
         edges = []
         for conn in connections:
+            if (str(conn.source_id) in front_office_ids) != (str(conn.target_id) in front_office_ids):
+                continue
             mem_type = memory_id_to_type.get(str(conn.source_id), "note")
             stroke = type_stroke.get(mem_type, default_stroke)
             edge = {
@@ -361,6 +366,16 @@ class GraphManager:
 
         return {"nodes": nodes, "edges": edges}
     
+    async def _crosses_front_office_lane(self, source_id: UUID, target_id: UUID) -> bool:
+        """Whether exactly one end of an edge is Front Office knowledge. That lane is read
+        by strangers' turns and stays closed both ways, so no write path (the auto-connect,
+        a manual edge from the Memory page) may create such an edge; an edge inside the
+        lane is fine."""
+        result = await self.db.execute(
+            select(Memory.id, Memory.meta).where(Memory.id.in_([source_id, target_id])))
+        sides = {str(row[0]): is_front_office_source((row[1] or {}).get("source")) for row in result.all()}
+        return sides.get(str(source_id), False) != sides.get(str(target_id), False)
+
     async def create_connection(
         self,
         source_id: UUID,
@@ -368,7 +383,7 @@ class GraphManager:
         connection_type: str = "manual",
         strength: float = 1.0,
         label: Optional[str] = None
-    ) -> Connection:
+    ) -> Optional[Connection]:
         """
         Create a connection between two memories.
         
@@ -380,8 +395,12 @@ class GraphManager:
             label: Optional label for the connection
             
         Returns:
-            Created Connection object
+            Created Connection object, or None for an edge that would cross the Front
+            Office lane (refused on every write path, not only the auto-connect)
         """
+        if await self._crosses_front_office_lane(source_id, target_id):
+            logger.warning("Refusing a connection across the Front Office lane: %s -> %s", source_id, target_id)
+            return None
         # Check for existing connection
         existing = await self.db.execute(
             select(Connection).where(
@@ -514,7 +533,8 @@ class GraphManager:
                     connection_type="semantic",
                     strength=strength
                 )
-                connections.append(conn)
+                if conn is not None:
+                    connections.append(conn)
         
         logger.info(f"Auto-connected memory {memory.id} to {len(connections)} similar memories")
         return connections
@@ -726,7 +746,8 @@ class GraphManager:
                     connection_type=connection_type,
                     strength=1.0
                 )
-                connections.append(conn)
+                if conn is not None:
+                    connections.append(conn)
             except ValueError:
                 logger.warning(f"Invalid UUID: {related_id}")
 

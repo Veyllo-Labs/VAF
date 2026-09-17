@@ -109,13 +109,24 @@ def test_an_unverified_but_harmless_mail_is_marked(world, monkeypatch):
     assert "(sender unknown)" in out and 'subject "Lunch"' in out
 
 
-def test_a_mail_behind_a_long_chat_is_still_found(world):
+def test_a_mail_behind_a_long_chat_is_still_found_and_every_page_keeps_its_verdicts(world):
+    from email.utils import formatdate
     bob = _bob(world)
+    fresh = (f"Authentication-Results: mx.google.com; dmarc=pass header.from=example.org\nFrom: Bob <bob@example.org>\n"
+             f"To: {ACCOUNT}\nSubject: Neu\nDate: {formatdate(NOW)}\nMessage-ID: <neu@example.org>\n\nNoch eine Frage.\n").encode()
+    s = MailStore(SCOPE)
+    apk = s.account_pk(ACCOUNT)
+    fpk = s.get_folder(apk, "INBOX")["id"]
+    from vaf.mail.verification import auth_policy_for_account
+    s.ingest_message(apk, fpk, 4, parse_message(fresh), raw=fresh,
+                     auth_policy=auth_policy_for_account({"account_id": ACCOUNT, "email": ACCOUNT, "trusted_authserv_id": "mx.google.com"}))
+    s.close()
     for i in range(130):
         cms.append_message("alice", "+491700000042", f"ping {i}", "in", chat_name="Bob", ts=int(NOW) - 400 + i,
                            user_scope_id=SCOPE, channel="whatsapp")
     out = _run(bob, channel="mail", limit=5)
-    assert 'subject "Angebot xyz"' in out, "the timeline is paged past the chat until the filter is satisfied"
+    assert 'subject "Neu"' in out and 'subject "Angebot xyz"' in out, "the timeline is paged past the chat until the filter is satisfied"
+    assert "(sender unknown)" not in out, "a verdict read on an earlier page survives the later pages"
 
 
 def test_without_a_pin_the_tool_refuses(world):

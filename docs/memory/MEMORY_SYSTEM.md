@@ -518,7 +518,9 @@ follows the chat-namespace contract, implemented in `vaf/memory/lanes.py`:
   searched the owner's whole memory, learned documents included.
 - **The lane is set at ingest and an update cannot move it.** `pin_namespace` keeps `source` on a
   Front Office row and strips `source = front_office` from every other writer; the learn passes
-  `keep_namespace=True`. Auto-connect never crosses the lane either.
+  `keep_namespace=True`. No graph edge crosses the lane either: the auto-connect skips it, a
+  manual edge from the Memory page is refused on the shared write path
+  (`GraphManager.create_connection` returns None), and the graph draws no edge into it.
 - **The duplicate check keeps the lanes apart.** `find_completed_learn` without a source covers
   the owner's lanes and leaves the Front Office out, so the same file learned for both is two
   documents.

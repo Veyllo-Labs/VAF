@@ -153,6 +153,51 @@ def test_a_forwarded_mail_is_not_read_as_a_report():
     assert "see below" in p.body_text
 
 
+_FWD_DSN = b"""From: bob@example.com
+To: carol@example.org
+Subject: Fwd: Undelivered
+Message-ID: <fwd2@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="F"
+
+--F
+Content-Type: text/plain
+
+look at this bounce
+--F
+Content-Type: message/rfc822
+
+From: MAILER-DAEMON@example.net
+To: bob@example.com
+Subject: Undelivered
+Message-ID: <dsn3@example.net>
+Content-Type: multipart/report; report-type=delivery-status; boundary="B"
+
+--B
+Content-Type: text/plain
+
+Delivery failed
+--B
+Content-Type: message/delivery-status
+
+Reporting-MTA: dns; example.net
+
+Final-Recipient: rfc822; dave@example.org
+Action: failed
+Status: 5.1.1
+
+--B--
+--F--
+"""
+
+
+def test_a_bounce_forwarded_inside_a_mail_is_not_this_mails_report():
+    p = parse_message(_FWD_DSN)
+    assert p.report_type == "" and p.dsn_action == "" and p.original_message_id == "", "the nested report is somebody else's"
+    assert "look at this bounce" in p.body_text
+    assert parse_message(_DSN).dsn_action == "failed", "a real bounce still reports"
+
+
 _MDN = b"""From: carol@example.org
 To: bob@example.com
 Subject: Read: hi

@@ -721,11 +721,15 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
     // The held answer of the open thread, fetched by thread id: a thread opened by a jump
     // from the inbox need not be a row of the list on screen.
     const [activeDraft, setActiveDraft] = useState<DraftRow | null>(null);
+    // Only the newest request may answer: a thread opened and left again before its draft
+    // arrived must not paint that draft on the thread opened after it.
+    const draftRequestRef = useRef(0);
     const loadActiveDraft = useCallback(async (threadId: number) => {
+        const seq = ++draftRequestRef.current;
         try {
             const d = await jfetch(`api/mail/drafts?thread_id=${threadId}`);
-            setActiveDraft(((d.drafts || []) as DraftRow[])[0] || null);
-        } catch { setActiveDraft(null); }
+            if (seq === draftRequestRef.current) setActiveDraft(((d.drafts || []) as DraftRow[])[0] || null);
+        } catch { if (seq === draftRequestRef.current) setActiveDraft(null); }
     }, []);
     const draft = activeRow?.draft ?? activeDraft;
     // The held op whose text is being edited in the composer: consumed when the edited
@@ -1195,6 +1199,10 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                                     </div>
                                 </div>
                             )}
+                            {!draft && draftNote && (
+                                /* An approved draft is no longer held, so its block is gone; what became of it stays readable. */
+                                <p className="mx-5 my-3 text-xs text-[#c8b58a]">{draftNote}</p>
+                            )}
                             {hiddenCount > 0 && !showOlder && (
                                 <button type="button" onClick={() => setShowOlder(true)}
                                     className="w-full text-left px-5 py-2.5 text-sm text-[#9a9a9a] border-b border-[#2e2e2e] hover:bg-[#1f1f1f]">
@@ -1233,8 +1241,9 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                         if (held !== null) {
                             // The edited mail replaces the agent's held answer: the held op is
                             // discarded, or both versions would leave.
-                            jpost(`api/mail/drafts/${held}`, undefined, 'DELETE').catch(() => undefined)
-                                .then(() => { setActiveDraft(null); loadThreads(); });
+                            jpost(`api/mail/drafts/${held}`, undefined, 'DELETE')
+                                .then(() => { setActiveDraft(null); loadThreads(); },
+                                      () => setError(t('actionFailed')));   // the held draft stays; discard it by hand
                         }
                     }} />
             )}

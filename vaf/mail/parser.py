@@ -352,6 +352,13 @@ def parse_message(raw: bytes) -> ParsedMessage:
     text_part = html_part = None
     part_index = 0
     skip: set = set()
+    # The report fields belong to THIS message: only a direct child of its top-level
+    # container feeds them. A bounce or receipt forwarded inside a message/rfc822 part is
+    # somebody else's report, and a forwarded mail's embedded original is not a report's.
+    try:
+        top_level = {id(p) for p in msg.get_payload()} if msg.is_multipart() else set()
+    except Exception:
+        top_level = set()
     try:
         for part in msg.walk():
             part_index += 1
@@ -359,11 +366,9 @@ def parse_message(raw: bytes) -> ParsedMessage:
                 if id(part) in skip:
                     continue
                 ctype = part.get_content_type()
-                if ctype in ("message/delivery-status", "message/disposition-notification") or (
-                        ctype in ("message/rfc822", "text/rfc822-headers") and out.report_type):
-                    # The embedded original is a report part only inside a report (a bounce,
-                    # a receipt); a forwarded mail carries the same content type and stays in
-                    # the ordinary walk.
+                if id(part) in top_level and (
+                        ctype in ("message/delivery-status", "message/disposition-notification")
+                        or (ctype in ("message/rfc822", "text/rfc822-headers") and out.report_type)):
                     skip |= _report_parts(part, out)
                     continue
                 if part.is_multipart():

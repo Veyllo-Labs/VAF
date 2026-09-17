@@ -112,6 +112,7 @@ class ContactHistoryTool(BaseTool):
         # word and phishing filters, so a mail behind a long chat is still found.
         wanted = None if channel == "all" else ("email" if channel == "mail" else channel)
         kept: List[Dict[str, Any]] = []
+        verdicts: Dict[str, Dict[str, Any]] = {}   # by item id, across every page read
         cursor = None
         for _ in range(_MAX_PAGES):
             page = contact_timeline(contact, username, user_scope_id, limit=max(limit * 3, 60),
@@ -119,7 +120,7 @@ class ContactHistoryTool(BaseTool):
             items = list(page.get("items") or [])
             if wanted:
                 items = [it for it in items if it.get("channel") == wanted]
-            verdicts = _mail_verdicts(items, user_scope_id)
+            verdicts.update(_mail_verdicts(items, user_scope_id))
             for it in items:
                 if it.get("kind") == "mail" and it.get("direction") == "in":
                     ref = it.get("ref") or {}

@@ -112,6 +112,30 @@ def test_the_cursor_arms_first_and_the_backlog_is_never_judged(world):
     assert _run(queue)["judged"] == 0, "the cursor moved; nothing is judged twice"
 
 
+def test_a_full_page_moves_the_cursor_to_its_last_row_and_the_rest_is_judged_next_run(world, monkeypatch):
+    """A sync can ingest more inbox rows than one run reads (the store query is capped at
+    INBOX_PAGE_LIMIT); the cursor then stops at the last row read, so the remainder is judged
+    on the next run instead of vanishing behind max_message_pk.
+    MUTATION: advance the cursor to max_message_pk on a full page and the cursor assertion goes
+    red (the second run judges nothing); drop the limit argument from the query and the first
+    run judges all three rows."""
+    monkeypatch.setattr(inbound, "INBOX_PAGE_LIMIT", 2)
+    s, apk, fpk = _store()
+    s.set_account_state(apk, inbound_cursor=0)
+    pks = [_ingest(s, apk, fpk, i, _raw(f"<m{i}@example.org>", sender_addr=f"Pia {i} <pia{i}@example.org>"))
+           for i in (1, 2, 3)]
+    s.close()
+    queue = []
+    assert _run(queue)["judged"] == 2, "one page"
+    s = MailStore(SCOPE)
+    try:
+        assert s.account_state(apk)["inbound_cursor"] == pks[1], "the cursor stops at the last row read"
+    finally:
+        s.close()
+    assert _run(queue)["judged"] == 1 and len(queue) == 3, "the third row is judged on the next run, never skipped"
+    assert _run(queue)["judged"] == 0
+
+
 def test_a_closed_channel_without_a_case_judges_nothing_but_arms_the_cursor(world):
     from vaf.core.channel_ingress_policy import set_front_office
     world["state"]["channel_ingress_policy"] = set_front_office(None, False, "email")
@@ -395,6 +419,12 @@ def test_the_mail_window_and_the_inbox_show_the_held_draft():
         "the inbox reloads only when the outbox says the mail left"
     assert "api/mail/drafts?thread_id=${threadId}" in page and "editingDraftRef.current = heldOpId ?? null" in page, \
         "a jumped-to thread fetches its draft by id; an edited draft consumes the held op"
+    # MUTATION: rendering the untagged draft again (`activeRow?.draft ?? activeDraft`) turns this red.
+    assert "const draft = activeRow?.draft ?? (activeDraft && activeDraft.threadId === activeThread ? activeDraft.draft : null);" in page, \
+        "the fetched draft is tagged with its thread: a search hit (no active thread) never shows another thread's draft"
+    # MUTATION: leaving the row's draft in place until the reload (`.then(() => { setActiveDraft(null); loadThreads(); }`) turns this red.
+    assert "setThreads(prev => prev.map(tr => tr.thread_id === activeThread ? { ...tr, draft: null } : tr));" in page, \
+        "an edited held draft leaves the list row at once, not only after the reload"
     shell = (REPO / "web" / "components" / "connections" / "ChannelDashboardShell.tsx").read_text(encoding="utf-8")
     assert "reason === 'draft' ? t('waitsDraft')" in shell
     for path in sorted((REPO / "web" / "messages").glob("*.json")):

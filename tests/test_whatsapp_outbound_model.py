@@ -171,6 +171,25 @@ def test_an_inbound_alone_does_not_open_the_window(isolated, monkeypatch):
     assert _dispatch("alice", "491700000042@s.whatsapp.net") is None
 
 
+def test_a_synced_contact_without_the_flag_still_answers_inside_the_reply_window(isolated, monkeypatch):
+    """The chat-list sync creates a record with "Can reach your assistant" OFF for every named
+    chat (contacts_store.sync_channel_contacts), so under a closed channel that is the state
+    of nearly every number the agent is asked to write to. The bridge hands that record to
+    evaluate_ingress as sender_opted_out; the reply inside the window is still answered.
+    MUTATION: check sender_opted_out before conversation_match in evaluate_ingress and the
+    reply is dropped (no task)."""
+    from vaf.core import contacts_store
+    monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
+    contacts_store.sync_channel_contacts(
+        "whatsapp", [{"endpoint": "+491700000042", "display_name": "Carol", "last_seen_ts": 1.0}], "alice", user_scope_id=SCOPE)
+    rec = contacts_store.find_contact_by_channel("whatsapp", "+491700000042", "alice", SCOPE)
+    assert rec is not None and rec["allow_as_assistant_user"] is False, "the sync never sets the flag"
+    store.append_message("alice", "+491700000042", "Hi Carol, a table for two tonight?", direction="out", user_scope_id=SCOPE)
+    task = _dispatch("alice", "491700000042@s.whatsapp.net", body="Yes, 8pm works", pushName="Carol")
+    assert task is not None and task["metadata"]["ingress_reason"] == "open_conversation"
+    assert task["metadata"]["from_contact"] is True
+
+
 # ── who may be replied to ─────────────────────────────────────────────────────
 
 def test_reply_lane_answers_owner_contact_and_open_conversation_only(isolated, monkeypatch):

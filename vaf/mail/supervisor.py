@@ -36,8 +36,12 @@ _new_mail_observers: List[Callable[[str, str, Dict[str, Any]], None]] = []
 
 
 def on_new_mail(cb: Callable[[str, str, Dict[str, Any]], None]) -> None:
-    """Register an observer for 'account ingested new mail' (E3 hook)."""
-    _new_mail_observers.append(cb)
+    """Register an observer for 'account ingested new mail' (E3 hook). Registering the
+    same observer again is a no-op: this list is process-global while the web startup
+    event runs once per lifespan of the shared app (8001 + 8005 in TLS mode), so the
+    second lifespan would otherwise run every observer twice per ingesting sync."""
+    if cb not in _new_mail_observers:
+        _new_mail_observers.append(cb)
 
 
 def _notify_new_mail(scope: str, account_id: str, stats: Dict[str, Any]) -> None:

@@ -16,7 +16,11 @@ Mutation proofs (each verified by editing the module and reverting):
   symmetric `d.endswith("." + f)` branch is added.
 - test_unaligned_spf_pass_is_via_not_verified turns red when the
   `and aligned(trusted.spf_domain, from_domain)` guard on the spf branch of _decide is
-  removed."""
+  removed.
+- test_dmarc_pass_without_header_from_needs_a_from_domain turns red when the
+  `from_domain and` guard on the dmarc branch of _decide is dropped (first three
+  checks), and when a header.from-less dmarc=pass is refused for every From (last
+  check)."""
 from types import SimpleNamespace
 
 from vaf.mail.authenticity import (
@@ -307,6 +311,27 @@ def test_dmarc_pass_for_another_from_domain_does_not_verify_by_dmarc():
     v = verdict(p, trusted_authserv_id="mx.google.com")
     assert v.state == "via" and v.via_domain == "other.example"
     assert "dmarc=pass header.from=other.example not aligned" in v.reasons
+
+
+def test_dmarc_pass_without_header_from_needs_a_from_domain():
+    """A dmarc=pass clause without header.from is accepted for a From that names a
+    domain (the provider evaluated the only From there is) and never for a From
+    without one: verified says the From domain authenticated, and there is none.
+    MUTATION: dropping the `from_domain and` guard on the dmarc branch of _decide
+    turns the first three checks red; refusing a header.from-less dmarc=pass for
+    every From turns the last one red."""
+    p = _msg(from_addr="Nobody", auth_results=["mx.google.com; dmarc=pass"])
+    v = verdict(p, trusted_authserv_id="mx.google.com")
+    assert (v.state, v.aligned_by, v.from_domain) == ("unverified", "", "")
+    assert "no from domain" in v.reasons and "dmarc=pass without header.from" in v.reasons
+    p = _msg(from_addr="", auth_results=["mx.google.com; dkim=pass header.d=example.org; dmarc=pass"])
+    v = verdict(p, trusted_authserv_id="mx.google.com")
+    assert (v.state, v.via_domain, v.aligned_by) == ("via", "example.org", ""), "the dkim pass still names the domain it did pass for"
+    p = _msg(from_addr="Nobody", auth_results=["spf=none; dkim=none; dmarc=pass action=none; compauth=pass reason=100"])
+    v = verdict(p, trusted_authserv_id="", auth_profile="microsoft")
+    assert (v.state, v.aligned_by) == ("unverified", "")
+    v = verdict(_msg(auth_results=["mx.google.com; dmarc=pass"]), trusted_authserv_id="mx.google.com")
+    assert (v.state, v.aligned_by) == ("verified", "dmarc"), "a From with a domain keeps the header.from-less pass"
 
 
 def test_arc_is_recorded_but_never_a_pass():

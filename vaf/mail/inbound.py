@@ -44,6 +44,9 @@ logger = logging.getLogger("vaf.mail.inbound")
 
 THREAD_MAX_MESSAGES = 8
 THREAD_PER_MESSAGE_CHARS = 1500
+# One page of new inbox rows per run. A sync can ingest more than this; the cursor then
+# stops at the last row read so the next run continues from there instead of skipping.
+INBOX_PAGE_LIMIT = 200
 _lock = threading.Lock()
 _CAP_EVENT_STATE_KEY = "inbound_cap_events"
 
@@ -120,9 +123,12 @@ def process_account(scope: str, account_id: str, *, now: Optional[datetime] = No
             svc.store.set_account_state(apk, inbound_cursor=cursor)
             summary["skipped"] = "cursor armed"
             return summary
-        rows = svc.store.new_inbox_messages(apk, after_pk=int(cursor), min_date_ts=int(mail_policy.get("opened_at") or 0))
+        rows = svc.store.new_inbox_messages(apk, after_pk=int(cursor), min_date_ts=int(mail_policy.get("opened_at") or 0),
+                                            limit=INBOX_PAGE_LIMIT)
         # Rows below opened_at advance the cursor too: they are the past and stay judged never.
-        last_pk = svc.store.max_message_pk(apk)
+        # A full page may have left rows behind (the query is capped), so the cursor then stops
+        # at the last row read: max_message_pk would put the unread remainder behind it for good.
+        last_pk = int(rows[-1]["id"]) if len(rows) >= INBOX_PAGE_LIMIT else svc.store.max_message_pk(apk)
         for row in rows:
             try:
                 decision = _judge(svc, apk, account, username, scope, row, raw_policy, mail_policy, moment, enqueue)

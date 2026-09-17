@@ -327,15 +327,23 @@ def _decide(trusted: AuthResults, from_domain: str) -> Tuple[str, str, str, str,
     of either ("via"), else unverified. dmarc=pass is only accepted when its
     header.from is the From domain VAF sees (or an ancestor of it): a provider
     evaluates DMARC on the RFC5322.From it saw, and a mismatch means the header does
-    not describe this From."""
+    not describe this From. A dmarc=pass without header.from is accepted for a From
+    that names a domain (the provider evaluated the only From there is) and never
+    for a From without one: verified says the From domain authenticated, and a From
+    without a domain has nothing to authenticate."""
     reasons: List[str] = []
     if not from_domain:
         reasons.append("no from domain")
     if trusted.dmarc == "pass":
-        if not trusted.dmarc_domain or aligned(trusted.dmarc_domain, from_domain):
+        # Deliberate: aligned() already refuses an empty from_domain; the guard is for
+        # the header.from-less clause, which would otherwise short-circuit past it.
+        if from_domain and (not trusted.dmarc_domain or aligned(trusted.dmarc_domain, from_domain)):
             reasons.append("dmarc=pass")
             return "verified", "dmarc", "", trusted.dkim_domain, reasons
-        reasons.append(f"dmarc=pass header.from={trusted.dmarc_domain} not aligned")
+        if trusted.dmarc_domain:
+            reasons.append(f"dmarc=pass header.from={trusted.dmarc_domain} not aligned")
+        else:
+            reasons.append("dmarc=pass without header.from")
     elif trusted.dmarc:
         reasons.append(f"dmarc={trusted.dmarc}")
     for d in trusted.dkim_pass_domains:

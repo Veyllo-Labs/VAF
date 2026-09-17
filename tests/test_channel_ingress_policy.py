@@ -12,6 +12,7 @@ from vaf.core.channel_ingress_policy import (
     _SUPPORTED_CHANNELS,
     evaluate_ingress,
     normalize_policy,
+    set_front_office,
 )
 from vaf.core.messaging_connections import ROUTABLE_CHANNELS
 
@@ -58,3 +59,18 @@ def test_conversation_match_defaults_to_false_for_old_callers():
 def test_supported_channels_untouched_by_the_third_match_kind():
     assert set(_SUPPORTED_CHANNELS) == set(ROUTABLE_CHANNELS)
     assert set(normalize_policy(None)) >= set(ROUTABLE_CHANNELS)
+
+
+def test_a_record_with_the_flag_off_does_not_close_the_reply_window():
+    """`sender_opted_out` is the opt-out under an OPEN channel. The same state (a record
+    with "Can reach your assistant" off) is what the WhatsApp sync creates for every named
+    chat, so it must not close the window the agent's own message opened, in any mode.
+    MUTATION: check sender_opted_out before conversation_match in evaluate_ingress and the
+    first loop goes red (not_paired instead of open_conversation)."""
+    for policy in (None, {"mode": "permissive"}, set_front_office(None, True, "whatsapp")):
+        assert evaluate_ingress("whatsapp", policy, explicit_match=False, contact_match=False,
+                                conversation_match=True, sender_opted_out=True) == (True, "open_conversation")
+    # Without the window, the flag off keeps the person out of an open channel.
+    opened = set_front_office(None, True, "whatsapp")
+    assert evaluate_ingress("whatsapp", opened, explicit_match=False, contact_match=False,
+                            sender_opted_out=True) == (False, "not_paired")

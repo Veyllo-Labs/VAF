@@ -488,6 +488,55 @@ def test_removing_a_document_stops_its_learn_and_forgets_the_lane_rows(config, m
     assert deleted == [("fo-prices", True, SCOPE)]
 
 
+def test_the_listing_reads_the_callers_lane_and_a_missing_scope_reads_only_null_scoped_rows(monkeypatch, tmp_path):
+    """The knowledge listing is one SELECT on memories. With a scope it selects that scope's
+    rows. Without one (a caller whose scope is not a UUID, whose learn writes rows with
+    user_scope_id NULL) it selects exactly the NULL-scoped rows: on the default install the
+    data connection is the owner role, which bypasses RLS, so an unfiltered SELECT returned
+    every user's Front Office titles. MUTATION: drop the `else` branch in `_knowledge_rows`
+    and the IS NULL assertion goes red."""
+    from uuid import UUID
+    from sqlalchemy.dialects import postgresql
+    from vaf.api import front_office_routes as routes
+    import vaf.memory.database as database
+    monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path / "vaf"))
+    seen = []
+
+    class _Result:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return []
+
+    class _Session:
+        async def execute(self, stmt):
+            compiled = stmt.compile(dialect=postgresql.dialect())
+            seen.append((str(compiled).split("WHERE", 1)[1], dict(compiled.params)))
+            return _Result()
+
+    class _Db:
+        def __init__(self, user_scope_id=None):
+            seen.append(("get_db", user_scope_id))
+
+        async def __aenter__(self):
+            return _Session()
+
+        async def __aexit__(self, *a):
+            return False
+    monkeypatch.setattr(database, "get_db", _Db)
+
+    assert asyncio.run(routes._knowledge_rows({"username": "alice", "user_scope_id": SCOPE, "is_admin": True})) == []
+    (_, scope), (where, params) = seen
+    assert scope == UUID(SCOPE) and params["user_scope_id_1"] == UUID(SCOPE) and "IS NULL" not in where
+
+    seen.clear()
+    assert asyncio.run(routes._knowledge_rows({"username": "admin", "user_scope_id": None, "is_admin": True})) == []
+    (_, scope), (where, params) = seen
+    assert scope is None and "memories.user_scope_id IS NULL" in where, "a None scope must not read every scope's lane"
+    assert "front_office" in params.values() and "document_index" in params.values()
+
+
 # ── an open channel: every sender answered, one person kept out, new ones enrolled ──────
 
 def test_switching_a_channel_on_opens_it_to_new_senders_and_implies_the_contact_door():

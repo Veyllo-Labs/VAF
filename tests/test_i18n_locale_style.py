@@ -846,3 +846,42 @@ def test_no_simplified_forms_in_japanese():
         if leaked:
             offenders.append(f"{path}: {ascii(''.join(leaked))} in {ascii(text[:60])}")
     assert not offenders, "ja.json carries Simplified-Chinese forms:\n" + "\n".join(offenders[:10])
+
+
+# --------------------------------------------------------------------------
+# The Inbound label. One feature is named in the Discord session list, the
+# WhatsApp card footer and the inbox mode line, and every one of those strings
+# opens with the label and a colon (one closes with it instead). A locale that
+# spells the label one way in the inbox chip and another way in a card shows
+# two features where there is one: the generic word for "incoming" is a
+# different noun in every language that has one, so it cannot stand in for the
+# feature name. The chip is the bare one-word form and is the reference.
+# --------------------------------------------------------------------------
+_INBOUND_LABEL = "inbox.modeChip.contact"
+_INBOUND_OPENS_WITH_LABEL = (
+    "settings.discordDashboard.subContact",
+    "settings.discordDashboard.footContact",
+    "settings.whatsappDashboard.footFrontOffice",
+    "inbox.mode.contact",
+)
+_INBOUND_CLOSES_WITH_LABEL = ("settings.whatsappDashboard.subContact",)
+
+
+@pytest.mark.parametrize("locale", _ALL_LOCALES)
+def test_the_inbound_label_is_spelt_one_way_per_locale(locale):
+    """Every mode string names the Inbound feature the way the inbox chip does.
+
+    MUTATION: replace the opening word of settings.discordDashboard.subContact
+    in any locale with that language's generic word for incoming, and the
+    locale's case goes red.
+    """
+    flat = _flatten(_load(locale))
+    label = flat[_INBOUND_LABEL]
+    drift = []
+    for path in _INBOUND_OPENS_WITH_LABEL:
+        if not re.match(rf"{re.escape(label)}[:：]", flat[path]):
+            drift.append(f"{path}: {flat[path]!r} does not open with {label!r}")
+    for path in _INBOUND_CLOSES_WITH_LABEL:
+        if not flat[path].endswith(label):
+            drift.append(f"{path}: {flat[path]!r} does not close with {label!r}")
+    assert not drift, f"{locale}.json names Inbound two ways:\n" + "\n".join(drift)

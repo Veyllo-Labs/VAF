@@ -143,6 +143,9 @@ def test_the_mail_window_renders_the_badge_on_rows_and_in_the_reader():
     for state in ("'verified'", "'via'", "'unverified'"):
         assert f"auth.state === {state}" in src, state
     assert "own_domain_spoof" in src, "the red state"
+    # MUTATION: naming dkim_domain for every method again (`auth.dkim_domain || auth.from_domain`) turns this red.
+    assert "const domain = method === 'dkim' ? (auth.dkim_domain || auth.from_domain || '') : (auth.from_domain || '');" in src, \
+        "the verified label names the aligned DKIM signer for DKIM and the From domain for DMARC and SPF"
     assert "t(`auth.machine.${kind}`)" in src
 
 

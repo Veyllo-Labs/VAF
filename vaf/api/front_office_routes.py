@@ -158,6 +158,12 @@ async def _knowledge_rows(caller: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
     if scope is not None:
         conditions.append(Memory.user_scope_id == scope)
+    else:
+        # Deliberate: a caller without a scope owns the NULL-scoped rows (the learn it
+        # starts writes them that way), and on the owner-role data connection an
+        # unfiltered SELECT returns every user's lane; IS NULL fails closed the way the
+        # store's own scope filters do.
+        conditions.append(Memory.user_scope_id.is_(None))
     async with get_db(user_scope_id=scope) as db:
         roots = (await db.execute(select(Memory).where(and_(*conditions)))).scalars().all()
         for root in roots:

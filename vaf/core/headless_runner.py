@@ -1580,7 +1580,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             _sender_ref = str(_meta.get("email_from") or "").strip()
                         contact_block = (
                             f"Sender: {('+' + _sender_ref) if _sender_ref.isdigit() else (_sender_ref or 'unknown')} "
-                            "(no contact record). Your own earlier outbound message to this number opened "
+                            "(no contact record). Your own earlier outbound message to this sender opened "
                             "this conversation; they are a third party, not the account owner. Answer only "
                             "what concerns that conversation, reveal nothing about the owner, and report "
                             "their answer to the owner through the back-channel when it matters."

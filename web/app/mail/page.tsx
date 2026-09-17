@@ -135,7 +135,12 @@ function AuthBadge({ auth, compact }: { auth?: AuthSummary; compact?: boolean })
             : <span className="inline-flex items-center gap-1 text-[11px] text-[#9a9a9a]"><Bot className="w-3.5 h-3.5" />{label}</span>;
     }
     if (auth.state === 'verified') {
-        const label = t('auth.verified', { method: (auth.aligned_by || '').toUpperCase(), domain: auth.dkim_domain || auth.from_domain || '' });
+        // The domain the verdict rests on: the aligned DKIM signer for DKIM, the From domain for
+        // DMARC and SPF (dkim_domain is then the header's first dkim=pass clause, else its first dkim
+        // clause, aligned or not).
+        const method = (auth.aligned_by || '').toLowerCase();
+        const domain = method === 'dkim' ? (auth.dkim_domain || auth.from_domain || '') : (auth.from_domain || '');
+        const label = t('auth.verified', { method: method.toUpperCase(), domain });
         return compact
             ? <ShieldCheck className="w-3.5 h-3.5 flex-shrink-0 text-[#7bbf7b]" aria-label={label} />
             : <span className="inline-flex items-center gap-1 text-[11px] text-[#7bbf7b]"><ShieldCheck className="w-3.5 h-3.5" />{label}</span>;
@@ -720,7 +725,7 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
     const activeRow = useMemo(() => threads.find(x => x.thread_id === activeThread) || null, [threads, activeThread]);
     // The held answer of the open thread, fetched by thread id: a thread opened by a jump
     // from the inbox need not be a row of the list on screen.
-    const [activeDraft, setActiveDraft] = useState<DraftRow | null>(null);
+    const [activeDraft, setActiveDraft] = useState<{ threadId: number; draft: DraftRow | null } | null>(null);
     // Only the newest request may answer: a thread opened and left again before its draft
     // arrived must not paint that draft on the thread opened after it.
     const draftRequestRef = useRef(0);
@@ -728,10 +733,12 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
         const seq = ++draftRequestRef.current;
         try {
             const d = await jfetch(`api/mail/drafts?thread_id=${threadId}`);
-            if (seq === draftRequestRef.current) setActiveDraft(((d.drafts || []) as DraftRow[])[0] || null);
+            if (seq === draftRequestRef.current) setActiveDraft({ threadId, draft: ((d.drafts || []) as DraftRow[])[0] || null });
         } catch { if (seq === draftRequestRef.current) setActiveDraft(null); }
     }, []);
-    const draft = activeRow?.draft ?? activeDraft;
+    // The fetched draft carries its thread id: a reader showing something else (a search hit
+    // has no active thread) must not paint the last opened thread's draft.
+    const draft = activeRow?.draft ?? (activeDraft && activeDraft.threadId === activeThread ? activeDraft.draft : null);
     // The held op whose text is being edited in the composer: consumed when the edited
     // mail is queued, so the agent's version does not leave as well.
     const editingDraftRef = useRef<number | null>(null);
@@ -1242,7 +1249,13 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                             // The edited mail replaces the agent's held answer: the held op is
                             // discarded, or both versions would leave.
                             jpost(`api/mail/drafts/${held}`, undefined, 'DELETE')
-                                .then(() => { setActiveDraft(null); loadThreads(); },
+                                .then(() => {
+                                    setActiveDraft(null);
+                                    // The list row still carries the held answer until the reload lands; drop it
+                                    // now, or the block stays clickable for a draft the store no longer has.
+                                    setThreads(prev => prev.map(tr => tr.thread_id === activeThread ? { ...tr, draft: null } : tr));
+                                    loadThreads();
+                                },
                                       () => setError(t('actionFailed')));   // the held draft stays; discard it by hand
                         }
                     }} />

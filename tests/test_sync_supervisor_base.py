@@ -217,6 +217,28 @@ def test_mail_supervisor_is_a_subclass_with_its_own_filter():
     assert sup.wants({"account_id": "a@x", "provider": "imap", "mail_enabled": False}) is False
 
 
+def test_on_new_mail_registers_an_observer_once_per_process():
+    """The second lifespan of the shared app (8005 in TLS mode, or a second TestClient
+    context) registers the same observer again; a doubled subscription would run the
+    answering lane twice per ingesting sync.
+    MUTATION: append to _new_mail_observers without the membership check and the
+    observer is called twice."""
+    calls = []
+
+    def observer(scope, account_id, stats):
+        calls.append((scope, account_id, stats))
+
+    before = list(mail_sup._new_mail_observers)
+    mail_sup._new_mail_observers[:] = []          # a full run already holds handle_new_mail here
+    try:
+        mail_sup.on_new_mail(observer)
+        mail_sup.on_new_mail(observer)            # the second lifespan
+        mail_sup._notify_new_mail("scope-a", "a@x", {"new": 1})
+    finally:
+        mail_sup._new_mail_observers[:] = before
+    assert calls == [("scope-a", "a@x", {"new": 1})]
+
+
 def test_web_server_starts_both_supervisors_through_the_guard():
     src = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
     assert "asyncio.create_task(MailSyncSupervisor().run())" not in src, "the bare start ran twice under TLS"

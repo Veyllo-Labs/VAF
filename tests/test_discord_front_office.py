@@ -73,3 +73,18 @@ def test_the_dashboard_rows_carry_the_inbox_mode(world):
         store.append_message("admin", cid, body, "in", channel="discord", user_scope_id=None)
     rows = {s["chat_id"]: s["type"] for s in routes._store_sessions()}
     assert rows == {"42": "admin", "555": "contact", "777": "readonly"}
+
+
+def test_the_no_contact_prefix_calls_the_sender_a_sender_and_not_a_number():
+    """The runner's no-contact prefix (vaf/core/headless_runner.py) is the default for every
+    Inbound channel: the sender it names is a WhatsApp number, a Telegram user id, a Discord
+    author id or an e-mail address, so the sentence explaining it must be channel-neutral.
+    Source guard in the idiom of test_chat_namespace_runner.py, since no runner harness
+    exists in tests/. MUTATION: write "this number" back into the block and this goes red."""
+    from pathlib import Path
+    runner = (Path(__file__).resolve().parent.parent / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
+    start = runner.index("# No contact record: this sender reached Front Office")
+    block = runner[start:runner.index('reply_lang_hint = ""', start)]
+    assert '"discord_author_id"' in block, "the block resolves the Discord sender too"
+    assert "outbound message to this sender opened" in block
+    assert "this number" not in block

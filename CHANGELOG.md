@@ -81,6 +81,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   to keep private details back. It now reads the Front Office knowledge and what it learned
   inside that chat, and your general memory only when you switch "Also use my general
   memory" on in the Front Office window.
+- **The Front Office knowledge list reads only the caller's rows.** A caller whose scope
+  could not be resolved to a UUID was listed with no scope filter at all, which on the
+  default install (the data connection is the owner role, which bypasses row-level
+  security) returned every user's Front Office documents. Such a caller now sees exactly
+  the rows learned without a scope, the same fail-closed rule the memory store applies.
 
 ### Fixed
 - **Inbound, after review.** An unresolved WhatsApp LID is no longer answered by an open

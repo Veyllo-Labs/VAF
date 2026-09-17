@@ -217,7 +217,11 @@ def evaluate_ingress(
         OFF. With the channel's Front Office switched on (`open_to_new_senders`) every
         other sender is let in as a Front Office contact, reason "front_office_open", and
         the bridge enrols an unknown one; the record with the flag off is how the owner
-        keeps one person out of an open channel.
+        keeps one person out of an open channel. Read by that branch alone, deliberately:
+        the flag is a plain bool, and every record the WhatsApp sync creates for a named
+        chat carries it OFF (contacts_store.sync_channel_contacts), so under a closed
+        channel that state is the default of every known number and not an opt-out; a
+        window the agent's own message opened (conversation_match) is not closed by it.
     """
     resolved = resolve_channel_policy(channel, raw_policy)
     mode = resolved["mode"]

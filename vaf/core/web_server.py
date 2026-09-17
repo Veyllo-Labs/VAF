@@ -1769,6 +1769,11 @@ async def startup_event():
         # A sync that changed a conversation list (new mail, flags, vanished rows) tells
         # the person's browsers, so the inbox and the mail window refetch instead of polling.
         _mail_sup.on_change(lambda scope, _account_id, _stats: notify_inbox_changed(scope))
+        # The mail answering lane (FRONT_OFFICE.md, "Mail"): after a sync that ingested mail,
+        # judge the new inbox rows and queue a Front Office turn for the ones to answer.
+        from vaf.mail import inbound as _mail_inbound
+        from vaf.mail.supervisor import on_new_mail as _on_new_mail
+        _on_new_mail(_mail_inbound.handle_new_mail)
         if start_supervisor(_mail_sup):
             log("WebServer", "Mail v2 sync supervisor task started")
         else:

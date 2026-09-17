@@ -13,6 +13,7 @@ Rules:
 - Provider IO always runs via asyncio.to_thread - never on the event loop.
 """
 import asyncio
+from datetime import datetime, timezone
 import logging
 from typing import Any, Dict, Optional
 
@@ -104,11 +105,23 @@ def _with_inbox_state(threads: list, user: Dict[str, Any]) -> list:
     window and the Posteingang never disagree about who waits."""
     from vaf.core.channel_message_store import chat_marks
     from vaf.core.inbox import mail_thread_state
+    from vaf.mail.service import MailService
     marks = chat_marks(user.get("username") or "", _scope_of(user), channel="mail")
+    drafts: Dict[int, Dict[str, Any]] = {}
+    try:
+        for d in MailService(_scope_of(user)).list_drafts():
+            if d.get("thread_id") is not None:
+                drafts.setdefault(int(d["thread_id"]), d)
+    except Exception:
+        drafts = {}
     for t in threads:
-        state = mail_thread_state(t, marks.get(("mail", str(t.get("thread_id")))))
+        draft = drafts.get(int(t.get("thread_id") or 0))
+        state = mail_thread_state(t, marks.get(("mail", str(t.get("thread_id")))), draft=draft)
         for k in ("waits", "waits_reason", "done", "answered_by_agent"):
             t[k] = state[k]
+        t["draft"] = ({"op_id": draft["op_id"], "to": draft.get("to") or "", "subject": draft.get("subject") or "",
+                       "body": draft.get("body") or "", "created_at": draft.get("created_at") or ""}
+                      if draft else None)
     return threads
 
 
@@ -208,9 +221,11 @@ async def sync_account(account_id: str, folder: Optional[str] = None,
         except ValueError as e:
             return {"ok": False, "error": str(e)}
         try:
+            from vaf.mail.verification import auth_policy_for_account
             eng = ImapSyncEngine(svc.store, acc.get("account_id") or account_id,
                                  acc.get("provider") or "imap",
-                                 acc.get("email") or account_id, client)
+                                 acc.get("email") or account_id, client,
+                                 auth_policy=auth_policy_for_account(acc))
             stats = (eng.sync_folder(folder) if folder else eng.sync_account())
             # Carry the user's legacy labels/answered markers over here too: the
             # import used to run ONLY on the supervisor sweep, so a user with
@@ -386,35 +401,12 @@ async def send_message(body: Dict[str, Any] = Body(...),
         # fast path: deliver right after the undo window; the supervisor sweep
         # is the restart-safe fallback for anything this task misses
         await asyncio.sleep(undo + 2)
-        def _process():
-            from vaf.core.config import Config
-            from vaf.mail.imap_client import MailAuthError, _safe_logout, build_imap_client
-            from vaf.mail.service import MailService
-            from vaf.mail.writeback import OpExecutor
-            svc = MailService(scope)
-            apk = svc.store.account_pk(account_id)
-            if apk is None:
-                return
-            client = None
-            try:
-                try:
-                    client = build_imap_client(acc, cred_username, scope)
-                except (MailAuthError, ValueError):
-                    client = None  # send still works; Sent-APPEND is skipped
-                # send-only: the fast path exists to deliver THIS queued send;
-                # other write ops (which may need a real IMAP session that this
-                # path might lack) are left for the sweep, so their attempts are
-                # not burned against a session-less client.
-                OpExecutor(svc.store, apk, client or _NoImap(), acc, scope,
-                           cred_username=cred_username).process(
-                    write_enabled=bool(Config.get("mail_engine_write_enabled", False))
-                    and client is not None,
-                    allowed_kinds={"send"})
-            finally:
-                if client is not None:
-                    _safe_logout(client)
+        # send-only: the fast path exists to deliver THIS queued send; other write ops
+        # (which may need a real IMAP session that this path might lack) are left for
+        # the sweep, so their attempts are not burned against a session-less client.
+        from vaf.mail.service import deliver_queued_sends
         try:
-            await asyncio.to_thread(_process)
+            await asyncio.to_thread(deliver_queued_sends, scope, acc, cred_username, account_id)
         except Exception as e:
             logger.warning("outbox fast-path delivery failed (sweep retries): %s", e)
 
@@ -425,19 +417,6 @@ async def send_message(body: Dict[str, Any] = Body(...),
     _INFLIGHT_SEND_TASKS.add(_task)
     _task.add_done_callback(_INFLIGHT_SEND_TASKS.discard)
     return out
-
-
-class _NoImap:
-    """Null client for send-only op processing when no IMAP session exists."""
-
-    def has_capability(self, cap):
-        return False
-
-    def select_folder(self, *a, **k):
-        raise RuntimeError("no imap session")
-
-    def append(self, *a, **k):
-        raise RuntimeError("no imap session")
 
 
 @router.delete("/send/{op_id}")
@@ -645,14 +624,30 @@ async def accounts(_user: Dict[str, Any] = Depends(_get_current_user)):
     from vaf.core.email_accounts import list_mail_accounts
     username, _cred, scope = _acct_identity(_user)
     rows = await asyncio.to_thread(lambda: list_mail_accounts(username, user_scope_id=scope))
-    return {"accounts": [{
+    return {"accounts": [_account_row(a) for a in rows]}
+
+
+def _account_row(a: Dict[str, Any]) -> Dict[str, Any]:
+    """One account for the panel: the settings and the sender-verification state (the
+    provider's Authentication-Results id the store trusts, how it was learned)."""
+    from vaf.mail.verification import auth_policy_for_account
+    policy = auth_policy_for_account(a)
+    return {
         "account_id": a.get("account_id") or a.get("email"),
         "email": a.get("email") or a.get("account_id"),
         "provider": (a.get("provider") or "imap"),
         "label": (a.get("label") or "").strip(),
         "imap_ready": bool(a.get("imap_ready")),
         "auto_sync_enabled": bool(a.get("auto_sync_enabled")),
-    } for a in rows]}
+        "trusted_authserv_id": policy["trusted_authserv_id"],
+        "auth_profile": policy["auth_profile"],
+        "authserv_source": str(a.get("authserv_source") or ""),
+        "authserv_learned_at": str(a.get("authserv_learned_at") or ""),
+        "authserv_samples": int(a.get("authserv_samples") or 0),
+        "aliases": [str(x) for x in (a.get("aliases") or [])],
+        # The verification is set up when a trusted id is known, or the profile needs none.
+        "auth_ready": bool(policy["trusted_authserv_id"]) or policy["auth_profile"] == "microsoft",
+    }
 
 
 def _login_failure(email: str, err: str, hint: Optional[str]) -> Dict[str, Any]:
@@ -750,19 +745,150 @@ async def accounts_verify(account_id: str, _user: Dict[str, Any] = Depends(_get_
 @router.patch("/accounts/{account_id}")
 async def accounts_patch(account_id: str, body: Dict[str, Any] = Body(...), _user: Dict[str, Any] = Depends(_get_current_user)):
     """Edit a per-account label or auto-sync toggle."""
-    from vaf.core.email_accounts import patch_account
+    from vaf.core.email_accounts import get_account, patch_account
+    from vaf.mail.verification import AUTH_PROFILES
     fields: Dict[str, Any] = {}
     if "label" in body:
         fields["label"] = (body.get("label") or "").strip()
     if "auto_sync_enabled" in body:
         fields["auto_sync_enabled"] = bool(body.get("auto_sync_enabled"))
+    # Sender verification, set by hand: the provider's authserv-id, the header profile,
+    # the account's other addresses. A verdict depends on them, so every stored verdict
+    # of the account is recomputed under the new policy afterwards.
+    if "trusted_authserv_id" in body:
+        fields["trusted_authserv_id"] = str(body.get("trusted_authserv_id") or "").strip().lower()[:253]
+        fields["authserv_source"] = "manual" if fields["trusted_authserv_id"] else ""
+    if "auth_profile" in body:
+        profile = str(body.get("auth_profile") or "").strip().lower()
+        if profile not in AUTH_PROFILES:
+            raise HTTPException(status_code=422, detail="auth_profile must be rfc8601, microsoft or none")
+        fields["auth_profile"] = profile
+    if "aliases" in body:
+        raw_aliases = body.get("aliases") or []
+        if not isinstance(raw_aliases, list):
+            raise HTTPException(status_code=422, detail="aliases must be a list of addresses")
+        fields["aliases"] = sorted({str(x).strip().lower() for x in raw_aliases if "@" in str(x)})[:32]
     if not fields:
-        raise HTTPException(status_code=422, detail="nothing to patch (label / auto_sync_enabled)")
+        raise HTTPException(status_code=422, detail="nothing to patch (label / auto_sync_enabled / trusted_authserv_id / auth_profile / aliases)")
     username, _cred, scope = _acct_identity(_user)
     ok = await asyncio.to_thread(lambda: patch_account(account_id, fields, username, user_scope_id=scope))
     if not ok:
         raise HTTPException(status_code=404, detail="account not found")
+    backfilled = 0
+    if {"trusted_authserv_id", "auth_profile", "aliases"} & set(fields):
+        backfilled = await asyncio.to_thread(
+            lambda: _backfill_account(scope, get_account(account_id, username, user_scope_id=scope)))
+    return {"ok": True, "backfilled": backfilled}
+
+
+def _backfill_account(scope: str, account: Optional[Dict[str, Any]]) -> int:
+    """Recompute the account's verdicts under its current policy (never raises: a
+    backfill that fails leaves the old verdicts, and the next learn or patch retries)."""
+    if not account:
+        return 0
+    try:
+        from vaf.mail.service import MailService
+        from vaf.mail.verification import auth_policy_for_account
+        aid = account.get("account_id") or account.get("email") or ""
+        return MailService(scope).backfill_verification(aid, auth_policy_for_account(account))
+    except Exception as e:
+        logger.warning("verification backfill failed for %s: %s", (str(account.get("account_id") or ""))[:3] + "***", e)
+        return 0
+
+
+@router.post("/accounts/{account_id}/learn-auth")
+async def accounts_learn_auth(account_id: str, _user: Dict[str, Any] = Depends(_get_current_user)):
+    """Learn the provider's Authentication-Results id from the account's own inbox (the
+    majority topmost authserv-id, or the Microsoft id-less form), save it on the account
+    and recompute every stored verdict under it. Answers what was learned and how many
+    rows were rewritten; with too few or disagreeing samples nothing is saved and the
+    counts say why."""
+    from vaf.core.email_accounts import get_account, patch_account
+    username, _cred, scope = _acct_identity(_user)
+    acc = get_account(account_id, username, user_scope_id=scope)
+    if acc is None:
+        raise HTTPException(status_code=404, detail="account not found")
+
+    def _run():
+        from vaf.mail.service import MailService
+        svc = MailService(scope)
+        learned = svc.learn_provider(acc.get("account_id") or account_id)
+        saved = False
+        backfilled = 0
+        if learned.get("authserv_id") or learned.get("profile") == "microsoft":
+            fields = {
+                "trusted_authserv_id": learned.get("authserv_id") or "",
+                "auth_profile": learned.get("profile") or "rfc8601",
+                "authserv_source": "mailbox",
+                "authserv_learned_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "authserv_samples": int(learned.get("count") or 0),
+            }
+            saved = patch_account(account_id, fields, username, user_scope_id=scope)
+            if saved:
+                backfilled = _backfill_account(scope, get_account(account_id, username, user_scope_id=scope))
+        return {"ok": True, "learned": learned, "saved": bool(saved), "backfilled": backfilled}
+
+    return await asyncio.to_thread(_run)
+
+
+@router.get("/drafts")
+async def list_drafts(thread_id: Optional[int] = None, _user: Dict[str, Any] = Depends(_get_current_user)):
+    """The agent's held answers awaiting the caller's approval (FRONT_OFFICE.md, "Mail"),
+    newest first, narrowed to one thread when asked."""
+    svc = _service(_user)
+    rows = await asyncio.to_thread(lambda: svc.list_drafts(thread_id=thread_id))
+    return {"drafts": rows}
+
+
+@router.post("/drafts/{op_id}/send")
+async def send_draft(op_id: int, _user: Dict[str, Any] = Depends(_get_current_user)):
+    """Approve a held answer: it becomes a queued send and leaves right away (the
+    supervisor sweep is the restart-safe fallback), and the inbox stops waiting."""
+    svc = _service(_user)
+    op = await asyncio.to_thread(svc.store.get_op, int(op_id))
+    if not op or op.get("kind") != "send" or op.get("state") != "held":
+        raise HTTPException(status_code=404, detail="no held draft with that id")
+    account_id = str((op.get("payload") or {}).get("account_id") or "")
+    scope, cred_username, acc = _account_ctx(_user, account_id)
+    if acc is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if not await asyncio.to_thread(svc.approve_draft, int(op_id)):
+        raise HTTPException(status_code=409, detail="the draft is no longer held")
+    from vaf.mail.service import deliver_queued_sends
+    stats = await asyncio.to_thread(deliver_queued_sends, scope, acc, cred_username, account_id, service=svc)
+    outcome = await asyncio.to_thread(svc.send_outcome, int(op_id))
+    try:
+        from vaf.core.web_interface import notify_inbox_changed
+        notify_inbox_changed(scope)
+    except Exception:
+        pass
+    return {"ok": True, "state": outcome["state"], "delivery": outcome["delivery"], "error": outcome["error"], "stats": stats}
+
+
+@router.delete("/drafts/{op_id}")
+async def discard_draft(op_id: int, _user: Dict[str, Any] = Depends(_get_current_user)):
+    """Discard a held answer; the mail it answered keeps waiting for the caller."""
+    svc = _service(_user)
+    if not await asyncio.to_thread(svc.discard_draft, int(op_id)):
+        raise HTTPException(status_code=404, detail="no held draft with that id")
+    try:
+        from vaf.core.web_interface import notify_inbox_changed
+        notify_inbox_changed(_scope_of(_user))
+    except Exception:
+        pass
     return {"ok": True}
+
+
+@router.get("/messages/{message_pk}/verdict")
+async def message_verdict(message_pk: int, _user: Dict[str, Any] = Depends(_get_current_user)):
+    """The full stored verdict of one message: the machine kind, the provider's
+    authentication results, the alignment, the identity flags and the reasons, plus the
+    header snapshot it was computed from."""
+    svc = _service(_user)
+    row = await asyncio.to_thread(svc.message_verdict, message_pk)
+    if row is None:
+        raise HTTPException(status_code=404, detail="no verdict for that message")
+    return {"verdict": row}
 
 
 @router.delete("/accounts/{account_id}")

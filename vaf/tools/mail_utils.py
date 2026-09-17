@@ -181,7 +181,37 @@ def _phishing_score(message: dict) -> tuple[int, List[str]]:
     if ("reply-to" in text and "different" in text) or ("unusual activity" in text and "click" in text):
         score += 1
         reasons.append("phishing_pattern")
+    # The stored verdict (vaf/mail/verification.py, schema v2), when the row carries one:
+    # what the account's own provider said about the sender, which no text pattern can.
+    auth = message.get("auth") if isinstance(message.get("auth"), dict) else {}
+    flags = set(auth.get("flags") or [])
+    if "own_domain_spoof" in flags:
+        score += 5
+        reasons.append("own_domain_spoof")
+    if "dmarc_fail" in flags or str(auth.get("dmarc") or "").lower() == "fail":
+        score += 5
+        reasons.append("authentication_failed")
+    if "reply_to_mismatch" in flags:
+        score += 2
+        reasons.append("reply_to_mismatch")
+    if "lookalike" in flags:
+        score += 3
+        reasons.append("lookalike_domain")
     return score, reasons
+
+
+def _trusted_domain_applies(message: dict, domain: str, trusted_domains: set) -> bool:
+    """The trusted-sender-domain bypass keys on the From domain, which is authenticated
+    only when the row's verdict says so: a row with a verdict that is not `verified` gets
+    no bypass (that is exactly the mail a spoofer sends), a row without any verdict keeps
+    the historical behaviour (older stores, rows never assessed)."""
+    if not (domain and domain in trusted_domains):
+        return False
+    auth = message.get("auth") if isinstance(message.get("auth"), dict) else None
+    if not auth:
+        return True
+    state = str(auth.get("state") or "unknown")
+    return state in ("verified", "unknown")
 
 
 def _phishing_filter_policy() -> tuple[bool, int, set[str]]:
@@ -218,7 +248,7 @@ def annotate_messages_with_agent_visibility(messages: List[dict]) -> List[dict]:
             continue
         domain = _email_domain_from_from_header(str(row.get("from") or ""))
         score, reasons = _phishing_score(row)
-        suspicious = bool(score >= threshold and not (domain and domain in trusted_domains))
+        suspicious = bool(score >= threshold and not _trusted_domain_applies(row, domain, trusted_domains))
         row["suspicious_for_agent"] = suspicious
         row["suspicious_reasons"] = reasons if suspicious else []
         row["suspicious_score"] = score if suspicious else 0
@@ -240,7 +270,7 @@ def filter_phishing_messages_for_agent(messages: List[dict]) -> tuple[List[dict]
     blocked = 0
     for m in messages or []:
         domain = _email_domain_from_from_header(str(m.get("from") or ""))
-        if domain and domain in trusted_domains:
+        if _trusted_domain_applies(m, domain, trusted_domains):
             safe.append(m)
             continue
         score, _ = _phishing_score(m)

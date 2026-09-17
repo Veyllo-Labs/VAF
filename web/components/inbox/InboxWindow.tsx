@@ -20,7 +20,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { X, Search, RefreshCw, Inbox, ArrowLeft, Sparkles, ExternalLink, CheckCheck } from 'lucide-react';
+import { X, Search, RefreshCw, Inbox, ArrowLeft, Sparkles, ExternalLink, CheckCheck, Headphones } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useEscapeLayer } from '@/hooks/useEscapeLayer';
 import {
@@ -53,6 +53,8 @@ export interface InboxRow {
     members?: number;
     invited?: boolean;
     jump?: Record<string, unknown>;
+    /** Mail: the agent's held answer awaiting approval (FRONT_OFFICE.md, "Mail"). */
+    draft?: { op_id: number; to: string; subject: string; body: string; created_at: string } | null;
 }
 
 interface Counts {
@@ -80,6 +82,8 @@ export interface InboxWindowProps {
     version: number;
     onOpenInChannel: (jump: InboxJump) => void;
     onOpenRoom: (roomId: string, name: string) => void;
+    /** The rail's gear: how the agent answers what arrives here (Settings, Connections, Inbound). */
+    onOpenInbound: () => void;
 }
 
 const CHANNELS: InboxChannel[] = ['whatsapp', 'telegram', 'discord', 'mail', 'room'];
@@ -110,7 +114,7 @@ function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) =
     );
 }
 
-export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel, onOpenRoom }: InboxWindowProps) {
+export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel, onOpenRoom, onOpenInbound }: InboxWindowProps) {
     const t = useTranslations('inbox');
     const [view, setView] = useState<View>('all');
     const [channel, setChannel] = useState<InboxChannel | null>(null);
@@ -287,6 +291,19 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
         return counts.unread > 0 || counts.waits - invitations > 0;
     })();
 
+    // A held mail answer: approve or discard from here; editing happens in the mail window.
+    const [draftBusy, setDraftBusy] = useState(false);
+    const actOnDraft = async (r: InboxRow, action: 'send' | 'discard') => {
+        if (!r.draft) return;
+        setDraftBusy(true);
+        try {
+            await fetch(api(action === 'send' ? `api/mail/drafts/${r.draft.op_id}/send` : `api/mail/drafts/${r.draft.op_id}`),
+                { method: action === 'send' ? 'POST' : 'DELETE', credentials: 'include' });
+            await load();
+        } catch { /* the row keeps its draft; the next refresh tells */ }
+        finally { setDraftBusy(false); }
+    };
+
     const openElsewhere = (r: InboxRow, draft: boolean) => {
         if (r.channel === 'room') { onClose(); onOpenRoom(r.id, r.name); return; }
         onClose();
@@ -372,6 +389,11 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                         <Toggle on={groups} onChange={setGroups} label={t('showGroups')} />
                         <Toggle on={done} onChange={setDone} label={t('showDone')} />
                         <Toggle on={bulk} onChange={setBulk} label={t('showBulk')} />
+                        {/* The other side of this window: what arrives here is answered the way
+                            Inbound is set up. The inbox closes first, the way a chat jump does. */}
+                        <button type="button" onClick={() => { onClose(); onOpenInbound(); }} className={cn(RAIL_BTN, 'mt-2 hover:bg-[#262626]')}>
+                            <span className="flex items-center gap-2 min-w-0"><Headphones className="w-3.5 h-3.5 shrink-0 text-[#9a9a9a]" /><span className="truncate">{t('rail.inbound')}</span></span>
+                        </button>
                         <div className="mt-auto px-4 py-3 border-t border-[#2e2e2e] text-xs text-[#9a9a9a] space-y-1 max-md:hidden">
                             {(['whatsapp', 'telegram', 'discord', 'mail'] as const).map(ch => {
                                 const line = statusLine(ch);
@@ -496,6 +518,20 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                     )}
                                     {noteReason === 'invitation' && (
                                         <span className="self-center mt-2 text-[11px] text-[#e0b866] bg-[#2b2417] border border-[#4a3b1e] px-3 py-1 rounded-full text-center">{t('invitation')}</span>
+                                    )}
+                                    {selected.draft && (
+                                        <div className="mt-2 rounded-xl border border-[#4a3b1e] bg-[#2b2417] p-3 text-[13px]">
+                                            <div className="flex items-center gap-2 text-[#e0b866] font-medium"><Sparkles className="w-4 h-4" /><span>{t('draftTitle')}</span></div>
+                                            <p className="text-xs text-[#c8b58a] mt-0.5">{t('draftWaiting')}</p>
+                                            <pre className="mt-2 whitespace-pre-wrap font-sans text-[#e8e8e8] max-h-48 overflow-y-auto">{selected.draft.body}</pre>
+                                            <div className="mt-2 flex items-center gap-2 flex-wrap">
+                                                {/* The one emphasis action takes the theme's light neutral, like "write a draft" above. */}
+                                                <button type="button" disabled={draftBusy} onClick={() => actOnDraft(selected, 'send')}
+                                                    className={cn('flex items-center gap-1.5', BTN_PRIMARY)}>{t('draftSend')}</button>
+                                                <button type="button" disabled={draftBusy} onClick={() => actOnDraft(selected, 'discard')}
+                                                    className={cn('flex items-center gap-1.5', BTN)}>{t('draftDiscard')}</button>
+                                            </div>
+                                        </div>
                                     )}
                                 </div>
                                 <div className="px-5 py-2 border-t border-[#2e2e2e] text-xs text-[#9a9a9a] flex justify-between gap-3 flex-wrap shrink-0">

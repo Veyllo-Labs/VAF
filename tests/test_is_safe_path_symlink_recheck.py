@@ -114,8 +114,10 @@ def test_send_mail_symlink_attachment_is_refused_through_run(home, monkeypatch):
     calls = {"n": 0}
     monkeypatch.setattr(sm, "list_accounts_for_user", lambda *a, **k: ["user@example.com"])
     monkeypatch.setattr(sm, "get_account", lambda *a, **k: {"provider": "imap", "email": "user@example.com"})
-    monkeypatch.setattr(sm.sender, "send",
-                        lambda msg: calls.__setitem__("n", calls["n"] + 1) or sm.sender.SendResult(True, "ok"))
+    import vaf.mail.sender as sender
+    # The tool sends through the outbox; the native sender is the one seam, patched at its module.
+    monkeypatch.setattr(sender, "send",
+                        lambda msg: calls.__setitem__("n", calls["n"] + 1) or sender.SendResult(True, "ok"))
 
     out = sm.SendMailTool().run(
         to="rcpt@example.com",

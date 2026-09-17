@@ -12,19 +12,59 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **The contact is the hub, not the channel.** While answering a contact, the agent has one
+  read tool, `contact_history`: what that person wrote to you before and what went to them,
+  across WhatsApp, Telegram, Discord and mail, newest first, with a channel filter and a
+  search word. So Bob asking on WhatsApp "did you get my mail about the offer?" is answered
+  from Bob's own mail, and "as we said on WhatsApp" in a mail from Bob's chat. The tool
+  takes no name and no id: the person it reads is the one the turn is answering, pinned by
+  the runner, and your notes about them, other people and your other conversations stay
+  out of reach.
+- **Inbound answers mail, draft first.** The Inbound window's E-Mail row has a switch like
+  WhatsApp and Telegram, plus a reply mode: draft first (the default) or send at once. With
+  it on, a mail from a sender your mail provider verified gets an answer written in Front
+  Office mode, as a complete mail; in draft mode the answer waits in the mail outbox and
+  shows up in the inbox and above the thread in the mail window ("Your agent's draft"), with
+  Send, Edit and Discard. Nothing else is answered: bounces, read receipts, out-of-office
+  replies, mailing lists, bulk mail, our own mail coming back, and every sender the provider
+  did not verify are left to you, and mail from before the switch was turned on is never
+  touched. Every answered conversation is a case: the agent's mail carries a signed case
+  anchor as its Message-ID, so a reply is recognised with certainty and only from somebody
+  already on that case; a reply into a case the agent wrote in gets through even with the
+  channel switched off (the WhatsApp reply-window rule, on mail). At most three automatic
+  answers per address and hour, ten per day. A new sender the agent answers is added to the
+  contact book with "Let the agent reply" on, where you switch them off. Three new security
+  log entries: a mail claiming your own domain that did not authenticate, a case anchor that
+  is not yours, and an address that reached the cap.
+- **The mail client says who really wrote a mail.** Every message now gets a verdict
+  when it is synced: whether a person wrote it (a bounce, a read receipt, an
+  out-of-office reply, a mailing list, bulk mail and a calendar invitation are
+  recognised from the headers, not guessed from the text) and whether the sender is who
+  the From line claims, read from the authentication results your own mail provider
+  writes into the mail (SPF, DKIM, DMARC, with the alignment rule DMARC uses). The mail
+  window shows it as a shield on every thread row and in the reader: green for a
+  verified sender, grey for a pass on another domain, a warning for an unverified one,
+  red when a mail claims your own domain; machine mail shows its kind. The account
+  panel learns your provider's id from the mailbox with one click and re-assesses the
+  stored mail; until then the badge stays quiet rather than crying wolf. The inbox keeps
+  machine mail off "Waits for you", and the agent's phishing filter now counts a failed
+  authentication and a spoofed own domain, and grants a trusted sender domain its
+  bypass only when the mail really came from it.
 - **Inbound has a home in Settings.** Under Connections, right below Contacts, an "Inbound"
-  card opens the window for the agent's answers to incoming requests (the Front Office). On the right, a switch per channel: switching WhatsApp or Telegram on means everyone
-  who writes there is answered in Front Office mode, every contact of that channel in your
-  book is allowed at that moment, and a new sender is added to the book when they write;
-  one person is kept out by switching "Let the agent reply" off for them in the channel
-  window or the contact book (switching on asks once; every change is a
-  `front_office_changed` entry in the security log). On the left, your instructions for
-  those answers (who the agent speaks for, the tone, what it may promise, what it must never
-  say) and the knowledge: PDF, TXT or MD documents learned into a lane of the memory store
-  that only a contact's answer reads. Until now the agent answered only contacts with the
-  flag, and only after the door had been opened by hand in `config.json`
-  (`channel_ingress_policy`), while the contact book said the agent answers them; that hint
-  now says when Front Office is off.
+  card opens the window for the agent's answers to incoming requests (the Front Office).
+  On the right, a switch per channel: switching WhatsApp or Telegram on means everyone who
+  writes there is answered in Front Office mode, every contact of that channel in your book
+  is allowed at that moment, and a new sender is added to the book when they write; one
+  person is kept out by switching "Let the agent reply" off for them in the channel window
+  or the contact book (switching on asks once; every change is a `front_office_changed`
+  entry in the security log). On the left, your instructions for those answers (who the
+  agent speaks for, the tone, what it may promise, what it must never say) and the
+  knowledge: PDF, TXT or MD documents learned into a lane of the memory store that only a
+  contact's answer reads. The inbox's rail has an "Inbound" entry that opens the window,
+  and the window's header an "Open inbox" for the way back. Until now the agent answered
+  only contacts with the flag, and only after the door had been opened by hand in
+  `config.json` (`channel_ingress_policy`), while the contact book said the agent answers
+  them; that hint now says when Inbound is off.
 
 ### Security
 - **A contact's answer no longer draws on your whole memory.** A Front Office turn used to
@@ -34,6 +74,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   memory" on in the Front Office window.
 
 ### Fixed
+- **A mail the agent sent for you now has a Sent copy and marks the mail it answered.**
+  `send_mail`, `reply_mail` and `forward_mail` built and sent the wire bytes themselves,
+  so on a plain IMAP account nothing was filed in Sent and the answered mail kept
+  waiting in the inbox. They now queue through the same outbox as the compose window and
+  deliver right away; the outbox files the Sent copy, remembers the Message-ID of every
+  mail VAF sends (so our own mail coming back is recognised), and marks the answered mail
+  when the reply has left. Message-IDs are minted on your own address's domain instead of
+  the machine's hostname.
 - **A contact saved by a LAN account could not reach the agent on Telegram.** The Telegram
   lookup read contact books by username only, so a book saved under the account's scope was
   never consulted; it reads the same keys as WhatsApp and the dashboards now.

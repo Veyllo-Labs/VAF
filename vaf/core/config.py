@@ -696,6 +696,11 @@ class Config:
             "telegram": {"mode": "inherit", "allow_contact_fallback": False},
             "whatsapp": {"mode": "inherit", "allow_contact_fallback": False},
             "discord": {"mode": "inherit", "allow_contact_fallback": False},
+            # Mail: an ingress-only Front Office channel (no bridge, no send tool). reply_mode
+            # draft holds every answer for the owner's approval; opened_at is stamped by the
+            # switch so mail from before it is never answered.
+            "email": {"mode": "inherit", "allow_contact_fallback": False, "open_to_new_senders": False,
+                      "reply_mode": "draft", "opened_at": 0},
         },
 
         # Messaging-channel tool access. By default, channel sessions (Telegram/WhatsApp/Discord)
@@ -749,6 +754,13 @@ class Config:
         # Mail engine (vaf/mail/, docs/integrations/EMAIL_CLIENT.md). The write
         # flag and retention are instance-wide resource policy: admin-only.
         "mail_engine_write_enabled": False,  # allow server-side writes (flags/move/append) - separate switch by design
+        # The mail answering lane (vaf/mail/inbound.py, FRONT_OFFICE.md): instance policy,
+        # admin-only via GLOBAL_CONFIG_KEYS. A closed case reopens on a reply inside the
+        # lock window and forks a linked new case after it; the caps bound how many
+        # automatic answers one address can draw, whatever headers an autoresponder sends.
+        "mail_case_lock_days": 30,
+        "mail_auto_reply_max_per_address_per_hour": 3,
+        "mail_auto_reply_max_per_address_per_day": 10,
         "mail_body_retention_days": 365,  # cached-body retention (headers are kept forever)
         "mail_store_encryption_key": "",  # AES key (Base64) for mail.db body blobs; auto-generated (PROTECTED)
         # Calendar sync (vaf/core/calendar_sync.py, docs/integrations/CALENDAR_INTEGRATION.md):
@@ -1055,6 +1067,9 @@ class Config:
         "email_allow_private_hosts",
         # Mail engine write flag + retention: instance-wide policy.
         "mail_engine_write_enabled",
+        "mail_case_lock_days",
+        "mail_auto_reply_max_per_address_per_hour",
+        "mail_auto_reply_max_per_address_per_day",
         "mail_body_retention_days",
         # Calendar sync: cadence and window are the instance's request volume against the
         # providers, the push flag is the kill switch for outbound calendar writes.

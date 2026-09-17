@@ -83,6 +83,16 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     # mail
     "mail_high_risk_send_blocked": "Outgoing mail stopped as high-risk before sending",
     "mail_image_proxy_blocked": "Remote image proxy refused a host",
+    "mail_spoofed_own_domain": "A mail claiming one of the account's own domains did not "
+                               "authenticate with the provider (DMARC fail or no aligned pass): "
+                               "somebody writes as the owner's organisation. `username` the "
+                               "account's owner, `channel` email, `detail` the masked sender",
+    "mail_case_token_misuse": "A mail carried a case anchor that is not this account's (another "
+                              "scope, another account, or tampered); the mail was not attributed. "
+                              "`detail` the masked sender",
+    "mail_auto_reply_capped": "The answering lane reached its per-address cap for the day; "
+                              "further mail from that address waits for the owner. Once per "
+                              "address and day, `detail` the masked address",
     # skills
     "skill_blocked": "HIGH scan result stopped a skill install or update",
     "skill_override": "Admin explicitly accepted a HIGH result (install or quarantine restore)",

@@ -23,16 +23,6 @@ def _service(user_scope_id: Optional[str]):
     return MailService(scope)
 
 
-def _pk_by_message_id(svc, message_id: str) -> Optional[int]:
-    mid = (message_id or "").strip()
-    variants = {mid, mid.strip("<>"), f"<{mid.strip('<>')}>"}
-    q = ",".join("?" for _ in variants)
-    row = svc.store._conn().execute(
-        f"SELECT id FROM messages WHERE message_id IN ({q}) ORDER BY id DESC LIMIT 1",
-        (*variants,)).fetchone()
-    return int(row["id"]) if row else None
-
-
 def _write_note() -> str:
     if not bool(Config.get("mail_engine_write_enabled", False)):
         return (" Note: server-side writes are disabled (mail_engine_write_enabled), "
@@ -74,7 +64,7 @@ class ForwardMailTool(BaseTool):
         if not to or not message_id:
             return "Pass message_id and to."
         svc = _service(user_scope_id)
-        pk = _pk_by_message_id(svc, message_id)
+        pk = svc.store.pk_by_message_id(message_id)
         if pk is None:
             return f"Message '{message_id}' not found in the local mail store."
         pre = svc.forward_prefill(pk)
@@ -96,25 +86,27 @@ class ForwardMailTool(BaseTool):
                     f"Reasons: {', '.join(reasons)}. If the user confirms, call "
                     "forward_mail again with confirm_high_risk=true.")
         from vaf.core.email_transport import get_account
-        from vaf.mail import compose, sender
+        from vaf.mail.service import deliver_queued_sends
         acc = get_account(pre["account_id"], username=cred_username, user_scope_id=user_scope_id)
         if not acc:
             return f"Account '{pre['account_id']}' not found."
+        # The one send funnel (see reply_mail): queued, delivered, filed and recorded.
         try:
-            from_addr = acc.get("email") or pre["account_id"]
-            mime = compose.build_message(from_addr, to, pre["subject"], full_body)
-            msg = sender.OutgoingMessage(
-                account=acc, raw_bytes=bytes(mime), to=to,
-                username=cred_username, user_scope_id=user_scope_id,
-                subject=pre["subject"], body=full_body, message_id=mime["Message-ID"])
-            res = sender.send(msg)
+            queued = svc.queue_send(pre["account_id"], to, pre["subject"], full_body,
+                                    undo_seconds=0, sent_by="agent")
+            deliver_queued_sends(svc.user_scope_id, acc, cred_username, pre["account_id"], service=svc)
+            outcome = svc.send_outcome(int(queued["op_id"]))
         except Exception as e:
             return f"Failed to forward: {e}"
-        if res.classification == "ambiguous":
+        state, error = outcome["state"], outcome["error"]
+        if state == "done":
+            return f"Forwarded to {to} (subject: {pre['subject']})."
+        if state == "pending":
+            return f"The forward to {to} is queued in the outbox and will be retried shortly."
+        if outcome["delivery"] == "ambiguous":
             return ("The forward may already have been delivered but the server did not confirm "
                     "it - do NOT resend without checking the Sent folder first.")
-        return (f"Forwarded to {to} (subject: {pre['subject']})." if res.ok
-                else "Failed to forward (check the account connection in Settings).")
+        return "Failed to forward (check the account connection in Settings)." + (f" Detail: {error}" if error else "")
 
 
 class ArchiveMailTool(BaseTool):
@@ -139,7 +131,7 @@ class ArchiveMailTool(BaseTool):
 
     def run(self, **kwargs) -> str:
         svc = _service(cred_scope_from_kwargs(kwargs))
-        pk = _pk_by_message_id(svc, kwargs.get("message_id") or "")
+        pk = svc.store.pk_by_message_id(kwargs.get("message_id") or "")
         if pk is None:
             return "Message not found in the local mail store."
         out = svc.archive(pk)
@@ -170,7 +162,7 @@ class DeleteMailTool(BaseTool):
 
     def run(self, **kwargs) -> str:
         svc = _service(cred_scope_from_kwargs(kwargs))
-        pk = _pk_by_message_id(svc, kwargs.get("message_id") or "")
+        pk = svc.store.pk_by_message_id(kwargs.get("message_id") or "")
         if pk is None:
             return "Message not found in the local mail store."
         out = svc.trash(pk)

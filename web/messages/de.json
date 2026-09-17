@@ -657,6 +657,9 @@
     "ovUnitsHint": "session-scoped · Live-Watchdog",
     "ovEvMailSend": "Riskante Mail blockiert",
     "ovEvMailImage": "Externes Bild blockiert",
+    "ovEvMailSpoof": "Mail gibt sich als deine Domain aus",
+    "ovEvMailToken": "Fremdes Vorgangs-Token in einer Mail",
+    "ovEvMailCapped": "Automatische Mail-Antworten gedeckelt",
     "ovEvSkillBlocked": "Skill-Installation blockiert",
     "ovEvSkillOverride": "Admin-Freigabe",
     "ovEvSkillAlert": "Skill-Neuprüfung auffällig",
@@ -878,7 +881,7 @@
       "inboundOff": "WhatsApp leitet gerade nichts an den Agenten weiter (Eingang im WhatsApp-Fenster ausgeschaltet). Dort bekommt also niemand eine Antwort.",
       "contactsCount": "{count, plural, one {# Kontakt darf deinem Agenten schreiben.} other {# Kontakte dürfen deinem Agenten schreiben.}}",
       "openContacts": "Kontakte öffnen",
-      "onNote": "An. Auf WhatsApp darf außerdem jeder, den dein Agent selbst angeschrieben hat, {hours} Stunden lang antworten (Antwortfenster, einstellbar im WhatsApp-Fenster).",
+      "openInbox": "Posteingang öffnen",
       "offNote": "Aus. Eine Ausnahme bleibt: Auf WhatsApp darf jeder, den dein Agent selbst angeschrieben hat, noch {hours} Stunden lang antworten (Antwortfenster, einstellbar im WhatsApp-Fenster; 0 schaltet es ab).",
       "offNoteClosed": "Aus. Auch das WhatsApp-Antwortfenster ist geschlossen. Außer dir erreicht deinen Agenten niemand.",
       "briefingTitle": "Anweisungen",
@@ -910,7 +913,12 @@
       "saveFailed": "Die Änderung konnte nicht gespeichert werden.",
       "open": "Inbound öffnen",
       "cardOn": "An für {channels}. {count, plural, one {# freigegebener Kontakt} other {# freigegebene Kontakte}}.",
-      "cardOff": "Aus. Kontakte bekommen keine Antwort; nur du erreichst deinen Agenten."
+      "cardOff": "Aus. Kontakte bekommen keine Antwort; nur du erreichst deinen Agenten.",
+      "mailModeLabel": "Antworten",
+      "mailModeDraft": "Entwurf zuerst",
+      "mailModeSend": "Sofort senden",
+      "mailModeHint": "Entwürfe warten im Posteingang und im Mail-Fenster auf deine Freigabe. Eine Antwort bekommt nur, wen dein Mail-Anbieter als Absender bestätigt hat; Newsletter, automatische Mails und unbestätigte Absender nie.",
+      "confirmBodyMail": "Dein Agent beantwortet dann eingehende Mails eigenständig im Inbound-Modus: als dein Assistent, nur für Absender, die dein Mail-Anbieter bestätigt hat, und zuerst als Entwurf, den du freigibst. Die {count} Kontakte mit Mail-Adresse in deinem Kontaktbuch werden jetzt freigegeben; wer neu schreibt, kommt ins Kontaktbuch."
     },
     "whatsappWizard": {
       "title": "WhatsApp einrichten",
@@ -966,7 +974,8 @@
       "unreadCount": "{count} ungelesen",
       "agentAnswered": "Agent hat geantwortet",
       "done": "Erledigt",
-      "couldNotLoad": "Das Dashboard konnte nicht geladen werden."
+      "couldNotLoad": "Das Dashboard konnte nicht geladen werden.",
+      "waitsDraft": "Dein Agent hat eine Antwort vorbereitet; sie wartet auf deine Freigabe."
     },
     "whatsappDashboard": {
       "title": "WhatsApp",
@@ -2342,7 +2351,8 @@
     "rail": {
       "view": "Ansicht",
       "channels": "Kanäle",
-      "filters": "Filter"
+      "filters": "Filter",
+      "inbound": "Inbound"
     },
     "view": {
       "all": "Alle",
@@ -2405,7 +2415,11 @@
     "unanswered": "Die letzte Nachricht kam von {name}, noch ohne Antwort.",
     "invitation": "Dieser Raum wartet auf deine Antwort auf die Einladung.",
     "members": "{count, plural, one {# Agent} other {# Agenten}}",
-    "messagesCount": "{count, plural, one {# Nachricht} other {# Nachrichten}}"
+    "messagesCount": "{count, plural, one {# Nachricht} other {# Nachrichten}}",
+    "draftTitle": "Entwurf deines Agenten",
+    "draftWaiting": "Noch nicht gesendet; zum Bearbeiten im Mail-Fenster öffnen.",
+    "draftSend": "Senden",
+    "draftDiscard": "Verwerfen"
   },
   "mailV2": {
     "title": "Mail",
@@ -2551,6 +2565,40 @@
       "matchedYourTone": "Ton an {n} deiner eigenen Nachrichten im Verlauf angelehnt.",
       "noToneSample": "Keine eigene Nachricht im Verlauf - neutraler Ton.",
       "reasoningOnly": "Das Modell hat sein ganzes Ausgabebudget mit Nachdenken verbraucht und keine Antwort geschrieben. Versuch es noch einmal, mit einer kürzeren Anweisung, oder erhöhe die Ausgabegrenze des Composers."
+    },
+    "auth": {
+      "verified": "Absender verifiziert ({method}, {domain})",
+      "via": "Nicht eindeutig: {domain} hat die Prüfung bestanden, nicht die Absenderdomain",
+      "unverified": "Absender nicht verifiziert",
+      "spoof": "Nicht verifiziert und gibt sich als deine eigene Domain aus",
+      "machine": {
+        "bounce": "Unzustellbarkeitsmeldung",
+        "mdn": "Lesebestätigung",
+        "auto_reply": "Automatische Antwort",
+        "list": "Mailingliste",
+        "bulk": "Massenmail",
+        "calendar": "Termineinladung",
+        "own_loop": "Deine eigene Mail",
+        "null_return_path": "Ohne Absenderpfad (automatisch)"
+      },
+      "accountLearned": "Absenderprüfung: {id} ({count} Mails)",
+      "accountMicrosoft": "Absenderprüfung: Microsoft 365",
+      "accountManual": "Absenderprüfung: {id} (manuell)",
+      "accountNone": "Absenderprüfung noch nicht eingerichtet: Alle Absender gelten als ungeprüft.",
+      "learn": "Aus dem Postfach lernen",
+      "learnDone": "Gelernt: {id}. {count} Mails neu bewertet.",
+      "learnDoneMicrosoft": "Erkannt: Microsoft 365. {count} Mails neu bewertet.",
+      "learnTooFew": "Noch zu wenige Mails im Posteingang, um den Anbieter sicher zu erkennen ({count}). Versuche es später noch einmal.",
+      "learnFailed": "Das Lernen ist fehlgeschlagen."
+    },
+    "draft": {
+      "title": "Entwurf deines Agenten",
+      "hint": "Noch nicht gesendet. Lies den Text, dann sende ihn, bearbeite ihn oder verwirf ihn.",
+      "send": "Senden",
+      "edit": "Bearbeiten",
+      "discard": "Verwerfen",
+      "sent": "Gesendet.",
+      "failed": "Konnte nicht gesendet werden: {error}"
     }
   }
 }

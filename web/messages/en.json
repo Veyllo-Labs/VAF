@@ -657,6 +657,9 @@
     "ovUnitsHint": "session-scoped · live watchdog",
     "ovEvMailSend": "High-risk mail blocked",
     "ovEvMailImage": "Remote image blocked",
+    "ovEvMailSpoof": "Mail claims your own domain",
+    "ovEvMailToken": "Foreign case token in a mail",
+    "ovEvMailCapped": "Automatic mail replies capped",
     "ovEvSkillBlocked": "Skill install blocked",
     "ovEvSkillOverride": "Admin override",
     "ovEvSkillAlert": "Skill re-scan alert",
@@ -878,7 +881,7 @@
       "inboundOff": "WhatsApp forwards nothing to the agent right now (inbound switched off in the WhatsApp window), so nobody is answered there.",
       "contactsCount": "{count, plural, one {# contact may write to your agent.} other {# contacts may write to your agent.}}",
       "openContacts": "Open contacts",
-      "onNote": "On. On WhatsApp, anyone your agent wrote to may also reply for {hours} h (the reply window, set in the WhatsApp window).",
+      "openInbox": "Open inbox",
       "offNote": "Off. One door stays open: on WhatsApp, anyone your agent wrote to may still reply for {hours} h (the reply window, set in the WhatsApp window; 0 closes it).",
       "offNoteClosed": "Off. The WhatsApp reply window is closed too, so nobody but you reaches your agent.",
       "briefingTitle": "Instructions",
@@ -910,7 +913,12 @@
       "saveFailed": "The change could not be saved.",
       "open": "Open Inbound",
       "cardOn": "On for {channels}. {count, plural, one {# allowed contact} other {# allowed contacts}}.",
-      "cardOff": "Off. Contacts are turned away; only you reach your agent."
+      "cardOff": "Off. Contacts are turned away; only you reach your agent.",
+      "mailModeLabel": "Replies",
+      "mailModeDraft": "Draft first",
+      "mailModeSend": "Send at once",
+      "mailModeHint": "Drafts wait in the inbox and the mail window for your approval. Only a sender your mail provider verified gets an answer; newsletters, automatic mail and unverified senders never do.",
+      "confirmBodyMail": "Your agent then answers incoming mail on its own in Inbound mode: as your assistant, only for senders your mail provider verified, and as a draft you approve first. The {count} contacts with a mail address in your contact book are allowed now; whoever writes anew is added to the book."
     },
     "whatsappWizard": {
       "title": "WhatsApp Setup",
@@ -966,7 +974,8 @@
       "unreadCount": "{count} unread",
       "agentAnswered": "Agent answered",
       "done": "Done",
-      "couldNotLoad": "The dashboard could not be loaded."
+      "couldNotLoad": "The dashboard could not be loaded.",
+      "waitsDraft": "Your agent prepared an answer; it waits for your approval."
     },
     "whatsappDashboard": {
       "title": "WhatsApp",
@@ -2342,7 +2351,8 @@
     "rail": {
       "view": "View",
       "channels": "Channels",
-      "filters": "Filters"
+      "filters": "Filters",
+      "inbound": "Inbound"
     },
     "view": {
       "all": "All",
@@ -2405,7 +2415,11 @@
     "unanswered": "The last message came from {name}, still unanswered.",
     "invitation": "This room waits for your answer to the invitation.",
     "members": "{count, plural, one {# agent} other {# agents}}",
-    "messagesCount": "{count, plural, one {# message} other {# messages}}"
+    "messagesCount": "{count, plural, one {# message} other {# messages}}",
+    "draftTitle": "Your agent's draft",
+    "draftWaiting": "Not sent yet; open the mail window to edit it.",
+    "draftSend": "Send",
+    "draftDiscard": "Discard"
   },
   "mailV2": {
     "title": "Mail",
@@ -2551,6 +2565,40 @@
       "matchedYourTone": "Tone matched to {n} of your own messages in this thread.",
       "noToneSample": "No message of your own in this thread - neutral tone.",
       "reasoningOnly": "The model spent its whole output budget thinking and wrote no reply. Try again with a shorter instruction, or raise the Composer's output limit."
+    },
+    "auth": {
+      "verified": "Sender verified ({method}, {domain})",
+      "via": "Not aligned: {domain} passed, not the sender's domain",
+      "unverified": "Sender not verified",
+      "spoof": "Not verified and claims to be your own domain",
+      "machine": {
+        "bounce": "Delivery failure notice",
+        "mdn": "Read receipt",
+        "auto_reply": "Automatic reply",
+        "list": "Mailing list",
+        "bulk": "Bulk mail",
+        "calendar": "Calendar invitation",
+        "own_loop": "Your own mail",
+        "null_return_path": "No return path (automatic)"
+      },
+      "accountLearned": "Sender verification: {id} ({count} mails)",
+      "accountMicrosoft": "Sender verification: Microsoft 365",
+      "accountManual": "Sender verification: {id} (set by hand)",
+      "accountNone": "Sender verification not set up yet: every sender counts as unchecked.",
+      "learn": "Learn from the mailbox",
+      "learnDone": "Learned: {id}. {count} mails re-assessed.",
+      "learnDoneMicrosoft": "Recognised: Microsoft 365. {count} mails re-assessed.",
+      "learnTooFew": "Too few mails in the inbox to recognise the provider with certainty ({count}). Try again later.",
+      "learnFailed": "Learning failed."
+    },
+    "draft": {
+      "title": "Your agent's draft",
+      "hint": "Not sent yet. Read it, then send, edit or discard it.",
+      "send": "Send",
+      "edit": "Edit",
+      "discard": "Discard",
+      "sent": "Sent.",
+      "failed": "Could not be sent: {error}"
     }
   }
 }

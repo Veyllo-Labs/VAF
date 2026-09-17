@@ -21,16 +21,6 @@ def _resolve_service(user_scope_id: Optional[str]):
     return MailService(scope)
 
 
-def _find_pk_by_message_id(svc, message_id: str) -> Optional[int]:
-    mid = (message_id or "").strip()
-    variants = {mid, mid.strip("<>"), f"<{mid.strip('<>')}>"}
-    q = ",".join("?" for _ in variants)
-    row = svc.store._conn().execute(
-        f"SELECT id FROM messages WHERE message_id IN ({q}) ORDER BY id DESC LIMIT 1",
-        (*variants,)).fetchone()
-    return int(row["id"]) if row else None
-
-
 class ReplyMailTool(BaseTool):
     """Reply to an email (quoted, correctly threaded). Use instead of send_mail
     when the user wants to answer a specific mail."""
@@ -66,7 +56,7 @@ class ReplyMailTool(BaseTool):
         if not message_id or not body:
             return "Pass message_id and body."
         svc = _resolve_service(user_scope_id)
-        pk = _find_pk_by_message_id(svc, message_id)
+        pk = svc.store.pk_by_message_id(message_id)
         if pk is None:
             return f"Message '{message_id}' not found in the local mail store."
         pre = svc.reply_prefill(pk, reply_all=bool(kwargs.get("reply_all", False)))
@@ -86,34 +76,28 @@ class ReplyMailTool(BaseTool):
                     f"Reasons: {', '.join(reasons)}. If the user confirms, call "
                     "reply_mail again with confirm_high_risk=true.")
         from vaf.core.email_transport import get_account
-        from vaf.mail import compose, sender
+        from vaf.mail.service import deliver_queued_sends
         acc = get_account(pre["account_id"], username=cred_username, user_scope_id=user_scope_id)
         if not acc:
             return f"Account '{pre['account_id']}' not found."
+        # The one send funnel: the reply is queued and delivered right away; the outbox
+        # files the Sent copy, records the id and marks the answered mail when it left.
         try:
-            from_addr = acc.get("email") or pre["account_id"]
-            mime = compose.build_message(from_addr, pre["to"], pre["subject"], full_body,
-                                         cc=pre.get("cc") or None,
-                                         in_reply_to=pre.get("in_reply_to") or None,
-                                         references=pre.get("references") or None)
-            msg = sender.OutgoingMessage(
-                account=acc, raw_bytes=bytes(mime),
-                to=pre["to"], cc=pre.get("cc") or "",
-                username=cred_username, user_scope_id=user_scope_id,
-                subject=pre["subject"], body=full_body, message_id=mime["Message-ID"],
-                in_reply_to=pre.get("in_reply_to") or None, references=pre.get("references") or None)
-            res = sender.send(msg)
+            original = svc.store.get_message(pk) or {}
+            queued = svc.queue_send(pre["account_id"], pre["to"], pre["subject"], full_body,
+                                    cc=pre.get("cc") or "", in_reply_to=pre.get("in_reply_to") or "",
+                                    references=pre.get("references") or "", undo_seconds=0,
+                                    sent_by="agent", reply_to_pk=pk, thread_id=original.get("thread_id"))
+            deliver_queued_sends(svc.user_scope_id, acc, cred_username, pre["account_id"], service=svc)
+            outcome = svc.send_outcome(int(queued["op_id"]))
         except Exception as e:
             return f"Failed to send reply: {e}"
-        if res.classification == "ambiguous":
+        state, error = outcome["state"], outcome["error"]
+        if state == "done":
+            return f"Reply sent to {pre['to']} (subject: {pre['subject']})."
+        if state == "pending":
+            return f"The reply to {pre['to']} is queued in the outbox and will be retried shortly."
+        if outcome["delivery"] == "ambiguous":
             return ("The reply may already have been delivered but the server did not confirm "
                     "it - do NOT resend without checking the Sent folder first.")
-        if not res.ok:
-            return f"Failed to send reply (check the account connection in Settings)."
-        try:
-            svc.store._conn().execute(
-                "UPDATE messages SET answered_at=datetime('now') WHERE id=?", (pk,))
-            svc.store._conn().commit()
-        except Exception:
-            pass
-        return f"Reply sent to {pre['to']} (subject: {pre['subject']})."
+        return "Failed to send reply (check the account connection in Settings)." + (f" Detail: {error}" if error else "")

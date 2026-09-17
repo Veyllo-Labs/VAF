@@ -35,6 +35,7 @@ VIEWS: Tuple[str, ...] = ("all", "waits", "unread", "agent")
 WAITS_UNANSWERED = "unanswered"
 WAITS_OWNER_ASKED = "owner_asked"
 WAITS_INVITATION = "invitation"
+WAITS_DRAFT = "draft"   # mail: the agent's answer is held in the outbox for the person's approval
 
 # Whether an inbound message asks for an answer is decided from its text alone, no model
 # (see reply_expectation): a score from 0 to 1, and the configured threshold turns it into
@@ -358,6 +359,16 @@ _AUTOMATED_CATEGORIES = frozenset(("promotions", "social", "updates", "forums", 
 _BULK_CATEGORIES = frozenset(_AUTOMATED_CATEGORIES | {"spam", "junk", "junkemail", "marketing", "notifications", "ads", "advertising"})
 
 
+# Machine kinds the HEADERS decided (vaf/mail/classify.py): a bounce, a read receipt, an
+# auto-reply, a list message, a null reverse-path. These outrank the person's label the
+# way the Junk folder does, because they are facts of the message, not a guess about the
+# sender. The kind `bulk` is partly a guess (a List-Unsubscribe, a Feedback-ID, the no-reply
+# rule) and keeps the person's primary label as the last word, exactly as the lexical rule
+# below does.
+MACHINE_STRUCTURAL_KINDS = ("bounce", "mdn", "auto_reply", "list", "null_return_path")
+MACHINE_BULK_KINDS = MACHINE_STRUCTURAL_KINDS + ("bulk",)
+
+
 def is_bulk_mail(thread: Dict[str, Any]) -> bool:
     """Whether a mail thread is bulk mail, which the inbox hides unless asked: it sits in
     the Junk folder (the provider's or the person's own placement, which outranks any tab
@@ -369,12 +380,20 @@ def is_bulk_mail(thread: Dict[str, Any]) -> bool:
     wins over the heuristic."""
     if str(thread.get("newest_special_use") or "").lower() == "\\junk":
         return True
+    # The stored verdict of the newest message (schema v2, vaf/mail/classify.py) settles
+    # machine mail before any text heuristic: a bounce, a read receipt, an auto-reply, a
+    # list or bulk mail is not inbox material whatever its category says. A calendar
+    # invitation and our own mail coming back are machine mail too, but they are not
+    # bulk: the invitation is a person asking, the loop is the person's own.
+    machine = str(thread.get("newest_machine_kind") or "")
+    if machine in MACHINE_STRUCTURAL_KINDS:
+        return True
     category = str(thread.get("category") or "").strip().lower()
     if category == "primary":
         return False
     if category:
         return category in _BULK_CATEGORIES
-    return is_automated_sender(str(thread.get("from_addr") or ""))
+    return machine == "bulk" or is_automated_sender(str(thread.get("from_addr") or ""))
 
 
 def is_automated_sender(from_addr: str, category: Optional[str] = None) -> bool:
@@ -510,7 +529,8 @@ def chat_mode(channel: str, chat_id: str, *, owners: Set[str], contacts: Set[str
 
 
 def mail_thread_state(thread: Dict[str, Any], mark: Optional[Dict[str, Any]], *,
-                      waits_threshold_value: Optional[float] = None) -> Dict[str, Any]:
+                      waits_threshold_value: Optional[float] = None,
+                      draft: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """A mail thread's state: unread is IMAP's count, the last word was ours when the newest
     message sits in the Sent folder, and the thread waits when it is not done, still unread
     (opening it marks its messages read, and a read thread is the person's to answer or
@@ -527,13 +547,22 @@ def mail_thread_state(thread: Dict[str, Any], mark: Optional[Dict[str, Any]], *,
     done_ts = (mark or {}).get("done_ts")
     done = newest_in_sent or (done_ts is not None and float(done_ts) >= last_ts)
     unread = int(thread.get("unread_count") or 0)
+    # Machine mail never waits: nobody reads the answer to a bounce or an auto-reply.
+    # A calendar invitation is the one machine kind a person sent, and it keeps waiting.
+    machine = str(thread.get("newest_machine_kind") or "")
     waits = ((not done) and (not answered) and unread > 0
+             and machine in ("", "calendar")
              and not is_automated_sender(thread.get("from_addr") or "", thread.get("category"))
              and expects_answer(thread.get("snippet") or thread.get("subject") or "", waits_threshold_value))
+    reason = WAITS_UNANSWERED if waits else ""
+    if draft:
+        # A held answer waits for the person whatever the rest says: reading the thread does
+        # not approve it, and a done mark does not discard it.
+        waits, done, reason = True, False, WAITS_DRAFT
     return {
         "unread": unread,
         "waits": waits,
-        "waits_reason": WAITS_UNANSWERED if waits else "",
+        "waits_reason": reason,
         "answered_by_agent": answered,
         "done": done,
         "preview_from": "you" if newest_in_sent else "them",
@@ -694,6 +723,15 @@ def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: 
     svc = svc or MailService(user_scope_id)
     marks = chat_marks(username or "", user_scope_id, channel="mail")
     threshold = waits_threshold()
+    # The agent's held answers, one per thread: "Draft waits for you" in the row, and the
+    # draft itself for the window's send and discard.
+    drafts: Dict[str, Dict[str, Any]] = {}
+    try:
+        for d in svc.list_drafts():
+            if d.get("thread_id") is not None:
+                drafts.setdefault(str(d["thread_id"]), d)
+    except Exception:
+        drafts = {}
     rows: List[Dict[str, Any]] = []
     # The store hands out 200 threads a page. With bulk mail hidden the lane pages on
     # until it holds `limit` primary threads (or the store runs dry, at most five pages),
@@ -717,7 +755,8 @@ def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: 
             if not bulk:
                 primary += 1
             thread_id = str(t.get("thread_id"))
-            state = mail_thread_state(t, marks.get(("mail", thread_id)), waits_threshold_value=threshold)
+            draft = drafts.get(thread_id)
+            state = mail_thread_state(t, marks.get(("mail", thread_id)), waits_threshold_value=threshold, draft=draft)
             rows.append({
                 "key": f"mail:{thread_id}",
                 "channel": "mail",
@@ -736,6 +775,13 @@ def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: 
                 "is_group": False,
                 "mode": "mail",
                 "bulk": bulk,
+                # The newest message's verdict (EMAIL_CLIENT.md, "Verification and cases"):
+                # the same badge the mail window shows, so the two never disagree.
+                "verification": {"state": str(t.get("newest_auth_state") or "unknown"),
+                                 "machine_kind": str(t.get("newest_machine_kind") or "")},
+                "draft": ({"op_id": draft["op_id"], "to": draft.get("to") or "", "subject": draft.get("subject") or "",
+                           "body": draft.get("body") or "", "created_at": draft.get("created_at") or ""}
+                          if draft else None),
                 "reply_window_until": None,
                 "can_compose": False,
                 "session_id": "",

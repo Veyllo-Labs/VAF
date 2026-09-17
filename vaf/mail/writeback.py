@@ -227,11 +227,27 @@ class OpExecutor:
         if not res.ok:
             if res.classification == "transient" and not res.handed_off:
                 raise _SendRetry(res.error or "transient send failure")
+            try:
+                self.store.mark_sent_delivery(self.account_pk, payload.get("message_id") or "",
+                                              "ambiguous" if res.handed_off else "failed")
+            except Exception:
+                pass
             raise RuntimeError(res.error or f"send failed ({res.classification})")
         # Everything after a successful send is best-effort and MUST NOT raise
         # out of the handler - otherwise process() would treat the (already
         # delivered) mail as failed and, without an atomic claim, re-send it.
         # The whole tail (find_special_folder + b64decode + append) is wrapped.
+        try:
+            # The ledger: this id left, and the mail it answered is answered.
+            self.store.mark_sent_delivery(self.account_pk, payload.get("message_id") or "", "sent")
+            answered_pk = payload.get("reply_to_pk")
+            if answered_pk is None and payload.get("in_reply_to"):
+                answered_pk = self.store.pk_by_message_id(str(payload["in_reply_to"]),
+                                                          self.account.get("account_id") or None)
+            if answered_pk is not None:
+                self.store.set_answered(int(answered_pk))
+        except Exception as e:
+            logger.warning("post-send ledger update failed (mail WAS sent): %s", e)
         try:
             provider = (self.account.get("provider") or "imap").lower()
             if (provider == "imap" and write_enabled and payload.get("raw_b64")

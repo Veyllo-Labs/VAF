@@ -171,27 +171,35 @@ def test_ssrf_refusal_is_permanent(patched, monkeypatch):
 
 # ── P2.3: the send_mail tool routes through the native sender ─────────────────
 
-def test_send_mail_tool_routes_through_native_sender(monkeypatch):
+def test_send_mail_tool_routes_through_native_sender(monkeypatch, tmp_path):
+    """The tool queues through the outbox and drains it at once; the native sender is the
+    one seam, patched at its module (the tool no longer imports it)."""
     import vaf.tools.send_mail as sm
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
     monkeypatch.setattr(sm, "get_account",
                         lambda *a, **k: {"provider": "imap", "email": "u@example.com", "account_id": "u@example.com"})
     cap = {}
 
     def _snd(msg):
         cap["raw"] = msg.raw_bytes
-        return sm.sender.SendResult(True, "ok")
+        return sender.SendResult(True, "ok")
 
-    monkeypatch.setattr(sm.sender, "send", _snd)
-    out = sm.SendMailTool().run(account_id="u@example.com", to="a@b.com", subject="s", body="b")
+    monkeypatch.setattr(sender, "send", _snd)
+    out = sm.SendMailTool().run(account_id="u@example.com", to="a@b.com", subject="s", body="b",
+                                user_scope_id="12345678-1234-1234-1234-123456789abc")
     assert "sent to a@b.com" in out
     assert b"a@b.com" in cap["raw"]  # native path received the built MIME bytes
 
 
-def test_send_mail_tool_ambiguous_says_possibly_delivered(monkeypatch):
+def test_send_mail_tool_ambiguous_says_possibly_delivered(monkeypatch, tmp_path):
     import vaf.tools.send_mail as sm
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
     monkeypatch.setattr(sm, "get_account",
                         lambda *a, **k: {"provider": "imap", "email": "u@example.com", "account_id": "u@example.com"})
-    monkeypatch.setattr(sm.sender, "send",
-                        lambda msg: sm.sender.SendResult(False, "ambiguous", handed_off=True))
-    out = sm.SendMailTool().run(account_id="u@example.com", to="a@b.com", subject="s", body="b")
+    monkeypatch.setattr(sender, "send",
+                        lambda msg: sender.SendResult(False, "ambiguous", handed_off=True))
+    out = sm.SendMailTool().run(account_id="u@example.com", to="a@b.com", subject="s", body="b",
+                                user_scope_id="12345678-1234-1234-1234-123456789abc")
     assert "do NOT resend" in out  # never a false 'failed' for a possibly-delivered mail

@@ -97,7 +97,7 @@ _BOOKKEEPING_TOOLS = frozenset({"update_working_memory", "update_intent", "add_t
 # prefix. Kept separate from _BOOKKEEPING_TOOLS (that guards plan-spin; this guards read/verify-spin).
 _NONPROGRESS_TOOLS = frozenset({
     "list_automations", "read_automation", "list_automation_notes", "list_automation_todos",
-    "list_calendar_events", "inbox", "read_mail", "find_mail",
+    "list_calendar_events", "inbox", "read_mail", "find_mail", "contact_history",
     "list_timers", "list_email_accounts", "git_status",
 })
 # NOTE: web_search / memory_search are intentionally NOT here — they are genuine information-gathering
@@ -12673,6 +12673,11 @@ class Agent:
             tool_args["_agent"] = self
         if name in ("set_timer", "list_timers", "cancel_timer"):
             # Timer tools read the live session/source/identity off the agent.
+            tool_args["_agent"] = self
+        if name == "contact_history":
+            # The Front Office read tool with no free argument: it reads the contact the
+            # headless runner pinned on THIS agent for the turn (_front_office_contact)
+            # and nothing else, so the pin has to travel with the live agent.
             tool_args["_agent"] = self
         if name in ("list_tools", "search_tools"):
             # The discovery tools answer from the registry as the MODEL may see it

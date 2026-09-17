@@ -67,6 +67,12 @@ class FrontOfficeUpdate(BaseModel):
     channel: Optional[str] = None
 
 
+class FrontOfficeMailUpdate(BaseModel):
+    # draft: the agent's answer is held in the mail outbox for the owner's approval;
+    # send: it leaves at once.
+    reply_mode: str
+
+
 class FrontOfficeProfileUpdate(BaseModel):
     briefing: Optional[str] = None
     use_general_memory: Optional[bool] = None
@@ -100,6 +106,13 @@ def _channel_connected(channel: str, caller: Dict[str, Any]) -> bool:
     if channel == "whatsapp":
         from vaf.core.messaging_connections import whatsapp_enabled_for_scope
         return whatsapp_enabled_for_scope(caller["user_scope_id"])
+    if channel == "email":
+        # Mail is connected when the caller has a mail account the engine can sync.
+        try:
+            from vaf.core.email_accounts import list_mail_accounts
+            return bool(list_mail_accounts(caller["username"], user_scope_id=caller["user_scope_id"]))
+        except Exception:
+            return False
     cfg = Config.get(f"{channel}_config") or {}
     cfg = cfg if isinstance(cfg, dict) else {}
     if caller["is_admin"]:
@@ -229,6 +242,7 @@ async def _state(caller: Dict[str, Any]) -> Dict[str, Any]:
         "enabled": state["enabled"],
         "channels": state["channels"],
         "contacts_only": state["contacts_only"],
+        "email_reply_mode": state["email_reply_mode"],
         "channels_connected": {ch: _channel_connected(ch, caller) for ch in FRONT_OFFICE_CHANNELS},
         "channel_contacts": _channel_contacts(caller),
         # Off stops every sender before the agent, contacts included (whatsapp_bridge).
@@ -282,6 +296,29 @@ async def put_front_office(
             else:
                 log_security_event("front_office_changed", channel=ch, username=str(caller["username"]),
                                    detail="off")
+    return await _state(caller)
+
+
+@router.put("/mail")
+async def put_front_office_mail(
+    body: FrontOfficeMailUpdate,
+    request: Request,
+    _admin: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """The mail channel's reply mode (draft or send), instance policy like the switch."""
+    from vaf.core.channel_ingress_policy import set_email_reply_mode
+    caller = _caller(request)
+    config = Config.load()
+    try:
+        policy = set_email_reply_mode(config.get("channel_ingress_policy"), body.reply_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    before = front_office_state(config.get("channel_ingress_policy"))["email_reply_mode"]
+    if before != front_office_state(policy)["email_reply_mode"]:
+        config["channel_ingress_policy"] = policy
+        Config.save(config)
+        log_security_event("front_office_changed", channel="email", username=str(caller["username"]),
+                           detail=f"reply mode {front_office_state(policy)['email_reply_mode']}")
     return await _state(caller)
 
 

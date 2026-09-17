@@ -81,11 +81,14 @@ def test_send_mail_attachment_outside_user_data_is_refused(monkeypatch, tmp_path
     outside_file = tmp_path / "report.txt"
     outside_file.write_text("not yours")
 
+    import vaf.mail.sender as sender
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
     calls = {"n": 0}
     monkeypatch.setattr(sm, "list_accounts_for_user", lambda *a, **k: ["user@example.com"])
     monkeypatch.setattr(sm, "get_account", lambda *a, **k: {"provider": "imap", "email": "user@example.com"})
-    monkeypatch.setattr(sm.sender, "send",
-                        lambda msg: calls.__setitem__("n", calls["n"] + 1) or sm.sender.SendResult(True, "ok"))
+    monkeypatch.setattr(sender, "send",
+                        lambda msg: calls.__setitem__("n", calls["n"] + 1) or sender.SendResult(True, "ok"))
 
     out = sm.SendMailTool().run(
         to="rcpt@example.com",
@@ -111,16 +114,21 @@ def test_send_mail_attachment_inside_own_root_is_allowed(monkeypatch, tmp_path):
     attachment = own / "invoice.pdf"
     attachment.write_bytes(b"%PDF-1.4")
 
+    import vaf.mail.sender as sender
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
     sent = {}
 
     def _snd(msg):
         sent["attachments"] = msg.attachments      # {path, filename} - delegate tail only
         sent["raw"] = msg.raw_bytes                # native path: bytes read INSIDE the jail
-        return sm.sender.SendResult(True, "ok")
+        return sender.SendResult(True, "ok")
 
     monkeypatch.setattr(sm, "list_accounts_for_user", lambda *a, **k: ["user@example.com"])
     monkeypatch.setattr(sm, "get_account", lambda *a, **k: {"provider": "imap", "email": "user@example.com"})
-    monkeypatch.setattr(sm.sender, "send", _snd)
+    # The funnel delivers through the outbox: the native sender is the one seam, patched at
+    # its module, and the outbox's op payload carries the attachment names the delegate tail
+    # once read.
+    monkeypatch.setattr(sender, "send", _snd)
 
     out = sm.SendMailTool().run(
         to="rcpt@example.com",

@@ -116,7 +116,8 @@ export function UnreadPill({ count }: { count?: number }) {
 /** "Waits for you": the last word is the other side's and nobody answered, or the agent asked the person about this chat. */
 export function WaitsChip({ reason }: { reason?: string }) {
     const t = useTranslations('settings.channelDashboard');
-    return <span className={WAITS_CHIP} title={reason === 'owner_asked' ? t('waitsOwnerAsked') : undefined}>{t('waitsForYou')}</span>;
+    const title = reason === 'owner_asked' ? t('waitsOwnerAsked') : reason === 'draft' ? t('waitsDraft') : undefined;
+    return <span className={WAITS_CHIP} title={title}>{t('waitsForYou')}</span>;
 }
 
 /** The chip line under a row: the unread pill, then one word about where the conversation stands. */

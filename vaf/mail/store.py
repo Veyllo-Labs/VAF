@@ -30,9 +30,88 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from vaf.mail.parser import ParsedMessage
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 RAW_CACHE_MAX_BYTES = 256 * 1024
 SNIPPET_CHARS = 240
+
+# Schema version 2 (verification and cases, EMAIL_CLIENT.md "Verification and cases"):
+# the per-message verdicts (who wrote it, is the From address who it claims to be), the
+# cases a conversation belongs to, the ids of every mail VAF sent. Created for a fresh
+# store and by the stepwise migration alike, so the two never drift.
+_SCHEMA_V2_SQL = """
+CREATE TABLE IF NOT EXISTS message_auth (
+  message_pk INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  machine_kind TEXT NOT NULL DEFAULT '',
+  machine_reason TEXT NOT NULL DEFAULT '',
+  auth_state TEXT NOT NULL DEFAULT 'unknown',
+  auth_source TEXT NOT NULL DEFAULT 'none',
+  authserv_id TEXT NOT NULL DEFAULT '',
+  topmost_authserv_id TEXT NOT NULL DEFAULT '',
+  from_domain TEXT NOT NULL DEFAULT '',
+  spf TEXT NOT NULL DEFAULT '',
+  spf_domain TEXT NOT NULL DEFAULT '',
+  dkim TEXT NOT NULL DEFAULT '',
+  dkim_domain TEXT NOT NULL DEFAULT '',
+  dmarc TEXT NOT NULL DEFAULT '',
+  arc TEXT NOT NULL DEFAULT '',
+  compauth TEXT NOT NULL DEFAULT '',
+  aligned_by TEXT NOT NULL DEFAULT '',
+  via_domain TEXT NOT NULL DEFAULT '',
+  flags TEXT NOT NULL DEFAULT '[]',
+  reasons TEXT NOT NULL DEFAULT '[]',
+  headers TEXT NOT NULL DEFAULT '{}',
+  policy_key TEXT NOT NULL DEFAULT '',
+  computed_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cases (
+  id INTEGER PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  case_id TEXT NOT NULL,
+  thread_id INTEGER REFERENCES threads(id) ON DELETE SET NULL,
+  correspondent TEXT NOT NULL DEFAULT '',
+  contact_id TEXT NOT NULL DEFAULT '',
+  extra_participants TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'open',
+  trust_max TEXT NOT NULL DEFAULT '',
+  opened_by TEXT NOT NULL DEFAULT 'inbound',
+  related_case TEXT NOT NULL DEFAULT '',
+  related_reason TEXT NOT NULL DEFAULT '',
+  outlook_conv_guid TEXT NOT NULL DEFAULT '',
+  subject_norm TEXT NOT NULL DEFAULT '',
+  opened_at TEXT NOT NULL,
+  closed_at TEXT,
+  last_inbound_at TEXT,
+  last_outbound_at TEXT,
+  UNIQUE(account_id, case_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cases_thread ON cases(thread_id);
+CREATE TABLE IF NOT EXISTS case_messages (
+  message_pk INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  case_id TEXT NOT NULL,
+  signal TEXT NOT NULL DEFAULT '',
+  certainty TEXT NOT NULL DEFAULT '',
+  outcome TEXT NOT NULL DEFAULT '',
+  decision TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  decided_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_case_messages_case ON case_messages(case_id);
+CREATE TABLE IF NOT EXISTS sent_ids (
+  id INTEGER PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL,
+  case_id TEXT NOT NULL DEFAULT '',
+  to_addrs TEXT NOT NULL DEFAULT '',
+  sent_by TEXT NOT NULL DEFAULT 'owner',
+  in_reply_to TEXT NOT NULL DEFAULT '',
+  delivery TEXT NOT NULL DEFAULT 'queued',
+  op_id INTEGER,
+  enqueued_at TEXT NOT NULL,
+  sent_at TEXT,
+  UNIQUE(account_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sent_ids_case ON sent_ids(case_id);
+"""
 
 _RE_SUBJECT_PREFIX = re.compile(r"^\s*((re|fw|fwd|aw|wg|sv|antw)(\[\d+\])?:\s*)+", re.IGNORECASE)
 
@@ -148,7 +227,20 @@ class MailStore:
         version = int(row["value"]) if row else 0
         if version > SCHEMA_VERSION:
             raise RuntimeError(f"mail.db schema {version} is newer than this build ({SCHEMA_VERSION})")
-        # future migrations: if version < SCHEMA_VERSION: migrate stepwise here
+        if version < 2:
+            self._migrate_to_2(conn)
+
+    def _migrate_to_2(self, conn: sqlite3.Connection) -> None:
+        """Version 1 to 2: the verification and case tables. Additive only (no column of a
+        v1 table changes), so a v1 store keeps every row and the derived verdicts are
+        filled by the backfill (MailService.backfill_verification) from the cached raw
+        bytes and, for header-only rows, at the next sync that touches them."""
+        conn.executescript(_SCHEMA_V2_SQL)
+        conn.execute("INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(SCHEMA_VERSION),))
+        conn.execute("INSERT INTO schema_meta(key, value) VALUES('migrated_to_2_at', ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (_now(),))
+        conn.commit()
 
     def _create_schema(self, conn: sqlite3.Connection) -> None:
         conn.executescript(f"""
@@ -250,6 +342,7 @@ class MailStore:
         );
         CREATE INDEX idx_ops_state ON ops(account_id, state);
         """)
+        conn.executescript(_SCHEMA_V2_SQL)
         conn.execute(_fts_create_sql())
         conn.execute("INSERT INTO schema_meta(key, value) VALUES('fts_variant', ?)",
                      ("contentless" if _fts_supports_contentless_delete() else "stored",))
@@ -378,10 +471,14 @@ class MailStore:
                        size_bytes: Optional[int] = None,
                        gm_msgid: Optional[str] = None,
                        gm_thrid: Optional[str] = None,
-                       category: str = "") -> int:
-        """Insert or update one message; updates FTS, attachments, raw blob and
-        thread linkage in the same transaction (index desync is structurally
-        impossible - the Gloda lesson)."""
+                       category: str = "",
+                       auth_policy: Optional[Dict[str, Any]] = None) -> int:
+        """Insert or update one message; updates FTS, attachments, raw blob, thread
+        linkage and the verification verdict in the same transaction (index desync is
+        structurally impossible - the Gloda lesson). `auth_policy` is the account's
+        verification policy (vaf/mail/verification.auth_policy_for_account); without it
+        the verdict still records the machine kind and the provider's header, with every
+        sender unknown rather than verified."""
         conn = self._conn()
         flags_json = json.dumps(sorted(set(server_flags or [])))
         snippet = re.sub(r"\s+", " ", parsed.body_text or "")[:SNIPPET_CHARS]
@@ -446,6 +543,12 @@ class MailStore:
                     (pk, parsed.subject, parsed.from_addr, parsed.to_addrs,
                      (parsed.body_text or "")[:100_000]))
                 self._assign_thread(conn, account_pk, pk, parsed, gm_thrid)
+            if not existing or conn.execute(
+                    "SELECT 1 FROM message_auth WHERE message_pk=?", (pk,)).fetchone() is None:
+                # The verdict is computed from the bytes fetched NOW, before the size
+                # decision below: a message too large to cache still gets its row.
+                self._write_message_auth_in(conn, pk, self._assess(
+                    parsed, account_pk, auth_policy, category))
             if raw is not None and len(raw) <= RAW_CACHE_MAX_BYTES:
                 self._store_raw(conn, pk, raw)
                 if existing:
@@ -531,6 +634,9 @@ class MailStore:
 
     def _merge_threads(self, conn: sqlite3.Connection, keep: int, drop: int) -> None:
         conn.execute("UPDATE messages SET thread_id=? WHERE thread_id=?", (keep, drop))
+        # A case rides on its thread; thread ids are not stable (a Gmail thread id arriving
+        # late, a reply joining two threads), so the case follows the merge.
+        conn.execute("UPDATE cases SET thread_id=? WHERE thread_id=?", (keep, drop))
         conn.execute("DELETE FROM threads WHERE id=?", (drop,))
         conn.execute(
             "UPDATE threads SET message_count=(SELECT COUNT(*) FROM messages WHERE thread_id=?), "
@@ -696,6 +802,435 @@ class MailStore:
             conn.execute("UPDATE messages SET answered_at=datetime('now') WHERE id=?", (pk,))
         conn.commit()
 
+    # ── verification (schema v2): one verdict row per message ───────────────
+
+    MESSAGE_AUTH_FIELDS = (
+        "machine_kind", "machine_reason", "auth_state", "auth_source", "authserv_id",
+        "topmost_authserv_id", "from_domain", "spf", "spf_domain", "dkim", "dkim_domain",
+        "dmarc", "arc", "compauth", "aligned_by", "via_domain", "flags", "reasons",
+        "headers", "policy_key",
+    )
+    _MESSAGE_AUTH_JSON = ("flags", "reasons", "headers")
+
+    def _assess(self, parsed: ParsedMessage, account_pk: int,
+                auth_policy: Optional[Dict[str, Any]], category: str) -> Dict[str, Any]:
+        from vaf.mail.verification import assess
+        return assess(parsed, policy=auth_policy,
+                      is_own_message_id=lambda mid: self.is_sent_id(account_pk, mid),
+                      category=category or "")
+
+    def _write_message_auth_in(self, conn: sqlite3.Connection, pk: int, row: Dict[str, Any]) -> None:
+        values: List[Any] = []
+        for name in self.MESSAGE_AUTH_FIELDS:
+            v = row.get(name)
+            if name in self._MESSAGE_AUTH_JSON:
+                v = json.dumps(v if v is not None else ([] if name != "headers" else {}))
+            values.append("" if v is None else v)
+        cols = ", ".join(self.MESSAGE_AUTH_FIELDS)
+        marks = ",".join("?" for _ in self.MESSAGE_AUTH_FIELDS)
+        updates = ", ".join(f"{c}=excluded.{c}" for c in self.MESSAGE_AUTH_FIELDS)
+        conn.execute(
+            f"INSERT INTO message_auth(message_pk, {cols}, computed_at) VALUES(?,{marks},?) "
+            f"ON CONFLICT(message_pk) DO UPDATE SET {updates}, computed_at=excluded.computed_at",
+            (int(pk), *values, _now()))
+
+    def write_message_auth(self, pk: int, row: Dict[str, Any]) -> None:
+        """Store (or replace) the verdict of one message. `row` carries the
+        MESSAGE_AUTH_FIELDS (missing ones default; flags and reasons are lists, headers a
+        dict); computed_at is stamped here. The verdict is computed once at ingest and
+        replaced only by an explicit backfill under a new policy: DKIM keys rotate, so a
+        later recomputation from the same bytes can differ from the verdict at receipt."""
+        conn = self._conn()
+        self._write_message_auth_in(conn, pk, row)
+        conn.commit()
+
+    def message_auth(self, pks: Iterable[int]) -> Dict[int, Dict[str, Any]]:
+        """The stored verdicts of the given messages, keyed by pk (absent when never
+        computed, which a caller reads as auth_state unknown)."""
+        ids = [int(x) for x in pks]
+        out: Dict[int, Dict[str, Any]] = {}
+        if not ids:
+            return out
+        conn = self._conn()
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            q = ",".join("?" for _ in chunk)
+            for r in conn.execute(f"SELECT * FROM message_auth WHERE message_pk IN ({q})", chunk).fetchall():
+                d = dict(r)
+                for name in self._MESSAGE_AUTH_JSON:
+                    try:
+                        d[name] = json.loads(d.get(name) or ("{}" if name == "headers" else "[]"))
+                    except Exception:
+                        d[name] = {} if name == "headers" else []
+                out[int(d["message_pk"])] = d
+        return out
+
+    def topmost_authserv_ids(self, account_pk: int, *, limit: int = 200) -> List[str]:
+        """The authserv-id of the topmost Authentication-Results header of the account's
+        newest inbox messages (the value written by whichever host delivered the mail into
+        this mailbox), for learning the provider's id. Empty strings are the Microsoft
+        id-less form and stay in the list so the caller can recognise that profile."""
+        rows = self._conn().execute(
+            "SELECT ma.topmost_authserv_id AS tid, ma.headers AS headers FROM message_auth ma "
+            "JOIN messages m ON m.id=ma.message_pk JOIN folders f ON f.id=m.folder_id "
+            "WHERE m.account_id=? AND (f.special_use='\\Inbox' OR upper(f.name)='INBOX') "
+            "ORDER BY COALESCE(m.date_ts, m.internaldate_ts, 0) DESC, m.id DESC LIMIT ?",
+            (int(account_pk), max(1, min(int(limit), 2000)))).fetchall()
+        out: List[str] = []
+        for r in rows:
+            try:
+                heads = json.loads(r["headers"] or "{}")
+            except Exception:
+                heads = {}
+            if not (heads.get("auth_results") or []):
+                continue  # a message without any Authentication-Results says nothing about the provider
+            out.append(str(r["tid"] or ""))
+        return out
+
+    def topmost_auth_headers(self, account_pk: int, *, limit: int = 200) -> List[str]:
+        """The raw topmost Authentication-Results value per inbox message, newest first
+        (the learner's second input: recognising the Microsoft id-less form)."""
+        rows = self._conn().execute(
+            "SELECT ma.headers AS headers FROM message_auth ma "
+            "JOIN messages m ON m.id=ma.message_pk JOIN folders f ON f.id=m.folder_id "
+            "WHERE m.account_id=? AND (f.special_use='\\Inbox' OR upper(f.name)='INBOX') "
+            "ORDER BY COALESCE(m.date_ts, m.internaldate_ts, 0) DESC, m.id DESC LIMIT ?",
+            (int(account_pk), max(1, min(int(limit), 2000)))).fetchall()
+        out: List[str] = []
+        for r in rows:
+            try:
+                heads = json.loads(r["headers"] or "{}")
+            except Exception:
+                continue
+            vals = heads.get("auth_results") or []
+            if vals:
+                out.append(str(vals[0]))
+        return out
+
+    # ── sent ids (schema v2): every Message-ID VAF itself sent ───────────────
+
+    def is_sent_id(self, account_pk: int, message_id: str) -> bool:
+        """Whether this account sent a mail with that Message-ID (bracketed, as delivered)."""
+        mid = str(message_id or "").strip()
+        if not mid:
+            return False
+        if not mid.startswith("<"):
+            mid = f"<{mid}>"
+        row = self._conn().execute(
+            "SELECT 1 FROM sent_ids WHERE account_id=? AND message_id=?", (int(account_pk), mid)).fetchone()
+        return row is not None
+
+    def record_sent_id(self, account_pk: int, message_id: str, *, case_id: str = "", to_addrs: str = "",
+                       sent_by: str = "owner", in_reply_to: str = "", op_id: Optional[int] = None,
+                       delivery: str = "queued") -> int:
+        """Remember a Message-ID this account is about to send (written at enqueue, so the
+        row exists before the wire and a fast reply is recognised). Idempotent per id."""
+        mid = str(message_id or "").strip()
+        if not mid:
+            raise ValueError("record_sent_id needs a Message-ID")
+        if not mid.startswith("<"):
+            mid = f"<{mid}>"
+        conn = self._conn()
+        conn.execute(
+            "INSERT INTO sent_ids(account_id, message_id, case_id, to_addrs, sent_by, in_reply_to, delivery, op_id, enqueued_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id, message_id) DO UPDATE SET "
+            "case_id=CASE WHEN excluded.case_id != '' THEN excluded.case_id ELSE sent_ids.case_id END, "
+            "op_id=COALESCE(excluded.op_id, sent_ids.op_id)",
+            (int(account_pk), mid, case_id or "", to_addrs or "", sent_by or "owner", in_reply_to or "",
+             delivery or "queued", op_id, _now()))
+        conn.commit()
+        row = conn.execute("SELECT id FROM sent_ids WHERE account_id=? AND message_id=?",
+                           (int(account_pk), mid)).fetchone()
+        return int(row["id"])
+
+    def mark_sent_delivery(self, account_pk: int, message_id: str, delivery: str) -> bool:
+        """Stamp a sent id's delivery state (sent, bounced, delayed, read, failed); `sent`
+        also records sent_at."""
+        mid = str(message_id or "").strip()
+        if mid and not mid.startswith("<"):
+            mid = f"<{mid}>"
+        conn = self._conn()
+        if delivery == "sent":
+            cur = conn.execute("UPDATE sent_ids SET delivery=?, sent_at=COALESCE(sent_at, ?) WHERE account_id=? AND message_id=?",
+                               (delivery, _now(), int(account_pk), mid))
+        else:
+            cur = conn.execute("UPDATE sent_ids SET delivery=? WHERE account_id=? AND message_id=?",
+                               (delivery, int(account_pk), mid))
+        conn.commit()
+        return cur.rowcount > 0
+
+    def sent_id(self, account_pk: int, message_id: str) -> Optional[Dict[str, Any]]:
+        mid = str(message_id or "").strip()
+        if mid and not mid.startswith("<"):
+            mid = f"<{mid}>"
+        row = self._conn().execute(
+            "SELECT * FROM sent_ids WHERE account_id=? AND message_id=?", (int(account_pk), mid)).fetchone()
+        return dict(row) if row else None
+
+    # ── cases (schema v2): the conversations the agent answers in ───────────
+
+    _CASE_STATUSES = ("open", "held", "answered", "closed")
+
+    def open_case(self, account_pk: int, case_id: str, *, thread_id: Optional[int] = None,
+                  correspondent: str = "", contact_id: str = "", subject_norm: str = "",
+                  opened_by: str = "inbound", trust_max: str = "", related_case: str = "",
+                  related_reason: str = "") -> int:
+        """A new case for this account (case_id from vaf/mail/case_token.mint_case_id);
+        idempotent on (account, case_id)."""
+        conn = self._conn()
+        conn.execute(
+            "INSERT INTO cases(account_id, case_id, thread_id, correspondent, contact_id, subject_norm, "
+            "opened_by, trust_max, related_case, related_reason, opened_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(account_id, case_id) DO NOTHING",
+            (int(account_pk), case_id, thread_id, (correspondent or "").strip().lower(), contact_id or "",
+             subject_norm or "", opened_by or "inbound", trust_max or "", related_case or "",
+             related_reason or "", _now()))
+        conn.commit()
+        row = conn.execute("SELECT id FROM cases WHERE account_id=? AND case_id=?",
+                           (int(account_pk), case_id)).fetchone()
+        return int(row["id"])
+
+    @staticmethod
+    def _case_row(r: Any) -> Dict[str, Any]:
+        d = dict(r)
+        try:
+            d["extra_participants"] = json.loads(d.get("extra_participants") or "[]")
+        except Exception:
+            d["extra_participants"] = []
+        return d
+
+    def case_by_id(self, account_pk: int, case_id: str) -> Optional[Dict[str, Any]]:
+        row = self._conn().execute("SELECT * FROM cases WHERE account_id=? AND case_id=?",
+                                   (int(account_pk), str(case_id or ""))).fetchone()
+        return self._case_row(row) if row else None
+
+    def case_for_thread(self, account_pk: int, thread_id: int) -> Optional[Dict[str, Any]]:
+        """The case riding on a thread: an unclosed one first, else the newest."""
+        row = self._conn().execute(
+            "SELECT * FROM cases WHERE account_id=? AND thread_id=? "
+            "ORDER BY (status='closed') ASC, id DESC LIMIT 1", (int(account_pk), int(thread_id))).fetchone()
+        return self._case_row(row) if row else None
+
+    def cases_for_address(self, account_pk: int, address: str, *, limit: int = 20) -> List[Dict[str, Any]]:
+        rows = self._conn().execute(
+            "SELECT * FROM cases WHERE account_id=? AND correspondent=? ORDER BY id DESC LIMIT ?",
+            (int(account_pk), (address or "").strip().lower(), max(1, int(limit)))).fetchall()
+        return [self._case_row(r) for r in rows]
+
+    def list_cases(self, account_pk: Optional[int] = None, *, status: Optional[str] = None,
+                   limit: int = 200) -> List[Dict[str, Any]]:
+        where, args = ["1=1"], []
+        if account_pk is not None:
+            where.append("account_id=?")
+            args.append(int(account_pk))
+        if status:
+            where.append("status=?")
+            args.append(status)
+        args.append(max(1, min(int(limit), 2000)))
+        rows = self._conn().execute(
+            f"SELECT * FROM cases WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT ?", args).fetchall()
+        return [self._case_row(r) for r in rows]
+
+    def set_case_status(self, account_pk: int, case_id: str, status: str) -> bool:
+        if status not in self._CASE_STATUSES:
+            raise ValueError(f"not a case status: {status!r}")
+        conn = self._conn()
+        if status == "closed":
+            cur = conn.execute("UPDATE cases SET status=?, closed_at=? WHERE account_id=? AND case_id=?",
+                               (status, _now(), int(account_pk), case_id))
+        else:
+            cur = conn.execute("UPDATE cases SET status=?, closed_at=NULL WHERE account_id=? AND case_id=?",
+                               (status, int(account_pk), case_id))
+        conn.commit()
+        return cur.rowcount > 0
+
+    def set_case_contact(self, account_pk: int, case_id: str, contact_id: str) -> None:
+        conn = self._conn()
+        conn.execute("UPDATE cases SET contact_id=? WHERE account_id=? AND case_id=?",
+                     (contact_id or "", int(account_pk), case_id))
+        conn.commit()
+
+    def set_case_thread(self, account_pk: int, case_id: str, thread_id: Optional[int]) -> None:
+        conn = self._conn()
+        conn.execute("UPDATE cases SET thread_id=? WHERE account_id=? AND case_id=?",
+                     (thread_id, int(account_pk), case_id))
+        conn.commit()
+
+    def add_case_participant(self, account_pk: int, case_id: str, address: str) -> None:
+        """An address the owner added to a case by hand (a colleague in Cc who may write)."""
+        case = self.case_by_id(account_pk, case_id)
+        if not case:
+            return
+        addr = (address or "").strip().lower()
+        if not addr or addr in case["extra_participants"]:
+            return
+        conn = self._conn()
+        conn.execute("UPDATE cases SET extra_participants=? WHERE id=?",
+                     (json.dumps(case["extra_participants"] + [addr]), int(case["id"])))
+        conn.commit()
+
+    def touch_case(self, account_pk: int, case_id: str, *, inbound: bool = False, outbound: bool = False,
+                   trust: str = "") -> None:
+        conn = self._conn()
+        sets, args = [], []
+        if inbound:
+            sets.append("last_inbound_at=?")
+            args.append(_now())
+        if outbound:
+            sets.append("last_outbound_at=?")
+            args.append(_now())
+        if trust:
+            # T4 > T3 > ... as text compares, since every rung is one letter and one digit
+            sets.append("trust_max=CASE WHEN trust_max < ? THEN ? ELSE trust_max END")
+            args.extend([trust, trust])
+        if not sets:
+            return
+        args.extend([int(account_pk), case_id])
+        conn.execute(f"UPDATE cases SET {', '.join(sets)} WHERE account_id=? AND case_id=?", args)
+        conn.commit()
+
+    def attach_message_to_case(self, pk: int, case_id: str, *, signal: str = "", certainty: str = "",
+                               outcome: str = "", decision: str = "", reason: str = "") -> None:
+        """How one inbound message was attributed and what was decided; one row per message,
+        the newest decision replacing an older one."""
+        conn = self._conn()
+        conn.execute(
+            "INSERT INTO case_messages(message_pk, case_id, signal, certainty, outcome, decision, reason, decided_at) "
+            "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(message_pk) DO UPDATE SET case_id=excluded.case_id, "
+            "signal=excluded.signal, certainty=excluded.certainty, outcome=excluded.outcome, "
+            "decision=excluded.decision, reason=excluded.reason, decided_at=excluded.decided_at",
+            (int(pk), case_id or "", signal or "", certainty or "", outcome or "", decision or "", reason or "", _now()))
+        conn.commit()
+
+    def case_message(self, pk: int) -> Optional[Dict[str, Any]]:
+        row = self._conn().execute("SELECT * FROM case_messages WHERE message_pk=?", (int(pk),)).fetchone()
+        return dict(row) if row else None
+
+    def case_messages(self, pks: Iterable[int]) -> Dict[int, Dict[str, Any]]:
+        ids = [int(x) for x in pks]
+        out: Dict[int, Dict[str, Any]] = {}
+        if not ids:
+            return out
+        conn = self._conn()
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            q = ",".join("?" for _ in chunk)
+            for r in conn.execute(f"SELECT * FROM case_messages WHERE message_pk IN ({q})", chunk).fetchall():
+                out[int(r["message_pk"])] = dict(r)
+        return out
+
+    def case_participants(self, account_pk: int, case_id: str) -> set:
+        """Every address on the case: the correspondent, the owner's added participants,
+        and every From, To and Cc of the messages on the case's thread (lowercased
+        mailboxes). The participant check of the attribution reads this."""
+        from vaf.mail.addressing import header_addresses
+        case = self.case_by_id(account_pk, case_id)
+        if not case:
+            return set()
+        out = set()
+        if case.get("correspondent"):
+            out.add(case["correspondent"])
+        out.update(a for a in case.get("extra_participants") or [] if a)
+        tid = case.get("thread_id")
+        if tid is not None:
+            for r in self._conn().execute(
+                    "SELECT from_addr, to_addrs, cc_addrs FROM messages WHERE thread_id=?", (int(tid),)).fetchall():
+                for value in (r["from_addr"], r["to_addrs"], r["cc_addrs"]):
+                    out.update(header_addresses(value))
+        return out
+
+    def sent_ids_for_case(self, account_pk: int, case_id: str) -> List[Dict[str, Any]]:
+        """Every mail VAF sent in a case, oldest first (the first row is the case's root
+        anchor, appended to References on every later mail of the case)."""
+        rows = self._conn().execute(
+            "SELECT * FROM sent_ids WHERE account_id=? AND case_id=? ORDER BY id",
+            (int(account_pk), str(case_id or ""))).fetchall()
+        return [dict(r) for r in rows]
+
+    def front_office_replies_since(self, account_pk: int, address: str, since_iso: str) -> int:
+        """How many Front Office answers went to this address since `since_iso` (the
+        rate cap's ledger: sent_ids, no second table)."""
+        addr = (address or "").strip().lower()
+        if not addr:
+            return 0
+        row = self._conn().execute(
+            "SELECT COUNT(*) AS n FROM sent_ids WHERE account_id=? AND sent_by='front_office' "
+            "AND lower(to_addrs) LIKE ? AND enqueued_at >= ? AND delivery != 'discarded'",
+            (int(account_pk), f"%{addr}%", since_iso)).fetchone()
+        return int(row["n"] or 0)
+
+    def inbound_from_address_since(self, account_pk: int, address: str, since_ts: int) -> int:
+        addr = (address or "").strip().lower()
+        if not addr:
+            return 0
+        row = self._conn().execute(
+            "SELECT COUNT(*) AS n FROM messages m JOIN folders f ON f.id=m.folder_id "
+            "WHERE m.account_id=? AND lower(m.from_addr) LIKE ? AND COALESCE(m.date_ts, m.internaldate_ts, 0) >= ? "
+            "AND (f.special_use='\\Inbox' OR upper(f.name)='INBOX')",
+            (int(account_pk), f"%{addr}%", int(since_ts))).fetchone()
+        return int(row["n"] or 0)
+
+    def account_state(self, account_pk: int) -> Dict[str, Any]:
+        """The account's own JSON state (the answering lane's cursor lives here)."""
+        row = self._conn().execute("SELECT sync_state FROM accounts WHERE id=?", (int(account_pk),)).fetchone()
+        if not row:
+            return {}
+        try:
+            return json.loads(row["sync_state"] or "{}") or {}
+        except Exception:
+            return {}
+
+    def set_account_state(self, account_pk: int, **patch: Any) -> Dict[str, Any]:
+        state = self.account_state(account_pk)
+        state.update(patch)
+        conn = self._conn()
+        conn.execute("UPDATE accounts SET sync_state=? WHERE id=?", (json.dumps(state), int(account_pk)))
+        conn.commit()
+        return state
+
+    def new_inbox_messages(self, account_pk: int, *, after_pk: int, min_date_ts: int = 0,
+                           limit: int = 200) -> List[Dict[str, Any]]:
+        """The account's inbox messages newer than a cursor (by pk, the ingest order), dated
+        at or after `min_date_ts`, oldest first: what the answering lane reads after a sync."""
+        rows = self._conn().execute(
+            "SELECT m.*, f.name AS folder_name, f.special_use AS folder_special_use FROM messages m "
+            "JOIN folders f ON f.id=m.folder_id WHERE m.account_id=? AND m.id > ? "
+            "AND (f.special_use='\\Inbox' OR upper(f.name)='INBOX') "
+            "AND COALESCE(m.date_ts, m.internaldate_ts, 0) >= ? ORDER BY m.id LIMIT ?",
+            (int(account_pk), int(after_pk), int(min_date_ts), max(1, int(limit)))).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["flags"] = json.loads(d.get("flags") or "[]")
+            out.append(d)
+        return out
+
+    def max_message_pk(self, account_pk: int) -> int:
+        row = self._conn().execute("SELECT MAX(id) AS m FROM messages WHERE account_id=?", (int(account_pk),)).fetchone()
+        return int(row["m"] or 0)
+
+    def messages_for_verification(self, account_pk: int, *, policy_key: str,
+                                  limit: int = 5000) -> List[Dict[str, Any]]:
+        """Messages whose verdict is missing or was computed under another policy (a newly
+        learned authserv-id), oldest first: id, message_id, from_addr, subject, category,
+        body_state and the stored header snapshot (empty for a row that was never assessed,
+        which the backfill then re-parses from the cached raw bytes when there are any)."""
+        rows = self._conn().execute(
+            "SELECT m.id, m.message_id, m.from_addr, m.subject, m.category, m.body_state, "
+            "ma.headers AS headers, ma.policy_key AS policy_key FROM messages m "
+            "LEFT JOIN message_auth ma ON ma.message_pk=m.id "
+            "WHERE m.account_id=? AND (ma.message_pk IS NULL OR ma.policy_key != ?) "
+            "ORDER BY m.id LIMIT ?", (int(account_pk), policy_key, max(1, int(limit)))).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["headers"] = json.loads(d.get("headers") or "{}")
+            except Exception:
+                d["headers"] = {}
+            out.append(d)
+        return out
+
     def list_attachments(self, pk: int) -> List[Dict[str, Any]]:
         return [dict(r) for r in self._conn().execute(
             "SELECT * FROM attachments WHERE message_pk=? ORDER BY id", (pk,)).fetchall()]
@@ -758,11 +1293,17 @@ class MailStore:
             # the last word was the correspondent's (not in Sent) and to hand read_mail its ids.
             f"m.message_id AS newest_message_id, fn.name AS newest_folder, "
             f"fn.special_use AS newest_special_use, m.answered_at AS newest_answered_at, "
-            f"m.gm_msgid AS newest_gm_msgid "
+            f"m.gm_msgid AS newest_gm_msgid, "
+            # The newest message's verdict (schema v2): whether a person wrote it and
+            # whether its sender authenticated, so a list row can say so without a
+            # second query and the inbox can keep a bounce off "waits for you".
+            f"COALESCE(ma.machine_kind, '') AS newest_machine_kind, "
+            f"COALESCE(ma.auth_state, 'unknown') AS newest_auth_state "
             f"FROM threads t JOIN accounts a ON a.id=t.account_id "
             f"JOIN messages m ON m.id = (SELECT m3.id FROM messages m3 WHERE m3.thread_id=t.id "
             f"  ORDER BY COALESCE(m3.date_ts, m3.internaldate_ts, 0) DESC, m3.id DESC LIMIT 1) "
             f"JOIN folders fn ON fn.id = m.folder_id "
+            f"LEFT JOIN message_auth ma ON ma.message_pk = m.id "
             f"WHERE {' AND '.join(where)} "
             f"ORDER BY t.last_date_ts DESC LIMIT ? OFFSET ?", args).fetchall()
         out = []
@@ -891,18 +1432,61 @@ class MailStore:
         return out
 
     def enqueue_op(self, account_pk: int, kind: str, payload: Dict[str, Any],
-                   not_before_ts: Optional[int] = None) -> int:
+                   not_before_ts: Optional[int] = None, state: str = "pending") -> int:
         """Durable idempotent operation for server replay. kinds: flags, move,
-        append, send. not_before_ts delays execution (undo-send window)."""
+        append, send. not_before_ts delays execution (undo-send window). `state`
+        `held` parks a send for the person's approval: the drain reads pending ops only,
+        so a held op never leaves until approve_op turns it pending."""
         conn = self._conn()
         body = dict(payload)
         if not_before_ts is not None:
             body["not_before_ts"] = int(not_before_ts)
         cur = conn.execute(
-            "INSERT INTO ops(account_id, kind, payload, created_at) VALUES(?,?,?,?)",
-            (account_pk, kind, json.dumps(body), _now()))
+            "INSERT INTO ops(account_id, kind, payload, state, created_at) VALUES(?,?,?,?,?)",
+            (account_pk, kind, json.dumps(body), state if state in ("pending", "held") else "pending", _now()))
         conn.commit()
         return int(cur.lastrowid)
+
+    # ── held sends: a draft the person approves or discards ─────────────────
+
+    def held_ops(self, account_pk: Optional[int] = None, *, thread_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Held send ops (drafts awaiting approval), newest first, payload decoded;
+        narrowed to one account and/or one thread (the payload's thread_id)."""
+        conn = self._conn()
+        where, args = ["kind='send'", "state='held'"], []
+        if account_pk is not None:
+            where.append("account_id=?")
+            args.append(int(account_pk))
+        if thread_id is not None:
+            where.append("json_extract(payload, '$.thread_id')=?")
+            args.append(int(thread_id))
+        rows = conn.execute(f"SELECT * FROM ops WHERE {' AND '.join(where)} ORDER BY id DESC", args).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["payload"] = json.loads(d["payload"] or "{}")
+            out.append(d)
+        return out
+
+    def approve_op(self, op_id: int, *, not_before_ts: Optional[int] = None) -> bool:
+        """A held send becomes pending, runnable now (or after not_before_ts): the person
+        approved the draft. Only a held op can be approved."""
+        conn = self._conn()
+        now = int(not_before_ts if not_before_ts is not None
+                  else datetime.now(timezone.utc).timestamp())
+        cur = conn.execute(
+            "UPDATE ops SET state='pending', updated_at=?, payload=json_set(payload, '$.not_before_ts', ?) "
+            "WHERE id=? AND state='held' AND kind='send'", (_now(), now, int(op_id)))
+        conn.commit()
+        return cur.rowcount == 1
+
+    def discard_op(self, op_id: int) -> bool:
+        """A held send is discarded: the person did not want it. Only a held op."""
+        conn = self._conn()
+        cur = conn.execute(
+            "UPDATE ops SET state='discarded', updated_at=? WHERE id=? AND state='held'", (_now(), int(op_id)))
+        conn.commit()
+        return cur.rowcount == 1
 
     def pending_ops(self, account_pk: Optional[int] = None,
                     now_ts: Optional[int] = None) -> List[Dict[str, Any]]:

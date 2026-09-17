@@ -139,6 +139,7 @@ IDENTITY_BASELINE = {
     "use_skill": ["user_scope_id"],
     "whatsapp_call": ["user_scope_id", "username"],
     "inbox": ["user_scope_id", "username"],
+    "contact_history": ["user_scope_id", "username"],
     "write_file": ["user_role", "user_scope_id"],
 }
 

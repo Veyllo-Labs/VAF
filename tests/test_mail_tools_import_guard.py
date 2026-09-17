@@ -43,7 +43,13 @@ def test_list_email_accounts_run(monkeypatch):
 def test_archive_and_delete_run(monkeypatch):
     import vaf.tools.manage_mail as mm
 
+    class FakeStore:
+        def pk_by_message_id(self, mid, account_id=None):
+            return 5
+
     class FakeSvc:
+        store = FakeStore()
+
         def archive(self, pk):
             return {"ok": True, "dest": "All Mail"}
 
@@ -51,7 +57,6 @@ def test_archive_and_delete_run(monkeypatch):
             return {"ok": True, "dest": "Trash"}
 
     monkeypatch.setattr(mm, "_service", lambda scope: FakeSvc())
-    monkeypatch.setattr(mm, "_pk_by_message_id", lambda svc, mid: 5)
     monkeypatch.setattr(mm, "_write_note", lambda: "")
     assert "Archived" in mm.ArchiveMailTool().run(message_id="<m@x>")
     assert "trash" in mm.DeleteMailTool().run(message_id="<m@x>").lower()

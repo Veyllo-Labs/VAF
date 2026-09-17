@@ -73,6 +73,9 @@ def _agent_row(m: Dict[str, Any]) -> Dict[str, Any]:
         "body_snippet": m.get("snippet") or "",
         "synced_at": m.get("created_at") or "",
         "answered_at": (m.get("answered_at") or "").strip() if m.get("answered_at") else "",
+        # The verdict summary rides along so the agent-facing tools and the phishing
+        # filter can read it; a row from a store without verdicts carries an empty dict.
+        "auth": dict(m.get("auth") or {}),
     }
 
 
@@ -104,10 +107,12 @@ class MailService:
         reader surfaces this as a warning banner; the agent tools hide these mails
         entirely - re-surfacing it here is the safety layer MailDashboard had (P5.1)."""
         from vaf.tools.mail_utils import annotate_messages_with_agent_visibility
+        self.attach_auth(rows)
         shimmed = [{"from": r.get("from_addr") or r.get("from") or "",
                     "subject": r.get("subject") or "",
                     "body_snippet": r.get("snippet") or r.get("body_snippet") or "",
-                    "category": r.get("category") or ""} for r in rows]
+                    "category": r.get("category") or "",
+                    "auth": r.get("auth") or {}} for r in rows]
         for r, a in zip(rows, annotate_messages_with_agent_visibility(shimmed)):
             r["suspicious_for_agent"] = a.get("suspicious_for_agent", False)
             r["suspicious_reasons"] = a.get("suspicious_reasons", [])
@@ -115,6 +120,80 @@ class MailService:
             # produces it, so pass it through rather than let that panel guess
             r["suspicious_score"] = a.get("suspicious_score", 0)
         return rows
+
+    def attach_auth(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """`auth` on every row: the verdict summary (vaf.mail.verification.summary) of the
+        message, or of a thread row's newest message. One query for the whole list; a
+        message never assessed reads as state unknown, machine kind empty."""
+        from vaf.mail.verification import summary
+        pks: List[int] = []
+        for r in rows:
+            pk = r.get("newest_pk") if "thread_id" in r and "newest_pk" in r else r.get("id")
+            try:
+                pks.append(int(pk))
+            except (TypeError, ValueError):
+                continue
+        verdicts = self.store.message_auth(pks) if pks else {}
+        for r in rows:
+            pk = r.get("newest_pk") if "thread_id" in r and "newest_pk" in r else r.get("id")
+            try:
+                r["auth"] = summary(verdicts.get(int(pk)))
+            except (TypeError, ValueError):
+                r["auth"] = summary(None)
+        return rows
+
+    def message_verdict(self, message_pk: int) -> Optional[Dict[str, Any]]:
+        """The full stored verdict of one message (flags, reasons, the header snapshot)."""
+        return self.store.message_auth([int(message_pk)]).get(int(message_pk))
+
+    # ── verification: learning the provider, recomputing verdicts ──────────
+
+    def learn_provider(self, account_id: str) -> Dict[str, Any]:
+        """What this account's inbox says about the provider's Authentication-Results
+        header (`verification.learn_provider`): the majority authserv-id or the Microsoft
+        profile, with the sample counts. Reads the stored verdicts only, never the server."""
+        from vaf.mail.verification import learn_provider
+        apk = self.store.account_pk(account_id)
+        if apk is None:
+            return {"authserv_id": "", "profile": "rfc8601", "count": 0, "total": 0}
+        return learn_provider(self.store.topmost_authserv_ids(apk),
+                              self.store.topmost_auth_headers(apk))
+
+    def backfill_verification(self, account_id: str, policy: Dict[str, Any], *, limit: int = 5000) -> int:
+        """Recompute the verdicts of every message of the account whose verdict is missing
+        or was computed under another policy (a newly learned authserv-id). Reads the
+        stored header snapshot; a message never assessed is re-parsed from its cached raw
+        bytes, and one without either keeps state unknown. Returns the number of rows
+        written."""
+        from vaf.mail.parser import parse_message
+        from vaf.mail.verification import assess, parsed_from_snapshot, policy_key
+        apk = self.store.account_pk(account_id)
+        if apk is None:
+            return 0
+        key = policy_key(policy)
+        done = 0
+        for row in self.store.messages_for_verification(apk, policy_key=key, limit=limit):
+            pk = int(row["id"])
+            snapshot = row.get("headers") or {}
+            parsed = None
+            if snapshot:
+                parsed = parsed_from_snapshot(snapshot, from_addr=row.get("from_addr") or "",
+                                              message_id=row.get("message_id") or "",
+                                              subject=row.get("subject") or "")
+            else:
+                raw = self.store.get_raw(pk)
+                if raw:
+                    parsed = parse_message(raw)
+            if parsed is None:
+                parsed = parsed_from_snapshot({}, from_addr=row.get("from_addr") or "",
+                                              message_id=row.get("message_id") or "",
+                                              subject=row.get("subject") or "")
+            verdict = assess(parsed, policy=policy,
+                             is_own_message_id=lambda mid, _a=apk: self.store.is_sent_id(_a, mid),
+                             category=row.get("category") or "")
+            self.store.write_message_auth(pk, verdict)
+            done += 1
+        return done
 
     def counts(self, **kw) -> Dict[str, int]:
         return self.store.counts(**kw)
@@ -132,12 +211,12 @@ class MailService:
         cat = None if (category or "").strip() in ("", "all") else category
         rows = self.store.list_messages(account_id=account_id or None, folder=folder or None,
                                         category=cat, limit=limit, offset=offset)
-        return [_agent_row(m) for m in rows]
+        return [_agent_row(m) for m in self.attach_auth(rows)]
 
     def search_for_agent(self, query: str, account_id: Optional[str] = None,
                          limit: int = 50) -> List[Dict[str, Any]]:
         rows = self.store.search(query, account_id=account_id or None, limit=limit)
-        return [_agent_row(m) for m in rows]
+        return [_agent_row(m) for m in self.attach_auth(rows)]
 
     def find_pk_by_message_id(self, message_id: str, account_id: Optional[str] = None) -> Optional[int]:
         return self.store.pk_by_message_id(message_id, account_id=account_id)
@@ -473,10 +552,28 @@ class MailService:
 
     def queue_send(self, account_id: str, to: str, subject: str, body: str,
                    cc: str = "", bcc: str = "", in_reply_to: str = "",
-                   references: str = "", undo_seconds: int = 15) -> Dict[str, Any]:
-        """Undo-send outbox (client-delay model): the op becomes runnable after
-        undo_seconds; until then cancel_send withdraws it. Survives restarts -
-        the supervisor sweep delivers held ops whose delay passed."""
+                   references: str = "", undo_seconds: int = 15, *,
+                   case_id: str = "", sent_by: str = "owner", hold: bool = False,
+                   agent_written: bool = False, root_anchor: str = "",
+                   attachments: Optional[List[Dict[str, Any]]] = None,
+                   attachment_meta: Optional[List[Dict[str, str]]] = None,
+                   reply_to_pk: Optional[int] = None,
+                   thread_id: Optional[int] = None) -> Dict[str, Any]:
+        """The one send funnel (EMAIL_CLIENT.md, "Native send"): every lane, the compose
+        window, the agent's send/reply/forward tools and the Front Office answers, queues
+        here and delivers through the outbox, so every sent mail has a Sent copy, a
+        `sent_ids` row and a delivery stamp.
+
+        Undo-send outbox (client-delay model): the op becomes runnable after undo_seconds;
+        until then cancel_send withdraws it. Survives restarts - the supervisor sweep
+        delivers queued ops whose delay passed. `hold` parks the mail as a draft for the
+        person's approval (state `held`; approve_draft / discard_draft), which is how a
+        Front Office answer waits in the inbox. `case_id` stamps the case anchor as the
+        Message-ID (vaf/mail/case_token.py) so a reply is attributable with certainty;
+        `agent_written` marks a mail the agent wrote on its own (RFC 3834 headers);
+        `sent_by` records whose word it is (owner, agent, front_office); `reply_to_pk`
+        is the inbound message this answers, marked answered when the mail leaves.
+        """
         from datetime import datetime, timezone
         from vaf.mail import compose
         apk = self.store.account_pk(account_id)
@@ -487,10 +584,18 @@ class MailService:
         acc = next((a for a in self.store.list_accounts()
                     if a.get("account_id") == account_id), None)
         from_addr = (acc or {}).get("email") or account_id
+        message_id = None
+        if case_id:
+            from vaf.mail.case_token import mint_message_id
+            message_id = mint_message_id(self.user_scope_id, account_id, case_id,
+                                         compose.message_id_domain(from_addr))
         msg = compose.build_message(from_addr, to, subject, body, cc=cc or None,
                                     bcc=bcc or None,
                                     in_reply_to=in_reply_to or None,
-                                    references=references or None)
+                                    references=references or None,
+                                    attachments=attachments or None,
+                                    message_id=message_id, agent_written=agent_written,
+                                    root_anchor=root_anchor or None)
         # Carry the compose Message-ID so the DELIVERED mail is sent with this
         # exact id (transport message_id=), making the delivered mail and the
         # Sent copy one RFC822 entity - replies then thread correctly.
@@ -500,15 +605,81 @@ class MailService:
         op_id = self.store.enqueue_op(apk, "send", {
             "account_id": account_id, "to": to, "cc": cc, "bcc": bcc,
             "subject": subject, "body": body,
-            "in_reply_to": in_reply_to, "references": references,
+            # The References as built (the case's root anchor in front), so the payload
+            # says what the wire says.
+            "in_reply_to": in_reply_to, "references": str(msg.get("References") or references or ""),
             "message_id": message_id,
             "raw_b64": _b64.b64encode(bytes(msg)).decode("ascii"),
-        }, not_before_ts=not_before)
+            "case_id": case_id or "", "sent_by": sent_by or "owner",
+            "agent_written": bool(agent_written),
+            "attachments": list(attachment_meta or []),
+            "reply_to_pk": int(reply_to_pk) if reply_to_pk is not None else None,
+            "thread_id": int(thread_id) if thread_id is not None else None,
+        }, not_before_ts=not_before, state="held" if hold else "pending")
+        self.store.record_sent_id(apk, message_id, case_id=case_id or "", to_addrs=to,
+                                  sent_by=sent_by or "owner", in_reply_to=in_reply_to or "",
+                                  op_id=op_id, delivery="held" if hold else "queued")
         # undo_seconds is the DURATION the client counts down (server-relative);
         # the client uses it instead of (undo_until_ts - client_now) so a skewed
         # browser clock cannot make the undo snackbar vanish early or linger.
-        return {"ok": True, "op_id": op_id, "undo_until_ts": not_before,
-                "undo_seconds": max(0, int(undo_seconds))}
+        return {"ok": True, "op_id": op_id, "message_id": message_id, "undo_until_ts": not_before,
+                "undo_seconds": max(0, int(undo_seconds)), "held": bool(hold)}
+
+    def send_outcome(self, op_id: int) -> Dict[str, Any]:
+        """What became of a queued send, for a caller that delivered right away: the op
+        state (done, pending, failed, held, cancelled, discarded), the ledger's delivery
+        stamp (sent, ambiguous, failed, queued, held) and the last error text. The
+        delivery stamp is the word on an ambiguous send: handed to the server and not
+        confirmed, which must never be re-sent."""
+        op = self.store.get_op(int(op_id)) or {}
+        payload = op.get("payload") or {}
+        delivery = ""
+        try:
+            row = self.store.sent_id(int(op["account_id"]), payload.get("message_id") or "") if op else None
+            delivery = str((row or {}).get("delivery") or "")
+        except Exception:
+            delivery = ""
+        return {"state": str(op.get("state") or ""), "delivery": delivery,
+                "error": str(payload.get("last_error") or ""), "message_id": payload.get("message_id") or ""}
+
+    def approve_draft(self, op_id: int) -> bool:
+        """A held answer leaves: pending now, delivered by the next drain."""
+        op = self.store.get_op(int(op_id))
+        if not op or op.get("kind") != "send":
+            return False
+        ok = self.store.approve_op(int(op_id))
+        if ok:
+            apk = int(op["account_id"])
+            self.store.mark_sent_delivery(apk, op["payload"].get("message_id") or "", "queued")
+        return ok
+
+    def discard_draft(self, op_id: int) -> bool:
+        """A held answer is dropped; its sent-id row records the discard."""
+        op = self.store.get_op(int(op_id))
+        if not op or op.get("kind") != "send":
+            return False
+        ok = self.store.discard_op(int(op_id))
+        if ok:
+            self.store.mark_sent_delivery(int(op["account_id"]), op["payload"].get("message_id") or "", "discarded")
+        return ok
+
+    def list_drafts(self, *, account_id: Optional[str] = None, thread_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Held answers awaiting approval: op id, account, thread, recipient, subject,
+        body, who wrote it, when. Newest first."""
+        apk = self.store.account_pk(account_id) if account_id else None
+        if account_id and apk is None:
+            return []
+        out = []
+        for op in self.store.held_ops(apk, thread_id=thread_id):
+            p = op.get("payload") or {}
+            out.append({
+                "op_id": int(op["id"]), "account_id": p.get("account_id") or "",
+                "thread_id": p.get("thread_id"), "reply_to_pk": p.get("reply_to_pk"),
+                "to": p.get("to") or "", "cc": p.get("cc") or "", "subject": p.get("subject") or "",
+                "body": p.get("body") or "", "sent_by": p.get("sent_by") or "", "case_id": p.get("case_id") or "",
+                "message_id": p.get("message_id") or "", "created_at": op.get("created_at") or "",
+            })
+        return out
 
     def cancel_send(self, op_id: int) -> bool:
         op = self.store.get_op(int(op_id))
@@ -552,3 +723,52 @@ class MailService:
                     return None
                 return filename, ctype, payload
         return None
+
+
+class _NoImap:
+    """Null client for send-only op processing when no IMAP session exists."""
+
+    def has_capability(self, cap):
+        return False
+
+    def select_folder(self, *a, **k):
+        raise RuntimeError("no imap session")
+
+    def append(self, *a, **k):
+        raise RuntimeError("no imap session")
+
+
+def deliver_queued_sends(scope: str, account: Dict[str, Any], cred_username: Optional[str],
+                         account_id: Optional[str] = None, *, service: Optional["MailService"] = None) -> Dict[str, int]:
+    """Drain the account's queued SENDS now (the compose window's fast path after the
+    undo window, and the agent's tools right after they queued): an IMAP session when
+    one can be opened, so the Sent copy is filed, else the null client, so the mail
+    still leaves. Other op kinds are left for the sweep, which has a real session.
+    Never raises; a failure leaves the op for the sweep."""
+    from vaf.core.config import Config
+    from vaf.mail.imap_client import MailAuthError, _safe_logout, build_imap_client
+    from vaf.mail.writeback import OpExecutor
+    aid = account_id or account.get("account_id") or account.get("email") or ""
+    svc = service or MailService(scope)
+    apk = svc.store.account_pk(aid)
+    if apk is None:
+        return {"done": 0, "failed": 0, "deferred": 0}
+    client = None
+    try:
+        try:
+            client = build_imap_client(account, cred_username, scope)
+        except (MailAuthError, ValueError, Exception):
+            client = None  # send still works; Sent-APPEND is skipped
+        return OpExecutor(svc.store, apk, client or _NoImap(), account, scope,
+                          cred_username=cred_username).process(
+            write_enabled=bool(Config.get("mail_engine_write_enabled", False)) and client is not None,
+            allowed_kinds={"send"})
+    except Exception as e:
+        logger.warning("send delivery failed (the sweep retries): %s", e)
+        return {"done": 0, "failed": 0, "deferred": 0}
+    finally:
+        if client is not None:
+            try:
+                _safe_logout(client)
+            except Exception:
+                pass

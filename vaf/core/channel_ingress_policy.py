@@ -20,7 +20,19 @@ _SUPPORTED_MODES = ("paired_only", "permissive")
 # on purpose: _SUPPORTED_CHANNELS is every routable channel and stays equal to
 # ROUTABLE_CHANNELS. tests/test_front_office_settings.py holds this tuple against the
 # bridges' call sites.
-FRONT_OFFICE_CHANNELS = ("whatsapp", "telegram")
+#
+# Mail is a Front Office channel without being a messenger: it is an INGRESS lane (the
+# mail sync hands new mail to the answering lane in vaf/mail/inbound.py) and never a
+# routable one (`send_to_user` cannot mail, KNOWN_CHANNELS does not list it). Its policy
+# entry carries two fields of its own: `reply_mode` (draft: the answer waits for the
+# owner's approval in the outbox; send: it leaves at once) and `opened_at` (the moment
+# the channel was switched on; mail sent before it is never answered, so switching on
+# never answers a backlog).
+MAIL_CHANNEL = "email"
+MESSENGER_FRONT_OFFICE_CHANNELS = ("whatsapp", "telegram")
+FRONT_OFFICE_CHANNELS = MESSENGER_FRONT_OFFICE_CHANNELS + (MAIL_CHANNEL,)
+_POLICY_CHANNELS = _SUPPORTED_CHANNELS + (MAIL_CHANNEL,)
+MAIL_REPLY_MODES = ("draft", "send")
 _THROTTLE_MIN = 5
 _THROTTLE_MAX = 3600
 _DEFAULT_THROTTLE = 60
@@ -36,6 +48,8 @@ def _default_policy() -> Dict[str, Any]:
         "telegram": {"mode": "inherit", "allow_contact_fallback": False, "open_to_new_senders": False},
         "whatsapp": {"mode": "inherit", "allow_contact_fallback": False, "open_to_new_senders": False},
         "discord": {"mode": "inherit", "allow_contact_fallback": False, "open_to_new_senders": False},
+        "email": {"mode": "inherit", "allow_contact_fallback": False, "open_to_new_senders": False,
+                  "reply_mode": "draft", "opened_at": 0},
     }
 
 
@@ -57,7 +71,7 @@ def normalize_policy(raw: Any) -> Dict[str, Any]:
     throttle = max(_THROTTLE_MIN, min(_THROTTLE_MAX, throttle))
     policy["throttle_seconds"] = throttle
 
-    for channel in _SUPPORTED_CHANNELS:
+    for channel in _POLICY_CHANNELS:
         src = raw.get(channel)
         if not isinstance(src, dict):
             continue
@@ -69,6 +83,14 @@ def normalize_policy(raw: Any) -> Dict[str, Any]:
             out["allow_contact_fallback"] = bool(src.get("allow_contact_fallback"))
         if "open_to_new_senders" in src:
             out["open_to_new_senders"] = bool(src.get("open_to_new_senders"))
+        if channel == MAIL_CHANNEL:
+            mode_raw = str(src.get("reply_mode", "") or "").strip().lower()
+            if mode_raw in MAIL_REPLY_MODES:
+                out["reply_mode"] = mode_raw
+            try:
+                out["opened_at"] = max(0, int(src.get("opened_at") or 0))
+            except (TypeError, ValueError):
+                out["opened_at"] = 0
         policy[channel] = out
     return policy
 
@@ -77,7 +99,7 @@ def resolve_channel_policy(channel: str, raw_policy: Any) -> Dict[str, Any]:
     """Resolve effective mode and flags for one channel."""
     channel_name = str(channel or "").strip().lower()
     policy = normalize_policy(raw_policy)
-    if channel_name not in _SUPPORTED_CHANNELS:
+    if channel_name not in _POLICY_CHANNELS:
         return {"mode": policy["mode"], "allow_contact_fallback": False, "open_to_new_senders": False,
                 "throttle_seconds": policy["throttle_seconds"]}
 
@@ -86,7 +108,7 @@ def resolve_channel_policy(channel: str, raw_policy: Any) -> Dict[str, Any]:
     mode = policy["mode"] if ch_mode == "inherit" else ch_mode
     if mode not in _SUPPORTED_MODES:
         mode = "paired_only"
-    return {
+    out = {
         "mode": mode,
         "allow_contact_fallback": bool(ch.get("allow_contact_fallback", False)),
         # Only a Front Office channel can be open: its bridge enrols the sender as a
@@ -95,6 +117,10 @@ def resolve_channel_policy(channel: str, raw_policy: Any) -> Dict[str, Any]:
         "open_to_new_senders": bool(ch.get("open_to_new_senders", False)) and channel_name in FRONT_OFFICE_CHANNELS,
         "throttle_seconds": int(policy.get("throttle_seconds", _DEFAULT_THROTTLE)),
     }
+    if channel_name == MAIL_CHANNEL:
+        out["reply_mode"] = str(ch.get("reply_mode") or "draft")
+        out["opened_at"] = int(ch.get("opened_at") or 0)
+    return out
 
 
 def _contact_door_open(channel: str, raw_policy: Any) -> bool:
@@ -115,10 +141,25 @@ def front_office_state(raw_policy: Any) -> Dict[str, Any]:
     """
     channels = {ch: resolve_channel_policy(ch, raw_policy)["open_to_new_senders"] for ch in FRONT_OFFICE_CHANNELS}
     contacts_only = {ch: (not channels[ch]) and _contact_door_open(ch, raw_policy) for ch in FRONT_OFFICE_CHANNELS}
-    return {"enabled": any(channels.values()), "channels": channels, "contacts_only": contacts_only}
+    mail = resolve_channel_policy(MAIL_CHANNEL, raw_policy)
+    return {"enabled": any(channels.values()), "channels": channels, "contacts_only": contacts_only,
+            "email_reply_mode": mail["reply_mode"], "email_opened_at": mail["opened_at"]}
 
 
-def set_front_office(raw_policy: Any, enabled: bool, channel: Optional[str] = None) -> Dict[str, Any]:
+def set_email_reply_mode(raw_policy: Any, mode: str) -> Dict[str, Any]:
+    """The policy with the mail channel's reply mode set (draft or send). Pure."""
+    name = str(mode or "").strip().lower()
+    if name not in MAIL_REPLY_MODES:
+        raise ValueError(f"not a mail reply mode: {mode!r}")
+    policy = normalize_policy(raw_policy)
+    entry = dict(policy[MAIL_CHANNEL])
+    entry["reply_mode"] = name
+    policy[MAIL_CHANNEL] = entry
+    return policy
+
+
+def set_front_office(raw_policy: Any, enabled: bool, channel: Optional[str] = None,
+                     now: Optional[float] = None) -> Dict[str, Any]:
     """The policy with Front Office switched on or off for one channel (or every one). Pure:
     returns a normalized copy, the input is untouched.
 
@@ -145,6 +186,11 @@ def set_front_office(raw_policy: Any, enabled: bool, channel: Optional[str] = No
         entry["open_to_new_senders"] = bool(enabled)
         if not enabled and resolve_channel_policy(name, policy)["mode"] == "permissive":
             entry["mode"] = "paired_only"
+        if name == MAIL_CHANNEL and enabled:
+            # Switching mail on stamps the moment: only mail sent after it is answered,
+            # so neither the backlog nor what arrived while the channel was off gets a
+            # reply. Re-enabling stamps again for the same reason.
+            entry["opened_at"] = int(now if now is not None else time.time())
         policy[name] = entry
     return policy
 

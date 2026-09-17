@@ -12445,6 +12445,7 @@ function VAFDashboardContent() {
                 initialTab={settingsInitialTab ?? undefined}
                 initialChatJump={settingsChatJump}
                 onChatJumpConsumed={() => setSettingsChatJump(null)}
+                onOpenInbox={() => { handleSettingsClose(); setIsInboxOpen(true); }}
                 onRefreshConfig={() => ws?.send(JSON.stringify({ type: 'get_config' }))}
                 connectionLabel={connectionLabel}
                 isConnected={isConnected}
@@ -12469,6 +12470,12 @@ function VAFDashboardContent() {
                 onOpenInChannel={(jump) => {
                     // The channel windows live inside Settings: open it on Connections with the jump.
                     setSettingsChatJump(jump);
+                    setSettingsInitialTab('connections');
+                    setIsSettingsOpen(true);
+                }}
+                onOpenInbound={() => {
+                    // Same road as a chat jump: the Inbound window lives inside Settings too.
+                    setSettingsChatJump({ channel: 'front_office' });
                     setSettingsInitialTab('connections');
                     setIsSettingsOpen(true);
                 }}

@@ -65,12 +65,16 @@ def _flags_to_strs(flags: Iterable[Any]) -> List[str]:
 
 
 class ImapSyncEngine:
-    def __init__(self, store: MailStore, account_id: str, provider: str, email: str, client):
+    def __init__(self, store: MailStore, account_id: str, provider: str, email: str, client,
+                 auth_policy: Optional[Dict[str, Any]] = None):
         self.store = store
         self.account_id = account_id
         self.provider = provider
         self.email = email
         self.client = client
+        # The account's verification policy (trusted authserv-id, header profile, own
+        # addresses), read once per run and stamped on every verdict written by this run.
+        self.auth_policy = auth_policy
         self.account_pk = store.upsert_account(account_id, provider, email)
         caps = set()
         try:
@@ -272,14 +276,41 @@ class ImapSyncEngine:
         if self.is_gmail:
             category = (categories or {}).get(int(uid), "primary")
         category = self._ruled_category(parsed.from_addr, category)
-        self.store.ingest_message(
+        pk = self.store.ingest_message(
             self.account_pk, fpk, uid, parsed,
             raw=bytes(raw) if (raw and fetched_body) else None,
             server_flags=flags, internaldate_ts=internal_ts,
             size_bytes=int(size) if size else None,
             gm_msgid=str(gm_msgid) if gm_msgid else None,
             gm_thrid=str(gm_thrid) if gm_thrid else None,
-            category=category)
+            category=category,
+            auth_policy=self.auth_policy)
+        self._report_spoof(pk, parsed)
+
+    def _report_spoof(self, pk: int, parsed) -> None:
+        """A mail claiming one of the account's own domains that did not authenticate is
+        the one verdict that belongs in the security log: somebody writes as the owner's
+        organisation. Read only when the From domain is an own domain, so the check costs
+        nothing on ordinary mail. Never raises."""
+        try:
+            own = set((self.auth_policy or {}).get("own_domains") or [])
+            if not own:
+                return
+            from email.utils import parseaddr
+            _name, addr = parseaddr(parsed.from_addr or "")
+            domain = addr.rsplit("@", 1)[-1].strip().lower() if "@" in addr else ""
+            if not domain or not any(domain == d or domain.endswith("." + d) for d in own):
+                return
+            verdict = self.store.message_auth([pk]).get(pk) or {}
+            if "own_domain_spoof" not in (verdict.get("flags") or []):
+                return
+            from vaf.core.config import resolve_caller_username
+            from vaf.core.security_events import log_security_event
+            log_security_event("mail_spoofed_own_domain",
+                               username=resolve_caller_username(None, self.store.user_scope_id),
+                               channel="email", detail=f"from {addr[:3]}*** claiming {domain}")
+        except Exception as e:
+            logger.info("spoof report skipped: %s", e)
 
     def _resync_flags(self, fpk: int, last_seen: int,
                       folder: Dict[str, Any]) -> Tuple[int, int, bool]:

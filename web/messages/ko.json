@@ -657,6 +657,9 @@
     "ovUnitsHint": "세션별 · 실시간 감시",
     "ovEvMailSend": "위험한 메일 차단",
     "ovEvMailImage": "외부 이미지 차단",
+    "ovEvMailSpoof": "메일이 내 도메인을 사칭함",
+    "ovEvMailToken": "메일에 다른 곳의 사건 토큰",
+    "ovEvMailCapped": "자동 메일 답장 한도 도달",
     "ovEvSkillBlocked": "스킬 설치 차단",
     "ovEvSkillOverride": "관리자 해제",
     "ovEvSkillAlert": "스킬 재검사에서 이상 발견",
@@ -878,7 +881,7 @@
       "inboundOff": "지금은 WhatsApp이 에이전트에게 아무것도 전달하지 않아요 (WhatsApp 창에서 받은 메시지 전달을 껐어요). 그래서 거기서는 아무에게도 답하지 않아요.",
       "contactsCount": "{count, plural, other {연락처 #명이 에이전트에게 쓸 수 있어요.}}",
       "openContacts": "연락처 열기",
-      "onNote": "켜짐. WhatsApp에서는 에이전트가 메시지를 보낸 사람도 {hours}시간 동안 답장할 수 있어요 (답장 기간, WhatsApp 창에서 설정).",
+      "openInbox": "받은 편지함 열기",
       "offNote": "꺼짐. 문 하나는 열려 있어요: WhatsApp에서는 에이전트가 메시지를 보낸 사람이 {hours}시간 동안 여전히 답장할 수 있어요 (답장 기간, WhatsApp 창에서 설정, 0이면 닫혀요).",
       "offNoteClosed": "꺼짐. WhatsApp 답장 기간도 닫혀 있어서, 나 말고는 아무도 에이전트에게 연락할 수 없어요.",
       "briefingTitle": "지침",
@@ -910,7 +913,12 @@
       "saveFailed": "변경 사항을 저장하지 못했어요.",
       "open": "인바운드 열기",
       "cardOn": "{channels}에서 켜짐. {count, plural, other {허용된 연락처 #명}}.",
-      "cardOff": "꺼짐. 연락처는 거절되고, 나만 에이전트에게 연락할 수 있어요."
+      "cardOff": "꺼짐. 연락처는 거절되고, 나만 에이전트에게 연락할 수 있어요.",
+      "mailModeLabel": "답장",
+      "mailModeDraft": "먼저 초안으로",
+      "mailModeSend": "바로 보내기",
+      "mailModeHint": "초안은 받은편지함과 메일 창에서 승인을 기다려요. 메일 제공업체가 확인한 보낸 사람만 답장을 받고, 뉴스레터, 자동 메일, 확인되지 않은 보낸 사람은 받지 않아요.",
+      "confirmBodyMail": "그러면 에이전트가 들어오는 메일에 인바운드 모드로 직접 답장해요. 비서로서, 메일 제공업체가 확인한 보낸 사람에게만, 먼저 승인하는 초안으로요. 주소록에 메일 주소가 있는 연락처 {count}개가 지금 허용되고, 새로 쓰는 사람은 주소록에 추가돼요."
     },
     "whatsappWizard": {
       "title": "WhatsApp 설정",
@@ -966,7 +974,8 @@
       "unreadCount": "{count}개 읽지 않음",
       "agentAnswered": "에이전트가 답장함",
       "done": "완료",
-      "couldNotLoad": "대시보드를 불러오지 못했어요."
+      "couldNotLoad": "대시보드를 불러오지 못했어요.",
+      "waitsDraft": "에이전트가 답장을 준비했어요. 승인을 기다리고 있어요."
     },
     "whatsappDashboard": {
       "title": "WhatsApp",
@@ -2342,7 +2351,8 @@
     "rail": {
       "view": "보기",
       "channels": "채널",
-      "filters": "필터"
+      "filters": "필터",
+      "inbound": "인바운드"
     },
     "view": {
       "all": "전체",
@@ -2405,7 +2415,11 @@
     "unanswered": "{name} 님의 마지막 메시지에 아직 답하지 않았어요.",
     "invitation": "이 룸은 초대에 대한 답을 기다리고 있어요.",
     "members": "에이전트 {count}명",
-    "messagesCount": "메시지 {count}개"
+    "messagesCount": "메시지 {count}개",
+    "draftTitle": "에이전트의 초안",
+    "draftWaiting": "아직 보내지 않았어요. 수정하려면 메일 창을 여세요.",
+    "draftSend": "보내기",
+    "draftDiscard": "버리기"
   },
   "mailV2": {
     "title": "메일",
@@ -2551,6 +2565,40 @@
       "matchedYourTone": "이 대화에 있는 내 메일 {n}통에 말투를 맞췄어요.",
       "noToneSample": "이 대화에 내가 쓴 메일이 없어서 중립적인 말투로 썼어요.",
       "reasoningOnly": "모델이 출력 한도를 전부 생각하는 데 써서 답장을 쓰지 못했어요. 더 짧은 지시로 다시 시도하거나 Composer의 출력 한도를 올려 주세요."
+    },
+    "auth": {
+      "verified": "보낸 사람 확인됨 ({method}, {domain})",
+      "via": "정렬되지 않음: 검증을 통과한 것은 {domain}이며 보낸 사람의 도메인이 아니에요",
+      "unverified": "보낸 사람 확인되지 않음",
+      "spoof": "확인되지 않았고 내 도메인을 사칭하고 있어요",
+      "machine": {
+        "bounce": "전송 실패 알림",
+        "mdn": "읽음 확인",
+        "auto_reply": "자동 답장",
+        "list": "메일링 리스트",
+        "bulk": "대량 메일",
+        "calendar": "일정 초대",
+        "own_loop": "내가 보낸 메일",
+        "null_return_path": "반송 경로 없음 (자동)"
+      },
+      "accountLearned": "보낸 사람 확인: {id} (메일 {count}개)",
+      "accountMicrosoft": "보낸 사람 확인: Microsoft 365",
+      "accountManual": "보낸 사람 확인: {id} (직접 설정)",
+      "accountNone": "보낸 사람 확인이 아직 설정되지 않았어요. 모든 보낸 사람은 확인되지 않은 것으로 간주돼요.",
+      "learn": "메일함에서 학습",
+      "learnDone": "학습 완료: {id}. 메일 {count}개를 다시 평가했어요.",
+      "learnDoneMicrosoft": "인식 완료: Microsoft 365. 메일 {count}개를 다시 평가했어요.",
+      "learnTooFew": "받은편지함의 메일이 아직 너무 적어 제공업체를 확실히 알 수 없어요 ({count}개). 나중에 다시 시도해 주세요.",
+      "learnFailed": "학습에 실패했어요."
+    },
+    "draft": {
+      "title": "에이전트의 초안",
+      "hint": "아직 보내지 않았어요. 읽은 다음 보내거나, 수정하거나, 버리세요.",
+      "send": "보내기",
+      "edit": "수정",
+      "discard": "버리기",
+      "sent": "보냈어요.",
+      "failed": "보낼 수 없었어요: {error}"
     }
   }
 }

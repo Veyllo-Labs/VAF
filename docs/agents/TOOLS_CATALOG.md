@@ -2,7 +2,7 @@
 
 The tools the **main agent** loads by default, grouped by area. Generated from the live
 tool registry (`Agent.tools`, populated by `_load_tools()` in
-[vaf/core/agent.py](../../vaf/core/agent.py)); 118 tools, counted from a freshly
+[vaf/core/agent.py](../../vaf/core/agent.py)); 119 tools, counted from a freshly
 constructed agent rather than from this list's own history. The **Coder sub-agent**
 additionally loads `coder_only` file/shell tools (e.g. `bash`, `move_file`,
 `codesearch`) that are not in this list. Some tools only do anything once their
@@ -178,6 +178,7 @@ runs its model call with no tools at all - see
 | Tool | Perm | What it does |
 |------|------|--------------|
 | `inbox` | read | Every conversation across WhatsApp, Telegram, Discord, mail and rooms, newest first, with unread and who waits for an answer; `channel` and `view` narrow it. The rows the inbox window shows. |
+| `contact_history` | read | Front Office only: what the contact being answered wrote to the owner before, and what went to them, across WhatsApp, Telegram, Discord and mail (the contact book's timeline for that one person, pinned by the runner, no argument names anyone); `channel` and `query` narrow it. See [FRONT_OFFICE.md](FRONT_OFFICE.md#tool-restriction). |
 | `send_to_user` | write | Channel-agnostic delivery: resolves the user's `main_messenger` at run time and sends text plus optional file via the canonical router; Web UI notification fallback (irreversible). |
 | `send_whatsapp` | write | Send WhatsApp text / voice / document (irreversible). |
 | `read_whatsapp_chat` | read | Read messages from a WhatsApp chat. |

@@ -1443,6 +1443,9 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
       case 'front_office_changed': return t('ovEvFrontOffice');
       case 'mail_high_risk_send_blocked': return t('ovEvMailSend');
       case 'mail_image_proxy_blocked': return t('ovEvMailImage');
+      case 'mail_spoofed_own_domain': return t('ovEvMailSpoof');
+      case 'mail_case_token_misuse': return t('ovEvMailToken');
+      case 'mail_auto_reply_capped': return t('ovEvMailCapped');
       case 'skill_blocked': return t('ovEvSkillBlocked');
       case 'skill_override': return t('ovEvSkillOverride');
       case 'skill_scan_alert': return t('ovEvSkillAlert');

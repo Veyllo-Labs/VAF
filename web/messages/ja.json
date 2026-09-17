@@ -657,6 +657,9 @@
     "ovUnitsHint": "セッション単位 · ライブ監視",
     "ovEvMailSend": "リスクの高いメールをブロック",
     "ovEvMailImage": "外部画像をブロック",
+    "ovEvMailSpoof": "メールが自分のドメインを名乗っています",
+    "ovEvMailToken": "メールに他所の案件トークン",
+    "ovEvMailCapped": "自動メール返信が上限に達しました",
     "ovEvSkillBlocked": "スキルのインストールをブロック",
     "ovEvSkillOverride": "管理者による解除",
     "ovEvSkillAlert": "スキルの再スキャンで異常",
@@ -878,7 +881,7 @@
       "inboundOff": "WhatsAppは今、エージェントに何も渡していません（WhatsAppウィンドウで受信がオフ）。そのため、そこでは誰にも応答しません。",
       "contactsCount": "{count, plural, other {#人の連絡先がエージェントに連絡できます。}}",
       "openContacts": "連絡先を開く",
-      "onNote": "オン。WhatsAppでは、エージェントが送信した相手も{hours}時間は返信できます（返信ウィンドウ。WhatsAppウィンドウで設定できます）。",
+      "openInbox": "受信箱を開く",
       "offNote": "オフ。ドアが1つだけ開いています：WhatsAppでは、エージェントが送信した相手はまだ{hours}時間は返信できます（返信ウィンドウ。WhatsAppウィンドウで設定でき、0で閉じます）。",
       "offNoteClosed": "オフ。WhatsAppの返信ウィンドウも閉じているので、自分以外は誰もエージェントに連絡できません。",
       "briefingTitle": "指示",
@@ -910,7 +913,12 @@
       "saveFailed": "変更を保存できませんでした。",
       "open": "インバウンドを開く",
       "cardOn": "{channels}でオン。許可済みの連絡先は{count, plural, other {#人}}です。",
-      "cardOff": "オフ。連絡先には応答しません。エージェントに連絡できるのは自分だけです。"
+      "cardOff": "オフ。連絡先には応答しません。エージェントに連絡できるのは自分だけです。",
+      "mailModeLabel": "返信",
+      "mailModeDraft": "まず下書きにする",
+      "mailModeSend": "すぐに送信",
+      "mailModeHint": "下書きは受信箱とメールウィンドウで承認を待ちます。返信するのは、メールプロバイダーが確認した差出人だけです。ニュースレター、自動メール、未確認の差出人には返信しません。",
+      "confirmBodyMail": "エージェントが受信メールにインバウンドモードで自分で返信します。アシスタントとして、メールプロバイダーが確認した差出人にだけ、まず承認する下書きとして返信します。連絡先帳にメールアドレスのある{count}件の連絡先を今すぐ許可し、新しく書いてきた人は連絡先帳に追加されます。"
     },
     "whatsappWizard": {
       "title": "WhatsAppの設定",
@@ -966,7 +974,8 @@
       "unreadCount": "{count}件未読",
       "agentAnswered": "エージェントが返信済み",
       "done": "完了",
-      "couldNotLoad": "ダッシュボードを読み込めませんでした。"
+      "couldNotLoad": "ダッシュボードを読み込めませんでした。",
+      "waitsDraft": "エージェントが返信を用意しました。承認を待っています。"
     },
     "whatsappDashboard": {
       "title": "WhatsApp",
@@ -2342,7 +2351,8 @@
     "rail": {
       "view": "表示",
       "channels": "チャンネル",
-      "filters": "フィルター"
+      "filters": "フィルター",
+      "inbound": "インバウンド"
     },
     "view": {
       "all": "すべて",
@@ -2405,7 +2415,11 @@
     "unanswered": "{name}からの最後のメッセージにまだ返信していません。",
     "invitation": "このルームは招待への返事を待っています。",
     "members": "エージェント{count}名",
-    "messagesCount": "{count}件のメッセージ"
+    "messagesCount": "{count}件のメッセージ",
+    "draftTitle": "エージェントの下書き",
+    "draftWaiting": "まだ送信していません。編集するにはメールウィンドウを開いてください。",
+    "draftSend": "送信",
+    "draftDiscard": "破棄"
   },
   "mailV2": {
     "title": "メール",
@@ -2551,6 +2565,40 @@
       "matchedYourTone": "このスレッドにある自分のメール{n}通に文体を合わせました。",
       "noToneSample": "このスレッドに自分のメールがないため、中立的な文体にしました。",
       "reasoningOnly": "モデルが出力の上限をすべて思考に使い切り、返信を書けませんでした。指示を短くしてもう一度試すか、Composerの出力上限を上げてください。"
+    },
+    "auth": {
+      "verified": "差出人を確認済み（{method}、{domain}）",
+      "via": "不一致：検証を通過したのは{domain}で、差出人のドメインではありません",
+      "unverified": "差出人は未確認",
+      "spoof": "未確認で、自分のドメインを名乗っています",
+      "machine": {
+        "bounce": "配信不能通知",
+        "mdn": "開封確認",
+        "auto_reply": "自動返信",
+        "list": "メーリングリスト",
+        "bulk": "一斉送信メール",
+        "calendar": "予定の招待",
+        "own_loop": "自分のメール",
+        "null_return_path": "返送先なし（自動）"
+      },
+      "accountLearned": "差出人確認：{id}（{count}件のメール）",
+      "accountMicrosoft": "差出人確認：Microsoft 365",
+      "accountManual": "差出人確認：{id}（手動設定）",
+      "accountNone": "差出人確認はまだ設定されていません。すべての差出人は未確認として扱われます。",
+      "learn": "メールボックスから学習",
+      "learnDone": "学習しました：{id}。{count}件のメールを再評価しました。",
+      "learnDoneMicrosoft": "認識しました：Microsoft 365。{count}件のメールを再評価しました。",
+      "learnTooFew": "受信トレイのメールがまだ少なく、プロバイダーを確実に判別できません（{count}件）。後でもう一度お試しください。",
+      "learnFailed": "学習に失敗しました。"
+    },
+    "draft": {
+      "title": "エージェントの下書き",
+      "hint": "まだ送信していません。読んでから、送信、編集、または破棄してください。",
+      "send": "送信",
+      "edit": "編集",
+      "discard": "破棄",
+      "sent": "送信しました。",
+      "failed": "送信できませんでした：{error}"
     }
   }
 }

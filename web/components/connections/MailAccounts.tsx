@@ -15,9 +15,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import {
-    AlertTriangle, Check, ChevronDown, Loader2, Mail, Pencil, Plus, RefreshCw, Trash2, X,
+    AlertTriangle, Check, ChevronDown, Loader2, Mail, Pencil, Plus, RefreshCw, ShieldCheck, Trash2, X,
 } from 'lucide-react';
-import { getApiBase } from '@/lib/utils';
+import { cn, getApiBase } from '@/lib/utils';
 
 // What a refused IMAP login comes back with. The guidance arrives in PARTS so
 // the panel renders it in the reader's language; the backend also sends `hint`
@@ -82,7 +82,18 @@ interface Acct {
     label: string;
     imap_ready: boolean;
     auto_sync_enabled: boolean;
+    /** Sender verification (EMAIL_CLIENT.md, "Verification and cases"): the provider's
+     *  Authentication-Results id the store trusts, how it was learned, and whether the
+     *  account is set up at all (a Microsoft account needs no id). */
+    trusted_authserv_id?: string;
+    auth_profile?: string;
+    authserv_source?: string;
+    authserv_samples?: number;
+    auth_ready?: boolean;
 }
+
+type LearnState = { kind: 'idle' } | { kind: 'busy' } | { kind: 'done'; id: string; profile: string; count: number }
+    | { kind: 'too_few'; count: number } | { kind: 'failed' };
 
 function providerName(p: string): string {
     const m: Record<string, string> = { gmail: 'Gmail', microsoft: 'Microsoft', imap: 'IMAP' };
@@ -170,6 +181,29 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
             setEditLabel(prev => { const n = { ...prev }; delete n[a.account_id]; return n; });
         } catch { setError(t('accountsSaveFailed')); }
         finally { setBusy(null); }
+    };
+
+    const [learn, setLearn] = useState<Record<string, LearnState>>({});
+    /** Learn the provider's Authentication-Results id from the account's own inbox: the
+     *  route saves it on the account and recomputes every stored verdict, so the badges in
+     *  the list change from nothing to verified or unverified after this call. */
+    const learnAuth = async (a: Acct) => {
+        setLearn(p => ({ ...p, [a.account_id]: { kind: 'busy' } }));
+        try {
+            const r = await jsend(`api/mail/accounts/${encodeURIComponent(a.account_id)}/learn-auth`, {});
+            const learned = r?.learned || {};
+            if (r?.saved) {
+                setAccounts(prev => prev.map(x => x.account_id === a.account_id
+                    ? { ...x, trusted_authserv_id: learned.authserv_id || '', auth_profile: learned.profile || 'rfc8601',
+                        authserv_source: 'mailbox', authserv_samples: learned.count || 0, auth_ready: true }
+                    : x));
+                setLearn(p => ({ ...p, [a.account_id]: { kind: 'done', id: learned.authserv_id || '', profile: learned.profile || '', count: r.backfilled || 0 } }));
+            } else {
+                setLearn(p => ({ ...p, [a.account_id]: { kind: 'too_few', count: learned.total || 0 } }));
+            }
+        } catch {
+            setLearn(p => ({ ...p, [a.account_id]: { kind: 'failed' } }));
+        }
     };
 
     const toggleAutoSync = async (a: Acct) => {
@@ -286,6 +320,32 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
                                     )}
                                 </div>
                             </div>
+
+                            <div className="mt-2 flex items-center gap-2 flex-wrap text-xs">
+                                <ShieldCheck className={cn('w-3.5 h-3.5 flex-shrink-0', a.auth_ready ? 'text-[#7bbf7b]' : 'text-[#9a9a9a]')} />
+                                <span className={cn('min-w-0', a.auth_ready ? 'text-[#c8c8c8]' : 'text-[#9a9a9a]')}>
+                                    {a.auth_profile === 'microsoft'
+                                        ? t('auth.accountMicrosoft')
+                                        : a.trusted_authserv_id
+                                            ? (a.authserv_source === 'mailbox'
+                                                ? t('auth.accountLearned', { id: a.trusted_authserv_id, count: a.authserv_samples || 0 })
+                                                : t('auth.accountManual', { id: a.trusted_authserv_id }))
+                                            : t('auth.accountNone')}
+                                </span>
+                                <button type="button" onClick={() => learnAuth(a)} disabled={learn[a.account_id]?.kind === 'busy'}
+                                    className="text-xs px-2 py-1 rounded-md bg-[#262626] border border-[#2e2e2e] hover:border-[#444] flex items-center gap-1">
+                                    {learn[a.account_id]?.kind === 'busy' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                                    <span>{t('auth.learn')}</span>
+                                </button>
+                            </div>
+                            {(() => {
+                                const st = learn[a.account_id];
+                                if (!st || st.kind === 'idle' || st.kind === 'busy') return null;
+                                const text = st.kind === 'done'
+                                    ? (st.profile === 'microsoft' ? t('auth.learnDoneMicrosoft', { count: st.count }) : t('auth.learnDone', { id: st.id, count: st.count }))
+                                    : st.kind === 'too_few' ? t('auth.learnTooFew', { count: st.count }) : t('auth.learnFailed');
+                                return <div className={cn('mt-1 text-xs', st.kind === 'done' ? 'text-[#7bbf7b]' : 'text-[#d4a24e]')}>{text}</div>;
+                            })()}
 
                             <div className="flex items-center gap-2 mt-2.5 flex-wrap">
                                 <label className="flex items-center gap-1.5 text-xs text-[#9a9a9a] cursor-pointer">

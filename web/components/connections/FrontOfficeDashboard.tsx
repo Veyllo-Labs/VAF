@@ -15,7 +15,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { BookOpen, Headphones, Loader2, Mail, MessageCircle, Phone, Plus, Trash2, Users, X } from 'lucide-react';
+import { BookOpen, Headphones, Inbox, Loader2, Mail, MessageCircle, Phone, Plus, Trash2, Users, X } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
 import { useEscapeLayer } from '@/hooks/useEscapeLayer';
@@ -40,6 +40,8 @@ export interface FrontOfficeState {
     enabled: boolean;
     channels: Record<string, boolean>;
     contacts_only: Record<string, boolean>;
+    /** Mail only: draft holds every answer in the outbox for approval, send lets it leave at once. */
+    email_reply_mode: 'draft' | 'send';
     channels_connected: Record<string, boolean>;
     channel_contacts: Record<string, { total: number; allowed: number }>;
     whatsapp_inbound_to_agent: boolean;
@@ -58,6 +60,8 @@ export interface FrontOfficeDashboardProps {
     onClose: () => void;
     /** Open the contact book (the window closes first). */
     onOpenContacts?: () => void;
+    /** Open the inbox, where what Inbound answers shows up (the window closes first). */
+    onOpenInbox?: () => void;
     /** Called after every saved change so the card in Connections shows the same state. */
     onChanged?: (state: FrontOfficeState) => void;
 }
@@ -67,7 +71,7 @@ const SWITCH_KNOB = 'absolute top-1 w-4 h-4 rounded-full bg-white shadow transit
 const CARD = 'rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3';
 const BTN = 'px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white hover:bg-gray-100 text-gray-900 transition-colors shrink-0 disabled:opacity-50';
 
-type FrontOfficeChannel = 'whatsapp' | 'telegram';
+type FrontOfficeChannel = 'whatsapp' | 'telegram' | 'email';
 type Confirm = { kind: 'open'; channel: FrontOfficeChannel } | { kind: 'remove'; doc: FrontOfficeKnowledge } | null;
 
 /** The channels the panel lists: the two with a Front Office lane, then the ones without,
@@ -76,7 +80,7 @@ const CHANNEL_ROWS: Array<{ id: string; label: string; icon: React.ElementType; 
     { id: 'whatsapp', label: 'WhatsApp', icon: Phone, color: 'bg-green-600', frontOffice: true },
     { id: 'telegram', label: 'Telegram', icon: MessageCircle, color: 'bg-sky-500', frontOffice: true },
     { id: 'discord', label: 'Discord', icon: MessageCircle, color: 'bg-indigo-600', frontOffice: false },
-    { id: 'email', label: 'E-Mail', icon: Mail, color: 'bg-amber-500', frontOffice: false },
+    { id: 'email', label: 'E-Mail', icon: Mail, color: 'bg-amber-500', frontOffice: true },
 ];
 
 function Switch({ on, disabled, label, onClick }: { on: boolean; disabled?: boolean; label: string; onClick: () => void }) {
@@ -95,7 +99,7 @@ function Switch({ on, disabled, label, onClick }: { on: boolean; disabled?: bool
     );
 }
 
-export default function FrontOfficeDashboard({ isOpen, onClose, onOpenContacts, onChanged }: FrontOfficeDashboardProps) {
+export default function FrontOfficeDashboard({ isOpen, onClose, onOpenContacts, onOpenInbox, onChanged }: FrontOfficeDashboardProps) {
     const t = useTranslations('settings.frontOffice');
     const tcm = useTranslations('common');
     const [data, setData] = useState<FrontOfficeState | null>(null);
@@ -164,6 +168,11 @@ export default function FrontOfficeDashboard({ isOpen, onClose, onOpenContacts, 
 
     const setChannel = async (channel: FrontOfficeChannel, enabled: boolean) => {
         const next = await put('api/front-office', { channel, enabled });
+        if (next) apply(next);
+    };
+
+    const setMailMode = async (mode: 'draft' | 'send') => {
+        const next = await put('api/front-office/mail', { reply_mode: mode });
         if (next) apply(next);
     };
 
@@ -245,9 +254,17 @@ export default function FrontOfficeDashboard({ isOpen, onClose, onOpenContacts, 
                                 <p className="text-sm text-gray-500 max-md:text-xs truncate">{t('subtitle')}</p>
                             </div>
                         </div>
-                        <button type="button" onClick={onClose} title={tcm('close')} className="p-2 hover:bg-gray-200 rounded-lg transition-colors">
-                            <X className="w-5 h-5 text-gray-500" />
-                        </button>
+                        <div className="flex items-center gap-2 shrink-0">
+                            {onOpenInbox && (
+                                <button type="button" onClick={onOpenInbox} className={cn(BTN, 'flex items-center gap-2')}>
+                                    <Inbox className="w-4 h-4" />
+                                    <span className="max-md:hidden">{t('openInbox')}</span>
+                                </button>
+                            )}
+                            <button type="button" onClick={onClose} title={tcm('close')} className="p-2 hover:bg-gray-200 rounded-lg transition-colors">
+                                <X className="w-5 h-5 text-gray-500" />
+                            </button>
+                        </div>
                     </div>
 
                     <div className="p-6 overflow-y-auto max-md:p-4 max-md:flex-1">
@@ -386,6 +403,27 @@ export default function FrontOfficeDashboard({ isOpen, onClose, onOpenContacts, 
                                                 {row.frontOffice && row.id === 'whatsapp' && connected && data && !data.whatsapp_inbound_to_agent && (
                                                     <div className="text-xs text-gray-500 mt-1">{t('inboundOff')}</div>
                                                 )}
+                                                {row.id === 'email' && on && data && (
+                                                    /* Mail is the one channel whose answer can wait for the owner: draft
+                                                       first is the default, send at once the choice for a mailbox the
+                                                       owner trusts the agent with. Only a sender the provider verified is
+                                                       answered at all; the hint says so. */
+                                                    <div className="mt-2 space-y-1.5">
+                                                        <div className="flex items-center gap-2 flex-wrap">
+                                                            <span className="text-xs text-gray-600">{t('mailModeLabel')}</span>
+                                                            <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-xs">
+                                                                {(['draft', 'send'] as const).map(mode => (
+                                                                    <button key={mode} type="button" disabled={busy || !data.admin}
+                                                                        onClick={() => setMailMode(mode)}
+                                                                        className={cn('px-2.5 py-1 whitespace-nowrap transition-colors', data.email_reply_mode === mode ? 'bg-gray-900 text-white' : 'bg-white text-gray-700 hover:bg-gray-100')}>
+                                                                        {mode === 'draft' ? t('mailModeDraft') : t('mailModeSend')}
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                        <p className="text-xs text-gray-500 leading-relaxed">{t('mailModeHint')}</p>
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                         {row.frontOffice && (
@@ -410,11 +448,12 @@ export default function FrontOfficeDashboard({ isOpen, onClose, onOpenContacts, 
                             )}
                         </div>
                         <p className="text-xs text-gray-500 leading-relaxed">{t('optOutHint')}</p>
-                        {data && (
+                        {/* The reply window is the one door that stays open with WhatsApp Inbound off;
+                            with it on, everyone who writes is answered anyway, so the note would only
+                            contradict the switch above it. */}
+                        {data && !data.channels.whatsapp && (
                             <p className="text-xs text-gray-500 leading-relaxed">
-                                {data.enabled
-                                    ? t('onNote', { hours })
-                                    : (hours > 0 ? t('offNote', { hours }) : t('offNoteClosed'))}
+                                {hours > 0 ? t('offNote', { hours }) : t('offNoteClosed')}
                             </p>
                         )}
                       </div>
@@ -430,10 +469,12 @@ export default function FrontOfficeDashboard({ isOpen, onClose, onOpenContacts, 
                     : t('confirmTitle', { channel: confirm?.kind === 'open' ? (CHANNEL_ROWS.find(r => r.id === confirm.channel)?.label ?? '') : '' })}
                 body={confirm?.kind === 'remove'
                     ? t('removeConfirmBody', { title: confirm.doc.title })
-                    : t('confirmBody', {
-                        channel: confirm?.kind === 'open' ? (CHANNEL_ROWS.find(r => r.id === confirm.channel)?.label ?? '') : '',
-                        count: confirm?.kind === 'open' ? (data?.channel_contacts[confirm.channel]?.total ?? 0) : 0,
-                    })}
+                    : confirm?.kind === 'open' && confirm.channel === 'email'
+                        ? t('confirmBodyMail', { count: data?.channel_contacts.email?.total ?? 0 })
+                        : t('confirmBody', {
+                            channel: confirm?.kind === 'open' ? (CHANNEL_ROWS.find(r => r.id === confirm.channel)?.label ?? '') : '',
+                            count: confirm?.kind === 'open' ? (data?.channel_contacts[confirm.channel]?.total ?? 0) : 0,
+                        })}
                 confirmLabel={confirm?.kind === 'remove' ? t('remove') : t('confirmYes')}
                 cancelLabel={t('confirmNo')}
                 onConfirm={() => {

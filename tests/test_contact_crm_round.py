@@ -452,9 +452,14 @@ def test_contact_self_view_carries_own_events_and_never_the_owners_remarks(scrat
     assert "(none)" in cs.format_contact_self_view(cs.contact_self_view({"name": "Nobody", "channels": []}))
 
 
-def test_front_office_allow_list_holds_only_the_send_tools_and_web_search():
+def test_front_office_allow_list_holds_only_the_send_tools_web_search_and_the_pinned_history():
+    """The one read tool allowed is the one with no free argument: contact_history reads the
+    contact the runner pinned on the agent, never a name or an id the model chose."""
     from vaf.core.front_office_tools import FRONT_OFFICE_ALLOWED_TOOLS
-    assert FRONT_OFFICE_ALLOWED_TOOLS == frozenset({"send_whatsapp", "send_telegram", "send_discord", "send_slack", "web_search"})
+    assert FRONT_OFFICE_ALLOWED_TOOLS == frozenset({"send_whatsapp", "send_telegram", "send_discord", "send_slack", "web_search", "contact_history"})
+    from vaf.tools.contact_history import ContactHistoryTool
+    assert "contact" not in ContactHistoryTool.parameters["properties"], "no argument names the person"
+    assert set(ContactHistoryTool.parameters["properties"]) == {"channel", "query", "limit"}
 
 
 def test_front_office_doc_lists_exactly_the_allowed_tools():

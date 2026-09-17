@@ -88,8 +88,10 @@ def _sync_one(scope: str, cred_username: Optional[str], acc: Dict[str, Any]) -> 
         return {"ok": False, "account": account_id, "error": str(e)}
     try:
         svc = MailService(scope)
+        from vaf.mail.verification import auth_policy_for_account
         eng = ImapSyncEngine(svc.store, account_id, acc.get("provider") or "imap",
-                             acc.get("email") or account_id, client)
+                             acc.get("email") or account_id, client,
+                             auth_policy=auth_policy_for_account(acc))
         # replay queued local writes first (flags/move/append/send) so user
         # actions reach the server before the next read pass re-syncs state
         try:

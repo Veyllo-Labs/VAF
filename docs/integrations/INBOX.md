@@ -21,13 +21,15 @@ One shape for five sources:
 | `name`, `preview`, `preview_from` | who and what was said last (`them`, `agent`, `you`, or a room member's label) |
 | `last_ts`, `message_count` | the newest message and the store's own count (tombstones excluded), one meaning on every surface |
 | `unread` | messenger: inbound messages after the person last opened the chat; mail: IMAP's unseen count; room: the person's own reading position |
-| `waits`, `waits_reason` | `unanswered` (the last word is the other side's, nobody answered, the text asks for an answer, and the person has not opened the conversation since; mail: and the sender is somebody who reads one), `owner_asked` (the agent asked the person about this chat and the person has not opened it since), `invitation` (a room waits for the person's answer). Reading takes a conversation off "waits": the person read it and decides for themselves whether to answer |
+| `waits`, `waits_reason` | `unanswered` (the last word is the other side's, nobody answered, the text asks for an answer, and the person has not opened the conversation since; mail: and the sender is somebody who reads one), `owner_asked` (the agent asked the person about this chat and the person has not opened it since), `invitation` (a room waits for the person's answer), `draft` (mail: the agent's answer is held in the outbox for the person's approval, see [FRONT_OFFICE.md](../agents/FRONT_OFFICE.md#mail); reading does not lift it, sending or discarding the draft does). Reading takes a conversation off "waits": the person read it and decides for themselves whether to answer |
 | `answered_by_agent` | the newest message is the agent's own send (WhatsApp: a message sent from the agent number's own phone is the person's, labelled `OWNER_SENDER` by the bridge, not the agent's; mail: the newest message carries the answered mark; an older reply in the thread says nothing about the mail that arrived after it) |
 | `done` | marked done and nothing newer arrived, or the newest message is the person's own reply (mail: the newest message sits in the Sent folder). A newer message reopens |
 | `is_group` | WhatsApp `@g.us`, a negative Telegram id, every room |
 | `mode` | which lane answers: `owner`, `contact` (Front Office), `conversation` (WhatsApp reply window open), `readonly`, `needs_assign` (an unresolved WhatsApp `@lid`), `admin` (Discord), `relay` (Telegram), `mail`, `room` |
 | `reply_window_until` | the WhatsApp reply window, computed from the store with the bridge's rule (a test pins that the two agree) |
 | `bulk` | mail only: the thread is bulk mail (`is_bulk_mail`, see the rules), listed only when the bulk toggle asks |
+| `draft` | mail only: the agent's held answer to the thread (`op_id`, `to`, `subject`, `body`, `created_at`) or null; the window shows it with Send and Discard, the routes are `POST /api/mail/drafts/{op_id}/send` and `DELETE /api/mail/drafts/{op_id}` |
+| `verification` | mail only: the newest message's verdict, `state` (verified, via, unverified, unknown) and `machine_kind` (bounce, mdn, auto_reply, list, bulk, calendar, own_loop, null_return_path, or empty), the same summary the mail window's badge reads (see [EMAIL_CLIENT.md](EMAIL_CLIENT.md#verification-and-cases)) |
 | `can_compose` | WhatsApp only: the person may write themselves where the agent does not answer, a read-only chat or every chat once the channel switch (`inbound_to_agent`) is off (the WhatsApp window's rule) |
 | `session_id`, `jump` | what the agent session and the channel window need to land on this conversation |
 
@@ -80,14 +82,23 @@ the same rule, and a mail from something that reads no answer never waits at all
 (`is_automated_sender`: a no-reply, do-not-reply or notification address, a newsletter, a
 mailer daemon, a status page, by the address's local part or its display name, and any
 message the sync filed under a non-primary Gmail category such as promotions or updates);
+a thread whose newest message the store classified as machine mail at ingest (a bounce, a
+read receipt, an auto-reply, a list message, bulk mail, a null reverse-path, our own mail
+coming back; `message_auth.machine_kind`, see
+[EMAIL_CLIENT.md](EMAIL_CLIENT.md#verification-and-cases)) never waits either, with one
+exception, a calendar invitation, which a person sent;
 rooms wait on unread frames and invitations only.
 
 **Bulk mail is not inbox material.** The mail lane lists primary mail only unless asked:
 a thread in the Junk folder (the provider's or the person's own placement, which outranks
-any tab stamp), a thread whose newest message carries a bulk category (the provider's
+any tab stamp), a thread whose newest message the headers classified as a bounce, a read
+receipt, an auto-reply, a list message or a null reverse-path (a fact of the message,
+which outranks the label the way the Junk folder does), a thread whose newest message carries a bulk category (the provider's
 tab, promotions or social or updates or forums, the person's own label from the mail
 client's relabel picker, or a sender rule learned from one), and, when no category was set
-at all, a thread from a sender who reads no answer (`is_automated_sender`) stay out of the
+at all, a thread from a sender who reads no answer (`is_automated_sender`) or whose newest
+message the store classified as `bulk` (a `List-Unsubscribe` without a list, a
+`Feedback-ID`, `Precedence: bulk`) stay out of the
 list and its counts (`is_bulk_mail`; `stored_per_channel` still counts them and
 `bulk_hidden` says how many the listing dropped, which the tool and the command line
 repeat). A thread filed under primary, or under a label of the person's own, is never
@@ -232,6 +243,8 @@ exports the pieces the inbox window reads as well (the bubbles, the history hook
 chips) and the compose box the WhatsApp window uses, so nothing is copied a fourth time.
 
 ## The window
+
+The rail's last entry, **Inbound**, opens the Inbound window (Settings → Connections → Inbound, see [FRONT_OFFICE.md](../agents/FRONT_OFFICE.md#the-front-office-window-in-connections)): the inbox shows what the agent answered and who waits, Inbound decides how it answers. The inbox closes first and Settings opens on Connections with the window up, the road a chat jump takes; the Inbound window's header carries **Open inbox** for the way back.
 
 The inbox window (`web/components/inbox/InboxWindow.tsx`) is the fourth row of the sidebar
 footer, between the calendar and the logs, with a badge: the amber count of conversations

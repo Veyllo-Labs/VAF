@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (348 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (351 keys).
 
 ## How configuration is set
 
@@ -442,6 +442,9 @@ Most of these are populated by the setup wizard / Connections UI, not hand-edite
 | `email_agent_phishing_score_threshold` | `3` | Risk score (1-10) at/above which a message is hidden from the agent. Admin-only. |
 | `email_agent_trusted_sender_domains` | `None` | List of sender From-domains that bypass the phishing filter. Note: the From header is not authenticated; use sparingly. Admin-only. |
 | `mail_engine_write_enabled` | `False` | Allow the mail engine to perform server-side writes (flags/move/append). The standalone safety valve for mailbox writes: the engine stays read-only against mailboxes until this is set. Admin-only. |
+| `mail_case_lock_days` | `30` | Admin-only. The mail answering lane (Inbound on mail, [FRONT_OFFICE.md](../agents/FRONT_OFFICE.md#mail)): a verified reply into a closed case reopens it when the case closed less than this many days ago; a later reply opens a new case linked to the old one. |
+| `mail_auto_reply_max_per_address_per_hour` | `3` | Admin-only. At most this many automatic mail answers to one address per hour; the rest of that address's mail waits for the owner (the autoresponder loop guard, independent of headers). |
+| `mail_auto_reply_max_per_address_per_day` | `10` | Admin-only. The same cap per day; reaching it writes `mail_auto_reply_capped` to the security log once per address and day. |
 | `mail_body_retention_days` | `365` | How long cached message bodies are kept in the per-user mail store. Headers/envelopes are kept forever. Admin-only. |
 | `mail_store_encryption_key` | `""` | AES key (Base64) for encrypting cached mail bodies at rest; held in the data keyring and auto-generated there on first use, with a value left here by an older install adopted once and the plaintext entry then blanked. Protected (never overwritten from the UI) and redacted for non-admins. |
 | `calendar_sync_interval_minutes` | `5` | Minutes between two sweeps of the calendar sync supervisor over every connected Google or Microsoft calendar account. Read per sweep, so a change needs no restart. Admin-only: the cadence is the instance's request volume against the providers. |
@@ -462,9 +465,9 @@ Most of these are populated by the setup wizard / Connections UI, not hand-edite
 | `cloud_sync_interval_minutes` | `15` | Cloud sync interval. |
 | `cloud_sync_max_file_size_mb` | `100` | Max synced file size. |
 | `cloud_sync_conflict_resolution` | `"last_write_wins"` | Conflict policy. |
-| `channel_ingress_policy` | `{...}` | Inbound-channel pairing policy: `mode` (`paired_only`, the default, or `permissive`), `throttle_seconds` (`60`) for the REJECT log lines, and per channel (`telegram`, `whatsapp`, `discord`) a `mode` (`inherit`), `allow_contact_fallback` (`False`) and `open_to_new_senders` (`False`). `open_to_new_senders` is the Front Office switch of that channel in Settings → Connections (every sender answered in Front Office mode unless their contact record says no; inert outside WhatsApp and Telegram), `allow_contact_fallback` the narrower expert door for contacts with the flag only (`front_office_state` and `set_front_office` in `vaf/core/channel_ingress_policy.py`); `permissive` opens the contact door everywhere and is reported by `vaf security doctor` and the security overview. Admin-only. |
+| `channel_ingress_policy` | `{...}` | Inbound-channel pairing policy: `mode` (`paired_only`, the default, or `permissive`), `throttle_seconds` (`60`) for the REJECT log lines, and per channel (`telegram`, `whatsapp`, `discord`, `email`) a `mode` (`inherit`), `allow_contact_fallback` (`False`) and `open_to_new_senders` (`False`); the `email` entry additionally carries `reply_mode` (`draft`: the agent's answer is held in the mail outbox for the owner's approval; `send`: it leaves at once) and `opened_at` (the moment the mail switch was turned on, stamped by the switch; mail dated before it is never answered). `open_to_new_senders` is the Front Office switch of that channel in Settings → Connections (every sender answered in Front Office mode unless their contact record says no; inert outside WhatsApp, Telegram and mail, and on mail only a sender the provider verified is answered, see [FRONT_OFFICE.md](../agents/FRONT_OFFICE.md#mail)), `allow_contact_fallback` the narrower expert door for contacts with the flag only (`front_office_state` and `set_front_office` in `vaf/core/channel_ingress_policy.py`); `permissive` opens the contact door everywhere and is reported by `vaf security doctor` and the security overview. Admin-only. |
 | `connection_enabled_by_scope` | `None` | Per-scope connection toggles. |
-| `front_office_contact_reply_require_approval` | `False` | Reserved: not read by any code at the moment, every Front Office reply is sent directly (see FRONT_OFFICE.md, Reply approval). |
+| `front_office_contact_reply_require_approval` | `False` | Reserved: not read by any code at the moment, every messenger Front Office reply is sent directly; mail has its own review, `channel_ingress_policy.email.reply_mode` (see FRONT_OFFICE.md, Reply approval). |
 
 ## Internal / managed (do not hand-edit)
 

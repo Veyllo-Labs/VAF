@@ -37,9 +37,11 @@ able to leave.
 
 Decisions that shaped this (owner-approved): the engine is IMAP-uniform (the
 Gmail-API/Graph transports are gone); email stays OUT of the messaging channel
-model (`KNOWN_CHANNELS`), so `send_to_user` cannot deliver via email; there is no
-new-mail automation trigger yet, but the sync engine emits internal new-mail events
-so one can be added; message bodies are encrypted at rest via the secure_store DEK;
+model (`KNOWN_CHANNELS`), so `send_to_user` cannot deliver via email, while it IS a
+Front Office ingress channel (`FRONT_OFFICE_CHANNELS`, the ingress policy's `email`
+entry); the sync engine's new-mail event (`supervisor.on_new_mail`) has one subscriber,
+the answering lane in `vaf/mail/inbound.py` (see [FRONT_OFFICE.md](../agents/FRONT_OFFICE.md#mail)),
+and no other automation trigger; message bodies are encrypted at rest via the secure_store DEK;
 body-cache retention defaults to 12 months with headers kept indefinitely.
 
 ## Not built yet
@@ -75,7 +77,11 @@ Deliberately deferred, listed so nobody looks for them in the code:
   FETCH), `attachments` (metadata; payloads as files under the scope dir),
   `threads`, `ops` (durable operation queue), an FTS5 search index
   (unicode61, remove_diacritics 2) populated in the same transaction as
-  ingest, plus a `schema_version` table (lazy migrate-on-open). Invariant:
+  ingest, plus a `schema_version` table (lazy migrate-on-open). Schema version 2
+  adds `message_auth` (one verdict per message: who wrote it, did the sender
+  authenticate), `cases`, `case_messages` and `sent_ids` (see "Verification and
+  cases"); a version 1 store migrates on open, additively, and the verdicts of
+  its existing rows arrive through the backfill. Invariant:
   every derived table (threads, FTS, counters) is rebuildable from raw
   messages + the server; reindex is a cheap command.
 - FTS index, two forms. Preferred is **contentless** (`content=''`), which keeps
@@ -144,14 +150,25 @@ Deliberately deferred, listed so nobody looks for them in the code:
   classification). A `handed_off` flag flips at the DATA command: a failure before
   it is transient/permanent, at or after it is ambiguous (parked, never re-sent).
   The stored Sent bytes are sent verbatim, so the delivered Message-ID is
-  byte-identical to the local copy and replies join the same thread. Bcc is
+  byte-identical to the local copy and replies join the same thread. Every lane
+  queues through `MailService.queue_send` (the one send funnel): the compose
+  window with its undo window, the agent's `send_mail`, `reply_mail` and
+  `forward_mail` tools with no delay and an immediate drain
+  (`deliver_queued_sends`), and a Front Office answer as a held draft. The funnel
+  mints the Message-ID on the sending address's own domain (a case anchor when the
+  mail belongs to a case), records it in `sent_ids` before the wire, and
+  `writeback._op_send` stamps the delivery, files the Sent copy on plain IMAP
+  when writes are enabled, and marks the answered mail (`reply_to_pk`, or the
+  `In-Reply-To` resolved through `pk_by_message_id`) so the inbox stops saying it
+  waits. Before the funnel the three tools built the wire bytes themselves and
+  left no local copy and no answered mark on plain IMAP. Bcc is
   stripped from the delivered wire and rides the SMTP envelope only;
   `normalize_recipients` lives in `vaf/mail/addressing.py`, next to its matching
   counterpart `header_addresses` (the complete lowercased mailboxes named in one
   header string), which the per-address queries of both mail stores and the
   contact timeline's direction rule use so that `ann@example.com` never matches
-  `joann@example.com`. All four senders
-  (send_mail/reply_mail/forward_mail tools + `writeback._op_send`) route here.
+  `joann@example.com`. `writeback._op_send` is the only caller of `sender.send`;
+  the tools reach it through the outbox.
 - Libraries: IMAPClient (BSD-3) as the IMAP driver, stdlib `smtplib` for SMTP
   submission (every caller is synchronous, so an async SMTP client buys nothing;
   aiosmtplib was declared for a while, never imported, and has been dropped - do
@@ -273,6 +290,9 @@ The drafting assistant in the compose box (`POST /api/mail/composer`, the button
 row in `ComposeModal`). It writes a reply from the thread, or rewrites text the
 user already typed. It writes INTO the textarea and stops there: the user reads it
 and presses Send. There is no auto-send, no draft persistence and no new agent tool.
+(The answering lane's held drafts are a different thing: outbox rows written by the
+Front Office turn, see "Verification and cases" and FRONT_OFFICE.md; the Composer
+never writes one.)
 
 Do not confuse it with `vaf/mail/compose.py`, which builds the RFC 822 message
 that goes on the wire. The Composer never produces or sends a message.
@@ -463,6 +483,131 @@ the calendar sync resolves accounts by that provider; the entry survives with
 `mail_enabled=False` so it disappears from the mail list while the calendar keeps
 syncing (`calendar_sync.wants_calendar_sync` keeps such an entry on purpose). Deleting a user removes the scope directory and all credential keys.
 
+## Verification and cases
+
+Written for the same reader as the remote-content section: it says what the mail
+client can know about a sender and what it cannot, because an answer sent to a
+spoofed mail is the one mistake an agent must not make for its owner.
+
+### Two questions, answered once at ingest
+
+Every message gets a verdict row in `message_auth` (schema version 2) in the same
+transaction as its envelope, computed from the bytes fetched at that moment (a
+message too large to cache still gets its row). Two independent questions, two
+independent answers, never mixed:
+
+1. **Did a person write this?** `vaf/mail/classify.py` (`classify_machine`) reads
+   headers and MIME structure in a fixed order: a bounce (`multipart/report;
+   report-type=delivery-status`, RFC 3464, or a null `Return-Path` from a mailer
+   daemon), a read receipt (`disposition-notification`, RFC 8098), a calendar
+   invitation (`text/calendar` with a METHOD), an auto-reply (`Auto-Submitted` other
+   than `no`, RFC 3834; `X-Auto-Response-Suppress`, MS-OXCMAIL; the `X-Autoreply`
+   family; `Precedence: auto_reply`), a list (`List-Id`, `List-Post`, `Precedence:
+   list`, RFC 2919 and 2369), our own mail coming back (a Message-ID in `sent_ids`,
+   or an own address as From), bulk mail (`Precedence: bulk` or `junk`, a
+   `Feedback-ID`, a `List-Unsubscribe` without a list, a bulk category, or the
+   inbox's lexical no-reply rule `is_automated_sender`, which can only add a verdict,
+   never remove a header one), and a null reverse-path on anything else. The kind
+   is stored as `machine_kind` with the deciding header as `machine_reason`.
+2. **Is the From address who it claims to be?** `vaf/mail/authenticity.py`
+   (`verdict`) reads the `Authentication-Results` header the account's OWN provider
+   wrote (RFC 8601): the topmost header whose authserv-id matches the account's
+   `trusted_authserv_id` (exact or dot-suffix, so `mx4.messagingengine.com`
+   matches `messagingengine.com`); every other copy is untrusted and ignored.
+   Microsoft 365 and outlook.com write the header without an authserv-id (`spf=`
+   first, a stray tenant token, `action=` instead of `policy.action=`, a
+   `compauth=` pair), so `auth_profile: microsoft` reads the topmost id-less header.
+   The verified signals are `dmarc=pass`, or a `dkim=pass` or `spf=pass` whose
+   domain is ALIGNED with the From domain (RFC 7489 section 3.1: equal, or an
+   ancestor of it; a signature by a child of the From domain is deliberately not
+   aligned, which is stricter than DMARC relaxed mode and fails safe without a
+   public suffix list). `compauth=pass` is Microsoft's heuristic composite and
+   never verifies on its own; `dmarc=bestguesspass` is not a pass; ARC is recorded
+   and never a pass by itself (VAF trusts the provider's DMARC verdict, it does not
+   evaluate seals). The result is one of four states: `verified` (aligned_by dmarc,
+   dkim or spf), `via` (a pass exists on another domain, Gmail's "via" state, the
+   domain kept as `via_domain`), `unverified` (a trusted header with no pass, or
+   `dmarc=fail`), `unknown` (no trusted id learned for the account, or no matching
+   header). Identity flags ride beside the state, because DKIM and DMARC bind the
+   From field but never judge its meaning: `reply_to_mismatch` (Reply-To outside the
+   From domain's tree), `own_domain_spoof` (a mail claiming one of the account's own
+   domains that did not verify), `dmarc_fail`, `no_message_id`, `multiple_from`.
+
+What an IMAP client cannot do, stated so nobody looks for it: it cannot re-run SPF
+(that needs the connecting IP and MAIL FROM at SMTP time, and the `Received`
+lines it did not add are not evidence, RFC 5321 section 7.6). It COULD re-verify
+DKIM from the stored raw bytes with a DNS lookup of the selector's key (RFC 6376
+section 2.2 names MUAs as verifiers); that lane is not built: it needs two new
+dependencies (`dkimpy`, `dnspython`) and a DNS lookup inside the sync worker, and a
+rotated or revoked key turns an old signature unverifiable (RFC 6376 section 5.2).
+The verdict is therefore computed once, at receipt, from the provider's header, and
+replaced only by an explicit backfill under a new policy; it is never re-derived
+live. The residual assumption is RFC 8601 section 4.1: the provider strips forged
+copies of its own authserv-id before delivery (Gmail, Microsoft and Fastmail do).
+
+### Learning the provider's id
+
+The trusted authserv-id is per account (`email_config_by_scope[...].accounts[]`:
+`trusted_authserv_id`, `auth_profile` rfc8601|microsoft|none, `authserv_source`
+mailbox|manual, `authserv_learned_at`, `authserv_samples`, `aliases`) and is never
+typed from memory: the account panel's **Learn from the mailbox** button
+(`POST /api/mail/accounts/{id}/learn-auth`) reads the topmost authserv-id of the
+account's newest inbox messages (`MailStore.topmost_authserv_ids`), accepts the
+majority when at least three samples agree at ninety percent
+(`authenticity.learn_authserv_id`), recognises the Microsoft id-less form
+(`looks_microsoft`), saves it, and recomputes every stored verdict under the new
+policy (`MailService.backfill_verification`, which reads the header snapshot every
+verdict row keeps in `headers`, so a message whose raw bytes were never cached or
+were evicted by retention still gets its verdict; a migrated row without a snapshot
+is re-parsed from its cached raw). `PATCH /api/mail/accounts/{id}` accepts the same
+fields by hand (`authserv_source: manual`) and backfills too. Until an id is learned
+every sender stays `unknown`, the badge shows nothing, and the panel says so.
+`policy_key` on every verdict names the policy it was computed under, which is how
+the backfill knows a row is stale. A stale trusted id is the one way to get a wrong
+verdict (a forged header carrying an id that is not the provider's would be read),
+which is why the id is learned from the mailbox and shown next to its sample count.
+
+### What reads the verdict
+
+- Every `/api/mail` read response carries `auth` per message (thread rows: the newest
+  message's) through `MailService.attach_auth`, in the shape of
+  `verification.summary`: `state`, `source`, `aligned_by`, `via_domain`, `dkim_domain`,
+  `from_domain`, `dmarc`, `flags`, `machine_kind`, `machine_reason`.
+  `GET /api/mail/messages/{pk}/verdict` returns the full row with the reasons and
+  the header snapshot.
+- The mail window shows Gmail's three states on the thread row and in the reader
+  header: a green shield for a verified sender (with the method and domain), a grey
+  shield for "via", a warning shield for an unverified sender, red when the mail
+  claims the owner's own domain; machine mail shows its kind instead. Nothing while
+  the state is unknown, so the badge keeps its meaning. The inbox's mail rows carry
+  the same summary as `verification`.
+- The phishing scorer (`mail_utils._phishing_score`) reads the row's `auth`: an
+  own-domain spoof or a DMARC failure adds 5, a Reply-To mismatch 2, a lookalike
+  domain 3; and the trusted-sender-domain bypass applies only to a row whose verdict
+  is `verified` (or carries none): a trusted domain that did not authenticate is
+  exactly the mail a spoofer sends.
+- The inbox (`vaf/core/inbox.py`): a bounce, a read receipt, an auto-reply, a list
+  message or a null reverse-path is bulk mail whatever its label (a header fact
+  outranks the tab, the way the Junk folder does), the kind `bulk` keeps the person's
+  primary label as the last word (it is partly a guess), and machine mail never
+  waits for an answer; a calendar invitation is the one machine kind a person sent
+  and keeps waiting.
+- The agent rows (`_agent_row`) carry `auth`, so the mail tools and the Front
+  Office lane can read the state without a second query.
+
+### The send ledger and cases
+
+`sent_ids` remembers every Message-ID VAF sends (`MailStore.record_sent_id`, written
+at enqueue so the row exists before the wire; `mark_sent_delivery` stamps the
+delivery), which is what lets `classify_machine` recognise our own mail re-entering
+the mailbox. `cases` and `case_messages` (a conversation the agent answers in, its
+participants and status, and how each message was attributed to it) are created
+by the same migration; the attribution and the answering lane that fill them are
+described in [FRONT_OFFICE.md](../agents/FRONT_OFFICE.md). No CLI command exists
+for the verdicts: the mail client has no command group at all today, and the
+verdict is reachable through the agent rows and the routes; a `vaf mail` group is
+the named boundary here, to be built when a headless install measurably needs one.
+
 ## Remote content and tracking
 
 Written for a privacy or enterprise review. It states the limits as plainly as the
@@ -568,6 +713,10 @@ through only split-horizon names the local resolver does not know.
   `email_agent_phishing_filter_enabled` / `_score_threshold` /
   `_trusted_sender_domains` (all admin-only).
 
+  The scorer also reads the row's stored verdict (`auth`, see "Verification and
+  cases"): an own-domain spoof or a DMARC failure, a Reply-To mismatch and a
+  lookalike domain raise the score, and the trusted-domain bypass applies only to a
+  verified row.
   Know the reach of this filter before relying on it, because it is narrower than
   "the agent is protected from mail": it runs at the two LIST call sites
   (the mail lane of `inbox`, `find_mail`) and drops whole messages there. `read_mail` does not
@@ -722,7 +871,10 @@ Any mail change that adds tools, config keys, or events must update ALL of:
 9. [CONNECTIONS.md](CONNECTIONS.md) email section and this document.
 
 Not every item applies to every change, and saying so beats leaving a reader to
-guess: the Mail Composer touched 6, 8 and 9 only. It adds no tool, so the tool
+guess: the Mail Composer touched 6, 8 and 9 only. The verification round
+(schema v2) touched 8 and 9 and the per-account fields, which live inside the
+account entries rather than in `config.py DEFAULTS`; it adds no tool, no
+WebSocket event and no config key. It adds no tool, so the tool
 tuples, the front-office list, `_SENT_TOOLS` and the pruning allow-list are N/A;
 it adds no WebSocket event, so item 7 is N/A.
 

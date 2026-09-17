@@ -122,13 +122,34 @@ def _flow_encode(text: str) -> str:
     return "\r\n".join(out)
 
 
+def message_id_domain(from_addr: str) -> str:
+    """The domain half of a Message-ID VAF mints: the sending address's own domain, so
+    the id looks ordinary to the correspondent and never carries the machine's hostname
+    (which `make_msgid()` would use)."""
+    from email.utils import parseaddr
+    _name, addr = parseaddr(from_addr or "")
+    domain = addr.rsplit("@", 1)[-1].strip().lower() if "@" in addr else ""
+    return domain or "vaf.invalid"
+
+
 def build_message(from_addr: str, to: str, subject: str, body_text: str,
                   cc: Optional[str] = None, bcc: Optional[str] = None,
                   in_reply_to: Optional[str] = None, references: Optional[str] = None,
-                  attachments: Optional[List[Dict[str, bytes]]] = None) -> EmailMessage:
+                  attachments: Optional[List[Dict[str, bytes]]] = None,
+                  message_id: Optional[str] = None, agent_written: bool = False,
+                  root_anchor: Optional[str] = None) -> EmailMessage:
     """RFC 822 message with format=flowed plain text. attachments: list of
     {filename, content_type, payload}. Bcc handling is the TRANSPORT's job
-    (envelope vs header semantics differ per provider - v1 rules apply)."""
+    (envelope vs header semantics differ per provider - v1 rules apply).
+
+    `message_id` is the id to stamp (a case anchor from vaf/mail/case_token.py); without
+    one a fresh id on the sender's own domain is minted. `agent_written` marks a mail the
+    agent wrote on its own (a Front Office answer), never the person's own compose: it
+    adds `Auto-Submitted: auto-replied` (RFC 3834, the loop guard every autoresponder
+    honours) and `X-Auto-Response-Suppress: OOF, AutoReply` (Exchange's). `root_anchor`
+    is the case's first Message-ID, appended to References on every mail of the case so
+    a client that threads on a consistent id keeps the conversation together.
+    """
     msg = EmailMessage()
     msg["From"] = from_addr
     msg["To"] = to
@@ -140,11 +161,17 @@ def build_message(from_addr: str, to: str, subject: str, body_text: str,
         msg["Bcc"] = bcc
     msg["Subject"] = subject or "(No subject)"
     msg["Date"] = formatdate(localtime=False)
-    msg["Message-ID"] = make_msgid()
+    msg["Message-ID"] = message_id or make_msgid(domain=message_id_domain(from_addr))
     if in_reply_to:
         msg["In-Reply-To"] = in_reply_to
-    if references:
-        msg["References"] = references
+    refs = [r for r in (references or "").split() if r]
+    if root_anchor and root_anchor not in refs:
+        refs.insert(0, root_anchor)
+    if refs:
+        msg["References"] = " ".join(refs)
+    if agent_written:
+        msg["Auto-Submitted"] = "auto-replied"
+        msg["X-Auto-Response-Suppress"] = "OOF, AutoReply"
     msg.set_content(_flow_encode(body_text or ""), subtype="plain",
                     cte="quoted-printable",
                     params={"format": "flowed", "delsp": "yes"})

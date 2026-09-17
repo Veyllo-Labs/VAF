@@ -58,6 +58,7 @@ KWARGS_BASELINE = {
     "add_task":                  ("chat", []),
     "analyze_image":             ("chat", ["_agent", "session_id", "user_scope_id"]),
     "archive_mail":              ("chat", ["user_scope_id", "username"]),
+    "contact_history":           ("chat", ["_agent", "user_scope_id", "username"]),
     "ask_user":                  ("chat", ["_agent"]),
     "bash":                      ("chat", []),
     "browser_agent":             ("chat", ["user_scope_id"]),

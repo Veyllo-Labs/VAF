@@ -217,9 +217,71 @@ def _front_office_chat_ref(metadata, username):
         dc = str(meta.get("discord_author_id") or "").strip()
         if dc:
             return {"channel": "discord", "chat_id": dc}
+        tid = meta.get("email_thread_id")
+        if tid is not None and str(tid).strip():
+            # The inbox keys a mail conversation on its thread id (chat_marks channel "mail").
+            return {"channel": "mail", "chat_id": str(tid).strip()}
     except Exception:
         return None
     return None
+
+
+def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
+    """A Front Office answer on mail leaves through the outbox (MailService.queue_send):
+    the case anchor as Message-ID, the RFC 3834 loop guard, the thread's References, the
+    quoted original under the answer; held for the owner's approval in draft mode,
+    delivered at once in send mode. Never a send tool, never a direct SMTP call, so every
+    answer has its Sent copy, its ledger row and its delivery stamp (EMAIL_CLIENT.md,
+    "Native send"). Never raises: a failure is logged and the mail stays waiting."""
+    from vaf.core.email_accounts import get_account
+    from vaf.core.log_helper import append_lane_log
+    from vaf.mail.service import MailService, deliver_queued_sends
+    scope = str(meta.get("user_scope_id") or "").strip()
+    account_id = str(meta.get("email_account_id") or "").strip()
+    pk = meta.get("email_message_pk")
+    if not scope or not account_id or pk is None:
+        return
+    out = _prepare_channel_outbound(final_text)
+    if not out:
+        append_lane_log("email_inbound", f"REPLY EMPTY after sanitize pk={pk} session={task.session_id!r}", always=True)
+        return
+    try:
+        svc = MailService(scope)
+        pre = svc.reply_prefill(int(pk))
+        if not pre or not pre.get("to"):
+            append_lane_log("email_inbound", f"REPLY SKIP no recipients pk={pk}", always=True)
+            return
+        apk = svc.store.account_pk(account_id)
+        case_id = str(meta.get("email_case_id") or "")
+        root_anchor = ""
+        if apk is not None and case_id:
+            earlier = svc.store.sent_ids_for_case(apk, case_id)
+            root_anchor = str(earlier[0].get("message_id") or "") if earlier else ""
+        hold = str(meta.get("email_reply_mode") or "draft") != "send"
+        queued = svc.queue_send(
+            account_id, pre["to"], pre["subject"], f"{out}{pre.get('body') or ''}",
+            cc=pre.get("cc") or "", in_reply_to=pre.get("in_reply_to") or "",
+            references=pre.get("references") or "", undo_seconds=0,
+            case_id=case_id, sent_by="front_office", hold=hold, agent_written=True,
+            root_anchor=root_anchor, reply_to_pk=int(pk), thread_id=meta.get("email_thread_id"))
+        if apk is not None and case_id:
+            svc.store.touch_case(apk, case_id, outbound=True)
+            svc.store.set_case_status(apk, case_id, "held" if hold else "answered")
+        if not hold:
+            acc = get_account(account_id, meta.get("username"), user_scope_id=scope)
+            if acc:
+                deliver_queued_sends(scope, acc, meta.get("username"), account_id, service=svc)
+        append_lane_log("email_inbound",
+                        f"REPLY {'HELD' if hold else 'SENT'} pk={pk} op={queued.get('op_id')} case={case_id or '-'} to={str(pre['to'])[:3]}***",
+                        always=True)
+    except Exception as e:
+        append_lane_log("email_inbound", f"REPLY FAILED pk={pk}: {e}", always=True)
+        return
+    try:
+        from vaf.core.web_interface import notify_inbox_changed
+        notify_inbox_changed(scope)
+    except Exception:
+        pass
 
 
 def _apply_channel_history_window(agent, source: str) -> None:
@@ -227,7 +289,7 @@ def _apply_channel_history_window(agent, source: str) -> None:
     Keep only a small recent window for channel sessions (Telegram/WhatsApp/Discord)
     so stale long-tail chat history does not dominate tool decisions.
     """
-    if source not in {"telegram", "whatsapp", "discord"}:
+    if source not in {"telegram", "whatsapp", "discord", "email"}:
         return
     try:
         raw_limit = Config.get("channel_history_window_messages", CHANNEL_HISTORY_WINDOW_MESSAGES)
@@ -1444,6 +1506,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     if _meta.get("from_contact"):
                         agent._front_office_mode = True
                         agent._front_office_chat = _front_office_chat_ref(_meta, _meta.get("username"))
+                        agent._front_office_contact = None   # pinned below once the record is resolved
                         try:
                             from vaf.core.front_office_tools import FRONT_OFFICE_ALLOWED_TOOLS
                             agent._active_tools = tuple(n for n in FRONT_OFFICE_ALLOWED_TOOLS if n in agent.tools)
@@ -1452,6 +1515,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     else:
                         agent._front_office_mode = False
                         agent._front_office_chat = None
+                        agent._front_office_contact = None
                         agent._active_tools = None
 
                     # Sidebar documents: inject into this turn only (session history stays clean)
@@ -1475,8 +1539,18 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 _jid = _meta.get("whatsapp_chat_jid")
                                 if _jid:
                                     contact = get_contact_by_whatsapp_phone(_jid, _username, user_scope_id=_user_scope)
+                            elif task_source == "email":
+                                from vaf.core.contacts_store import find_contact_by_channel
+                                _addr = str(_meta.get("email_from") or "").strip().lower()
+                                if _addr:
+                                    _rec = find_contact_by_channel("email", _addr, _username, user_scope_id=_user_scope)
+                                    contact = _rec if (_rec and _rec.get("allow_as_assistant_user")) else None
                         except Exception:
                             pass
+                        # The contact of THIS turn, pinned on the agent: contact_history reads
+                        # that person's correspondence across every channel and nothing else,
+                        # which is why it needs no identity argument (FRONT_OFFICE.md).
+                        agent._front_office_contact = dict(contact) if isinstance(contact, dict) else None
                         # No contact record: this sender reached Front Office through the reply
                         # window (the agent wrote to them first) rather than through a contact
                         # with "Can reach your assistant". Tell the model exactly that, so it
@@ -1484,6 +1558,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         _sender_ref = str(
                             _meta.get("whatsapp_chat_jid") or _meta.get("telegram_user_id") or ""
                         ).split("@", 1)[0].split(":", 1)[0]
+                        if _meta.get("email_from"):
+                            _sender_ref = str(_meta.get("email_from") or "").strip()
                         contact_block = (
                             f"Sender: {('+' + _sender_ref) if _sender_ref.isdigit() else (_sender_ref or 'unknown')} "
                             "(no contact record). Your own earlier outbound message to this number opened "
@@ -1920,7 +1996,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # Do not run workflow matching for contact messages (WhatsApp/Telegram/Discord).
                     # Workflows are for the account owner in Web/CLI; contact chat should be normal LLM reply only.
                     task_source = getattr(task, "source", None) or ""
-                    disable_workflows = str(task_source).lower() in ("whatsapp", "telegram", "discord")
+                    disable_workflows = str(task_source).lower() in ("whatsapp", "telegram", "discord", "email")
 
                     # Keep WebUI sub-agents inside the WebUI panel (no host terminal popups)
                     # even after restarts where global env flags may be unset.
@@ -2251,6 +2327,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 out = _prepare_channel_outbound(final_text)
                                 if out:
                                     send_discord_reply(str(discord_channel_id), out)
+                        elif task_source == "email":
+                            # A Front Office answer on mail: through the outbox, held or sent
+                            # by the channel's reply mode (see _deliver_email_reply).
+                            _deliver_email_reply(task, meta, final_text)
                         elif task_source == "whatsapp":
                             chat_jid = meta.get("whatsapp_chat_jid")
                             username = meta.get("username") or "admin"
@@ -2723,6 +2803,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 finally:
                     agent._front_office_mode = False
                     agent._front_office_chat = None
+                    agent._front_office_contact = None
                     agent._active_tools = None
                 try:
                     if is_debug_logging_enabled():

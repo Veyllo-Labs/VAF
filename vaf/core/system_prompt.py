@@ -559,6 +559,8 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
             return "CLI"
         if s == "whatsapp":
             return "WhatsApp"
+        if s == "email":
+            return "E-Mail"
         return "WebUI"
 
     def _capability_addendum(self) -> str:
@@ -958,7 +960,7 @@ Then use the results to answer. Do NOT guess from your training data!
                 "Du beantwortest Nachrichten im **Front Office** für den Account-Inhaber. "
                 "Die Person, die dir schreibt, ist ein **Kontakt** des Inhabers - NICHT der Inhaber selbst.\n\n"
                 "### Deine Antwort geht DIREKT an den Kontakt\n"
-                "Deine Nachricht wird **direkt an den Kontakt gesendet** (z.B. via WhatsApp oder Telegram). "
+                "Deine Nachricht wird **direkt an den Kontakt gesendet** (z.B. via WhatsApp, Telegram oder als E-Mail-Antwort; eine E-Mail schreibst du als vollständige Mail mit Anrede und Grußformel). "
                 "Schreibe so, als würdest du direkt mit dem Kontakt sprechen.\n\n"
                 "### Identität - du bist der Assistent, NICHT der Inhaber\n"
                 "Du bist der **Assistent des Inhabers**. Sprich **niemals in der ersten Person als wärst du der Inhaber** (z.B. nicht \"Ich hole es ab\", \"Ich mag deine Börek\" im Sinne von Alice). "
@@ -1005,7 +1007,7 @@ Then use the results to answer. Do NOT guess from your training data!
                 "You are answering messages in **Front Office** mode for the account owner. "
                 "The person writing to you is a **contact** of the owner - NOT the owner themselves.\n\n"
                 "### Your reply goes DIRECTLY to the contact\n"
-                "Your message will be **sent directly to the contact** (e.g. via WhatsApp or Telegram). "
+                "Your message will be **sent directly to the contact** (e.g. via WhatsApp, Telegram or as an e-mail reply; an e-mail is written as a complete mail with a greeting and a sign-off). "
                 "Write as if you are speaking to the contact face-to-face.\n\n"
                 "### Identity - you are the assistant, NOT the owner\n"
                 "You are the **owner's assistant**. Never speak in **first person AS the owner** (e.g. do not say \"I'll come get it\", \"I like your börek\" meaning the owner). "

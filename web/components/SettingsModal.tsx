@@ -72,7 +72,9 @@ import remarkGfm from 'remark-gfm';
 /** Where the inbox sends the person: a chat in a channel window, or a mail thread in the mail client. */
 export type SettingsChatJump =
     | { channel: 'whatsapp' | 'telegram' | 'discord'; chatId: string; draft?: boolean }
-    | { channel: 'mail'; threadId: number; draft?: boolean };
+    | { channel: 'mail'; threadId: number; draft?: boolean }
+    // The inbox's gear: Settings opens on Connections with the Inbound window up.
+    | { channel: 'front_office' };
 
 export interface SettingsModalProps {
     isOpen: boolean;
@@ -199,6 +201,8 @@ export interface SettingsModalProps {
     /** A jump from the inbox into a channel window or the mail client; consumed once, the parent resets it to null. */
     initialChatJump?: SettingsChatJump | null;
     onChatJumpConsumed?: () => void;
+    /** The Inbound window's "Open inbox": the page closes Settings and opens the inbox. */
+    onOpenInbox?: () => void;
     /** Callback to refresh config (e.g. after OAuth/cloud connection) */
     onRefreshConfig?: () => void;
     /** Connection status for indicator above Logout in sidebar */
@@ -511,7 +515,7 @@ function AccessPresetSection({
     );
 }
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, onCreateCustomTool, onUpdateCustomTool, onDeleteCustomTool, customToolUsers = [], onGetCustomToolUsers, isCustomToolSaving = false, customToolBackendError = null, workflows = [], onCreateWorkflow, onUpdateWorkflow, onDeleteWorkflow, isWorkflowSaving = false, workflowBackendError = null, skills = [], onCreateSkill, onUpdateSkill, onDeleteSkill, onUploadSkill, isSkillSaving = false, skillBackendError = null, skillSavedTick = 0, mcpServers = [], onRefreshMcpServers, onSaveMcpServer, onDeleteMcpServer, isMcpSaving = false, mcpBackendError = null, onTestMcpServer, mcpTestResult = null, isMcpTesting = false, trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, initialChatJump = null, onChatJumpConsumed, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar, calendarVersion = 0, speakerProfile = null, onStartVoiceEnrollment, onDeleteSpeakerProfile, onRefreshSpeakerProfile }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, onCreateCustomTool, onUpdateCustomTool, onDeleteCustomTool, customToolUsers = [], onGetCustomToolUsers, isCustomToolSaving = false, customToolBackendError = null, workflows = [], onCreateWorkflow, onUpdateWorkflow, onDeleteWorkflow, isWorkflowSaving = false, workflowBackendError = null, skills = [], onCreateSkill, onUpdateSkill, onDeleteSkill, onUploadSkill, isSkillSaving = false, skillBackendError = null, skillSavedTick = 0, mcpServers = [], onRefreshMcpServers, onSaveMcpServer, onDeleteMcpServer, isMcpSaving = false, mcpBackendError = null, onTestMcpServer, mcpTestResult = null, isMcpTesting = false, trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, initialChatJump = null, onChatJumpConsumed, onOpenInbox, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar, calendarVersion = 0, speakerProfile = null, onStartVoiceEnrollment, onDeleteSpeakerProfile, onRefreshSpeakerProfile }: SettingsModalProps) {
     const t = useTranslations();
     const tTabs = useTranslations('settings.tabs');
     const tCommon = useTranslations('common');
@@ -1301,7 +1305,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // it, so a repeat jump to the same chat fires again without a sequence number.
     useEffect(() => {
         if (!isOpen || !initialChatJump) return;
-        if (initialChatJump.channel === 'mail') {
+        if (initialChatJump.channel === 'front_office') {
+            setShowFrontOfficeDashboard(true);
+        } else if (initialChatJump.channel === 'mail') {
             setMailJump({ threadId: initialChatJump.threadId, draft: !!initialChatJump.draft });
             setShowMailClient(true);
         } else {
@@ -8171,6 +8177,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 isOpen={showFrontOfficeDashboard}
                 onClose={() => setShowFrontOfficeDashboard(false)}
                 onOpenContacts={() => { setShowFrontOfficeDashboard(false); setShowContactsDashboard(true); }}
+                onOpenInbox={onOpenInbox ? () => { setShowFrontOfficeDashboard(false); onOpenInbox(); } : undefined}
                 // The card in Connections refetches on refreshTrigger, so a change made in the
                 // window shows on the card the moment the window closes.
                 onChanged={() => setCloudDashboardRefresh(v => v + 1)}

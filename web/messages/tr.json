@@ -657,6 +657,9 @@
     "ovUnitsHint": "oturum kapsamlı · canlı bekçi",
     "ovEvMailSend": "Riskli posta engellendi",
     "ovEvMailImage": "Dış kaynaklı görsel engellendi",
+    "ovEvMailSpoof": "Posta kendi alan adın gibi görünüyor",
+    "ovEvMailToken": "Bir postada yabancı vaka belirteci",
+    "ovEvMailCapped": "Otomatik posta yanıtları sınırlandı",
     "ovEvSkillBlocked": "Beceri kurulumu engellendi",
     "ovEvSkillOverride": "Yönetici istisnası",
     "ovEvSkillAlert": "Beceri yeniden taramasında olağandışılık",
@@ -878,7 +881,7 @@
       "inboundOff": "WhatsApp şu anda ajana hiçbir şey iletmiyor (WhatsApp penceresinde gelen mesajlar kapalı), dolayısıyla orada kimse yanıtlanmaz.",
       "contactsCount": "{count, plural, other {# kişi ajanına yazabilir.}}",
       "openContacts": "Kişileri aç",
-      "onNote": "Açık. WhatsApp'ta ajanının yazdığı herkes de {hours} saat boyunca yanıt verebilir (yanıt penceresi, WhatsApp penceresinde ayarlanır).",
+      "openInbox": "Gelen kutusunu aç",
       "offNote": "Kapalı. Bir kapı açık kalır: WhatsApp'ta ajanının yazdığı herkes yine de {hours} saat boyunca yanıt verebilir (yanıt penceresi, WhatsApp penceresinde ayarlanır; 0 kapatır).",
       "offNoteClosed": "Kapalı. WhatsApp yanıt penceresi de kapalı, yani ajanına senden başka kimse ulaşamaz.",
       "briefingTitle": "Talimatlar",
@@ -910,7 +913,12 @@
       "saveFailed": "Değişiklik kaydedilemedi.",
       "open": "Inbound'u aç",
       "cardOn": "{channels} için açık. {count, plural, other {# izinli kişi}}.",
-      "cardOff": "Kapalı. Kişiler geri çevrilir; ajanına yalnızca sen ulaşırsın."
+      "cardOff": "Kapalı. Kişiler geri çevrilir; ajanına yalnızca sen ulaşırsın.",
+      "mailModeLabel": "Yanıtlar",
+      "mailModeDraft": "Önce taslak",
+      "mailModeSend": "Hemen gönder",
+      "mailModeHint": "Taslaklar gelen kutusunda ve posta penceresinde onayını bekler. Yalnızca posta sağlayıcının doğruladığı gönderenler yanıt alır; bültenler, otomatik postalar ve doğrulanmamış gönderenler asla.",
+      "confirmBodyMail": "Ajanın gelen postaları Inbound modunda kendi başına yanıtlar: asistanın olarak, yalnızca posta sağlayıcının doğruladığı gönderenler için ve önce senin onayladığın bir taslak olarak. Rehberindeki posta adresi olan {count} kişi şimdi izinli; yeni yazan rehbere eklenir."
     },
     "whatsappWizard": {
       "title": "WhatsApp Kurulumu",
@@ -966,7 +974,8 @@
       "unreadCount": "{count} okunmamış",
       "agentAnswered": "Ajan yanıtladı",
       "done": "Tamamlandı",
-      "couldNotLoad": "Pano yüklenemedi."
+      "couldNotLoad": "Pano yüklenemedi.",
+      "waitsDraft": "Ajanın bir yanıt hazırladı; onayını bekliyor."
     },
     "whatsappDashboard": {
       "title": "WhatsApp",
@@ -2342,7 +2351,8 @@
     "rail": {
       "view": "Görünüm",
       "channels": "Kanallar",
-      "filters": "Filtreler"
+      "filters": "Filtreler",
+      "inbound": "Inbound"
     },
     "view": {
       "all": "Tümü",
@@ -2405,7 +2415,11 @@
     "unanswered": "Son mesaj {name} tarafından geldi, henüz yanıtlanmadı.",
     "invitation": "Bu oda, davete vereceğin yanıtı bekliyor.",
     "members": "{count} ajan",
-    "messagesCount": "{count} mesaj"
+    "messagesCount": "{count} mesaj",
+    "draftTitle": "Ajanının taslağı",
+    "draftWaiting": "Henüz gönderilmedi; düzenlemek için posta penceresini aç.",
+    "draftSend": "Gönder",
+    "draftDiscard": "At"
   },
   "mailV2": {
     "title": "Posta",
@@ -2551,6 +2565,40 @@
       "matchedYourTone": "Üslup, bu konuşmadaki kendi {n} mesajına göre ayarlandı.",
       "noToneSample": "Bu konuşmada kendine ait mesaj yok - nötr üslup.",
       "reasoningOnly": "Model tüm çıktı bütçesini düşünmeye harcadı ve yanıt yazmadı. Daha kısa bir talimatla tekrar dene ya da Composer'ın çıktı sınırını yükselt."
+    },
+    "auth": {
+      "verified": "Gönderen doğrulandı ({method}, {domain})",
+      "via": "Hizalı değil: {domain} doğrulamayı geçti, gönderenin alan adı değil",
+      "unverified": "Gönderen doğrulanmadı",
+      "spoof": "Doğrulanmadı ve kendi alan adın gibi görünüyor",
+      "machine": {
+        "bounce": "Teslim edilemedi bildirimi",
+        "mdn": "Okundu bilgisi",
+        "auto_reply": "Otomatik yanıt",
+        "list": "Posta listesi",
+        "bulk": "Toplu posta",
+        "calendar": "Takvim daveti",
+        "own_loop": "Kendi postan",
+        "null_return_path": "Dönüş yolu yok (otomatik)"
+      },
+      "accountLearned": "Gönderen doğrulaması: {id} ({count} posta)",
+      "accountMicrosoft": "Gönderen doğrulaması: Microsoft 365",
+      "accountManual": "Gönderen doğrulaması: {id} (elle ayarlandı)",
+      "accountNone": "Gönderen doğrulaması henüz kurulmadı: Her gönderen denetlenmemiş sayılır.",
+      "learn": "Posta kutusundan öğren",
+      "learnDone": "Öğrenildi: {id}. {count} posta yeniden değerlendirildi.",
+      "learnDoneMicrosoft": "Tanındı: Microsoft 365. {count} posta yeniden değerlendirildi.",
+      "learnTooFew": "Sağlayıcıyı kesin tanımak için gelen kutusunda henüz çok az posta var ({count}). Daha sonra tekrar dene.",
+      "learnFailed": "Öğrenme başarısız oldu."
+    },
+    "draft": {
+      "title": "Ajanının taslağı",
+      "hint": "Henüz gönderilmedi. Oku, sonra gönder, düzenle ya da at.",
+      "send": "Gönder",
+      "edit": "Düzenle",
+      "discard": "At",
+      "sent": "Gönderildi.",
+      "failed": "Gönderilemedi: {error}"
     }
   }
 }

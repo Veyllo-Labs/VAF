@@ -657,6 +657,9 @@
     "ovUnitsHint": "按会话划分 · 实时看门狗",
     "ovEvMailSend": "高风险邮件已拦截",
     "ovEvMailImage": "外部图片已拦截",
+    "ovEvMailSpoof": "邮件冒充你自己的域名",
+    "ovEvMailToken": "邮件中出现他人的事务令牌",
+    "ovEvMailCapped": "自动邮件回复已达上限",
     "ovEvSkillBlocked": "技能安装已拦截",
     "ovEvSkillOverride": "管理员放行",
     "ovEvSkillAlert": "技能重扫发现异常",
@@ -878,7 +881,7 @@
       "inboundOff": "WhatsApp 目前不会把任何消息交给智能体（在 WhatsApp 窗口中关闭了传入消息），所以那里没有人会得到回复。",
       "contactsCount": "{count, plural, other {# 位联系人可以给你的智能体写消息。}}",
       "openContacts": "打开联系人",
-      "onNote": "开。在 WhatsApp 上，你的智能体写过消息的人也可以在 {hours} 小时内回复（回复窗口，在 WhatsApp 窗口中设置）。",
+      "openInbox": "打开收件箱",
       "offNote": "关。还有一扇门开着：在 WhatsApp 上，你的智能体写过消息的人仍可以在 {hours} 小时内回复（回复窗口，在 WhatsApp 窗口中设置；0 表示关闭）。",
       "offNoteClosed": "关。WhatsApp 的回复窗口也已关闭，所以除了你，没有人能联系到你的智能体。",
       "briefingTitle": "指示",
@@ -910,7 +913,12 @@
       "saveFailed": "无法保存更改。",
       "open": "打开入站",
       "cardOn": "已在 {channels} 上开启。{count, plural, other {# 位已允许的联系人}}。",
-      "cardOff": "关。联系人会被拒绝；只有你能联系到你的智能体。"
+      "cardOff": "关。联系人会被拒绝；只有你能联系到你的智能体。",
+      "mailModeLabel": "回复",
+      "mailModeDraft": "先生成草稿",
+      "mailModeSend": "立即发送",
+      "mailModeHint": "草稿会在收件箱和邮件窗口等待你的批准。只有邮件服务商验证过的发件人才会收到回复；简报、自动邮件和未验证的发件人永远不会。",
+      "confirmBodyMail": "之后你的代理会以入站模式自行回复来信：作为你的助手，只回复邮件服务商验证过的发件人，并先生成由你批准的草稿。通讯录里有邮箱地址的 {count} 位联系人现在获得许可；新来信的人会被加入通讯录。"
     },
     "whatsappWizard": {
       "title": "设置 WhatsApp",
@@ -966,7 +974,8 @@
       "unreadCount": "{count} 条未读",
       "agentAnswered": "智能体已回复",
       "done": "已完成",
-      "couldNotLoad": "无法加载仪表板。"
+      "couldNotLoad": "无法加载仪表板。",
+      "waitsDraft": "你的代理准备了一封回复，正在等待你的批准。"
     },
     "whatsappDashboard": {
       "title": "WhatsApp",
@@ -2342,7 +2351,8 @@
     "rail": {
       "view": "视图",
       "channels": "渠道",
-      "filters": "筛选"
+      "filters": "筛选",
+      "inbound": "入站"
     },
     "view": {
       "all": "全部",
@@ -2405,7 +2415,11 @@
     "unanswered": "最后一条消息来自 {name}，尚未回复。",
     "invitation": "此房间在等待你对邀请的答复。",
     "members": "{count} 个智能体",
-    "messagesCount": "{count} 条消息"
+    "messagesCount": "{count} 条消息",
+    "draftTitle": "代理的草稿",
+    "draftWaiting": "尚未发送；打开邮件窗口即可编辑。",
+    "draftSend": "发送",
+    "draftDiscard": "丢弃"
   },
   "mailV2": {
     "title": "邮件",
@@ -2551,6 +2565,40 @@
       "matchedYourTone": "语气参考了你在这条会话里的 {n} 封邮件。",
       "noToneSample": "这条会话里没有你自己写的邮件，采用中性语气。",
       "reasoningOnly": "模型把全部输出额度都用在了思考上，没有写出回复。请用更短的指示再试一次，或提高 Composer 的输出上限。"
+    },
+    "auth": {
+      "verified": "发件人已验证（{method}，{domain}）",
+      "via": "未对齐：通过验证的是 {domain}，而不是发件人的域名",
+      "unverified": "发件人未验证",
+      "spoof": "未验证，且冒充你自己的域名",
+      "machine": {
+        "bounce": "退信通知",
+        "mdn": "已读回执",
+        "auto_reply": "自动回复",
+        "list": "邮件列表",
+        "bulk": "群发邮件",
+        "calendar": "日历邀请",
+        "own_loop": "你自己的邮件",
+        "null_return_path": "无退信路径（自动）"
+      },
+      "accountLearned": "发件人验证：{id}（{count} 封邮件）",
+      "accountMicrosoft": "发件人验证：Microsoft 365",
+      "accountManual": "发件人验证：{id}（手动设置）",
+      "accountNone": "尚未设置发件人验证：所有发件人都视为未检查。",
+      "learn": "从邮箱学习",
+      "learnDone": "已学习：{id}。已重新评估 {count} 封邮件。",
+      "learnDoneMicrosoft": "已识别：Microsoft 365。已重新评估 {count} 封邮件。",
+      "learnTooFew": "收件箱中的邮件还太少，无法确定服务商（{count}）。请稍后再试。",
+      "learnFailed": "学习失败。"
+    },
+    "draft": {
+      "title": "代理的草稿",
+      "hint": "尚未发送。请先阅读，再发送、编辑或丢弃。",
+      "send": "发送",
+      "edit": "编辑",
+      "discard": "丢弃",
+      "sent": "已发送。",
+      "failed": "无法发送：{error}"
     }
   }
 }

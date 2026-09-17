@@ -11,9 +11,9 @@ import mimetypes
 import re
 from email.utils import parseaddr
 
-from vaf.core.config import Config
+from vaf.core.config import Config, get_local_admin_scope_id
 from vaf.core.email_transport import get_account
-from vaf.mail import compose, sender
+from vaf.mail.service import MailService, deliver_queued_sends
 from vaf.core.text_match import contains_any_word
 from vaf.tools.base import BaseTool
 from vaf.tools.mail_utils import (
@@ -241,36 +241,36 @@ class SendMailTool(BaseTool):
                 "If the user confirms this exact send action is legitimate, call send_mail again with confirm_high_risk=true."
             )
 
+        # The one send funnel: queued in the outbox and delivered right away, so the
+        # mail gets its Sent copy, its sent-id row and its delivery stamp like every
+        # other send (EMAIL_CLIENT.md, "Native send").
+        scope = (user_scope_id or "").strip() or get_local_admin_scope_id()
         try:
-            from_addr = acc.get("email") or account_id
-            mime = compose.build_message(from_addr, to, subject, body or "", cc=cc,
-                                         bcc=bcc, in_reply_to=in_reply_to,
-                                         attachments=att_bytes or None)
-            msg = sender.OutgoingMessage(
-                account=acc,
-                raw_bytes=bytes(mime),
-                to=to, cc=cc or "", bcc=bcc or "",
-                username=cred_username, user_scope_id=user_scope_id,
-                subject=subject, body=body or "",
-                message_id=mime["Message-ID"], in_reply_to=in_reply_to,
-                attachments=attachments or None,  # paths - only the delegate tail uses these
-            )
-            res = sender.send(msg)
+            svc = MailService(scope)
+            queued = svc.queue_send(account_id, to, subject, body or "", cc=cc or "", bcc=bcc or "",
+                                    in_reply_to=in_reply_to or "", undo_seconds=0, sent_by="agent",
+                                    attachments=att_bytes or None, attachment_meta=attachments or None)
+            deliver_queued_sends(scope, acc, cred_username, account_id, service=svc)
+            outcome = svc.send_outcome(int(queued["op_id"]))
         except Exception as e:
             return f"Failed to send email: {e}"
-        if res.ok:
+        state, error = outcome["state"], outcome["error"]
+        if state == "done":
             suffix = f" with {len(attachments)} attachment(s)" if attachments else ""
             cc_suffix = f", cc {cc}" if cc else ""
             return f"Email{suffix} sent to {to}{cc_suffix} from {account_id}."
-        if res.classification == "ambiguous":
+        if state == "pending":
+            return (f"The email to {to} is queued in the outbox and will be retried shortly "
+                    "(the server did not accept it on the first attempt).")
+        if outcome["delivery"] == "ambiguous":
             # Handed to the server but not confirmed: it MAY have been delivered.
             # Tell the model NOT to resend (locked decision: no false 'failed').
             return ("The email may already have been delivered but the server did not "
                     "confirm it - do NOT resend without checking the Sent folder first."
-                    + (f" Detail: {res.error}" if res.error else ""))
+                    + (f" Detail: {error}" if error else ""))
         prov = (acc.get("provider") or "imap").lower()
         if prov in ("gmail", "microsoft"):
             prov_hint = f" ({prov.upper()} submission failed - check connection in Settings -> Connections -> Email)"
         else:
             prov_hint = " (check SMTP settings and credentials in Settings)"
-        return f"Failed to send email{prov_hint}." + (f" Detail: {res.error}" if res.error else "")
+        return f"Failed to send email{prov_hint}." + (f" Detail: {error}" if error else "")

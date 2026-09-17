@@ -15,8 +15,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl';
 import {
     AlertTriangle, Archive, ChevronRight, CornerUpLeft, CornerUpRight, Inbox, Loader2, Mail,
-    MailOpen, Moon, Paperclip, PenSquare, RefreshCw, Reply, ReplyAll, Search, Settings,
-    ShieldCheck, Sparkles, Star, Sun,
+    Bot, MailOpen, Moon, Paperclip, PenSquare, RefreshCw, Reply, ReplyAll, Search, Settings,
+    Shield, ShieldAlert, ShieldCheck, Sparkles, Star, Sun,
     Tag, Trash2, X,
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
@@ -48,12 +48,26 @@ interface ThreadRow {
     suspicious_for_agent?: boolean; suspicious_reasons?: string[];
     /** The inbox's state of the thread (INBOX.md): the last word is the correspondent's and nobody answered. */
     waits?: boolean; waits_reason?: string; done?: boolean; answered_by_agent?: boolean;
+    /** The newest message's verdict (EMAIL_CLIENT.md, "Verification and cases"). */
+    auth?: AuthSummary;
+    /** The agent's held answer to this thread, waiting for the reader's approval (FRONT_OFFICE.md, "Mail"). */
+    draft?: DraftRow | null;
+}
+interface DraftRow { op_id: number; to: string; subject: string; body: string; created_at: string }
+/** What the store decided about a message at ingest: did a person write it, and did the
+ *  sender authenticate with the account's own provider. `state` is unknown until the
+ *  provider's Authentication-Results id is learned for the account. */
+interface AuthSummary {
+    state: 'verified' | 'via' | 'unverified' | 'unknown';
+    source?: string; aligned_by?: string; via_domain?: string; dkim_domain?: string; from_domain?: string;
+    dmarc?: string; flags?: string[]; machine_kind?: string; machine_reason?: string;
 }
 interface Msg {
     id: number; thread_id?: number; subject: string; from_addr: string; to_addrs: string; date_ts?: number;
     internaldate_ts?: number; snippet: string; flags: string[]; folder_name: string;
     has_attachments: number; answered_at?: string; category?: string;
     suspicious_for_agent?: boolean; suspicious_reasons?: string[];
+    auth?: AuthSummary;
 }
 interface Body {
     html: string | null; text: string; blocked_remote: number; cached: boolean;
@@ -101,6 +115,47 @@ function fmtDateStr(s?: string): string {
 // Gmail-style categories the sync produces + the user can relabel to. Matches the
 // classic dashboard's STANDARD_CATEGORIES; 'primary' is the default and shows no chip.
 const STD_CATEGORIES = ['primary', 'social', 'promotions'] as const;
+
+const MACHINE_KINDS = ['bounce', 'mdn', 'auto_reply', 'list', 'bulk', 'calendar', 'own_loop', 'null_return_path'] as const;
+
+/** The sender-verification badge, Gmail's three states: a shield for a verified sender
+ *  (the provider's DMARC, or an aligned DKIM or SPF pass), a grey shield for a pass on
+ *  another domain ("via"), a warning for an unverified sender (red when the mail claims the
+ *  owner's own domain). Nothing while the state is unknown: no provider id is learned yet,
+ *  and a badge that says "unverified" for every mail would teach the reader to ignore it.
+ *  Machine mail (a bounce, an auto-reply, a list) gets its kind instead of a trust badge. */
+function AuthBadge({ auth, compact }: { auth?: AuthSummary; compact?: boolean }) {
+    const t = useTranslations('mailV2');
+    if (!auth) return null;
+    const kind = auth.machine_kind || '';
+    if (kind && (MACHINE_KINDS as readonly string[]).includes(kind)) {
+        const label = t(`auth.machine.${kind}`);
+        return compact
+            ? <Bot className="w-3.5 h-3.5 flex-shrink-0 text-[#9a9a9a]" aria-label={label} />
+            : <span className="inline-flex items-center gap-1 text-[11px] text-[#9a9a9a]"><Bot className="w-3.5 h-3.5" />{label}</span>;
+    }
+    if (auth.state === 'verified') {
+        const label = t('auth.verified', { method: (auth.aligned_by || '').toUpperCase(), domain: auth.dkim_domain || auth.from_domain || '' });
+        return compact
+            ? <ShieldCheck className="w-3.5 h-3.5 flex-shrink-0 text-[#7bbf7b]" aria-label={label} />
+            : <span className="inline-flex items-center gap-1 text-[11px] text-[#7bbf7b]"><ShieldCheck className="w-3.5 h-3.5" />{label}</span>;
+    }
+    if (auth.state === 'via') {
+        const label = t('auth.via', { domain: auth.via_domain || '' });
+        return compact
+            ? <Shield className="w-3.5 h-3.5 flex-shrink-0 text-[#9a9a9a]" aria-label={label} />
+            : <span className="inline-flex items-center gap-1 text-[11px] text-[#9a9a9a]"><Shield className="w-3.5 h-3.5" />{label}</span>;
+    }
+    if (auth.state === 'unverified') {
+        const spoof = (auth.flags || []).includes('own_domain_spoof');
+        const label = spoof ? t('auth.spoof') : t('auth.unverified');
+        const color = spoof ? 'text-[#e08c8c]' : 'text-[#d4a24e]';
+        return compact
+            ? <ShieldAlert className={cn('w-3.5 h-3.5 flex-shrink-0', color)} aria-label={label} />
+            : <span className={cn('inline-flex items-center gap-1 text-[11px]', color)}><ShieldAlert className="w-3.5 h-3.5" />{label}</span>;
+    }
+    return null;
+}
 function catDisplay(cat?: string): string {
     const c = (cat || '').trim();
     return c ? c.charAt(0).toUpperCase() + c.slice(1).replace(/_/g, ' ') : '';
@@ -501,6 +556,9 @@ function MessageView({ msg, expanded, onToggle, onRelabeled }: {
                             {fmtDateStr(msg.answered_at) ? t('answeredOn', { when: fmtDateStr(msg.answered_at) }) : t('answered')}
                         </span>
                     )}
+                    {msg.auth && (msg.auth.state !== 'unknown' || msg.auth.machine_kind) && (
+                        <span className="inline-flex items-center gap-1"><span className="text-[#9a9a9a]">·</span><AuthBadge auth={msg.auth} /></span>
+                    )}
                 </div>
             </button>
             {msg.suspicious_for_agent && (
@@ -655,6 +713,28 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
     // A send that exhausted its retries is parked in the outbox. Nothing used to
     // read that state, so the compose dialog reported success and the mail simply
     // never left - the one failure mode that must never be silent.
+    // The agent's held answer on the open thread: approve (it leaves through the outbox at
+    // once), edit (the reply composer opens with its text), or discard.
+    const [draftBusy, setDraftBusy] = useState(false);
+    const [draftNote, setDraftNote] = useState<string>('');
+    const activeRow = useMemo(() => threads.find(x => x.thread_id === activeThread) || null, [threads, activeThread]);
+    const sendDraft = useCallback(async (d: DraftRow) => {
+        setDraftBusy(true); setDraftNote('');
+        try {
+            const r = await jpost(`api/mail/drafts/${d.op_id}/send`, {});
+            setDraftNote(r?.state === 'done' ? t('draft.sent') : t('draft.failed', { error: r?.error || r?.state || '' }));
+            await loadThreads();
+        } catch (e) {
+            setDraftNote(t('draft.failed', { error: e instanceof Error ? e.message : '' }));
+        } finally { setDraftBusy(false); }
+    }, [loadThreads, t]);
+    const discardDraft = useCallback(async (d: DraftRow) => {
+        setDraftBusy(true); setDraftNote('');
+        try { await jpost(`api/mail/drafts/${d.op_id}`, undefined, 'DELETE'); await loadThreads(); }
+        catch { setDraftNote(t('actionFailed')); }
+        finally { setDraftBusy(false); }
+    }, [loadThreads, t]);
+
     const checkOutbox = useCallback(() => jfetch('api/mail/ops')
         .then(d => setFailedSends(
             ((d.ops || []) as { id: number; kind: string; state: string; subject?: string }[])
@@ -734,7 +814,7 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
         } catch { setError(t('actionFailed')); loadThreads(); }
     }, [activeThread, loadThreads, loadFolders, t]);
 
-    const openCompose = useCallback(async (mode: 'new' | 'reply' | 'replyAll' | 'forward', autoDraft = false) => {
+    const openCompose = useCallback(async (mode: 'new' | 'reply' | 'replyAll' | 'forward', autoDraft = false, bodyOverride?: string) => {
         // The auto draft belongs to the jump that asked for it: armed only once the reply
         // prefill is on screen, and off again for a new mail or a failed prefill, or the next
         // composer the person opens by hand would draft a mail nobody asked for.
@@ -745,7 +825,8 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
             const params = mode === 'forward' ? 'forward=true' : (mode === 'replyAll' ? 'reply_all=true' : '');
             const pre = await jfetch(`api/mail/messages/${newest.id}/reply-prefill?${params}`);
             setComposeAutoDraft(autoDraft);
-            setCompose(pre);
+            // The agent's held draft, edited by hand: its text above the quoted original.
+            setCompose(bodyOverride !== undefined ? { ...pre, body: `${bodyOverride}${pre?.body || ''}` } : pre);
         } catch { setComposeAutoDraft(false); setError(t('actionFailed')); }
     }, [threadMsgs, t]);
     useEffect(() => {
@@ -1028,6 +1109,7 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                                     {row.suspicious_for_agent && (
                                         <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 text-[#e08c8c]" aria-label={t('suspiciousBadge')} />
                                     )}
+                                    <AuthBadge auth={row.auth} compact />
                                     <span className="truncate">{row.subject || t('noSubject')}</span>
                                 </div>
                                 <div className="text-xs text-[#9a9a9a] truncate pr-14">{row.snippet}</div>
@@ -1074,6 +1156,25 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                                 <button type="button" title={t('forward')} onClick={() => openCompose('forward')}
                                     className="p-2 rounded-lg bg-[#262626] border border-[#2e2e2e] hover:border-[#444]"><CornerUpRight className="w-4 h-4" /></button>
                             </div>
+                            {activeRow?.draft && (
+                                <div className="mx-5 my-3 rounded-xl border border-[#4a3b1e] bg-[#2b2417] p-3 text-[13px]">
+                                    <div className="flex items-center gap-2 text-[#e0b866] font-medium">
+                                        <Sparkles className="w-4 h-4" />
+                                        <span>{t('draft.title')}</span>
+                                    </div>
+                                    <p className="text-xs text-[#c8b58a] mt-0.5">{t('draft.hint')}</p>
+                                    <pre className="mt-2 whitespace-pre-wrap font-sans text-[#e8e8e8] max-h-64 overflow-y-auto">{activeRow.draft.body}</pre>
+                                    <div className="mt-2 flex items-center gap-2 flex-wrap">
+                                        <button type="button" disabled={draftBusy} onClick={() => sendDraft(activeRow.draft as DraftRow)}
+                                            className="px-3 py-1.5 rounded-md bg-[#e05d44] text-white text-xs font-medium hover:bg-[#e8735d] disabled:opacity-50">{t('draft.send')}</button>
+                                        <button type="button" disabled={draftBusy} onClick={() => openCompose('reply', false, (activeRow.draft as DraftRow).body)}
+                                            className="px-3 py-1.5 rounded-md border border-[#4a3b1e] text-xs hover:bg-[#332a1a] disabled:opacity-50">{t('draft.edit')}</button>
+                                        <button type="button" disabled={draftBusy} onClick={() => discardDraft(activeRow.draft as DraftRow)}
+                                            className="px-3 py-1.5 rounded-md text-xs hover:bg-[#332a1a] disabled:opacity-50">{t('draft.discard')}</button>
+                                        {draftNote && <span className="text-xs text-[#c8b58a]">{draftNote}</span>}
+                                    </div>
+                                </div>
+                            )}
                             {hiddenCount > 0 && !showOlder && (
                                 <button type="button" onClick={() => setShowOlder(true)}
                                     className="w-full text-left px-5 py-2.5 text-sm text-[#9a9a9a] border-b border-[#2e2e2e] hover:bg-[#1f1f1f]">

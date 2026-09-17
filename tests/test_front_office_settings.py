@@ -10,6 +10,7 @@ contact book's hint said the agent answers them. The framework half is two pure 
 in channel_ingress_policy; the harness half is a route, a security event and the card.
 """
 import ast
+import json
 import asyncio
 import re
 from pathlib import Path
@@ -36,16 +37,19 @@ TENANT = "22222222-3333-4444-5555-666666666666"
 
 # ── the framework half: pure over the policy dict ──────────────────────────────────────
 
+_SHUT = {"whatsapp": False, "telegram": False, "email": False}
+
+
 def test_the_default_policy_keeps_every_front_office_door_shut():
     state = front_office_state(None)
-    assert state == {"enabled": False, "channels": {"whatsapp": False, "telegram": False},
-                     "contacts_only": {"whatsapp": False, "telegram": False}}
+    assert state == {"enabled": False, "channels": dict(_SHUT), "contacts_only": dict(_SHUT),
+                     "email_reply_mode": "draft", "email_opened_at": 0}
 
 
 def test_opening_one_channel_opens_only_that_door():
     policy = set_front_office(None, True, "whatsapp")
-    assert front_office_state(policy) == {"enabled": True, "channels": {"whatsapp": True, "telegram": False},
-                                          "contacts_only": {"whatsapp": False, "telegram": False}}
+    assert front_office_state(policy) == {"enabled": True, "channels": dict(_SHUT, whatsapp=True),
+                                          "contacts_only": dict(_SHUT), "email_reply_mode": "draft", "email_opened_at": 0}
     # The door is the contact rule of evaluate_ingress, nothing else.
     assert evaluate_ingress("whatsapp", policy, explicit_match=False, contact_match=True) == (True, "contact_fallback_override")
     assert evaluate_ingress("telegram", policy, explicit_match=False, contact_match=True) == (False, "not_paired")
@@ -54,10 +58,11 @@ def test_opening_one_channel_opens_only_that_door():
 
 
 def test_the_master_switch_opens_and_closes_every_front_office_channel():
-    opened = set_front_office(None, True)
-    assert front_office_state(opened)["channels"] == {"whatsapp": True, "telegram": True}
+    opened = set_front_office(None, True, now=1_700_000_000)
+    assert front_office_state(opened)["channels"] == {"whatsapp": True, "telegram": True, "email": True}
     closed = set_front_office(opened, False)
-    assert front_office_state(closed) == front_office_state(None)
+    assert front_office_state(closed)["channels"] == front_office_state(None)["channels"]
+    assert front_office_state(closed)["email_opened_at"] == 1_700_000_000, "the stamp survives a close"
 
 
 def test_opening_never_touches_the_modes_or_the_throttle():
@@ -73,8 +78,8 @@ def test_closing_under_a_permissive_global_mode_really_closes():
     """The expert setting `mode: permissive` lets contacts in everywhere; switching a channel
     off must win over it, or the UI shows "off" while the bridge answers."""
     policy = set_front_office({"mode": "permissive"}, False, "whatsapp")
-    assert front_office_state(policy)["contacts_only"] == {"whatsapp": False, "telegram": True}
-    assert front_office_state(policy)["channels"] == {"whatsapp": False, "telegram": False}
+    assert front_office_state(policy)["contacts_only"] == {"whatsapp": False, "telegram": True, "email": True}
+    assert front_office_state(policy)["channels"] == dict(_SHUT)
     assert policy["whatsapp"] == {"mode": "paired_only", "allow_contact_fallback": False, "open_to_new_senders": False}
     assert evaluate_ingress("whatsapp", policy, explicit_match=False, contact_match=True) == (False, "not_paired")
     assert policy["mode"] == "permissive", "the global mode is the admin's: never rewritten"
@@ -88,9 +93,9 @@ def test_closing_under_a_channel_permissive_override_really_closes():
 
 def test_permissive_reads_as_contacts_only_never_as_an_open_channel():
     state = front_office_state({"mode": "permissive"})
-    assert state["contacts_only"] == {"whatsapp": True, "telegram": True} and state["channels"] == {"whatsapp": False, "telegram": False}
+    assert state["contacts_only"] == {"whatsapp": True, "telegram": True, "email": True} and state["channels"] == dict(_SHUT)
     state = front_office_state({"whatsapp": {"mode": "permissive"}})
-    assert state["contacts_only"] == {"whatsapp": True, "telegram": False}
+    assert state["contacts_only"] == {"whatsapp": True, "telegram": False, "email": False}
 
 
 def test_a_channel_without_a_contact_lane_is_refused():
@@ -106,8 +111,41 @@ def test_the_setter_returns_a_normalized_policy_and_leaves_discord_alone():
     assert policy["discord"] == {"mode": "inherit", "allow_contact_fallback": True, "open_to_new_senders": False}
 
 
-def test_front_office_channels_are_a_strict_subset_of_the_routable_channels():
-    assert set(FRONT_OFFICE_CHANNELS) < set(_SUPPORTED_CHANNELS) == set(ROUTABLE_CHANNELS)
+def test_front_office_channels_are_the_messengers_with_a_contact_lane_plus_mail():
+    """The messenger Front Office channels are a strict subset of the routable channels;
+    mail is the one ingress-only channel (an answering lane in vaf/mail/inbound.py, no
+    bridge, no send tool), so it is a Front Office channel without being routable."""
+    from vaf.core.channel_ingress_policy import MAIL_CHANNEL, MESSENGER_FRONT_OFFICE_CHANNELS
+    assert set(MESSENGER_FRONT_OFFICE_CHANNELS) < set(_SUPPORTED_CHANNELS) == set(ROUTABLE_CHANNELS)
+    assert set(FRONT_OFFICE_CHANNELS) == set(MESSENGER_FRONT_OFFICE_CHANNELS) | {MAIL_CHANNEL}
+    assert MAIL_CHANNEL not in ROUTABLE_CHANNELS
+
+
+def test_mail_is_a_front_office_channel_because_the_answering_lane_subscribes_to_new_mail():
+    """MUTATION: drop the on_new_mail registration from web_server.py, or the lane module,
+    and this goes red: a Front Office switch for a channel nothing answers on would switch
+    nothing."""
+    lane = REPO / "vaf" / "mail" / "inbound.py"
+    assert lane.exists() and "def handle_new_mail" in lane.read_text(encoding="utf-8")
+    server = (REPO / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    assert "on_new_mail(" in server and "inbound.handle_new_mail" in server
+
+
+def test_the_mail_switch_stamps_the_moment_and_the_reply_mode_is_its_own_setting():
+    from vaf.core.channel_ingress_policy import set_email_reply_mode
+    policy = set_front_office(None, True, "email", now=1_700_000_000)
+    assert policy["email"]["open_to_new_senders"] and policy["email"]["opened_at"] == 1_700_000_000
+    assert front_office_state(policy)["channels"]["email"] and front_office_state(policy)["email_reply_mode"] == "draft"
+    again = set_front_office(policy, True, "email", now=1_700_000_500)
+    assert again["email"]["opened_at"] == 1_700_000_500, "re-enabling stamps again"
+    off = set_front_office(again, False, "email")
+    assert not off["email"]["open_to_new_senders"] and off["email"]["opened_at"] == 1_700_000_500
+    sending = set_email_reply_mode(off, "send")
+    assert front_office_state(sending)["email_reply_mode"] == "send"
+    assert normalize_policy({"email": {"reply_mode": "guess", "opened_at": "x"}})["email"] == {
+        "mode": "inherit", "allow_contact_fallback": False, "open_to_new_senders": False, "reply_mode": "draft", "opened_at": 0}
+    with pytest.raises(ValueError):
+        set_email_reply_mode(None, "later")
 
 
 # ── the tuple against the bridges ──────────────────────────────────────────────────────
@@ -211,8 +249,8 @@ def test_the_state_carries_the_doors_the_other_door_and_the_callers_own_book(con
 
     state = asyncio.run(routes.get_front_office(_req()))
     assert state["enabled"] is False
-    assert state["channels"] == {"whatsapp": False, "telegram": False}
-    assert state["channels_connected"] == {"whatsapp": True, "telegram": False}, "the admin reads the global flags"
+    assert state["channels"] == dict(_SHUT)
+    assert state["channels_connected"] == {"whatsapp": True, "telegram": False, "email": False}, "the admin reads the global flags; no mail account, no mail"
     assert state["whatsapp_inbound_to_agent"] is True
     assert state["reply_window_hours"] == 48.0
     assert state["reachable_contacts"] == 1, "Dave has no flag, Erin is another book"
@@ -220,7 +258,7 @@ def test_the_state_carries_the_doors_the_other_door_and_the_callers_own_book(con
 
     tenant = asyncio.run(routes.get_front_office(_req("bob", TENANT, "user")))
     assert tenant["reachable_contacts"] == 1, "the tenant's own book, never the admin's"
-    assert tenant["channels_connected"] == {"whatsapp": False, "telegram": True}, "a tenant reads their own sliders"
+    assert tenant["channels_connected"] == {"whatsapp": False, "telegram": True, "email": False}, "a tenant reads their own sliders"
     assert tenant["admin"] is False
 
 
@@ -230,19 +268,21 @@ def test_the_switch_writes_the_policy_and_records_one_event_per_changed_channel(
     admin = {"username": "alice", "role": "admin"}
 
     out = asyncio.run(routes.put_front_office(routes.FrontOfficeUpdate(enabled=True), _req(), admin))
-    assert out["enabled"] is True and out["channels"] == {"whatsapp": True, "telegram": True}
+    assert out["enabled"] is True and out["channels"] == {"whatsapp": True, "telegram": True, "email": True}
     assert front_office_state(config["channel_ingress_policy"])["enabled"] is True, "saved through Config.save"
     assert sorted(events, key=lambda e: e[1]["channel"]) == [
+        ("front_office_changed", {"channel": "email", "username": "alice", "detail": "on, 0 contacts granted"}),
         ("front_office_changed", {"channel": "telegram", "username": "alice", "detail": "on, 0 contacts granted"}),
         ("front_office_changed", {"channel": "whatsapp", "username": "alice", "detail": "on, 0 contacts granted"}),
     ]
+    assert config["channel_ingress_policy"]["email"]["opened_at"] > 0, "the mail switch stamps the moment"
 
     events.clear()
     asyncio.run(routes.put_front_office(routes.FrontOfficeUpdate(enabled=True), _req(), admin))
     assert events == [], "a write that changes nothing records nothing"
 
     out = asyncio.run(routes.put_front_office(routes.FrontOfficeUpdate(enabled=False, channel="telegram"), _req(), admin))
-    assert out["channels"] == {"whatsapp": True, "telegram": False}
+    assert out["channels"] == {"whatsapp": True, "telegram": False, "email": True}
     assert events == [("front_office_changed", {"channel": "telegram", "username": "alice", "detail": "off"})]
     assert config["channel_ingress_policy"]["mode"] == "paired_only", "the mode is not the switch's to write"
 
@@ -448,8 +488,8 @@ def test_removing_a_document_stops_its_learn_and_forgets_the_lane_rows(config, m
 def test_switching_a_channel_on_opens_it_to_new_senders_and_implies_the_contact_door():
     policy = set_front_office(None, True, "whatsapp")
     state = front_office_state(policy)
-    assert state["channels"] == {"whatsapp": True, "telegram": False}
-    assert state["contacts_only"] == {"whatsapp": False, "telegram": False}
+    assert state["channels"] == dict(_SHUT, whatsapp=True)
+    assert state["contacts_only"] == dict(_SHUT)
     assert policy["whatsapp"] == {"mode": "inherit", "allow_contact_fallback": True, "open_to_new_senders": True}
     # A stranger is answered as a Front Office contact; a person switched off is not.
     assert evaluate_ingress("whatsapp", policy, explicit_match=False, contact_match=False) == (True, "front_office_open")
@@ -487,10 +527,10 @@ def test_switching_a_channel_on_grants_every_contact_of_that_channel_in_the_call
     contacts_store.create_contact("Frank", "bob", user_scope_id=TENANT, whatsapp_phone="+491700000003")
 
     state = asyncio.run(routes.get_front_office(_req()))
-    assert state["channel_contacts"] == {"whatsapp": {"total": 2, "allowed": 1}, "telegram": {"total": 1, "allowed": 0}}
+    assert state["channel_contacts"] == {"whatsapp": {"total": 2, "allowed": 1}, "telegram": {"total": 1, "allowed": 0}, "email": {"total": 0, "allowed": 0}}
 
     out = asyncio.run(routes.put_front_office(routes.FrontOfficeUpdate(enabled=True, channel="whatsapp"), _req(), {"role": "admin"}))
-    assert out["channels"] == {"whatsapp": True, "telegram": False}
+    assert out["channels"] == dict(_SHUT, whatsapp=True)
     assert out["channel_contacts"]["whatsapp"] == {"total": 2, "allowed": 2}, "Carol was granted, Erin already was"
     assert out["channel_contacts"]["telegram"] == {"total": 1, "allowed": 0}, "Dave has no WhatsApp key"
     assert contacts_store.get_contact_by_id(carol["id"], "alice", user_scope_id=SCOPE)["allow_as_assistant_user"] is True
@@ -565,3 +605,33 @@ def test_a_stranger_on_telegram_is_enrolled_for_the_one_owner_and_kept_out_when_
 
     state["telegram_config"]["whitelist"].append({"telegram_user_id": "2", "user_scope_id": TENANT, "vaf_username": "bob"})
     assert tg._resolve_telegram_user("556", sender) == (None, False), "two owners: a stranger cannot be attributed"
+
+
+# ── the inbox and the Inbound window point at each other ────────────────────────────────
+
+def test_the_inbox_and_the_inbound_window_are_linked_both_ways():
+    """The inbox shows what Inbound answers; Inbound decides how. Each opens the other the
+    way a chat jump does: the inbox closes first, Settings opens on Connections."""
+    page = (REPO / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert "setSettingsChatJump({ channel: 'front_office' });" in page
+    assert "onOpenInbox={() => { handleSettingsClose(); setIsInboxOpen(true); }}" in page
+    settings = _SETTINGS.read_text(encoding="utf-8")
+    assert "| { channel: 'front_office' };" in settings
+    assert "if (initialChatJump.channel === 'front_office') {" in settings
+    assert "onOpenInbox={onOpenInbox ? () => { setShowFrontOfficeDashboard(false); onOpenInbox(); } : undefined}" in settings
+    inbox = (REPO / "web" / "components" / "inbox" / "InboxWindow.tsx").read_text(encoding="utf-8")
+    assert "onClick={() => { onClose(); onOpenInbound(); }}" in inbox, "the inbox closes before Settings opens"
+    assert "t('rail.inbound')" in inbox
+    window = _WINDOW.read_text(encoding="utf-8")
+    assert "t('openInbox')" in window and "onOpenInbox" in window
+
+
+def test_the_reply_window_note_is_shown_only_while_whatsapp_inbound_is_off():
+    """With WhatsApp Inbound on, everyone who writes is answered anyway; a note about the
+    reply window would only contradict the switch above it."""
+    window = _WINDOW.read_text(encoding="utf-8")
+    assert "{data && !data.channels.whatsapp && (" in window
+    assert "onNote" not in window
+    for loc in ("en", "de", "ja", "ko", "th", "tr", "zh"):
+        cat = json.loads((REPO / "web" / "messages" / f"{loc}.json").read_bytes())
+        assert "onNote" not in cat["settings"]["frontOffice"], loc

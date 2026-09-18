@@ -174,7 +174,8 @@ def test_the_card_is_mounted_and_fed_by_signals_not_by_a_timer():
 def test_the_card_has_no_hardcoded_copy():
     """Every string the person reads comes from the catalogues, in all seven languages."""
     card = (ROOT / "web" / "components" / "outbox" / "HeldSendCard.tsx").read_text(encoding="utf-8")
-    keys = {"title", "to", "noRecipient", "send", "discard", "more", "failed", "countdown"}
+    keys = {"title", "to", "noRecipient", "send", "discard", "more", "failed", "ambiguous",
+            "countdown"}
     for key in keys:
         assert f"t('{key}'" in card, key
     for lang in ("de", "en", "tr", "zh", "ja", "ko", "th"):
@@ -388,6 +389,9 @@ def test_the_send_button_is_the_house_white_and_locked_until_it_is_read():
     # Discard is never locked: throwing away something unread costs nothing.
     assert 'disabled={busy === `${r.kind}-${r.id}`} onClick={() => act(r, \'discard\')}' in card
     assert 'className="vaf-draft-rim pointer-events-none absolute inset-0 rounded-2xl"' in card
+    # A draft whose send was interrupted offers no Send button at all: it may have arrived, and
+    # the click that would repeat it is the one thing this card must not hand out.
+    assert "{r.state !== 'ambiguous' && (" in card and "t('ambiguous')" in card
 
     css = (ROOT / "web" / "app" / "globals.css").read_text(encoding="utf-8")
     rim = css.split("@keyframes vafDraftRim", 1)[1][:200]
@@ -404,11 +408,14 @@ def test_the_send_button_is_the_house_white_and_locked_until_it_is_read():
 def test_the_card_carries_no_colour_of_its_own():
     """MUTATION: bring the amber back.
 
-    The card is the agent's output in the conversation, not a warning strip, so it wears the
-    same neutral surface and border tokens as the rest of the theme. An amber card reads as an
+    The card is the agent's output in the conversation, not a warning strip, so its SURFACE and
+    BORDER wear the same neutral tokens as the rest of the theme. An amber card reads as an
     alert about the app, and the one thing on it that does signal is the rim, which breathes
-    and then stops.
+    and then stops. A single coloured LINE is a different thing: a draft whose send failed says
+    so in red, one that may already have gone out in amber, and both are facts about that one
+    draft rather than a colour the card wears.
     """
     card = (ROOT / "web" / "components" / "outbox" / "HeldSendCard.tsx").read_text(encoding="utf-8")
-    assert "amber" not in card
+    for token in ("bg-amber", "border-amber", "dark:bg-amber", "dark:border-amber"):
+        assert token not in card, token
     assert "dark:bg-[#1f1f1f]" in card and "dark:border-[#2e2e2e]" in card

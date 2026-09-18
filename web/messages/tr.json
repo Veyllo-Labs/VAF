@@ -2345,6 +2345,7 @@
     "discard": "At",
     "more": "ve {count} tane daha bekliyor",
     "failed": "Olmadı ({error}); taslak duruyor.",
+    "ambiguous": "Son deneme yarıda kaldı, bu yüzden mesaj gönderilmiş olabilir. Yeniden istemeden önce sohbete bak.",
     "countdown": "Önce oku ({seconds})"
   },
   "inbox": {

@@ -2345,6 +2345,7 @@
     "discard": "Verwerfen",
     "more": "und {count} weitere warten",
     "failed": "Das hat nicht geklappt ({error}); der Entwurf bleibt.",
+    "ambiguous": "Der letzte Versuch wurde unterbrochen, die Nachricht kann also schon unterwegs sein. Sieh im Chat nach, bevor du sie noch einmal anforderst.",
     "countdown": "Erst lesen ({seconds})"
   },
   "inbox": {

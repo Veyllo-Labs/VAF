@@ -256,10 +256,8 @@ def _store_sessions() -> list:
         except Exception:
             contacts, denied = set(), set()
         try:
-            from vaf.core.channel_ingress_policy import resolve_channel_policy
-            from vaf.core.config import Config
-            channel_open = bool(resolve_channel_policy(
-                "discord", Config.get("channel_ingress_policy"))["open_to_new_senders"])
+            from vaf.core.messaging_connections import front_office_open
+            channel_open = front_office_open("discord")
         except Exception:
             channel_open = False
         for row in chat_overview(row_user, user_scope_id=None, channel="discord", limit=500):

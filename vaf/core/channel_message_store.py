@@ -488,7 +488,8 @@ def settle_held_send(entry_id: int, username: str, state: str,
     """Move a parked call from `expect` to `state`. False when it was not in `expect` any
     more, which is what makes a double click harmless: the guard is in the WHERE, so two
     approvals cannot both claim the same draft. The states are the mail outbox's vocabulary:
-    held, sending (claimed by an approval), sent, discarded, failed. `expect` may be several
+    held, sending (claimed by an approval), sent, discarded, failed (the tool answered and the
+    message did not leave), ambiguous (a worker died mid-send; nobody knows). `expect` may be several
     states, because a draft the person may act on is either waiting or one whose last attempt
     failed, and both are theirs to send or drop."""
     init_store(username, user_scope_id)
@@ -516,11 +517,13 @@ def reclaim_stranded_held_sends(username: str, user_scope_id: Optional[str] = No
     """Park calls left in `sending` by a crashed or killed worker, and return how many.
 
     `decided_ts` is written when an approval CLAIMS the row, so it is the lease clock; a draft
-    may sit in `held` for days and is never touched here. The stranded row goes to `failed`,
-    never back to `held`: a messenger send has no idempotency key, so an interrupted attempt
-    may or may not have left, and re-arming it for a one-click retry would invite the double
-    send. The person sees it with the reason and decides, which is the same answer the mail
-    outbox gives for an interrupted send (`MailStore.reclaim_stale_ops`)."""
+    may sit in `held` for days and is never touched here. The stranded row goes to `ambiguous`
+    and to no other state: the worker died between handing the message to the bridge and
+    writing down what happened, so it may already have been delivered. `failed` would be a
+    claim nobody can make, and it is one click from being sent a second time; `ambiguous` is
+    listed with its reason and can only be dropped, so the person checks the conversation and
+    decides. Same answer as the mail outbox for an interrupted send, which parks the op and
+    never retries it (`MailStore.reclaim_stale_ops`)."""
     if not store_exists(username, user_scope_id):
         return 0
     init_store(username, user_scope_id)
@@ -528,9 +531,10 @@ def reclaim_stranded_held_sends(username: str, user_scope_id: Optional[str] = No
     conn = _get_conn(username, user_scope_id)
     try:
         cur = conn.execute(
-            "UPDATE held_sends SET state = 'failed', error = ? "
+            "UPDATE held_sends SET state = 'ambiguous', error = ? "
             "WHERE username = ? AND state = 'sending' AND decided_ts IS NOT NULL AND decided_ts < ?",
-            ("The last attempt was interrupted. It is not sent again on its own.",
+            ("The last attempt was interrupted. It may already have been sent, so it is "
+             "neither sent again nor counted as failed: check the conversation.",
              (username or "").strip() or "", cutoff),
         )
         conn.commit()

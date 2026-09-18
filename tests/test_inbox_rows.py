@@ -178,6 +178,32 @@ def test_the_reply_window_is_the_one_rule_left_and_opens_no_door(world):
     assert _row("whatsapp:+491700000052")["reply_window_until"] is None
 
 
+def test_an_open_telegram_channel_needs_the_one_owner_the_bridge_needs(world, monkeypatch):
+    """The Telegram bot is shared by every account on the install, so with several owners on
+    the whitelist the bridge refuses a stranger it cannot attribute. The row has to say the
+    same thing: it used to read the policy flag alone and call such a chat "contact", which
+    tells the person the agent is answering somebody it turns away.
+
+    MUTATION: read `resolve_channel_policy(...)["open_to_new_senders"]` in `_messenger_rows`
+    again and the two-owner case goes red.
+    """
+    from vaf.core.channel_ingress_policy import set_front_office
+    cfg = dict(CONFIG)
+    cfg["channel_ingress_policy"] = set_front_office(None, True, "telegram")
+    import vaf.core.config as cfg_mod
+    monkeypatch.setattr(cfg_mod.Config, "get", classmethod(lambda cls, key, default=None: cfg.get(key, default)))
+    _msg("555", "hallo", ts=NOW - 100, channel="telegram")
+    assert _row("telegram:555")["mode"] == "contact", "one owner: the open channel answers them"
+
+    cfg["telegram_config"] = dict(CONFIG["telegram_config"],
+                                  whitelist=list(CONFIG["telegram_config"]["whitelist"]) +
+                                  [{"telegram_user_id": "8", "vaf_username": "bob", "user_scope_id": OTHER}])
+    assert _row("telegram:555")["mode"] == "readonly", "two owners: the bridge turns them away"
+    # The owner's own chat and a relay entry are unaffected: they are paired, not strangers.
+    _msg("7", "owner", ts=NOW - 90, channel="telegram")
+    assert _row("telegram:7")["mode"] == "owner"
+
+
 def test_views_groups_and_the_done_toggle(world):
     _msg("+491700000042", "waiting", ts=NOW - 900)
     _msg("+491700000043", "seen and answered", ts=NOW - 850)

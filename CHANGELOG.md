@@ -28,7 +28,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   message gets read before it goes; discarding it is possible at once. A draft is only ever
   used up by a send that reports the message left: if the WhatsApp bridge is down or the mail
   cannot go out, the draft stays in the card with the reason on it, and it is yours to try
-  again or drop.
+  again or drop. If VAF is killed in the middle of a send, the draft comes back saying the
+  message may already have been on its way, and that one can only be dropped: nothing here
+  may hand you a button that sends the same message twice.
 - **Inbound on Discord.** The Inbound window switches Discord like the other channels:
   with it on, anybody the admin has not decided about is answered in Front Office mode when
   they write the bot a direct message, and added to the admin's book (where they can be

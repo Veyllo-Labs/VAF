@@ -29,19 +29,27 @@ _LIMIT_MAX = 100
 
 
 def _mail_service(user: Dict[str, Any]):
-    """The caller's own mail service, or None when this identity has no mail at all.
+    """The caller's own mail service, or None when this identity has no mail lane at all.
 
-    None rather than an exception: an install without a mail account, or a scope whose store
-    was never created, must answer "no such draft" and not a 500. The scope comes from the
-    auth dependency, so a mail id can only ever be looked up in the caller's own outbox.
+    None rather than an exception for the two cases that MEAN "no mail here": a scope the
+    fail-closed constructor refuses, and an install whose mail module is not importable. Not
+    for anything else. `MailStore` creates its file on construction, so a missing store is not
+    an error at all - it answers with an empty outbox - and a broad `except` could only ever
+    turn a real failure (a permission error, a corrupt database) into "no mail account", which
+    is the one answer that sends the person looking in the wrong place. Those propagate and
+    the route reports an operational error. The scope comes from the auth dependency, so a
+    mail id can only ever be looked up in the caller's own outbox.
     """
     scope = (user.get("user_scope_id") or "").strip()
     if not scope:
         return None
     try:
         from vaf.mail.service import MailService
+    except ImportError:
+        return None
+    try:
         return MailService(scope)
-    except Exception:
+    except ValueError:
         return None
 
 

@@ -452,7 +452,11 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
     /** One decision at a time for one person: the group is dead until the PATCH has answered,
      *  so a second click cannot overtake the first. */
     const setAccess = async (id: string, value: 'allowed' | 'denied' | 'undecided') => {
-        if (accessBusy) return;
+        // Per CONTACT, matching the buttons that are disabled: a global guard would silently
+        // swallow a click on the person you switched to while the previous PATCH was still in
+        // flight, and their buttons look perfectly enabled (only one record is on screen, so
+        // that is the reachable case). Two writes to two different records are no race.
+        if (accessBusy === id) return;
         setAccessBusy(id);
         try {
             await patchContact(id, { assistant_access: value });

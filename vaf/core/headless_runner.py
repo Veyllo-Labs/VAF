@@ -2830,6 +2830,12 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     agent._front_office_chat = None
                     agent._front_office_contact = None
                     agent._active_tools = None
+                    # Cleared with them, for the same reason: one agent object serves every
+                    # queued turn, and a mark left standing by a timer would tell the next
+                    # turn that nobody is watching - which is exactly when the outward hold
+                    # stands down. The per-task assignment above covers the loop's own path;
+                    # this covers every other turn that reaches the same object.
+                    agent._unattended_turn = False
                 try:
                     if is_debug_logging_enabled():
                         from datetime import datetime as _dt

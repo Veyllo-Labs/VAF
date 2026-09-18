@@ -13,7 +13,7 @@ Also persists and resolves user -> telegram_chat_id for proactive Telegram sends
 import json
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from vaf.core.config import Config
 from vaf.core.platform import Platform
@@ -45,6 +45,45 @@ def reply_window_hours() -> float:
     except (TypeError, ValueError):
         hours = WA_REPLY_WINDOW_HOURS_DEFAULT
     return max(0.0, hours)
+
+
+def single_telegram_owner() -> Optional[Tuple[Optional[str], str]]:
+    """(scope, username) when exactly ONE account is paired on Telegram, else None.
+
+    The Telegram bot is shared by every account on the install, so a sender who is nobody's
+    paired endpoint cannot be attributed to an owner when there are several: whose contact
+    would they be, whose memory would the turn read? A WhatsApp number belongs to one account
+    and the Discord lane is the local admin's, so neither needs this.
+    """
+    tc = Config.get("telegram_config") or {}
+    whitelist = (tc.get("whitelist") or []) if isinstance(tc, dict) else []
+    owners = {(str(e.get("user_scope_id") or ""), str(e.get("vaf_username") or "admin").strip())
+              for e in whitelist if isinstance(e, dict)}
+    if len(owners) != 1:
+        return None
+    scope, uname = next(iter(owners))
+    return (scope or None, uname)
+
+
+def front_office_open(channel: str, raw_policy: Any = None) -> bool:
+    """Does this channel's Inbound really answer somebody nobody has decided about?
+
+    The policy flag is the switch; this is the switch AND whatever else that channel needs to
+    act on it. Today that is Telegram's single owner (above). The distinction matters because
+    two different answers to one question is how a row ends up claiming the agent answers in a
+    chat the bridge refuses: the bridges, the inbox rows and the channel windows all ask here.
+    """
+    from vaf.core.channel_ingress_policy import resolve_channel_policy
+    name = str(channel or "").strip().lower()
+    try:
+        if not resolve_channel_policy(name, raw_policy if raw_policy is not None
+                                      else Config.get("channel_ingress_policy"))["open_to_new_senders"]:
+            return False
+    except Exception:
+        return False
+    if name == "telegram":
+        return single_telegram_owner() is not None
+    return True
 
 
 def _entry_is_mine(entry: Dict[str, Any], username: Optional[str], user_scope_id: Optional[str]) -> bool:

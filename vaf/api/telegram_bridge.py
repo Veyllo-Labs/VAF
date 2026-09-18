@@ -34,7 +34,7 @@ for _noisy in ("httpx", "httpcore"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 from vaf.core.config import Config
-from vaf.core.channel_ingress_policy import evaluate_ingress, resolve_channel_policy, should_log_unauthorized
+from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
 from vaf.core.task_queue import TaskQueue
 from vaf.core.telegram_reply import set_telegram_reply_callback
 from vaf.core.tray_context import TrayContext
@@ -237,19 +237,19 @@ def _open_front_office_entry(telegram_user_id: str, policy: Any, sender: Any) ->
     """A sender the open Front Office on Telegram lets in (Settings, Connections): answered
     as a Front Office contact of the ONE owner this bot serves, enrolled in that owner's
     book WITHOUT a decision: the open channel is what answers them, and the record is there
-    so the owner can allow or deny them by hand. Named boundary: the bot is
-    shared by every account on the install, a WhatsApp number is not; with several owners
-    on the whitelist a stranger cannot be attributed to one of them and stays out."""
+    so the owner can allow or deny them by hand. The single-owner condition is the
+    framework's (`messaging_connections.front_office_open` / `single_telegram_owner`), because
+    the inbox rows and the channel windows have to give the same answer: a row that says the
+    agent answers in a chat this function refuses is a lie the person acts on. The bot is
+    shared by every account on the install, a WhatsApp number is not."""
     try:
-        if not resolve_channel_policy("telegram", policy)["open_to_new_senders"]:
+        from vaf.core.messaging_connections import front_office_open, single_telegram_owner
+        if not front_office_open("telegram", policy):
             return (None, False)
-        tc = Config.get("telegram_config") or {}
-        whitelist = tc.get("whitelist") or [] if isinstance(tc, dict) else []
-        owners = {(str(e.get("user_scope_id") or ""), str(e.get("vaf_username") or "admin").strip())
-                  for e in whitelist if isinstance(e, dict)}
-        if len(owners) != 1:
+        owner = single_telegram_owner()
+        if owner is None:
             return (None, False)
-        scope, uname = next(iter(owners))
+        scope, uname = owner
         from vaf.core.contacts_store import admit_front_office_sender
         name = str(getattr(sender, "full_name", None) or getattr(sender, "username", None) or "").strip()
         allowed, _reason, rec = admit_front_office_sender(

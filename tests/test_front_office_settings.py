@@ -647,7 +647,12 @@ def test_the_bridges_read_the_decision_and_enrol_who_the_open_door_let_in():
     assert 'if policy_reason == "front_office_open"' in wa and "enrol_front_office_contact(" in wa
     tg = (REPO / "vaf" / "api" / "telegram_bridge.py").read_text(encoding="utf-8")
     assert "def _open_front_office_entry" in tg and "admit_front_office_sender(" in tg, "the stranger path is the shared admission"
-    assert "len(owners) != 1" in tg, "a shared bot with several owners cannot attribute a stranger"
+    # The single-owner condition moved into the framework, where the inbox rows and the channel
+    # windows read it too: a shared bot with several owners cannot attribute a stranger, and a
+    # row that claimed otherwise would say the agent answers in a chat the bridge refuses.
+    assert "front_office_open(" in tg and "single_telegram_owner()" in tg
+    inbox = (REPO / "vaf" / "core" / "inbox.py").read_text(encoding="utf-8")
+    assert "front_office_open(channel)" in inbox, "the rows ask the same function"
     dc = (REPO / "vaf" / "api" / "discord_bridge.py").read_text(encoding="utf-8")
     assert "def _admit_sender" in dc and "admit_front_office_sender(" in dc and "local_admin_identity()" in dc, \
         "Discord admits through the shared admission, in the local admin's book"

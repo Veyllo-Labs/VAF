@@ -263,13 +263,17 @@ def test_a_send_that_did_not_say_it_left_keeps_the_draft(scratch):
     assert outbound_hold.pending(USER, SCOPE) == [], "a sent draft leaves the list"
 
 
-def test_a_draft_stranded_mid_send_comes_back_to_the_person(scratch):
+def test_a_draft_stranded_mid_send_is_never_repeated_by_a_click(scratch):
     """A worker killed between the claim and the answer left the row in `sending`: invisible
     to the listing, unreachable by discard, and silently stuck for good.
 
-    MUTATION: drop the reclaim call from `pending()` and this goes red. The row is parked as
-    FAILED, never re-armed to held: a messenger send has no idempotency key, so nobody may
-    retry it on the person's behalf.
+    It comes back as AMBIGUOUS, not failed: the message was handed to the bridge and nobody
+    wrote down what happened, so it may have arrived. A messenger send has no idempotency key,
+    so the one thing the person must not be offered is a one-click repeat.
+
+    MUTATION: drop the reclaim call from `pending()` and the listing assertion goes red; park
+    the row as "failed" instead and the send assertion goes red, because a failed draft is
+    sendable again by design.
     """
     entry_id = outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+1", "message": "x"},
                                                  username=USER, user_scope_id=SCOPE)
@@ -280,9 +284,20 @@ def test_a_draft_stranded_mid_send_comes_back_to_the_person(scratch):
     assert store.reclaim_stranded_held_sends(USER, SCOPE, lease_seconds=300,
                                              now=time.time() + 301) == 1
     row = store.held_send(entry_id, USER, SCOPE)
-    assert row["state"] == "failed" and "interrupted" in row["error"].lower()
+    assert row["state"] == "ambiguous" and "may already have been sent" in row["error"]
     listed = outbound_hold.pending(USER, SCOPE)
-    assert len(listed) == 1 and listed[0]["id"] == entry_id and listed[0]["state"] == "failed"
+    assert len(listed) == 1 and listed[0]["id"] == entry_id and listed[0]["state"] == "ambiguous"
+
+    # Send is refused with the reason, and the tool is never touched.
+    tool = _FakeTool(answer="Message sent via WhatsApp.")
+    out = outbound_hold.approve_call(entry_id, username=USER, user_scope_id=SCOPE,
+                                     user_role="user", tools={"send_whatsapp": tool})
+    assert out["ok"] is False and "may already have been sent" in out["result"]
+    assert tool.calls == [], "a second delivery is not the machine's call to make"
+    assert store.held_send(entry_id, USER, SCOPE)["state"] == "ambiguous"
+    # Dropping it is the person's own answer, and it works.
+    assert outbound_hold.discard_call(entry_id, username=USER, user_scope_id=SCOPE)
+    assert outbound_hold.pending(USER, SCOPE) == []
 
 
 def test_discarding_drops_it_once(scratch):

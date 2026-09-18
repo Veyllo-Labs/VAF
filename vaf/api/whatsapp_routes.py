@@ -546,8 +546,8 @@ async def get_whatsapp_dashboard(request: Request):
     except Exception:
         pass
     try:
-        from vaf.core.channel_ingress_policy import resolve_channel_policy
-        channel_open = bool(resolve_channel_policy("whatsapp", Config.get("channel_ingress_policy"))["open_to_new_senders"])
+        from vaf.core.messaging_connections import front_office_open
+        channel_open = front_office_open("whatsapp")
     except Exception:
         channel_open = False
 

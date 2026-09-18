@@ -1006,6 +1006,11 @@ class Config:
         # Skipping the confirmation dialog is an instance-wide safety decision:
         # a non-admin LAN user must never be able to turn it on for themselves.
         "tool_confirmation_bypass_admins",
+        # The same decision for what LEAVES: with the outward hold off, a send the agent
+        # prepares on a chat turn goes out without anybody seeing it. There is one config
+        # file, so a non-admin write would switch it off for every account on the machine -
+        # a guard its own subject can disable is not a guard.
+        "outward_send_hold",
         # Server-side semantic turn-end: arming it makes every call stream
         # microphone PCM to the backend and downloads/loads a model there, for
         # the whole instance. Documented admin-only in CONFIG_SCHEMA.md, and the

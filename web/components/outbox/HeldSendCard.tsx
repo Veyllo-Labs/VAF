@@ -33,7 +33,8 @@ export type HeldSendRow = {
     subject: string;
     preview: string;
     created_ts: number;
-    /** 'held' while it waits, 'failed' when the last attempt did not say the message left. */
+    /** 'held' while it waits, 'failed' when the last attempt answered and the message did not
+     *  leave, 'ambiguous' when a worker died mid-send and nobody knows whether it arrived. */
     state?: string;
     /** Why the last attempt did not leave. Shown on the row, so nobody sends again blind. */
     error?: string;
@@ -166,12 +167,19 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
                     {r.state === 'failed' && (
                         <p className="text-xs text-red-600 dark:text-red-400">{t('failed', { error: r.error || '' })}</p>
                     )}
+                    {/* Interrupted mid-send: it may have arrived. The person gets the reason and
+                        the Discard button, and no Send, because a second click could be a second
+                        delivery and nothing here can tell. */}
+                    {r.state === 'ambiguous' && (
+                        <p className="text-xs text-amber-700 dark:text-[#e0b866]">{t('ambiguous')}</p>
+                    )}
                     <div className="flex gap-2 pt-1">
                         {/* The house's own primary button (bg-gray-900 light, #e6e6e6 dark): the
                             light tone is spelled out, because the bare white token under a dark
                             variant folds to the DARK surface colour and would hide the label (a
                             guard test pins that repo-wide). While the reading pause runs the
                             button is dead and says why; nothing is ever sent by the clock. */}
+                        {r.state !== 'ambiguous' && (
                         <button type="button" disabled={busy === `${r.kind}-${r.id}` || locked > 0}
                             onClick={() => act(r, 'send')}
                             className="px-3 py-1.5 text-sm font-medium rounded-md bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none disabled:opacity-50 inline-flex items-center gap-1.5 min-w-[7.5rem] justify-center">
@@ -179,6 +187,7 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
                                 ? <>{t('countdown', { seconds: locked })}</>
                                 : <><Send className="w-3.5 h-3.5" />{t('send')}</>}
                         </button>
+                        )}
                         <button type="button" disabled={busy === `${r.kind}-${r.id}`} onClick={() => act(r, 'discard')}
                             className="px-3 py-1.5 text-sm font-medium rounded-md bg-gray-200 dark:bg-[#2e2e2e] text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-[#3a3a3a] disabled:opacity-50 inline-flex items-center gap-1.5">
                             <Trash2 className="w-3.5 h-3.5" />{t('discard')}

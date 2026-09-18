@@ -2345,6 +2345,7 @@
     "discard": "Discard",
     "more": "and {count} more waiting",
     "failed": "That did not work ({error}); the draft stays.",
+    "ambiguous": "The last attempt was interrupted, so this message may already have been sent. Check the conversation before you ask for it again.",
     "countdown": "Read first ({seconds})"
   },
   "inbox": {

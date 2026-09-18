@@ -697,13 +697,14 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
             denied = set(denied_endpoints(username, user_scope_id, channel) or ())
         except Exception:
             contacts, denied = set(), set()
-        # Whether this channel answers people nobody decided about. The row has to know it or
-        # it calls a chat read-only while the agent is answering in it.
+        # Whether this channel answers people nobody decided about, asked through the one
+        # function the bridges ask (`messaging_connections.front_office_open`): the switch AND
+        # what the channel needs to act on it, which for Telegram is a single paired owner.
+        # Reading the policy flag alone made a row say "contact" about a Telegram stranger the
+        # bridge turns away, and a row that disagrees with the lane is worse than no row.
         try:
-            from vaf.core.channel_ingress_policy import resolve_channel_policy
-            from vaf.core.config import Config as _Cfg
-            channel_open = bool(resolve_channel_policy(
-                channel, _Cfg.get("channel_ingress_policy"))["open_to_new_senders"])
+            from vaf.core.messaging_connections import front_office_open
+            channel_open = front_office_open(channel)
         except Exception:
             channel_open = False
         for o in overview:

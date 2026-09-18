@@ -57,9 +57,13 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-# The states a draft can be sent or dropped from: it is waiting, or its last attempt failed
-# and it is still the person's. `sent` and `discarded` have left their hands.
-_ACTIONABLE: Tuple[str, ...] = ("held", "failed")
+# The states a draft can be SENT from: it is waiting, or its last attempt answered and the
+# message did not leave. `sent` and `discarded` have left the person's hands.
+_SENDABLE: Tuple[str, ...] = ("held", "failed")
+# What the person still owns, which is one state more: a send interrupted mid-flight may or
+# may not have arrived, so it is theirs to look at and drop, but never to repeat with one
+# click. A messenger send carries no idempotency key, so nobody can make that call for them.
+_ACTIONABLE: Tuple[str, ...] = _SENDABLE + ("ambiguous",)
 
 # The one chat source with a place to decide. See the module docstring for why this is a
 # positive test and not an exclusion list.
@@ -258,7 +262,8 @@ def pending(username: str, user_scope_id: Optional[str] = None, *,
 
     A call whose last attempt FAILED is listed too, with the reason on it: it is still the
     person's to send or drop, and a draft that is only reachable while everything works is not
-    a guard. Reading the list is also where a row a crashed worker left mid-send is parked
+    a guard. So is one left AMBIGUOUS by a worker that died mid-send, which can only be
+    dropped. Reading the list is also where such a row is parked
     (`reclaim_stranded_held_sends`), because this is the one call every surface makes first.
     """
     want = str(session_id or "").strip()
@@ -366,15 +371,22 @@ def approve_call(entry_id: int, *, username: str, user_scope_id: Optional[str],
 
     The row is CLAIMED (held -> sending) before the call runs, the way the mail outbox claims
     an op, so two clicks cannot send the same draft twice. A send that fails puts the draft
-    back to held with the error on it: a bridge that is down must not consume the draft. A
-    draft whose last attempt FAILED is claimable again, because it is still the person's to
-    send; only the states that have left the person's hands (sent, discarded) are not.
+    back with the error on it: a bridge that is down must not consume the draft. A draft whose
+    last attempt FAILED is claimable again, because the tool answered and the message did not
+    leave. One left AMBIGUOUS is not: the worker died between the bridge and the bookkeeping,
+    so a second attempt could be a second delivery, and nobody may make that choice on the
+    person's behalf. They see it with the reason and drop it, or ask the agent again.
     """
     from vaf.core import channel_message_store as store
 
     row = store.held_send(entry_id, username, user_scope_id)
     was = str((row or {}).get("state") or "")
-    if not row or was not in _ACTIONABLE:
+    if was == "ambiguous":
+        return {"ok": False, "result": (
+            "The last attempt was interrupted and this message may already have been sent. "
+            "Check the conversation: drop the draft if it arrived, and ask for it again if it "
+            "did not.")}
+    if not row or was not in _SENDABLE:
         return {"ok": False, "result": "This draft is not waiting any more."}
     tool_name = str(row.get("tool") or "")
     tool = (tools or {}).get(tool_name) or resolve_tool(tool_name)

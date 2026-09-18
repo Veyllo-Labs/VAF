@@ -57,6 +57,16 @@ class CreateContactTool(BaseTool):
         except ImportError as e:
             return f"Contacts unavailable: {e}"
 
+        # Two words or nothing. The store treats anything it does not recognise as "nobody
+        # decided", which is the right default for a NEW contact but the wrong answer to give
+        # silently: a model that wrote "block" would create the person it meant to refuse with
+        # no decision at all, and nothing would say so.
+        access = str(kwargs.get("assistant_access") or "").strip().lower()
+        if access and access not in ("allowed", "denied"):
+            return ("assistant_access must be 'allowed' (answered on every channel) or 'denied' "
+                    f"(answered nowhere); got '{kwargs.get('assistant_access')}'. Leave it out "
+                    "when the user has not decided.")
+
         contact = create_contact(
             name,
             username,
@@ -68,7 +78,7 @@ class CreateContactTool(BaseTool):
             how_to_address=(kwargs.get("how_to_address") or "").strip() or None,
             birthday=(kwargs.get("birthday") or "").strip() or None,
             notes=(kwargs.get("notes") or "").strip() or None,
-            assistant_access=str(kwargs.get("assistant_access") or "").strip().lower() or None,
+            assistant_access=access or None,
             company=(kwargs.get("company") or "").strip() or None,
             role=(kwargs.get("role") or "").strip() or None,
             tags=kwargs.get("tags") or None,

@@ -69,8 +69,11 @@ def list_pending(
         preview = (row.get("preview") or "").replace("\n", " ")[:60]
         # A draft whose last attempt failed is still waiting for the person, and the reason is
         # the whole point of showing it: without the line they would press send again blind.
-        if str(row.get("state") or "") == "failed":
+        state = str(row.get("state") or "")
+        if state == "failed":
             preview = f"[red]not sent:[/red] {(row.get('error') or '').strip()[:40]} | {preview}"
+        elif state == "ambiguous":
+            preview = f"[yellow]may already have been sent:[/yellow] {preview}"
         table.add_row(_when(row["created_ts"]), row["kind"], str(row["id"]), row["channel"],
                       (row.get("recipient") or "")[:40], preview)
     UI.console.print(table)

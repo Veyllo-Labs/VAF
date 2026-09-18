@@ -42,13 +42,21 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(wi, "notify_inbox_changed", lambda scope: None)
     store._reset_announce_state()
 
-    # No mail store in this scratch world: the mail half of the listing stays empty, which is
-    # also the shape of an install that has no mail account.
-    class _NoMail:
+    # No mail in this scratch world, in the shape a real install has it: the store exists and
+    # is empty. `MailStore` creates its file on construction, so "no mail account" never
+    # raises; it answers with an empty outbox and finds no op.
+    class _EmptyMail:
         def __init__(self, scope):
-            raise RuntimeError("no mail account")
+            self.user_scope_id = scope
+            self.store = SimpleNamespace(get_op=lambda _id: None)
+
+        def list_drafts(self, **kw):
+            return []
+
+        def discard_draft(self, _op_id):
+            return False
     import vaf.mail.service as svc_mod
-    monkeypatch.setattr(svc_mod, "MailService", _NoMail)
+    monkeypatch.setattr(svc_mod, "MailService", _EmptyMail)
     return monkeypatch
 
 
@@ -128,7 +136,38 @@ def test_an_unknown_kind_is_refused(world):
 
 
 def test_a_mail_verb_without_a_mail_store_does_not_pretend(world):
-    """A scope with no mail service answers 404 rather than reporting a send."""
+    """A scope with no mail answers 404 rather than reporting a send."""
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(orr.discard_entry("mail", 7, _request()))
+    assert exc.value.status_code == 404
+    # And the send verb: an empty outbox holds no such op, so the shared release answers
+    # "not waiting" and the route turns that into the same 404 rather than a report.
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(orr.send_entry("mail", 7, _request()))
+    assert exc.value.status_code == 404
+
+
+def test_a_broken_mail_store_is_an_error_and_not_a_missing_account(world, monkeypatch):
+    """"No mail account" is an ANSWER, and it has to be true. A store that cannot be opened
+    (a permission error, a corrupt database) used to be reported as one, which sends the
+    person to the mail settings over a disk problem.
+
+    MUTATION: catch `Exception` in `_mail_service` again and this goes red: the route answers
+    "no mail account" instead of letting the failure surface.
+    """
+    import vaf.mail.service as svc_mod
+
+    class _Broken:
+        def __init__(self, scope):
+            raise PermissionError("mail.db is not readable")
+    monkeypatch.setattr(svc_mod, "MailService", _Broken)
+    with pytest.raises(PermissionError):
+        asyncio.run(orr.discard_entry("mail", 7, _request()))
+    # The fail-closed constructor's own signal stays "no mail lane here", not an error.
+    class _NoScope:
+        def __init__(self, scope):
+            raise ValueError("MailService requires an explicit user_scope_id")
+    monkeypatch.setattr(svc_mod, "MailService", _NoScope)
     with pytest.raises(HTTPException) as exc:
         asyncio.run(orr.discard_entry("mail", 7, _request()))
     assert exc.value.status_code == 404

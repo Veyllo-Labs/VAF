@@ -4,7 +4,8 @@
 """
 Central contacts list with optional personal file per contact.
 Stored per user: data_dir/contacts.json (local admin) or data_dir/users/<username>/contacts.json.
-Used by the agent (list_contacts, get_contact) and by bridges for contact whitelist (allow_as_assistant_user).
+Used by the agent (list_contacts, get_contact) and by bridges for the owner's decision about a
+person (`contact_access`: allowed, denied, or nobody decided yet).
 """
 import json
 import logging
@@ -188,18 +189,6 @@ def _load_all(username: Optional[str] = None, user_scope_id: Optional[str] = Non
     return []
 
 
-def _every_book_path() -> List[Path]:
-    """Every contact book on this instance, each once: the admin's file and one per scope
-    and per user directory (the three places _contacts_path writes)."""
-    data_dir = Platform.data_dir()
-    paths = [data_dir / "contacts.json"]
-    for sub in ("scopes", "users"):
-        base = data_dir / sub
-        if base.is_dir():
-            paths.extend(sorted(p for p in base.glob("*/contacts.json") if p.is_file() and p not in paths))
-    return paths
-
-
 def _save_path(path: Path, contacts: List[Dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(contacts, indent=2), encoding="utf-8")
@@ -238,11 +227,6 @@ def get_contacts_by_name(name: str, username: Optional[str] = None, user_scope_i
         return []
     with _LOCK:
         return [dict(c) for c in _load_all(username, user_scope_id) if (c.get("name") or "").strip().lower() == name_clean.lower()]
-
-
-def _normalize_phone_for_match(value: str) -> str:
-    """Return digits only (for JID or E.164 comparison)."""
-    return "".join(c for c in (value or "") if c.isdigit())
 
 
 # JIDs that carry no phone number: a LID is an opaque id, a group or a broadcast list is not
@@ -299,39 +283,6 @@ def whatsapp_store_key(value: str) -> Optional[str]:
 
 # The older private name; the callers that grew up with it keep working.
 _phone_digits_canonical = phone_digits_canonical
-
-
-def get_contact_by_telegram_user_id(telegram_user_id: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Return the contact who has this telegram_user_id and allow_as_assistant_user=True, or None."""
-    tid = (telegram_user_id or "").strip()
-    if not tid:
-        return None
-    with _LOCK:
-        for c in _load_all(username, user_scope_id):
-            if not c.get("allow_as_assistant_user"):
-                continue
-            for val in _contact_telegram_values(c):
-                if (val or "").strip() == tid:
-                    return _contact_ensure_channels(dict(c))
-    return None
-
-
-def get_contact_by_whatsapp_phone(whatsapp_jid_or_phone: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Return the contact who has this WhatsApp number (JID or E.164) and allow_as_assistant_user=True, or None."""
-    raw = (whatsapp_jid_or_phone or "").strip()
-    if not raw:
-        return None
-    norm = _normalize_phone_for_match(raw.split("@")[0] if "@" in raw else raw)
-    if not norm:
-        return None
-    with _LOCK:
-        for c in _load_all(username, user_scope_id):
-            if not c.get("allow_as_assistant_user"):
-                continue
-            for p in _contact_whatsapp_values(c):
-                if _normalize_phone_for_match(p) == norm:
-                    return _contact_ensure_channels(dict(c))
-    return None
 
 
 def get_contact_name_by_phone(phone: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Optional[str]:
@@ -408,6 +359,7 @@ def create_contact(
     birthday: Optional[str] = None,
     notes: Optional[str] = None,
     allow_as_assistant_user: bool = False,
+    assistant_access: Optional[str] = None,
     company: Optional[str] = None,
     role: Optional[str] = None,
     tags: Any = None,
@@ -439,13 +391,19 @@ def create_contact(
         "how_to_address": (how_to_address or "").strip() or None,
         "birthday": (birthday or "").strip() or None,
         "notes": (notes or "").strip() or None,
-        "allow_as_assistant_user": bool(allow_as_assistant_user),
         "company": (company or "").strip() or None,
         "role": (role or "").strip() or None,
         "tags": _normalize_tags(tags),
         "source": (source or "manual").strip() or "manual",
         "created_at": _time.time(),
     }
+    # A creation carries a DECISION or none at all. The old bool is accepted from callers that
+    # predate the third state, and it can only ever mean "allowed": nobody creating a contact
+    # with the default is saying "never answer this person", and a veto now outranks the
+    # channel switch, so inventing one here would make every contact the form, the tool or a
+    # sync creates permanently unanswerable.
+    apply_contact_access(contact, assistant_access
+                         if assistant_access else (ACCESS_ALLOWED if allow_as_assistant_user else None))
     _sync_legacy_from_channels(contact)
     with _LOCK:
         contacts = _load_all(username, user_scope_id)
@@ -468,13 +426,22 @@ def update_contact(
                 allowed = {
                     "name", "channels", "whatsapp_phone", "telegram_username", "telegram_user_id", "email",
                     "preferred_language", "how_to_address", "birthday", "notes", "allow_as_assistant_user",
-                    "status", "company", "role", "tags",
+                    "assistant_access", "status", "company", "role", "tags",
                 }
                 for k, v in updates.items():
                     if k not in allowed:
                         continue
-                    if k == "allow_as_assistant_user":
-                        contacts[i][k] = bool(v)
+                    if k == "assistant_access":
+                        # The person's own decision: allowed, denied, or cleared back to
+                        # "nobody decided". Written through the one writer so the legacy bool
+                        # cannot drift away from it; an unknown word clears rather than
+                        # inventing a state.
+                        apply_contact_access(contacts[i], v)
+                    elif k == "allow_as_assistant_user":
+                        # A caller that still speaks the old bool: True is a grant, False is
+                        # the withdrawal of a decision, never a veto (bool() over a three-state
+                        # string is how a denial turns into a grant, Rule 4.7).
+                        apply_contact_access(contacts[i], ACCESS_ALLOWED if bool(v) else None)
                     elif k == "channels":
                         contacts[i]["channels"] = _normalize_channels(v)
                         _sync_legacy_from_channels(contacts[i])
@@ -1158,9 +1125,8 @@ def contact_activity_stats(
 
 def find_contact_by_phone(phone: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """The contact carrying this phone number on any phone/WhatsApp channel, regardless of
-    the Front Office flag (get_contact_by_whatsapp_phone answers the ingress question and
-    only sees contacts that may reach the assistant). Canonical-digit match, so 0152...
-    and +49152... are one number."""
+    the owner's decision about them (`contact_access` answers that separately). Canonical
+    digit match, so 0152... and +49152... are one number."""
     norm = _phone_digits_canonical(phone or "")
     if not norm:
         return None
@@ -1194,8 +1160,9 @@ def sync_channel_contacts(
         its name only when the contact had none or was named after its number;
       * no match creates the contact with the channel's name and the number as a
         `whatsapp` channel;
-      * `allow_as_assistant_user` is never touched: whether a person may reach the
-        assistant stays a decision the user takes in the contact book.
+      * no decision about the person is ever written: whether they may reach the assistant
+        stays the user's own answer in the contact book, and a synced record carries none
+        (which is why a record without one means "nobody decided", not "refused").
     The link itself is `links[channel] = {endpoint, display_name, last_seen_ts, linked_at}`,
     the field the dashboard's channel icon and "last contact via" line read. One load,
     one save. Returns {"created": n, "linked": n, "skipped": n}."""
@@ -1264,10 +1231,64 @@ def sync_channel_contacts(
     return out
 
 
+# ── may this person reach the assistant: three answers, not two ────────────────
+#
+# `allow_as_assistant_user` is a plain bool, and its False meant two different things: "the
+# owner switched this person off" and "nobody ever decided". They are not the same, and the
+# difference is the whole rule: a DENIED contact is never answered, even
+# on an open channel; an ALLOWED contact is answered on every channel where they have an
+# endpoint, even with the channel closed; a contact nobody decided about is answered only
+# while that channel stands open to new senders.
+#
+# Reading two states where three exist is how a guard goes quietly wrong, so there is ONE
+# reader and ONE writer, and every other site asks them. The old bool is still written, so a
+# record stays readable by anything that has not been converted, and an old record is read
+# through the same door: True means allowed, False means nobody decided (the channel sync
+# wrote that False for every named chat, so treating it as a denial would silence people the
+# owner never touched).
+
+ACCESS_ALLOWED = "allowed"
+ACCESS_DENIED = "denied"
+ACCESS_VALUES = (ACCESS_ALLOWED, ACCESS_DENIED)
+
+
+def contact_access(contact: Optional[Dict[str, Any]]) -> Optional[str]:
+    """`"allowed"`, `"denied"`, or None when nobody has decided about this person."""
+    if not isinstance(contact, dict):
+        return None
+    raw = str(contact.get("assistant_access") or "").strip().lower()
+    if raw in ACCESS_VALUES:
+        return raw
+    return ACCESS_ALLOWED if contact.get("allow_as_assistant_user") else None
+
+
+def apply_contact_access(contact: Dict[str, Any], access: Optional[str]) -> Dict[str, Any]:
+    """Write a decision into a record (in place) and keep the old bool in step. `None` clears
+    the decision back to "nobody decided", which is what a person un-deciding looks like."""
+    value = str(access or "").strip().lower()
+    if value not in ACCESS_VALUES:
+        contact.pop("assistant_access", None)
+        contact["allow_as_assistant_user"] = False
+        return contact
+    contact["assistant_access"] = value
+    contact["allow_as_assistant_user"] = value == ACCESS_ALLOWED
+    return contact
+
+
 def get_contacts_allowing_assistant(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Return contacts with allow_as_assistant_user=True, for bridge whitelist checks."""
+    """Contacts the owner ALLOWED to reach the assistant, for the bridges' checks. Read through
+    `contact_access`, so a record that predates the third state is understood the same way."""
     with _LOCK:
-        return [dict(c) for c in _load_all(username, user_scope_id) if c.get("allow_as_assistant_user")]
+        return [dict(c) for c in _load_all(username, user_scope_id)
+                if contact_access(c) == ACCESS_ALLOWED]
+
+
+def get_contacts_denied_assistant(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Contacts the owner explicitly switched OFF. Their veto holds on every channel, open or
+    closed, which is why they are their own list rather than "everyone who is not allowed"."""
+    with _LOCK:
+        return [dict(c) for c in _load_all(username, user_scope_id)
+                if contact_access(c) == ACCESS_DENIED]
 
 
 # ── endpoints: where a contact's messages live ──────────────────────────────────
@@ -1350,10 +1371,11 @@ def find_contact_by_channel(
     username: Optional[str] = None,
     user_scope_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """The contact carrying this store key on one channel, whatever its Front Office flag
-    says: the ingress question "is this sender opted out?" needs the record with the flag
-    OFF, which get_contact_by_whatsapp_phone and get_contact_by_telegram_user_id never
-    return. Keys are the ones contact_endpoints builds (`+<digits>` for WhatsApp, the
+    """The contact carrying this store key on one channel, whatever the owner decided about
+    them. It is the one lookup every access question goes through: the record first, the
+    decision second (`contact_access`), because a lookup that filters by the permission
+    cannot tell "denied" from "nobody decided" and cannot name the person at all.
+    Keys are the ones contact_endpoints builds (`+<digits>` for WhatsApp, the
     numeric id for Telegram), so a JID or a formatted number is normalised first."""
     chan = (channel or "").strip().lower()
     raw = str(value or "").strip()
@@ -1375,51 +1397,6 @@ def find_contact_by_channel(
     return None
 
 
-def grant_assistant_for_channel(
-    channel: str,
-    username: Optional[str] = None,
-    user_scope_id: Optional[str] = None,
-    *,
-    every_book: bool = False,
-) -> int:
-    """Switch "Can reach your assistant" ON for every contact that has a store key on this
-    channel: what switching a channel's Front Office on means for the people already in
-    the book (a new sender is enrolled by the bridge when they write). One load, one save
-    per book; returns how many records changed. Switching the channel off leaves the flags
-    alone: with the door shut they decide nothing, and the owner's per-person choices
-    survive. `every_book` grants in every contact book on this instance instead of the
-    caller's: the switch is instance-wide (one policy key), so with the channel open a
-    tenant's contact left with the flag OFF would read as an opt-out while a stranger
-    writing to that tenant is answered."""
-    chan = (channel or "").strip().lower()
-
-    def _grant(contacts: List[Dict[str, Any]]) -> int:
-        n = 0
-        for c in contacts:
-            if c.get("allow_as_assistant_user"):
-                continue
-            if contact_endpoints(c).get(chan):
-                c["allow_as_assistant_user"] = True
-                n += 1
-        return n
-
-    changed = 0
-    with _LOCK:
-        if every_book:
-            for path in _every_book_path():
-                contacts = _load_path(path)
-                n = _grant(contacts)
-                if n:
-                    _save_path(path, contacts)
-                changed += n
-        else:
-            contacts = _load_all(username, user_scope_id)
-            changed = _grant(contacts)
-            if changed:
-                _save_all(contacts, username, user_scope_id)
-    return changed
-
-
 def enrol_front_office_contact(
     channel: str,
     value: str,
@@ -1428,9 +1405,14 @@ def enrol_front_office_contact(
     user_scope_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """The record a bridge creates for a sender the open Front Office let in: the name the
-    channel showed (or the id), the one channel value, the flag ON so the owner can switch
-    this person off later, `source = "front_office"` so the book says where the record came
-    from. Idempotent: an existing record on that channel is returned unchanged."""
+    channel showed (or the id), the one channel value, `source = "front_office"` so the book
+    says where the record came from - and NO decision about them.
+
+    The record is not a permission. It exists so the person appears in the book and the owner
+    CAN decide; what answers them meanwhile is the open channel. Enrolling them as allowed
+    would be a standing, channel-independent pass that outlives the switch being turned off,
+    which is the mass-grant this round removed. Idempotent: an existing record on that channel
+    is returned unchanged, decision included."""
     existing = find_contact_by_channel(channel, value, username, user_scope_id)
     if existing is not None:
         return existing
@@ -1444,7 +1426,7 @@ def enrol_front_office_contact(
     return create_contact(
         label, username, user_scope_id=user_scope_id,
         channels=[{"type": chan, "value": key}],
-        allow_as_assistant_user=True, source="front_office",
+        source="front_office",
     )
 
 
@@ -1466,27 +1448,27 @@ def admit_front_office_sender(
     raw_policy: Any = None,
     display_name: str = "",
     explicit_match: bool = False,
-    conversation_match: bool = False,
 ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
-    """The admission of one sender on a Front Office channel, the same for every bridge:
-    the sender's record whatever its flag (a record with "Can reach your assistant" OFF is
-    the owner's opt-out), the ingress policy's answer with that record as the contact
-    match, and for a stranger the open channel let in the enrolment with the flag ON plus
-    its `contact_access_changed` event, once. Returns (allowed, reason, record): the record
-    is the contact who may reach the assistant, None for a refusal and for a sender the
-    reply window let in. Called by the Discord bridge and the Telegram bridge's stranger
-    path. Named boundary: the WhatsApp bridge still decides inline, because its admission
-    interleaves the LID resolution, the whitelist and the reply window in one block, and
-    the Telegram bridge's flagged-contact branch attributes the owner from the record
-    first; both convert in a change of their own."""
+    """The admission of one sender on a Front Office channel, the same for every bridge.
+
+    One record lookup answers both halves of the question: WHO this is, and what the owner
+    decided about them (`contact_access`: allowed, denied, or nobody decided). The policy
+    then says whether the message reaches the agent, and a stranger the open channel let in
+    is enrolled, once, with NO decision on the record: the channel is what answers them, and
+    the record exists so the owner can decide later. Enrolling them as "allowed" would hand
+    out a channel-independent pass that survives closing the channel.
+
+    Returns (allowed, reason, record). The record is whoever was admitted, whatever the
+    decision says, because the caller needs the person, not the permission: the runner pins
+    the Front Office contact with it. Called by the Discord bridge and the Telegram bridge's
+    stranger path; the WhatsApp bridge decides inline (a named boundary in its own file).
+    """
     from vaf.core.channel_ingress_policy import evaluate_ingress
     chan = (channel or "").strip().lower()
     key = str(value or "").strip()
     rec = find_contact_by_channel(chan, key, username, user_scope_id) if key else None
-    reaches = bool(rec) and bool(rec.get("allow_as_assistant_user"))
     allowed, reason = evaluate_ingress(
-        chan, raw_policy, explicit_match=bool(explicit_match), contact_match=reaches,
-        conversation_match=bool(conversation_match), sender_opted_out=bool(rec) and not reaches)
+        chan, raw_policy, explicit_match=bool(explicit_match), access=contact_access(rec))
     if not allowed:
         return False, reason, None
     if reason == "front_office_open" and rec is None:
@@ -1495,11 +1477,10 @@ def admit_front_office_sender(
             from vaf.core.security_events import log_security_event
             log_security_event("contact_access_changed", channel=chan, username=str(username or ""),
                                path=str(rec.get("id") or ""),
-                               detail=f"granted by the open Front Office: {rec.get('name') or key}")
+                               detail=f"added by the open Front Office: {rec.get('name') or key}")
         except Exception:
             pass
-        reaches = True
-    return True, reason, (rec if reaches else None)
+    return True, reason, rec
 
 
 def front_office_endpoints(
@@ -1507,11 +1488,26 @@ def front_office_endpoints(
     user_scope_id: Optional[str] = None,
     channel: str = "whatsapp",
 ) -> Set[str]:
-    """The store keys, on one channel, of every contact who may reach the assistant
-    ("Can reach your assistant"). The WhatsApp bridge decides ingress with it and the
-    dashboard labels chats with it; one implementation, the same keys everywhere."""
+    """The store keys, on one channel, of every contact the owner ALLOWED to reach the
+    assistant. The bridges decide ingress with it and the dashboards label chats with it; one
+    implementation, the same keys everywhere."""
     out: Set[str] = set()
     chan = (channel or "").strip().lower()
     for c in get_contacts_allowing_assistant(username, user_scope_id=user_scope_id):
+        out.update(contact_endpoints(c).get(chan) or [])
+    return out
+
+
+def denied_endpoints(
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+    channel: str = "whatsapp",
+) -> Set[str]:
+    """The store keys, on one channel, of every contact the owner switched OFF. Its own lookup
+    because a denial outranks an open channel: the bridge has to know the difference between
+    "not allowed" and "refused", and only this set is the refusal."""
+    out: Set[str] = set()
+    chan = (channel or "").strip().lower()
+    for c in get_contacts_denied_assistant(username, user_scope_id=user_scope_id):
         out.update(contact_endpoints(c).get(chan) or [])
     return out

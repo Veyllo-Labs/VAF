@@ -46,10 +46,14 @@ def world(monkeypatch, tmp_path):
 
 
 def _agent(front_office=True, chat={"channel": "whatsapp", "chat_id": "+491700000042"}):
-    return SimpleNamespace(_event_sink=None, _is_channel_turn=lambda: True, _front_office_mode=front_office,
+    fake = SimpleNamespace(_event_sink=None, _is_channel_turn=lambda: True, _front_office_mode=front_office,
                            _front_office_chat=chat, _current_username="alice", _current_user_scope_id=SCOPE,
-                           tools={}, _active_tools=None,
+                           tools={}, _active_tools=None, current_session_id=None,
                            _record_owner_question=lambda *a, **k: Agent._record_owner_question(agent_box[0], *a, **k))
+    # Bound from the real class, not stubbed: the post-dispatch hook now also tells the browser
+    # about a parked send, and a no-op here would be the test agreeing with itself.
+    fake._announce_held_send = Agent._announce_held_send.__get__(fake)
+    return fake
 
 
 agent_box = [None]

@@ -130,7 +130,7 @@ def test_done_by_mark_or_by_the_persons_own_reply_and_a_newer_message_reopens_it
     assert row["done"] and not row["waits"] and row["preview_from"] == "you"
 
 
-def test_the_five_mode_chips(world):
+def test_the_mode_chips(world):
     _msg("+491700000009", "owner", ts=NOW - 900)
     _msg("+491700000005", "contact", ts=NOW - 800)
     _msg("+491700000042", "agent wrote", direction="out", ts=NOW - 700)
@@ -143,7 +143,11 @@ def test_the_five_mode_chips(world):
     modes = {r["key"]: r["mode"] for r in _rows()["rows"]}
     assert modes["whatsapp:+491700000009"] == "owner"
     assert modes["whatsapp:+491700000005"] == "contact"
-    assert modes["whatsapp:+491700000042"] == "conversation"
+    # No "conversation" chip any more: writing to somebody opened a 72 hour door that the
+    # owner had never opened, so the row for a number nobody decided about is read-only until
+    # the channel is opened or the person allowed. MUTATION: give chat_mode the window back
+    # and this goes red.
+    assert modes["whatsapp:+491700000042"] == "readonly"
     assert modes["whatsapp:+491700000099"] == "readonly"
     assert modes["whatsapp:777@lid"] == "needs_assign" and modes["whatsapp:555@lid"] == "readonly"
     assert modes["telegram:7"] == "owner" and modes["telegram:9"] == "relay"
@@ -153,14 +157,25 @@ def test_the_five_mode_chips(world):
     assert _row("whatsapp:+491700000042")["session_id"] == "whatsapp_alice_491700000042"
 
 
-def test_the_reply_window_agrees_with_the_bridge_on_the_same_seed(world):
+def test_the_reply_window_is_the_one_rule_left_and_opens_no_door(world):
+    """The agent's own message opens the window, a reply inside it extends it, a later
+    message does not, and the person's own dashboard send opens nothing (it is not the
+    agent writing). The bridge's second copy of this rule is gone with the 72 hour door it
+    served: it decided who may write in, and that is the switch's and the contact's answer
+    now. MUTATION: count OWNER_SENDER as the agent in chat_overview's `last_agent_ts` and
+    the last assertion goes red."""
     from vaf.api import whatsapp_bridge
+    assert not hasattr(whatsapp_bridge, "conversation_open_until"), "one implementation, in vaf/core"
     _msg("+491700000042", "agent first", direction="out", ts=NOW - 5000)
     _msg("+491700000042", "answer", ts=NOW - 4000)
     _msg("+491700000042", "later, rejected", ts=NOW + 400_000)
-    mine = _row("whatsapp:+491700000042")["reply_window_until"]
-    assert mine == whatsapp_bridge.conversation_open_until("alice", "+491700000042", SCOPE)
-    assert mine == (NOW - 4000) + 72 * 3600
+    assert _row("whatsapp:+491700000042")["reply_window_until"] == (NOW - 4000) + 72 * 3600
+    # An inbound alone is no door, and neither is the person's own send from the dashboard.
+    _msg("+491700000051", "stranger", ts=NOW - 100)
+    assert _row("whatsapp:+491700000051")["reply_window_until"] is None
+    _msg("+491700000052", "hi, it is me", direction="out", sender=store.OWNER_SENDER, ts=NOW - 100)
+    _msg("+491700000052", "hello back", ts=NOW - 50)
+    assert _row("whatsapp:+491700000052")["reply_window_until"] is None
 
 
 def test_views_groups_and_the_done_toggle(world):

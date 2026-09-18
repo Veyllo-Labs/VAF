@@ -245,11 +245,22 @@ class SendMailTool(BaseTool):
         # mail gets its Sent copy, its sent-id row and its delivery stamp like every
         # other send (EMAIL_CLIENT.md, "Native send").
         scope = (user_scope_id or "").strip() or get_local_admin_scope_id()
+        # `hold` is set by the chat lane (vaf/core/outbound_hold.py) when the person ordered
+        # this mail in the web UI: the message is built and parked as a draft for them, and
+        # nothing is delivered. Every other lane (automations, workflows, channels, the Front
+        # Office answer) leaves it unset and sends as before.
+        hold = bool(kwargs.get("hold", False))
         try:
             svc = MailService(scope)
             queued = svc.queue_send(account_id, to, subject, body or "", cc=cc or "", bcc=bcc or "",
                                     in_reply_to=in_reply_to or "", undo_seconds=0, sent_by="agent",
-                                    attachments=att_bytes or None, attachment_meta=attachments or None)
+                                    attachments=att_bytes or None, attachment_meta=attachments or None,
+                                    hold=hold,
+                                    chat_session_id=str(kwargs.get("hold_session") or ""))
+            if hold:
+                from vaf.core.outbound_hold import held_result
+                return held_result("send_mail", {"to": to, "subject": subject, "body": body},
+                                   entry_id=int(queued["op_id"]))
             deliver_queued_sends(scope, acc, cred_username, account_id, service=svc)
             outcome = svc.send_outcome(int(queued["op_id"]))
         except Exception as e:

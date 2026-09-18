@@ -193,9 +193,13 @@ def test_the_decision_answers_only_a_verified_sender_through_an_open_door():
     d = cases.decide(trust="T2", attribution=new, raw_policy=opened)
     assert d.action == "draft" and d.ingress_reason == "front_office_open" and d.reason == "ok"
     assert cases.decide(trust="T2", attribution=new, raw_policy=opened, reply_mode="send").action == "answer"
-    # a contact under an open channel comes through the contact door the switch opened with it
-    assert cases.decide(trust="T3", attribution=new, raw_policy=opened).ingress_reason == "contact_fallback_override"
-    assert cases.decide(trust="T2", attribution=new, raw_policy=opened, opted_out=True).reason == "not_paired"
+    # An allowed contact comes through their own permission, on an open channel or a closed
+    # one; a denied sender is refused on both. `access` is the owner's own decision, passed
+    # through rather than folded into a bool.
+    assert cases.decide(trust="T3", attribution=new, raw_policy=opened, access="allowed").ingress_reason == "contact_allowed"
+    assert cases.decide(trust="T3", attribution=new, raw_policy=closed, access="allowed").action == "draft"
+    assert cases.decide(trust="T2", attribution=new, raw_policy=opened, access="denied").reason == "contact_denied"
+    assert cases.decide(trust="T2", attribution=new, raw_policy=opened, access=None).ingress_reason == "front_office_open"
     assert cases.decide(trust="T1", attribution=new, raw_policy=opened).reason == "via"
     assert cases.decide(trust="T0", attribution=new, raw_policy=opened).reason == "unverified"
     assert cases.decide(trust="T2", attribution=new, raw_policy=opened, machine_kind="list").reason == "machine:list"
@@ -205,9 +209,13 @@ def test_the_decision_answers_only_a_verified_sender_through_an_open_door():
     # T4: a reply into a case the agent wrote in gets through a CLOSED channel (the reply window rule)
     t4 = cases.decide(trust="T4", attribution=cases.Attribution("case", "X"), raw_policy=closed)
     assert t4.action == "draft" and t4.ingress_reason == "open_conversation"
-    # the expert contact door: a T3 contact with the channel off
+    # The expert door in config.json is gone: the contact's own decision says the same thing,
+    # in the place the owner actually looks. MUTATION: honour `allow_contact_fallback` again in
+    # normalize_policy and the second assertion goes red.
     door = {"email": {"allow_contact_fallback": True}}
-    assert cases.decide(trust="T3", attribution=new, raw_policy=door).ingress_reason == "contact_fallback_override"
+    assert cases.decide(trust="T3", attribution=new, raw_policy=door, access="allowed").ingress_reason == "contact_allowed"
+    assert cases.decide(trust="T3", attribution=new, raw_policy=door).action == "ignore", \
+        "a contact record without a decision is not a permission"
     assert cases.decide(trust="T2", attribution=new, raw_policy=door).action == "ignore"
 
 

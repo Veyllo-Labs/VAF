@@ -327,7 +327,7 @@ async def get_whatsapp_dashboard(request: Request):
                 "last_ts": 0,
                 "message_count": 0,
             }
-    # Include Front Office contacts (allow_as_assistant_user) so their chats appear even before Baileys syncs
+    # Include the contacts the owner ALLOWED so their chats appear even before Baileys syncs
     try:
         from vaf.core.contacts_store import contact_endpoints, get_contacts_allowing_assistant
         for contact in get_contacts_allowing_assistant(username, user_scope_id=user_info.get("user_scope_id")):
@@ -533,13 +533,23 @@ async def get_whatsapp_dashboard(request: Request):
             rec["last_ts"] = now_ts
     sessions = sorted(sessions_by_chat.values(), key=lambda s: (s.get("last_ts") or 0), reverse=True)
 
-    # FO phones (E.164) for answerable check
+    # The three inputs the lane itself uses, so the row's mode cannot disagree with it: the
+    # people the owner allowed, the ones they switched off, and whether this channel answers
+    # everybody else. Read here once for every row.
     fo_phones: set = set()
+    denied_phones: set = set()
+    channel_open = False
     try:
-        from vaf.core.contacts_store import front_office_endpoints
+        from vaf.core.contacts_store import denied_endpoints, front_office_endpoints
         fo_phones = front_office_endpoints(username, user_info.get("user_scope_id"), "whatsapp")
+        denied_phones = denied_endpoints(username, user_info.get("user_scope_id"), "whatsapp")
     except Exception:
         pass
+    try:
+        from vaf.core.channel_ingress_policy import resolve_channel_policy
+        channel_open = bool(resolve_channel_policy("whatsapp", Config.get("channel_ingress_policy"))["open_to_new_senders"])
+    except Exception:
+        channel_open = False
 
     # LID resolution (config + node) for session enrichment and lid_chats_to_assign
     lid_to_e164_cfg = dict((whatsapp_config.get("lid_to_e164") or {}) if isinstance(whatsapp_config, dict) else {})
@@ -565,31 +575,31 @@ async def get_whatsapp_dashboard(request: Request):
         resolved = _resolved_e164(rec) if is_lid else None
         if is_lid and resolved:
             rec["resolved_e164"] = resolved
-            rec["answerable"] = resolved in whitelist_by_phone or resolved in fo_phones
             rec["needs_assign"] = False
         elif is_lid:
             rec["resolved_e164"] = None
-            rec["answerable"] = False
             rec["needs_assign"] = True
         else:
-            # owner = registered main-user number (full chat); contact = Front Office
-            # contact; conversation = the agent wrote to this number inside the reply
-            # window (Front Office); everything else is read-only.
-            cid_norm = _normalize_chat_id(cid) or cid
-            in_whitelist = cid in whitelist_by_phone or cid_norm in whitelist_by_phone
-            in_fo = cid_norm in fo_phones or cid in fo_phones
-            if in_whitelist:
-                rec["type"] = "owner"
-            elif in_fo:
-                rec["type"] = "contact"
-            elif (rec.get("reply_window_until") or 0) > now_ts:
-                rec["type"] = "conversation"
-            else:
-                rec["type"] = "unknown"
-            rec["answerable"] = rec.get("type") in ("owner", "contact", "conversation")
+            # The lane's own answer, through the shared rule (vaf/core/inbox.chat_mode): the
+            # registered main-user number gets the full chat, a person the owner allowed and
+            # anybody else while Inbound is open is a contact, a person they switched off and
+            # everyone under a closed channel is read-only. Hand-rolling it here is what let
+            # the row say "conversation, Front Office" about a chat the bridge refuses: the
+            # reply window decides nothing about ingress, and its timestamp stays on the row
+            # only because the window shows how long an answer is still convenient.
+            from vaf.core.inbox import chat_mode
+            # One number, two spellings in the store (the raw key and its canonical form):
+            # matching happens here, the RULE happens in chat_mode.
+            keys = {cid, _normalize_chat_id(cid) or cid}
+            mode = chat_mode("whatsapp", cid,
+                             owners={cid} if keys & whitelist_by_phone.keys() else set(),
+                             contacts={cid} if keys & fo_phones else set(),
+                             relays=set(),
+                             denied={cid} if keys & denied_phones else set(),
+                             channel_open=channel_open)
+            # The WhatsApp window's own word for "the agent does not answer here".
+            rec["type"] = "unknown" if mode == "readonly" else mode
             rec["needs_assign"] = False
-        if rec.get("type") != "conversation":
-            rec["reply_window_until"] = None
         # display_name: prefer name, then contact name for resolved/phone, then "Unknown chat" for LID, else phone
         disp = (rec.get("name") or "").strip() or None
         if not disp:
@@ -608,19 +618,24 @@ async def get_whatsapp_dashboard(request: Request):
         if not disp:
             disp = (rec.get("phone_number") or cid or "").strip() or "Unknown chat"
         rec["display_name"] = disp
-        # The contact-book record for this number, Front Office flag or not, so the
-        # dashboard offers "add as contact" only to a number the book does not know yet
-        # (the WhatsApp sync creates records without the flag; those must not look new).
+        # The contact-book record for this number, whatever the owner decided about the
+        # person, so the dashboard offers "add as contact" only to a number the book does not
+        # know yet (the WhatsApp sync creates records nobody has decided about; those must not
+        # look new). `contact_access` carries the decision itself - allowed, denied, or null
+        # when nobody decided - because the window's control has three positions and the
+        # chat's mode cannot tell "denied" from "the channel is closed".
         rec["contact_id"] = None
         rec["contact_name"] = None
+        rec["contact_access"] = None
         phone_for_book = resolved or (None if is_lid else (rec.get("phone_number") or cid))
         if phone_for_book and "@" not in str(phone_for_book):
             try:
-                from vaf.core.contacts_store import find_contact_by_phone
+                from vaf.core.contacts_store import contact_access, find_contact_by_phone
                 book = find_contact_by_phone(str(phone_for_book), username, user_info.get("user_scope_id"))
                 if book:
                     rec["contact_id"] = book.get("id")
                     rec["contact_name"] = (book.get("name") or "").strip() or None
+                    rec["contact_access"] = contact_access(book)
             except Exception:
                 pass
 

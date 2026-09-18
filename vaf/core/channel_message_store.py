@@ -172,6 +172,31 @@ def init_store(username: Optional[str] = None, user_scope_id: Optional[str] = No
                 SELECT username, channel, chat_id, MAX(ts) FROM channel_messages
                 GROUP BY username, channel, chat_id
             """)
+        # A send the agent prepared on the person's own chat turn, waiting for that person's
+        # word. The parked CALL is stored (tool plus arguments), not a message row: an
+        # outbound row in channel_messages would open the channel's reply window for a
+        # message nobody has agreed to send yet (last_message_ts reads direction='out'
+        # whatever its content_type). `state` mirrors the mail outbox's vocabulary so both
+        # halves of an outbox listing read the same: held, sent, discarded.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS held_sends (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL DEFAULT '',
+                channel TEXT NOT NULL,
+                chat_id TEXT NOT NULL DEFAULT '',
+                recipient TEXT NOT NULL DEFAULT '',
+                tool TEXT NOT NULL,
+                args TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT '',
+                session_id TEXT NOT NULL DEFAULT '',
+                created_ts REAL NOT NULL,
+                decided_ts REAL,
+                state TEXT NOT NULL DEFAULT 'held',
+                error TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_held_sends_state "
+                     "ON held_sends(username, state, created_ts)")
         conn.commit()
     finally:
         conn.close()
@@ -390,6 +415,131 @@ def chat_marks(username: str, user_scope_id: Optional[str] = None,
         return out
     finally:
         conn.close()
+
+
+def park_held_send(username: str, channel: str, tool: str, args_json: str, *,
+                   user_scope_id: Optional[str] = None, chat_id: str = "", recipient: str = "",
+                   preview: str = "", session_id: str = "") -> int:
+    """Park an outward call for the person's word and return its id.
+
+    The CALL is parked, not a message: nothing is written to `channel_messages`, so a send
+    nobody has agreed to cannot open the channel's reply window, and nothing is on the wire
+    until the person approves. `args_json` is the call as it would have been dispatched;
+    `preview` is what the person reads before deciding."""
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        cur = conn.execute(
+            "INSERT INTO held_sends (username, channel, chat_id, recipient, tool, args, preview, "
+            "session_id, created_ts, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'held')",
+            ((username or "").strip() or "", channel or "", chat_id or "", recipient or "",
+             tool or "", args_json or "{}", preview or "", session_id or "", time.time()),
+        )
+        conn.commit()
+        entry_id = int(cur.lastrowid)
+    finally:
+        conn.close()
+    _announce_changed(username, user_scope_id)
+    return entry_id
+
+
+def held_sends(username: str, user_scope_id: Optional[str] = None, *,
+               state: str = "held", limit: int = 50) -> List[Dict[str, Any]]:
+    """The parked calls of this identity, newest first. A missing store answers []."""
+    if not store_exists(username, user_scope_id):
+        return []
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        clauses, params = ["username = ?"], [(username or "").strip() or ""]
+        if state:
+            clauses.append("state = ?")
+            params.append(state)
+        cur = conn.execute(
+            f"SELECT * FROM held_sends WHERE {' AND '.join(clauses)} "
+            "ORDER BY created_ts DESC, id DESC LIMIT ?",
+            (*params, max(1, int(limit))),
+        )
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def held_send(entry_id: int, username: str, user_scope_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """One parked call of this identity, or None. The username is part of the lookup, never a
+    filter applied afterwards: one store file can hold more than one identity's rows."""
+    if not store_exists(username, user_scope_id):
+        return None
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        row = conn.execute(
+            "SELECT * FROM held_sends WHERE id = ? AND username = ?",
+            (int(entry_id), (username or "").strip() or ""),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def settle_held_send(entry_id: int, username: str, state: str,
+                     user_scope_id: Optional[str] = None, error: str = "",
+                     expect: Any = "held") -> bool:
+    """Move a parked call from `expect` to `state`. False when it was not in `expect` any
+    more, which is what makes a double click harmless: the guard is in the WHERE, so two
+    approvals cannot both claim the same draft. The states are the mail outbox's vocabulary:
+    held, sending (claimed by an approval), sent, discarded, failed. `expect` may be several
+    states, because a draft the person may act on is either waiting or one whose last attempt
+    failed, and both are theirs to send or drop."""
+    init_store(username, user_scope_id)
+    expected = (expect,) if isinstance(expect, str) else tuple(expect or ())
+    expected = tuple(e for e in expected if e) or ("held",)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        cur = conn.execute(
+            "UPDATE held_sends SET state = ?, decided_ts = ?, error = ? "
+            f"WHERE id = ? AND username = ? AND state IN ({','.join('?' for _ in expected)})",
+            (state, time.time(), error or "", int(entry_id), (username or "").strip() or "",
+             *expected),
+        )
+        conn.commit()
+        changed = cur.rowcount == 1
+    finally:
+        conn.close()
+    if changed:
+        _announce_changed(username, user_scope_id)
+    return changed
+
+
+def reclaim_stranded_held_sends(username: str, user_scope_id: Optional[str] = None,
+                                lease_seconds: float = 300.0, now: Optional[float] = None) -> int:
+    """Park calls left in `sending` by a crashed or killed worker, and return how many.
+
+    `decided_ts` is written when an approval CLAIMS the row, so it is the lease clock; a draft
+    may sit in `held` for days and is never touched here. The stranded row goes to `failed`,
+    never back to `held`: a messenger send has no idempotency key, so an interrupted attempt
+    may or may not have left, and re-arming it for a one-click retry would invite the double
+    send. The person sees it with the reason and decides, which is the same answer the mail
+    outbox gives for an interrupted send (`MailStore.reclaim_stale_ops`)."""
+    if not store_exists(username, user_scope_id):
+        return 0
+    init_store(username, user_scope_id)
+    cutoff = (now if now is not None else time.time()) - max(1.0, float(lease_seconds))
+    conn = _get_conn(username, user_scope_id)
+    try:
+        cur = conn.execute(
+            "UPDATE held_sends SET state = 'failed', error = ? "
+            "WHERE username = ? AND state = 'sending' AND decided_ts IS NOT NULL AND decided_ts < ?",
+            ("The last attempt was interrupted. It is not sent again on its own.",
+             (username or "").strip() or "", cutoff),
+        )
+        conn.commit()
+        changed = int(cur.rowcount or 0)
+    finally:
+        conn.close()
+    if changed:
+        _announce_changed(username, user_scope_id)
+    return changed
 
 
 def append_message(
@@ -635,7 +785,7 @@ def chat_overview(
     chars), `last_direction`, `last_sender`, `last_content_type`, and, when
     `reply_window_seconds` is given, `last_in_within_ts`: the newest inbound that arrived
     inside the window the agent's last message opened (the reply-window rule's second
-    input, `whatsapp_bridge.conversation_open_until`). `channel=None` lists every channel.
+    input, `inbox.reply_window_until`). `channel=None` lists every channel.
     Correlated subqueries instead of window functions: the store must run on the SQLite
     every install ships, and `idx_ch_msg_channel` serves each of them."""
     if not store_exists(username, user_scope_id):
@@ -873,7 +1023,7 @@ def last_message_ts(
     hours" is answered by the store that already records every outbound send, so no bridge
     keeps a second ledger of open conversations. An "in" row does NOT mean the sender was
     accepted: the store keeps a rejected sender's message for the owner's inbox too, which
-    is why the reply rule (whatsapp_bridge.conversation_open_until) reads inbound rows only
+    is why the reply-window rule (vaf/core/inbox.reply_window_until) reads inbound rows only
     inside the window an outbound message opened. `exclude_sender` leaves out rows stored
     under that sender label: the reply rule passes OWNER_SENDER, because a message the
     person sent from the dashboard left the number without the agent writing anything."""

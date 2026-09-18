@@ -22,7 +22,7 @@ class UpdateContactTool(BaseTool):
     description = (
         "Update a contact by contact_id. Required: contact_id (from list_contacts or get_contact). "
         "Optional: name, email, whatsapp_phone, telegram_username, preferred_language, how_to_address, birthday, notes, "
-        "allow_as_assistant_user, company, role, tags, status, add_note, add_event_title + add_event_when. "
+        "assistant_access, company, role, tags, status, add_note, add_event_title + add_event_when. "
         "When multiple contacts have the same name, always ask the user which one they mean before updating."
     )
     parameters = {
@@ -37,7 +37,11 @@ class UpdateContactTool(BaseTool):
             "how_to_address": {"type": "string", "description": "e.g. du, Sie."},
             "birthday": {"type": "string", "description": "MM-DD or ISO date."},
             "notes": {"type": "string", "description": "Free-form notes."},
-            "allow_as_assistant_user": {"type": "boolean", "description": "Can reach your assistant (front office)."},
+            "assistant_access": {"type": "string", "enum": ["allowed", "denied", "undecided"],
+                                 "description": "What the user decided about this person reaching the assistant: "
+                                                "allowed (answered on every channel), denied (never answered, even on "
+                                                "an open channel), undecided (answered only while that channel is open "
+                                                "to new senders). Only set it when the user said so."},
             "company": {"type": "string", "description": "Company or organisation the person belongs to."},
             "role": {"type": "string", "description": "The person's role or job title."},
             "tags": {"type": "string", "description": "Comma-separated tags that REPLACE the current ones (a tag cannot contain a comma); empty string clears them."},
@@ -63,11 +67,14 @@ class UpdateContactTool(BaseTool):
 
         updates = {}
         for key in ("name", "email", "whatsapp_phone", "telegram_username", "preferred_language", "how_to_address", "birthday", "notes",
-                    "allow_as_assistant_user", "status", "company", "role", "tags"):
+                    "assistant_access", "status", "company", "role", "tags"):
             if key in kwargs:
                 v = kwargs[key]
-                if key == "allow_as_assistant_user":
-                    updates[key] = bool(v)
+                if key == "assistant_access":
+                    # Passed on as the word, never as a bool: the store's three states are
+                    # allowed, denied and "nobody decided", and any other word clears the
+                    # decision rather than inventing one.
+                    updates[key] = str(v or "").strip().lower()
                 elif key == "tags":
                     # The store splits the comma string itself; an empty string clears the list.
                     updates[key] = v if isinstance(v, (str, list)) else ""
@@ -81,7 +88,7 @@ class UpdateContactTool(BaseTool):
 
         if not updates and not note_text and not event_title:
             return ("No fields to update. Provide at least one of: name, email, whatsapp_phone, telegram_username, preferred_language, "
-                    "how_to_address, birthday, notes, allow_as_assistant_user, company, role, tags, status, add_note, add_event_title + add_event_when.")
+                    "how_to_address, birthday, notes, assistant_access, company, role, tags, status, add_note, add_event_title + add_event_when.")
 
         done = []
         contact = get_contact_by_id(contact_id, username, user_scope_id=user_scope_id)

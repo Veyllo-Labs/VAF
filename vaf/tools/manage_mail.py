@@ -91,9 +91,18 @@ class ForwardMailTool(BaseTool):
         if not acc:
             return f"Account '{pre['account_id']}' not found."
         # The one send funnel (see reply_mail): queued, delivered, filed and recorded.
+        # `hold` is set by the chat lane (vaf/core/outbound_hold.py) when the person ordered
+        # this forward in the web UI: it is parked as a draft for them instead of leaving.
+        hold = bool(kwargs.get("hold", False))
         try:
             queued = svc.queue_send(pre["account_id"], to, pre["subject"], full_body,
-                                    undo_seconds=0, sent_by="agent")
+                                    undo_seconds=0, sent_by="agent", hold=hold,
+                                    chat_session_id=str(kwargs.get("hold_session") or ""))
+            if hold:
+                from vaf.core.outbound_hold import held_result
+                return held_result("forward_mail",
+                                   {"to": to, "subject": pre["subject"], "body": full_body},
+                                   entry_id=int(queued["op_id"]))
             deliver_queued_sends(svc.user_scope_id, acc, cred_username, pre["account_id"], service=svc)
             outcome = svc.send_outcome(int(queued["op_id"]))
         except Exception as e:

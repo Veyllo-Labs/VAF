@@ -634,7 +634,7 @@ partition:
 
 ### WhatsApp
 
-Each user runs a **separate Node.js subprocess** with its own authentication directory (`~/.vaf/users/<username>/whatsapp/`). The linked account is that user's agent number; there is no fallback to another user's credentials (two Baileys sockets on one credential set evict each other). Sessions are completely isolated at the process level, and the sender loop stores outbound messages in the same per-scope message store as the inbound lane, so the reply window and the read tools see one conversation per scope.
+Each user runs a **separate Node.js subprocess** with its own authentication directory (`~/.vaf/users/<username>/whatsapp/`). The linked account is that user's agent number; there is no fallback to another user's credentials (two Baileys sockets on one credential set evict each other). Sessions are completely isolated at the process level, and the sender loop stores outbound messages in the same per-scope message store as the inbound lane, so the read tools and the window's own state see one conversation per scope.
 
 ### Telegram
 

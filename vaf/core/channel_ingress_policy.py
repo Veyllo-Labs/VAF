@@ -11,7 +11,13 @@ from typing import Any, Dict, Optional, Tuple
 
 
 _SUPPORTED_CHANNELS = ("telegram", "whatsapp", "discord")
-_SUPPORTED_MODES = ("paired_only", "permissive")
+# One mode is left, and it is the floor rather than a choice: who may write in is decided by
+# the channel switch (`open_to_new_senders`) and by the person's own decision in the contact
+# book. `permissive` and the per-channel `allow_contact_fallback` used to be a second way to
+# say "let contacts in", in a place nobody looked; a stored `permissive` is read once and
+# coerced to this, so an old config keeps working and carries no word that means nothing.
+_SUPPORTED_MODES = ("paired_only",)
+_LEGACY_MODES = ("permissive",)
 # The channels whose bridge admits a contact (contacts_store.admit_front_office_sender, or
 # a contact match handed to evaluate_ingress), so a contact with "Can reach your assistant"
 # can be let in there at all, and whose bridge enrols a new sender as a contact when the
@@ -46,10 +52,10 @@ def _default_policy() -> Dict[str, Any]:
     return {
         "mode": "paired_only",
         "throttle_seconds": _DEFAULT_THROTTLE,
-        "telegram": {"mode": "inherit", "allow_contact_fallback": False, "open_to_new_senders": False},
-        "whatsapp": {"mode": "inherit", "allow_contact_fallback": False, "open_to_new_senders": False},
-        "discord": {"mode": "inherit", "allow_contact_fallback": False, "open_to_new_senders": False},
-        "email": {"mode": "inherit", "allow_contact_fallback": False, "open_to_new_senders": False,
+        "telegram": {"mode": "inherit", "open_to_new_senders": False},
+        "whatsapp": {"mode": "inherit", "open_to_new_senders": False},
+        "discord": {"mode": "inherit", "open_to_new_senders": False},
+        "email": {"mode": "inherit", "open_to_new_senders": False,
                   "reply_mode": "draft", "opened_at": 0},
     }
 
@@ -63,6 +69,11 @@ def normalize_policy(raw: Any) -> Dict[str, Any]:
     mode = str(raw.get("mode", "") or "").strip().lower()
     if mode in _SUPPORTED_MODES:
         policy["mode"] = mode
+    # A config written before the doors were merged: read it, do not honour it, do not keep
+    # the word. Dropping it silently to the default would also lose mail's `opened_at`, so it
+    # is coerced here rather than rejected upstream.
+    elif mode in _LEGACY_MODES:
+        policy["mode"] = "paired_only"
 
     throttle_raw = raw.get("throttle_seconds")
     try:
@@ -80,8 +91,8 @@ def normalize_policy(raw: Any) -> Dict[str, Any]:
         ch_mode = str(src.get("mode", "") or "").strip().lower()
         if ch_mode in (*_SUPPORTED_MODES, "inherit"):
             out["mode"] = ch_mode
-        if "allow_contact_fallback" in src:
-            out["allow_contact_fallback"] = bool(src.get("allow_contact_fallback"))
+        elif ch_mode in _LEGACY_MODES:
+            out["mode"] = "paired_only"
         if "open_to_new_senders" in src:
             out["open_to_new_senders"] = bool(src.get("open_to_new_senders"))
         if channel == MAIL_CHANNEL:
@@ -101,7 +112,7 @@ def resolve_channel_policy(channel: str, raw_policy: Any) -> Dict[str, Any]:
     channel_name = str(channel or "").strip().lower()
     policy = normalize_policy(raw_policy)
     if channel_name not in _POLICY_CHANNELS:
-        return {"mode": policy["mode"], "allow_contact_fallback": False, "open_to_new_senders": False,
+        return {"mode": policy["mode"], "open_to_new_senders": False,
                 "throttle_seconds": policy["throttle_seconds"]}
 
     ch = dict(policy.get(channel_name) or {})
@@ -111,7 +122,6 @@ def resolve_channel_policy(channel: str, raw_policy: Any) -> Dict[str, Any]:
         mode = "paired_only"
     out = {
         "mode": mode,
-        "allow_contact_fallback": bool(ch.get("allow_contact_fallback", False)),
         # Only a Front Office channel can be open: its bridge enrols the sender as a
         # contact and runs the turn in Front Office mode. On any other channel the flag
         # is inert, whatever config.json says.
@@ -124,26 +134,20 @@ def resolve_channel_policy(channel: str, raw_policy: Any) -> Dict[str, Any]:
     return out
 
 
-def _contact_door_open(channel: str, raw_policy: Any) -> bool:
-    resolved = resolve_channel_policy(channel, raw_policy)
-    return resolved["mode"] == "permissive" or bool(resolved["allow_contact_fallback"])
-
-
 def front_office_state(raw_policy: Any) -> Dict[str, Any]:
     """Front Office per channel, as the window shows it.
 
     `channels[ch]` is the switch "Front Office on for this channel": the channel is open to
-    new senders (`open_to_new_senders`), which implies the contact door. `contacts_only[ch]`
-    is the narrower expert state, contact door open but not the channel: only contacts with
-    "Can reach your assistant" get in (`allow_contact_fallback` or a permissive mode).
-    `enabled` is true when any Front Office channel is switched on. The other doors (the
-    owner's own pairing, the WhatsApp reply window) are not read here; a window that shows
-    this state must name the reply window separately, or "off" overstates what the bridge does.
+    everybody the owner has not decided about. `enabled` is true when any Front Office channel
+    is switched on. What the switch does NOT say is who the owner allowed or denied by hand:
+    an allowed contact is answered on every channel, a denied one on none, and neither state
+    is visible here - a window showing only this must say so, or "off" overstates what the
+    bridges do. The narrower "contacts only" state is gone with the expert doors: allowing a
+    person IS the contacts-only state now, and it is per person rather than per channel.
     """
     channels = {ch: resolve_channel_policy(ch, raw_policy)["open_to_new_senders"] for ch in FRONT_OFFICE_CHANNELS}
-    contacts_only = {ch: (not channels[ch]) and _contact_door_open(ch, raw_policy) for ch in FRONT_OFFICE_CHANNELS}
     mail = resolve_channel_policy(MAIL_CHANNEL, raw_policy)
-    return {"enabled": any(channels.values()), "channels": channels, "contacts_only": contacts_only,
+    return {"enabled": any(channels.values()), "channels": channels,
             "email_reply_mode": mail["reply_mode"], "email_opened_at": mail["opened_at"]}
 
 
@@ -164,14 +168,12 @@ def set_front_office(raw_policy: Any, enabled: bool, channel: Optional[str] = No
     """The policy with Front Office switched on or off for one channel (or every one). Pure:
     returns a normalized copy, the input is untouched.
 
-    On means the channel is open: every sender is answered in Front Office mode unless the
-    owner switched that person off in the contact book, and a new sender is enrolled as a
-    contact by the bridge; so both `open_to_new_senders` and the contact door
-    (`allow_contact_fallback`) are set. The modes are left alone: `permissive` is the state
-    the security doctor and the overview warn about, and a deliberately opened Front Office
-    is not a misconfiguration. Off clears both flags and, where the channel's resolved mode
-    is permissive, pins that channel to paired_only, so "off" is off under the expert
-    setting too. The global mode and the throttle are never written.
+    On means the channel is open: everybody the owner has not decided about is answered in
+    Front Office mode, and a new sender is enrolled as a contact by the bridge - without a
+    decision, so closing the channel closes it for them again. Off clears the flag, and that
+    is all it clears: the switch writes ONE field and never touches the contact book, so a
+    person the owner allowed keeps their access and a person they denied stays out. The
+    global mode and the throttle are never written.
     """
     policy = normalize_policy(raw_policy)
     if channel is None:
@@ -183,10 +185,7 @@ def set_front_office(raw_policy: Any, enabled: bool, channel: Optional[str] = No
         targets = (name,)
     for name in targets:
         entry = dict(policy[name])
-        entry["allow_contact_fallback"] = bool(enabled)
         entry["open_to_new_senders"] = bool(enabled)
-        if not enabled and resolve_channel_policy(name, policy)["mode"] == "permissive":
-            entry["mode"] = "paired_only"
         if name == MAIL_CHANNEL and enabled:
             # Switching mail on stamps the moment: only mail sent after it is answered,
             # so neither the backlog nor what arrived while the channel was off gets a
@@ -200,40 +199,49 @@ def evaluate_ingress(
     channel: str,
     raw_policy: Any,
     explicit_match: bool,
-    contact_match: bool,
-    conversation_match: bool = False,
-    sender_opted_out: bool = False,
+    access: Optional[str] = None,
+    case_reply: bool = False,
 ) -> Tuple[bool, str]:
-    """
-    Evaluate whether inbound sender is allowed.
+    """May this sender's message be handed to the agent? (allowed, reason)
 
-    explicit_match: sender matched explicit pairing (e.g. whitelist / verified admin).
-    contact_match: sender matched contact-based fallback.
-    conversation_match: the agent itself wrote to this sender recently (the bridge
-        decides the window). Accepted in every mode, because the door was opened by
-        the agent's own outbound message, not by a stranger; the reply lands in Front
-        Office (restricted tools), never as the owner. Reason: "open_conversation".
-    sender_opted_out: the sender has a contact record whose "Can reach your assistant" is
-        OFF. With the channel's Front Office switched on (`open_to_new_senders`) every
-        other sender is let in as a Front Office contact, reason "front_office_open", and
-        the bridge enrols an unknown one; the record with the flag off is how the owner
-        keeps one person out of an open channel. Read by that branch alone, deliberately:
-        the flag is a plain bool, and every record the WhatsApp sync creates for a named
-        chat carries it OFF (contacts_store.sync_channel_contacts), so under a closed
-        channel that state is the default of every known number and not an opt-out; a
-        window the agent's own message opened (conversation_match) is not closed by it.
+    Two inputs decide it, and they answer different questions:
+
+    - the CHANNEL switch (`open_to_new_senders`, "Inbound" in the window) says whether people
+      the owner has not decided about are answered on this channel at all;
+    - the PERSON's own decision in the contact book (`contacts_store.contact_access`) says
+      whether this one human is answered, and it holds on every channel where they have an
+      endpoint, open or closed.
+
+    So: the owner's own paired endpoint keeps the full chat; a DENIED contact is never
+    answered, whatever the channel says; an ALLOWED contact is answered even on a channel
+    switched off, because the owner said so about the person; a sender nobody has decided
+    about is answered only while the channel stands open, and the bridge then enrols them.
+    Anything else is refused and the message is only stored for the owner's inbox.
+
+    `case_reply` is MAIL ONLY: a reply that carries the case anchor this agent minted into its
+    own outgoing Message-ID (vaf/mail/case_token.py), which is proof that it answers a mail the
+    agent sent in that case. A correspondence the owner started themselves is not stranded by a
+    switch, and nothing can leave unseen there anyway (mail answers are drafts by default).
+
+    WHAT WAS REMOVED, and why it is not coming back: a 72 hour "reply window" used to admit
+    anyone the agent had written to, in every mode. It made the switch mean less than it says -
+    the owner had the agent send one message on a channel set to "paired only", and from then
+    on that person could write in and be answered for three days (live incident). And the two
+    expert doors in config.json (`permissive`, `allow_contact_fallback`) said the same thing as
+    the contact's own flag, in a second place where nobody looked; the flag decides now.
     """
     resolved = resolve_channel_policy(channel, raw_policy)
-    mode = resolved["mode"]
+    is_mail = str(channel or "").strip().lower() == MAIL_CHANNEL
+    decision = str(access or "").strip().lower()
     if explicit_match:
         return True, "explicit_pair"
-    if conversation_match:
+    if decision == "denied":
+        return False, "contact_denied"
+    if decision == "allowed":
+        return True, "contact_allowed"
+    if case_reply and is_mail:
         return True, "open_conversation"
-    if mode == "permissive" and contact_match:
-        return True, "contact_fallback"
-    if mode == "paired_only" and resolved["allow_contact_fallback"] and contact_match:
-        return True, "contact_fallback_override"
-    if resolved["open_to_new_senders"] and not sender_opted_out:
+    if resolved["open_to_new_senders"]:
         return True, "front_office_open"
     return False, "not_paired"
 

@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """An unresolved @lid under an open Inbound (vaf/api/whatsapp_bridge.py, FRONT_OFFICE.md): the
-sender has no number, so no contact record can carry the owner's opt-out for them and none is
-enrolled. The open door does not apply and the message is refused as not_paired until the LID
-is assigned to a number; a resolved sender goes through as front_office_open. Isolated: tmp
-data dir, in-memory config, the debounce flush stubbed so no task queue is touched.
+sender has no number, so nothing can match them in the book and nothing is enrolled. The open
+channel does not apply and the message is refused as not_paired until the LID is assigned to a
+number; a resolved sender goes through as front_office_open. The refusal is its own branch
+rather than a faked denial, because "nobody decided about this person" and "the owner refused
+them" are different answers and the log prints the reason. Isolated: tmp data dir, in-memory
+config, the debounce flush stubbed so no task queue is touched.
 
-MUTATION: drop the `not raw` branch from the bridge's opt-out block and the unresolved sender
-is answered (front_office_open)."""
+MUTATION: drop the `not raw` branch from the bridge's admission block and the unresolved
+sender is answered (front_office_open)."""
 import time
 
 import pytest
@@ -42,7 +44,7 @@ def decisions(monkeypatch, tmp_path):
 
     def recording(channel, policy, **kw):
         out = real(channel, policy, **kw)
-        calls.append((kw.get("sender_opted_out"), out))
+        calls.append((kw.get("access"), out))
         return out
 
     monkeypatch.setattr(wa, "evaluate_ingress", recording)
@@ -53,10 +55,10 @@ def test_an_unresolved_lid_is_not_answered_by_the_open_door_but_a_resolved_sende
     now = int(time.time())
     wa._dispatch_bridge_event("alice", SCOPE, "message", {"from": "123456789012345@lid", "body": "hallo", "ts": now,
                                                           "message_id": "L1", "content_type": "text"})
-    assert decisions == [(True, (False, "not_paired"))], "no number, so no record could carry an opt-out: the open door does not apply"
+    assert decisions == [], "an unresolved @lid is refused before the policy is asked at all"
     wa._dispatch_bridge_event("alice", SCOPE, "message", {"from": "491700000042@s.whatsapp.net", "body": "hallo", "ts": now,
                                                           "message_id": "P1", "content_type": "text"})
-    assert decisions[-1] == (False, (True, "front_office_open"))
+    assert decisions[-1] == (None, (True, "front_office_open")), "nobody decided about them; the open channel did"
     from vaf.core.contacts_store import find_contact_by_channel
     assert find_contact_by_channel("whatsapp", "+491700000042", "alice", SCOPE) is not None, "the resolved sender is enrolled"
     assert find_contact_by_channel("whatsapp", "123456789012345@lid", "alice", SCOPE) is None, "the LID never became a phantom number"

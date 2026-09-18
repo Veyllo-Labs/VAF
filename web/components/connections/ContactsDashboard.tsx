@@ -58,7 +58,12 @@ export interface Contact {
     how_to_address?: string | null;
     birthday?: string | null;
     notes?: string | null;
+    /** Legacy: true only ever meant "allowed". `assistant_access` is the decision. */
     allow_as_assistant_user?: boolean;
+    /** What the user decided about this person reaching the agent: allowed on every channel
+     *  they have, denied everywhere, or absent when nobody has decided and the channel's
+     *  Inbound switch answers for them. */
+    assistant_access?: 'allowed' | 'denied' | null;
     status?: string | null;
     company?: string | null;
     role?: string | null;
@@ -156,6 +161,14 @@ const CARD_TITLE = 'text-xs font-semibold uppercase tracking-wide text-gray-600'
 const KV = 'flex items-center justify-between gap-2 py-1.5 border-b border-gray-200 last:border-b-0 text-[13px]';
 const EMPTY_FIGURE = '-';
 const REMINDER_CHOICES = [0, 5, 15, 30, 60, 1440];
+
+/** The one reader of a contact's decision, the mirror of `contacts_store.contact_access`:
+ *  'allowed', 'denied', or 'undecided' when nobody has decided. Reading the legacy bool
+ *  instead would turn a denial into a grant, because 'denied' is a truthy string. */
+export function contactAccess(c: Contact): 'allowed' | 'denied' | 'undecided' {
+    if (c.assistant_access === 'allowed' || c.assistant_access === 'denied') return c.assistant_access;
+    return c.allow_as_assistant_user ? 'allowed' : 'undecided';
+}
 
 function hashIndex(s: string, n: number): number {
     let h = 0;
@@ -602,9 +615,9 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
             how_to_address: text(form.how_to_address),
             birthday: text(form.birthday),
             notes: text(form.notes),
-            // Front Office is switched on only through the header switch and its confirmation;
-            // a new record starts closed and an edit leaves the flag alone.
-            ...(editing ? {} : { allow_as_assistant_user: false }),
+            // Nothing about the agent's access here: a new record starts with no decision on
+            // it (the person's channel switch answers for them until the user decides), and
+            // the decision itself is taken with the control in the record's header.
         };
         try {
             if (editing && modalContact) {
@@ -751,7 +764,7 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
     }, [contacts, searchQuery, statusFilter, sortBy]);
 
     const selectedContact = selectedContactId ? contacts.find(c => c.id === selectedContactId) ?? null : null;
-    const reachCount = useMemo(() => contacts.filter(c => c.allow_as_assistant_user).length, [contacts]);
+    const reachCount = useMemo(() => contacts.filter(c => contactAccess(c) === 'allowed').length, [contacts]);
 
     const toggleSelected = (id: string) => {
         setSelectedIds(prev => {
@@ -841,7 +854,7 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
         else if (c.kind === 'deleteSelected') deleteSelected(c.ids);
         else if (c.kind === 'removeNote') removeNote(c.contactId, c.noteId);
         else if (c.kind === 'removeEvent') removeEvent(c.contactId, c.eventId);
-        else if (c.kind === 'reach') patchContact(c.contact.id, { allow_as_assistant_user: true });
+        else if (c.kind === 'reach') patchContact(c.contact.id, { assistant_access: 'allowed' });
     };
 
     // ---- render helpers ----------------------------------------------------------
@@ -948,12 +961,17 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
         const lastContact = overview?.last_contact ?? lastSeen(c);
         const created = overview?.created ?? (c.created_at ? { ts: c.created_at, source: c.source || 'manual' } : null);
         const bdays = c.birthday ? birthdayInDays(c.birthday) : null;
-        const reachOn = !!c.allow_as_assistant_user;
-        // "On" is only true when at least one of this person's messenger channels has its
-        // Front Office door open; a WhatsApp-only contact under a closed WhatsApp door is
-        // turned away however the switch stands.
-        const foTypes = channelTypes(c).filter(ty => ty === 'whatsapp' || ty === 'telegram');
-        const doorClosed = frontOffice !== null && foTypes.length > 0 && !foTypes.some(ty => !!frontOffice.channels[ty]);
+        const access = contactAccess(c);
+        // Only "nobody decided" depends on the channel: that person is answered while their
+        // channel's Inbound stands open and turned away while it does not. An allowed contact
+        // is answered with every switch off, a denied one with every switch on.
+        // Every Front Office channel the person actually has, read from the state's own keys
+        // rather than from a hand-kept pair: with WhatsApp and Telegram hardcoded, a contact
+        // who is only reachable by mail or on Discord was told the channel would answer them
+        // while their channel's Inbound was shut.
+        const foTypes = channelTypes(c).filter(ty => ty in (frontOffice?.channels ?? {}));
+        const doorClosed = frontOffice !== null && foTypes.length > 0
+            && !foTypes.some(ty => !!frontOffice.channels[ty]);
         const statusValue = (c.status || '').trim();
         const notesCount = (c.notes_log || []).length;
         const eventsCount = (c.events || []).length;
@@ -976,7 +994,8 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
                     <div className="min-w-0 flex-1">
                         <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2 min-w-0">
                             <span className="truncate">{c.name}</span>
-                            {reachOn && <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" title={tc('canReachAgent')} />}
+                            {access === 'allowed' && <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" title={tc('canReachAgent')} />}
+                            {access === 'denied' && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title={tc('blockedFromAgent')} />}
                         </h3>
                         {(c.company || c.role) && (
                             <p className="text-sm text-gray-600 truncate">
@@ -1055,15 +1074,30 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
                                 )}
                             </div>
                         </div>
-                        <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer select-none">
+                        {/* Three positions, because the middle one is a state and not the
+                            absence of one: allowed answers on every channel, denied on none,
+                            and "the channel decides" is what a record carries until the user
+                            says otherwise. A two-way switch could only take a decision back. */}
+                        <div className="flex items-center gap-2 text-xs text-gray-700">
                             <span>{tw('allowReach')}</span>
-                            <button type="button" role="switch" aria-checked={reachOn}
-                                onClick={() => reachOn ? patchContact(c.id, { allow_as_assistant_user: false }) : setConfirm({ kind: 'reach', contact: c })}
-                                className={cn('relative w-11 h-6 rounded-full transition-colors', reachOn ? 'bg-gray-800 dark:bg-[#d9d9d9]' : 'bg-gray-300 dark:bg-[#333333]')}>
-                                <div className={cn('absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform', reachOn ? 'translate-x-6 dark:bg-[#1a1a1a]' : 'translate-x-1 dark:bg-[#e8e8e8]')} />
-                            </button>
-                        </label>
-                        <p className="text-[11px] text-gray-500 text-right max-w-[300px] max-md:text-left">{reachOn ? (doorClosed ? tc('reachHintOnDoorClosed') : tc('reachHintOn')) : tc('reachHintOff')}</p>
+                            <div className="inline-flex rounded-lg border border-gray-200 dark:border-[#2e2e2e] overflow-hidden" role="group" aria-label={tw('allowReach')}>
+                                {(['allowed', 'undecided', 'denied'] as const).map(value => (
+                                    <button key={value} type="button" aria-pressed={access === value}
+                                        onClick={() => value === 'allowed' ? setConfirm({ kind: 'reach', contact: c }) : patchContact(c.id, { assistant_access: value })}
+                                        className={cn('px-2.5 py-1 whitespace-nowrap transition-colors',
+                                            access === value
+                                                ? 'bg-gray-900 text-white dark:bg-[#d9d9d9] dark:text-[#1a1a1a]'
+                                                : 'bg-white text-gray-700 hover:bg-gray-100 dark:bg-[#1f1f1f] dark:text-[#d0d0d0] dark:hover:bg-[#2a2a2a]')}>
+                                        {tw(value === 'allowed' ? 'accessAllowed' : value === 'denied' ? 'accessDenied' : 'accessUndecided')}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        <p className="text-[11px] text-gray-500 text-right max-w-[300px] max-md:text-left">
+                            {access === 'allowed' ? tc('reachHintOn')
+                                : access === 'denied' ? tc('reachHintOff')
+                                    : doorClosed ? tc('reachHintUndecidedDoorClosed') : tc('reachHintUndecided')}
+                        </p>
                     </div>
                 </div>
 
@@ -1403,7 +1437,8 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
                                                         <div className="min-w-0">
                                                             <div className="text-[13px] font-semibold truncate flex items-center gap-1.5">
                                                                 <span className="truncate">{c.name}</span>
-                                                                {c.allow_as_assistant_user && <span className="w-[7px] h-[7px] rounded-full bg-green-500 shrink-0" title={tc('canReachAgent')} />}
+                                                                {contactAccess(c) === 'allowed' && <span className="w-[7px] h-[7px] rounded-full bg-green-500 shrink-0" title={tc('canReachAgent')} />}
+                                                                {contactAccess(c) === 'denied' && <span className="w-[7px] h-[7px] rounded-full bg-red-500 shrink-0" title={tc('blockedFromAgent')} />}
                                                             </div>
                                                             <div className="text-[11.5px] text-gray-600 truncate flex items-center gap-1.5 mt-0.5">
                                                                 {status && <span className={cn('px-1.5 rounded text-[10.5px] whitespace-nowrap', STATUS_PILL[status] || PILL_DEFAULT)}>{statusLabel(status)}</span>}

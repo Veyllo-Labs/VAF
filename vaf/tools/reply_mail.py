@@ -82,12 +82,22 @@ class ReplyMailTool(BaseTool):
             return f"Account '{pre['account_id']}' not found."
         # The one send funnel: the reply is queued and delivered right away; the outbox
         # files the Sent copy, records the id and marks the answered mail when it left.
+        # `hold` is set by the chat lane (vaf/core/outbound_hold.py) when the person ordered
+        # this reply in the web UI: it is parked as a draft for them instead of leaving.
+        hold = bool(kwargs.get("hold", False))
         try:
             original = svc.store.get_message(pk) or {}
             queued = svc.queue_send(pre["account_id"], pre["to"], pre["subject"], full_body,
                                     cc=pre.get("cc") or "", in_reply_to=pre.get("in_reply_to") or "",
                                     references=pre.get("references") or "", undo_seconds=0,
-                                    sent_by="agent", reply_to_pk=pk, thread_id=original.get("thread_id"))
+                                    sent_by="agent", reply_to_pk=pk, thread_id=original.get("thread_id"),
+                                    hold=hold,
+                                    chat_session_id=str(kwargs.get("hold_session") or ""))
+            if hold:
+                from vaf.core.outbound_hold import held_result
+                return held_result("reply_mail",
+                                   {"to": pre["to"], "subject": pre["subject"], "body": full_body},
+                                   entry_id=int(queued["op_id"]))
             deliver_queued_sends(svc.user_scope_id, acc, cred_username, pre["account_id"], service=svc)
             outcome = svc.send_outcome(int(queued["op_id"]))
         except Exception as e:

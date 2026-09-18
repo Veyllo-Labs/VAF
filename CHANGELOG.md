@@ -12,15 +12,32 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **A message your agent writes for you waits for your word.** Ask for a mail in the chat and
+  it is no longer gone the moment the agent has written it: it is prepared in full and parked
+  as a draft, and a card under the answer sends or discards it. The same holds for a WhatsApp
+  message the agent addresses to a number, the one messenger message that can reach somebody
+  other than you. Telegram and Discord messages are untouched, because they can only reach
+  your own devices. Nothing changes for automations, workflows, Front Office answers, a
+  reminder you scheduled or anything else that runs while you are not there: those still send,
+  because nobody is waiting at the screen to agree. `vaf outbox list`, `vaf outbox send` and
+  `vaf outbox discard` do the same from a terminal, and `outward_send_hold` turns the whole
+  thing off. The
+  card belongs to the chat you asked in: switch chats while the agent is still writing and the
+  draft stays where it was, with the red dot on that chat in the list until you go back. Send
+  waits three seconds before it can be pressed, and the card glows softly while it does, so the
+  message gets read before it goes; discarding it is possible at once. A draft is only ever
+  used up by a send that reports the message left: if the WhatsApp bridge is down or the mail
+  cannot go out, the draft stays in the card with the reason on it, and it is yours to try
+  again or drop.
 - **Inbound on Discord.** The Inbound window switches Discord like the other channels:
-  with it on, anyone who writes the bot a direct message is answered in Front Office mode
-  as a contact of the admin's book (added there when they write, switched off there to
-  keep them out); the paired admin's DM stays the full agent and guild channels are never
+  with it on, anybody the admin has not decided about is answered in Front Office mode when
+  they write the bot a direct message, and added to the admin's book (where they can be
+  blocked for good); the paired admin's DM stays the full agent and guild channels are never
   answered. The Discord window badges such a chat as Contact, and the inbox's mode says
   `contact` for it and `readonly` for a kept stranger's DM instead of `admin` for every row.
-  The admission a bridge makes (the record whatever its flag, the policy's answer, the
-  enrolment with its event) is one shared function now, used by Discord and by Telegram's
-  stranger path.
+  The admission a bridge makes (the record, what you decided about that person, the policy's
+  answer and the enrolment with its event) is one shared function now, used by Discord and by
+  Telegram's stranger path.
 - **The contact is the hub, not the channel.** While answering a contact, the agent has one
   read tool, `contact_history`: what that person wrote to you before and what went to them,
   across WhatsApp, Telegram, Discord and mail, newest first, with a channel filter and a
@@ -40,11 +57,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   touched. Every answered conversation is a case: the agent's mail carries a signed case
   anchor as its Message-ID, so a reply is recognised with certainty and only from somebody
   already on that case; a reply into a case the agent wrote in gets through even with the
-  channel switched off (the WhatsApp reply-window rule, on mail). At most three automatic
-  answers per address and hour, ten per day. A new sender the agent answers is added to the
-  contact book with "Let the agent reply" on, where you switch them off. Three new security
-  log entries: a mail claiming your own domain that did not authenticate, a case anchor that
-  is not yours, and an address that reached the cap.
+  channel switched off, and that is the one door of its kind left anywhere. At most three
+  automatic answers per address and hour, ten per day. A new sender the agent answers is added
+  to the contact book without a decision on them, where you can allow or block them. Three new
+  security log entries: a mail claiming your own domain that did not authenticate, a case
+  anchor that is not yours, and an address that reached the cap.
 - **The mail client says who really wrote a mail.** Every message now gets a verdict
   when it is synced: whether a person wrote it (a bounce, a read receipt, an
   out-of-office reply, a mailing list, bulk mail and a calendar invitation are
@@ -61,21 +78,40 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   bypass only when the mail really came from it.
 - **Inbound has a home in Settings.** Under Connections, right below Contacts, an "Inbound"
   card opens the window for the agent's answers to incoming requests (the Front Office).
-  On the right, a switch per channel: switching WhatsApp or Telegram on means everyone who
-  writes there is answered in Front Office mode, every contact of that channel in your book
-  is allowed at that moment, and a new sender is added to the book when they write; one
-  person is kept out by switching "Let the agent reply" off for them in the channel window
-  or the contact book (switching on asks once; every change is a `front_office_changed`
-  entry in the security log). On the left, your instructions for those answers (who the
-  agent speaks for, the tone, what it may promise, what it must never say) and the
+  On the right, a switch per channel: switching WhatsApp or Telegram on means everybody you
+  have not decided about is answered there in Front Office mode, and a new sender is added to
+  your book when they write. The switch grants nobody: a contact you allowed is answered with
+  it off, one you blocked with it on (switching on asks once; every change is a
+  `front_office_changed` entry in the security log). On the left, your instructions for those
+  answers (who the agent speaks for, the tone, what it may promise, what it must never say) and the
   knowledge: PDF, TXT or MD documents learned into a lane of the memory store that only a
   contact's answer reads. The inbox's rail has an "Inbound" entry that opens the window,
   and the window's header an "Open inbox" for the way back. Until now the agent answered
   only contacts with the flag, and only after the door had been opened by hand in
   `config.json` (`channel_ingress_policy`), while the contact book said the agent answers
-  them; that hint now says when Inbound is off.
+  them; the hint under each person now says what their own state means.
 
 ### Security
+- **"Let the agent reply" has three positions, and the 72 hour reply window is gone.** Whether
+  your agent answers somebody was a yes-or-no flag, and its "no" meant two different things:
+  "I switched this person off" and "nobody ever decided". The channel sync had written that
+  same "no" for every chat it had ever named, so the two could not be told apart. Each person
+  now carries **allowed** (answered on every channel where you have their address, even with
+  that channel's Inbound off), **blocked** (answered nowhere, even with Inbound on) or **the
+  channel decides**, the state a new or synced record starts in. Your existing contacts keep
+  their yes as **allowed**; every "no" becomes "the channel decides", because none of them was
+  ever a refusal you typed. The Inbound switch now writes one field and no permission: it used
+  to switch every contact of that channel on in every book on this machine, which survived
+  switching it off again. And a message from your agent no longer opens a door: for three days
+  after any message it sent, the recipient could write in and be answered, on channels you had
+  closed (one `send_whatsapp` was enough). What the agent may answer is your own decision about
+  the person plus the channel switch, nothing else. `whatsapp_config.reply_window_hours` stays
+  as a display value in the WhatsApp window and admits nobody, and the two expert keys in
+  `config.json` that said the same thing as a contact's own state (`permissive`,
+  `allow_contact_fallback`) are gone; an old config with them keeps working and grants nothing.
+  Blocking a person is recorded in the security log as a block, which it never was before: the
+  two states were compared as truthy values, so the single most security-relevant change on a
+  contact went unrecorded.
 - **A contact's answer no longer draws on your whole memory.** A Front Office turn used to
   search the owner's general memory, learned documents included, and relied on the prompt
   to keep private details back. It now reads the Front Office knowledge and what it learned
@@ -102,8 +138,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   reply that only repeats the model's own reasoning now counts as no answer, which is what
   asks the model for a real one.
 - **Inbound, after review.** An unresolved WhatsApp LID is no longer answered by an open
-  Inbound (no contact record could carry the opt-out for it); switching a channel on
-  grants the contacts of every book on the instance, not only the admin's; a mail answer
+  Inbound (it has no number, so nothing can match it); a mail answer
   in send mode counts as answered only once it left; editing the agent's held draft
   replaces it instead of letting both leave; the inbox's draft buttons report a failed
   send instead of reloading as if it had left; a forwarded mail is no longer read as a
@@ -111,7 +146,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   reply cap counts whole mailboxes and honours `0`; the `none` verification profile
   trusts no header whatever id the account remembers; no graph edge crosses the Front
   Office lane on any write path. The Inbound window no longer explains the WhatsApp reply
-  window under the switches; that door is the WhatsApp window's own setting.
+  window under the switches.
 - **A mail the agent sent for you now has a Sent copy and marks the mail it answered.**
   `send_mail`, `reply_mail` and `forward_mail` built and sent the wire bytes themselves,
   so on a plain IMAP account nothing was filed in Sent and the answered mail kept

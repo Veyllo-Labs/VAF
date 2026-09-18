@@ -1069,6 +1069,16 @@ except ImportError as e:
 except Exception as e:
     log("WebServer", f"Failed to mount inbox routes: {e}")
 
+# Mount the outbox routes (what the agent prepared and the person has not sent yet)
+try:
+    from vaf.api.outbox_routes import router as outbox_router
+    app.include_router(outbox_router)
+    log("WebServer", "Outbox routes mounted at /api/outbox")
+except ImportError as e:
+    log("WebServer", f"Outbox routes not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount outbox routes: {e}")
+
 # Mount Auth routes (Local Network Authentication)
 try:
     from vaf.api.auth_routes import router as auth_router

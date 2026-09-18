@@ -560,6 +560,23 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 }
 @keyframes roomMsgConfirm { from { opacity: .5 } to { opacity: 1 } }
 .room-msg-confirm { animation: roomMsgConfirm .45s ease-out both }
+/* The held-send card's glowing rim, while its send button is still counting down. A
+   message nobody has agreed to send yet is the one thing in the conversation that wants
+   the eye, and the rim says "read me" without a colour that shouts. OPACITY ONLY, per
+   the repaint rule above: the ring is its own element with a fixed shadow, and only its
+   opacity breathes, so the card's own box never repaints. */
+@keyframes vafDraftRim { 0%, 100% { opacity: .35 } 50% { opacity: .9 } }
+.vaf-draft-rim {
+  animation: vafDraftRim 2.2s ease-in-out infinite;
+  /* Dark ink on the light theme, light ink on the dark one. A white ring is the one value
+     that cannot work for both: on the light card (#f9fafb) it is invisible, so the single
+     signal that the card wants reading disappeared on exactly the theme that starts the app. */
+  box-shadow: 0 0 0 1px rgba(17,24,39,.35), 0 0 18px 2px rgba(17,24,39,.12);
+}
+.dark .vaf-draft-rim {
+  box-shadow: 0 0 0 1px rgba(255,255,255,.35), 0 0 18px 2px rgba(255,255,255,.12);
+}
+
 @media (prefers-reduced-motion: reduce) {
   /* A person who asked the system for less motion still gets a message that
      arrives - it fades without travelling, rather than not animating at all. */
@@ -572,6 +589,9 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   /* The pending message holds still at its dimness; the sending note under it
      already says what the sweep says. */
   @keyframes roomSheenSweep { 0%, 100% { transform: translateX(-100%) } }
+  /* The draft's rim stops breathing and simply stands there: the countdown on the
+     button already says the card is waiting. */
+  @keyframes vafDraftRim { 0%, 100% { opacity: .6 } }
 }
 /* The vote panel docking above the message box, and leaving the same way.
    Both directions, because a vote here ENDS by itself - the last ballot lands or

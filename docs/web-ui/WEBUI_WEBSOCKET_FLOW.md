@@ -332,6 +332,18 @@ Key rules:
   `notify_inbox_changed` on the same primitive, throttled per scope in the message store;
   see [INBOX.md](../integrations/INBOX.md).
 
+- `outbound_held` (no payload): the agent prepared an outward message on THIS session's chat
+  turn and it is parked for the person instead of sent (a mail draft in the mail outbox, or a
+  parked WhatsApp call in `held_sends`; see
+  [`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py)). A signal, not the draft,
+  for the same reason as `inbox_changed` and one more: the two lanes park in different stores
+  and neither id belongs in a chat event, so the card reads `GET /api/outbox` and cannot
+  disagree with the store. Pushed to the session by the agent's post-dispatch hook whenever a
+  tool result carries the held marker, so mail and messenger need one line between them. The
+  same moment also emits `session_unread` for that chat, so a person who has moved to another
+  conversation sees the chat list's red dot on the one that is waiting; the browser ignores
+  that dot for the chat it is showing, which makes it exactly the "somewhere else" signal.
+
 - `browser_interactive_state` (`{ sessionId, status, saving, reason, streamPath }`):
   the interactive-browser lease verdict and lifecycle. `status` is one of `active`
   (streamPath set, the window's iframe loads it), `stopped` (with `reason`: `user`,

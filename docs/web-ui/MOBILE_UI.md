@@ -23,6 +23,16 @@ Breakpoints in use: `md` = 768px is the mobile cutoff almost everywhere. A few
 older screens (e.g. the Memory full page, some dashboards) split at `lg` = 1024px;
 match whatever the file already uses.
 
+## The held-send card
+
+What the agent prepared and nobody has sent (`web/components/outbox/HeldSendCard.tsx`). It is
+not a banner: it is the last row IN the conversation, in the same bot-row wrapper as an answer,
+so the phone needs nothing of its own for the card itself. What the phone does need is the
+wrapper, and `page.tsx` gives it the message column's own rule: `w-full max-w-[85%]
+max-md:max-w-full`, so the card uses the full width on a phone and the message column on a
+desktop. The card's insides stack by construction (a column of short rows, three at most, then
+a count), and both buttons stay side by side because they are two short labels.
+
 ## Reusable patterns (copy the class strings)
 
 ### Full-screen sheet (modals / dialogs with real content)

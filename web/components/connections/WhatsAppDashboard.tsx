@@ -5,9 +5,9 @@
 //
 // The WhatsApp window on the shared channel shell. The linked account is the
 // agent's own number; each chat's badge says who it is to the agent (owner /
-// contact / conversation inside the reply window / read-only), and the settings
-// hold the agent number, the owner's registered number, who else may write, the
-// reply window and the activity chart. Where the agent does NOT answer (a read-only
+// contact / read-only, the lane's own answer through vaf/core/inbox.chat_mode),
+// and the settings hold the agent number, the owner's registered number, who else
+// may write, the reply window and the activity chart. Where the agent does NOT answer (a read-only
 // sender, or the whole channel with inbound_to_agent off) the person answers
 // themselves: a compose box under the chat sends from the agent's number, and the
 // Composer on the right drafts into that box (the mail window's assistant on the
@@ -65,7 +65,12 @@ interface WhatsAppSession {
     display_name?: string | null;
     resolved_e164?: string | null;
     contact_id?: string | null;
+    /** What the owner decided about this person: allowed on every channel, denied everywhere,
+     *  or null when nobody has decided and the channel switch answers for them. */
+    contact_access?: 'allowed' | 'denied' | null;
     contact_name?: string | null;
+    /** When a conversation the agent started still counts as live. It decides nothing about
+     *  who is answered (the badge does that); the window shows it and nothing else. */
     reply_window_until?: number | null;
     last_preview?: string;
     unread?: number;
@@ -359,10 +364,12 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
+                // The record only, with no decision on it: whether the agent answers this
+                // person is the control next to this button, and adding somebody to the book
+                // is not the same as handing them a pass that outlives the channel switch.
                 body: JSON.stringify({
                     name: (s.display_name || s.name || phone).trim(),
                     whatsapp_phone: phone,
-                    allow_as_assistant_user: true,
                 }),
             });
             if (!res.ok) {
@@ -378,7 +385,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         }
     };
 
-    const handleAllowReach = async (s: WhatsAppSession, allow: boolean) => {
+    const handleSetAccess = async (s: WhatsAppSession, access: 'allowed' | 'denied' | 'undecided') => {
         if (!s.contact_id) return;
         setAddingContact(true);
         setNote(null);
@@ -387,7 +394,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
-                body: JSON.stringify({ allow_as_assistant_user: allow }),
+                body: JSON.stringify({ assistant_access: access }),
             });
             if (!res.ok) { setNote(t('addContactFailed')); return; }
             fetchDashboard();
@@ -492,8 +499,8 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     };
 
     /** The person writes here only where the agent does not: a read-only sender, or the
-     *  whole channel with inbound_to_agent off. Owner, contact and conversation chats
-     *  are the agent's to answer, and an unassigned LID has no address to send to. */
+     *  whole channel with inbound_to_agent off. Owner and contact chats are the agent's to
+     *  answer, and an unassigned LID has no address to send to. */
     const canCompose = (s: WhatsAppSession) =>
         !s.needs_assign && (data?.inbound_to_agent === false || s.type === 'unknown');
 
@@ -639,7 +646,6 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         if (s.needs_assign) return { label: t('badgeAssign'), cls: BADGE_CLS.assign };
         if (s.type === 'owner') return { label: t('badgeOwner'), cls: BADGE_CLS.owner };
         if (s.type === 'contact') return { label: t('badgeContact'), cls: BADGE_CLS.contact };
-        if (s.type === 'conversation') return { label: t('badgeConversation'), cls: BADGE_CLS.conversation };
         return { label: t('badgeReadOnly'), cls: BADGE_CLS.readOnly };
     };
 
@@ -649,13 +655,17 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         if (s.needs_assign) return t('subAssign');
         if (s.type === 'owner') return prefix + t('subOwner');
         if (s.type === 'contact') return prefix + t('subContact');
-        if (s.type === 'conversation') return prefix + (s.reply_window_until ? t('subConversation', { until: fmtUntil(s.reply_window_until) }) : t('subConversationOpen'));
+        // The reply window, and only as information: it says how long a conversation the AGENT
+        // started counts as live, never who is answered. That is the badge's job, and the line
+        // that used to promise "replies answered until ..." here was the display half of the
+        // door this round removed.
+        if (s.reply_window_until) return prefix + t('subConversation', { until: fmtUntil(s.reply_window_until) });
         return prefix + t('subReadOnly');
     };
 
     const footerFor = (s: WhatsAppSession) => {
         if (s.type === 'owner') return t('footOwner');
-        if (s.type === 'contact' || s.type === 'conversation') return t('footFrontOffice');
+        if (s.type === 'contact') return t('footFrontOffice');
         return t('footReadOnly');
     };
 
@@ -697,10 +707,13 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         const s = sessionsById.get(chat.id);
         if (!s) return null;
         const phone = s.resolved_e164 || s.phone_number || '';
-        const canAddContact = !s.needs_assign && !s.contact_id && (s.type === 'conversation' || s.type === 'unknown') && !!phone && !phone.includes('@');
-        // A contact-book record (Front Office flag on or off) gets a switch; the owner's own number never does.
+        // Any number the book does not know yet, whatever the agent may do there: the record
+        // comes first, the decision is the control beside it.
+        const canAddContact = !s.needs_assign && !s.contact_id && s.type !== 'owner' && !!phone && !phone.includes('@');
+        // A contact-book record gets the decision control, whatever the decision is; the
+        // owner's own number never does.
         const hasBookRecord = !s.needs_assign && !!s.contact_id && s.type !== 'owner';
-        const reachOn = s.type === 'contact';
+        const access: 'allowed' | 'denied' | 'undecided' = s.contact_access || 'undecided';
         return (
             <>
                 {s.needs_assign && (
@@ -719,16 +732,23 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                         <span className="text-xs text-[#9a9a9a] flex items-center gap-1.5" title={s.contact_name || undefined}>
                             <BookUser className="w-4 h-4" />{t('inContacts')}
                         </span>
-                        <label className="flex items-center gap-2 text-xs text-[#d0d0d0] cursor-pointer select-none">
-                            <button type="button" role="switch" aria-checked={reachOn} disabled={addingContact}
-                                onClick={() => reachOn ? handleAllowReach(s, false) : setReachConfirm(s)}
-                                // The house switch in its dark form (ConnectionsPanel, ContactsDashboard): light track and dark knob when on, dark track and light knob when off. The shell is dark-only, so the dark pair is used outright.
-                                className={cn('relative w-11 h-6 rounded-full transition-colors', reachOn ? 'bg-[#d9d9d9]' : 'bg-[#333333]')}>
-                                {/* left-0: an absolutely positioned SPAN inside a button starts at the button's centred static position, so without it the knob sat on the right while the switch was off. */}
-                                <span className={cn('absolute left-0 top-1 w-4 h-4 rounded-full shadow transition-transform', reachOn ? 'translate-x-6 bg-[#1a1a1a]' : 'translate-x-1 bg-[#e8e8e8]')} />
-                            </button>
-                            {t('allowReach')}
-                        </label>
+                        {/* Three positions, not a switch: "the channel decides" is a state of
+                            its own between allowed and denied, and a two-way switch could only
+                            ever take a decision back, never refuse a person. */}
+                        <div className="flex items-center gap-2 text-xs text-[#d0d0d0]">
+                            <span>{t('allowReach')}</span>
+                            <div className="inline-flex rounded-lg border border-[#2e2e2e] overflow-hidden" role="group" aria-label={t('allowReach')}>
+                                {(['allowed', 'undecided', 'denied'] as const).map(value => (
+                                    <button key={value} type="button" disabled={addingContact}
+                                        aria-pressed={access === value}
+                                        onClick={() => value === 'allowed' ? setReachConfirm(s) : handleSetAccess(s, value)}
+                                        className={cn('px-2.5 py-1 whitespace-nowrap transition-colors',
+                                            access === value ? 'bg-[#d9d9d9] text-[#1a1a1a]' : 'bg-[#1f1f1f] text-[#d0d0d0] hover:bg-[#2a2a2a]')}>
+                                        {t(value === 'allowed' ? 'accessAllowed' : value === 'denied' ? 'accessDenied' : 'accessUndecided')}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
                     </>
                 )}
             </>
@@ -944,7 +964,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             body={t('allowReachConfirmBody', { name: reachConfirm?.contact_name || reachConfirm?.display_name || reachConfirm?.phone_number || '' })}
             confirmLabel={t('allowReachConfirmYes')}
             cancelLabel={t('allowReachConfirmNo')}
-            onConfirm={() => { const s = reachConfirm; setReachConfirm(null); if (s) handleAllowReach(s, true); }}
+            onConfirm={() => { const s = reachConfirm; setReachConfirm(null); if (s) handleSetAccess(s, 'allowed'); }}
             onCancel={() => setReachConfirm(null)}
             zIndexClass="z-[60]"
             escapeLevel={53}

@@ -193,13 +193,13 @@ def _resolve_telegram_user(telegram_user_id: str, sender: Any = None) -> Tuple[O
     policy = Config.get("channel_ingress_policy")
     entry = _whitelist_lookup(telegram_user_id)
     if entry:
-        allowed, _ = evaluate_ingress("telegram", policy, explicit_match=True, contact_match=False)
+        allowed, _ = evaluate_ingress("telegram", policy, explicit_match=True)
         if allowed:
             return (entry, False)
         return (None, False)
     entry = _relay_whitelist_lookup(telegram_user_id)
     if entry:
-        allowed, _ = evaluate_ingress("telegram", policy, explicit_match=True, contact_match=False)
+        allowed, _ = evaluate_ingress("telegram", policy, explicit_match=True)
         if allowed:
             return (entry, True)
         return (None, False)
@@ -207,7 +207,11 @@ def _resolve_telegram_user(telegram_user_id: str, sender: Any = None) -> Tuple[O
         from vaf.core.messaging_connections import get_contact_whitelist_telegram_entry
         entry = get_contact_whitelist_telegram_entry(telegram_user_id)
         if entry:
-            allowed, _ = evaluate_ingress("telegram", policy, explicit_match=False, contact_match=True)
+            # The entry exists because a contact carries this Telegram id AND the owner
+            # allowed them, so the decision is "allowed"; the policy is still asked, because
+            # a later veto on that record has to win here too.
+            allowed, _ = evaluate_ingress("telegram", policy, explicit_match=False,
+                                          access=_contact_access_for_telegram(telegram_user_id, entry))
             if allowed:
                 return (entry, False)
     except Exception:
@@ -215,10 +219,25 @@ def _resolve_telegram_user(telegram_user_id: str, sender: Any = None) -> Tuple[O
     return _open_front_office_entry(telegram_user_id, policy, sender)
 
 
+def _contact_access_for_telegram(telegram_user_id: str, entry: Dict[str, Any]) -> Optional[str]:
+    """What the owner decided about the contact behind this Telegram id, read from the record
+    itself rather than from the fact that a lookup returned an entry: the entry is built from
+    the allowed set, so it cannot see a denial that arrived afterwards."""
+    try:
+        from vaf.core.contacts_store import contact_access, find_contact_by_channel
+        rec = find_contact_by_channel("telegram", str(telegram_user_id or ""),
+                                      (entry or {}).get("vaf_username") or "admin",
+                                      (entry or {}).get("user_scope_id"))
+        return contact_access(rec)
+    except Exception:
+        return None
+
+
 def _open_front_office_entry(telegram_user_id: str, policy: Any, sender: Any) -> Tuple[Optional[Dict[str, Any]], bool]:
     """A sender the open Front Office on Telegram lets in (Settings, Connections): answered
     as a Front Office contact of the ONE owner this bot serves, enrolled in that owner's
-    book with the flag ON so they can be switched off there. Named boundary: the bot is
+    book WITHOUT a decision: the open channel is what answers them, and the record is there
+    so the owner can allow or deny them by hand. Named boundary: the bot is
     shared by every account on the install, a WhatsApp number is not; with several owners
     on the whitelist a stranger cannot be attributed to one of them and stays out."""
     try:

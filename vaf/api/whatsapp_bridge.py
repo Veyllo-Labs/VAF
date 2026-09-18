@@ -9,10 +9,13 @@ Voice messages from WhatsApp are downloaded by Node, transcribed via Whisper STT
 
 Roles. The linked account is the AGENT's own number: the agent writes to contacts and
 third parties from it, and nobody chats with the agent from that phone (its "message
-yourself" chat is dropped). Who may write IN is decided per message: the registered
-main-user number (whitelist entry: full chat as the owner), a contact with "Can reach your
-assistant" (Front Office), or a number the agent itself wrote to inside the reply window
-(Front Office, `open_conversation`). Everyone else is rejected.
+yourself" chat is dropped). Who may write IN is decided per message, by the one rule both
+directions ask (`channel_ingress_policy.evaluate_ingress`): the registered main-user number
+(whitelist entry: full chat as the owner), a contact the owner ALLOWED (Front Office, on
+every channel they have), and, while this channel's Inbound is open, everybody the owner has
+not decided about (Front Office, enrolled as a contact when they write). A contact the owner
+blocked is answered nowhere, and everyone else is rejected. A message the agent sent opens
+nothing: the 72 hour reply window that used to admit its recipient is gone.
 """
 import json
 import logging
@@ -25,13 +28,12 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from vaf.core.config import Config
 from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
-from vaf.core.messaging_connections import (  # noqa: F401 - reply_window_hours is re-exported for the routes
-    WA_REPLY_WINDOW_HOURS_DEFAULT, reply_window_hours, save_whatsapp_chat_jid, whatsapp_enabled_for_scope,
-    whatsapp_session_id,
+from vaf.core.messaging_connections import (
+    save_whatsapp_chat_jid, whatsapp_enabled_for_scope, whatsapp_session_id,
 )
 from vaf.core.platform import Platform
 from vaf.core.task_queue import TaskQueue
@@ -96,61 +98,14 @@ _wa_pending: Dict[str, Dict[str, Any]] = {}
 _wa_pending_lock = threading.Lock()
 WA_DEBOUNCE_SECONDS = 7
 
-# The reply window (`reply_window_hours`, `WA_REPLY_WINDOW_HOURS_DEFAULT`) lives with the
-# other channel rules in messaging_connections and is imported above: the inbox in vaf/core
-# applies the same window without reaching into the bridge.
-
-
-def conversation_open_until(
-    username: str,
-    chat_id: str,
-    user_scope_id: Optional[str] = None,
-    direction: Optional[str] = None,
-) -> Optional[float]:
-    """Unix timestamp until which `chat_id` (E.164 display form, the store's key) counts as an
-    open conversation, or None when there is no message inside the window. `direction="out"`
-    asks whether the AGENT wrote last-ish (the inbound acceptance rule: the door is opened by
-    the agent's own message). None is the reply rule: the agent's own message opens the
-    window, and a reply the contact sent INSIDE that window extends it (an accepted message
-    may always be answered). An inbound row alone opens nothing: the store keeps a rejected
-    sender's message for the owner's inbox too, and that row must not become a door."""
-    window = reply_window_hours() * 3600.0
-    if window <= 0 or not chat_id:
-        return None
-    from vaf.core.channel_message_store import OWNER_SENDER, last_message_ts
-    user = (username or "").strip() or "admin"
-    # Only what the AGENT sent opens a door. A message the person sent from the dashboard
-    # is stored as an outbound row too (it left the number), labelled OWNER_SENDER, and it
-    # must not hand the contact's answer to an agent nobody allowed to talk to them.
-    out_ts = last_message_ts(user, chat_id, direction="out", user_scope_id=user_scope_id,
-                             exclude_sender=OWNER_SENDER)
-    if direction == "out" or direction is not None:
-        ts = out_ts if direction == "out" else last_message_ts(user, chat_id, direction=direction, user_scope_id=user_scope_id)
-        return (ts + window) if ts is not None else None
-    if out_ts is None:
-        return None
-    until = out_ts + window
-    # The newest inbound INSIDE the window the outbound opened: a later, rejected inbound
-    # (kept in the store for the owner) must neither open the window nor shadow the reply
-    # the contact sent while it was open.
-    in_ts = last_message_ts(user, chat_id, direction="in", user_scope_id=user_scope_id, until_ts=until)
-    if in_ts is not None and in_ts > out_ts:
-        until = max(until, in_ts + window)
-    return until
-
-
-def _conversation_is_open(
-    username: str,
-    chat_id: str,
-    user_scope_id: Optional[str] = None,
-    direction: Optional[str] = None,
-) -> bool:
-    try:
-        until = conversation_open_until(username, chat_id, user_scope_id, direction)
-    except Exception as e:
-        logger.debug("WhatsApp: reply-window lookup failed for %s: %s", chat_id, e)
-        return False
-    return until is not None and until > time.time()
+# The reply window (`reply_window_hours`) lives with the other channel rules in
+# messaging_connections, and it decides NOTHING about who may write in: the bridge's own copy
+# of the rule (`conversation_open_until`, `_conversation_is_open`) is gone with the 72 hour
+# door it served, and the one implementation left is `vaf.core.inbox.reply_window_until`,
+# which the WhatsApp window reads to show how long a conversation the owner started counts as
+# live. NAMED BOUNDARY: the setting is display-only now. Deleting it outright touches 93 sites
+# in 26 files (the inbox rows, the inbox tool, the CLI, the store's overview, the settings
+# card), so it is its own round; what must not happen is a new caller treating it as a door.
 
 
 def _ipc_base_dir() -> Path:
@@ -599,7 +554,16 @@ def _allow_from_match(sender_jid: str, allowed_phones: List[str]) -> bool:
 
 
 def _get_allowed_phones_for_user(username: str, user_scope_id: str) -> Tuple[List[str], List[str]]:
-    """Return (config_phones, allowed_phones) for inbound checks. config_phones = whitelist only; allowed_phones = whitelist + Front Office contacts. Called per message so new FO contacts work without bridge restart."""
+    """(config_phones, allowed_phones) for this account, read per message so a change in the
+    book needs no bridge restart.
+
+    `config_phones` is the whitelist, and it is the one that DECIDES: a match is the owner's
+    own registered number (`explicit_pair`). `allowed_phones` adds the endpoints of the
+    contacts the owner allowed, and it decides nothing any more - the person's own record is
+    read by `contacts_store.contact_access` at the decision site, because a set built from a
+    flag cannot tell "allowed" from "denied" and was consulted first, so a denial was never
+    seen. What is left of it is one debug line for a user whose book and whitelist are both
+    empty. A caller that wants the answer, not the list, asks `evaluate_ingress`."""
     config_phones: List[str] = []
     allowed_phones: List[str] = []
     whatsapp_config = Config.get("whatsapp_config") or {}
@@ -905,22 +869,35 @@ def _jid_to_chat_id(username: str, chat_jid: str) -> str:
 
 def _is_reply_allowed(username: str, chat_jid: str, user_scope_id: Optional[str] = None) -> bool:
     """May the agent send to this JID on a REPLY lane (headless reply, owner delivery)?
-    Yes for the registered main-user number, a Front Office contact, or an open
-    conversation (the agent wrote to them inside the reply window, or they answered
-    inside it; a stored message of a rejected sender opens nothing, see
-    conversation_open_until). An unresolved @lid matches nothing.
-    Explicit recipients (`send_whatsapp(to_phone=...)`) do not pass through here."""
+
+    The SAME question the inbound side asks, through the same function: the registered
+    main-user number always, a contact the owner allowed always, a person they denied never,
+    and anybody else exactly while this channel's Inbound is open. Asking it twice in two
+    shapes is how the two sides drift: the agent could be allowed to answer somebody who is
+    no longer allowed to write, or refuse to answer a stranger the open channel just admitted.
+    An unresolved @lid matches nothing. Explicit recipients (`send_whatsapp(to_phone=...)`)
+    do not pass through here."""
     from vaf.core.config import scope_id_for_username
     uname = (username or "").strip() or "admin"
     scope = str(user_scope_id).strip() if user_scope_id else None
     chat_id = _jid_to_chat_id(uname, chat_jid)
+    if not chat_id:
+        return False
     # A missing scope is resolved from the NAME (the admin's own scope for the admin, a
     # tenant's own for a tenant, nothing for a stranger), never defaulted to the admin's:
-    # that default read the admin's Front Office contacts for every scopeless caller.
-    _, allowed_phones = _get_allowed_phones_for_user(uname, scope or scope_id_for_username(uname) or "")
-    if chat_id and _allow_from_match(chat_id, allowed_phones):
+    # that default read the admin's own contacts for every scopeless caller.
+    _scope = scope or scope_id_for_username(uname) or ""
+    config_phones, _ = _get_allowed_phones_for_user(uname, _scope)
+    if _allow_from_match(chat_id, config_phones):
         return True
-    return bool(chat_id) and _conversation_is_open(uname, chat_id, scope)
+    try:
+        from vaf.core.contacts_store import contact_access, find_contact_by_channel
+        access = contact_access(find_contact_by_channel("whatsapp", chat_id, uname, _scope or None))
+    except Exception:
+        access = None
+    allowed, _reason = evaluate_ingress(
+        "whatsapp", Config.get("channel_ingress_policy"), explicit_match=False, access=access)
+    return bool(allowed)
 
 
 def _enqueue_reply(username: str, chat_jid: str, text: str, voice_path: Optional[str] = None, user_scope_id: Optional[str] = None) -> bool:
@@ -1502,7 +1479,10 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                 pass
             return
         if not allowed_phones:
-            logger.debug("WhatsApp: no allowFrom for user %s, rejecting inbound from %s", username, obj.get("from"))
+            # Neither a registered number nor an allowed contact: unless this channel's
+            # Inbound is open, nothing from here will be answered.
+            logger.debug("WhatsApp: no registered number and no allowed contact for %s (inbound from %s)",
+                         username, obj.get("from"))
         from_e164 = obj.get("fromE164")  # Resolved via Baileys lidMapping when @lid
         body = (obj.get("body") or "").strip()
         voice_path = obj.get("voice_path")
@@ -1562,49 +1542,44 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
         chat_id = _to_e164_display(raw) if raw else str(from_jid or "")
         if not chat_id:
             chat_id = str(from_jid or "")
-        # Allow when: JID or fromE164 matches whitelist/FO, or unresolved @lid is manually mapped (lid_to_e164) to an allowed number
-        allow_match = bool(allowed_phones) and (
-            _allow_from_match(from_jid or "", allowed_phones)
-            or (from_e164 and _allow_from_match(from_e164, allowed_phones))
-            or (resolved_e164_from_config and _allow_from_match(resolved_e164_from_config, allowed_phones))
-        )
+        # The owner's own number, by JID, by fromE164, or through a manually mapped @lid. The
+        # contact side is no longer a phone-set membership test: a set built from the flag
+        # could say "allowed" while the record said "denied", and the set was read first, so
+        # the denial never got a look. One record lookup below answers that half.
         explicit_allow = bool(config_phones) and (
             _allow_from_match(from_jid or "", config_phones)
             or (from_e164 and _allow_from_match(from_e164, config_phones))
             or (resolved_e164_from_config and _allow_from_match(resolved_e164_from_config, config_phones))
         )
-        contact_allow = bool(allow_match and not explicit_allow)
-        # Reply window: the agent wrote to this number recently (an outbound row in the
-        # store), so its answer is expected. Only checked when the sender is not the owner.
-        conversation_allow = (not explicit_allow) and bool(raw) and _conversation_is_open(
-            username, chat_id, user_scope_id, direction="out"
-        )
         ingress_policy = Config.get("channel_ingress_policy")
-        # An open Front Office (Settings, Connections) answers every sender on this number
-        # except a person the owner switched off: the contact record with the flag OFF is
-        # that opt-out, so it is looked up regardless of the flag.
-        opted_out = False
-        if not explicit_allow and not contact_allow:
-            if not raw:
-                # An unresolved @lid carries no number, so no contact record can hold the
-                # owner's opt-out for it and none is enrolled: the open door does not apply
-                # until the LID is assigned to a number (REJECT not_paired, with the note).
-                opted_out = True
-            else:
-                try:
-                    from vaf.core.contacts_store import find_contact_by_channel
-                    _rec = find_contact_by_channel("whatsapp", chat_id, username, user_scope_id)
-                    opted_out = bool(_rec) and not bool(_rec.get("allow_as_assistant_user"))
-                except Exception:
-                    opted_out = False
-        policy_allowed, policy_reason = evaluate_ingress(
-            "whatsapp",
-            ingress_policy,
-            explicit_match=explicit_allow,
-            contact_match=contact_allow,
-            conversation_match=conversation_allow,
-            sender_opted_out=opted_out,
-        )
+        # ONE record lookup answers both halves: who this is, and what the owner decided about
+        # them (allowed on every channel, denied on every channel, or nothing decided). The
+        # phone-set detour is gone with the reply window: a set built from the flag could say
+        # "allowed" while the record said "denied", and the set was consulted first, so the
+        # denial was never read.
+        access = None
+        if not explicit_allow and raw:
+            try:
+                from vaf.core.contacts_store import contact_access, find_contact_by_channel
+                access = contact_access(
+                    find_contact_by_channel("whatsapp", chat_id, username, user_scope_id))
+            except Exception:
+                access = None
+        if not explicit_allow and not raw:
+            # An unresolved @lid carries no number, so nothing can match it and nothing can be
+            # enrolled for it: the open channel does not apply until the LID is assigned to a
+            # number (REJECT, with the note below). Refused here rather than by handing
+            # evaluate_ingress a "denied" it never got from the book: nobody decided anything
+            # about a sender the bridge cannot even name, and the reason is read by the log and
+            # by whoever asks why a message went unanswered.
+            policy_allowed, policy_reason = False, "not_paired"
+        else:
+            policy_allowed, policy_reason = evaluate_ingress(
+                "whatsapp",
+                ingress_policy,
+                explicit_match=explicit_allow,
+                access=access,
+            )
         # An unresolved @lid is not a phone number, so no whitelist or contact can match it;
         # the note rides on the one REJECT line below instead of being a second line.
         lid_note = ""
@@ -1620,7 +1595,8 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             try:
                 from vaf.core.log_helper import log_channel_inbound, log_whatsapp_qr
                 log_whatsapp_qr(
-                    f"[inbound] REJECT from={from_jid} from_digits={from_digits or '?'} allowed_count={len(allowed_phones)} reason={policy_reason}"
+                    f"[inbound] REJECT from={from_jid} from_digits={from_digits or '?'} "
+                    f"access={access or 'undecided'} reason={policy_reason}"
                 )
             except Exception:
                 pass
@@ -1632,16 +1608,16 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             # below); as a security event it lit the alert dot on every such message.
             if should_log_unauthorized("whatsapp", sender_for_throttle, ingress_policy):
                 logger.warning(
-                    "WhatsApp: dropped unauthorized inbound from=%s reason=%s explicit=%s contact=%s",
+                    "WhatsApp: dropped unauthorized inbound from=%s reason=%s explicit=%s access=%s",
                     from_jid,
                     policy_reason,
                     explicit_allow,
-                    contact_allow,
+                    access or "undecided",
                 )
                 try:
                     log_channel_inbound(
                         "whatsapp",
-                        f"REJECT not_paired from={from_jid} allowed_count={len(allowed_phones)} reason={policy_reason}{lid_note}",
+                        f"REJECT from={from_jid} reason={policy_reason} access={access or 'undecided'}{lid_note}",
                         always=True,
                     )
                 except Exception:
@@ -1679,10 +1655,11 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             # only; a contact's message must never become "where the owner is".
             save_whatsapp_chat_jid(user_scope_id, username, from_jid)
         if policy_reason == "front_office_open" and raw and chat_id.startswith("+"):
-            # A sender the open Front Office let in becomes a contact with the flag ON, so
-            # the owner sees them in the book and the WhatsApp window and can switch them
-            # off there. Recorded like a pairing; the bridge never repeats it for a record
-            # that exists.
+            # A sender the open Front Office let in becomes a contact with NO decision on the
+            # record: the open channel is what answers them, and a record that carried a
+            # permission would outlive the switch being turned off. The owner sees them in the
+            # book and the WhatsApp window and decides there. Recorded like a pairing; the
+            # bridge never repeats it for a record that exists.
             try:
                 from vaf.core.contacts_store import enrol_front_office_contact, find_contact_by_channel
                 from vaf.core.security_events import log_security_event
@@ -1691,7 +1668,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                         "whatsapp", chat_id, str(obj.get("pushName") or ""), username, user_scope_id)
                     log_security_event("contact_access_changed", channel="whatsapp", username=username,
                                        path=str(_new.get("id") or ""),
-                                       detail=f"granted by the open Front Office: {_new.get('name') or chat_id}")
+                                       detail=f"added by the open Front Office: {_new.get('name') or chat_id}")
             except Exception:
                 pass
         if raw:

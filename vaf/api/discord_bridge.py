@@ -99,19 +99,21 @@ def _keep_rejected_discord_message(author_id: str, content: str, message_id: str
 
 def _admit_sender(author_id: str, is_dm: bool, admin_user_id: str, display_name: str,
                   policy: Any) -> Tuple[bool, str, Dict[str, Any]]:
-    """Who the bridge answers: the paired admin's direct message as the full agent, and with
-    Inbound switched on for Discord (Settings, Connections) anybody else who writes the bot
-    a direct message, as a Front Office contact of the local admin, the one account this
-    integration serves: enrolled in the admin's book with the flag ON and kept out once the
-    owner switches them off there (contacts_store.admit_front_office_sender, the admission
-    the Telegram bridge shares). A guild message is never answered: the bot sees every
-    channel it sits in. Returns (allowed, reason, the extra task metadata of a contact's
-    turn)."""
+    """Who the bridge answers: the paired admin's direct message as the full agent; a person
+    the admin ALLOWED in their book, whatever the switch says; and, with Inbound switched on
+    for Discord (Settings, Connections), anybody the admin has not decided about who writes
+    the bot a direct message, as a Front Office contact of the local admin, the one account
+    this integration serves. Such a sender is enrolled in the admin's book with NO decision on
+    the record, so closing the channel closes it for them again, and the admin can allow or
+    block them there (contacts_store.admit_front_office_sender, the admission the Telegram
+    bridge shares). A blocked person is answered on no channel. A guild message is never
+    answered: the bot sees every channel it sits in. Returns (allowed, reason, the extra task
+    metadata of a contact's turn)."""
     aid = str(author_id or "").strip()
     if not is_dm:
         return (False, "not_paired", {})
     if aid and aid == str(admin_user_id or "").strip():
-        allowed, reason = evaluate_ingress("discord", policy, explicit_match=True, contact_match=False)
+        allowed, reason = evaluate_ingress("discord", policy, explicit_match=True)
         return (allowed, reason, {})
     try:
         from vaf.core.contacts_store import admit_front_office_sender, local_admin_identity

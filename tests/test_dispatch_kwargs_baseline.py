@@ -27,6 +27,14 @@ HTTP backend - too slow and too network-dependent for CI. So the guard drives a
 run against a real `Agent` over all 117 registered tools: 117 measured, 0 differences. When
 the fake stops mirroring the dispatcher it will show up here as a diff, not as a silent pass.
 
+WHAT CHANGED SINCE, AND WHY THE THREE MAIL ROWS CARRY `hold`. The context below is a WEB chat
+turn, which is exactly the surface on which an outward send now waits for the person
+(vaf/core/outbound_hold.py): the chat stage sets `hold=True` on send_mail, reply_mail and
+forward_mail so the mail is built and parked instead of delivered, and `hold_session` names
+the chat that asked, so the draft appears in that conversation and in no other. Re-measured,
+not typed. A row that loses `hold` again means the person's own mail leaves unseen; a fourth
+mail tool that never gains it is the same door left open.
+
 THE CONTEXT IS PART OF THE MEASUREMENT. Several branches are conditional, so the numbers only
 mean something for one fixed situation: a web (non-channel) chat turn, run kind "chat", an
 admin role (so `admin_only` tools reach the injection stage instead of being blocked before
@@ -102,7 +110,7 @@ KWARGS_BASELINE = {
     "find_telegram_messages":    ("chat", ["user_scope_id", "username"]),
     "find_whatsapp_messages":    ("chat", ["user_scope_id", "username"]),
     "folder_size":               ("chat", ["user_role", "user_scope_id"]),
-    "forward_mail":              ("chat", ["user_scope_id", "username"]),
+    "forward_mail":              ("chat", ["hold", "hold_session", "user_scope_id", "username"]),
     "get_contact":               ("chat", ["user_scope_id", "username"]),
     "git_add_commit":            ("chat", []),
     "git_init":                  ("chat", []),
@@ -181,7 +189,7 @@ KWARGS_BASELINE = {
     "repair_report":             ("chat", []),
     "replace_editor_selection":  ("chat", ["user_scope_id"]),
     "replace_editor_text":       ("chat", []),
-    "reply_mail":                ("chat", ["user_scope_id", "username"]),
+    "reply_mail":                ("chat", ["hold", "hold_session", "user_scope_id", "username"]),
     "report_filename":           ("chat", []),
     "request_clarification":     ("chat", []),
     "research_agent":            ("chat", []),
@@ -197,7 +205,7 @@ KWARGS_BASELINE = {
     # The four messenger senders gained user_role on 2026-08-02 with their file_access
     # declaration (attachment containment); send_slack has no path parameter and stays.
     "send_discord":              ("chat", ["_agent", "user_role", "user_scope_id", "username"]),
-    "send_mail":                 ("chat", ["user_role", "user_scope_id", "username"]),
+    "send_mail":                 ("chat", ["hold", "hold_session", "user_role", "user_scope_id", "username"]),
     "send_slack":                ("chat", ["_agent", "user_scope_id", "username"]),
     "send_telegram":             ("chat", ["_agent", "user_role", "user_scope_id", "username"]),
     "send_to_user":              ("chat", ["_agent", "user_role", "user_scope_id", "username"]),
@@ -233,7 +241,11 @@ KWARGS_BASELINE = {
 
 IDENTITY_KEYS = {"user_scope_id", "username", "user_role"}
 PLUMBING_KEYS = {"_agent", "_session_id", "session_id", "_session_workspace",
-                 "_is_channel_session", "with_vaf_tools"}
+                 "_is_channel_session", "with_vaf_tools",
+                 # The chat stage's own two: on a web turn the mail send tools are told to
+                 # park the message for the person instead of delivering it, and which chat
+                 # asked, so the draft shows up in that conversation and in no other.
+                 "hold", "hold_session"}
 
 
 def _stub_for(orig):

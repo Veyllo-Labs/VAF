@@ -32,6 +32,7 @@ import { useVoiceCallStore } from '@/lib/voiceCallStore';
 import { TurnActionsTimeline, type TimelineAction } from '@/components/TurnActionsTimeline';
 import AutomationCalendarModal from '@/components/AutomationCalendarModal';
 import InboxWindow from '@/components/inbox/InboxWindow';
+import HeldSendCard from '@/components/outbox/HeldSendCard';
 import type { SettingsChatJump } from '@/components/SettingsModal';
 import CreateAutomationPopup, { type CreateAutomationPayload, type EditAutomationTask } from '@/components/CreateAutomationPopup';
 import NotificationsModal, { type NotificationItem } from '@/components/NotificationsModal';
@@ -3221,6 +3222,9 @@ function VAFDashboardContent() {
     const [showChangingModelOverlay, setShowChangingModelOverlay] = useState(false);
     type PendingContactReply = { replyId: string; source: string; contactName: string; preview: string; sessionId?: string };
     const [pendingContactReplies, setPendingContactReplies] = useState<PendingContactReply[]>([]);
+    // Bumped by `outbound_held` and by `inbox_changed`: what the agent prepared and nobody
+    // has sent yet is fetched, never pushed, so the card and the store cannot drift.
+    const [heldVersion, setHeldVersion] = useState(0);
     // Speaker confirmation ("was that your voice?"): web fallback card when no
     // main messenger is configured. nameOpen/name are local UI state for the
     // "no, that's <name>" answer.
@@ -5773,11 +5777,20 @@ function VAFDashboardContent() {
                     wsSocketRef.current?.send(JSON.stringify({ type: 'get_sessions' }));
                     setInboxVersion(v => v + 1);
                 }
+                else if (data.type === 'outbound_held') {
+                    // The agent prepared an outward message on this person's own chat turn and
+                    // it is parked for them (vaf/core/outbound_hold.py). A signal, not the
+                    // draft: the card fetches what is waiting, so it cannot disagree with the
+                    // store about ids or state.
+                    setHeldVersion(v => v + 1);
+                }
                 else if (data.type === 'inbox_changed') {
                     // A conversation list changed underneath the browser (a stored message,
                     // a mark, a mail sync). A signal, not the rows: the open inbox window and
-                    // the footer badge refetch, debounced.
+                    // the footer badge refetch, debounced. A held draft rides the same signal,
+                    // because the store announces one exactly as it announces a message.
                     setInboxVersion(v => v + 1);
+                    setHeldVersion(v => v + 1);
                 }
                 else if (data.type === 'calendar_changed') {
                     // The calendar changed underneath the browser (a tool, a route, a sync
@@ -10196,6 +10209,24 @@ function VAFDashboardContent() {
                                 )}
 
                                 {/* Active Tools Panel Removed (Now Inline) */}
+
+                                {/* What the agent prepared and nobody has sent yet. It belongs in the
+                                    conversation, under the answer that produced it, not in a banner
+                                    over the header: it is the agent's own output waiting for a word,
+                                    the way a tool result is. Same row shape as a bot bubble, so it
+                                    lines up with the text above it. */}
+                                <div className="flex gap-4 pt-4 vaf-msg-row">
+                                    {/* The bot row's own geometry, copied rather than approximated: the
+                                        85% block, the avatar gutter (w-9 plus the row gap) as an empty
+                                        spacer, then the content. Anything else puts the card left of the
+                                        answer it belongs to, because the row centers its child. */}
+                                    <div className="w-full max-w-[85%] max-md:max-w-full flex gap-4 max-md:gap-2">
+                                        <div className="w-9 shrink-0" aria-hidden="true" />
+                                        <div className="flex flex-col flex-1 min-w-0">
+                                            <HeldSendCard apiBase={getApiBase()} version={heldVersion} sessionId={currentSessionId || ''} />
+                                        </div>
+                                    </div>
+                                </div>
 
                                 </>)}
                                 {/* The bottom anchor the autoscroll aims at. OUTSIDE the

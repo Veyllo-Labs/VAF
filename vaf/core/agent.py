@@ -13069,7 +13069,76 @@ class Agent:
                 self.main_persistence.write_subagent_delegation_intent(intent, goal, name)
         if _subagent_dup_msg is not None:
             return _subagent_dup_msg
+
+        # An outward send the PERSON ordered in the web UI waits for that person. This is the
+        # seam for it because it is the last point before dispatch that sees the final
+        # recipient argument and the assigned identity, and it is chat-lane only, so the
+        # workflow engine and the automation lane (which dispatch through the shared funnel
+        # with no chat source) keep sending as before. Two shapes, see vaf/core/outbound_hold:
+        # a mail is BUILT and parked as a draft by its own tool (one argument), a messenger
+        # call is parked here and re-dispatched on approval.
+        try:
+            from vaf.core import outbound_hold
+            if outbound_hold.holds_outward_send(
+                name, tool_args,
+                source=str(getattr(self, "_current_chat_source", "") or "").strip().lower(),
+                unattended=bool(getattr(self, "_unattended_turn", False)),
+            ):
+                if name in outbound_hold.MAIL_HOLD_TOOLS:
+                    tool_args["hold"] = True
+                    tool_args["hold_session"] = str(getattr(self, "current_session_id", "") or "")
+                else:
+                    entry_id = outbound_hold.park_messenger_call(
+                        name, dict(tool_args),
+                        username=getattr(self, "_current_username", None) or "",
+                        user_scope_id=getattr(self, "_current_user_scope_id", None),
+                        session_id=str(getattr(self, "current_session_id", "") or ""),
+                    )
+                    return outbound_hold.held_result(name, tool_args, entry_id=entry_id)
+        except Exception as _hold_exc:
+            # Fail OPEN: a guard that parks messages must never swallow one. But it says so
+            # out loud, on the two surfaces that do not depend on the debug-log switch: a
+            # silent skip is how a hold that does not hold looks exactly like a hold that
+            # does. Measured: the first live test sent because of an exception here, and the
+            # only trace was in a log file the switch had turned off.
+            from vaf.cli.ui import UI as _UI
+            _UI.event("System", f"Outward hold skipped ({_hold_exc}); the message was sent as before.",
+                      style="warning")
+            append_domain_log("backend", f"[OUTBOUND_HOLD] skipped: {_hold_exc}")
+            if _emit_to_web_ui():
+                try:
+                    from vaf.core.subagent_ipc import get_current_session_id
+                    from vaf.core.web_interface import get_web_interface
+                    get_web_interface().log(
+                        f"The send guard could not park this message ({_hold_exc}); it was sent "
+                        "as before.", level="warning", source="System",
+                        session_id=get_current_session_id())
+                except Exception:
+                    pass
         return None
+
+    def _announce_held_send(self, result) -> None:
+        """Tell this session's browser that a draft is waiting, so the card appears without a
+        refresh. Keyed on the result marker rather than on the tool name, because the two
+        lanes park in different stores and neither id belongs in a chat event: the browser
+        fetches what is waiting. Never raises."""
+        try:
+            from vaf.core.outbound_hold import HELD_PREFIX
+            if not str(result or "").startswith(HELD_PREFIX):
+                return
+            from vaf.core.web_interface import get_web_interface
+            sid = getattr(self, "current_session_id", None)
+            wi = get_web_interface()
+            wi._push_session_update(sid, {"type": "outbound_held"})
+            # And the chat list's own red dot, the one a background answer already uses. The
+            # person can be in another conversation while this one is still being written, and
+            # the card lives in the chat it belongs to, so without this the draft would wait
+            # somewhere they have no reason to look. The browser ignores the dot for the chat
+            # it is showing, so this is the "somewhere else" case by construction.
+            if sid:
+                wi.emit_session_unread(str(sid))
+        except Exception:
+            pass
 
     def _record_owner_question(self, name: str, args, result) -> None:
         """Mark the Front Office chat as waiting for the person when a send to the owner
@@ -13112,6 +13181,7 @@ class Agent:
         # know which chat the turn belongs to and must not learn it for this.
         if getattr(self, "_front_office_mode", False) and name in _OWNER_SEND_TOOLS:
             self._record_owner_question(name, args, result)
+        self._announce_held_send(result)
         # search_tools post-hook: expand _active_tools with discovered tool names so the
         # model can call them in the very next turn without a router round-trip.
         # The parser is SHARED with the tool module (and its format tests), so the

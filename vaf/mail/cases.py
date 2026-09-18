@@ -184,13 +184,14 @@ def trust_level(*, auth: Optional[Dict[str, Any]], machine_kind: str = "",
         return "T0"
     if attribution is not None and attribution.attributed and agent_wrote_in_case:
         return "T4"
-    if contact and contact.get("allow_as_assistant_user"):
+    from vaf.core.contacts_store import ACCESS_ALLOWED, contact_access
+    if contact_access(contact) == ACCESS_ALLOWED:
         return "T3"
     return "T2"
 
 
 def decide(*, trust: str, attribution: Attribution, raw_policy: Any, reply_mode: str = "draft",
-           machine_kind: str = "", opted_out: bool = False,
+           machine_kind: str = "", access: Optional[str] = None,
            replies_last_hour: int = 0, replies_last_day: int = 0,
            max_per_hour: int = 3, max_per_day: int = 10) -> Decision:
     """What the answering lane does with one mail. Pure over its inputs."""
@@ -204,13 +205,16 @@ def decide(*, trust: str, attribution: Attribution, raw_policy: Any, reply_mode:
         return Decision("ignore", "unverified" if trust == "T0" else "via")
     if attribution.outcome in ("conflict", "foreign", "orphan"):
         return Decision("ignore", attribution.outcome)
+    # T3 is a verified sender the owner ALLOWED, T4 a reply carrying the case anchor the agent
+    # minted. `access` is the owner's own decision about the person, straight from
+    # `contacts_store.contact_access`, and it is passed on rather than folded into a bool:
+    # "denied" and "nobody decided" are different answers here (the first is never answered,
+    # the second only while the mail channel stands open). A denial does not need to outrank
+    # the verification rungs above, because an unverified sender is already gone by this line.
     allowed, ingress_reason = evaluate_ingress(
-        "email", raw_policy, explicit_match=False, contact_match=(trust == "T3"),
-        conversation_match=(trust == "T4"), sender_opted_out=opted_out)
+        "email", raw_policy, explicit_match=False, access=access, case_reply=(trust == "T4"))
     if not allowed:
         return Decision("ignore", ingress_reason, ingress_reason)
-    if opted_out and ingress_reason != "open_conversation":
-        return Decision("ignore", "opted_out", ingress_reason)
     # A cap of 0 is honoured as written: no automatic answer, every mail waits for the owner.
     if replies_last_hour >= max(0, int(max_per_hour)) or replies_last_day >= max(0, int(max_per_day)):
         return Decision("ignore", "capped", ingress_reason)

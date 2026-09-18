@@ -169,7 +169,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
         const badge = s.type === 'admin'
             ? { label: t('badgeFull'), cls: BADGE_CLS.owner }
             : s.type === 'relay'
-                ? { label: t('badgeRelay'), cls: BADGE_CLS.conversation }
+                ? { label: t('badgeRelay'), cls: BADGE_CLS.relay }
                 : { label: t('badgeReadOnly'), cls: BADGE_CLS.readOnly };
         const sub = s.type === 'admin' ? t('subFull') : s.type === 'relay' ? t('subRelay') : t('subReadOnly');
         const foot = s.type === 'admin' ? t('footFull') : s.type === 'relay' ? t('footRelay') : t('footReadOnly');

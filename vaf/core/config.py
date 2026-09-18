@@ -283,6 +283,14 @@ class Config:
                 "result_grounding_enabled": True,              # global kill-switch
                 "result_grounding_max_retries": 2,             # corrections before proceeding anyway
 
+                # An outward message the agent prepares on the person's own web chat turn waits
+                # for that person: a mail is parked as a draft, a WhatsApp message with an
+                # explicit number is parked as a call, and both appear as a card to send or
+                # discard. Only calls that can reach somebody else are held, and only on the web
+                # chat: automations, workflows, channel turns and the Front Office lane send as
+                # before, because nobody is there to click. Off means the old direct send.
+                "outward_send_hold": True,
+
                 # Current-step reminder: each turn, surface the agent's current plan step (the first
                 # pending task in working memory) with the index to mark it done, so any model
                 # follows its plan step by step instead of skipping or abandoning it. Silent when no
@@ -685,21 +693,22 @@ class Config:
         "whatsapp_config": None,                                   # { enabled, inbound_to_agent, reply_window_hours (72), chat_sync_interval_sec (600), whitelist: [{ phone_number, user_scope_id, vaf_username }], lid_to_e164: {}, owner_control: {}, chat_activity: [] }
         # Per-user connection toggles (sliders). Only non-admins use this; admin uses global telegram/whatsapp/discord_config.enabled.
         "connection_enabled_by_scope": None,                       # { "<user_scope_id>": { "telegram": bool, "whatsapp": bool, "discord": bool } }
-        # Channel ingress policy (default-deny / explicit pairing).
-        # mode:
-        #   - "paired_only": allow only explicitly paired senders (whitelist/verified admin)
-        #   - "permissive": allow explicit pairs and contact fallback
-        # Per-channel mode can be "inherit", "paired_only", or "permissive".
+        # Channel ingress policy (default-deny / explicit pairing). `mode` has one value,
+        # "paired_only": it is the floor, not a choice. Who else gets in is answered by the
+        # channel's own `open_to_new_senders` (the Front Office switch) and by the owner's
+        # decision about the person in the contact book. A stored "permissive" is read once
+        # and coerced to the floor; the per-channel `allow_contact_fallback` said the same
+        # thing as the contact's own decision, in a place nobody looked, and is gone.
         "channel_ingress_policy": {
             "mode": "paired_only",
             "throttle_seconds": 60,
-            "telegram": {"mode": "inherit", "allow_contact_fallback": False},
-            "whatsapp": {"mode": "inherit", "allow_contact_fallback": False},
-            "discord": {"mode": "inherit", "allow_contact_fallback": False},
+            "telegram": {"mode": "inherit", "open_to_new_senders": False},
+            "whatsapp": {"mode": "inherit", "open_to_new_senders": False},
+            "discord": {"mode": "inherit", "open_to_new_senders": False},
             # Mail: an ingress-only Front Office channel (no bridge, no send tool). reply_mode
             # draft holds every answer for the owner's approval; opened_at is stamped by the
             # switch so mail from before it is never answered.
-            "email": {"mode": "inherit", "allow_contact_fallback": False, "open_to_new_senders": False,
+            "email": {"mode": "inherit", "open_to_new_senders": False,
                       "reply_mode": "draft", "opened_at": 0},
         },
 

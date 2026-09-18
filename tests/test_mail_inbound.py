@@ -150,6 +150,35 @@ def test_a_closed_channel_without_a_case_judges_nothing_but_arms_the_cursor(worl
         s.close()
 
 
+def test_a_closed_channel_still_answers_a_contact_the_owner_allowed(world):
+    """The lane's open/closed question is not the policy's alone: a person the owner ALLOWED
+    is answered on every channel they have, so a closed mail channel with such a contact in
+    the book is still a lane that judges.
+
+    MUTATION: drop the `front_office_endpoints` branch from `inbound._lane_open` and this goes
+    red with skipped == "closed" - the allowed contact would be silently unanswerable, which is
+    exactly the permission the owner gave by hand.
+    """
+    from vaf.core.channel_ingress_policy import set_front_office
+    world["state"]["channel_ingress_policy"] = set_front_office(None, False, "email")
+    # Nobody allowed yet: the lane does not even look.
+    s, apk, fpk = _store()
+    s.set_account_state(apk, inbound_cursor=0)
+    _ingest(s, apk, fpk, 1, _raw("<lena@example.org>"))
+    s.close()
+    assert _run([])["skipped"] == "closed"
+
+    contacts_store.create_contact("Lena", "alice", user_scope_id=SCOPE, email="lena@example.org",
+                                  assistant_access="allowed")
+    s = MailStore(SCOPE)
+    s.set_account_state(apk, inbound_cursor=0)
+    s.close()
+    queue = []
+    out = _run(queue)
+    assert out["skipped"] == "" and out["draft"] == 1, "her own permission opened the lane"
+    assert queue[0][2]["ingress_reason"] == "contact_allowed" and queue[0][2]["email_trust"] == "T3"
+
+
 def test_a_verified_stranger_gets_a_case_a_contact_and_a_fenced_turn(world):
     s, apk, fpk = _store()
     s.set_account_state(apk, inbound_cursor=0)
@@ -173,7 +202,9 @@ def test_a_verified_stranger_gets_a_case_a_contact_and_a_fenced_turn(world):
     finally:
         s.close()
     rec = contacts_store.find_contact_by_channel("email", "lena@example.org", "alice", SCOPE)
-    assert rec and rec["allow_as_assistant_user"] and rec["source"] == "front_office" and rec["name"] == "Lena"
+    assert rec and rec["source"] == "front_office" and rec["name"] == "Lena"
+    assert contacts_store.contact_access(rec) is None, \
+        "the open channel answered her; the record carries no standing permission"
     assert [e for e in world["events"] if e[0] == "contact_access_changed"][0][1]["channel"] == "email"
     assert any("DRAFT from=len*** trust=T2" in m for _c, m in world["lane_log"])
 
@@ -196,21 +227,32 @@ def test_send_mode_answers_and_machine_or_unverified_mail_is_ignored(world):
     assert reasons == ["machine:auto_reply", "machine:list", "ok", "unverified", "via"]
 
 
-def test_an_opted_out_contact_is_left_alone_and_a_contact_is_t3(world):
-    contacts_store.create_contact("Lena", "alice", user_scope_id=SCOPE, email="lena@example.org", allow_as_assistant_user=False)
+def test_a_denied_contact_is_left_alone_and_an_allowed_one_is_t3(world):
+    """The lane read the old bool here, so every contact the mail sync had ever created
+    counted as an opt-out. MUTATION: read `allow_as_assistant_user` again in process_account
+    and the first assertion goes red: Lena has a record and no decision, so the open channel
+    must answer her."""
+    contacts_store.create_contact("Lena", "alice", user_scope_id=SCOPE, email="lena@example.org")
     s, apk, fpk = _store()
     s.set_account_state(apk, inbound_cursor=0)
     _ingest(s, apk, fpk, 1, _raw("<x@example.org>"))
     s.close()
     queue = []
-    assert _run(queue)["ignore"] == 1 and queue == []
-    assert any("reason=not_paired" in m for _c, m in world["lane_log"])
+    assert _run(queue)["draft"] == 1 and queue[0][2]["ingress_reason"] == "front_office_open"
     rec = contacts_store.find_contact_by_channel("email", "lena@example.org", "alice", SCOPE)
-    contacts_store.update_contact(rec["id"], "alice", user_scope_id=SCOPE, allow_as_assistant_user=True)
+    contacts_store.update_contact(rec["id"], "alice", user_scope_id=SCOPE, assistant_access="denied")
     s = MailStore(SCOPE)
     _ingest(s, apk, fpk, 2, _raw("<y@example.org>"))
     s.close()
+    queue.clear()
+    assert _run(queue)["ignore"] == 1 and queue == []
+    assert any("reason=contact_denied" in m for _c, m in world["lane_log"])
+    contacts_store.update_contact(rec["id"], "alice", user_scope_id=SCOPE, assistant_access="allowed")
+    s = MailStore(SCOPE)
+    _ingest(s, apk, fpk, 3, _raw("<z@example.org>"))
+    s.close()
     assert _run(queue)["draft"] == 1 and queue[0][2]["email_trust"] == "T3"
+    assert queue[0][2]["ingress_reason"] == "contact_allowed"
 
 
 def test_a_reply_into_a_case_the_agent_wrote_in_comes_through_a_closed_channel(world):

@@ -339,7 +339,7 @@ def _a2a_credential_verifier(credential: str):
 _set_credential_verifier(_a2a_credential_verifier)
 
 import typer
-from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup, a2a, repair, usage, top, inbox
+from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup, a2a, repair, usage, top, inbox, outbox
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -404,6 +404,9 @@ app.add_typer(session_app, name="session", help="Manage conversations",
               callback=_terminal_door)
 # The inbox prints the same chats across every channel: the same door.
 app.add_typer(inbox.app, name="inbox", help="Your conversations across every channel",
+              callback=_terminal_door)
+# The outbox prints and sends what the agent prepared: the same door, for the same reason.
+app.add_typer(outbox.app, name="outbox", help="Messages your agent prepared and has not sent",
               callback=_terminal_door)
 
 # Snapshot/Undo

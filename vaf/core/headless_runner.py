@@ -1510,6 +1510,13 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     agent._current_chat_source = getattr(task, "source", "web")
 
                     _meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+                    # Nobody is at the screen for this one. A timer fires on a clock and a
+                    # compaction is housekeeping, and both arrive with the source of the chat
+                    # they belong to - "web" for a timer the person set in the browser. The
+                    # outward hold reads this: a message the person SCHEDULED must leave at
+                    # the scheduled time, not wait for a click they are not there to give
+                    # (vaf/core/outbound_hold.py).
+                    agent._unattended_turn = bool(_meta.get("timer") or _meta.get("compaction"))
                     if _meta.get("from_contact"):
                         agent._front_office_mode = True
                         agent._front_office_chat = _front_office_chat_ref(_meta, _meta.get("username"))
@@ -1533,25 +1540,26 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         _username = _meta.get("username") or "admin"
                         _user_scope = _meta.get("user_scope_id")
                         try:
-                            from vaf.core.contacts_store import (
-                                get_contact_by_telegram_user_id,
-                                get_contact_by_whatsapp_phone,
-                            )
+                            from vaf.core.contacts_store import find_contact_by_channel
+                            # Whoever was ADMITTED, whatever the book says about them: this
+                            # turn exists because the bridge let the message through, so the
+                            # question here is who is speaking, not whether they may. Filtering
+                            # by the permission left an open channel's sender without their
+                            # own record, and the model was told "no contact record" about a
+                            # person who is in the book.
                             task_source = getattr(task, "source", None)
                             if task_source == "telegram":
                                 _tid = _meta.get("telegram_user_id")
                                 if _tid:
-                                    contact = get_contact_by_telegram_user_id(_tid, _username, user_scope_id=_user_scope)
+                                    contact = find_contact_by_channel("telegram", str(_tid), _username, user_scope_id=_user_scope)
                             elif task_source == "whatsapp":
                                 _jid = _meta.get("whatsapp_chat_jid")
                                 if _jid:
-                                    contact = get_contact_by_whatsapp_phone(_jid, _username, user_scope_id=_user_scope)
+                                    contact = find_contact_by_channel("whatsapp", str(_jid), _username, user_scope_id=_user_scope)
                             elif task_source == "email":
-                                from vaf.core.contacts_store import find_contact_by_channel
                                 _addr = str(_meta.get("email_from") or "").strip().lower()
                                 if _addr:
-                                    _rec = find_contact_by_channel("email", _addr, _username, user_scope_id=_user_scope)
-                                    contact = _rec if (_rec and _rec.get("allow_as_assistant_user")) else None
+                                    contact = find_contact_by_channel("email", _addr, _username, user_scope_id=_user_scope)
                             elif task_source == "discord":
                                 from vaf.core.contacts_store import find_contact_by_channel, local_admin_identity
                                 _aid = str(_meta.get("discord_author_id") or "").strip()
@@ -1560,8 +1568,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     # the literal "admin" identity; the book, the calendar and the
                                     # contact's own view are the admin's real one.
                                     _username, _user_scope = local_admin_identity()
-                                    _rec = find_contact_by_channel("discord", _aid, _username, user_scope_id=_user_scope)
-                                    contact = _rec if (_rec and _rec.get("allow_as_assistant_user")) else None
+                                    contact = find_contact_by_channel("discord", _aid, _username, user_scope_id=_user_scope)
                         except Exception:
                             pass
                         # The contact of THIS turn, pinned on the agent: contact_history reads

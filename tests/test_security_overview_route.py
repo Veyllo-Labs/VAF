@@ -159,22 +159,29 @@ def test_workspace_metrics_aggregate_per_user(tmp_path):
 
 
 def test_channels_status_derivation():
+    """The module answers one question: can somebody nobody authorized talk to the agent?
+    That is the channel switch now, not the ingress mode the expert doors used to set: a
+    stored `permissive` is read once and coerced, so warning about it would point at a key
+    nothing writes any more. MUTATION: derive the warning from `mode` again and the first
+    assertion goes red, because the open channel is the only one that warns."""
     from vaf.api.security_routes import derive_channels_status
     channels = [
-        {"name": "telegram", "enabled": True, "paired": 3, "last_ts": 123.0, "mode": "paired_only", "contact_fallback": False},
-        {"name": "whatsapp", "enabled": True, "paired": 1, "last_ts": None, "mode": "permissive", "contact_fallback": False},
-        {"name": "discord", "enabled": False, "paired": 0, "last_ts": None, "mode": "permissive", "contact_fallback": False},
+        {"name": "telegram", "enabled": True, "paired": 3, "last_ts": 123.0, "open": False},
+        {"name": "whatsapp", "enabled": True, "paired": 1, "last_ts": None, "open": True},
+        {"name": "discord", "enabled": False, "paired": 0, "last_ts": None, "open": True},
     ]
     out = derive_channels_status(channels)
-    # an ENABLED permissive channel -> warn; a disabled permissive one alone would not
-    assert out["state"] == "warn" and out["any_permissive"] is True
+    # an ENABLED open channel -> warn; a disabled open one alone would not
+    assert out["state"] == "warn" and out["any_open"] is True
     tg = next(c for c in out["channels"] if c["name"] == "telegram")
-    assert tg["paired"] == 3 and tg["mode"] == "paired_only"
+    assert tg["paired"] == 3 and tg["open"] is False
+    assert "any_permissive" not in out and all("mode" not in c for c in out["channels"]), \
+        "the mode is one value and decides nothing; a module showing it would show a constant"
     # Posture only: a refused sender is channel traffic, not a number on this module.
     assert "rejected_today" not in out and all("rejected_today" not in c for c in out["channels"])
 
-    out_ok = derive_channels_status([dict(channels[0])])
-    assert out_ok["state"] == "ok"
+    out_ok = derive_channels_status([dict(channels[0]), dict(channels[2])])
+    assert out_ok["state"] == "ok" and out_ok["any_open"] is False
 
 
 def test_guardrails_derivation_shape_and_unrestricted_passthrough():

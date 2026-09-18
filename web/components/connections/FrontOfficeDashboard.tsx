@@ -39,11 +39,12 @@ export interface FrontOfficeKnowledge {
 export interface FrontOfficeState {
     enabled: boolean;
     channels: Record<string, boolean>;
-    contacts_only: Record<string, boolean>;
     /** Mail only: draft holds every answer in the outbox for approval, send lets it leave at once. */
     email_reply_mode: 'draft' | 'send';
     channels_connected: Record<string, boolean>;
-    channel_contacts: Record<string, { total: number; allowed: number }>;
+    /** Per channel: how many contacts have a key there, and what the user decided about them.
+     *  The switch decides for `undecided` alone - `allowed` is answered anyway, `denied` never. */
+    channel_contacts: Record<string, { total: number; allowed: number; denied: number; undecided: number }>;
     whatsapp_inbound_to_agent: boolean;
     reply_window_hours: number;
     reachable_contacts: number;
@@ -383,11 +384,14 @@ export default function FrontOfficeDashboard({ isOpen, onClose, onOpenContacts, 
                                 const on = !!data?.channels[row.id];
                                 const connected = !!data?.channels_connected[row.id];
                                 const counts = data?.channel_contacts[row.id];
+                                // On, the number that still matters is who is REFUSED here;
+                                // off, it is who is answered anyway because the user allowed
+                                // them. The other counters would each state the opposite.
                                 const note = !connected
                                     ? t('channelNotConnected')
                                     : on
-                                        ? t('channelOn', { count: counts?.allowed ?? 0 })
-                                        : t('channelOff', { count: counts?.total ?? 0 });
+                                        ? t('channelOn', { count: counts?.denied ?? 0 })
+                                        : t('channelOff', { count: counts?.allowed ?? 0 });
                                 return (
                                     <div key={row.id} className="rounded-xl border border-gray-200 bg-white p-4 flex items-start justify-between gap-4">
                                         <div className="flex items-start gap-3 min-w-0">
@@ -457,10 +461,13 @@ export default function FrontOfficeDashboard({ isOpen, onClose, onOpenContacts, 
                 body={confirm?.kind === 'remove'
                     ? t('removeConfirmBody', { title: confirm.doc.title })
                     : confirm?.kind === 'open' && confirm.channel === 'email'
-                        ? t('confirmBodyMail', { count: data?.channel_contacts.email?.total ?? 0 })
+                        ? t('confirmBodyMail', { count: data?.channel_contacts.email?.undecided ?? 0 })
                         : t('confirmBody', {
                             channel: confirm?.kind === 'open' ? (CHANNEL_ROWS.find(r => r.id === confirm.channel)?.label ?? '') : '',
-                            count: confirm?.kind === 'open' ? (data?.channel_contacts[confirm.channel]?.total ?? 0) : 0,
+                            // The people this switch actually changes anything for: the ones
+                            // nobody has decided about. Naming the whole book here promised a
+                            // grant the switch does not hand out.
+                            count: confirm?.kind === 'open' ? (data?.channel_contacts[confirm.channel]?.undecided ?? 0) : 0,
                         })}
                 confirmLabel={confirm?.kind === 'remove' ? t('remove') : t('confirmYes')}
                 cancelLabel={t('confirmNo')}

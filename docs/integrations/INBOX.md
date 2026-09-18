@@ -25,8 +25,8 @@ One shape for five sources:
 | `answered_by_agent` | the newest message is the agent's own send (WhatsApp: a message sent from the agent number's own phone is the person's, labelled `OWNER_SENDER` by the bridge, not the agent's; mail: the newest message carries the answered mark; an older reply in the thread says nothing about the mail that arrived after it) |
 | `done` | marked done and nothing newer arrived, or the newest message is the person's own reply (mail: the newest message sits in the Sent folder). A newer message reopens |
 | `is_group` | WhatsApp `@g.us`, a negative Telegram id, every room |
-| `mode` | which lane answers: `owner`, `contact` (Front Office), `conversation` (WhatsApp reply window open), `readonly`, `needs_assign` (an unresolved WhatsApp `@lid`), `admin` (the paired Discord admin's direct message; a Discord contact of an open Inbound is `contact`, a kept stranger's DM `readonly`), `relay` (Telegram), `mail`, `room` |
-| `reply_window_until` | the WhatsApp reply window, computed from the store with the bridge's rule (a test pins that the two agree) |
+| `mode` | which lane answers, the same rule the bridge applies (`inbox.chat_mode`): `owner`, `contact` (a person the owner allowed, or anybody while that channel's Inbound is open), `readonly` (a person the owner blocked, and everybody else under a closed channel), `needs_assign` (an unresolved WhatsApp `@lid`), `admin` (the paired Discord admin's direct message), `relay` (Telegram), `mail`, `room`. There is no `conversation` any more: the reply window decided who was answered, and it decides nothing now |
+| `reply_window_until` | display only: how long a conversation the AGENT started counts as live (`inbox.reply_window_until`, the one implementation left). It admits nobody |
 | `bulk` | mail only: the thread is bulk mail (`is_bulk_mail`, see the rules), listed only when the bulk toggle asks |
 | `draft` | mail only: the agent's held answer to the thread (`op_id`, `to`, `subject`, `body`, `created_at`) or null; the window shows it with Send and Discard, the routes are `POST /api/mail/drafts/{op_id}/send` and `DELETE /api/mail/drafts/{op_id}` |
 | `verification` | mail only: the newest message's verdict, `state` (verified, via, unverified, unknown) and `machine_kind` (bounce, mdn, auto_reply, list, bulk, calendar, own_loop, null_return_path, or empty), the same summary the mail window's badge reads (see [EMAIL_CLIENT.md](EMAIL_CLIENT.md#verification-and-cases)) |
@@ -108,6 +108,16 @@ later mail of that sender on any provider). The
 toggle "Show bulk mail" in the window, `include_bulk` on
 `list_conversations` and on the agent's tool, `--bulk` on the command line and `bulk` on
 the routes show them, and "mark all as read" follows the same toggle.
+
+## The other direction
+
+This document is about what came IN. What the agent wrote and nobody has sent yet is the
+outbox: a send the person ordered on their own web chat turn is parked for them rather than
+delivered, and a card in the conversation (plus `vaf outbox list|send|discard`) decides it. A mail
+draft appears in both places, because a held answer is a row here as well (`waits_reason`
+`draft`); a parked messenger call appears only in the outbox, since there is no conversation
+row for a message that was never sent. The rule is in
+[`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py).
 
 ## The marks
 

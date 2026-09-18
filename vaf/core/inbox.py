@@ -510,25 +510,40 @@ def chat_state(row: Dict[str, Any], *, now: Optional[float] = None,
 
 
 def chat_mode(channel: str, chat_id: str, *, owners: Set[str], contacts: Set[str], relays: Set[str],
-              reply_window_until_ts: Optional[float], now: float, needs_assign: bool = False) -> str:
-    """Which lane answers in this chat, the words the channel windows already use."""
+              needs_assign: bool = False, denied: Optional[Set[str]] = None,
+              channel_open: bool = False) -> str:
+    """Which lane answers in this chat, the words the channel windows already use.
+
+    `contacts` are the people the owner ALLOWED, `denied` the ones they switched off, and
+    `channel_open` says whether this channel's Inbound answers everybody else. The three
+    together are the same rule the bridge applies, so a row cannot say "read-only" about a
+    chat the agent is in fact answering, or "contact" about one it must not touch.
+
+    The reply window is NOT an input: it decides nothing about ingress any more, so a mode
+    that read it would disagree with the bridge. The window's own timestamp is still on the
+    row (`reply_window_until`), because the WhatsApp window shows how long an owner-sent
+    conversation stays convenient to answer."""
+    cid = str(chat_id or "")
+    blocked = cid in (denied or set())
     if channel == "discord":
         # The paired admin's direct message is the admin's own chat ("admin", the Discord
-        # window's word for it); a person an open Inbound answers is a contact; every other
-        # kept DM is read-only.
-        cid = str(chat_id or "")
-        return "admin" if cid in owners else ("contact" if cid in contacts else "readonly")
+        # window's word for it); a person the owner allowed, or anybody while Inbound is
+        # open, is a contact; a person switched off and every other kept DM is read-only.
+        if cid in owners:
+            return "admin"
+        if blocked:
+            return "readonly"
+        return "contact" if (cid in contacts or channel_open) else "readonly"
     if needs_assign:
         return "needs_assign"
-    cid = str(chat_id or "")
     if cid in owners:
         return "owner"
     if channel == "telegram" and cid in relays:
         return "relay"
-    if cid in contacts:
+    if blocked:
+        return "readonly"
+    if cid in contacts or channel_open:
         return "contact"
-    if channel == "whatsapp" and reply_window_until_ts is not None and reply_window_until_ts > now:
-        return "conversation"
     return "readonly"
 
 
@@ -677,10 +692,20 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
         owners = owner_endpoints(channel, username, user_scope_id)
         relays = owner_endpoints(channel, username, user_scope_id, relay=True) if channel == "telegram" else set()
         try:
-            from vaf.core.contacts_store import front_office_endpoints
+            from vaf.core.contacts_store import denied_endpoints, front_office_endpoints
             contacts = set(front_office_endpoints(username, user_scope_id, channel) or ())
+            denied = set(denied_endpoints(username, user_scope_id, channel) or ())
         except Exception:
-            contacts = set()
+            contacts, denied = set(), set()
+        # Whether this channel answers people nobody decided about. The row has to know it or
+        # it calls a chat read-only while the agent is answering in it.
+        try:
+            from vaf.core.channel_ingress_policy import resolve_channel_policy
+            from vaf.core.config import Config as _Cfg
+            channel_open = bool(resolve_channel_policy(
+                channel, _Cfg.get("channel_ingress_policy"))["open_to_new_senders"])
+        except Exception:
+            channel_open = False
         for o in overview:
             chat_id = str(o.get("chat_id") or "")
             state = chat_state(o, now=now, waits_threshold_value=threshold)
@@ -688,7 +713,7 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
                 if channel == "whatsapp" else None
             needs_assign = channel == "whatsapp" and _lid_needs_assign(chat_id, lid_map)
             mode = chat_mode(channel, chat_id, owners=owners, contacts=contacts, relays=relays,
-                             reply_window_until_ts=until, now=now, needs_assign=needs_assign)
+                             needs_assign=needs_assign, denied=denied, channel_open=channel_open)
             rows.append({
                 "key": f"{channel}:{chat_id}",
                 "channel": channel,

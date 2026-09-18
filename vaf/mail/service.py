@@ -558,7 +558,8 @@ class MailService:
                    attachments: Optional[List[Dict[str, Any]]] = None,
                    attachment_meta: Optional[List[Dict[str, str]]] = None,
                    reply_to_pk: Optional[int] = None,
-                   thread_id: Optional[int] = None) -> Dict[str, Any]:
+                   thread_id: Optional[int] = None,
+                   chat_session_id: str = "") -> Dict[str, Any]:
         """The one send funnel (EMAIL_CLIENT.md, "Native send"): every lane, the compose
         window, the agent's send/reply/forward tools and the Front Office answers, queues
         here and delivers through the outbox, so every sent mail has a Sent copy, a
@@ -615,6 +616,11 @@ class MailService:
             "attachments": list(attachment_meta or []),
             "reply_to_pk": int(reply_to_pk) if reply_to_pk is not None else None,
             "thread_id": int(thread_id) if thread_id is not None else None,
+            # Which chat asked for this draft, when a chat did (vaf/core/outbound_hold.py).
+            # The card in that conversation shows only its own drafts: a message being written
+            # in one chat must never appear in another, and a Front Office draft (no chat at
+            # all) belongs to the inbox rather than to any conversation.
+            "chat_session_id": str(chat_session_id or ""),
         }, not_before_ts=not_before, state="held" if hold else "pending")
         self.store.record_sent_id(apk, message_id, case_id=case_id or "", to_addrs=to,
                                   sent_by=sent_by or "owner", in_reply_to=in_reply_to or "",
@@ -678,6 +684,7 @@ class MailService:
                 "to": p.get("to") or "", "cc": p.get("cc") or "", "subject": p.get("subject") or "",
                 "body": p.get("body") or "", "sent_by": p.get("sent_by") or "", "case_id": p.get("case_id") or "",
                 "message_id": p.get("message_id") or "", "created_at": op.get("created_at") or "",
+                "chat_session_id": p.get("chat_session_id") or "",
             })
         return out
 
@@ -772,3 +779,39 @@ def deliver_queued_sends(scope: str, account: Dict[str, Any], cred_username: Opt
                 _safe_logout(client)
             except Exception:
                 pass
+
+
+def release_held_draft(scope: str, username: str, op_id: int,
+                       service: Optional["MailService"] = None) -> Dict[str, Any]:
+    """Send one held draft NOW: {"ok", "state", "error"}.
+
+    What "Send" means for a mail draft, in one place, because it is two acts: the op is
+    released (`approve_draft`) and the account is drained (`deliver_queued_sends`), and only
+    the second one puts the mail on the wire. The card and `vaf outbox send` both call this;
+    when the card released and the terminal only released, the two surfaces disagreed about
+    what the button did and the terminal's "Sent." was a mail still sitting in the outbox.
+    A draft that is not waiting answers with state "" and ok False rather than raising: both
+    callers turn that into "no draft with that id".
+    """
+    svc = service or MailService(scope)
+    op = svc.store.get_op(int(op_id))
+    if not op or op.get("kind") != "send" or op.get("state") != "held":
+        return {"ok": False, "state": "", "error": "not waiting"}
+    if not svc.approve_draft(int(op_id)):
+        return {"ok": False, "state": "", "error": "not waiting"}
+    account_id = str((op.get("payload") or {}).get("account_id") or "")
+    try:
+        from vaf.core.email_accounts import get_email_config
+        from vaf.tools.mail_utils import cred_username_from_kwargs
+        ec = get_email_config(username or "admin", user_scope_id=scope)
+        acc = next((a for a in (ec.get("accounts") or [])
+                    if (a.get("account_id") or a.get("email") or "").lower() == account_id.lower()), None)
+        if acc is not None:
+            deliver_queued_sends(scope, acc, cred_username_from_kwargs({"username": username}),
+                                 account_id, service=svc)
+    except Exception:
+        # The op stays released, so the sweep delivers it; only the immediate drain failed.
+        pass
+    outcome = svc.send_outcome(int(op_id))
+    return {"ok": outcome.get("state") == "done", "state": outcome.get("state") or "",
+            "error": outcome.get("error") or ""}

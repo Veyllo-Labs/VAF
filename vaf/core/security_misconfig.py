@@ -64,26 +64,20 @@ def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict
                 )
             )
 
+    # The one state that means "somebody the owner never decided about is answered": the
+    # channel switch. The expert modes this used to warn about are gone (they said the same
+    # thing as a contact's own permission, in a place nobody looked), so a warning about them
+    # would be a check that can no longer fire.
     ingress = normalize_policy(cfg.get("channel_ingress_policy"))
-    global_mode = ingress.get("mode", "paired_only")
-    if global_mode == "permissive":
-        findings.append(
-            _finding(
-                "high",
-                "channel_policy_permissive",
-                "Channel ingress policy mode is permissive; unknown senders may be accepted.",
-            )
-        )
-
     for channel in ("telegram", "whatsapp", "discord"):
         ch_cfg = ingress.get(channel) if isinstance(ingress.get(channel), dict) else {}
-        ch_mode = ch_cfg.get("mode", "paired_only")
-        if ch_mode == "permissive":
+        if bool(ch_cfg.get("open_to_new_senders")):
             findings.append(
                 _finding(
                     "medium",
-                    f"{channel}_policy_permissive",
-                    f"{channel.title()} ingress policy is permissive.",
+                    f"{channel}_open_to_new_senders",
+                    f"{channel.title()} Inbound is open: anybody who writes there is answered, "
+                    "except contacts switched off in the book.",
                 )
             )
 

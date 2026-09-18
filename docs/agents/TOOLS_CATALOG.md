@@ -139,8 +139,8 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `update_calendar_event` | write | Update an event (title, time, location, reminder); a moved start keeps the duration. |
 | `delete_calendar_event` | write | Delete an event (irreversible; a mirrored one is removed at the provider by the next sync). |
 | `list_calendar_events` | read | List the calendar's events in a time range, offline, from the store. |
-| `create_contact` | write | Create a contact: name, channels, personal file, company, role, comma-separated tags (recorded with source `agent`). |
-| `update_contact` | write | Update a contact: fields (company, role and tags included; tags replace), status, a dated note (`add_note`), a dated event (`add_event_title` + `add_event_when`). |
+| `create_contact` | write | Create a contact: name, channels, personal file, company, role, comma-separated tags, and `assistant_access` (`allowed` or `denied`) only when the user said so (recorded with source `agent`). |
+| `update_contact` | write | Update a contact: fields (company, role and tags included; tags replace), status, `assistant_access` (`allowed` / `denied` / `undecided`, the three states of "may the agent answer this person"), a dated note (`add_note`), a dated event (`add_event_title` + `add_event_when`). |
 | `delete_contact` | write | Delete a contact (irreversible). |
 | `get_contact` | read | Get a contact by name: channel IDs, personal file, company, role, tags, since when and from where, status, last contact, upcoming events, newest notes, and the newest stored messages and mails with the person. |
 | `list_contacts` | read | List all contacts, optionally filtered by status or tag. |
@@ -151,9 +151,9 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 |------|------|--------------|
 | `read_mail` | read | Read the full body of one email. |
 | `find_mail` | read | Search the mailbox by subject/sender. |
-| `send_mail` | write | Send an email (irreversible). |
-| `reply_mail` | write | Reply (quoted, correctly threaded) to an email (irreversible). |
-| `forward_mail` | write | Forward an email to new recipients (irreversible). |
+| `send_mail` | write | Send an email (irreversible). Ordered in the web chat, it is parked as a draft for the person (`outward_send_hold`). |
+| `reply_mail` | write | Reply (quoted, correctly threaded) to an email (irreversible). Parked as a draft when ordered in the web chat. |
+| `forward_mail` | write | Forward an email to new recipients (irreversible). Parked as a draft when ordered in the web chat. |
 | `archive_mail` | write | Move an email out of the inbox into Archive. |
 | `delete_mail` | write | Move an email to Trash (trash-only, never expunged). |
 | `label_mail` | write | Set an email's label/category. |
@@ -180,7 +180,7 @@ runs its model call with no tools at all - see
 | `inbox` | read | Every conversation across WhatsApp, Telegram, Discord, mail and rooms, newest first, with unread and who waits for an answer; `channel` and `view` narrow it. The rows the inbox window shows. |
 | `contact_history` | read | Front Office only: what the contact being answered wrote to the owner before, and what went to them, across WhatsApp, Telegram, Discord and mail (the contact book's timeline for that one person, pinned by the runner, no argument names anyone); `channel` and `query` narrow it. See [FRONT_OFFICE.md](FRONT_OFFICE.md#tool-restriction). |
 | `send_to_user` | write | Channel-agnostic delivery: resolves the user's `main_messenger` at run time and sends text plus optional file via the canonical router; Web UI notification fallback (irreversible). |
-| `send_whatsapp` | write | Send WhatsApp text / voice / document (irreversible). |
+| `send_whatsapp` | write | Send WhatsApp text / voice / document (irreversible). With `to_phone` (a third party) and ordered in the web chat, it is parked for the person; without it the message goes to the account owner and is sent. |
 | `read_whatsapp_chat` | read | Read messages from a WhatsApp chat. |
 | `find_whatsapp_messages` | read | Search WhatsApp messages. |
 | `whatsapp_call` | write | Placeholder - WhatsApp call (not implemented). |

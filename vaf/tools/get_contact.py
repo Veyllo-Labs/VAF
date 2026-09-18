@@ -49,7 +49,7 @@ class GetContactTool(BaseTool):
             return "name is required (e.g. get_contact(name='Max'))."
 
         try:
-            from vaf.core.contacts_store import get_contacts_by_name
+            from vaf.core.contacts_store import contact_access, get_contacts_by_name
         except ImportError as e:
             return f"Contacts unavailable: {e}"
 
@@ -106,8 +106,13 @@ class GetContactTool(BaseTool):
             parts.append(f"Birthday: {contact['birthday']}")
         if contact.get("notes"):
             parts.append(f"Notes: {contact['notes']}")
-        if contact.get("allow_as_assistant_user"):
-            parts.append("Allowed as assistant user: yes")
+        # Three answers, and the third one is silence: a person nobody decided about is
+        # answered only while their channel stands open, so there is nothing to state here.
+        access = contact_access(contact)
+        if access == "allowed":
+            parts.append("Can reach your assistant: yes, on every channel")
+        elif access == "denied":
+            parts.append("Can reach your assistant: no, the user switched this person off")
         if contact.get("company"):
             parts.append(f"Company: {contact['company']}")
         if contact.get("role"):

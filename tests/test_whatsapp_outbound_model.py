@@ -5,10 +5,11 @@
 
 The linked account is the AGENT: its own chat is dropped, no whitelist entry is needed to
 run it, and no user ever runs on another user's credentials. Who may write in is decided
-per message (registered main-user number, Front Office contact, open conversation); who
-may be replied to is decided by the same three answers. Every test here fails when the
-old model comes back: the admin-creds fallback, the self-chat note, the bare @lid pass,
-the whitelist-gated process list.
+per message (the registered main-user number, the owner's decision about the person, an
+open channel); who may be replied to is decided by the same question through the same
+function. Every test here fails when the old model comes back: the admin-creds fallback,
+the self-chat note, the bare @lid pass, the whitelist-gated process list, and the 72 hour
+reply window that answered a stranger on a channel the owner had closed.
 """
 import json
 import time
@@ -128,25 +129,65 @@ def test_owner_number_gets_the_full_chat(isolated, monkeypatch):
     assert saved == ["491700000009@s.whatsapp.net"]                    # the owner endpoint
 
 
-def test_contact_lands_in_front_office_and_does_not_become_the_owner_endpoint(isolated, monkeypatch):
-    isolated["channel_ingress_policy"] = {"mode": "permissive"}
+def test_an_allowed_contact_lands_in_front_office_on_a_closed_channel(isolated, monkeypatch):
+    """The permission the owner gave about the PERSON needs no switch, and it does not make
+    them the owner. MUTATION: require the open channel for the allowed branch of
+    evaluate_ingress and no task is queued."""
+    from vaf.core import contacts_store
+    contacts_store.create_contact("Bob", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000005",
+                                  assistant_access="allowed")
     monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], ["+491700000005"]))
     saved = []
     monkeypatch.setattr(wa, "save_whatsapp_chat_jid", lambda scope, user, jid: saved.append(jid))
     rec = _dispatch("alice", "491700000005@s.whatsapp.net", pushName="Bob")
     assert rec is not None and rec["metadata"]["from_contact"] is True
-    assert rec["metadata"]["ingress_reason"] == "contact_fallback"
+    assert rec["metadata"]["ingress_reason"] == "contact_allowed"
     assert rec["metadata"]["chat_label"] == "Bob", "the namespace label is the name the bridge knew"
     assert saved == []
 
 
-def test_reply_inside_the_window_is_front_office_with_reason_open_conversation(isolated, monkeypatch):
+def test_a_denied_contact_is_refused_even_on_an_open_channel(isolated, monkeypatch):
+    """The veto the owner took by hand outranks the switch, and the message is still stored
+    for the inbox. MUTATION: read the record with bool() instead of contact_access and the
+    denial turns into a pass, because "denied" is a truthy string."""
+    from vaf.core import contacts_store
+    from vaf.core.channel_ingress_policy import set_front_office
+    contacts_store.create_contact("Mara", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000007",
+                                  assistant_access="denied")
+    isolated["channel_ingress_policy"] = set_front_office(None, True, "whatsapp")
     monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
+    assert _dispatch("alice", "491700000007@s.whatsapp.net", body="hello?") is None
+    assert store.last_message_ts("alice", "+491700000007", direction="in", user_scope_id=SCOPE) is not None
+
+
+def test_a_stranger_on_an_open_channel_is_answered_and_enrolled(isolated, monkeypatch):
+    """The open channel is what answers a person nobody decided about, whether or not the
+    agent wrote first. MUTATION: drop the enrolment after a front_office_open reason and the
+    record assertion goes red."""
+    from vaf.core import contacts_store
+    from vaf.core.channel_ingress_policy import set_front_office
+    monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
+    isolated["channel_ingress_policy"] = set_front_office(None, True, "whatsapp")
     store.append_message("alice", "+491700000042", "Hi, do you have a table tonight?", direction="out", user_scope_id=SCOPE)
-    rec = _dispatch("alice", "491700000042@s.whatsapp.net", body="Yes, 8pm works")
+    rec = _dispatch("alice", "491700000042@s.whatsapp.net", body="Yes, 8pm works", pushName="Table")
     assert rec is not None and rec["metadata"]["from_contact"] is True
-    assert rec["metadata"]["ingress_reason"] == "open_conversation"
-    # The accepted reply is stored, so the conversation stays open for the reply lane.
+    assert rec["metadata"]["ingress_reason"] == "front_office_open"
+    assert store.last_message_ts("alice", "+491700000042", direction="in", user_scope_id=SCOPE) is not None
+    book = contacts_store.find_contact_by_channel("whatsapp", "+491700000042", "alice", SCOPE)
+    assert book is not None and contacts_store.contact_access(book) is None, \
+        "the record exists so the owner can decide; the channel is what answered"
+
+
+def test_a_closed_channel_does_not_answer_the_person_the_agent_wrote_to(isolated, monkeypatch):
+    """The live incident, end to end through the bridge: Inbound on "paired only", the owner
+    has the agent send one message, and the answer comes back. It is STORED for the inbox and
+    it is not handed to the agent, because the owner never opened that channel.
+
+    MUTATION: accept `conversation_match` without the open-channel test in evaluate_ingress.
+    """
+    monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
+    store.append_message("alice", "+491700000042", "Gute Nacht!", direction="out", user_scope_id=SCOPE)
+    assert _dispatch("alice", "491700000042@s.whatsapp.net", body="Danke, dir auch") is None
     assert store.last_message_ts("alice", "+491700000042", direction="in", user_scope_id=SCOPE) is not None
 
 
@@ -156,11 +197,20 @@ def test_reply_after_the_window_is_rejected(isolated, monkeypatch):
     assert _dispatch("alice", "491700000042@s.whatsapp.net") is None
 
 
-def test_window_of_zero_switches_the_rule_off(isolated, monkeypatch):
+def test_the_window_setting_no_longer_admits_anybody(isolated, monkeypatch):
+    """`whatsapp_config.reply_window_hours` is a display value now (the WhatsApp window shows
+    how long an owner-started conversation stays convenient to answer). Whatever it says, a
+    stranger is not admitted by it. MUTATION: hand a conversation match back to
+    evaluate_ingress and the open-channel case turns into "open_conversation" plus an answer
+    on the closed one."""
+    from vaf.core.channel_ingress_policy import set_front_office
     monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
-    isolated["whatsapp_config"]["reply_window_hours"] = 0
-    store.append_message("alice", "+491700000042", "just now", direction="out", user_scope_id=SCOPE)
-    assert _dispatch("alice", "491700000042@s.whatsapp.net") is None
+    for hours in (0, 72):
+        isolated["whatsapp_config"]["reply_window_hours"] = hours
+        store.append_message("alice", "+491700000043", "just now", direction="out", user_scope_id=SCOPE)
+        assert _dispatch("alice", "491700000043@s.whatsapp.net") is None, hours
+    isolated["channel_ingress_policy"] = set_front_office(None, True, "whatsapp")
+    assert _dispatch("alice", "491700000043@s.whatsapp.net")["metadata"]["ingress_reason"] == "front_office_open"
 
 
 def test_an_inbound_alone_does_not_open_the_window(isolated, monkeypatch):
@@ -171,34 +221,53 @@ def test_an_inbound_alone_does_not_open_the_window(isolated, monkeypatch):
     assert _dispatch("alice", "491700000042@s.whatsapp.net") is None
 
 
-def test_a_synced_contact_without_the_flag_still_answers_inside_the_reply_window(isolated, monkeypatch):
-    """The chat-list sync creates a record with "Can reach your assistant" OFF for every named
-    chat (contacts_store.sync_channel_contacts), so under a closed channel that is the state
-    of nearly every number the agent is asked to write to. The bridge hands that record to
-    evaluate_ingress as sender_opted_out; the reply inside the window is still answered.
-    MUTATION: check sender_opted_out before conversation_match in evaluate_ingress and the
-    reply is dropped (no task)."""
+def test_a_synced_contact_is_undecided_and_not_an_opt_out(isolated, monkeypatch):
+    """The chat-list sync creates a record for every named chat and decides nothing
+    (contacts_store.sync_channel_contacts), so that is the state of nearly every number the
+    agent is asked to write to. Reading it as "switched off" would silence 161 people the
+    owner never touched; reading it as a grant would answer them on a closed channel. It is
+    the third state, and only the switch decides for it.
+    MUTATION: make `contact_access` return ACCESS_DENIED for a record whose bool is False and
+    the open-channel case goes red."""
     from vaf.core import contacts_store
+    from vaf.core.channel_ingress_policy import set_front_office
     monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
     contacts_store.sync_channel_contacts(
         "whatsapp", [{"endpoint": "+491700000042", "display_name": "Carol", "last_seen_ts": 1.0}], "alice", user_scope_id=SCOPE)
     rec = contacts_store.find_contact_by_channel("whatsapp", "+491700000042", "alice", SCOPE)
-    assert rec is not None and rec["allow_as_assistant_user"] is False, "the sync never sets the flag"
-    store.append_message("alice", "+491700000042", "Hi Carol, a table for two tonight?", direction="out", user_scope_id=SCOPE)
+    assert rec is not None and contacts_store.contact_access(rec) is None, "the sync decides nothing"
+    assert _dispatch("alice", "491700000042@s.whatsapp.net", body="Hi?", pushName="Carol") is None, \
+        "a closed channel answers nobody the owner has not allowed"
+    isolated["channel_ingress_policy"] = set_front_office(None, True, "whatsapp")
     task = _dispatch("alice", "491700000042@s.whatsapp.net", body="Yes, 8pm works", pushName="Carol")
-    assert task is not None and task["metadata"]["ingress_reason"] == "open_conversation"
+    assert task is not None and task["metadata"]["ingress_reason"] == "front_office_open"
     assert task["metadata"]["from_contact"] is True
 
 
 # ── who may be replied to ─────────────────────────────────────────────────────
 
-def test_reply_lane_answers_owner_contact_and_open_conversation_only(isolated, monkeypatch):
-    monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: (["+491700000009"], ["+491700000009", "+491700000005"]))
-    assert wa._is_reply_allowed("alice", "491700000009@s.whatsapp.net", SCOPE)      # owner
-    assert wa._is_reply_allowed("alice", "491700000005@s.whatsapp.net", SCOPE)      # contact
-    assert not wa._is_reply_allowed("alice", "491700000042@s.whatsapp.net", SCOPE)  # stranger
+def test_the_reply_lane_asks_the_same_question_as_the_inbound_side(isolated, monkeypatch):
+    """One function, both directions: the agent must not be free to answer somebody who is no
+    longer free to write. MUTATION: let _is_reply_allowed fall back to the phone list of
+    allowed_phones instead of the book and the denied assertion goes red."""
+    from vaf.core import contacts_store
+    from vaf.core.channel_ingress_policy import set_front_office
+    monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: (["+491700000009"], ["+491700000009"]))
+    monkeypatch.setattr("vaf.core.config.scope_id_for_username", lambda name: SCOPE)
+    contacts_store.create_contact("Bob", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000005",
+                                  assistant_access="allowed")
+    contacts_store.create_contact("Mara", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000007",
+                                  assistant_access="denied")
+    assert wa._is_reply_allowed("alice", "491700000009@s.whatsapp.net", SCOPE)       # the owner
+    assert wa._is_reply_allowed("alice", "491700000005@s.whatsapp.net", SCOPE)       # allowed
+    assert not wa._is_reply_allowed("alice", "491700000007@s.whatsapp.net", SCOPE)   # denied
+    assert not wa._is_reply_allowed("alice", "491700000042@s.whatsapp.net", SCOPE)   # undecided, channel shut
     store.append_message("alice", "+491700000042", "hi", direction="out", user_scope_id=SCOPE)
-    assert wa._is_reply_allowed("alice", "491700000042@s.whatsapp.net", SCOPE)      # open conversation
+    assert not wa._is_reply_allowed("alice", "491700000042@s.whatsapp.net", SCOPE), \
+        "writing to somebody does not make them answerable: the window is gone"
+    isolated["channel_ingress_policy"] = set_front_office(None, True, "whatsapp")
+    assert wa._is_reply_allowed("alice", "491700000042@s.whatsapp.net", SCOPE)       # undecided, channel open
+    assert not wa._is_reply_allowed("alice", "491700000007@s.whatsapp.net", SCOPE), "a denial holds on an open channel"
 
 
 def test_reply_lane_never_passes_an_unresolved_lid(isolated, monkeypatch):
@@ -558,9 +627,12 @@ def test_status_updates_and_newsletters_are_not_rejected_senders(isolated, monke
     # A real stranger is still rejected and recorded, in the channel's own lane, with the
     # line that survives debug logging being off.
     assert _dispatch("alice", "491700000099@s.whatsapp.net", body="hi") is None
-    rejects = [l for l in lines if l[1].startswith("REJECT not_paired")]
+    rejects = [l for l in lines if l[1].startswith("REJECT ") and "reason=not_paired" in l[1]]
     assert len(rejects) == 1 and rejects[0][0] == "whatsapp" and rejects[0][2] is True
     assert "from=491700000099@s.whatsapp.net" in rejects[0][1]
+    # The line names the decision the book held about them, so a refusal can be told apart
+    # from a veto when somebody asks why a message was not answered.
+    assert "access=undecided" in rejects[0][1]
     # A LID no number is known for gets ONE line too, with the hint on it, not a second one.
     assert _dispatch("alice", "12345678901234@lid", body="hi") is None
     lid_lines = [l for l in lines if "12345678901234@lid" in l[1] and "REJECT" in l[1]]
@@ -634,48 +706,24 @@ def test_a_rejected_senders_message_is_kept_for_the_owner_but_not_answered(isola
     assert store.get_chat_messages("bob", "+491700000042", user_scope_id="66666666-7777-8888-9999-000000000000") == []
 
 
-def test_a_stored_rejected_inbound_opens_no_reply_window_but_an_accepted_reply_extends_it(isolated, monkeypatch):
-    """conversation_open_until with no direction is the reply rule. Now that a rejected
-    sender's message is stored too, an inbound row alone must open nothing (a door the
-    stranger could open by writing); the agent's own message opens the window and a reply
-    inside it extends it, so an accepted answer can still be answered."""
+def test_the_reply_window_is_not_a_door_on_any_lane(isolated, monkeypatch):
+    """The bridge's own copy of the window rule is gone with the door it served: whether the
+    agent may answer is `evaluate_ingress`, on both lanes, and the window's timestamp is the
+    WhatsApp window's display value (vaf/core/inbox.reply_window_until, one implementation).
+    MUTATION: give _is_reply_allowed a window fallback and every assertion here goes red."""
     monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
+    monkeypatch.setattr("vaf.core.config.scope_id_for_username", lambda name: SCOPE)
+    assert not hasattr(wa, "conversation_open_until") and not hasattr(wa, "_conversation_is_open")
     now = time.time()
-    store.append_message("alice", "+491700000042", "stranger", direction="in", user_scope_id=SCOPE, ts=now - 60)
-    assert wa.conversation_open_until("alice", "+491700000042", SCOPE) is None
-    assert wa._is_reply_allowed("alice", "491700000042@s.whatsapp.net", SCOPE) is False
-    # the agent wrote 70 hours ago, the contact answered an hour ago: open until an hour ago + 72h
-    store.append_message("alice", "+491700000043", "hello", direction="out", user_scope_id=SCOPE, ts=now - 70 * 3600)
-    store.append_message("alice", "+491700000043", "yes", direction="in", user_scope_id=SCOPE, ts=now - 3600)
-    until = wa.conversation_open_until("alice", "+491700000043", SCOPE)
-    assert until is not None and abs(until - (now - 3600 + 72 * 3600)) < 5
-    assert wa._is_reply_allowed("alice", "491700000043@s.whatsapp.net", SCOPE) is True
-    # an inbound that arrived AFTER the window had closed was a rejected one: it extends nothing
-    store.append_message("alice", "+491700000044", "hello", direction="out", user_scope_id=SCOPE, ts=now - 80 * 3600)
-    store.append_message("alice", "+491700000044", "too late", direction="in", user_scope_id=SCOPE, ts=now - 60)
-    stale = wa.conversation_open_until("alice", "+491700000044", SCOPE)
-    assert stale is None or stale < now                                          # the window closed with the outbound
-    assert wa._is_reply_allowed("alice", "491700000044@s.whatsapp.net", SCOPE) is False
-    # the inbound acceptance rule (direction="out") is unchanged
-    assert wa.conversation_open_until("alice", "+491700000043", SCOPE, direction="out") is not None
-
-
-def test_a_later_rejected_inbound_does_not_shadow_the_reply_that_extended_the_window(isolated, monkeypatch):
-    """Outbound, an accepted reply inside the window (which extends it), then a stale
-    inbound after the window from the outbound closed (rejected, stored for the owner):
-    the extension the accepted reply earned must survive, and the stale row must add
-    nothing. The store answers with the newest inbound INSIDE the window (until_ts)."""
-    monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
-    now = time.time()
-    t0 = now - 72.8 * 3600
-    store.append_message("alice", "+491700000045", "hello", direction="out", user_scope_id=SCOPE, ts=t0)
-    store.append_message("alice", "+491700000045", "yes", direction="in", user_scope_id=SCOPE, ts=t0 + 3600)          # accepted: inside
-    store.append_message("alice", "+491700000045", "again?", direction="in", user_scope_id=SCOPE, ts=t0 + 72.5 * 3600)  # rejected: after
-    until = wa.conversation_open_until("alice", "+491700000045", SCOPE)
-    assert until is not None and abs(until - (t0 + 3600 + 72 * 3600)) < 5                # the accepted reply's extension
-    assert wa._is_reply_allowed("alice", "491700000045@s.whatsapp.net", SCOPE) is True   # now (t0 + 72.8h) is before t0 + 73h
-    assert store.last_message_ts("alice", "+491700000045", direction="in", user_scope_id=SCOPE, until_ts=t0 + 72 * 3600) == t0 + 3600
-    assert store.last_message_ts("alice", "+491700000045", direction="in", user_scope_id=SCOPE) == t0 + 72.5 * 3600
+    # The agent wrote an hour ago and the person answered: no lane opens for them.
+    store.append_message("alice", "+491700000043", "hello", direction="out", user_scope_id=SCOPE, ts=now - 3600)
+    store.append_message("alice", "+491700000043", "yes", direction="in", user_scope_id=SCOPE, ts=now - 60)
+    assert wa._is_reply_allowed("alice", "491700000043@s.whatsapp.net", SCOPE) is False
+    assert _dispatch("alice", "491700000043@s.whatsapp.net", body="and you?") is None
+    # The store's own query that the display value is built on is untouched: an inbound
+    # inside the window is found, a later one does not shadow it.
+    assert store.last_message_ts("alice", "+491700000043", direction="in", user_scope_id=SCOPE,
+                                 until_ts=now) == pytest.approx(now - 60)
 
 
 def test_fetch_older_messages_on_an_empty_chat_says_so_instead_of_asking(isolated, monkeypatch):
@@ -690,21 +738,24 @@ def test_fetch_older_messages_on_an_empty_chat_says_so_instead_of_asking(isolate
     assert written.getvalue() == ""                                                       # nothing was asked of the Node
 
 
-def test_a_message_the_person_sent_from_the_dashboard_opens_no_reply_window(isolated, monkeypatch):
+def test_a_message_the_person_sent_from_the_dashboard_is_not_the_agent_writing(isolated, monkeypatch):
     """An outbound row the PERSON sent (the compose box under the chat, stored under
-    OWNER_SENDER) leaves the number without the agent writing anything, so the
-    contact's answer must stay a read-only message: no window, no Front Office."""
+    OWNER_SENDER) leaves the number without the agent writing anything: the contact's answer
+    stays a read-only message, and the store's own "the agent wrote" query says so. MUTATION:
+    drop the exclude_sender argument and the first assertion goes red."""
     monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
+    monkeypatch.setattr("vaf.core.config.scope_id_for_username", lambda name: SCOPE)
     now = time.time()
     store.append_message("alice", "+491700000050", "hi, it's me", direction="out",
                          sender_jid=store.OWNER_SENDER, user_scope_id=SCOPE, ts=now - 60)
-    assert wa.conversation_open_until("alice", "+491700000050", SCOPE) is None
-    assert wa.conversation_open_until("alice", "+491700000050", SCOPE, direction="out") is None
+    assert store.last_message_ts("alice", "+491700000050", direction="out", user_scope_id=SCOPE,
+                                 exclude_sender=store.OWNER_SENDER) is None
     store.append_message("alice", "+491700000050", "hello back", direction="in", user_scope_id=SCOPE, ts=now - 30)
     assert wa._is_reply_allowed("alice", "491700000050@s.whatsapp.net", SCOPE) is False
-    # the agent's own message still opens it, and the row is visible to the pane either way
+    # the agent's own message counts as the agent's, and the row is visible to the pane either way
     store.append_message("alice", "+491700000050", "agent here", direction="out", user_scope_id=SCOPE, ts=now - 10)
-    assert wa.conversation_open_until("alice", "+491700000050", SCOPE) is not None
+    assert store.last_message_ts("alice", "+491700000050", direction="out", user_scope_id=SCOPE,
+                                 exclude_sender=store.OWNER_SENDER) == pytest.approx(now - 10)
     assert len(store.get_chat_messages("alice", "+491700000050", user_scope_id=SCOPE)) == 3
 
 

@@ -1,13 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""The Front Office switch: the contact door of the ingress policy, read and written as one
-state, and the card in Settings, Connections that shows it.
+"""The Front Office switch: one channel opened to the people nobody has decided about, read
+and written as one state, plus the card in Settings, Connections that shows it.
 
-Before the switch, the door lived only in config.json: the default policy (paired_only, no
-contact fallback) turned away every contact with "Can reach your assistant" while the
-contact book's hint said the agent answers them. The framework half is two pure functions
-in channel_ingress_policy; the harness half is a route, a security event and the card.
+What the switch is NOT: a permission on anybody. It writes one field per channel and never
+touches the contact book. A person the owner allowed is answered with the switch off, a
+person they denied is answered on no channel at all, and the switch decides only the third
+state, "nobody decided". The framework half is the pure functions in channel_ingress_policy;
+the harness half is a route, a security event and the card.
 """
 import ast
 import json
@@ -42,19 +43,22 @@ _SHUT = {"whatsapp": False, "telegram": False, "discord": False, "email": False}
 
 def test_the_default_policy_keeps_every_front_office_door_shut():
     state = front_office_state(None)
-    assert state == {"enabled": False, "channels": dict(_SHUT), "contacts_only": dict(_SHUT),
+    assert state == {"enabled": False, "channels": dict(_SHUT),
                      "email_reply_mode": "draft", "email_opened_at": 0}
+    assert "contacts_only" not in state, \
+        "the narrower state is gone: allowing a person IS it, per person rather than per channel"
 
 
 def test_opening_one_channel_opens_only_that_door():
     policy = set_front_office(None, True, "whatsapp")
     assert front_office_state(policy) == {"enabled": True, "channels": dict(_SHUT, whatsapp=True),
-                                          "contacts_only": dict(_SHUT), "email_reply_mode": "draft", "email_opened_at": 0}
-    # The door is the contact rule of evaluate_ingress, nothing else.
-    assert evaluate_ingress("whatsapp", policy, explicit_match=False, contact_match=True) == (True, "contact_fallback_override")
-    assert evaluate_ingress("telegram", policy, explicit_match=False, contact_match=True) == (False, "not_paired")
+                                          "email_reply_mode": "draft", "email_opened_at": 0}
+    # Open means: whoever writes here and has no decision against them is answered.
+    assert evaluate_ingress("whatsapp", policy, explicit_match=False) == (True, "front_office_open")
+    assert evaluate_ingress("telegram", policy, explicit_match=False) == (False, "not_paired")
     # MUTATION: a setter that forgets the flag leaves the default state; this goes red.
-    assert policy["whatsapp"]["allow_contact_fallback"] is True
+    assert policy["whatsapp"]["open_to_new_senders"] is True
+    assert "allow_contact_fallback" not in policy["whatsapp"], "the second door is gone, not written as False"
 
 
 def test_the_master_switch_opens_and_closes_every_front_office_channel():
@@ -68,34 +72,29 @@ def test_the_master_switch_opens_and_closes_every_front_office_channel():
 def test_opening_never_touches_the_modes_or_the_throttle():
     raw = {"mode": "paired_only", "throttle_seconds": 120, "telegram": {"mode": "paired_only"}}
     policy = set_front_office(raw, True)
-    assert policy["mode"] == "paired_only", "permissive is the warned state; the switch must not write it"
+    assert policy["mode"] == "paired_only", "the mode is the floor and nobody's to write, the switch least of all"
     assert policy["throttle_seconds"] == 120
     assert policy["telegram"]["mode"] == "paired_only"
     assert raw == {"mode": "paired_only", "throttle_seconds": 120, "telegram": {"mode": "paired_only"}}, "pure: input untouched"
 
 
-def test_closing_under_a_permissive_global_mode_really_closes():
-    """The expert setting `mode: permissive` lets contacts in everywhere; switching a channel
-    off must win over it, or the UI shows "off" while the bridge answers."""
+def test_a_config_written_before_the_doors_were_merged_opens_nothing():
+    """`mode: permissive` and the per-channel `allow_contact_fallback` were a second way to say
+    "let contacts in", in a place nobody looked. They are read once, coerced, and never
+    honoured; the contact's own decision is the only version of that rule left. MUTATION: keep
+    "permissive" in _SUPPORTED_MODES and the first assertion goes red."""
+    for legacy in ({"mode": "permissive"},
+                   {"telegram": {"mode": "permissive"}},
+                   {"whatsapp": {"allow_contact_fallback": True}}):
+        state = front_office_state(legacy)
+        assert state["channels"] == dict(_SHUT), legacy
+        assert normalize_policy(legacy)["mode"] == "paired_only"
+        for channel in FRONT_OFFICE_CHANNELS:
+            assert evaluate_ingress(channel, legacy, explicit_match=False) == (False, "not_paired")
+    # And switching a channel off under such a config writes the one field it owns.
     policy = set_front_office({"mode": "permissive"}, False, "whatsapp")
-    assert front_office_state(policy)["contacts_only"] == {"whatsapp": False, "telegram": True, "discord": True, "email": True}
+    assert policy["whatsapp"] == {"mode": "inherit", "open_to_new_senders": False}
     assert front_office_state(policy)["channels"] == dict(_SHUT)
-    assert policy["whatsapp"] == {"mode": "paired_only", "allow_contact_fallback": False, "open_to_new_senders": False}
-    assert evaluate_ingress("whatsapp", policy, explicit_match=False, contact_match=True) == (False, "not_paired")
-    assert policy["mode"] == "permissive", "the global mode is the admin's: never rewritten"
-
-
-def test_closing_under_a_channel_permissive_override_really_closes():
-    policy = set_front_office({"telegram": {"mode": "permissive"}}, False, "telegram")
-    assert front_office_state(policy)["channels"]["telegram"] is False
-    assert evaluate_ingress("telegram", policy, explicit_match=False, contact_match=True) == (False, "not_paired")
-
-
-def test_permissive_reads_as_contacts_only_never_as_an_open_channel():
-    state = front_office_state({"mode": "permissive"})
-    assert state["contacts_only"] == {"whatsapp": True, "telegram": True, "discord": True, "email": True} and state["channels"] == dict(_SHUT)
-    state = front_office_state({"whatsapp": {"mode": "permissive"}})
-    assert state["contacts_only"] == {"whatsapp": True, "telegram": False, "discord": False, "email": False}
 
 
 def test_a_channel_without_a_contact_lane_is_refused():
@@ -106,7 +105,7 @@ def test_a_channel_without_a_contact_lane_is_refused():
 def test_the_setter_returns_a_normalized_policy_and_switches_discord_with_the_rest():
     policy = set_front_office({"discord": {"allow_contact_fallback": True}}, True)
     assert set(policy) == set(normalize_policy(None))
-    assert policy["discord"] == {"mode": "inherit", "allow_contact_fallback": True, "open_to_new_senders": True}
+    assert policy["discord"] == {"mode": "inherit", "open_to_new_senders": True}
 
 
 def test_front_office_channels_are_the_messengers_with_a_contact_lane_plus_mail():
@@ -143,7 +142,7 @@ def test_the_mail_switch_stamps_the_moment_and_the_reply_mode_is_its_own_setting
     sending = set_email_reply_mode(off, "send")
     assert front_office_state(sending)["email_reply_mode"] == "send"
     assert normalize_policy({"email": {"reply_mode": "guess", "opened_at": "x"}})["email"] == {
-        "mode": "inherit", "allow_contact_fallback": False, "open_to_new_senders": False, "reply_mode": "draft", "opened_at": 0}
+        "mode": "inherit", "open_to_new_senders": False, "reply_mode": "draft", "opened_at": 0}
     with pytest.raises(ValueError):
         set_email_reply_mode(None, "later")
 
@@ -158,9 +157,10 @@ _BRIDGES = {
 
 
 def _bridge_reports_a_contact_match(path: Path) -> bool:
-    """Whether this bridge admits contacts: it calls the shared admission
-    (contacts_store.admit_front_office_sender) or hands evaluate_ingress a contact_match that
-    is not the literal False. The one way a contact can be let in on that channel."""
+    """Whether this bridge looks the sender up in the contact book: it calls the shared
+    admission (contacts_store.admit_front_office_sender) or hands evaluate_ingress an `access`
+    that is not the literal None. The one way a person's own decision can be honoured on that
+    channel, in either direction: without it a denial is invisible there too."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -171,8 +171,8 @@ def _bridge_reports_a_contact_match(path: Path) -> bool:
         if callee != "evaluate_ingress":
             continue
         for kw in node.keywords:
-            if kw.arg == "contact_match":
-                if not (isinstance(kw.value, ast.Constant) and kw.value.value is False):
+            if kw.arg == "access":
+                if not (isinstance(kw.value, ast.Constant) and kw.value.value is None):
                     return True
     return False
 
@@ -274,11 +274,13 @@ def test_the_switch_writes_the_policy_and_records_one_event_per_changed_channel(
     out = asyncio.run(routes.put_front_office(routes.FrontOfficeUpdate(enabled=True), _req(), admin))
     assert out["enabled"] is True and out["channels"] == {"whatsapp": True, "telegram": True, "discord": True, "email": True}
     assert front_office_state(config["channel_ingress_policy"])["enabled"] is True, "saved through Config.save"
+    # The detail says what changed and nothing more: the switch grants nobody, so a count of
+    # granted contacts would be a promise it does not keep.
     assert sorted(events, key=lambda e: e[1]["channel"]) == [
-        ("front_office_changed", {"channel": "discord", "username": "alice", "detail": "on, 0 contacts granted"}),
-        ("front_office_changed", {"channel": "email", "username": "alice", "detail": "on, 0 contacts granted"}),
-        ("front_office_changed", {"channel": "telegram", "username": "alice", "detail": "on, 0 contacts granted"}),
-        ("front_office_changed", {"channel": "whatsapp", "username": "alice", "detail": "on, 0 contacts granted"}),
+        ("front_office_changed", {"channel": "discord", "username": "alice", "detail": "on"}),
+        ("front_office_changed", {"channel": "email", "username": "alice", "detail": "on"}),
+        ("front_office_changed", {"channel": "telegram", "username": "alice", "detail": "on"}),
+        ("front_office_changed", {"channel": "whatsapp", "username": "alice", "detail": "on"}),
     ]
     assert config["channel_ingress_policy"]["email"]["opened_at"] > 0, "the mail switch stamps the moment"
 
@@ -377,7 +379,8 @@ def test_the_window_is_mounted_from_settings_and_the_contacts_hint_reads_the_doo
     assert "export { default as FrontOfficeDashboard } from './FrontOfficeDashboard';" in index
     contacts = _CONTACTS.read_text(encoding="utf-8")
     assert "api('api/front-office')" in contacts
-    assert "tc('reachHintOnDoorClosed')" in contacts
+    assert "tc('reachHintUndecidedDoorClosed')" in contacts, \
+        "only the undecided state depends on the channel; the other two do not"
 
 
 # ── the profile and the knowledge behind the window ─────────────────────────────────────
@@ -539,28 +542,21 @@ def test_the_listing_reads_the_callers_lane_and_a_missing_scope_reads_only_null_
 
 # ── an open channel: every sender answered, one person kept out, new ones enrolled ──────
 
-def test_switching_a_channel_on_opens_it_to_new_senders_and_implies_the_contact_door():
+def test_switching_a_channel_on_opens_it_to_the_undecided_and_to_nobody_else():
+    """The switch writes ONE field and decides ONE of the three states. MUTATION: let the
+    `denied` branch fall through to the open channel and the second assertion goes red; make
+    the allowed branch depend on the switch and the fourth does."""
     policy = set_front_office(None, True, "whatsapp")
-    state = front_office_state(policy)
-    assert state["channels"] == dict(_SHUT, whatsapp=True)
-    assert state["contacts_only"] == dict(_SHUT)
-    assert policy["whatsapp"] == {"mode": "inherit", "allow_contact_fallback": True, "open_to_new_senders": True}
-    # A stranger is answered as a Front Office contact; a person switched off is not.
-    assert evaluate_ingress("whatsapp", policy, explicit_match=False, contact_match=False) == (True, "front_office_open")
-    assert evaluate_ingress("whatsapp", policy, explicit_match=False, contact_match=False, sender_opted_out=True) == (False, "not_paired")
-    assert evaluate_ingress("telegram", policy, explicit_match=False, contact_match=False) == (False, "not_paired")
-    # The owner's own pairing and the reply window keep their reasons.
-    assert evaluate_ingress("whatsapp", policy, explicit_match=True, contact_match=False)[1] == "explicit_pair"
-    assert evaluate_ingress("whatsapp", policy, explicit_match=False, contact_match=False, conversation_match=True)[1] == "open_conversation"
+    assert front_office_state(policy)["channels"] == dict(_SHUT, whatsapp=True)
+    assert policy["whatsapp"] == {"mode": "inherit", "open_to_new_senders": True}
+    assert evaluate_ingress("whatsapp", policy, explicit_match=False) == (True, "front_office_open")
+    assert evaluate_ingress("whatsapp", policy, explicit_match=False, access="denied") == (False, "contact_denied")
+    assert evaluate_ingress("telegram", policy, explicit_match=False) == (False, "not_paired")
+    assert evaluate_ingress("telegram", policy, explicit_match=False, access="allowed") == (True, "contact_allowed"), \
+        "the person's own permission needs no switch"
+    assert evaluate_ingress("whatsapp", policy, explicit_match=True)[1] == "explicit_pair"
     closed = set_front_office(policy, False, "whatsapp")
-    assert closed["whatsapp"]["open_to_new_senders"] is False and closed["whatsapp"]["allow_contact_fallback"] is False
-
-
-def test_the_expert_contact_door_alone_reads_as_contacts_only_and_never_opens_the_channel():
-    policy = {"whatsapp": {"allow_contact_fallback": True}}
-    state = front_office_state(policy)
-    assert state["channels"]["whatsapp"] is False and state["contacts_only"]["whatsapp"] is True
-    assert evaluate_ingress("whatsapp", policy, explicit_match=False, contact_match=False) == (False, "not_paired")
+    assert closed["whatsapp"] == {"mode": "inherit", "open_to_new_senders": False}
 
 
 def test_the_open_door_never_applies_outside_the_front_office_channels():
@@ -569,52 +565,68 @@ def test_the_open_door_never_applies_outside_the_front_office_channels():
     does not know stays shut whatever its entry says, and that the open door reads for a
     listed one."""
     policy = {"signal": {"open_to_new_senders": True}, "whatsapp": {"open_to_new_senders": True}}
-    assert evaluate_ingress("signal", policy, explicit_match=False, contact_match=False) == (False, "not_paired")
-    assert evaluate_ingress("whatsapp", policy, explicit_match=False, contact_match=False) == (True, "front_office_open")
+    assert evaluate_ingress("signal", policy, explicit_match=False) == (False, "not_paired")
+    assert evaluate_ingress("whatsapp", policy, explicit_match=False) == (True, "front_office_open")
 
 
-def test_switching_a_channel_on_grants_every_contact_of_that_channel_in_every_book_on_the_instance(config, monkeypatch):
+def test_the_switch_grants_nobody_and_the_window_counts_the_three_states(config, monkeypatch):
+    """The switch used to write "allowed" into every contact of that channel in every book on
+    the instance, which outlived switching it off again and turned 161 synced records into
+    standing permissions. It writes the policy only now, and the window shows what the book
+    actually says. MUTATION: grant the channel's contacts in put_front_office and the
+    untouched-record assertions go red."""
     from vaf.api import front_office_routes as routes
     from vaf.core import contacts_store
     events = _events(monkeypatch)
     carol = contacts_store.create_contact("Carol", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000001")
     dave = contacts_store.create_contact("Dave", "alice", user_scope_id=SCOPE, telegram_user_id="777")
-    erin = contacts_store.create_contact("Erin", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000002", allow_as_assistant_user=True)
-    contacts_store.create_contact("Frank", "bob", user_scope_id=TENANT, whatsapp_phone="+491700000003")
+    erin = contacts_store.create_contact("Erin", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000002",
+                                         assistant_access="allowed")
+    frank = contacts_store.create_contact("Frank", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000004",
+                                          assistant_access="denied")
+    contacts_store.create_contact("Gina", "bob", user_scope_id=TENANT, whatsapp_phone="+491700000003")
 
     state = asyncio.run(routes.get_front_office(_req()))
-    assert state["channel_contacts"] == {"whatsapp": {"total": 2, "allowed": 1}, "telegram": {"total": 1, "allowed": 0},
-                                         "discord": {"total": 0, "allowed": 0}, "email": {"total": 0, "allowed": 0}}
+    assert state["channel_contacts"] == {
+        "whatsapp": {"total": 3, "allowed": 1, "denied": 1, "undecided": 1},
+        "telegram": {"total": 1, "allowed": 0, "denied": 0, "undecided": 1},
+        "discord": {"total": 0, "allowed": 0, "denied": 0, "undecided": 0},
+        "email": {"total": 0, "allowed": 0, "denied": 0, "undecided": 0}}
+    assert state["reachable_contacts"] == 1, "reachable means allowed, never everybody undenied"
 
     out = asyncio.run(routes.put_front_office(routes.FrontOfficeUpdate(enabled=True, channel="whatsapp"), _req(), {"role": "admin"}))
     assert out["channels"] == dict(_SHUT, whatsapp=True)
-    assert out["channel_contacts"]["whatsapp"] == {"total": 2, "allowed": 2}, "Carol was granted, Erin already was"
-    assert out["channel_contacts"]["telegram"] == {"total": 1, "allowed": 0}, "Dave has no WhatsApp key"
-    assert contacts_store.get_contact_by_id(carol["id"], "alice", user_scope_id=SCOPE)["allow_as_assistant_user"] is True
-    assert contacts_store.get_contact_by_id(dave["id"], "alice", user_scope_id=SCOPE)["allow_as_assistant_user"] is False
-    assert contacts_store.list_contacts("bob", user_scope_id=TENANT)[0]["allow_as_assistant_user"] is True, \
-        "the switch is instance-wide: left off, Frank would read as an opt-out while strangers writing to Bob get through"
-    assert events == [("front_office_changed", {"channel": "whatsapp", "username": "alice", "detail": "on, 2 contacts granted"})]
+    assert out["channel_contacts"] == state["channel_contacts"], "the switch changed no decision"
+    assert events == [("front_office_changed", {"channel": "whatsapp", "username": "alice", "detail": "on"})]
+    for record in (carol, dave, frank):
+        stored = contacts_store.get_contact_by_id(record["id"], "alice", user_scope_id=SCOPE)
+        assert stored.get("assistant_access") == record.get("assistant_access")
+        assert stored["allow_as_assistant_user"] is bool(record["allow_as_assistant_user"])
+    assert contacts_store.contact_access(contacts_store.list_contacts("bob", user_scope_id=TENANT)[0]) is None, \
+        "another book on the instance is not the switch's to write either"
 
-    # The owner switches Carol off; switching the channel off and on again does not undo
-    # that on its own, and off leaves every flag alone.
-    contacts_store.update_contact(carol["id"], "alice", user_scope_id=SCOPE, allow_as_assistant_user=False)
     events.clear()
     out = asyncio.run(routes.put_front_office(routes.FrontOfficeUpdate(enabled=False, channel="whatsapp"), _req(), {"role": "admin"}))
-    assert out["channel_contacts"]["whatsapp"] == {"total": 2, "allowed": 1}
+    assert out["channel_contacts"] == state["channel_contacts"], "and off leaves the book alone too"
     assert events == [("front_office_changed", {"channel": "whatsapp", "username": "alice", "detail": "off"})]
-    assert erin["id"] and contacts_store.get_contact_by_id(erin["id"], "alice", user_scope_id=SCOPE)["allow_as_assistant_user"] is True
+    assert contacts_store.contact_access(
+        contacts_store.get_contact_by_id(erin["id"], "alice", user_scope_id=SCOPE)) == "allowed"
 
 
-def test_the_store_finds_a_sender_regardless_of_the_flag_and_enrols_a_new_one_once(config):
+def test_the_store_finds_a_sender_regardless_of_the_decision_and_enrols_a_new_one_once(config):
+    """MUTATION: enrol with `assistant_access="allowed"` and the enrolment assertion goes red.
+    A record created because an open channel let somebody in must carry no decision, or
+    closing the channel again would leave a standing permission behind."""
     from vaf.core import contacts_store
     contacts_store.create_contact("Carol", "alice", user_scope_id=SCOPE, whatsapp_phone="+49 170 0000001")
     rec = contacts_store.find_contact_by_channel("whatsapp", "491700000001@s.whatsapp.net", "alice", SCOPE)
-    assert rec and rec["name"] == "Carol" and rec["allow_as_assistant_user"] is False, "the opt-out question sees the flag OFF"
+    assert rec and rec["name"] == "Carol" and contacts_store.contact_access(rec) is None, \
+        "the lookup finds the person; the decision is read separately and there is none"
     assert contacts_store.find_contact_by_channel("telegram", "777", "alice", SCOPE) is None
 
     new = contacts_store.enrol_front_office_contact("whatsapp", "+491700000009", "Grace", "alice", SCOPE)
-    assert new["allow_as_assistant_user"] is True and new["source"] == "front_office" and new["name"] == "Grace"
+    assert contacts_store.contact_access(new) is None and new["allow_as_assistant_user"] is False
+    assert new["source"] == "front_office" and new["name"] == "Grace"
     assert [ch["value"] for ch in new["channels"]] == ["+491700000009"]
     again = contacts_store.enrol_front_office_contact("whatsapp", "491700000009@s.whatsapp.net", "Grace again", "alice", SCOPE)
     assert again["id"] == new["id"], "enrolment is idempotent"
@@ -628,9 +640,9 @@ def test_the_store_finds_a_sender_regardless_of_the_flag_and_enrols_a_new_one_on
     assert contacts_store.enrol_front_office_contact("email", "NEW@EXAMPLE.ORG", "again", "alice", SCOPE)["id"] == mailed["id"]
 
 
-def test_the_bridges_ask_the_opt_out_question_and_enrol_who_the_open_door_let_in():
+def test_the_bridges_read_the_decision_and_enrol_who_the_open_door_let_in():
     wa = (REPO / "vaf" / "api" / "whatsapp_bridge.py").read_text(encoding="utf-8")
-    assert "sender_opted_out=opted_out" in wa
+    assert "access=access," in wa and "contact_access(" in wa
     assert 'find_contact_by_channel("whatsapp", chat_id, username, user_scope_id)' in wa
     assert 'if policy_reason == "front_office_open"' in wa and "enrol_front_office_contact(" in wa
     tg = (REPO / "vaf" / "api" / "telegram_bridge.py").read_text(encoding="utf-8")
@@ -664,14 +676,20 @@ def test_a_stranger_on_telegram_is_enrolled_for_the_one_owner_and_kept_out_when_
     entry, relay = tg._resolve_telegram_user("555", sender)
     assert entry == {"user_scope_id": SCOPE, "vaf_username": "alice", "telegram_user_id": "555", "from_contact": True} and relay is False
     rec = contacts_store.find_contact_by_channel("telegram", "555", "alice", SCOPE)
-    assert rec and rec["name"] == "Grace Hopper" and rec["allow_as_assistant_user"] is True and rec["source"] == "front_office"
+    assert rec and rec["name"] == "Grace Hopper" and rec["source"] == "front_office"
+    assert contacts_store.contact_access(rec) is None, "the record, not a permission"
     assert events == [("contact_access_changed", {"channel": "telegram", "username": "alice", "path": rec["id"],
-                                                  "detail": "granted by the open Front Office: Grace Hopper"})]
+                                                  "detail": "added by the open Front Office: Grace Hopper"})]
     events.clear()
     assert tg._resolve_telegram_user("555", sender)[0] == entry and events == [], "enrolled once"
 
-    contacts_store.update_contact(rec["id"], "alice", user_scope_id=SCOPE, allow_as_assistant_user=False)
-    assert tg._resolve_telegram_user("555", sender) == (None, False), "switched off in the book: kept out"
+    # Taking the decision back is not a veto: the channel is still open, so she is still
+    # answered. Only a denial keeps her out. MUTATION: read the record with bool() and the
+    # last assertion goes red, because "denied" is a truthy string.
+    contacts_store.update_contact(rec["id"], "alice", user_scope_id=SCOPE, assistant_access="undecided")
+    assert tg._resolve_telegram_user("555", sender)[0] == entry
+    contacts_store.update_contact(rec["id"], "alice", user_scope_id=SCOPE, assistant_access="denied")
+    assert tg._resolve_telegram_user("555", sender) == (None, False), "denied in the book: kept out"
 
     state["telegram_config"]["whitelist"].append({"telegram_user_id": "2", "user_scope_id": TENANT, "vaf_username": "bob"})
     assert tg._resolve_telegram_user("556", sender) == (None, False), "two owners: a stranger cannot be attributed"

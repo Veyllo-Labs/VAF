@@ -159,6 +159,19 @@ and embedders are fail-closed silent on the host; browser TTS is a
 separate frontend-pulled lane (`message_complete` -> `speak` WebSocket command) and
 is not affected by this gate.
 
+## The outward send a person ordered waits for them
+
+Between the assigned identity and the dispatch sits the chat lane's own stage
+(`Agent._chat_session_plumbing`, the funnel's `before_dispatch` hook). It is the last point
+that sees the final arguments, the identity AND the chat source, and a string it returns
+becomes the tool result without the tool running. That is where a send the person ordered in
+the web chat is turned into a draft: a mail is built and parked by its own tool, a WhatsApp
+message to an explicit number is parked as a call and re-dispatched when the person says so.
+Only that surface holds, because the workflow engine and the automations dispatch through the
+same funnel with nobody watching. The rule, the measurements and the named boundaries are in
+[`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py); the card and the verbs are in
+[WEB_UI.md](../web-ui/WEB_UI.md).
+
 ## Loop budgets (so a turn can never spin forever)
 
 | Counter | Purpose |

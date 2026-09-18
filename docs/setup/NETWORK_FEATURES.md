@@ -100,7 +100,7 @@ Implementation: `vaf/api/oauth_session_binding.py` + OAuth routes in `vaf/api/em
 Use the built-in doctor command to detect common security misconfigurations before exposing VAF on LAN:
 
 - `vaf doctor` (alias for `vaf security doctor`)
-- Checks include weak network posture flags (TLS/firewall/login/2FA), permissive channel ingress policy, and channel-enabled-without-pairing states.
+- Checks include weak network posture flags (TLS/firewall/login/2FA), a channel whose Inbound is open to new senders, and channel-enabled-without-pairing states.
 - Output is intentionally non-secret and safe to share in internal troubleshooting.
 
 ### Layer 4: Rate Limiting

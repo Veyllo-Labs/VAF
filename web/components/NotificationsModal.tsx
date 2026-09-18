@@ -151,12 +151,14 @@ type SecurityEvent = {
 
 type ChannelsStatus = {
   state: 'ok' | 'warn';
-  any_permissive: boolean;
+  // The channel is open to people the owner never decided about (the Inbound switch). It
+  // replaces the old `any_permissive`: the expert ingress modes are gone, and this is the
+  // state that now answers "can somebody unauthorized talk to the bot".
+  any_open: boolean;
   channels: {
     name: string;
     enabled: boolean;
-    mode: string;
-    contact_fallback: boolean;
+    open: boolean;
     paired: number;
     last_ts: number | null;
   }[];
@@ -1814,7 +1816,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
               name: t('ovCardChannels'),
               dot: !channels ? C.textFaint : channels.state === 'warn' ? '#f59e0b' : '#22c55e',
               status: !channels ? noData
-                : channels.state === 'warn' ? t('ovChPermissive')
+                : channels.state === 'warn' ? t('ovChSomeOpen')
                   : t('ovChLocked'),
               statusColor: !channels ? C.textDim : channels.state === 'warn' ? amber : green,
             },
@@ -2663,12 +2665,12 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
                         const label = ch.name === 'telegram' ? 'Telegram' : ch.name === 'whatsapp' ? 'WhatsApp' : ch.name === 'discord' ? 'Discord' : ch.name;
                         const parts = ch.enabled
                           ? [
-                              ch.mode,
+                              ch.open ? t('ovChOpen') : t('ovChPairedOnly'),
                               `${ch.paired} ${t('ovChPaired')}`,
                               ch.last_ts ? `${t('ovChLastUsed')}${tCommon('labelSeparator')}${new Date(ch.last_ts * 1000).toLocaleString(locale, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : null,
                             ].filter(Boolean).join(' · ')
                           : t('ovOff');
-                        const okDot = !ch.enabled ? null : ch.mode === 'permissive' ? false : true;
+                        const okDot = !ch.enabled ? null : !ch.open;
                         return factRow(label, parts, okDot);
                       })}
                       <button

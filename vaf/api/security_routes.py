@@ -349,33 +349,34 @@ _CHANNELS = ("telegram", "whatsapp", "discord")
 def derive_channels_status(channels: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Pure derivation of the channel-perimeter module.
 
-    Input per channel: {name, enabled, paired, last_ts, mode, contact_fallback}.
-    warn when any ENABLED channel runs in permissive mode (everyone may reach
-    the agent) - that answers the owner's core question "is someone unauthorized
-    able to talk to the bot?". The module reads the posture only: senders the
-    agent refused to answer are the channel's traffic, recorded in its inbound
-    log, and are not counted here (they used to be, which made every stranger's
-    message a number on the security dashboard).
+    Input per channel: {name, enabled, paired, last_ts, open}.
+    warn when any ENABLED channel is OPEN to new senders - that answers the
+    owner's core question "is someone unauthorized able to talk to the bot?".
+    It used to warn about the permissive ingress mode; that mode is gone, and
+    the switch is the state that now means the same thing, so the warning
+    follows it rather than pointing at a key nothing writes. The module reads
+    the posture only: senders the agent refused to answer are the channel's
+    traffic, recorded in its inbound log, and are not counted here (they used
+    to be, which made every stranger's message a number on the dashboard).
     """
     out_channels: List[Dict[str, Any]] = []
-    any_permissive = False
+    any_open = False
     for ch in channels:
         name = str(ch.get("name") or "")
         enabled = bool(ch.get("enabled"))
-        mode = str(ch.get("mode") or "paired_only")
-        if enabled and mode == "permissive":
-            any_permissive = True
+        is_open = bool(ch.get("open"))
+        if enabled and is_open:
+            any_open = True
         out_channels.append({
             "name": name,
             "enabled": enabled,
-            "mode": mode,
-            "contact_fallback": bool(ch.get("contact_fallback")),
+            "open": is_open,
             "paired": int(ch.get("paired") or 0),
             "last_ts": ch.get("last_ts"),
         })
     return {
-        "state": "warn" if any_permissive else "ok",
-        "any_permissive": any_permissive,
+        "state": "warn" if any_open else "ok",
+        "any_open": any_open,
         "channels": out_channels,
     }
 
@@ -413,8 +414,7 @@ def collect_channels_status() -> Dict[str, Any]:
                 "enabled": bool(cfg.get("enabled")),
                 "paired": paired,
                 "last_ts": last_ts(cfg),
-                "mode": pol.get("mode", "paired_only"),
-                "contact_fallback": bool(pol.get("allow_contact_fallback")),
+                "open": bool(pol.get("open_to_new_senders")),
             })
     except Exception:
         pass

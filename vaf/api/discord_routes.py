@@ -250,9 +250,18 @@ def _store_sessions() -> list:
         uname, scope = local_admin_identity()
         owners = owner_endpoints("discord", uname, scope)
         try:
+            from vaf.core.contacts_store import denied_endpoints
             contacts = set(front_office_endpoints(uname, scope, "discord") or ())
+            denied = set(denied_endpoints(uname, scope, "discord") or ())
         except Exception:
-            contacts = set()
+            contacts, denied = set(), set()
+        try:
+            from vaf.core.channel_ingress_policy import resolve_channel_policy
+            from vaf.core.config import Config
+            channel_open = bool(resolve_channel_policy(
+                "discord", Config.get("channel_ingress_policy"))["open_to_new_senders"])
+        except Exception:
+            channel_open = False
         for row in chat_overview(row_user, user_scope_id=None, channel="discord", limit=500):
             cid = str(row.get("chat_id") or "")
             if not cid:
@@ -261,7 +270,7 @@ def _store_sessions() -> list:
             sessions.append({
                 "chat_id": cid,
                 "type": chat_mode("discord", cid, owners=owners, contacts=contacts, relays=set(),
-                                  reply_window_until_ts=None, now=0.0),
+                                  denied=denied, channel_open=channel_open),
                 "name": (row.get("chat_name") or "").strip() or None,
                 "last_ts": int(row.get("last_ts") or 0),
                 "message_count": int(row.get("message_count") or 0),

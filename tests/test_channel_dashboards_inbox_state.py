@@ -7,7 +7,7 @@ person's own state (unread, waits, done) come from `chat_overview` + `chat_state
 WhatsApp reply window is computed from the same rows, so nothing asks a bridge or a session file.
 
 MUTATION: bring back the session-size overwrite and the WhatsApp count test goes red; ask the
-bridge's conversation_open_until and the no-bridge guard goes red; drop the Discord sessions
+bridge and the no-bridge guard goes red; drop the Discord sessions
 and the last test goes red.
 """
 import asyncio
@@ -66,8 +66,6 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(wa, "get_lid_mappings", lambda *a, **k: [])
     monkeypatch.setattr(wa, "get_contact_names", lambda *a, **k: {})
     monkeypatch.setattr(wa, "_append_chat_activity", lambda *a, **k: None)
-    monkeypatch.setattr(wa, "conversation_open_until",
-                        lambda *a, **k: pytest.fail("the dashboard asked the bridge for the reply window"))
     # Telegram: no getMe round trip, the caller is not the admin.
     monkeypatch.setattr(tr, "_get_bot_username", lambda: None)
     monkeypatch.setattr(tr, "_is_telegram_admin", lambda req: False)
@@ -89,9 +87,13 @@ def test_whatsapp_rows_carry_the_stores_count_the_state_and_the_reply_window(wor
     a, b, c = by_id["+491700000042"], by_id["+491700000050"], by_id["+491700000060"]
     assert a["message_count"] == 3 and a["unread"] == 2 and a["waits"] is True and a["waits_reason"] == "unanswered"
     assert by_id["+491700000070"]["waits"] is False and by_id["+491700000070"]["unread"] == 1, "a thank-you waits for nobody"
-    assert a["type"] == "conversation" and a["reply_window_until"] == pytest.approx(NOW - 10 + WINDOW_H * 3600)
+    # The mode is the lane's own answer (nobody allowed this number and Inbound is shut, so
+    # read-only), and the window's timestamp rides along for the window's "still convenient to
+    # answer" line. MUTATION: derive the type from the reply window again and this goes red.
+    assert a["type"] == "unknown" and a["reply_window_until"] == pytest.approx(NOW - 10 + WINDOW_H * 3600)
     assert a["last_preview"] == "und wann?" and a["preview_from"] == "them" and a["answered_by_agent"] is False
     assert b["type"] == "unknown" and b["reply_window_until"] is None and b["unread"] == 1 and b["message_count"] == 1
+    assert "answerable" not in a, "a field the UI never read and the window rule could only get wrong"
     assert c["done"] is True and c["waits"] is False and c["preview_from"] == "you", "the person's own reply closes it"
     assert [s["chat_id"] for s in out["sessions"]] == ["+491700000050", "+491700000042", "+491700000060", "+491700000070"]
 
@@ -109,8 +111,13 @@ def test_the_whatsapp_dashboard_reads_no_session_file_and_no_bridge_rule():
     src = (Path(routes.__file__)).read_text(encoding="utf-8")
     body = src.split("async def get_whatsapp_dashboard(", 1)[1].split("\n@router", 1)[0]
     assert "SessionManager" not in body and "list_chats_from_store" not in body
-    assert "conversation_open_until" not in body and "conversation_open(" not in body
+    assert "conversation_open_until" not in body and "conversation_open(" not in body, \
+        "the bridge's copy of the window rule is gone; vaf/core/inbox has the only one"
     assert "asyncio.to_thread(chat_overview" in body and "chat_state(" in body and "reply_window_until(" in body
+    # The mode ladder is the shared one too: hand-rolling it is what let a row claim "Front
+    # Office" about a chat the bridge refuses. The behaviour itself is asserted above; what is
+    # pinned here is that the route ASKS rather than deciding, which no row shape can show.
+    assert "chat_mode(" in body
 
 
 def test_telegram_sessions_come_from_the_store_and_the_activity_log_only_seeds(world):

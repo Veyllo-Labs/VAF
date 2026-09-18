@@ -9,7 +9,7 @@ operate only on that user's contacts. User 1 cannot see or modify User 2's conta
 Auth: request.state.user (set by auth middleware in network mode) or local admin fallback.
 """
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -54,10 +54,21 @@ class ContactCreate(BaseModel):
     how_to_address: Optional[str] = None
     birthday: Optional[str] = None
     notes: Optional[str] = None
+    # The old bool stays for clients that predate the third state, and it can only mean
+    # "allowed": a default False is nobody's decision, and a denial now outranks the channel
+    # switch, so inventing one on every create would make the contact unreachable for good.
     allow_as_assistant_user: bool = False
+    assistant_access: Optional[Literal["allowed", "denied", "undecided"]] = None
     company: Optional[str] = None
     role: Optional[str] = None
     tags: Optional[List[str]] = None
+
+
+def _access_from(value: Optional[str]) -> Optional[str]:
+    """The API's word for a decision, as the store stores it. "undecided" is a real answer a
+    client sends to take a decision back, and it is stored as no decision at all."""
+    word = str(value or "").strip().lower()
+    return word if word in ("allowed", "denied") else None
 
 
 class ContactUpdate(BaseModel):
@@ -72,7 +83,10 @@ class ContactUpdate(BaseModel):
     how_to_address: Optional[str] = None
     birthday: Optional[str] = None
     notes: Optional[str] = None
+    # Three answers, so the person can take a decision BACK: None here means "not sent", and
+    # a bool has no room left for "undecided".
     allow_as_assistant_user: Optional[bool] = None
+    assistant_access: Optional[Literal["allowed", "denied", "undecided"]] = None
     company: Optional[str] = None
     role: Optional[str] = None
     tags: Optional[List[str]] = None
@@ -132,15 +146,20 @@ async def post_contact(request: Request, body: ContactCreate) -> Dict[str, Any]:
         birthday=body.birthday,
         notes=body.notes,
         allow_as_assistant_user=body.allow_as_assistant_user,
+        assistant_access=_access_from(body.assistant_access),
         company=body.company,
         role=body.role,
         tags=body.tags,
     )
-    # The flag is the one thing on a contact that opens a door: with it the contact talks
-    # to the agent's Front Office. Recorded in the security log like a channel pairing.
-    if contact and contact.get("allow_as_assistant_user"):
+    # A decision about a person is the one thing on a contact that opens or closes a door.
+    # Recorded in the security log like a channel pairing, with the word that was actually
+    # taken: a denial reads as a denial, not as "revoked", and no decision writes nothing.
+    from vaf.core.contacts_store import contact_access
+    _state = contact_access(contact) if contact else None
+    if _state:
         log_security_event("contact_access_changed", username=username, path=str(contact.get("id") or ""),
-                           detail=f"granted: {contact.get('name') or contact.get('id')}")
+                           detail=f"{'granted' if _state == 'allowed' else 'blocked'}: "
+                                  f"{contact.get('name') or contact.get('id')}")
     return contact
 
 
@@ -176,15 +195,24 @@ async def patch_contact(contact_id: str, request: Request, body: ContactUpdate) 
         if not contact:
             raise HTTPException(status_code=404, detail="Contact not found")
         return contact
+    _touches_access = "allow_as_assistant_user" in updates or "assistant_access" in updates
+    if "assistant_access" in updates:
+        updates["assistant_access"] = _access_from(updates.get("assistant_access"))
     before = get_contact_by_id(contact_id, username, user_scope_id=user_scope_id) \
-        if "allow_as_assistant_user" in updates else None
+        if _touches_access else None
     contact = update_contact(contact_id, username, user_scope_id=user_scope_id, **updates)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
-    if before is not None and bool(before.get("allow_as_assistant_user")) != bool(contact.get("allow_as_assistant_user")):
-        log_security_event("contact_access_changed", username=username, path=str(contact_id),
-                           detail=f"{'granted' if contact.get('allow_as_assistant_user') else 'revoked'}: "
-                                  f"{contact.get('name') or contact_id}")
+    # The three states are compared as they are, never through bool(): "allowed" and "denied"
+    # are both truthy, so a revoke would have compared equal and gone unrecorded - the single
+    # most security-relevant change on a contact, invisible in its own log.
+    from vaf.core.contacts_store import contact_access
+    if before is not None:
+        _was, _now = contact_access(before), contact_access(contact)
+        if _was != _now:
+            _word = {"allowed": "granted", "denied": "blocked"}.get(_now or "", "cleared")
+            log_security_event("contact_access_changed", username=username, path=str(contact_id),
+                               detail=f"{_word}: {contact.get('name') or contact_id}")
     return contact
 
 

@@ -265,6 +265,19 @@ the earlier tools had and read the engine store internally. The destructive verb
 are deliberately NOT on the front-office allow-list. `delete_mail` is trash-only:
 it MOVEs to the trash folder and never expunges.
 
+**A send the person ordered in the web chat waits for them.** `send_mail`, `reply_mail` and
+`forward_mail` took the person's word as the decision and delivered in the same turn: in a live
+incident a mail left to a real external address the moment the person asked for one to be
+written. A chat turn on the web surface now passes `hold=True` into `queue_send`, so the message
+is BUILT (bytes, Message-ID, ledger row) and parked as a held draft, and the tool answers that
+nothing was sent. The card in the conversation sends or discards it, and so do
+`vaf outbox send|discard`
+and the mail window's own draft buttons; the decision itself is
+[`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py) and the switch is
+`outward_send_hold`. Every other lane is untouched: automations, workflow steps, channel
+turns, the Front Office answer and a timer the person scheduled all send as before, because
+nobody is there to click.
+
 The agent stamps `username` + `user_scope_id` into tool kwargs at dispatch
 (`agent.py`) and the workflow engine does the same (`workflows/engine.py`); tools
 never trust model-provided identity. Whether a caller may be served at all is
@@ -869,6 +882,9 @@ Any mail change that adds tools, config keys, or events must update ALL of:
 8. `mailV2` strings in BOTH `web/messages/de.json` and `web/messages/en.json`
    (de is the master and the fallback; no CI guard compares the two catalogs).
 9. [CONNECTIONS.md](CONNECTIONS.md) email section and this document.
+10. `outbound_hold.MAIL_HOLD_TOOLS` (any new tool that puts mail on the wire must be
+    parked on the person's own chat turn like its three siblings, or it is the one
+    door left open; guarded by `tests/test_outbound_hold_wiring.py`).
 
 Not every item applies to every change, and saying so beats leaving a reader to
 guess: the Mail Composer touched 6, 8 and 9 only. The verification round

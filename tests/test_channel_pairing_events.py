@@ -99,22 +99,33 @@ def test_telegram_whitelist_and_relay_entries_are_recorded_once_per_change(confi
     ]
 
 
-def test_a_contacts_assistant_access_flag_is_recorded_only_when_it_changes(config, monkeypatch):
+def test_a_contacts_decision_is_recorded_with_the_word_that_was_taken(config, monkeypatch):
+    """Three states, three words, and each one recorded exactly when it changes. The two that
+    matter most were invisible before: a DENIAL read as truthy through bool(), so switching a
+    person off compared equal to switching them on and the single most security-relevant change
+    on a contact never reached its own log.
+    MUTATION: compare the two states with bool() in patch_contact and the "blocked" line
+    disappears."""
     from vaf.api import contact_routes as routes
     events = _recorder(monkeypatch, routes)
 
     plain = asyncio.run(routes.post_contact(_req(), routes.ContactCreate(name="Bob")))
-    assert events == [], "a contact without the flag opens no door"
-    allowed = asyncio.run(routes.post_contact(_req(), routes.ContactCreate(name="Dana", allow_as_assistant_user=True)))
+    assert events == [], "a contact nobody decided about opens no door"
+    allowed = asyncio.run(routes.post_contact(_req(), routes.ContactCreate(name="Dana", assistant_access="allowed")))
     asyncio.run(routes.patch_contact(allowed["id"], _req(), routes.ContactUpdate(company="Acme")))
-    asyncio.run(routes.patch_contact(allowed["id"], _req(), routes.ContactUpdate(allow_as_assistant_user=True)))   # unchanged
-    asyncio.run(routes.patch_contact(allowed["id"], _req(), routes.ContactUpdate(allow_as_assistant_user=False)))
-    asyncio.run(routes.patch_contact(plain["id"], _req(), routes.ContactUpdate(allow_as_assistant_user=True)))
+    asyncio.run(routes.patch_contact(allowed["id"], _req(), routes.ContactUpdate(assistant_access="allowed")))   # unchanged
+    asyncio.run(routes.patch_contact(allowed["id"], _req(), routes.ContactUpdate(assistant_access="denied")))
+    asyncio.run(routes.patch_contact(allowed["id"], _req(), routes.ContactUpdate(assistant_access="undecided")))
+    asyncio.run(routes.patch_contact(plain["id"], _req(), routes.ContactUpdate(assistant_access="allowed")))
+    # The legacy bool still works and can only ever mean "allowed" or "nobody decided".
+    asyncio.run(routes.patch_contact(plain["id"], _req(), routes.ContactUpdate(allow_as_assistant_user=False)))
 
     assert [(k, f["username"], f["path"], f["detail"]) for k, f in events] == [
         ("contact_access_changed", "alice", allowed["id"], "granted: Dana"),
-        ("contact_access_changed", "alice", allowed["id"], "revoked: Dana"),
+        ("contact_access_changed", "alice", allowed["id"], "blocked: Dana"),
+        ("contact_access_changed", "alice", allowed["id"], "cleared: Dana"),
         ("contact_access_changed", "alice", plain["id"], "granted: Bob"),
+        ("contact_access_changed", "alice", plain["id"], "cleared: Bob"),
     ]
 
 

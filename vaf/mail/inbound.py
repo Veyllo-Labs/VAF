@@ -60,11 +60,23 @@ def email_session_id(username: str, address: str) -> str:
     return f"email_{user}_{addr}"
 
 
-def _lane_open(mail_policy: Dict[str, Any]) -> bool:
-    """Whether any mail could be answered under this policy: the channel is open, the
-    contact door is open, or the mode is permissive. Otherwise nothing is judged at all."""
-    return bool(mail_policy.get("open_to_new_senders") or mail_policy.get("allow_contact_fallback")
-                or mail_policy.get("mode") == "permissive")
+def _lane_open(mail_policy: Dict[str, Any], scope: str = "") -> bool:
+    """Whether any mail could be answered at all, so a closed install judges nothing.
+
+    Two ways in, and the second is why this is not a policy-only question any more: the mail
+    channel is switched on (everybody the owner has not decided about is answered), or the
+    owner has ALLOWED at least one contact, whose mail is answered whatever the switch says.
+    Asking the policy alone would leave an allowed correspondent unanswered on a closed
+    channel, which is exactly the permission the owner gave by hand."""
+    if bool(mail_policy.get("open_to_new_senders")):
+        return True
+    if not scope:
+        return False
+    try:
+        from vaf.core.contacts_store import front_office_endpoints
+        return bool(front_office_endpoints(None, scope, "email"))
+    except Exception:
+        return False
 
 
 def handle_new_mail(scope: str, account_id: str, stats: Optional[Dict[str, Any]] = None) -> None:
@@ -102,11 +114,11 @@ def process_account(scope: str, account_id: str, *, now: Optional[datetime] = No
     if apk is None:
         summary["skipped"] = "no store"
         return summary
-    # A closed channel still answers a reply into a case the agent wrote in (the reply
-    # window rule, T4), so the lane keeps judging while any case exists; with no door and
-    # no case there is nothing a verdict could change, and the cursor is armed anyway so
+    # A closed channel still answers a reply that carries the case anchor the agent minted
+    # (T4), so the lane keeps judging while any case exists; with no door, no allowed contact
+    # and no case there is nothing a verdict could change, and the cursor is armed anyway so
     # switching on later never answers what arrived meanwhile.
-    if not _lane_open(mail_policy) and not svc.store.list_cases(apk, limit=1):
+    if not _lane_open(mail_policy, scope) and not svc.store.list_cases(apk, limit=1):
         if svc.store.account_state(apk).get("inbound_cursor") is None:
             svc.store.set_account_state(apk, inbound_cursor=svc.store.max_message_pk(apk))
         summary["skipped"] = "closed"
@@ -144,7 +156,7 @@ def process_account(scope: str, account_id: str, *, now: Optional[datetime] = No
 def _judge(svc: Any, apk: int, account: Dict[str, Any], username: str, scope: str, row: Dict[str, Any],
            raw_policy: Any, mail_policy: Dict[str, Any], moment: datetime, enqueue: Optional[Any]) -> str:
     from vaf.core.config import Config
-    from vaf.core.contacts_store import contact_endpoints, find_contact_by_channel
+    from vaf.core.contacts_store import contact_access, contact_endpoints, find_contact_by_channel
     from vaf.core.log_helper import log_channel_inbound
     from vaf.mail import cases
     from vaf.mail.parser import parse_message
@@ -172,7 +184,9 @@ def _judge(svc: Any, apk: int, account: Dict[str, Any], username: str, scope: st
     sender = cases.sender_address(row.get("from_addr") or "")
     masked = (sender[:3] + "***") if sender else "?"
     contact = find_contact_by_channel("email", sender, username, scope) if sender else None
-    opted_out = bool(contact) and not bool(contact.get("allow_as_assistant_user"))
+    # The owner's own decision about this person, or None when nobody has decided. Reading the
+    # old bool here is what made every contact the mail sync ever created an opt-out.
+    access = contact_access(contact)
     other_addresses = list((contact_endpoints(contact).get("email") or [])) if contact else []
     attribution = cases.attribute(
         svc.store, apk, user_scope_id=scope, account_id=account_id, parsed=parsed,
@@ -189,7 +203,7 @@ def _judge(svc: Any, apk: int, account: Dict[str, Any], username: str, scope: st
     decision = cases.decide(
         trust=trust, attribution=attribution, raw_policy=raw_policy,
         reply_mode=str(mail_policy.get("reply_mode") or "draft"), machine_kind=machine_kind,
-        opted_out=opted_out,
+        access=access,
         replies_last_hour=svc.store.front_office_replies_since(apk, sender, hour_ago),
         replies_last_day=svc.store.front_office_replies_since(apk, sender, day_ago),
         max_per_hour=int(Config.get("mail_auto_reply_max_per_address_per_hour", 3) or 3),
@@ -256,8 +270,10 @@ def _case_for_answer(svc: Any, apk: int, attribution: Any, row: Dict[str, Any], 
 
 
 def _enrol(sender: str, from_addr: str, username: str, scope: str, account_id: str) -> Optional[Dict[str, Any]]:
-    """A verified stranger the lane answers becomes a contact with the flag on, the way the
-    messenger bridges enrol a new sender: that record is where the owner switches them off.
+    """A verified stranger the lane answers becomes a contact, the way the messenger bridges
+    enrol a new sender: the record with NO decision on it, so it is where the owner allows or
+    refuses them later. What answered them is the open mail channel, and closing the channel
+    closes it for them again.
     Newsletters and notification senders never get here (machine mail is never answered)."""
     from vaf.core.contacts_store import enrol_front_office_contact
     from vaf.mail import cases
@@ -270,7 +286,7 @@ def _enrol(sender: str, from_addr: str, username: str, scope: str, account_id: s
         from vaf.core.security_events import log_security_event
         log_security_event("contact_access_changed", username=str(username or ""), channel="email",
                            path=str(rec.get("id") or ""),
-                           detail=f"granted by the open Front Office: {cases.sender_name(from_addr) or sender}")
+                           detail=f"added by the open Front Office: {cases.sender_name(from_addr) or sender}")
     except Exception:
         pass
     return rec

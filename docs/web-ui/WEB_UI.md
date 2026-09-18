@@ -337,6 +337,39 @@ many frames have not been read.
   terminal join lands on, so one person is one member no matter where they type.
   Agents write through their room tools, foreign ones through `vaf a2a say`.
 
+### 2b-1. What the agent prepared and you have not sent
+
+A card in the conversation, as the last row under the answer that produced it: what the agent
+wrote on your own chat turn and parked for you rather than sending. It sits where the agent's
+own output sits, in a bot row so it lines up with the text above it, and deliberately NOT as a
+banner over the header, which reads as a system alert and loses the connection to the reply it
+belongs to. Each card names the recipient, the subject where there is one, and the text, with
+**Send** and **Discard**; up to three at once, then a count. **Send is locked for the first
+three seconds** and counts them down on the button, so a message nobody has read cannot leave
+on a reflex click; Discard is never locked, because throwing away something unread costs
+nothing. While the lock lasts the card wears a breathing rim (`vaf-draft-rim`), which is an
+element of its own animated in opacity only: animating the card's border or shadow would
+repaint it every frame, which is the measured leak the repaint rule in `globals.css` exists
+for. A person who asked for reduced motion gets the rim standing still. It shows the drafts of THAT
+conversation only (`GET /api/outbox?session_id=`): switching chats while the agent is still
+writing is the ordinary case, and a message being prepared in one chat must never turn up in
+another. The chat that holds the draft carries the sidebar's red dot, the same one a
+background reply uses, until the person goes back to it. A draft that belongs to no chat (a
+Front Office answer) appears in no conversation at all: its home is the inbox and the mail
+window. A failed send keeps the draft and says why,
+because a mail server or a bridge that is down must not consume a message.
+
+It appears for a mail the agent wrote (`send_mail`, `reply_mail`, `forward_mail`) and for a
+WhatsApp message addressed to an explicit number, which is the only messenger call that can
+reach a stranger. It does NOT appear for `send_telegram` or `send_discord`: their parameters
+carry no recipient, so those reach your own endpoint and there would be nothing to approve.
+The card reads `GET /api/outbox` on the `outbound_held` and `inbox_changed` signals, never on
+a timer, and the same two verbs exist on the command line as `vaf outbox send|discard` for a
+headless install. It holds only what the person ordered while they were there: a timer they scheduled fires and
+sends, and so do automations, workflows and every channel turn. The switch is
+`outward_send_hold`; the rule and the reasons behind it are in
+[`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py).
+
 ### 2c. The Inbox Window
 
 The fourth row of the sidebar footer, between the calendar and the logs, opens the inbox:
@@ -517,7 +550,7 @@ The left sidebar has five sections:
 
 The Overview is an antivirus-style protection dashboard summarising VAF's security posture for admins:
 
-- **Hero panel** - a large shield showing the overall status as a worst-of roll-up over all modules: `critical` (red; tampered hash chain, a quarantined or high-risk skill) > `attention` (amber; e.g. Docker down so execution is blocked, memory DB down, exposed container ports, permissive channels, a medium-risk skill, a security refusal overridden today, a skill re-scan alert today) > `ok` (green), with a grey no-data floor so absent data never reads as safe. The headline names the actual reasons, not just the colour. Below it, **today's blocked count is a clickable badge** opening the unfiltered event list for the day; it is amber when an override or a re-scan alert is among them and otherwise carries the hero's own colour. The badge exists because the roll-up reads module *states*: until it was added the shield could print "no anomalies" while a stopped HIGH skill install and an admin override sat as two numbers in the Skills panel. A block stays a plain count (the guard working, like the firewall row that stays green while reporting deflections); an override and an alert are what raise the shield.
+- **Hero panel** - a large shield showing the overall status as a worst-of roll-up over all modules: `critical` (red; tampered hash chain, a quarantined or high-risk skill) > `attention` (amber; e.g. Docker down so execution is blocked, memory DB down, exposed container ports, a channel open to new senders, a medium-risk skill, a security refusal overridden today, a skill re-scan alert today) > `ok` (green), with a grey no-data floor so absent data never reads as safe. The headline names the actual reasons, not just the colour. Below it, **today's blocked count is a clickable badge** opening the unfiltered event list for the day; it is amber when an override or a re-scan alert is among them and otherwise carries the hero's own colour. The badge exists because the roll-up reads module *states*: until it was added the shield could print "no anomalies" while a stopped HIGH skill install and an admin override sat as two numbers in the Skills panel. A block stays a plain count (the guard working, like the firewall row that stays green while reporting deflections); an override and an alert are what raise the shield.
 - **Module status list** - one row per protection module (audit chain, sandbox, firewall/LAN incl. Docker isolation, user isolation, channels, phishing shield, guardrails) with a traffic-light dot and short status. Clicking a row opens a detail popup; the firewall popup lazily fetches its own module's events from `GET /api/security/events?module=firewall`, the shield badge's popup the unfiltered day.
 - **Audit chain panel** - live view of the selected day's hash chain (verified/tampered, event count, last event, tail hashes) with a date selector; while today is selected the chain refreshes every 5 s. The selection follows the calendar: after midnight it advances to the new day as soon as it has events, unless the admin explicitly pinned an older day (picking the current day again re-enables following). All date math uses LOCAL time - the backend names timeline files by the server's local day, and the earlier UTC comparison kept showing yesterday as "Today" until 02:00 CEST.
 - **Skills panel** - a donut of installed skills by scan level (clean/low/medium/high) plus today's blocked installs, admin overrides, and re-scan alerts. These three counters stay here rather than moving to the hero badge because they are skill-specific by construction - all six emit sites are skill operations - while the badge counts every kind of blocked attempt. Clicking a skill opens its scan detail (`GET /api/security/skills/{id}/scan`) with resolution actions: **delete** and **isolate** are plain admin actions, while **acknowledge** (medium finding) and **restore** (quarantined skill) additionally require the admin's TOTP code, so a stolen admin session alone cannot silence a warning.

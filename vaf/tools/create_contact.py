@@ -21,7 +21,7 @@ class CreateContactTool(BaseTool):
     side_effect_class = "reversible"
     description = (
         "Create a contact in the central contact list. Required: name. Optional: email, whatsapp_phone, telegram_username, "
-        "preferred_language, how_to_address, birthday, notes, allow_as_assistant_user, company, role, tags. "
+        "preferred_language, how_to_address, birthday, notes, assistant_access, company, role, tags. "
         "Returns the new contact with contact_id (use for update_contact or delete_contact)."
     )
     parameters = {
@@ -35,7 +35,10 @@ class CreateContactTool(BaseTool):
             "how_to_address": {"type": "string", "description": "e.g. du, Sie, first name only."},
             "birthday": {"type": "string", "description": "MM-DD or ISO date."},
             "notes": {"type": "string", "description": "Free-form notes."},
-            "allow_as_assistant_user": {"type": "boolean", "description": "If true, this contact can reach your assistant (front office)."},
+            "assistant_access": {"type": "string", "enum": ["allowed", "denied"],
+                                 "description": "Only when the user said so: allowed means this person is answered on "
+                                                "every channel they have, denied means never. Leave it out and nobody "
+                                                "has decided yet, which is the normal case for a new contact."},
             "company": {"type": "string", "description": "Company or organisation the person belongs to."},
             "role": {"type": "string", "description": "The person's role or job title."},
             "tags": {"type": "string", "description": "Comma-separated tags (a tag cannot contain a comma), e.g. 'vip, berlin'."},
@@ -65,7 +68,7 @@ class CreateContactTool(BaseTool):
             how_to_address=(kwargs.get("how_to_address") or "").strip() or None,
             birthday=(kwargs.get("birthday") or "").strip() or None,
             notes=(kwargs.get("notes") or "").strip() or None,
-            allow_as_assistant_user=bool(kwargs.get("allow_as_assistant_user", False)),
+            assistant_access=str(kwargs.get("assistant_access") or "").strip().lower() or None,
             company=(kwargs.get("company") or "").strip() or None,
             role=(kwargs.get("role") or "").strip() or None,
             tags=kwargs.get("tags") or None,

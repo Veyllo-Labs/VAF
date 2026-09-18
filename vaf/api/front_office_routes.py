@@ -6,13 +6,13 @@
 Three things live behind the "Front Office" card under Contacts:
 
 - the switch per channel: "Front Office on for WhatsApp" opens that channel
-  (`channel_ingress_policy.set_front_office`): every sender is answered in Front Office
-  mode, the people already in the book get "Can reach your assistant" switched on at that
-  moment, a new sender is enrolled as a contact by the bridge, and the owner keeps one
-  person out by switching them off in the WhatsApp window or the contact book. The policy
-  used to be reachable only by editing `channel_ingress_policy` in config.json: a contact
-  with the flag was turned away under the default policy while the contact book said the
-  agent answers them. Writing it is the admin's (an instance-wide key).
+  (`channel_ingress_policy.set_front_office`) and does nothing else. Everybody the owner has
+  not decided about is answered there in Front Office mode, and a new sender is enrolled as a
+  contact by the bridge with no decision on the record. It grants nobody: a contact the owner
+  ALLOWED is answered with the switch off, one they BLOCKED with it on, and the switch writes
+  one field in the policy and never touches a contact book. It used to switch every contact of
+  that channel on in every book on the instance, which survived turning it off again. Writing
+  it is the admin's (an instance-wide key).
 - the profile (`vaf/core/front_office_profile.py`): the owner's own instructions for those
   turns and whether they may read the owner's general memory. Per user, the owner's own.
 - the knowledge: documents learned into the Front Office lane of the memory store
@@ -207,18 +207,23 @@ async def _knowledge_rows(caller: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _channel_contacts(caller: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
-    """Per Front Office channel: how many of the caller's contacts have a key there, and
-    how many of those may reach the assistant (the window's "N contacts, M allowed")."""
-    from vaf.core.contacts_store import contact_endpoints, list_contacts
-    out = {ch: {"total": 0, "allowed": 0} for ch in FRONT_OFFICE_CHANNELS}
+    """Per Front Office channel: how many of the caller's contacts have a key there, split by
+    what the owner decided about each of them (the window's "N contacts, M allowed, K open")."""
+    from vaf.core.contacts_store import contact_access, contact_endpoints, list_contacts
+    # Three counters, because the switch now decides for exactly one of them: the people
+    # nobody has decided about. Allowed contacts are answered anyway, denied ones never are,
+    # and a window that shows only "N of M allowed" would promise the switch a reach it does
+    # not have.
+    out = {ch: {"total": 0, "allowed": 0, "denied": 0, "undecided": 0} for ch in FRONT_OFFICE_CHANNELS}
     try:
         for c in list_contacts(caller["username"], user_scope_id=caller["user_scope_id"]):
             keys = contact_endpoints(c)
             for ch in FRONT_OFFICE_CHANNELS:
                 if keys.get(ch):
                     out[ch]["total"] += 1
-                    if c.get("allow_as_assistant_user"):
-                        out[ch]["allowed"] += 1
+                    state = contact_access(c)
+                    out[ch]["allowed" if state == "allowed"
+                            else ("denied" if state == "denied" else "undecided")] += 1
     except Exception:
         pass
     return out
@@ -247,13 +252,14 @@ async def _state(caller: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "enabled": state["enabled"],
         "channels": state["channels"],
-        "contacts_only": state["contacts_only"],
         "email_reply_mode": state["email_reply_mode"],
         "channels_connected": {ch: _channel_connected(ch, caller) for ch in FRONT_OFFICE_CHANNELS},
         "channel_contacts": _channel_contacts(caller),
         # Off stops every sender before the agent, contacts included (whatsapp_bridge).
         "whatsapp_inbound_to_agent": bool(wc.get("inbound_to_agent", True)),
-        # The other door that stays open with Front Office off: 0 means closed.
+        # The WhatsApp reply window: it no longer decides who may write in (a message from
+        # somebody the owner has not allowed is stored, not answered), and it is kept here
+        # because the WhatsApp window still shows and sets it.
         "reply_window_hours": reply_window_hours(),
         "reachable_contacts": reachable,
         "admin": caller["is_admin"],
@@ -288,22 +294,16 @@ async def put_front_office(
     if changed:
         config["channel_ingress_policy"] = policy
         Config.save(config)
-        from vaf.core.contacts_store import grant_assistant_for_channel
-        # One event per channel that really changed, like a pairing: the throttle keys
-        # on the channel, so both channels of one switch stay two events. Switching a
-        # channel on also grants every contact of that channel in every contact book on
-        # this instance (the policy is instance-wide, so a tenant's contact left with the
-        # flag off would be an opt-out while strangers get through; a new sender is
-        # enrolled by the bridge when they write); switching it off leaves the flags
-        # alone, so the owner's per-person choices survive a round trip.
+        # One event per channel that really changed, like a pairing: the throttle keys on the
+        # channel, so both channels of one switch stay two events. The switch decides the
+        # CHANNEL and nothing else now: it no longer writes a permission into every contact
+        # record on the instance. A person the owner allowed is answered whatever the switch
+        # says, a person they denied never is, and everybody else is answered exactly while
+        # the channel stands open - which is what the switch means, and it can be turned off
+        # again without leaving grants behind in the book.
         for ch in changed:
-            if after["channels"][ch]:
-                granted = grant_assistant_for_channel(ch, caller["username"], caller["user_scope_id"], every_book=True)
-                log_security_event("front_office_changed", channel=ch, username=str(caller["username"]),
-                                   detail=f"on, {granted} contacts granted")
-            else:
-                log_security_event("front_office_changed", channel=ch, username=str(caller["username"]),
-                                   detail="off")
+            log_security_event("front_office_changed", channel=ch, username=str(caller["username"]),
+                               detail="on" if after["channels"][ch] else "off")
     return await _state(caller)
 
 

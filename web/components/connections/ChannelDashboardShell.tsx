@@ -93,7 +93,7 @@ export interface ChannelDashboardShellProps {
 export const BADGE_CLS = {
     owner: 'bg-[#1d3550] text-[#8ec3f0]',
     contact: 'bg-[#1e3a24] text-[#8fd39a]',
-    conversation: 'bg-[#3a2f16] text-[#e0b866]',
+    relay: 'bg-[#3a2f16] text-[#e0b866]',
     assign: 'bg-[#2b2417] text-[#d4a24e]',
     readOnly: 'bg-[#262626] text-[#b0b0b0]',
 } as const;

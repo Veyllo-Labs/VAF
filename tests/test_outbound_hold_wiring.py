@@ -140,16 +140,22 @@ def test_the_card_is_mounted_and_fed_by_signals_not_by_a_timer():
     # a word: it belongs to that one answer in that one chat, while a banner over the header
     # would read as a system alert about the whole app. It is the last row of the chat's own
     # list, in a bot row wrapper, so it lines up under the answer that produced it.
-    row = PAGE.split("<HeldSendCard", 1)[0][-1200:]
+    assert PAGE.index("<HeldSendCard") < PAGE.index("<div ref={scrollRef} />")
+    card = (ROOT / "web" / "components" / "outbox" / "HeldSendCard.tsx").read_text(encoding="utf-8")
     # The bot row's geometry, all three parts: the row, the 85 percent block, and the avatar
     # gutter as a spacer. The row centers its child, so a card without the block starts left of
     # the whole column, and one without the spacer starts under the avatar instead of under the
     # text (both measured live, both looked wrong in exactly that way).
-    assert "flex gap-4 pt-4 vaf-msg-row" in row
-    assert 'w-full max-w-[85%] max-md:max-w-full flex gap-4' in row
-    assert '<div className="w-9 shrink-0" aria-hidden="true" />' in row
-    assert PAGE.index("<HeldSendCard") < PAGE.index("<div ref={scrollRef} />")
-    card = (ROOT / "web" / "components" / "outbox" / "HeldSendCard.tsx").read_text(encoding="utf-8")
+    # It lives in the CARD, not around the call: the card is what knows whether anything is
+    # waiting, and a wrapper in page.tsx rendered an empty padded row at the end of every
+    # conversation, every time. MUTATION: move it back and the last two assertions go red.
+    assert "flex gap-4 pt-4 vaf-msg-row" in card
+    assert 'w-full max-w-[85%] max-md:max-w-full flex gap-4' in card
+    assert '<div className="w-9 shrink-0" aria-hidden="true" />' in card
+    assert "if (!rows.length) return null;" in card
+    assert card.index("if (!rows.length) return null;") < card.index("vaf-msg-row")
+    wrapper = PAGE.split("<HeldSendCard", 1)[0][-400:]
+    assert "vaf-msg-row" not in wrapper, "the wrapper moved into the card"
     # No POLLING. The one interval in the file drives the reading pause's own countdown, and it
     # must not be a refresh in disguise: the listing is fetched on the signal and on a chat
     # change, never on a clock.

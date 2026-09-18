@@ -195,6 +195,13 @@ async def patch_contact(contact_id: str, request: Request, body: ContactUpdate) 
         if not contact:
             raise HTTPException(status_code=404, detail="Contact not found")
         return contact
+    # An explicit `allow_as_assistant_user: null` is "not sent", which is what the field's own
+    # type says: a bool has no room for "undecided", so None can only mean "no answer here".
+    # Left in, it reached the store's legacy-bool branch, where `bool(None)` cleared a decision
+    # the client never touched - a blocked contact silently un-blocked by a field that was not
+    # even filled in.
+    if updates.get("allow_as_assistant_user") is None:
+        updates.pop("allow_as_assistant_user", None)
     _touches_access = "allow_as_assistant_user" in updates or "assistant_access" in updates
     if "assistant_access" in updates:
         updates["assistant_access"] = _access_from(updates.get("assistant_access"))

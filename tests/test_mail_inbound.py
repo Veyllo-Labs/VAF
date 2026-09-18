@@ -388,6 +388,37 @@ def test_the_runner_and_the_prompt_know_the_mail_lane():
 USER = {"username": "alice", "user_scope_id": SCOPE, "role": "user"}
 
 
+def test_a_released_draft_the_sweep_delivers_is_not_a_failure():
+    """`release_held_draft` does two acts, and only the second one puts the mail on the wire.
+    When the immediate drain cannot run (no IMAP session, no matching account, a deferred op)
+    the op stays `pending` and the sweep takes it: the mail has left the person's hands, so the
+    card must not tell them it did not work. `state` keeps the difference.
+
+    MUTATION: compare the state with "done" alone and the pending case goes red.
+    """
+    from types import SimpleNamespace
+
+    from vaf.mail.service import release_held_draft
+
+    def _svc(final_state):
+        store = SimpleNamespace(get_op=lambda _id: {"kind": "send", "state": "held",
+                                                    "payload": {"account_id": "a@example.com"}})
+        return SimpleNamespace(store=store, approve_draft=lambda _id: True,
+                               send_outcome=lambda _id: {"state": final_state, "error": ""})
+
+    assert release_held_draft("scope", "alice", 1, service=_svc("pending")) == {
+        "ok": True, "state": "pending", "error": ""}
+    assert release_held_draft("scope", "alice", 1, service=_svc("done"))["ok"] is True
+    for bad in ("failed", "cancelled", "discarded", ""):
+        out = release_held_draft("scope", "alice", 1, service=_svc(bad))
+        assert out["ok"] is False and out["state"] == bad, bad
+    # And a draft that is not waiting is still "no draft with that id", not a send.
+    not_waiting = SimpleNamespace(
+        store=SimpleNamespace(get_op=lambda _id: {"kind": "send", "state": "done", "payload": {}}),
+        approve_draft=lambda _id: True, send_outcome=lambda _id: {"state": "done", "error": ""})
+    assert release_held_draft("scope", "alice", 1, service=not_waiting)["error"] == "not waiting"
+
+
 def test_the_draft_routes_send_and_discard(world, monkeypatch):
     import vaf.api.mail_routes as mr
     signals = []

@@ -129,6 +129,49 @@ def test_a_contacts_decision_is_recorded_with_the_word_that_was_taken(config, mo
     ]
 
 
+def test_a_field_that_was_not_filled_in_changes_no_decision(config, monkeypatch):
+    """`allow_as_assistant_user: null` is "not sent": the type has no room for a third state,
+    so None can only mean "no answer here". Left in the update it reached the store's legacy
+    branch, where `bool(None)` cleared the decision, and a blocked contact came back unblocked
+    through a field nobody filled in.
+
+    MUTATION: drop the `updates.pop("allow_as_assistant_user")` guard in patch_contact and the
+    state assertion goes red (and a "cleared" line appears in the security log).
+    """
+    from vaf.api import contact_routes as routes
+    from vaf.core import contacts_store
+    events = _recorder(monkeypatch, routes)
+
+    blocked = asyncio.run(routes.post_contact(_req(), routes.ContactCreate(name="Mara", assistant_access="denied")))
+    events.clear()
+    asyncio.run(routes.patch_contact(blocked["id"], _req(),
+                                     routes.ContactUpdate(company="Acme", allow_as_assistant_user=None)))
+    stored = contacts_store.get_contact_by_id(blocked["id"], "alice", user_scope_id=SCOPE)
+    assert contacts_store.contact_access(stored) == "denied" and stored.get("company") == "Acme"
+    assert events == [], "nothing about the decision changed, so nothing is recorded"
+
+
+def test_the_agent_tool_refuses_a_word_it_does_not_know(config):
+    """The store clears the decision for any word it does not recognise, so a tool that passed
+    one on would UN-block the person it was asked to block. MUTATION: pass the word through
+    again and the first assertion goes red."""
+    from vaf.core import contacts_store
+    from vaf.tools.update_contact import UpdateContactTool
+
+    rec = contacts_store.create_contact("Mara", "alice", user_scope_id=SCOPE, assistant_access="denied")
+    out = UpdateContactTool().run(contact_id=rec["id"], assistant_access="block",
+                                  username="alice", user_scope_id=SCOPE)
+    assert "must be" in out and "block" in out
+    assert contacts_store.contact_access(
+        contacts_store.get_contact_by_id(rec["id"], "alice", user_scope_id=SCOPE)) == "denied"
+    # The three words it does know still work, and "undecided" is the one that clears.
+    for word, expected in (("allowed", "allowed"), ("denied", "denied"), ("undecided", None)):
+        UpdateContactTool().run(contact_id=rec["id"], assistant_access=word,
+                                username="alice", user_scope_id=SCOPE)
+        assert contacts_store.contact_access(
+            contacts_store.get_contact_by_id(rec["id"], "alice", user_scope_id=SCOPE)) == expected, word
+
+
 def test_the_discord_admin_arrives_through_the_config_patch_and_is_recorded_from_the_diff(monkeypatch):
     from vaf.api import config_routes as routes
     events = []

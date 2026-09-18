@@ -72,9 +72,16 @@ class UpdateContactTool(BaseTool):
                 v = kwargs[key]
                 if key == "assistant_access":
                     # Passed on as the word, never as a bool: the store's three states are
-                    # allowed, denied and "nobody decided", and any other word clears the
-                    # decision rather than inventing one.
-                    updates[key] = str(v or "").strip().lower()
+                    # allowed, denied and "nobody decided". An unknown word is REFUSED rather
+                    # than passed on, because the store clears the decision for anything it
+                    # does not recognise: a model that typed "block" would have un-blocked the
+                    # person it was asked to block.
+                    word = str(v or "").strip().lower()
+                    if word not in ("allowed", "denied", "undecided"):
+                        return ("assistant_access must be 'allowed' (answered on every channel), "
+                                "'denied' (answered nowhere) or 'undecided' (the channel's Inbound "
+                                f"switch decides); got '{v}'.")
+                    updates[key] = word
                 elif key == "tags":
                     # The store splits the comma string itself; an empty string clears the list.
                     updates[key] = v if isinstance(v, (str, list)) else ""

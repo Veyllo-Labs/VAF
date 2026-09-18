@@ -813,5 +813,11 @@ def release_held_draft(scope: str, username: str, op_id: int,
         # The op stays released, so the sweep delivers it; only the immediate drain failed.
         pass
     outcome = svc.send_outcome(int(op_id))
-    return {"ok": outcome.get("state") == "done", "state": outcome.get("state") or "",
+    # `done` is delivered, `pending` is released and waiting for the sweep (the immediate drain
+    # could not run: no IMAP session, no matching account, a deferred op). Both are a send that
+    # left the person's hands, so both answer ok; `state` keeps the difference for a caller that
+    # wants to say which one it was. Reporting `pending` as a failure told the person the send
+    # had not worked over a mail that was already on its way.
+    state = str(outcome.get("state") or "")
+    return {"ok": state in ("done", "pending"), "state": state,
             "error": outcome.get("error") or ""}

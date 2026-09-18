@@ -10213,20 +10213,11 @@ function VAFDashboardContent() {
                                 {/* What the agent prepared and nobody has sent yet. It belongs in the
                                     conversation, under the answer that produced it, not in a banner
                                     over the header: it is the agent's own output waiting for a word,
-                                    the way a tool result is. Same row shape as a bot bubble, so it
-                                    lines up with the text above it. */}
-                                <div className="flex gap-4 pt-4 vaf-msg-row">
-                                    {/* The bot row's own geometry, copied rather than approximated: the
-                                        85% block, the avatar gutter (w-9 plus the row gap) as an empty
-                                        spacer, then the content. Anything else puts the card left of the
-                                        answer it belongs to, because the row centers its child. */}
-                                    <div className="w-full max-w-[85%] max-md:max-w-full flex gap-4 max-md:gap-2">
-                                        <div className="w-9 shrink-0" aria-hidden="true" />
-                                        <div className="flex flex-col flex-1 min-w-0">
-                                            <HeldSendCard apiBase={getApiBase()} version={heldVersion} sessionId={currentSessionId || ''} />
-                                        </div>
-                                    </div>
-                                </div>
+                                    the way a tool result is. The card brings the bot row's geometry
+                                    with it and renders NOTHING when nothing is waiting, which is why
+                                    there is no wrapper here: a wrapper would be an empty padded row
+                                    at the end of every conversation. */}
+                                <HeldSendCard apiBase={getApiBase()} version={heldVersion} sessionId={currentSessionId || ''} />
 
                                 </>)}
                                 {/* The bottom anchor the autoscroll aims at. OUTSIDE the

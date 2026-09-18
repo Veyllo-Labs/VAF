@@ -80,8 +80,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   card opens the window for the agent's answers to incoming requests (the Front Office).
   On the right, a switch per channel: switching WhatsApp or Telegram on means everybody you
   have not decided about is answered there in Front Office mode, and a new sender is added to
-  your book when they write. The switch grants nobody: a contact you allowed is answered with
-  it off, one you blocked with it on (switching on asks once; every change is a
+  your book when they write. The switch grants nobody, and it refuses nobody: a contact you
+  allowed is answered even with the switch off, and a contact you blocked is answered nowhere,
+  switch on or not (switching on asks once; every change is a
   `front_office_changed` entry in the security log). On the left, your instructions for those
   answers (who the agent speaks for, the tone, what it may promise, what it must never say) and the
   knowledge: PDF, TXT or MD documents learned into a lane of the memory store that only a
@@ -111,7 +112,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `allow_contact_fallback`) are gone; an old config with them keeps working and grants nothing.
   Blocking a person is recorded in the security log as a block, which it never was before: the
   two states were compared as truthy values, so the single most security-relevant change on a
-  contact went unrecorded.
+  contact went unrecorded. The security overview also counts the mail channel as part of the
+  perimeter now: an open mail Inbound answers verified strangers, and the check that asks "can
+  somebody nobody authorized talk to the agent" listed only the three messengers.
 - **A contact's answer no longer draws on your whole memory.** A Front Office turn used to
   search the owner's general memory, learned documents included, and relied on the prompt
   to keep private details back. It now reads the Front Office knowledge and what it learned

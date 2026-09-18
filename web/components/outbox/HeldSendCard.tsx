@@ -125,10 +125,19 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
         }
     };
 
+    // Nothing waiting, nothing rendered: not even the row wrapper, or every conversation would
+    // end in an empty padded row.
     if (!rows.length) return null;
 
     return (
-        <div className="flex flex-col gap-3 w-full min-w-0">
+        /* The bot row's own geometry, copied rather than approximated: the row, the 85% block,
+           the avatar gutter (w-9 plus the row gap) as an empty spacer, then the content. The row
+           centers its child, so a card without the block starts left of the whole column, and one
+           without the spacer starts under the avatar instead of under the text. */
+        <div className="flex gap-4 pt-4 vaf-msg-row">
+            <div className="w-full max-w-[85%] max-md:max-w-full flex gap-4 max-md:gap-2">
+                <div className="w-9 shrink-0" aria-hidden="true" />
+                <div className="flex flex-col gap-3 flex-1 min-w-0">
             {rows.slice(0, 3).map((r) => {
               const locked = lockedFor(r);
               return (
@@ -182,6 +191,8 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
             {rows.length > 3 && (
                 <span className="text-xs text-gray-500 dark:text-[#9a9a9a]">{t('more', { count: rows.length - 3 })}</span>
             )}
+                </div>
+            </div>
         </div>
     );
 }

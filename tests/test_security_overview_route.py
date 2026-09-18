@@ -184,6 +184,30 @@ def test_channels_status_derivation():
     assert out_ok["state"] == "ok" and out_ok["any_open"] is False
 
 
+def test_every_front_office_channel_counts_as_the_perimeter():
+    """The module answers "can somebody nobody authorized talk to the agent?", and mail has the
+    same switch as the messengers: an open mail channel answers a verified stranger. The list
+    used to be a hand-kept trio, so a perimeter with mail wide open reported "ok".
+
+    MUTATION: put the three messenger names back in place of FRONT_OFFICE_CHANNELS and the mail
+    assertion goes red.
+    """
+    from vaf.core.channel_ingress_policy import FRONT_OFFICE_CHANNELS, set_front_office
+    from vaf.core.security_misconfig import collect_security_findings
+
+    for channel in FRONT_OFFICE_CHANNELS:
+        cfg = {"channel_ingress_policy": set_front_office(None, True, channel)}
+        codes = {f["code"] for f in collect_security_findings(cfg)}
+        assert f"{channel}_open_to_new_senders" in codes, channel
+    closed = {"channel_ingress_policy": set_front_office(None, False)}
+    assert not [c for c in (f["code"] for f in collect_security_findings(closed))
+                if c.endswith("_open_to_new_senders")]
+    # Mail says what is true of mail: only a verified sender, and the answer waits as a draft.
+    mail = collect_security_findings({"channel_ingress_policy": set_front_office(None, True, "email")})
+    text = next(f["message"] for f in mail if f["code"] == "email_open_to_new_senders")
+    assert "verified" in text and "draft" in text
+
+
 def test_guardrails_derivation_shape_and_unrestricted_passthrough():
     from vaf.api.security_routes import derive_guardrails_status
     out = derive_guardrails_status(

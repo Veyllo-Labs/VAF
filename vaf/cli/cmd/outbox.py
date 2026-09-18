@@ -101,13 +101,16 @@ def send_entry(
         if outcome.get("error") == "not waiting":
             UI.console.print("[red]No draft with that id is waiting.[/red]")
             raise typer.Exit(1)
-        if outcome.get("ok"):
+        state = str(outcome.get("state") or "")
+        if state == "done":
             UI.console.print("[green]Sent.[/green]")
             return
-        UI.console.print(f"[yellow]Released, not delivered yet[/yellow] "
-                         f"(state: {outcome.get('state') or 'unknown'}). "
-                         f"{outcome.get('error') or 'The next outbox run takes it.'}")
-        return
+        if state == "pending":
+            UI.console.print("[green]Released.[/green] The next outbox run delivers it.")
+            return
+        UI.console.print(f"[red]Not sent[/red] (state: {state or 'unknown'}). "
+                         f"{outcome.get('error') or ''}".rstrip())
+        raise typer.Exit(1)
     UI.console.print("[red]Unknown kind.[/red] Use 'mail' or 'call', as the list prints it.")
     raise typer.Exit(1)
 

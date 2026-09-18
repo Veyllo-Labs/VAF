@@ -449,6 +449,18 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
 
     // ---- mutations -------------------------------------------------------------
 
+    /** One decision at a time for one person: the group is dead until the PATCH has answered,
+     *  so a second click cannot overtake the first. */
+    const setAccess = async (id: string, value: 'allowed' | 'denied' | 'undecided') => {
+        if (accessBusy) return;
+        setAccessBusy(id);
+        try {
+            await patchContact(id, { assistant_access: value });
+        } finally {
+            setAccessBusy(null);
+        }
+    };
+
     const patchContact = async (id: string, body: Record<string, unknown>) => {
         setFileError(null);
         try {
@@ -764,6 +776,15 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
     }, [contacts, searchQuery, statusFilter, sortBy]);
 
     const selectedContact = selectedContactId ? contacts.find(c => c.id === selectedContactId) ?? null : null;
+    // The contact whose decision is being written right now. Three positions one click apart
+    // invite a second click before the first PATCH has answered, and two in-flight writes can
+    // land in either order: the person would be looking at the position they chose LAST while
+    // the record holds the other one.
+    const [accessBusy, setAccessBusy] = useState<string | null>(null);
+    // Explicitly ALLOWED, which is the channel-independent answer. A contact nobody has decided
+    // about may still be answered while their channel's Inbound is open, so the subtitle says
+    // "allowed" rather than "can reach the agent"; the per-channel breakdown is the Inbound
+    // window's job.
     const reachCount = useMemo(() => contacts.filter(c => contactAccess(c) === 'allowed').length, [contacts]);
 
     const toggleSelected = (id: string) => {
@@ -854,7 +875,7 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
         else if (c.kind === 'deleteSelected') deleteSelected(c.ids);
         else if (c.kind === 'removeNote') removeNote(c.contactId, c.noteId);
         else if (c.kind === 'removeEvent') removeEvent(c.contactId, c.eventId);
-        else if (c.kind === 'reach') patchContact(c.contact.id, { assistant_access: 'allowed' });
+        else if (c.kind === 'reach') void setAccess(c.contact.id, 'allowed');
     };
 
     // ---- render helpers ----------------------------------------------------------
@@ -1083,8 +1104,11 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
                             <div className="inline-flex rounded-lg border border-gray-200 dark:border-[#2e2e2e] overflow-hidden" role="group" aria-label={tw('allowReach')}>
                                 {(['allowed', 'undecided', 'denied'] as const).map(value => (
                                     <button key={value} type="button" aria-pressed={access === value}
-                                        onClick={() => value === 'allowed' ? setConfirm({ kind: 'reach', contact: c }) : patchContact(c.id, { assistant_access: value })}
-                                        className={cn('px-2.5 py-1 whitespace-nowrap transition-colors',
+                                        disabled={accessBusy === c.id}
+                                        onClick={() => value === 'allowed'
+                                            ? setConfirm({ kind: 'reach', contact: c })
+                                            : void setAccess(c.id, value)}
+                                        className={cn('px-2.5 py-1 whitespace-nowrap transition-colors disabled:opacity-50',
                                             access === value
                                                 ? 'bg-gray-900 text-white dark:bg-[#d9d9d9] dark:text-[#1a1a1a]'
                                                 : 'bg-white text-gray-700 hover:bg-gray-100 dark:bg-[#1f1f1f] dark:text-[#d0d0d0] dark:hover:bg-[#2a2a2a]')}>

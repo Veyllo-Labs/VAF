@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from vaf.core.channel_ingress_policy import normalize_policy
+from vaf.core.channel_ingress_policy import FRONT_OFFICE_CHANNELS, MAIL_CHANNEL, normalize_policy
 from vaf.core.config import Config
 
 
@@ -68,16 +68,22 @@ def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict
     # channel switch. The expert modes this used to warn about are gone (they said the same
     # thing as a contact's own permission, in a place nobody looked), so a warning about them
     # would be a check that can no longer fire.
+    # Every Front Office channel, read from the one tuple rather than a hand-kept list: mail
+    # has the same switch and the same meaning, and a perimeter check that skips a channel
+    # reports a closed perimeter while that channel answers strangers.
     ingress = normalize_policy(cfg.get("channel_ingress_policy"))
-    for channel in ("telegram", "whatsapp", "discord"):
+    for channel in FRONT_OFFICE_CHANNELS:
         ch_cfg = ingress.get(channel) if isinstance(ingress.get(channel), dict) else {}
         if bool(ch_cfg.get("open_to_new_senders")):
+            qualifier = (" On mail only a sender the provider verified is answered, and by "
+                         "default the answer waits as a draft."
+                         if channel == MAIL_CHANNEL else "")
             findings.append(
                 _finding(
                     "medium",
                     f"{channel}_open_to_new_senders",
                     f"{channel.title()} Inbound is open: anybody who writes there is answered, "
-                    "except contacts switched off in the book.",
+                    f"unless you blocked them in the contact book.{qualifier}",
                 )
             )
 

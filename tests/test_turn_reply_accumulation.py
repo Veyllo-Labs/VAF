@@ -125,7 +125,10 @@ def test_every_buffer_clear_restores_the_kept_answers():
     assert clears, "no clear sites found; the pattern moved"
     for pos in clears:
         window = src[pos:pos + 120]
-        assert "_restream_kept_answers(stream_callback, kept_turn_answers)" in window, (
+        # The argument is not pinned: the retraction sites collapsed into
+        # `_retract_streamed_reply`, which is handed the kept list as a parameter. What must
+        # hold per occurrence is that a clear is followed by the restream.
+        assert "_restream_kept_answers(stream_callback, " in window, (
             "a stream_callback.clear() is not followed by the restream; the web "
             f"bubble loses validated answers there. Context: {src[pos-200:pos+120]!r}"
         )

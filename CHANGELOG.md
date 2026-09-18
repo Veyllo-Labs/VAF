@@ -88,6 +88,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the rows learned without a scope, the same fail-closed rule the memory store applies.
 
 ### Fixed
+- **A finished answer is never taken off the screen again.** The anti-confabulation check
+  could misjudge a correct reply and erased it in the same move, so the user was left with
+  the model's own thinking about the correction instead of the answer. It now keeps any reply
+  that is an answer and appends its correction below it, and only a generation with nothing
+  answer-shaped in it is still retracted. The check itself was misjudging for three reasons,
+  all fixed: it graded the model's thinking instead of the visible reply; it saw only the
+  first few tool results of the turn, so on a long turn the write it was asked about was
+  outside its view (every result of the turn is now included, and a write result is never
+  shortened away); and a judge that merely weighed the word "ungrounded" while reasoning
+  counted as a guilty verdict, after which the correction quoted a placeholder instead of the
+  claim. A correction can no longer ask for a tool call that loop protection refuses, and a
+  reply that only repeats the model's own reasoning now counts as no answer, which is what
+  asks the model for a real one.
 - **Inbound, after review.** An unresolved WhatsApp LID is no longer answered by an open
   Inbound (no contact record could carry the opt-out for it); switching a channel on
   grants the contacts of every book on the instance, not only the admin's; a mail answer

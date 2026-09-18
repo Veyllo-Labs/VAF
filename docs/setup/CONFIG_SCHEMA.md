@@ -178,8 +178,8 @@ These are sent only on the local path; cloud APIs ignore them.
 | `max_tool_turns_per_step` | `75` | Admin-only. Hard stop: tool turns one user turn may use before the loop protection ends it. The soft goal-reminder keeps its distance below the cap (min(50, cap-3), so 50 at the default). Clamped to at least 5. |
 | `tool_loop_unlimited` | `False` | Admin-only. Disables the hard stop AND the wall-clock backstop entirely; the spend budget (`spend_budget_usd_per_day`) still applies. The soft goal-reminder still fires, worded without a hard-stop promise. |
 | `workflow_generation_timeout_seconds` | `30` | create_automation: time-bound the inline LLM workflow pre-generation (fast-fail to robust prompt-based execution). |
-| `result_grounding_enabled` | `True` | Bounce a reply that claims a tool outcome the turn's results don't support. |
-| `result_grounding_max_retries` | `2` | Corrections before proceeding anyway. |
+| `result_grounding_enabled` | `True` | Send back a reply that claims a tool outcome the turn's results don't support. The reply is kept on screen (erased only when it is not an answer) and the correction is appended below it. |
+| `result_grounding_max_retries` | `2` | Corrections before proceeding anyway. A verdict that cannot name the claim never counts as one. |
 | `team_await_enabled` | `True` | When a reply claims completion while a sub-agent still runs, keep the reply (never erased) and append a "work not finished" note for the next turn. |
 | `autocontinue_pending_tasks_enabled` | `True` | Keep working within the turn while tasks remain pending. |
 | `autocontinue_question_classifier_enabled` | `True` | LLM check whether a reply is a blocking question before auto-continuing. |

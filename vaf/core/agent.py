@@ -207,6 +207,46 @@ def _note_claims_unearned_outcome(texts) -> "str | None":
     return None
 
 
+_REASONING_ECHO_MIN = 400
+
+# How often one turn may re-generate because loop protection refused every call of a
+# generation. Bounded: the re-generation exists so the model can read the refusal it was
+# just sent, not so it can keep proposing the same refused call.
+MAX_BLOCKED_BATCH_ROUNDS = 3
+
+
+def _reply_is_reasoning_echo(full_content: str) -> bool:
+    """True when the visible half of a response is just the model's own reasoning again.
+
+    The shape is a closed ``<think>...</think>`` block followed by a repetition of its own
+    text (whitespace normalised). It is a gateway habit rather than a model one: the harness
+    wraps `reasoning_content` in <think> tags and concatenates the content field after it
+    (api_backend.py), so a provider that returns the reasoning in BOTH fields produces a
+    reply whose answer IS the thinking. Measured over one machine's stored sessions: 23 of
+    619 final replies had that shape, and the two longest were 1324 and 32454 characters of
+    raw deliberation delivered to the user as the answer.
+
+    Only long duplicates count (`_REASONING_ECHO_MIN`). A short reply legitimately repeats
+    its own one-line thought ("Download #5/10 erledigt."), and 21 of those 23 were exactly
+    that. A hit means "no final answer", which in the foreground routes into the
+    empty-response retry below, whose whole job is to ask for a real one; a background
+    thinking run has that retry off by default, so there the echo is still delivered.
+
+    The comparison is against ALL the visible text, not just the tail after the last block:
+    a generation that answered first and then duplicated its thinking ("ANSWER<think>B</think>B",
+    an ordinary shape for a model that streams inline think tags) still contains its answer,
+    and declaring that "no answer" would erase it.
+    """
+    raw = full_content or ""
+    blocks = re.findall(r'<think>([\s\S]*?)</think>', raw, flags=re.IGNORECASE)
+    if not blocks:
+        return False
+    visible = " ".join(re.sub(r'<think>[\s\S]*?</think>', ' ', raw, flags=re.IGNORECASE).split())
+    if len(visible) < _REASONING_ECHO_MIN:
+        return False
+    return visible in (" ".join(blocks[-1].split()), " ".join(" ".join(blocks).split()))
+
+
 def _final_answer_probe(full_content: str) -> str:
     """What is left of a model response once everything that is not an ANSWER goes.
 
@@ -227,6 +267,8 @@ def _final_answer_probe(full_content: str) -> str:
     wiring test pins that, because a probe with a private copy in the loop would
     drift the first time one of them learned a new pattern.
     """
+    if _reply_is_reasoning_echo(full_content):
+        return ""
     clean = re.sub(r'<think>.*?</think>', '', (full_content or ""), flags=re.DOTALL)
     clean = re.sub(r'<think>.*$', '', clean, flags=re.DOTALL)
     clean = re.sub(r'<[^>]*>', '', clean)                  # remaining XML (e.g. <tool_call>)
@@ -279,7 +321,17 @@ def _restream_kept_answers(stream_callback, kept: list) -> None:
     if not kept:
         return
     try:
-        stream_callback("\n\n".join(kept) + "\n\n")
+        # Same containment rule `_join_turn_answers` uses, so the bubble and the returned
+        # reply agree about what counts as "already there": a kept answer the model restated
+        # in a later round would otherwise stand twice in the buffer and once in the reply.
+        extras: list = []
+        for text in kept:
+            t = (text or "").strip()
+            if t and not any(t in e for e in extras):
+                extras.append(t)
+        if not extras:
+            return
+        stream_callback("\n\n".join(extras) + "\n\n")
     except Exception:
         pass
 
@@ -334,6 +386,187 @@ def _original_args_for_tool_msg(history, tool_msg_index: int, tool_call_id) -> "
                     except Exception:
                         return None
     return None
+
+
+# Evidence budget for the result-grounding judge (_detect_ungrounded_result_claim).
+# The judge rules on whether a reply's claimed outcome happened, so the one thing it
+# must never be is blind to the result that carries that outcome. The window used to
+# join the turn chronologically and cut the STRING at 1500 chars, which keeps the
+# OLDEST entries. Measured on a live incident: 21 results made a 4537-char block, the
+# cut landed inside entry 6, and the `write_file: File written successfully` the reply
+# was actually about sat 1881 chars past it - so the judge was asked whether a tool ran
+# while the proof that it ran was outside the prompt. The cut was byte-identical on both
+# correction attempts, so the evidence the correction demanded was appended exactly where
+# the judge could never read it and the loop could not converge. Hence: a budget per
+# ENTRY, every entry of the turn named, and a declared write result kept readable.
+# The outcome vocabulary that gates the whole grounding check. Stems, not whole words
+# ("success" has to reach "successfully", "gespeichert" has to reach "abgespeichert"), and a
+# miss disables the check silently, which is what happened for models writing "ausgefuehrt".
+_RG_OUTCOME_KEYWORDS = (
+    "failed", "success", "succeed", "saved", "wrote", "written", "created", "deleted",
+    "removed", "sent", "crashed", "error", "not found", "no results", "executed",
+    "complete", "fehlgeschlagen", "gespeichert", "erstellt", "gelöscht", "gesendet",
+    "ausgeführt", "abgeschlossen", "durchgeführt", "erledigt", "bestätigt",
+    "nicht gefunden", "kein ergebnis",
+)
+
+# The words the deterministic tier quotes as the claim. Every one of them must also be
+# reachable by a keyword above, because that prefilter decides whether this tier runs at all:
+# three of these (abgeschlossen, durchgeführt, completed) were missing from it, so the tier
+# that needs no LLM to be right was dead for them. Pinned by a test, not by care.
+_RG_CLAIM_WORDS = (
+    "ausgeführt", "abgeschlossen", "erstellt", "gespeichert", "durchgeführt",
+    "executed", "completed", "created", "saved", "success",
+)
+
+_RG_OUTCOME_CHARS = 300
+_RG_LOOKUP_CHARS = 120
+_RG_MIN_CHARS = 60
+_RG_EVIDENCE_BUDGET = 4000
+
+
+def _cut_for_judge(text: str, limit: int) -> str:
+    """`text` bounded for a validator prompt, with the cut made visible to the judge."""
+    from vaf.core.arg_preview import TRUNCATION_MARK
+    t = text or ""
+    if len(t) <= limit:
+        return t
+    return t[: max(0, limit - len(TRUNCATION_MARK))] + TRUNCATION_MARK
+
+
+def _grounding_evidence(turn_results: list, tool_for_name=None) -> tuple:
+    """(block, shown, omitted, omitted_outcomes) for the result-grounding judge, in turn order.
+
+    Two tiers, classified by what a tool DECLARES instead of by a hardcoded name list. An
+    OUTCOME entry is a tool whose `permission_level` is write or dangerous (the results a
+    reply claims), a failed or blocked result (the prompt asks about a specific error too),
+    or a tool that cannot be resolved at all (never silently drop what cannot be classified).
+    Everything else is a LOOKUP.
+
+    Outcomes are kept first and their share shrinks (to the lookup share, then to
+    `_RG_MIN_CHARS`) before any of them is dropped, so "the write is not in the evidence"
+    stays as close to impossible as a bounded prompt allows. A drop that still happens is
+    REPORTED: the fourth return value counts the outcomes that fell out, because the prompt
+    is otherwise free to assure the judge that every write is listed when it is not, and that
+    assurance is the inference the whole incident turned on. Lookups share what the outcomes
+    leave, spread over the turn and never below `_RG_LOOKUP_CHARS`, so a two-tool turn is not
+    judged on less evidence than the old fixed 300-char window gave it.
+
+    Turn order is kept deliberately: the judge is asked a temporal question ("a tool that was
+    never run this turn"), so a list reordered by importance would invite exactly the wrong
+    inference. Pure function over the pairs; never raises.
+
+    `tool_for_name(name)` resolves a tool instance, `deliverable(name)` declares whether its
+    results are documents. The second one matters: the error classifier scans a whole result
+    for failure vocabulary unless the caller says the result is a document, so without it a
+    successful `read_file` of a log that mentions a failure is promoted to the outcome tier
+    and crowds out the real write. Both other callers of that classifier pass the flag.
+    """
+    try:
+        from vaf.core.context import tool_result_is_error
+    except Exception:                                    # pragma: no cover - import guard
+        def tool_result_is_error(_text, **_kw):          # type: ignore[misc]
+            return False
+    try:
+        from vaf.core.tool_contract import resolve_tool_contract
+    except Exception:                                    # pragma: no cover - import guard
+        resolve_tool_contract = None                     # type: ignore[assignment]
+
+    _cut = _cut_for_judge
+
+    def _is_outcome(name: str, content: str) -> bool:
+        try:
+            tool = tool_for_name(name) if callable(tool_for_name) else None
+            if tool_result_is_error(
+                content, content_carrying=bool(getattr(tool, "result_is_deliverable", False))
+            ):
+                return True
+            if tool is None:
+                return True
+            if resolve_tool_contract is None:
+                return True
+            return resolve_tool_contract(name, tool).permission_level in ("write", "dangerous")
+        except Exception:
+            return True
+
+    if not turn_results:
+        return "(no tools were run this turn)", 0, 0, 0
+
+    rows = []
+    for name, content in turn_results:
+        n = str(name or "tool")
+        c = str(content or "")
+        rows.append((n, c, _is_outcome(n, c)))
+
+    def _cost(name: str, content: str, limit: int) -> int:
+        return len(name) + len(_cut(content, limit)) + 4
+
+    def _total(indexes, limit) -> int:
+        return sum(_cost(rows[i][0], rows[i][1], limit) for i in indexes)
+
+    outcomes = [i for i, (_, _, outcome) in enumerate(rows) if outcome]
+    lookups = [i for i in range(len(rows)) if i not in set(outcomes)]
+
+    # Outcomes first, shrinking rather than dropping: a turn of fifty refused calls (a failed
+    # result is an outcome) must not send a 30 KB prompt on every final reply, and it must not
+    # lose a write result either.
+    outcome_share = _RG_OUTCOME_CHARS
+    for candidate in (_RG_OUTCOME_CHARS, _RG_LOOKUP_CHARS, _RG_MIN_CHARS):
+        outcome_share = candidate
+        if _total(outcomes, candidate) <= _RG_EVIDENCE_BUDGET:
+            break
+
+    # Whatever the outcomes leave goes to the lookups, spread evenly over the turn. The tool
+    # names and the "- : " framing are paid out of the same budget, so they come off the top;
+    # counting only the bodies made a full turn overflow by a single entry.
+    _left = max(0, _RG_EVIDENCE_BUDGET - _total(outcomes, outcome_share))
+    _framing = sum(len(rows[i][0]) + 4 for i in lookups)
+    lookup_share = min(
+        _RG_OUTCOME_CHARS,
+        max(_RG_LOOKUP_CHARS, max(0, _left - _framing) // max(1, len(lookups))),
+    )
+    share = [outcome_share if outcome else lookup_share for _, _, outcome in rows]
+
+    keep = [False] * len(rows)
+    used = 0
+    for group in (reversed(outcomes), reversed(lookups)):  # each newest first
+        for i in group:
+            cost = _cost(rows[i][0], rows[i][1], share[i])
+            if used + cost > _RG_EVIDENCE_BUDGET and used:
+                continue
+            keep[i] = True
+            used += cost
+
+    lines = [
+        f"- {rows[i][0]}: {_cut(rows[i][1], share[i])}"
+        for i in range(len(rows)) if keep[i]
+    ]
+    shown = len(lines)
+    dropped_outcomes = sum(1 for i in outcomes if not keep[i])
+    return "\n".join(lines), shown, len(rows) - shown, dropped_outcomes
+
+
+def _grounding_correction(claim: str) -> str:
+    """The correction a flagged reply is sent back with.
+
+    Three things it has to get right, each one a live incident. The claim is NAMED, because
+    an accusation the model cannot identify cannot be answered (two rounds went into guessing
+    a placeholder charge). The reply is still on the user's screen, so the remedy is an added
+    correction, not a rewrite of text the model cannot reach. And the remedy it offers has to
+    be one the harness allows: the old single wording ordered "Either CALL the tool now",
+    which `_find_redundant_read_call` refuses for a lookup that already ran this turn, so the
+    model obeyed, was refused, and the turn ended with no answer at all. Running a tool that
+    genuinely never ran stays available though, because for the guard's founding incident (a
+    narrated workflow success after a bookkeeping-only turn) that IS the correct action.
+    """
+    return (
+        "CORRECTION NEEDED: your reply states an outcome that this turn's tool results do not "
+        f"support: \"{(claim or '').strip()[:200]}\". Your reply is still on the user's screen, "
+        "so do not repeat it: add one short correction of that one sentence, using only what the "
+        "tool results above actually say. If the tool you are claiming never ran this turn, run it "
+        "NOW and report its real result, but never repeat a call whose result is already above; "
+        "use that result instead."
+    )
 
 
 def _find_redundant_read_call(history, tool_name: str, arguments, max_window: int = 12) -> bool:
@@ -9614,6 +9847,9 @@ class Agent:
         # Loop-protection counter for blocked redundant tool calls (per user turn). Kept SEPARATE from
         # empty_retry_count so a redundant block never climbs into the empty-response abort.
         redundant_block_count = 0
+        # Generations whose EVERY tool call loop protection refused. Bounded, because the
+        # re-generation it grants exists to let the model read the refusal, not to spin.
+        _blocked_batch_rounds = 0
         # API empty guard: delay-retry (3s) up to 4 times before showing system-log error
         api_empty_delay_retries = 0
         API_EMPTY_DELAY_RETRIES_MAX = 4
@@ -9695,6 +9931,7 @@ class Agent:
 
             streaming_tools = {}
             tool_calls_detected = []
+            _blocked_every_call = False   # loop protection refused a call of THIS generation
             # Anthropic only: raw assistant content blocks (thinking + tool_use, with
             # signatures) for verbatim replay so a thinking-enabled tool loop doesn't 400.
             anthropic_blocks_raw = None
@@ -10521,14 +10758,15 @@ class Agent:
                 # Measure only the USER-VISIBLE answer: weak local models (e.g. Gemma)
                 # stream their reasoning inline as <think>...</think> in the content
                 # field, which would otherwise inflate the length and trip the >800
-                # skip below — hiding genuinely short false promises behind a long
+                # skip below, hiding genuinely short false promises behind a long
                 # thinking block.
-                _visible = re.sub(r'<think>[\s\S]*?</think>', '', full_content, flags=re.IGNORECASE).strip()
+                from vaf.core.completion import strip_think_blocks as _strip_think
+                _visible = _strip_think(full_content)
                 _response_len = len(_visible)
 
                 # High-confidence signal: the model committed to a tool in its <Action>
-                # block — which per the system prompt is emitted ONLY right before a tool
-                # call — but then emitted no call at all. This is a definitional false
+                # block, which per the system prompt is emitted ONLY right before a tool
+                # call, but then emitted no call at all. This is a definitional false
                 # promise, far more reliable than the free-text heuristic, and it is what
                 # catches "Using web_search to find the weather..." with no call behind it.
                 _act_intent = _extract_action_text(full_response)
@@ -10541,7 +10779,7 @@ class Agent:
                 _promised_tool = _act_matches[0][0] if _action_promise else None
 
                 # False promises are always short (1-2 sentences like "Let me search...").
-                # A long analytical/conversational response is never a false promise —
+                # A long analytical/conversational response is never a false promise, so
                 # skip detection to avoid trapping the agent in a retry loop. An explicit
                 # <Action> commitment overrides the skip (the length is just thinking).
                 _skip_fp_detection = (_response_len > 800) and not _action_promise
@@ -10561,10 +10799,6 @@ class Agent:
                         # Proceed without blocking
                     else:
                         UI.event("System", f"False promise detected (attempt {self._false_promise_retries}) - forcing retry...", style="warning")
-                        # Only clear the UI bubble when the response is short/empty.
-                        # If the model generated a substantial response (>200 chars) that the
-                        # false-promise heuristic flagged, do NOT nuke it — the user is actively
-                        # reading it. The retry will append a corrected follow-up instead.
                         if _emit_to_web_ui():
                             try:
                                 from vaf.core.web_interface import get_web_interface
@@ -10576,17 +10810,19 @@ class Agent:
                                     source="System",
                                     session_id=session_id,
                                 )
-                                if not _is_substantial:
-                                    self._clear_last_assistant_ui(session_id)
                             except Exception:
                                 pass
-                        # Clear stream buffer so the retry sends only new content (no old + new)
-                        if stream_callback and hasattr(stream_callback, "clear"):
-                            try:
-                                stream_callback.clear()
-                                _restream_kept_answers(stream_callback, kept_turn_answers)
-                            except Exception:
-                                pass
+                        # Only retract a short/empty response. A substantial answer (>200 visible
+                        # chars) that this heuristic flagged stays where the user is reading it and
+                        # gets a corrected follow-up appended instead. The bubble and the stream
+                        # buffer are retracted together: clearing only the buffer left the screen
+                        # showing text that the stored reply no longer contained.
+                        if _is_substantial:
+                            # Validated as shown, so the next round's buffer clear re-streams it
+                            # instead of dropping the text the user is reading.
+                            kept_turn_answers.append(self._clean_reasoning(full_content))
+                        else:
+                            self._retract_streamed_reply(stream_callback, kept_turn_answers)
                         # Add error to history to force correction
                         self.history.append({
                             "role": "assistant",
@@ -10597,7 +10833,7 @@ class Agent:
                                 f"CORRECTION NEEDED: You announced an action (\"{_act_intent[:120]}\") "
                                 f"but did NOT execute the tool call.\n"
                                 f"Call `{_promised_tool}` NOW using a proper function call. "
-                                f"Do not describe the call — emit it."
+                                f"Do not describe the call, emit it."
                             )
                         else:
                             _correction = (
@@ -10620,7 +10856,7 @@ class Agent:
             # When the model produced a final text reply (no new tool call), make sure it isn't
             # claiming a concrete tool OUTCOME that the turn's actual tool results don't support
             # (e.g. "Workflow failed: Tool not found" when execute_workflow was never run). On a
-            # mismatch, bounce it back for correction — capped, then proceed so it never loops.
+            # mismatch, send it back for correction, capped, then proceed so it never loops.
             if not streaming_tools and not tool_calls_detected and full_content.strip():
                 _rg_on = True
                 try:
@@ -10628,9 +10864,15 @@ class Agent:
                     _rg_on = bool(_CfgRG.get("result_grounding_enabled", True))
                 except Exception:
                     _rg_on = True
-                if _rg_on:
+                # Only a generation that actually put an answer on the screen is judged. A
+                # generation without one claims nothing to anybody and belongs to the
+                # empty-response lane below, which replaces it with a real answer; judging it
+                # here used to spend a validation call and then send back a correction that
+                # told the model its reply was still visible when it had just been erased.
+                if _rg_on and self._guard_keeps_answer(full_content):
+                    _turn_res = self._turn_tool_results()
                     _ungrounded, _claim = self._detect_ungrounded_result_claim(
-                        full_content, self._turn_tool_results()
+                        full_content, _turn_res
                     )
                     if _ungrounded:
                         self._result_grounding_retries += 1
@@ -10640,37 +10882,34 @@ class Agent:
                         except Exception:
                             _rg_max = 2
                         if self._result_grounding_retries > _rg_max:
-                            UI.event("System", "Result grounding: max retries reached — proceeding.", style="error")
+                            UI.event("System", "Result grounding: max retries reached - proceeding.", style="error")
                             self._result_grounding_retries = 0
                         else:
-                            UI.event("System", f"Ungrounded tool-result claim detected (attempt {self._result_grounding_retries}) - forcing correction...", style="warning")
+                            UI.event("System", f"Ungrounded tool-result claim detected (attempt {self._result_grounding_retries}) - keeping the reply, correction follows...", style="warning")
+                            # NON-DESTRUCTIVE, like the team-await hold: a finished answer is
+                            # never taken off the screen for a judgement, the correction is
+                            # appended below it. Live incident: a correct German draft was erased
+                            # twice by this guard and the user ended up reading the model's own
+                            # English reasoning about the correction.
                             if _emit_to_web_ui():
                                 try:
                                     from vaf.core.web_interface import get_web_interface
                                     from vaf.core.subagent_ipc import get_current_session_id
-                                    _rg_sid = get_current_session_id()
                                     get_web_interface().log(
-                                        f"Ungrounded tool-result claim detected (attempt {self._result_grounding_retries}) - forcing correction...",
-                                        level="warning", source="System", session_id=_rg_sid,
+                                        f"Ungrounded tool-result claim detected (attempt {self._result_grounding_retries}) - "
+                                        "keeping the reply, correction follows...",
+                                        level="warning", source="System",
+                                        session_id=get_current_session_id(),
                                     )
-                                    self._clear_last_assistant_ui(_rg_sid)
                                 except Exception:
                                     pass
-                            if stream_callback and hasattr(stream_callback, "clear"):
-                                try:
-                                    stream_callback.clear()
-                                    _restream_kept_answers(stream_callback, kept_turn_answers)
-                                except Exception:
-                                    pass
+                            # Validated as shown: a later round's buffer clear re-streams it, so
+                            # the answer the user read cannot vanish from the bubble mid-turn.
+                            kept_turn_answers.append(self._clean_reasoning(full_content))
                             self.history.append({"role": "assistant", "content": full_content})
                             self.history.append({
                                 "role": "system",
-                                "content": (
-                                    "CORRECTION NEEDED: your reply stated a tool outcome — "
-                                    f"\"{(_claim or '')[:200]}\" — that no tool actually produced this turn. "
-                                    "Do NOT report results you did not get. Either CALL the tool now to "
-                                    "actually perform it, or restate WITHOUT claiming a result that did not happen."
-                                ),
+                                "content": _grounding_correction(_claim),
                             })
                             continue
                     else:
@@ -10763,6 +11002,7 @@ class Agent:
                                 if is_error:
                                     # Block retry of failure
                                     UI.event("Warning", f"Blocked retry of failed tool: {tool_name}", style="warning")
+                                    _blocked_every_call = True
                                     self.history.append({
                                         "role": "system",
                                         "content": (
@@ -10829,6 +11069,7 @@ class Agent:
                                         # left the agent silent. After a few repeats, force ONE final text answer
                                         # from the results already in context instead of looping further.
                                         redundant_block_count += 1
+                                        _blocked_every_call = True
                                         append_domain_log("backend", f"[LOOP_PROTECTION] blocked redundant tool call '{tool_name}' (#{redundant_block_count})")
                                         if redundant_block_count >= 3:
                                             self.history.append({
@@ -11001,6 +11242,7 @@ class Agent:
                         if _find_redundant_read_call(self.history, _fn, _fa):
                             UI.event("Warning", f"Blocked redundant tool call (result already in this turn): {_fn}", style="warning")
                             redundant_block_count += 1
+                            _blocked_every_call = True
                             try:
                                 append_domain_log("backend", f"[LOOP_PROTECTION] blocked windowed redundant '{_fn}' (#{redundant_block_count})")
                             except Exception:
@@ -11029,6 +11271,30 @@ class Agent:
                     except Exception:
                         _filtered_tcs.append(_tc)  # fail-open: never lose a call to a filter bug
                 tool_calls_detected = _filtered_tcs
+
+            # Loop protection refused EVERY tool call of this generation (any of its three
+            # sites: a retry of a failed tool, an adjacent identical repeat, or the windowed
+            # redundant read). The generation therefore produced no tool round and no answer,
+            # and the model has just been told why in a system message it never gets to read.
+            # Falling through hands the raw generation - often nothing but the model's own
+            # thinking - to the final-answer path as if it were a reply, which is how one live
+            # incident put a correction monologue on the user's screen. Generate once more
+            # instead, bounded. A generation that DID answer keeps the old fall-through: its
+            # text is on the screen already and a regeneration would take it away.
+            if (_blocked_every_call and not tool_calls_detected
+                    and not self._guard_keeps_answer(full_content)
+                    and _blocked_batch_rounds < MAX_BLOCKED_BATCH_ROUNDS):
+                _blocked_batch_rounds += 1
+                _tool_round_completed = True
+                try:
+                    append_domain_log(
+                        "backend",
+                        f"[LOOP_PROTECTION] every call of this generation was refused, regenerating "
+                        f"(#{_blocked_batch_rounds}/{MAX_BLOCKED_BATCH_ROUNDS})",
+                    )
+                except Exception:
+                    pass
+                continue
 
             # ── Action-Tag parser ──────────────────────────────────────────────────
             # Read the agent's committed <Action> intent and fuzzy-match it against the loaded
@@ -11846,7 +12112,9 @@ class Agent:
                     append_domain_log("backend", f"empty_response_retry full_content_preview={full_content[:100] if full_content else 'NONE'}")
                 except Exception:
                     pass
-                # Ensure Web UI shows retry message and remove the faulty assistant bubble
+                # Ensure Web UI shows retry message and remove the faulty assistant bubble.
+                # Unconditional here, and that is the one place it is right: this branch only runs
+                # when nothing answer-shaped was produced, so there is no answer to lose.
                 if _emit_to_web_ui():
                     try:
                         from vaf.core.web_interface import get_web_interface
@@ -11858,16 +12126,9 @@ class Agent:
                             source="System",
                             session_id=session_id,
                         )
-                        self._clear_last_assistant_ui(session_id)
                     except Exception:
                         pass
-                # Clear stream buffer so the retry sends only new content (no old + new)
-                if stream_callback and hasattr(stream_callback, "clear"):
-                    try:
-                        stream_callback.clear()
-                        _restream_kept_answers(stream_callback, kept_turn_answers)
-                    except Exception:
-                        pass
+                self._retract_streamed_reply(stream_callback, kept_turn_answers)
 
                 # First empty only: keep one assistant block (with thinking) and nudge; no temp sweep.
                 if empty_retry_count == 0:
@@ -13328,8 +13589,12 @@ class Agent:
 
     def _turn_tool_results(self) -> list:
         """The actual tool outcomes of the CURRENT turn: walk history back to the last user message
-        and collect the role='tool' entries since then as (tool_name, truncated_result) pairs, in
-        order. Used by result grounding to compare the reply's claims against what tools returned."""
+        and collect the role='tool' entries since then as (tool_name, result) pairs, in order. Used
+        by result grounding to compare the reply's claims against what tools returned.
+
+        Results are returned whole; `_grounding_evidence` is the one place that truncates, so the
+        two limits cannot silently disagree (a per-entry share above this function's old 500-char
+        pre-cut would have been a limit that looks generous and is not)."""
         out = []
         hist = getattr(self, "history", None) or []
         for msg in reversed(hist):
@@ -13341,40 +13606,48 @@ class Agent:
             if role == "tool":
                 name = str(msg.get("name") or "tool")
                 content = str(msg.get("content") or "")
-                out.append((name, content[:500]))
+                out.append((name, content))
         out.reverse()
         return out
 
     def _detect_ungrounded_result_claim(self, response_text: str, turn_results: list):
         """
-        Result grounding (anti-confabulation): does the reply assert a concrete tool OUTCOME — a
-        success, a failure, a saved/created file, a specific error, or a result/count — that the
+        Result grounding (anti-confabulation): does the reply assert a concrete tool OUTCOME, a
+        success, a failure, a saved/created file, a specific error, or a result/count, that the
         turn's ACTUAL tool results do not support, INCLUDING claiming a result for a tool that was
         never run this turn? Returns (ungrounded, claim).
 
         Conservative by design: a cheap keyword/regex pre-filter gates the LLM judge so ordinary
         replies cost nothing, and any failure returns (False, None) so the guard never blocks a reply.
+
+        Judged on the USER-VISIBLE reply only. The model's own thinking is not a claim to anybody,
+        and on a provider whose reasoning is folded into the content field (api_backend wraps
+        `reasoning_content` in <think> tags) the raw text is mostly reasoning: a live incident had
+        the guard grade a think block that recited "File written successfully" instead of the German
+        answer below it. The sibling false-promise guard has always measured the stripped text; this
+        one now uses the same shared helper.
         """
-        text = (response_text or "").strip()
+        from vaf.core.completion import strip_think_blocks
+        text = strip_think_blocks(response_text or "").strip()
         if len(text) < 12:
             return False, None
 
         # Pre-filter: only replies that actually assert a tool outcome are worth the LLM check.
+        # It runs on the RAW generation, not on the stripped reply: its only job is to decide
+        # whether a look is worth paying for, and a bilingual turn (English thinking, German
+        # answer) would otherwise never be looked at, because the keywords are the two
+        # languages mixed. What gets JUDGED is still the stripped reply.
         import re as _re
-        _low = text.lower()
-        _outcome_kw = (
-            "failed", "success", "succeed", "saved", "wrote", "written", "created", "deleted",
-            "removed", "sent", "crashed", "error", "not found", "no results", "executed",
-            "task complete", "fehlgeschlagen", "gespeichert", "erstellt", "gelöscht", "gesendet",
-            "ausgeführt", "bestätigt", "nicht gefunden", "kein ergebnis",
-        )
+        _low = (response_text or "").lower()
+        _outcome_kw = _RG_OUTCOME_KEYWORDS
         # contains_any, deliberately NOT the whole-word variant: these needles are
         # matched as stems ("success" has to reach "successfully", "gespeichert" has to
         # reach "abgespeichert"), and none of them folds into an English word. This
         # prefilter gates the entire ungrounded-claim check, so a miss disables it
         # silently - which is what happened for models that write "ausgefuehrt".
         _has_outcome = contains_any(_low, _outcome_kw) or bool(
-            _re.search(r'[✗✅❌]|found\s+\d+|\b\d+\s+(results|treffer|dateien|files)\b', text, _re.I)
+            _re.search(r'[✗✅❌]|found\s+\d+|\b\d+\s+(results|treffer|dateien|files)\b',
+                       response_text or "", _re.I)
         )
         if not _has_outcome:
             return False, None
@@ -13402,8 +13675,7 @@ class Agent:
         # on the actual results, which is where a judgement about content belongs.
         if turn_results and all((n or "") in _BOOKKEEPING_TOOLS for n, _ in turn_results):
             _m = _re.search(
-                r'[^.!?\n]{0,120}(ausgeführt|abgeschlossen|erstellt|gespeichert|durchgeführt'
-                r'|executed|completed|created|saved|success)[^.!?\n]{0,80}',
+                r'[^.!?\n]{0,120}(' + "|".join(_RG_CLAIM_WORDS) + r')[^.!?\n]{0,80}',
                 text, _re.I,
             )
             return True, (_m.group(0).strip() if _m else text[:120])
@@ -13411,35 +13683,149 @@ class Agent:
         if not (getattr(self, "use_server", False) or getattr(self, "api_backend", None) or getattr(self, "llm", None)):
             return False, None
 
-        _results_block = (
-            "\n".join(f"- {n}: {(c or '')[:300]}" for n, c in turn_results)
-            if turn_results else "(no tools were run this turn)"
+        _results_block, _shown, _omitted, _omitted_outcomes = _grounding_evidence(
+            turn_results, (getattr(self, "tools", None) or {}).get
         )
+        _omission_note = ""
+        if _omitted:
+            # Worded from what was actually dropped. The reassurance is only given when it is
+            # true: a prompt that swears every write is listed while a write was dropped hands
+            # the judge the exact inference this guard's own incident was built on.
+            _omission_note = (
+                f"NOTE: {_omitted} of {_shown + _omitted} results are not listed (length limit). "
+                + (f"{_omitted_outcomes} of the omitted ones are write or failure results. "
+                   if _omitted_outcomes
+                   else "Every omitted one is a plain lookup; every write result of this turn IS listed. ")
+                + "A result you cannot see here is not evidence that the tool did not run.\n\n"
+            )
         prompt = (
             "You verify an AI assistant reply against the ACTUAL tool results of this turn.\n"
             "Does the reply assert a concrete tool OUTCOME (a success, a failure, a saved/created "
-            "file, a specific error, or a result/count) that the tool results below do NOT support — "
+            "file, a specific error, or a result/count) that the tool results below do NOT support, "
             "including claiming a result for a tool that was never run this turn?\n\n"
-            f"ASSISTANT REPLY:\n{text[:900]}\n\n"
-            f"ACTUAL TOOL RESULTS THIS TURN:\n{_results_block[:1500]}\n\n"
+            f"ASSISTANT REPLY:\n{_cut_for_judge(text, 1800)}\n\n"
+            f"ACTUAL TOOL RESULTS THIS TURN:\n{_results_block}\n\n"
+            f"{_omission_note}"
+            "An entry ending in '... [cut]' was shortened. If the listed results do not let you "
+            "decide, answer </grounded>.\n"
             "Reply with EXACTLY one of:\n"
-            "- GROUNDED (every concrete outcome in the reply is supported by the results, or the reply "
-            "makes no concrete outcome claim)\n"
-            "- UNGROUNDED (the reply claims an outcome not supported / not actually performed)\n"
-            "If UNGROUNDED, add on the next line: CLAIM: [the unsupported claim, short]"
+            "- </grounded> if every concrete outcome in the reply is supported by the results, or "
+            "the reply makes no concrete outcome claim\n"
+            "- </ungrounded> if the reply claims an outcome not supported / not actually performed\n"
+            "On </ungrounded>, add on its own line: CLAIM: <the words from the reply that no result "
+            "supports>. Quote the reply, no brackets. If you cannot quote those words, answer "
+            "</grounded>."
         )
-        try:
-            content = self._run_validation_llm([{"role": "user", "content": prompt}], max_tokens=60)
-        except Exception:
+        _stricter = (
+            "Reply with EXACTLY </grounded> or </ungrounded>, then on the next line, only for "
+            "</ungrounded>: CLAIM: <the unsupported words from the reply>. Nothing else.\n"
+            f"REPLY: {_cut_for_judge(text, 600)}\n"
+            f"TOOL RESULTS: {_cut_for_judge(_results_block, 900)}"
+        )
+        # A sentinel, not an English word, and the same shape the workflow and sub-agent
+        # validators in this file already use. The reason is measured: the default provider
+        # reasons on every call, so a plain-word verdict either drowns in the reasoning (the
+        # old substring test convicted on "is this ungrounded? no") or never arrives at all
+        # when the thinking fills the token budget - which would leave this guard silently
+        # inert while the docs describe a working judge. Reasoning cannot emit a sentinel by
+        # deliberating, `</grounded>` is checked FIRST so an indecisive answer keeps the
+        # reply, and one stricter re-ask follows an answer that carries no sentinel.
+        _raw = ""
+        for _attempt in (0, 1):
+            try:
+                _raw = self._run_validation_llm(
+                    [{"role": "user", "content": _stricter if _attempt else prompt}],
+                    max_tokens=400, timeout_s=15.0,
+                ) or ""
+            except Exception:
+                return False, None
+            _resp = _raw.lower()
+            if "</grounded>" in _resp:
+                return False, None
+            if "</ungrounded>" in _resp:
+                break
+            _first = ([ln.strip() for ln in strip_think_blocks(_raw).splitlines() if ln.strip()] or [""])[0]
+            if _first.lstrip("-*# ").upper().startswith("UNGROUNDED"):
+                break
+        else:
+            try:
+                append_domain_log(
+                    "backend",
+                    f"[RESULT_GROUNDING] no verdict from the judge, kept the reply "
+                    f"(evidence {_shown}/{_shown + _omitted}, answer {len(_raw)} chars)",
+                )
+            except Exception:
+                pass
             return False, None
-        if "UNGROUNDED" not in (content or "").upper():
-            return False, None
+
         claim = None
-        for line in (content or "").splitlines():
+        for line in [ln.strip() for ln in strip_think_blocks(_raw).splitlines() if ln.strip()]:
             if "claim:" in line.lower():
                 claim = line.split(":", 1)[-1].strip()
                 break
-        return True, (claim or "a tool outcome that did not actually happen this turn")
+            if "ungrounded" in line.lower():
+                # A one-line verdict carries its accusation on the same line ("UNGROUNDED - the
+                # mail was never sent"). Throwing that away used to acquit a judge that had just
+                # named the claim, which is the one shape a correction can always act on.
+                _rest = _re.split(r'(?i)</?ungrounded>?', line, maxsplit=1)[-1]
+                claim = _rest.strip().lstrip("-:,;. ").strip() or None
+                if claim:
+                    break
+        claim = (claim or "").strip().strip('"\'').strip("[]").strip()
+        # No usable claim, no correction: a bounce the model cannot act on costs the user an
+        # answer and buys nothing. Fail open, the polarity this whole guard is built on.
+        _c = claim.strip(".").lower()
+        if len(claim) < 8 or "unsupported claim" in _c or _c in ("none", "keine", "n/a"):
+            try:
+                append_domain_log(
+                    "backend",
+                    f"[RESULT_GROUNDING] ungrounded without a usable claim, kept the reply "
+                    f"(evidence {_shown}/{_shown + _omitted})",
+                )
+            except Exception:
+                pass
+            return False, None
+        try:
+            append_domain_log(
+                "backend",
+                f"[RESULT_GROUNDING] ungrounded: {claim[:120]!r} "
+                f"(evidence {_shown}/{_shown + _omitted}, omitted outcomes {_omitted_outcomes})",
+            )
+        except Exception:
+            pass
+        return True, claim
+
+    def _guard_keeps_answer(self, full_content: str) -> bool:
+        """True when this generation already put something answer-shaped on the user's screen.
+
+        The rule every post-stream guard shares (Rule 4 invariant 2: a guardrail may append,
+        never erase what the user already saw): a bounce may retract the bubble only when there
+        is no answer to lose. `_final_answer_probe` is this file's existing definition of "is
+        this an answer", so the rule is not a second heuristic next to it.
+        """
+        return bool(_final_answer_probe(full_content or ""))
+
+    def _retract_streamed_reply(self, stream_callback, kept: list, session_id=None) -> None:
+        """Drop the just-produced reply from the bubble AND from the stream buffer, then put the
+        turn's already-validated answers back.
+
+        One sequence, three callers (empty response, false promise, result grounding). It was
+        three hand copies with three different policies, and they had drifted: one site cleared
+        the bubble only for a short reply but the buffer unconditionally, so the screen and the
+        stored message disagreed about what the user was shown. Never raises.
+        """
+        try:
+            from vaf.core.subagent_ipc import get_current_session_id
+            sid = session_id if session_id is not None else get_current_session_id()
+        except Exception:
+            sid = session_id
+        self._clear_last_assistant_ui(sid)
+        if stream_callback is not None and hasattr(stream_callback, "clear"):
+            try:
+                stream_callback.clear()
+                _restream_kept_answers(stream_callback, kept or [])
+            except Exception:
+                pass
 
     def _clear_last_assistant_ui(self, session_id) -> None:
         """Ask the Web UI to drop the just-produced (faulty) assistant bubble before a retry/correction.

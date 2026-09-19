@@ -44,7 +44,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `contact` for it and `readonly` for a kept stranger's DM instead of `admin` for every row.
   The admission a bridge makes (the record, what you decided about that person, the policy's
   answer and the enrolment with its event) is one shared function now, used by Discord and by
-  Telegram's stranger path.
+  Telegram's stranger path. What the agent learns in such a chat lands in that chat's own
+  memory namespace, as it does for a WhatsApp or Telegram contact, never in the admin's general
+  memory.
 - **The contact is the hub, not the channel.** While answering a contact, the agent has one
   read tool, `contact_history`: what that person wrote to you before and what went to them,
   across WhatsApp, Telegram, Discord and mail, newest first, with a channel filter and a

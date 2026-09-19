@@ -404,14 +404,20 @@ def test_the_send_button_is_the_house_white_and_locked_until_it_is_read():
     assert "const SEND_DELAY_SECONDS = 3;" in card
     # The lane belongs in the busy key: mail op ids and parked-call ids are two sequences, so
     # a bare number would disable a mail draft's buttons while a call of the same id is sending.
-    assert "disabled={busy === `${r.kind}-${r.id}` || locked > 0}" in card
-    assert "const key = `${row.kind}-${row.id}`;" in card and "setBusy(key)" in card
+    # And it is a SET of rows in flight: a single slot let the first request answering re-enable
+    # the second row's buttons while its own request was still on the wire.
+    assert "disabled={busy.has(`${r.kind}-${r.id}`) || locked > 0}" in card
+    assert "const key = `${row.kind}-${row.id}`;" in card and "setBusy(prev => new Set(prev).add(key));" in card
+    assert "useState<Set<string>>(() => new Set())" in card and "next.delete(key); return next;" in card
+    assert "busy === " not in card and "setBusy(null)" not in card
     # The failure note is keyed the same way and shown under ITS row only: a bare string was
-    # rendered under every card on screen, so one refusal read as three.
+    # rendered under every card on screen, so one refusal read as three. Acting on one row
+    # clears that row's note and nobody else's.
     assert "setNote({ key, text:" in card and "note?.key === `${r.kind}-${r.id}`" in card
+    assert "setNote(prev => (prev?.key === key ? null : prev));" in card and "setNote(null);" not in card.split("const act =", 1)[1]
     assert "t('countdown', { seconds: locked })" in card
     # Discard is never locked: throwing away something unread costs nothing.
-    assert 'disabled={busy === `${r.kind}-${r.id}`} onClick={() => act(r, \'discard\')}' in card
+    assert 'disabled={busy.has(`${r.kind}-${r.id}`)} onClick={() => act(r, \'discard\')}' in card
     assert 'className="vaf-draft-rim pointer-events-none absolute inset-0 rounded-2xl"' in card
     # A draft whose send was interrupted offers no Send button at all: it may have arrived, and
     # the click that would repeat it is the one thing this card must not hand out.

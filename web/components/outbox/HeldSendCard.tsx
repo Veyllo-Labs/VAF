@@ -51,8 +51,10 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
     const [rows, setRows] = useState<HeldSendRow[]>([]);
     // Keyed by LANE and id: the two lanes number independently (mail op ids, parked-call
     // rowids), so a bare id would disable a mail draft's buttons while a call with the same
-    // number is being sent.
-    const [busy, setBusy] = useState<string | null>(null);
+    // number is being sent. A SET, one entry per row in flight: with a single slot the first
+    // request answering re-enabled the second row's buttons while its own request was still
+    // on the wire, and a second click there could send that draft twice.
+    const [busy, setBusy] = useState<Set<string>>(() => new Set());
     // The failure note is keyed the same way: it is about ONE draft, and a bare string was
     // rendered under every card on screen, so a bridge refusing the first draft read as three
     // refusals.
@@ -124,7 +126,11 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
 
     const act = async (row: HeldSendRow, action: 'send' | 'discard') => {
         const key = `${row.kind}-${row.id}`;
-        setBusy(key); setNote(null);
+        if (busy.has(key)) return;
+        setBusy(prev => new Set(prev).add(key));
+        // Only this row's note goes: a note under another row is that row's fact, and acting
+        // here must not wipe the reason the person is still reading there.
+        setNote(prev => (prev?.key === key ? null : prev));
         try {
             const url = `${apiBase}/api/outbox/${row.kind}/${row.id}${action === 'send' ? '/send' : ''}`;
             const res = await fetch(url, {
@@ -140,7 +146,7 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
         } catch {
             setNote({ key, text: t('failed', { error: '' }) });
         } finally {
-            setBusy(null);
+            setBusy(prev => { const next = new Set(prev); next.delete(key); return next; });
         }
     };
 
@@ -207,7 +213,7 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
                             guard test pins that repo-wide). While the reading pause runs the
                             button is dead and says why; nothing is ever sent by the clock. */}
                         {r.state !== 'ambiguous' && (
-                        <button type="button" disabled={busy === `${r.kind}-${r.id}` || locked > 0}
+                        <button type="button" disabled={busy.has(`${r.kind}-${r.id}`) || locked > 0}
                             onClick={() => act(r, 'send')}
                             className="px-3 py-1.5 text-sm font-medium rounded-md bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none disabled:opacity-50 inline-flex items-center gap-1.5 min-w-[7.5rem] justify-center">
                             {locked > 0
@@ -215,7 +221,7 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
                                 : <><Send className="w-3.5 h-3.5" />{t('send')}</>}
                         </button>
                         )}
-                        <button type="button" disabled={busy === `${r.kind}-${r.id}`} onClick={() => act(r, 'discard')}
+                        <button type="button" disabled={busy.has(`${r.kind}-${r.id}`)} onClick={() => act(r, 'discard')}
                             className="px-3 py-1.5 text-sm font-medium rounded-md bg-gray-200 dark:bg-[#2e2e2e] text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-[#3a3a3a] disabled:opacity-50 inline-flex items-center gap-1.5">
                             <Trash2 className="w-3.5 h-3.5" />{t('discard')}
                         </button>

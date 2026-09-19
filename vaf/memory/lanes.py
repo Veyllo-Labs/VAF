@@ -132,7 +132,7 @@ class ChatNamespace:
     """One messenger chat's own memory lane.
 
     `key` IS the session id the bridge built for that chat (`whatsapp_<user>_<digits>`,
-    `telegram_<id>`); nothing else names a namespace, so the agent answering in the chat,
+    `telegram_<id>`, `discord_<id>`); nothing else names a namespace, so the agent answering in the chat,
     the compaction that learns from it and the Composer drafting for it all derive the same
     lane from the same id. `label` is the person's name as the bridge knew it when the fact
     was learned; the graph shows `display_label`."""

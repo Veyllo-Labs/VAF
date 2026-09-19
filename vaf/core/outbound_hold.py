@@ -303,6 +303,14 @@ def pending(username: str, user_scope_id: Optional[str] = None, *,
         pass
     try:
         from vaf.mail.service import MailService
+        # NAMED BOUNDARY: no scope, no mail half, and no fallback to the admin scope here. The
+        # mail lane is fail-closed by contract (`MailService` refuses an empty scope, EMAIL_CLIENT
+        # "Scoping rule"), so a held mail exists only under a real scope, and every caller of
+        # this listing carries one: the route binds the signed-in user's scope or the local
+        # admin's (`get_current_vaf_user`), the CLI binds the configured admin scope
+        # (`resolve_owner_identity`) and is scopeless only when the config names none, in which
+        # case no MailService could have parked a draft for anybody. The parked-call half
+        # answers a None scope with the admin's store because that store keys on it that way.
         if user_scope_id:
             svc = MailService(user_scope_id)
             try:

@@ -202,6 +202,12 @@ async def patch_contact(contact_id: str, request: Request, body: ContactUpdate) 
     # even filled in.
     if updates.get("allow_as_assistant_user") is None:
         updates.pop("allow_as_assistant_user", None)
+    # The same rule for the three-state field itself: `assistant_access: null` is a field
+    # nobody filled in, and "undecided" is the one word that takes a decision back. Passed on,
+    # the null reached `_access_from`, came out as "no decision" and cleared a block the
+    # client never mentioned.
+    if updates.get("assistant_access") is None:
+        updates.pop("assistant_access", None)
     _touches_access = "allow_as_assistant_user" in updates or "assistant_access" in updates
     if "assistant_access" in updates:
         updates["assistant_access"] = _access_from(updates.get("assistant_access"))

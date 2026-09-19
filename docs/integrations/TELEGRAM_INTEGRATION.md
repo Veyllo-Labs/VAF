@@ -104,7 +104,7 @@ Each whitelist entry maps a Telegram user to a VAF user scope:
 | `user_scope_id` | VAF user scope UUID |
 | `vaf_username` | VAF username for display |
 
-In addition, any Telegram user whose ID is stored in a VAF user's **Contacts** and set to **allowed** under **Let the agent reply** can write to that user's assistant (handled in the user's context, like a front office); while Inbound is on for Telegram, so can anybody the owner has not decided about, and a contact set to **blocked** cannot either way. The bridge checks the config whitelist first, then the relay whitelist, then the contact's own state.
+In addition, any Telegram user whose ID is stored in a VAF user's **Contacts** and set to **allowed** under **Let the agent reply** can write to that user's assistant (handled in the user's context, like a front office); while Inbound is on for Telegram, so can anybody the owner has not decided about, but only while exactly one account is paired on the bot (whitelist and relay entries together): the bot is shared by every account on the install, so with several owners such a sender cannot be attributed to one of them and gets no reply. A contact set to **blocked** cannot write in either way. The bridge checks the config whitelist first, then the relay whitelist, then the contact's own state.
 
 ### Proactive send (send_telegram)
 

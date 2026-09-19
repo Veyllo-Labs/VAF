@@ -691,20 +691,25 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
             continue
         owners = owner_endpoints(channel, username, user_scope_id)
         relays = owner_endpoints(channel, username, user_scope_id, relay=True) if channel == "telegram" else set()
+        access_known = True
         try:
             from vaf.core.contacts_store import denied_endpoints, front_office_endpoints
             contacts = set(front_office_endpoints(username, user_scope_id, channel) or ())
             denied = set(denied_endpoints(username, user_scope_id, channel) or ())
         except Exception:
             contacts, denied = set(), set()
+            access_known = False
         # Whether this channel answers people nobody decided about, asked through the one
         # function the bridges ask (`messaging_connections.front_office_open`): the switch AND
         # what the channel needs to act on it, which for Telegram is a single paired owner.
         # Reading the policy flag alone made a row say "contact" about a Telegram stranger the
         # bridge turns away, and a row that disagrees with the lane is worse than no row.
+        # Only when the book could be read: with `denied` empty because the lookup FAILED, an
+        # open channel would paint every blocked person as answered, so a failed lookup keeps
+        # the rows read-only (the bridge fails the same way, it refuses what it cannot read).
         try:
             from vaf.core.messaging_connections import front_office_open
-            channel_open = front_office_open(channel)
+            channel_open = access_known and front_office_open(channel)
         except Exception:
             channel_open = False
         for o in overview:

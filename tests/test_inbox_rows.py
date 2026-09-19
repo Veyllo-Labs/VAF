@@ -209,6 +209,48 @@ def test_an_open_telegram_channel_needs_the_one_owner_the_bridge_needs(world, mo
     cfg["telegram_config"] = dict(CONFIG["telegram_config"],
                                   relay_whitelist=[{"telegram_user_id": "9", "vaf_username": "alice", "user_scope_id": SCOPE}])
     assert _row("telegram:555")["mode"] == "contact", "the owner's own relay is still one owner"
+    # A row without a Telegram id is a half-filled pairing, not an account on the bot: it
+    # neither makes the bot look shared nor stands in as the one owner.
+    # MUTATION: drop the telegram_user_id condition from `single_telegram_owner` and the first
+    # assertion goes red (two "owners"), the second too (a phantom owner admits the stranger).
+    cfg["telegram_config"] = dict(CONFIG["telegram_config"],
+                                  whitelist=list(CONFIG["telegram_config"]["whitelist"]) +
+                                  [{"telegram_user_id": "", "vaf_username": "bob", "user_scope_id": OTHER}])
+    assert _row("telegram:555")["mode"] == "contact", "an empty entry is not a second owner"
+    cfg["telegram_config"] = dict(CONFIG["telegram_config"],
+                                  whitelist=[{"telegram_user_id": " ", "vaf_username": "alice", "user_scope_id": SCOPE}],
+                                  relay_whitelist=[])
+    assert _row("telegram:555")["mode"] == "readonly", "nobody is really paired, so nobody is attributed"
+
+
+def test_a_book_that_cannot_be_read_keeps_every_row_read_only(world, monkeypatch):
+    """The rows ask the contact book twice (allowed, denied) and the channel switch once. With
+    the book unreadable both sets come back empty, and an open channel would then paint every
+    blocked person as "contact": the one answer the rows must never give by accident. A failed
+    lookup keeps the channel closed for the rows, the way the bridge refuses what it cannot
+    read.
+
+    MUTATION: drop `access_known and` from the `channel_open` line in `_messenger_rows` and
+    this goes red.
+    """
+    from vaf.core.channel_ingress_policy import set_front_office
+    cfg = dict(CONFIG)
+    cfg["channel_ingress_policy"] = set_front_office(None, True, "whatsapp")
+    import vaf.core.config as cfg_mod
+    monkeypatch.setattr(cfg_mod.Config, "get", classmethod(lambda cls, key, default=None: cfg.get(key, default)))
+    _msg("+491700000042", "hallo", ts=NOW - 100)
+    assert _row("whatsapp:+491700000042")["mode"] == "contact", "the open channel answers them"
+
+    import vaf.core.contacts_store as contacts
+
+    def _broken(*a, **k):
+        raise RuntimeError("contacts.json unreadable")
+    monkeypatch.setattr(contacts, "front_office_endpoints", _broken)
+    monkeypatch.setattr(contacts, "denied_endpoints", _broken)
+    assert _row("whatsapp:+491700000042")["mode"] == "readonly", "unreadable book: nobody is painted as answered"
+    # The owner's own chat is still the owner's: that comes from the whitelist, not the book.
+    _msg("+491700000009", "owner", ts=NOW - 90)
+    assert _row("whatsapp:+491700000009")["mode"] == "owner"
     # The owner's own chat and a relay entry are unaffected: they are paired, not strangers.
     _msg("7", "owner", ts=NOW - 90, channel="telegram")
     assert _row("telegram:7")["mode"] == "owner"

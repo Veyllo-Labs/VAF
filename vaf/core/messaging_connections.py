@@ -60,8 +60,12 @@ def single_telegram_owner() -> Optional[Tuple[Optional[str], str]]:
     # is), so a whitelist owner plus another account's relay is two accounts on one bot, and
     # a stranger cannot be attributed. The same account on both lists is still one owner.
     entries = ((tc.get("whitelist") or []) + (tc.get("relay_whitelist") or [])) if isinstance(tc, dict) else []
+    # An entry without a Telegram id is a half-filled row, not a pairing (the security check
+    # counts paired users the same way): it must neither stand in as the one owner nor make a
+    # single-owner bot look like two.
     owners = {(str(e.get("user_scope_id") or ""), str(e.get("vaf_username") or "admin").strip())
-              for e in entries if isinstance(e, dict)}
+              for e in entries
+              if isinstance(e, dict) and str(e.get("telegram_user_id") or "").strip()}
     if len(owners) != 1:
         return None
     scope, uname = next(iter(owners))

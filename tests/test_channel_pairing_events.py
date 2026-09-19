@@ -149,6 +149,19 @@ def test_a_field_that_was_not_filled_in_changes_no_decision(config, monkeypatch)
     stored = contacts_store.get_contact_by_id(blocked["id"], "alice", user_scope_id=SCOPE)
     assert contacts_store.contact_access(stored) == "denied" and stored.get("company") == "Acme"
     assert events == [], "nothing about the decision changed, so nothing is recorded"
+    # The three-state field's own null is the same case: "undecided" is the word that clears,
+    # null is a field nobody filled in. MUTATION: drop the `assistant_access` pop in
+    # patch_contact and this goes red with the block cleared.
+    asyncio.run(routes.patch_contact(blocked["id"], _req(),
+                                     routes.ContactUpdate(role="Buyer", assistant_access=None)))
+    stored = contacts_store.get_contact_by_id(blocked["id"], "alice", user_scope_id=SCOPE)
+    assert contacts_store.contact_access(stored) == "denied" and stored.get("role") == "Buyer"
+    assert events == []
+    # And the word itself still clears, recorded as "cleared".
+    asyncio.run(routes.patch_contact(blocked["id"], _req(), routes.ContactUpdate(assistant_access="undecided")))
+    assert contacts_store.contact_access(
+        contacts_store.get_contact_by_id(blocked["id"], "alice", user_scope_id=SCOPE)) is None
+    assert [e[1]["detail"] for e in events] == ["cleared: Mara"]
 
 
 def test_the_agent_tool_refuses_a_word_it_does_not_know(config):

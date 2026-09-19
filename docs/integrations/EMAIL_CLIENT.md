@@ -278,6 +278,21 @@ and the mail window's own draft buttons; the decision itself is
 turns, the Front Office answer and a timer the person scheduled all send as before, because
 nobody is there to click.
 
+What the person sees is the whole mail: `list_drafts` (and the unified row `pending` builds
+from it) carries every recipient (`to`, `cc`, `bcc`) and the attachment names from the op's
+metadata, because a card that showed the To line alone let a Bcc or a document go out unseen.
+Sending is one function on every surface, `release_held_draft` (the card's route, `vaf outbox
+send` and `POST /api/mail/drafts/{op_id}/send` all call it): it releases the op, drains the
+account, and reads the outcome BY STATE. `done` is delivered, `pending` is released to the
+sweep, and both answer ok. `failed` means the transport answered and the mail did not leave:
+the op goes back to `held` with the reason in `last_error`, so every surface keeps the draft
+(`MailService.draft_state` reads it as `failed` with the error) and the next Send starts with
+a fresh attempt budget (`approve_op` resets `attempts`; `MAX_ATTEMPTS` bounds what the sweep
+tries on its own after one approval). A `failed` op whose ledger stamp is `ambiguous` was
+handed to the server and never confirmed: it goes back to the person as `ambiguous`, the
+approval itself refuses it (`approve_draft`), and only a discard ends it, because SMTP has no
+idempotency key and nobody may send it twice on the person's behalf.
+
 The agent stamps `username` + `user_scope_id` into tool kwargs at dispatch
 (`agent.py`) and the workflow engine does the same (`workflows/engine.py`); tools
 never trust model-provided identity. Whether a caller may be served at all is

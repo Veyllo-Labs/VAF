@@ -2346,6 +2346,9 @@
     "more": "ほかに{count}件待機中",
     "failed": "実行できませんでした（{error}）。下書きは残ります。",
     "ambiguous": "前回の送信が途中で止まったため、このメッセージはすでに届いている可能性があります。もう一度頼む前に会話を確認してください。",
+    "cc": "Cc: {recipients}",
+    "bcc": "Bcc: {recipients}",
+    "attachments": "添付ファイル：{names}",
     "countdown": "先に読む（{seconds}）"
   },
   "inbox": {

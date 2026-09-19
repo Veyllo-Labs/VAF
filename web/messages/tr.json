@@ -2346,6 +2346,9 @@
     "more": "ve {count} tane daha bekliyor",
     "failed": "Olmadı ({error}); taslak duruyor.",
     "ambiguous": "Son deneme yarıda kaldı, bu yüzden mesaj gönderilmiş olabilir. Yeniden istemeden önce sohbete bak.",
+    "cc": "Cc {recipients}",
+    "bcc": "Bcc {recipients}",
+    "attachments": "Ekler: {names}",
     "countdown": "Önce oku ({seconds})"
   },
   "inbox": {

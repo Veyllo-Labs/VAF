@@ -362,14 +362,16 @@ def test_a_held_mail_and_a_parked_call_sort_into_one_listing(scratch, monkeypatc
             self.scope = scope
 
         def list_drafts(self):
-            return [{"op_id": 12, "to": "uwe@example.com", "subject": "Angebot",
-                     "body": "Guten Tag", "thread_id": None,
+            return [{"op_id": 12, "to": "uwe@example.com", "cc": "cc@example.com", "bcc": "bcc@example.com",
+                     "subject": "Angebot", "body": "Guten Tag", "thread_id": None,
+                     "attachments": ["report.pdf"], "state": "failed", "error": "wire refused",
                      "created_at": datetime.now(timezone.utc).isoformat()}]
 
     import vaf.mail.service as svc_mod
     monkeypatch.setattr(svc_mod, "MailService", _Svc)
 
-    outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+1", "message": "later"},
+    outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+1", "message": "later",
+                                                        "file_path": "/home/user/out/voice note.ogg"},
                                       username=USER, user_scope_id=SCOPE)
     rows = outbound_hold.pending(USER, SCOPE)
     kinds = {r["kind"] for r in rows}
@@ -380,6 +382,13 @@ def test_a_held_mail_and_a_parked_call_sort_into_one_listing(scratch, monkeypatc
     # A threadless draft is in the listing: it is exactly what send_mail parks, and the two
     # older draft projections drop it (they keep only drafts with a thread_id).
     assert mail["recipient"] == "uwe@example.com"
+    # Every address and every file ride on the row, and so does the draft's own state: what
+    # the person approves is what leaves, and a mail that did not leave says why.
+    # MUTATION: drop cc, bcc, attachments or state from either row shape and this goes red.
+    assert (mail["cc"], mail["bcc"], mail["attachments"]) == ("cc@example.com", "bcc@example.com", ["report.pdf"])
+    assert (mail["state"], mail["error"]) == ("failed", "wire refused")
+    call = next(r for r in rows if r["kind"] == "call")
+    assert (call["cc"], call["bcc"], call["attachments"]) == ("", "", ["voice note.ogg"]), "the name, never the path"
 
 
 def test_the_epoch_helper_takes_both_clocks():

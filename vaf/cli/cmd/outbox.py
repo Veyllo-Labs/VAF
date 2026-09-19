@@ -79,8 +79,17 @@ def list_pending(
             preview = f"[red]not sent:[/red] {escape((row.get('error') or '').strip()[:40])} | {preview}"
         elif state == "ambiguous":
             preview = f"[yellow]may already have been sent:[/yellow] {preview}"
+        # Every address and every file, because approving is approving what leaves: a Bcc or
+        # a document the table did not show would go out unseen.
+        files = [str(a) for a in (row.get("attachments") or []) if str(a)]
+        if files:
+            preview = f"{preview} [dim]files:[/dim] {escape(', '.join(files)[:60])}"
+        to = escape((row.get("recipient") or "")[:40])
+        for label in ("cc", "bcc"):
+            if str(row.get(label) or "").strip():
+                to = f"{to} [dim]{label}:[/dim] {escape(str(row.get(label)).strip()[:40])}"
         table.add_row(_when(row["created_ts"]), escape(str(row["kind"])), str(row["id"]),
-                      escape(str(row["channel"])), escape((row.get("recipient") or "")[:40]), preview)
+                      escape(str(row["channel"])), to, preview)
     UI.console.print(table)
     UI.console.print("[dim]vaf outbox send <kind> <id>   vaf outbox discard <kind> <id>[/dim]")
 
@@ -104,6 +113,8 @@ def send_entry(
     if kind == "mail":
         # The same two acts the card performs (release AND drain), through the one function
         # both call: a terminal that only released printed "Sent." over a mail still waiting.
+        from rich.markup import escape
+
         from vaf.mail.service import release_held_draft
         outcome = release_held_draft(scope, username, int(entry_id))
         if outcome.get("error") == "not waiting":
@@ -116,8 +127,12 @@ def send_entry(
         if state == "pending":
             UI.console.print("[green]Released.[/green] The next outbox run delivers it.")
             return
-        UI.console.print(f"[red]Not sent[/red] (state: {state or 'unknown'}). "
-                         f"{outcome.get('error') or ''}".rstrip())
+        if state == "ambiguous":
+            # Handed to the server and never confirmed: nobody may send it again, only drop it.
+            UI.console.print(f"[yellow]May already have been sent.[/yellow] {escape(str(outcome.get('error') or ''))}")
+            raise typer.Exit(1)
+        UI.console.print(f"[red]Not sent[/red] (state: {state or 'unknown'}), the draft stays. "
+                         f"{escape(str(outcome.get('error') or ''))}".rstrip())
         raise typer.Exit(1)
     UI.console.print("[red]Unknown kind.[/red] Use 'mail' or 'call', as the list prints it.")
     raise typer.Exit(1)

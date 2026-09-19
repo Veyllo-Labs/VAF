@@ -653,3 +653,43 @@ def test_the_pure_rules_stand_alone():
                       "unread_count": 1, "snippet": "Wann können wir telefonieren?"}
     assert inbox.mail_thread_state(older_answered, None)["waits"] is True
     assert inbox.mail_thread_state(dict(older_answered, newest_answered_at="2026-09-09 10:00:00"), None)["waits"] is False
+
+
+def test_an_open_whatsapp_channel_answers_nobody_while_the_bridge_forwards_nothing(world, monkeypatch):
+    """`whatsapp_config.inbound_to_agent` off stops every sender in the bridge before the
+    policy is even read, so an open Front Office switch answers nobody on WhatsApp. The row
+    used to read the switch alone and call a stranger's chat "contact", the one thing the
+    fail-closed reader exists to prevent: a row claiming the agent answers where it is silent.
+
+    MUTATION: drop the whatsapp branch from `front_office_open` and the readonly assertion
+    goes red; read the config by hand in `_messenger_rows` again and the measured guard at
+    the end goes red.
+    """
+    from vaf.core.channel_ingress_policy import set_front_office
+    from vaf.core.messaging_connections import front_office_open, whatsapp_inbound_to_agent
+    cfg = dict(CONFIG)
+    cfg["channel_ingress_policy"] = set_front_office(None, True, "whatsapp")
+    import vaf.core.config as cfg_mod
+    monkeypatch.setattr(cfg_mod.Config, "get", classmethod(lambda cls, key, default=None: cfg.get(key, default)))
+    _msg("+491700000042", "hallo", ts=NOW - 100)
+    assert whatsapp_inbound_to_agent() is True and front_office_open("whatsapp") is True
+    row = _row("whatsapp:+491700000042")
+    assert row["mode"] == "contact" and row["can_compose"] is False, "forwarding on: the open channel answers them"
+
+    cfg["whatsapp_config"] = dict(CONFIG["whatsapp_config"], inbound_to_agent=False)
+    assert whatsapp_inbound_to_agent() is False and front_office_open("whatsapp") is False
+    row = _row("whatsapp:+491700000042")
+    assert row["mode"] == "readonly" and row["can_compose"] is True, "forwarding off: nobody is answered, the person writes"
+    # Only an explicit False switches it off: a missing key, a null and a config that is not a
+    # dict all forward, the bridge's own default.
+    for wc in ({}, None, "broken", dict(CONFIG["whatsapp_config"], inbound_to_agent=None)):
+        cfg["whatsapp_config"] = wc
+        assert whatsapp_inbound_to_agent() is True, repr(wc)
+
+    # The measured guard: the switch is read in ONE place. Five readers spelled the same
+    # isinstance-and-default line by hand before the primitive existed, and the Front Office
+    # switch read none of them.
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "vaf"
+    readers = [p for p in root.rglob("*.py") if '.get("inbound_to_agent"' in p.read_text(encoding="utf-8")]
+    assert [p.name for p in readers] == ["messaging_connections.py"], readers

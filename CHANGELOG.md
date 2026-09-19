@@ -30,7 +30,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   cannot go out, the draft stays in the card with the reason on it, and it is yours to try
   again or drop. If VAF is killed in the middle of a send, the draft comes back saying the
   message may already have been on its way, and that one can only be dropped: nothing here
-  may hand you a button that sends the same message twice.
+  may hand you a button that sends the same message twice. The same holds for a mail: a send
+  that did not leave keeps the draft in the card with the reason (it used to vanish into the
+  mail outbox's failed list with nothing said, and so did one sent from the mail window), and
+  one handed to the server without an answer comes back without a Send button. The card, the
+  terminal and the mail window show every address a mail goes to, Cc and Bcc included, and the
+  names of the files that leave with it, because what you approve is what leaves.
 - **Inbound on Discord.** The Inbound window switches Discord like the other channels:
   with it on, anybody the admin has not decided about is answered in Front Office mode when
   they write the bot a direct message, and added to the admin's book (where they can be

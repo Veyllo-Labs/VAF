@@ -701,8 +701,9 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
     lid_map: Dict[str, Any] = {}
     try:
         from vaf.core.config import Config
+        from vaf.core.messaging_connections import whatsapp_inbound_to_agent
         wc = Config.get("whatsapp_config") or {}
-        whatsapp_off = isinstance(wc, dict) and wc.get("inbound_to_agent", True) is False
+        whatsapp_off = not whatsapp_inbound_to_agent()
         lid_map = dict((wc.get("lid_to_e164") or {}) if isinstance(wc, dict) else {})
     except Exception:
         whatsapp_off = False

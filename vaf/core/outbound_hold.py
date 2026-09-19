@@ -245,6 +245,21 @@ def _epoch(value: Any) -> float:
             return 0.0
 
 
+def _call_attachments(args_json: Any) -> List[str]:
+    """The file a parked messenger call would send, by name, for the row. `send_whatsapp`
+    carries it as `file_path`; the row shows the name and never the path, which is the
+    caller's own directory and not the reader's business."""
+    try:
+        args = json.loads(str(args_json or "{}"))
+    except Exception:
+        return []
+    path = str((args or {}).get("file_path") or "").strip() if isinstance(args, dict) else ""
+    if not path:
+        return []
+    import os
+    return [os.path.basename(path.rstrip("/\\")) or path]
+
+
 def pending(username: str, user_scope_id: Optional[str] = None, *,
             limit: int = 50, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Everything waiting for this person's word, newest first, in one row shape.
@@ -278,6 +293,7 @@ def pending(username: str, user_scope_id: Optional[str] = None, *,
                 rows.append({
                     "kind": "call", "id": int(r["id"]), "channel": r.get("channel") or "",
                     "tool": r.get("tool") or "", "recipient": r.get("recipient") or "",
+                    "cc": "", "bcc": "", "attachments": _call_attachments(r.get("args")),
                     "subject": "", "preview": r.get("preview") or "",
                     "created_ts": float(r.get("created_ts") or 0.0),
                     "session_id": r.get("session_id") or "",
@@ -303,13 +319,20 @@ def pending(username: str, user_scope_id: Optional[str] = None, *,
             for d in drafts:
                 if want and str(d.get("chat_session_id") or "") != want:
                     continue
+                # Every address and every file, because what the person approves is what
+                # leaves: a card that showed the To line alone let a Bcc or a document go out
+                # unseen. The state is the draft's own (`MailService.draft_state`): a send
+                # that did not leave comes back to the card with its reason, one that may
+                # have left comes back without a Send button.
                 rows.append({
                     "kind": "mail", "id": int(d.get("op_id") or 0), "channel": "mail",
                     "tool": "send_mail", "recipient": str(d.get("to") or ""),
+                    "cc": str(d.get("cc") or ""), "bcc": str(d.get("bcc") or ""),
+                    "attachments": [str(a) for a in (d.get("attachments") or []) if str(a)],
                     "subject": str(d.get("subject") or ""), "preview": str(d.get("body") or ""),
                     "created_ts": _epoch(d.get("created_at")),
                     "session_id": str(d.get("chat_session_id") or ""),
-                    "state": "held", "error": "",
+                    "state": str(d.get("state") or "held"), "error": str(d.get("error") or ""),
                 })
     except Exception:
         pass

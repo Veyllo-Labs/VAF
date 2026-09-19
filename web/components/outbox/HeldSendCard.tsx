@@ -30,6 +30,12 @@ export type HeldSendRow = {
     channel: string;
     tool: string;
     recipient: string;
+    /** The other addresses a mail goes to. Shown because approving is approving what leaves:
+     *  a card with the To line alone let a Bcc go out unseen. */
+    cc?: string;
+    bcc?: string;
+    /** The names of the files that leave with it. */
+    attachments?: string[];
     subject: string;
     preview: string;
     created_ts: number;
@@ -172,11 +178,20 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
                         {t('to', { recipient: r.recipient || t('noRecipient') })}
                         {r.subject ? ` - ${r.subject}` : ''}
                     </p>
+                    {/* Every address and every file, because what the person approves is what
+                        leaves; a line is shown only when there is something on it. */}
+                    {r.cc ? <p className="text-xs text-gray-500 dark:text-[#9a9a9a] break-words">{t('cc', { recipients: r.cc })}</p> : null}
+                    {r.bcc ? <p className="text-xs text-gray-500 dark:text-[#9a9a9a] break-words">{t('bcc', { recipients: r.bcc })}</p> : null}
+                    {r.attachments && r.attachments.length > 0 ? (
+                        <p className="text-xs text-gray-500 dark:text-[#9a9a9a] break-words">{t('attachments', { names: r.attachments.join(', ') })}</p>
+                    ) : null}
                     <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words">{r.preview}</p>
                     {/* A draft whose last attempt did not leave says so on the row, with the
                         reason: the person decides whether to try again or drop it, and a retry
-                        with no explanation is a person guessing. */}
-                    {r.state === 'failed' && (
+                        with no explanation is a person guessing. Not while the note under the
+                        buttons already says it for this row: the note is set on the failed click
+                        and the reload brings the row back as failed, so both would show at once. */}
+                    {r.state === 'failed' && note?.key !== `${r.kind}-${r.id}` && (
                         <p className="text-xs text-red-600 dark:text-red-400">{t('failed', { error: r.error || '' })}</p>
                     )}
                     {/* Interrupted mid-send: it may have arrived. The person gets the reason and

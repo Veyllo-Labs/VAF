@@ -175,7 +175,7 @@ def test_the_card_has_no_hardcoded_copy():
     """Every string the person reads comes from the catalogues, in all seven languages."""
     card = (ROOT / "web" / "components" / "outbox" / "HeldSendCard.tsx").read_text(encoding="utf-8")
     keys = {"title", "to", "noRecipient", "send", "discard", "more", "failed", "ambiguous",
-            "countdown"}
+            "countdown", "cc", "bcc", "attachments"}
     for key in keys:
         assert f"t('{key}'" in card, key
     for lang in ("de", "en", "tr", "zh", "ja", "ko", "th"):
@@ -244,12 +244,15 @@ def test_the_cli_prints_and_decides(monkeypatch, tmp_path):
     # "[bold]" or "[/red]", and Rich would style the table on the first and raise on the
     # second. MUTATION: drop the `escape()` calls and this invoke exits non-zero (MarkupError)
     # or the literal brackets vanish from the output.
-    third = park_messenger_call("send_whatsapp", {"to_phone": "+49[/red]170", "message": "see [bold]this[/bold] and [/red]"},
+    third = park_messenger_call("send_whatsapp", {"to_phone": "+49[/red]170", "message": "see [bold]this[/bold] and [/red]",
+                                                  "file_path": "/home/user/out/[red]note.ogg"},
                                 username="alice", user_scope_id="scope-1")
     shown = runner.invoke(cmd.app, ["list"])
     assert shown.exit_code == 0, shown.output
     assert "[bold]this[/bold]" in shown.output and "[/red]" in shown.output
     assert store.held_send(third, "alice", "scope-1")["state"] == "held"
+    # The file that would leave with it is on the row by name, escaped like everything else.
+    assert "files:" in shown.output and "[red]note.ogg" in shown.output and "/home/user" not in shown.output
 
 
 def test_the_outbox_group_sits_behind_the_terminal_door():
@@ -413,6 +416,13 @@ def test_the_send_button_is_the_house_white_and_locked_until_it_is_read():
     # A draft whose send was interrupted offers no Send button at all: it may have arrived, and
     # the click that would repeat it is the one thing this card must not hand out.
     assert "{r.state !== 'ambiguous' && (" in card and "t('ambiguous')" in card
+    # Every address and every file: approving is approving what leaves, and a card with the To
+    # line alone let a Bcc or a document go out unseen.
+    assert "t('cc', { recipients: r.cc })" in card and "t('bcc', { recipients: r.bcc })" in card
+    assert "t('attachments', { names: r.attachments.join(', ') })" in card
+    # The failure is said ONCE per row: the note is set on the failed click and the reload
+    # brings the row back as failed, so the row's own line yields to the note for that row.
+    assert "{r.state === 'failed' && note?.key !== `${r.kind}-${r.id}` && (" in card
 
     css = (ROOT / "web" / "app" / "globals.css").read_text(encoding="utf-8")
     rim = css.split("@keyframes vafDraftRim", 1)[1][:200]

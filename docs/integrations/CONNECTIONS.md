@@ -319,7 +319,7 @@ The WhatsApp window (Settings → Connections → WhatsApp) is laid out like the
 }
 ```
 
-- **`inbound_to_agent`** (default `true`): When `true`, incoming WhatsApp messages are enqueued and the agent replies (two-way chat). When `false`, WhatsApp is send-only: the bot can send you content (text, voice, documents), but incoming messages do **not** trigger the agent. The user stays reachable; only the direction "user → agent" is disabled.
+- **`inbound_to_agent`** (default `true`): When `true`, incoming WhatsApp messages are enqueued and the agent replies (two-way chat). When `false`, WhatsApp is send-only: the bot can send you content (text, voice, documents), but incoming messages do **not** trigger the agent. The user stays reachable; only the direction "user → agent" is disabled. Off stops every sender, so an open Inbound switch answers nobody on WhatsApp while it is off, and the inbox rows and the WhatsApp window say so (`messaging_connections.whatsapp_inbound_to_agent` is the one reader of the key; `front_office_open("whatsapp")` folds it in).
 
 ### Troubleshooting
 

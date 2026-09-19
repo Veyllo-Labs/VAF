@@ -1472,12 +1472,16 @@ class MailStore:
 
     def approve_op(self, op_id: int, *, not_before_ts: Optional[int] = None) -> bool:
         """A held send becomes pending, runnable now (or after not_before_ts): the person
-        approved the draft. Only a held op can be approved."""
+        approved the draft. Only a held op can be approved. The attempt counter starts over:
+        MAX_ATTEMPTS bounds what the SWEEP tries on its own after one approval, and a draft
+        that came back to the person after a failed attempt (`release_held_draft`) would
+        otherwise run out of tries across their approvals and fail before it was even tried."""
         conn = self._conn()
         now = int(not_before_ts if not_before_ts is not None
                   else datetime.now(timezone.utc).timestamp())
         cur = conn.execute(
-            "UPDATE ops SET state='pending', updated_at=?, payload=json_set(payload, '$.not_before_ts', ?) "
+            "UPDATE ops SET state='pending', attempts=0, updated_at=?, "
+            "payload=json_set(payload, '$.not_before_ts', ?) "
             "WHERE id=? AND state='held' AND kind='send'", (_now(), now, int(op_id)))
         conn.commit()
         return cur.rowcount == 1

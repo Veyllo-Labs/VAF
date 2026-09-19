@@ -400,22 +400,30 @@ def test_a_released_draft_the_sweep_delivers_is_not_a_failure():
 
     from vaf.mail.service import release_held_draft
 
+    restored = []
+
     def _svc(final_state):
         store = SimpleNamespace(get_op=lambda _id: {"kind": "send", "state": "held",
-                                                    "payload": {"account_id": "a@example.com"}})
+                                                    "payload": {"account_id": "a@example.com"}},
+                                mark_op=lambda _id, state, **kw: restored.append((state, kw)) or True)
         return SimpleNamespace(store=store, approve_draft=lambda _id: True,
+                               draft_state=lambda op: ("held", ""),
                                send_outcome=lambda _id: {"state": final_state, "error": ""})
 
     assert release_held_draft("scope", "alice", 1, service=_svc("pending")) == {
-        "ok": True, "state": "pending", "error": ""}
+        "ok": True, "state": "pending", "delivery": "", "error": ""}
     assert release_held_draft("scope", "alice", 1, service=_svc("done"))["ok"] is True
     for bad in ("failed", "cancelled", "discarded", ""):
         out = release_held_draft("scope", "alice", 1, service=_svc(bad))
         assert out["ok"] is False and out["state"] == bad, bad
+    # Only the failed outcome goes back to held; a cancelled or discarded op is not the
+    # person's any more and is left alone.
+    assert restored == [("held", {"expect_state": "failed"})]
     # And a draft that is not waiting is still "no draft with that id", not a send.
     not_waiting = SimpleNamespace(
         store=SimpleNamespace(get_op=lambda _id: {"kind": "send", "state": "done", "payload": {}}),
-        approve_draft=lambda _id: True, send_outcome=lambda _id: {"state": "done", "error": ""})
+        approve_draft=lambda _id: True, draft_state=lambda op: ("held", ""),
+        send_outcome=lambda _id: {"state": "done", "error": ""})
     assert release_held_draft("scope", "alice", 1, service=not_waiting)["error"] == "not waiting"
 
 
@@ -507,3 +515,133 @@ def test_the_mail_window_and_the_inbox_show_the_held_draft():
         assert set(d["mailV2"]["draft"]) == {"title", "hint", "send", "edit", "discard", "sent", "failed"}, path.name
         assert {"draftTitle", "draftWaiting", "draftSend", "draftDiscard", "draftFailed"} <= set(d["inbox"]), path.name
         assert {"ovEvMailSpoof", "ovEvMailToken", "ovEvMailCapped"} <= set(d["notifications"]), path.name
+
+
+def test_a_held_draft_carries_every_recipient_and_every_file(world):
+    """What the person approves is byte for byte what leaves, so the row shows all of it: a
+    card with the To line alone let a Bcc or a document go out unseen. The names come from
+    the attachment metadata `send_mail` stores beside the op, never the paths.
+
+    MUTATION: drop `bcc` or `attachments` from `list_drafts` or from the unified row and this
+    goes red.
+    """
+    from vaf.core import outbound_hold
+    svc = MailService(SCOPE)
+    try:
+        q = svc.queue_send(ACCOUNT, "lena@example.org", "Angebot", "Guten Tag", cc="cc@example.org",
+                           bcc="bcc@example.org", undo_seconds=0, hold=True, sent_by="agent",
+                           attachment_meta=[{"path": "/home/user/docs/report.pdf", "filename": "report.pdf"}],
+                           chat_session_id="chat-1")
+        d = svc.list_drafts()[0]
+        assert d["op_id"] == q["op_id"] and d["cc"] == "cc@example.org" and d["bcc"] == "bcc@example.org"
+        assert d["attachments"] == ["report.pdf"] and d["state"] == "held" and d["error"] == ""
+    finally:
+        svc.store.close()
+    row = next(r for r in outbound_hold.pending("alice", SCOPE, session_id="chat-1") if r["kind"] == "mail")
+    assert row["cc"] == "cc@example.org" and row["bcc"] == "bcc@example.org" and row["attachments"] == ["report.pdf"]
+    assert row["state"] == "held" and row["error"] == ""
+
+
+def test_a_mail_send_that_did_not_leave_comes_back_to_the_person_with_the_reason(world, monkeypatch):
+    """The parked-call lane keeps a failed draft on the card with its reason; the mail lane
+    parked it as a failed op for the ops API, where nobody was looking, and the card lost it
+    with nothing said. `release_held_draft` now reads the outcome by state: `failed` goes back
+    to `held` with the reason, and the next approval starts with a fresh attempt budget.
+
+    MUTATION: drop the `mark_op(..., "held")` restore and the second block goes red (the draft
+    is gone); drop `attempts=0` from `approve_op` and the last block goes red (the sweep parks
+    the draft as "max attempts reached" before trying).
+    """
+    from vaf.core import outbound_hold
+    from vaf.mail.service import release_held_draft
+    svc = MailService(SCOPE)
+    try:
+        q = svc.queue_send(ACCOUNT, "lena@example.org", "Angebot", "Guten Tag", undo_seconds=0, hold=True,
+                           sent_by="agent", chat_session_id="chat-1")
+        op_id = q["op_id"]
+        monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(False, "permanent", error="wire refused"))
+        out = release_held_draft(SCOPE, "alice", op_id, service=svc)
+        assert out == {"ok": False, "state": "failed", "delivery": "failed", "error": "wire refused"}
+        # Still the person's: held, listed, with the reason, and sendable again.
+        assert svc.store.get_op(op_id)["state"] == "held"
+        d = svc.list_drafts()[0]
+        assert d["op_id"] == op_id and d["state"] == "failed" and d["error"] == "wire refused"
+        row = next(r for r in outbound_hold.pending("alice", SCOPE, session_id="chat-1") if r["kind"] == "mail")
+        assert row["state"] == "failed" and row["error"] == "wire refused"
+        # A fresh attempt budget on every approval: five attempts already burned (the sweep's
+        # cap) must not make the person's next Send fail before it is tried.
+        conn = svc.store._conn()
+        conn.execute("UPDATE ops SET attempts=5 WHERE id=?", (op_id,))
+        conn.commit()
+        monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(True, "ok"))
+        out = release_held_draft(SCOPE, "alice", op_id, service=svc)
+        assert out["ok"] is True and out["state"] == "done" and out["delivery"] == "sent", out
+        assert svc.list_drafts() == []
+    finally:
+        svc.store.close()
+
+
+def test_a_mail_handed_to_the_server_and_never_confirmed_is_never_sent_again(world, monkeypatch):
+    """The ledger's `ambiguous` stamp is final: SMTP has no idempotency key, so a draft whose
+    last attempt may have delivered it comes back to the person WITHOUT a way to send it
+    again, from every surface (the approval itself refuses), and only a discard ends it.
+
+    MUTATION: drop the ambiguous check from `approve_draft` and the sender is called a second
+    time.
+    """
+    from vaf.core import outbound_hold
+    from vaf.mail.service import AMBIGUOUS_DRAFT, release_held_draft
+    calls = []
+
+    def _handed_off(msg):
+        calls.append(msg)
+        return sender.SendResult(False, "ambiguous", handed_off=True, error="no reply after DATA")
+
+    svc = MailService(SCOPE)
+    try:
+        q = svc.queue_send(ACCOUNT, "lena@example.org", "Angebot", "Guten Tag", undo_seconds=0, hold=True,
+                           sent_by="agent", chat_session_id="chat-1")
+        op_id = q["op_id"]
+        monkeypatch.setattr(sender, "send", _handed_off)
+        out = release_held_draft(SCOPE, "alice", op_id, service=svc)
+        assert out["ok"] is False and out["state"] == "ambiguous" and out["delivery"] == "ambiguous"
+        assert out["error"] == "no reply after DATA" and len(calls) == 1
+        assert svc.store.get_op(op_id)["state"] == "held"
+        assert svc.list_drafts()[0]["state"] == "ambiguous"
+        row = next(r for r in outbound_hold.pending("alice", SCOPE, session_id="chat-1") if r["kind"] == "mail")
+        assert row["state"] == "ambiguous"
+        # No second delivery from any surface: the release refuses before approving, and the
+        # approval itself refuses.
+        monkeypatch.setattr(sender, "send", lambda msg: calls.append(msg) or sender.SendResult(True, "ok"))
+        again = release_held_draft(SCOPE, "alice", op_id, service=svc)
+        assert again == {"ok": False, "state": "ambiguous", "error": AMBIGUOUS_DRAFT} and len(calls) == 1
+        assert svc.approve_draft(op_id) is False and len(calls) == 1
+        assert svc.store.get_op(op_id)["state"] == "held"
+        # Only a discard ends it.
+        assert svc.discard_draft(op_id) is True and svc.list_drafts() == []
+    finally:
+        svc.store.close()
+
+
+def test_the_mail_windows_send_is_the_one_release(world, monkeypatch):
+    """`POST /api/mail/drafts/{id}/send` carried its own copy of the two acts (release, drain)
+    and parked a send that did not leave out of sight. It calls `release_held_draft` now, so
+    the mail window keeps a failed draft the way the card does, and an interrupted one comes
+    back without a way to send it again.
+
+    MUTATION: put the route's own approve-and-drain back and the held assertion goes red.
+    """
+    import vaf.api.mail_routes as mr
+    monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(False, "permanent", error="wire refused"))
+    svc = MailService(SCOPE)
+    q = svc.queue_send(ACCOUNT, "lena@example.org", "Angebot", "Guten Tag", undo_seconds=0, hold=True, sent_by="front_office")
+    svc.store.close()
+    out = asyncio.run(mr.send_draft(q["op_id"], _user=USER))
+    assert out == {"ok": False, "state": "failed", "delivery": "failed", "error": "wire refused"}
+    listed = asyncio.run(mr.list_drafts(thread_id=None, _user=USER))["drafts"]
+    assert [d["op_id"] for d in listed] == [q["op_id"]] and listed[0]["state"] == "failed"
+    monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(True, "ok"))
+    out = asyncio.run(mr.send_draft(q["op_id"], _user=USER))
+    assert out["ok"] is True and out["state"] == "done" and out["delivery"] == "sent"
+    with pytest.raises(mr.HTTPException):
+        asyncio.run(mr.send_draft(q["op_id"], _user=USER))

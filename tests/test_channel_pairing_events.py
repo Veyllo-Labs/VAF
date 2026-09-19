@@ -205,3 +205,49 @@ def test_the_discord_admin_arrives_through_the_config_patch_and_is_recorded_from
     import inspect
     src = inspect.getsource(routes.patch_config)
     assert src.index("Config.save(merged)") < src.index("_note_discord_admin_change(current, merged, _user)")
+
+
+def test_the_three_state_word_outranks_the_legacy_bool_whatever_order_they_arrive_in(config):
+    """`update_contact` takes both spellings of the decision, and a caller may send both: the
+    PATCH body has both fields, and a tool built on the old bool may add the word later. The
+    word IS the decision; the bool speaks only when the word is absent. It used to depend on
+    the order of the keys, so `assistant_access="denied", allow_as_assistant_user=True` came
+    out as a grant.
+
+    MUTATION: handle the two keys inside the field loop again and the first assertion goes red.
+    """
+    from vaf.core import contacts_store
+    rec = contacts_store.create_contact("Mara", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000077")
+    cid = rec["id"]
+    out = contacts_store.update_contact(cid, "alice", user_scope_id=SCOPE,
+                                        assistant_access="denied", allow_as_assistant_user=True)
+    assert contacts_store.contact_access(out) == "denied"
+    out = contacts_store.update_contact(cid, "alice", user_scope_id=SCOPE,
+                                        allow_as_assistant_user=True, assistant_access="denied")
+    assert contacts_store.contact_access(out) == "denied"
+    # The bool alone still speaks: True is a grant, False takes the decision back.
+    out = contacts_store.update_contact(cid, "alice", user_scope_id=SCOPE, allow_as_assistant_user=True)
+    assert contacts_store.contact_access(out) == "allowed"
+    out = contacts_store.update_contact(cid, "alice", user_scope_id=SCOPE, allow_as_assistant_user=False)
+    assert contacts_store.contact_access(out) is None
+    # And neither key leaks into the record as a raw field: the writer keeps them in step.
+    out = contacts_store.update_contact(cid, "alice", user_scope_id=SCOPE, assistant_access="allowed", name="Mara B.")
+    assert contacts_store.contact_access(out) == "allowed" and out["name"] == "Mara B."
+    assert out.get("allow_as_assistant_user") is True
+
+
+def test_the_tool_says_what_no_decision_means(config):
+    """`get_contact` answers the question "can this person reach my assistant" with three
+    words, and the third is a rule rather than silence: nobody decided, so the channel's
+    Inbound switch answers, and only while it stands open. Silence read as "no" to the model.
+
+    MUTATION: drop the else branch in get_contact.py and this goes red.
+    """
+    from vaf.core import contacts_store
+    from vaf.tools.get_contact import GetContactTool
+    contacts_store.create_contact("Nils", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000078")
+    text = GetContactTool().run(name="Nils", username="alice", user_scope_id=SCOPE)
+    assert "Can reach your assistant: not decided" in text and "Inbound is open" in text
+    contacts_store.create_contact("Olga", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000079",
+                                  assistant_access="denied")
+    assert "Can reach your assistant: no" in GetContactTool().run(name="Olga", username="alice", user_scope_id=SCOPE)

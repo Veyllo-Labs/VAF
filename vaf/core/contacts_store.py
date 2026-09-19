@@ -428,21 +428,22 @@ def update_contact(
                     "preferred_language", "how_to_address", "birthday", "notes", "allow_as_assistant_user",
                     "assistant_access", "status", "company", "role", "tags",
                 }
+                # The decision is resolved ONCE, before the field loop, because a caller may send
+                # both spellings and the loop would otherwise let the later key win: the three-state
+                # word is the decision itself, and the legacy bool speaks only when the word is
+                # absent. Written through the one writer so the bool cannot drift away from the
+                # word; an unknown word clears rather than inventing a state. The bool's True is a
+                # grant and its False the withdrawal of a decision, never a veto (bool() over a
+                # three-state string is how a denial turns into a grant, Rule 4.7).
+                if "assistant_access" in updates:
+                    apply_contact_access(contacts[i], updates["assistant_access"])
+                elif "allow_as_assistant_user" in updates:
+                    apply_contact_access(contacts[i],
+                                         ACCESS_ALLOWED if bool(updates["allow_as_assistant_user"]) else None)
                 for k, v in updates.items():
-                    if k not in allowed:
+                    if k not in allowed or k in ("assistant_access", "allow_as_assistant_user"):
                         continue
-                    if k == "assistant_access":
-                        # The person's own decision: allowed, denied, or cleared back to
-                        # "nobody decided". Written through the one writer so the legacy bool
-                        # cannot drift away from it; an unknown word clears rather than
-                        # inventing a state.
-                        apply_contact_access(contacts[i], v)
-                    elif k == "allow_as_assistant_user":
-                        # A caller that still speaks the old bool: True is a grant, False is
-                        # the withdrawal of a decision, never a veto (bool() over a three-state
-                        # string is how a denial turns into a grant, Rule 4.7).
-                        apply_contact_access(contacts[i], ACCESS_ALLOWED if bool(v) else None)
-                    elif k == "channels":
+                    if k == "channels":
                         contacts[i]["channels"] = _normalize_channels(v)
                         _sync_legacy_from_channels(contacts[i])
                     elif k == "tags":

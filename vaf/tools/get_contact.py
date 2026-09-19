@@ -106,13 +106,18 @@ class GetContactTool(BaseTool):
             parts.append(f"Birthday: {contact['birthday']}")
         if contact.get("notes"):
             parts.append(f"Notes: {contact['notes']}")
-        # Three answers, and the third one is silence: a person nobody decided about is
-        # answered only while their channel stands open, so there is nothing to state here.
+        # Three answers, and the third one is a rule rather than a fact about the person:
+        # nobody decided, so their channel's Inbound switch answers for them, and only while
+        # it stands open. Said out loud, because the model asked and silence reads as "no".
         access = contact_access(contact)
         if access == "allowed":
             parts.append("Can reach your assistant: yes, on every channel")
         elif access == "denied":
             parts.append("Can reach your assistant: no, the user switched this person off")
+        else:
+            parts.append("Can reach your assistant: not decided; the channel decides, so only while "
+                         "that channel's Inbound is open (update_contact assistant_access='allowed' "
+                         "or 'denied' to decide)")
         if contact.get("company"):
             parts.append(f"Company: {contact['company']}")
         if contact.get("role"):

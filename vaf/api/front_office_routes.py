@@ -231,7 +231,7 @@ def _channel_contacts(caller: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
 
 async def _state(caller: Dict[str, Any]) -> Dict[str, Any]:
     from vaf.core.contacts_store import get_contacts_allowing_assistant
-    from vaf.core.messaging_connections import reply_window_hours
+    from vaf.core.messaging_connections import reply_window_hours, whatsapp_inbound_to_agent
 
     state = front_office_state(Config.get("channel_ingress_policy"))
     wc = Config.get("whatsapp_config") or {}
@@ -256,7 +256,7 @@ async def _state(caller: Dict[str, Any]) -> Dict[str, Any]:
         "channels_connected": {ch: _channel_connected(ch, caller) for ch in FRONT_OFFICE_CHANNELS},
         "channel_contacts": _channel_contacts(caller),
         # Off stops every sender before the agent, contacts included (whatsapp_bridge).
-        "whatsapp_inbound_to_agent": bool(wc.get("inbound_to_agent", True)),
+        "whatsapp_inbound_to_agent": whatsapp_inbound_to_agent(),
         # The WhatsApp reply window: it no longer decides who may write in (a message from
         # somebody the owner has not allowed is stored, not answered), and it is kept here
         # because the WhatsApp window still shows and sets it.

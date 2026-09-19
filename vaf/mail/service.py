@@ -20,6 +20,13 @@ from vaf.mail.store import MailStore
 
 logger = logging.getLogger("vaf.mail.service")
 
+#: What a held draft is told when its last attempt handed the mail to the server and never
+#: heard back. The ledger's word for that is `ambiguous`, and it is final for the draft: SMTP
+#: has no idempotency key, so nobody may send it again on the person's behalf.
+AMBIGUOUS_DRAFT = ("The last attempt was interrupted after the mail was handed to the server, so "
+                   "it may already have been delivered. It is not sent again: check the Sent "
+                   "folder, drop the draft if it arrived, and ask for it again if it did not.")
+
 _ALLOWED_TAGS = {
     "a", "abbr", "b", "blockquote", "br", "caption", "center", "cite", "code",
     "col", "colgroup", "dd", "div", "dl", "dt", "em", "figcaption", "figure",
@@ -648,10 +655,33 @@ class MailService:
         return {"state": str(op.get("state") or ""), "delivery": delivery,
                 "error": str(payload.get("last_error") or ""), "message_id": payload.get("message_id") or ""}
 
+    def draft_state(self, op: Dict[str, Any]) -> Tuple[str, str]:
+        """(state, error) of one held op, the words the card and the terminal use: `held`
+        while it waits, `failed` when its last attempt answered and the mail did not leave
+        (the reason rides along), `ambiguous` when that attempt handed the mail to the server
+        and never heard back (the ledger's stamp). The one reader of those two facts, so the
+        listing, the approval and the release cannot disagree about which draft may be sent."""
+        payload = op.get("payload") or {}
+        delivery = ""
+        try:
+            row = self.store.sent_id(int(op["account_id"]), payload.get("message_id") or "")
+            delivery = str((row or {}).get("delivery") or "")
+        except Exception:
+            delivery = ""
+        error = str(payload.get("last_error") or "")
+        if delivery == "ambiguous":
+            return "ambiguous", error
+        return ("failed" if error else "held"), error
+
     def approve_draft(self, op_id: int) -> bool:
-        """A held answer leaves: pending now, delivered by the next drain."""
+        """A held answer leaves: pending now, delivered by the next drain. Refused for a draft
+        whose last attempt may already have delivered it (`draft_state` ambiguous): every
+        surface that can release a draft passes through here, so the one click that could be
+        a second delivery is not handed out anywhere."""
         op = self.store.get_op(int(op_id))
         if not op or op.get("kind") != "send":
+            return False
+        if self.draft_state(op)[0] == "ambiguous":
             return False
         ok = self.store.approve_op(int(op_id))
         if ok:
@@ -670,21 +700,30 @@ class MailService:
         return ok
 
     def list_drafts(self, *, account_id: Optional[str] = None, thread_id: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Held answers awaiting approval: op id, account, thread, recipient, subject,
-        body, who wrote it, when. Newest first."""
+        """Held answers awaiting approval: op id, account, thread, every recipient (to, cc,
+        bcc), subject, body, the attachment names, who wrote it, when, and the draft's state
+        with the reason of a failed attempt (`draft_state`). Newest first. The whole address
+        list and the files are on the row because what the person approves is byte for byte
+        what leaves: a card that showed the To line alone let a Bcc or a document go out
+        unseen."""
         apk = self.store.account_pk(account_id) if account_id else None
         if account_id and apk is None:
             return []
         out = []
         for op in self.store.held_ops(apk, thread_id=thread_id):
             p = op.get("payload") or {}
+            state, error = self.draft_state(op)
             out.append({
                 "op_id": int(op["id"]), "account_id": p.get("account_id") or "",
                 "thread_id": p.get("thread_id"), "reply_to_pk": p.get("reply_to_pk"),
-                "to": p.get("to") or "", "cc": p.get("cc") or "", "subject": p.get("subject") or "",
+                "to": p.get("to") or "", "cc": p.get("cc") or "", "bcc": p.get("bcc") or "",
+                "subject": p.get("subject") or "",
                 "body": p.get("body") or "", "sent_by": p.get("sent_by") or "", "case_id": p.get("case_id") or "",
+                "attachments": [str(a.get("filename") or a.get("path") or "")
+                                for a in (p.get("attachments") or []) if isinstance(a, dict)],
                 "message_id": p.get("message_id") or "", "created_at": op.get("created_at") or "",
                 "chat_session_id": p.get("chat_session_id") or "",
+                "state": state, "error": error,
             })
         return out
 
@@ -792,11 +831,22 @@ def release_held_draft(scope: str, username: str, op_id: int,
     what the button did and the terminal's "Sent." was a mail still sitting in the outbox.
     A draft that is not waiting answers with state "" and ok False rather than raising: both
     callers turn that into "no draft with that id".
+
+    The outcome is read BY STATE, and a draft is used up only by a send that left. `done` is
+    delivered and `pending` is released to the sweep. `failed` means the transport answered and
+    the mail did not leave: the op goes back to `held` with the reason on it, so the card and
+    the terminal keep the draft the way the parked-call lane keeps one (a failed op is parked
+    for the ops API, which is not where the person is looking, and the card lost the draft
+    with nothing said). A `failed` op whose ledger stamp is `ambiguous` was handed to the
+    server and never confirmed: it goes back to the person too, as `ambiguous`, which the
+    approval refuses and only a discard can end.
     """
     svc = service or MailService(scope)
     op = svc.store.get_op(int(op_id))
     if not op or op.get("kind") != "send" or op.get("state") != "held":
         return {"ok": False, "state": "", "error": "not waiting"}
+    if svc.draft_state(op)[0] == "ambiguous":
+        return {"ok": False, "state": "ambiguous", "error": AMBIGUOUS_DRAFT}
     if not svc.approve_draft(int(op_id)):
         return {"ok": False, "state": "", "error": "not waiting"}
     account_id = str((op.get("payload") or {}).get("account_id") or "")
@@ -819,5 +869,14 @@ def release_held_draft(scope: str, username: str, op_id: int,
     # wants to say which one it was. Reporting `pending` as a failure told the person the send
     # had not worked over a mail that was already on its way.
     state = str(outcome.get("state") or "")
-    return {"ok": state in ("done", "pending"), "state": state,
-            "error": outcome.get("error") or ""}
+    delivery = str(outcome.get("delivery") or "")
+    error = str(outcome.get("error") or "")
+    if state == "failed":
+        # Back to the person, with the reason: the transport answered and the mail did not
+        # leave (or, stamped ambiguous, may have). `expect_state` keeps a sweep that raced this
+        # from being overwritten; `last_error` stays in the payload for `draft_state`.
+        svc.store.mark_op(int(op_id), "held", expect_state="failed")
+        if delivery == "ambiguous":
+            state, error = "ambiguous", (error or AMBIGUOUS_DRAFT)
+    return {"ok": state in ("done", "pending"), "state": state, "delivery": delivery,
+            "error": error}

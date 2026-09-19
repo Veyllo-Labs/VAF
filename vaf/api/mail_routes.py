@@ -843,26 +843,31 @@ async def list_drafts(thread_id: Optional[int] = None, _user: Dict[str, Any] = D
 @router.post("/drafts/{op_id}/send")
 async def send_draft(op_id: int, _user: Dict[str, Any] = Depends(_get_current_user)):
     """Approve a held answer: it becomes a queued send and leaves right away (the
-    supervisor sweep is the restart-safe fallback), and the inbox stops waiting."""
+    supervisor sweep is the restart-safe fallback), and the inbox stops waiting. The release
+    itself is `release_held_draft`, the one function the chat card and `vaf outbox send` call
+    too: this route used to carry its own copy of the two acts, and a send that did not leave
+    was then parked out of the person's sight here while the card kept it. The account is
+    checked first so a draft for an account this caller does not have stays held."""
     svc = _service(_user)
     op = await asyncio.to_thread(svc.store.get_op, int(op_id))
     if not op or op.get("kind") != "send" or op.get("state") != "held":
         raise HTTPException(status_code=404, detail="no held draft with that id")
     account_id = str((op.get("payload") or {}).get("account_id") or "")
-    scope, cred_username, acc = _account_ctx(_user, account_id)
+    scope, _cred_username, acc = _account_ctx(_user, account_id)
     if acc is None:
         raise HTTPException(status_code=404, detail="Account not found")
-    if not await asyncio.to_thread(svc.approve_draft, int(op_id)):
+    from vaf.mail.service import release_held_draft
+    outcome = await asyncio.to_thread(release_held_draft, scope, str(_user.get("username") or ""),
+                                      int(op_id), svc)
+    if outcome.get("error") == "not waiting":
         raise HTTPException(status_code=409, detail="the draft is no longer held")
-    from vaf.mail.service import deliver_queued_sends
-    stats = await asyncio.to_thread(deliver_queued_sends, scope, acc, cred_username, account_id, service=svc)
-    outcome = await asyncio.to_thread(svc.send_outcome, int(op_id))
     try:
         from vaf.core.web_interface import notify_inbox_changed
         notify_inbox_changed(scope)
     except Exception:
         pass
-    return {"ok": True, "state": outcome["state"], "delivery": outcome["delivery"], "error": outcome["error"], "stats": stats}
+    return {"ok": bool(outcome.get("ok")), "state": outcome.get("state") or "",
+            "delivery": outcome.get("delivery") or "", "error": outcome.get("error") or ""}
 
 
 @router.delete("/drafts/{op_id}")

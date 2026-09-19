@@ -1721,7 +1721,8 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
         except Exception:
             pass
         whatsapp_config = Config.get("whatsapp_config") or {}
-        inbound_to_agent = whatsapp_config.get("inbound_to_agent", True) if isinstance(whatsapp_config, dict) else True
+        from vaf.core.messaging_connections import whatsapp_inbound_to_agent
+        inbound_to_agent = whatsapp_inbound_to_agent()
         if inbound_to_agent:
             owner_control = (whatsapp_config.get("owner_control") or {}) if isinstance(whatsapp_config, dict) else {}
             last_owner_ts = owner_control.get(from_jid) if from_jid else None

@@ -47,6 +47,17 @@ def reply_window_hours() -> float:
     return max(0.0, hours)
 
 
+def whatsapp_inbound_to_agent() -> bool:
+    """Does an accepted WhatsApp message reach the agent at all? `whatsapp_config.inbound_to_agent`,
+    on unless it says False: the bridge stops EVERY sender before the policy when it is off, the
+    owner included, and the account stays a place the agent can send to. Measured before this
+    existed: five readers spelled the same isinstance-and-default line by hand (the bridge gate,
+    two dashboard payloads, the inbox compose rule, the learning counter), and the Front Office
+    switch read none of them."""
+    wc = Config.get("whatsapp_config") or {}
+    return not (isinstance(wc, dict) and wc.get("inbound_to_agent", True) is False)
+
+
 def single_telegram_owner() -> Optional[Tuple[Optional[str], str]]:
     """(scope, username) when exactly ONE account is paired on Telegram, else None.
 
@@ -76,9 +87,11 @@ def front_office_open(channel: str, raw_policy: Any = None) -> bool:
     """Does this channel's Inbound really answer somebody nobody has decided about?
 
     The policy flag is the switch; this is the switch AND whatever else that channel needs to
-    act on it. Today that is Telegram's single owner (above). The distinction matters because
-    two different answers to one question is how a row ends up claiming the agent answers in a
-    chat the bridge refuses: the bridges, the inbox rows and the channel windows all ask here.
+    act on it. Today that is Telegram's single owner (above) and WhatsApp's forwarding switch
+    (`whatsapp_inbound_to_agent`): with it off the bridge enqueues nothing for anybody, so an
+    open policy answers nobody there. The distinction matters because two different answers to
+    one question is how a row ends up claiming the agent answers in a chat the bridge refuses:
+    the bridges, the inbox rows and the channel windows all ask here.
     """
     from vaf.core.channel_ingress_policy import resolve_channel_policy
     name = str(channel or "").strip().lower()
@@ -90,6 +103,8 @@ def front_office_open(channel: str, raw_policy: Any = None) -> bool:
         return False
     if name == "telegram":
         return single_telegram_owner() is not None
+    if name == "whatsapp":
+        return whatsapp_inbound_to_agent()
     return True
 
 

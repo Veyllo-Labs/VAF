@@ -2346,6 +2346,9 @@
     "more": "{count}건이 더 기다리고 있어요",
     "failed": "실패했습니다({error}). 초안은 그대로 남아 있습니다.",
     "ambiguous": "지난번 시도가 중간에 끊겨서 이 메시지는 이미 갔을 수도 있어요. 다시 부탁하기 전에 대화를 확인해 보세요.",
+    "cc": "참조 {recipients}",
+    "bcc": "숨은 참조 {recipients}",
+    "attachments": "첨부 파일: {names}",
     "countdown": "먼저 읽기({seconds})"
   },
   "inbox": {

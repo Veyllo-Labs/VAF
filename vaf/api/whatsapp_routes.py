@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 from vaf.core.security_events import log_security_event
-from vaf.core.messaging_connections import whatsapp_session_id
+from vaf.core.messaging_connections import whatsapp_inbound_to_agent, whatsapp_session_id
 
 logger = logging.getLogger("vaf.api.whatsapp")
 
@@ -128,7 +128,7 @@ def _learns_from_chat(request: Request, chat_id: str) -> bool:
     ingress evaluation). A read-only or manually written chat never advances any counter,
     so showing one there would promise learning that cannot happen."""
     whatsapp_config = Config.get("whatsapp_config") or {}
-    if not isinstance(whatsapp_config, dict) or not whatsapp_config.get("inbound_to_agent", True):
+    if not isinstance(whatsapp_config, dict) or not whatsapp_inbound_to_agent():
         return False
     user_info = get_current_vaf_user(request)
     cid_norm = _normalize_chat_id(chat_id) or chat_id
@@ -697,7 +697,7 @@ async def get_whatsapp_dashboard(request: Request):
         "linked_phone": get_linked_phone(username) if current_linked else None,
         "owner_number": _owner_number_for(whitelist, username, user_info.get("user_scope_id")),
         "reply_window_hours": _reply_window_hours(),
-        "inbound_to_agent": bool(whatsapp_config.get("inbound_to_agent", True)) if isinstance(whatsapp_config, dict) else True,
+        "inbound_to_agent": whatsapp_inbound_to_agent(),
         # The Composer panel is offered only when the lane is on (the same switch as the mail window).
         "composer_enabled": _composer_enabled(),
         "running": running,

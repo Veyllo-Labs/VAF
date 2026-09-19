@@ -455,13 +455,15 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
         // Per CONTACT, matching the buttons that are disabled: a global guard would silently
         // swallow a click on the person you switched to while the previous PATCH was still in
         // flight, and their buttons look perfectly enabled (only one record is on screen, so
-        // that is the reachable case). Two writes to two different records are no race.
-        if (accessBusy === id) return;
-        setAccessBusy(id);
+        // that is the reachable case). Two writes to two different records are no race, so the
+        // set holds every id in flight: a single slot let the first PATCH's finally clear the
+        // second contact's guard while its own PATCH was still on the wire.
+        if (accessBusy.has(id)) return;
+        setAccessBusy(prev => new Set(prev).add(id));
         try {
             await patchContact(id, { assistant_access: value });
         } finally {
-            setAccessBusy(null);
+            setAccessBusy(prev => { const next = new Set(prev); next.delete(id); return next; });
         }
     };
 
@@ -780,11 +782,11 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
     }, [contacts, searchQuery, statusFilter, sortBy]);
 
     const selectedContact = selectedContactId ? contacts.find(c => c.id === selectedContactId) ?? null : null;
-    // The contact whose decision is being written right now. Three positions one click apart
+    // The contacts whose decision is being written right now. Three positions one click apart
     // invite a second click before the first PATCH has answered, and two in-flight writes can
     // land in either order: the person would be looking at the position they chose LAST while
     // the record holds the other one.
-    const [accessBusy, setAccessBusy] = useState<string | null>(null);
+    const [accessBusy, setAccessBusy] = useState<Set<string>>(() => new Set());
     // Explicitly ALLOWED, which is the channel-independent answer. A contact nobody has decided
     // about may still be answered while their channel's Inbound is open, so the subtitle says
     // "allowed" rather than "can reach the agent"; the per-channel breakdown is the Inbound
@@ -1108,7 +1110,7 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
                             <div className="inline-flex rounded-lg border border-gray-200 dark:border-[#2e2e2e] overflow-hidden" role="group" aria-label={tw('allowReach')}>
                                 {(['allowed', 'undecided', 'denied'] as const).map(value => (
                                     <button key={value} type="button" aria-pressed={access === value}
-                                        disabled={accessBusy === c.id}
+                                        disabled={accessBusy.has(c.id)}
                                         onClick={() => value === 'allowed'
                                             ? setConfirm({ kind: 'reach', contact: c })
                                             : void setAccess(c.id, value)}

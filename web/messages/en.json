@@ -2346,6 +2346,9 @@
     "more": "and {count} more waiting",
     "failed": "That did not work ({error}); the draft stays.",
     "ambiguous": "The last attempt was interrupted, so this message may already have been sent. Check the conversation before you ask for it again.",
+    "cc": "Cc {recipients}",
+    "bcc": "Bcc {recipients}",
+    "attachments": "Attachments: {names}",
     "countdown": "Read first ({seconds})"
   },
   "inbox": {

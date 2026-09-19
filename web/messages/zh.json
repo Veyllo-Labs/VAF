@@ -2346,6 +2346,9 @@
     "more": "另有 {count} 条等待",
     "failed": "操作失败（{error}），草稿仍保留。",
     "ambiguous": "上一次尝试被中断，所以这条消息可能已经发出去了。再要一次之前先看看对话。",
+    "cc": "抄送 {recipients}",
+    "bcc": "密送 {recipients}",
+    "attachments": "附件：{names}",
     "countdown": "先读一下（{seconds}）"
   },
   "inbox": {

@@ -729,3 +729,20 @@ def test_the_inbox_and_the_inbound_window_are_linked_both_ways():
     assert "t('rail.inbound')" in inbox
     window = _WINDOW.read_text(encoding="utf-8")
     assert "t('openInbox')" in window and "onOpenInbox" in window
+
+
+def test_the_contacts_control_tracks_every_decision_in_flight():
+    """One slot for "the contact being written" cleared the guard of the SECOND contact when
+    the first PATCH answered: switch records mid-flight, click, and a second click on the new
+    record went through while its own PATCH was still on the wire. A set holds every id in
+    flight, each removed by its own request.
+
+    MUTATION: put the single string slot back and this goes red.
+    """
+    src = (REPO / "web" / "components" / "connections" / "ContactsDashboard.tsx").read_text(encoding="utf-8")
+    assert "useState<Set<string>>(() => new Set())" in src
+    assert "if (accessBusy.has(id)) return;" in src
+    assert "setAccessBusy(prev => new Set(prev).add(id));" in src
+    assert "next.delete(id); return next;" in src
+    assert "disabled={accessBusy.has(c.id)}" in src
+    assert "accessBusy === " not in src and "setAccessBusy(null)" not in src

@@ -98,6 +98,27 @@ def test_whatsapp_rows_carry_the_stores_count_the_state_and_the_reply_window(wor
     assert [s["chat_id"] for s in out["sessions"]] == ["+491700000050", "+491700000042", "+491700000060", "+491700000070"]
 
 
+def test_the_whatsapp_dashboard_fails_closed_when_the_book_cannot_be_read(world, monkeypatch):
+    """Same rule as the inbox rows and the Discord window, through the same reader
+    (`inbox.access_inputs`): an open channel plus an unreadable book must not paint a blocked
+    person as a contact. MUTATION: hand-roll the two lookups in the route again without the
+    `known` flag and the second assertion goes red."""
+    from vaf.core.channel_ingress_policy import set_front_office
+    world["channel_ingress_policy"] = set_front_office(None, True, "whatsapp")
+    _msg("+491700000042", "hallo", ts=NOW - 100, message_id="w1")
+    out = asyncio.run(routes.get_whatsapp_dashboard(_request()))
+    assert {s["chat_id"]: s["type"] for s in out["sessions"]}["+491700000042"] == "contact"
+
+    import vaf.core.contacts_store as cs_mod
+
+    def _broken(*a, **k):
+        raise RuntimeError("contacts.json unreadable")
+    monkeypatch.setattr(cs_mod, "front_office_endpoints", _broken)
+    monkeypatch.setattr(cs_mod, "denied_endpoints", _broken)
+    out = asyncio.run(routes.get_whatsapp_dashboard(_request()))
+    assert {s["chat_id"]: s["type"] for s in out["sessions"]}["+491700000042"] == "unknown"
+
+
 def test_a_lid_row_merged_into_its_number_keeps_both_store_keys_and_the_newer_state():
     e164 = {"chat_id": "+491700000042", "last_ts": 100, "unread": 1, "waits": False, "done": True, "reply_window_until": None}
     lid = {"chat_id": "555@lid", "last_ts": 200, "unread": 2, "waits": True, "waits_reason": "unanswered", "done": False,

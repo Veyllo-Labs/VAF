@@ -375,6 +375,13 @@ def test_the_card_asks_only_for_its_own_chat():
     card = (ROOT / "web" / "components" / "outbox" / "HeldSendCard.tsx").read_text(encoding="utf-8")
     assert "api/outbox?session_id=" in card
     assert "if (!sessionId) { setRows([]); return; }" in card
+    # And a listing that answers AFTER the person switched chats is dropped: the request
+    # remembers which chat it asked for, and the answer is compared against the chat on screen
+    # before it becomes rows. Without that, the previous chat's drafts landed under the new
+    # chat's last message, which is the same mix-up one step later.
+    assert "const asked = sessionId;" in card
+    assert "if (sessionRef.current !== asked) return;" in card
+    assert "sessionRef.current = sessionId;" in card
     assert "sessionId={currentSessionId || ''}" in PAGE
 
 

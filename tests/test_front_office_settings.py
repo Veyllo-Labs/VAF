@@ -623,6 +623,18 @@ def test_the_store_finds_a_sender_regardless_of_the_decision_and_enrols_a_new_on
     assert rec and rec["name"] == "Carol" and contacts_store.contact_access(rec) is None, \
         "the lookup finds the person; the decision is read separately and there is none"
     assert contacts_store.find_contact_by_channel("telegram", "777", "alice", SCOPE) is None
+    # A LID is an opaque id, not a number: mapped in `whatsapp_config.lid_to_e164` it finds the
+    # person behind the number, unmapped it finds NOBODY. It used to read the LID's digits as a
+    # phone, a key no record carries, so the runner could not pin a contact who wrote from a
+    # LID chat the dashboard had already assigned. MUTATION: drop the `@lid` branch and both
+    # assertions go red (the mapped LID no longer resolves, and the unmapped one builds a
+    # phone key out of an id).
+    config["whatsapp_config"] = dict(config["whatsapp_config"], lid_to_e164={"123456789012345@lid": "+491700000001"})
+    assert contacts_store.find_contact_by_channel("whatsapp", "123456789012345@lid", "alice", SCOPE)["name"] == "Carol"
+    assert contacts_store.find_contact_by_channel("whatsapp", "999999999999999@lid", "alice", SCOPE) is None
+    contacts_store.create_contact("Lid Digits", "alice", user_scope_id=SCOPE, whatsapp_phone="+999999999999999")
+    assert contacts_store.find_contact_by_channel("whatsapp", "999999999999999@lid", "alice", SCOPE) is None, \
+        "the digits of an id are not a phone number, whatever record happens to carry them"
 
     new = contacts_store.enrol_front_office_contact("whatsapp", "+491700000009", "Grace", "alice", SCOPE)
     assert contacts_store.contact_access(new) is None and new["allow_as_assistant_user"] is False

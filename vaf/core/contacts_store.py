@@ -1382,6 +1382,22 @@ def find_contact_by_channel(
     if not chan or not raw:
         return None
     if chan == "whatsapp":
+        if raw.endswith("@lid"):
+            # A LID is an opaque id, not a number: its digits must never be read as a phone.
+            # The persisted map (`whatsapp_config.lid_to_e164`, written by the dashboard's
+            # assignment and inference) says which number it stands for; without an entry
+            # there is no key, so the lookup finds nobody rather than a wrong somebody. The
+            # bridge's live Node mappings are its own and are resolved there before it asks
+            # here; the headless runner and the admission ask with the raw JID and land here.
+            try:
+                from vaf.core.config import Config
+                wc = Config.get("whatsapp_config") or {}
+                mapped = str(((wc.get("lid_to_e164") or {}) if isinstance(wc, dict) else {}).get(raw) or "").strip()
+            except Exception:
+                mapped = ""
+            if not mapped:
+                return None
+            raw = mapped
         key = whatsapp_store_key(raw.split("@")[0] if "@" in raw else raw)
     elif chan == "email":
         # contact_endpoints lowercases mail addresses; the sender's spelling must not decide.

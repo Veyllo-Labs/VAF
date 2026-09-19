@@ -58,6 +58,10 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
     const [now, setNow] = useState(() => 0);
     const seenAtRef = useRef<Map<string, number>>(new Map());
     const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    // The chat on screen, readable from inside an in-flight fetch: switching chats while a
+    // listing is still on the wire is the ordinary case, and the late answer would otherwise
+    // put the previous chat's drafts under the new chat's last message.
+    const sessionRef = useRef(sessionId);
 
     useEffect(() => () => { if (tickRef.current) clearInterval(tickRef.current); }, []);
 
@@ -66,16 +70,20 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
         // appear in another, and switching chats mid-draft is the ordinary case: the chat it
         // belongs to carries the red dot in the sidebar until the person goes back to it.
         if (!sessionId) { setRows([]); return; }
+        const asked = sessionId;
         try {
-            const res = await fetch(`${apiBase}/api/outbox?session_id=${encodeURIComponent(sessionId)}`,
+            const res = await fetch(`${apiBase}/api/outbox?session_id=${encodeURIComponent(asked)}`,
                 { credentials: 'include' });
             if (!res.ok) return;
             const data = await res.json().catch(() => ({}));
+            // Only for the chat that is still on screen; a listing for a chat the person has
+            // left is dropped, whatever it holds.
+            if (sessionRef.current !== asked) return;
             setRows(Array.isArray(data.rows) ? data.rows : []);
         } catch { /* a listing that cannot be fetched shows nothing, never an error banner */ }
     }, [apiBase, sessionId]);
 
-    useEffect(() => { setRows([]); setNote(null); }, [sessionId]);
+    useEffect(() => { sessionRef.current = sessionId; setRows([]); setNote(null); }, [sessionId]);
     useEffect(() => { void load(); }, [load, version]);
 
     // A quarter-second tick, and only while a row is still locked: the moment the last

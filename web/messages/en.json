@@ -1031,7 +1031,7 @@
       "register": "Register",
       "cardWhoTitle": "Who else can write to your agent",
       "cardWhoDesc": "Answered in Inbound mode: contacts you set to allowed, and, while Inbound is on for WhatsApp, everybody you have not decided about.",
-      "noFoContacts": "No contact can reach your assistant yet.",
+      "noFoContacts": "No contact is explicitly allowed yet.",
       "manageContacts": "Manage contacts",
       "cardWindowTitle": "Reply window",
       "cardWindowDesc": "How long a conversation your agent started counts as live in this window. It decides nothing about who is answered: that is each person's own setting plus the Inbound switch. 0 hides it.",

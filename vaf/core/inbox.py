@@ -449,6 +449,37 @@ def reply_window_until(agent_ts: Optional[float], in_within_ts: Optional[float],
     return until
 
 
+def access_inputs(channel: str, username: Optional[str], user_scope_id: Optional[str]) -> Tuple[Set[str], Set[str], bool]:
+    """(contacts, denied, channel_open) for `chat_mode`, read the way the lane reads them.
+
+    The people the owner ALLOWED on this channel, the people they switched OFF, and whether
+    the channel's Inbound answers everybody else (`messaging_connections.front_office_open`,
+    the switch plus what the channel needs to act on it). FAIL-CLOSED: when the contact book
+    cannot be read, both sets come back empty AND the channel reads closed, because an open
+    channel with an empty denied set would paint every blocked person as answered. The bridge
+    fails the same way, it refuses what it cannot read. One implementation, because the inbox
+    rows and two channel dashboards each hand-rolled this, and only one of the three had the
+    fail-closed half.
+    """
+    contacts: Set[str] = set()
+    denied: Set[str] = set()
+    known = True
+    try:
+        from vaf.core.contacts_store import denied_endpoints, front_office_endpoints
+        contacts = set(front_office_endpoints(username, user_scope_id, channel) or ())
+        denied = set(denied_endpoints(username, user_scope_id, channel) or ())
+    except Exception:
+        known = False
+    channel_open = False
+    if known:
+        try:
+            from vaf.core.messaging_connections import front_office_open
+            channel_open = bool(front_office_open(channel))
+        except Exception:
+            channel_open = False
+    return contacts, denied, channel_open
+
+
 # The group shape of each messenger as a LIKE pattern, for the store's channel-wide read
 # (a test pins that it agrees with `is_group`).
 _GROUP_LIKE = {"whatsapp": "%@g.us", "telegram": "-%"}
@@ -691,27 +722,9 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
             continue
         owners = owner_endpoints(channel, username, user_scope_id)
         relays = owner_endpoints(channel, username, user_scope_id, relay=True) if channel == "telegram" else set()
-        access_known = True
-        try:
-            from vaf.core.contacts_store import denied_endpoints, front_office_endpoints
-            contacts = set(front_office_endpoints(username, user_scope_id, channel) or ())
-            denied = set(denied_endpoints(username, user_scope_id, channel) or ())
-        except Exception:
-            contacts, denied = set(), set()
-            access_known = False
-        # Whether this channel answers people nobody decided about, asked through the one
-        # function the bridges ask (`messaging_connections.front_office_open`): the switch AND
-        # what the channel needs to act on it, which for Telegram is a single paired owner.
-        # Reading the policy flag alone made a row say "contact" about a Telegram stranger the
-        # bridge turns away, and a row that disagrees with the lane is worse than no row.
-        # Only when the book could be read: with `denied` empty because the lookup FAILED, an
-        # open channel would paint every blocked person as answered, so a failed lookup keeps
-        # the rows read-only (the bridge fails the same way, it refuses what it cannot read).
-        try:
-            from vaf.core.messaging_connections import front_office_open
-            channel_open = access_known and front_office_open(channel)
-        except Exception:
-            channel_open = False
+        # Who is answered here, read the way the lane reads it and fail-closed (`access_inputs`):
+        # a row that disagrees with the bridge is worse than no row.
+        contacts, denied, channel_open = access_inputs(channel, username, user_scope_id)
         for o in overview:
             chat_id = str(o.get("chat_id") or "")
             state = chat_state(o, now=now, waits_threshold_value=threshold)

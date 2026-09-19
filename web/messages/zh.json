@@ -1031,7 +1031,7 @@
       "register": "登记",
       "cardWhoTitle": "还有谁可以给你的智能体写消息",
       "cardWhoDesc": "在入站模式下会得到回复的是：你允许的联系人，以及在 WhatsApp 的入站开启时，所有你还没有做决定的人。",
-      "noFoContacts": "还没有联系人可以联系你的助手。",
+      "noFoContacts": "还没有明确允许的联系人。",
       "manageContacts": "管理联系人",
       "cardWindowTitle": "回复窗口",
       "cardWindowDesc": "你的智能体发起的对话在这个窗口里算作进行中的时长。它不决定谁会得到回复，那由每个人自己的设置和入站开关决定。填 0 就不显示。",

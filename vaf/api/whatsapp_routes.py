@@ -535,21 +535,11 @@ async def get_whatsapp_dashboard(request: Request):
 
     # The three inputs the lane itself uses, so the row's mode cannot disagree with it: the
     # people the owner allowed, the ones they switched off, and whether this channel answers
-    # everybody else. Read here once for every row.
-    fo_phones: set = set()
-    denied_phones: set = set()
-    channel_open = False
-    try:
-        from vaf.core.contacts_store import denied_endpoints, front_office_endpoints
-        fo_phones = front_office_endpoints(username, user_info.get("user_scope_id"), "whatsapp")
-        denied_phones = denied_endpoints(username, user_info.get("user_scope_id"), "whatsapp")
-    except Exception:
-        pass
-    try:
-        from vaf.core.messaging_connections import front_office_open
-        channel_open = front_office_open("whatsapp")
-    except Exception:
-        channel_open = False
+    # everybody else. Read once for every row, through the inbox's fail-closed reader: an
+    # unreadable book keeps every row read-only rather than painting a blocked person as
+    # answered under an open channel.
+    from vaf.core.inbox import access_inputs
+    fo_phones, denied_phones, channel_open = access_inputs("whatsapp", username, user_info.get("user_scope_id"))
 
     # LID resolution (config + node) for session enrichment and lid_chats_to_assign
     lid_to_e164_cfg = dict((whatsapp_config.get("lid_to_e164") or {}) if isinstance(whatsapp_config, dict) else {})

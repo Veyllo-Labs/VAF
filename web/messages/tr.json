@@ -1031,7 +1031,7 @@
       "register": "Kaydet",
       "cardWhoTitle": "Ajanına başka kimler yazabilir",
       "cardWhoDesc": "Inbound modunda yanıtlananlar: izin verdiğin kişiler ve WhatsApp için Inbound açıkken hakkında karar vermediğin herkes.",
-      "noFoContacts": "Henüz hiçbir kişi asistanına ulaşamıyor.",
+      "noFoContacts": "Henüz açıkça izin verilen kişi yok.",
       "manageContacts": "Kişileri yönet",
       "cardWindowTitle": "Yanıt penceresi",
       "cardWindowDesc": "Ajanının başlattığı bir sohbetin bu pencerede ne kadar süre devam ediyor sayılacağı. Kimin yanıtlanacağını belirlemez: onu kişinin kendi ayarı ve Inbound anahtarı belirler. 0 gizler.",

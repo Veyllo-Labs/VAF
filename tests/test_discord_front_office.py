@@ -80,7 +80,7 @@ def test_the_admin_and_guild_messages_and_a_closed_channel(world):
     assert grace["id"]
 
 
-def test_the_dashboard_rows_carry_the_inbox_mode(world):
+def test_the_dashboard_rows_carry_the_inbox_mode(world, monkeypatch):
     """The row says what the lane does: the paired admin's own chat, a person the owner
     allowed, a person they denied (read-only whatever the switch says) and somebody nobody
     decided about (answered while Inbound is open). MUTATION: let chat_mode fall through the
@@ -98,6 +98,19 @@ def test_the_dashboard_rows_carry_the_inbox_mode(world):
     world.state["channel_ingress_policy"] = set_front_office(world.state["channel_ingress_policy"], False, "discord")
     rows = {s["chat_id"]: s["type"] for s in routes._store_sessions()}
     assert rows == {"42": "admin", "555": "contact", "777": "readonly", "888": "readonly"}
+    # And with the book UNREADABLE under an open channel, nobody but the admin is painted as
+    # answered: the blocked person would otherwise read "contact" because the denied set came
+    # back empty. MUTATION: read the switch without `known` in `inbox.access_inputs` and the
+    # row for 888 goes red.
+    world.state["channel_ingress_policy"] = set_front_office(world.state["channel_ingress_policy"], True, "discord")
+    import vaf.core.contacts_store as cs_mod
+
+    def _broken(*a, **k):
+        raise RuntimeError("contacts.json unreadable")
+    monkeypatch.setattr(cs_mod, "front_office_endpoints", _broken)
+    monkeypatch.setattr(cs_mod, "denied_endpoints", _broken)
+    rows = {s["chat_id"]: s["type"] for s in routes._store_sessions()}
+    assert rows == {"42": "admin", "555": "readonly", "777": "readonly", "888": "readonly"}
 
 
 def test_the_no_contact_prefix_calls_the_sender_a_sender_and_not_a_number():

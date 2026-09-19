@@ -289,7 +289,18 @@ def pending(username: str, user_scope_id: Optional[str] = None, *,
         from vaf.mail.service import MailService
         if user_scope_id:
             svc = MailService(user_scope_id)
-            for d in svc.list_drafts():
+            try:
+                drafts = svc.list_drafts()
+            finally:
+                # The store's connection is thread-local; this runs on whatever thread the
+                # route or the CLI hands it, and that thread must not keep the handle. Guarded
+                # on its own: this whole half is fail-open, so a close that raised would take
+                # the drafts down with it, which is the silence the listing exists to remove.
+                try:
+                    svc.store.close()
+                except Exception:
+                    pass
+            for d in drafts:
                 if want and str(d.get("chat_session_id") or "") != want:
                     continue
                 rows.append({

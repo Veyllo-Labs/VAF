@@ -56,9 +56,12 @@ def single_telegram_owner() -> Optional[Tuple[Optional[str], str]]:
     and the Discord lane is the local admin's, so neither needs this.
     """
     tc = Config.get("telegram_config") or {}
-    whitelist = (tc.get("whitelist") or []) if isinstance(tc, dict) else []
+    # Both lists: a relay entry belongs to an account too (it says whose relay the person
+    # is), so a whitelist owner plus another account's relay is two accounts on one bot, and
+    # a stranger cannot be attributed. The same account on both lists is still one owner.
+    entries = ((tc.get("whitelist") or []) + (tc.get("relay_whitelist") or [])) if isinstance(tc, dict) else []
     owners = {(str(e.get("user_scope_id") or ""), str(e.get("vaf_username") or "admin").strip())
-              for e in whitelist if isinstance(e, dict)}
+              for e in entries if isinstance(e, dict)}
     if len(owners) != 1:
         return None
     scope, uname = next(iter(owners))

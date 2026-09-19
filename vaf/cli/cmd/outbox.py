@@ -61,21 +61,26 @@ def list_pending(
     if not rows:
         UI.console.print("  [dim]nothing waiting[/dim]")
         return
+    from rich.markup import escape
     from rich.table import Table
     table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
     for col in ("When", "Kind", "Id", "Channel", "To", "Preview"):
         table.add_column(col)
     for row in rows:
-        preview = (row.get("preview") or "").replace("\n", " ")[:60]
+        # Everything that came from a message is DATA and is escaped before it meets Rich:
+        # the body was written by the model, the reason by a bridge, the recipient by whoever
+        # typed it, and any of them may contain "[bold]" or "[/red]" - the first would style
+        # the table, the second raises inside it. Only the two status tags are markup.
+        preview = escape((row.get("preview") or "").replace("\n", " ")[:60])
         # A draft whose last attempt failed is still waiting for the person, and the reason is
         # the whole point of showing it: without the line they would press send again blind.
         state = str(row.get("state") or "")
         if state == "failed":
-            preview = f"[red]not sent:[/red] {(row.get('error') or '').strip()[:40]} | {preview}"
+            preview = f"[red]not sent:[/red] {escape((row.get('error') or '').strip()[:40])} | {preview}"
         elif state == "ambiguous":
             preview = f"[yellow]may already have been sent:[/yellow] {preview}"
-        table.add_row(_when(row["created_ts"]), row["kind"], str(row["id"]), row["channel"],
-                      (row.get("recipient") or "")[:40], preview)
+        table.add_row(_when(row["created_ts"]), escape(str(row["kind"])), str(row["id"]),
+                      escape(str(row["channel"])), escape((row.get("recipient") or "")[:40]), preview)
     UI.console.print(table)
     UI.console.print("[dim]vaf outbox send <kind> <id>   vaf outbox discard <kind> <id>[/dim]")
 

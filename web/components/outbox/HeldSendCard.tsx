@@ -47,7 +47,10 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
     // rowids), so a bare id would disable a mail draft's buttons while a call with the same
     // number is being sent.
     const [busy, setBusy] = useState<string | null>(null);
-    const [note, setNote] = useState('');
+    // The failure note is keyed the same way: it is about ONE draft, and a bare string was
+    // rendered under every card on screen, so a bridge refusing the first draft read as three
+    // refusals.
+    const [note, setNote] = useState<{ key: string; text: string } | null>(null);
     // The send button is dead for the first seconds a draft is on screen, and says how long.
     // Not an undo after the click: the point is that nobody fires off a message they have not
     // read, so the pause sits BEFORE the decision. Discard stays available the whole time -
@@ -72,7 +75,7 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
         } catch { /* a listing that cannot be fetched shows nothing, never an error banner */ }
     }, [apiBase, sessionId]);
 
-    useEffect(() => { setRows([]); setNote(''); }, [sessionId]);
+    useEffect(() => { setRows([]); setNote(null); }, [sessionId]);
     useEffect(() => { void load(); }, [load, version]);
 
     // A quarter-second tick, and only while a row is still locked: the moment the last
@@ -106,7 +109,8 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
     };
 
     const act = async (row: HeldSendRow, action: 'send' | 'discard') => {
-        setBusy(`${row.kind}-${row.id}`); setNote('');
+        const key = `${row.kind}-${row.id}`;
+        setBusy(key); setNote(null);
         try {
             const url = `${apiBase}/api/outbox/${row.kind}/${row.id}${action === 'send' ? '/send' : ''}`;
             const res = await fetch(url, {
@@ -116,11 +120,11 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
             if (res.ok && (action === 'discard' || data.ok)) {
                 setRows(prev => prev.filter(r => !(r.id === row.id && r.kind === row.kind)));
             } else {
-                setNote(t('failed', { error: String(data.error || res.status) }));
+                setNote({ key, text: t('failed', { error: String(data.error || res.status) }) });
                 await load();
             }
         } catch {
-            setNote(t('failed', { error: '' }));
+            setNote({ key, text: t('failed', { error: '' }) });
         } finally {
             setBusy(null);
         }
@@ -193,7 +197,9 @@ export function HeldSendCard({ apiBase, version, sessionId }: { apiBase: string;
                             <Trash2 className="w-3.5 h-3.5" />{t('discard')}
                         </button>
                     </div>
-                    {note && <span className="text-xs text-red-600 dark:text-red-400">{note}</span>}
+                    {note?.key === `${r.kind}-${r.id}` && (
+                        <span className="text-xs text-red-600 dark:text-red-400">{note.text}</span>
+                    )}
                 </div>
               );
             })}

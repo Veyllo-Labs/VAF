@@ -53,16 +53,44 @@ def _mail_service(user: Dict[str, Any]):
         return None
 
 
+def _close_quietly(svc: Any) -> None:
+    """Close the store's thread-local connection. Housekeeping, so it must never replace the
+    verb's answer: a discard that succeeded and then failed to close is a discard."""
+    try:
+        svc.store.close()
+    except Exception:
+        pass
+
+
 def _send_mail_draft(user: Dict[str, Any], op_id: int) -> Dict[str, Any]:
     """Release a held mail draft and drain it. The act itself lives in the mail layer
     (`vaf.mail.service.release_held_draft`), so this route and `vaf outbox send` cannot
-    disagree about what Send does."""
+    disagree about what Send does. Synchronous on purpose: the route runs it under
+    `asyncio.to_thread`, and the store's thread-local connection is closed here, on the
+    thread that opened it, so a pool thread does not keep a handle to somebody's mail.db."""
     svc = _mail_service(user)
     if svc is None:
         return {"ok": False, "error": "no mail account"}
     from vaf.mail.service import release_held_draft
-    return release_held_draft(str(user.get("user_scope_id") or ""), str(user.get("username") or ""),
-                              int(op_id), service=svc)
+    try:
+        return release_held_draft(str(user.get("user_scope_id") or ""), str(user.get("username") or ""),
+                                  int(op_id), service=svc)
+    finally:
+        _close_quietly(svc)
+
+
+def _discard_mail_draft(user: Dict[str, Any], op_id: int) -> Optional[bool]:
+    """Drop a held mail draft: None when this identity has no mail lane, else whether a
+    waiting draft with that id was dropped. Same shape and same reason as the send helper:
+    constructing `MailService` opens the store (a mkdir and a schema check), and that belongs
+    on the worker thread with the discard, not on the event loop next to it."""
+    svc = _mail_service(user)
+    if svc is None:
+        return None
+    try:
+        return bool(svc.discard_draft(int(op_id)))
+    finally:
+        _close_quietly(svc)
 
 
 @router.get("")
@@ -111,10 +139,7 @@ async def discard_entry(kind: str, entry_id: int, request: Request) -> Dict[str,
     """Drop one waiting draft. Nothing was on the wire, so nothing is recalled."""
     user = get_current_vaf_user(request)
     if kind == "mail":
-        svc = _mail_service(user)
-        if svc is None:
-            raise HTTPException(status_code=404, detail="draft not found")
-        ok = await asyncio.to_thread(svc.discard_draft, int(entry_id))
+        ok = await asyncio.to_thread(_discard_mail_draft, user, int(entry_id))
         if not ok:
             raise HTTPException(status_code=404, detail="draft not found")
         return {"ok": True}

@@ -45,10 +45,12 @@ def world(monkeypatch, tmp_path):
     # No mail in this scratch world, in the shape a real install has it: the store exists and
     # is empty. `MailStore` creates its file on construction, so "no mail account" never
     # raises; it answers with an empty outbox and finds no op.
+    closed = []
+
     class _EmptyMail:
         def __init__(self, scope):
             self.user_scope_id = scope
-            self.store = SimpleNamespace(get_op=lambda _id: None)
+            self.store = SimpleNamespace(get_op=lambda _id: None, close=lambda: closed.append(scope))
 
         def list_drafts(self, **kw):
             return []
@@ -57,6 +59,7 @@ def world(monkeypatch, tmp_path):
             return False
     import vaf.mail.service as svc_mod
     monkeypatch.setattr(svc_mod, "MailService", _EmptyMail)
+    monkeypatch.closed_mail_stores = closed
     return monkeypatch
 
 
@@ -136,15 +139,23 @@ def test_an_unknown_kind_is_refused(world):
 
 
 def test_a_mail_verb_without_a_mail_store_does_not_pretend(world):
-    """A scope with no mail answers 404 rather than reporting a send."""
+    """A scope with no mail answers 404 rather than reporting a send. And every verb that
+    opened the store CLOSES it: the connection is thread-local, the verb runs on a pool
+    thread, and a handle left open there outlives the request. MUTATION: drop the `finally`
+    around either helper and the count below goes red."""
     with pytest.raises(HTTPException) as exc:
         asyncio.run(orr.discard_entry("mail", 7, _request()))
     assert exc.value.status_code == 404
+    assert world.closed_mail_stores == [SCOPE], "discard opened one store and closed it"
     # And the send verb: an empty outbox holds no such op, so the shared release answers
     # "not waiting" and the route turns that into the same 404 rather than a report.
     with pytest.raises(HTTPException) as exc:
         asyncio.run(orr.send_entry("mail", 7, _request()))
     assert exc.value.status_code == 404
+    assert world.closed_mail_stores == [SCOPE, SCOPE], "and so did send"
+    # The listing too: it reads the mail half through the same store.
+    asyncio.run(orr.list_outbox(_request()))
+    assert world.closed_mail_stores == [SCOPE, SCOPE, SCOPE]
 
 
 def test_a_broken_mail_store_is_an_error_and_not_a_missing_account(world, monkeypatch):

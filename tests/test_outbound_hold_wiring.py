@@ -240,6 +240,17 @@ def test_the_cli_prints_and_decides(monkeypatch, tmp_path):
     empty = runner.invoke(cmd.app, ["list", "--json"])
     assert [line for line in empty.output.splitlines() if line.strip().startswith("{")] == []
 
+    # What came from a message is data, never markup: a body the model wrote may contain
+    # "[bold]" or "[/red]", and Rich would style the table on the first and raise on the
+    # second. MUTATION: drop the `escape()` calls and this invoke exits non-zero (MarkupError)
+    # or the literal brackets vanish from the output.
+    third = park_messenger_call("send_whatsapp", {"to_phone": "+49[/red]170", "message": "see [bold]this[/bold] and [/red]"},
+                                username="alice", user_scope_id="scope-1")
+    shown = runner.invoke(cmd.app, ["list"])
+    assert shown.exit_code == 0, shown.output
+    assert "[bold]this[/bold]" in shown.output and "[/red]" in shown.output
+    assert store.held_send(third, "alice", "scope-1")["state"] == "held"
+
 
 def test_the_outbox_group_sits_behind_the_terminal_door():
     """It prints messages, so it follows `vaf inbox` and `vaf session` through the same door."""
@@ -384,7 +395,10 @@ def test_the_send_button_is_the_house_white_and_locked_until_it_is_read():
     # The lane belongs in the busy key: mail op ids and parked-call ids are two sequences, so
     # a bare number would disable a mail draft's buttons while a call of the same id is sending.
     assert "disabled={busy === `${r.kind}-${r.id}` || locked > 0}" in card
-    assert "setBusy(`${row.kind}-${row.id}`)" in card
+    assert "const key = `${row.kind}-${row.id}`;" in card and "setBusy(key)" in card
+    # The failure note is keyed the same way and shown under ITS row only: a bare string was
+    # rendered under every card on screen, so one refusal read as three.
+    assert "setNote({ key, text:" in card and "note?.key === `${r.kind}-${r.id}`" in card
     assert "t('countdown', { seconds: locked })" in card
     # Discard is never locked: throwing away something unread costs nothing.
     assert 'disabled={busy === `${r.kind}-${r.id}`} onClick={() => act(r, \'discard\')}' in card

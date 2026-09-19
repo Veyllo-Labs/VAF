@@ -199,6 +199,16 @@ def test_an_open_telegram_channel_needs_the_one_owner_the_bridge_needs(world, mo
                                   whitelist=list(CONFIG["telegram_config"]["whitelist"]) +
                                   [{"telegram_user_id": "8", "vaf_username": "bob", "user_scope_id": OTHER}])
     assert _row("telegram:555")["mode"] == "readonly", "two owners: the bridge turns them away"
+    # A RELAY entry says whose relay the person is, so one that belongs to another account is
+    # that account on the same bot: two owners again. One for the same account is not.
+    # MUTATION: count the whitelist alone in `single_telegram_owner` and the first assertion
+    # below goes red.
+    cfg["telegram_config"] = dict(CONFIG["telegram_config"],
+                                  relay_whitelist=[{"telegram_user_id": "9", "vaf_username": "bob", "user_scope_id": OTHER}])
+    assert _row("telegram:555")["mode"] == "readonly", "another account's relay is another owner"
+    cfg["telegram_config"] = dict(CONFIG["telegram_config"],
+                                  relay_whitelist=[{"telegram_user_id": "9", "vaf_username": "alice", "user_scope_id": SCOPE}])
+    assert _row("telegram:555")["mode"] == "contact", "the owner's own relay is still one owner"
     # The owner's own chat and a relay entry are unaffected: they are paired, not strangers.
     _msg("7", "owner", ts=NOW - 90, channel="telegram")
     assert _row("telegram:7")["mode"] == "owner"

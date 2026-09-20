@@ -148,6 +148,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the rows learned without a scope, the same fail-closed rule the memory store applies.
 
 ### Fixed
+- **The confirming button in a dialog is black in dark mode, not dark blue.** It wore
+  Tailwind's cool grey, which is a dark navy, and that button is the only place in the app
+  where the colour is visible at all in dark mode: every other one turns light there.
 - **A finished answer is never taken off the screen again.** The anti-confabulation check
   could misjudge a correct reply and erased it in the same move, so the user was left with
   the model's own thinking about the correction instead of the answer. It now keeps any reply

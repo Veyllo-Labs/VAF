@@ -71,7 +71,7 @@ The active/emphasis system is one **light neutral** (no blue, no amber):
 | Component | Dark-mode classes |
 |---|---|
 | Primary / emphasis button (Save, Connect, CTA) | `dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none` (never `dark:hover:bg-white`: `white` is folded to the elevated-surface tone under `.dark`, so the hover would darken the button; `tests/test_dark_palette_hygiene.py` bans a bare `white` in any `dark:` variant) |
-| Confirm dialog, the emphasis INVERTED (`web/components/ui/ConfirmDialog.tsx`) | safe answer takes the emphasis fill `dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:border-transparent`; confirming answer keeps `bg-gray-900 hover:bg-black text-white` with **no `dark:` fill at all** and adds `dark:border-[#3a3a3a]`; with `destructive` it is `bg-red-600 hover:bg-red-700 text-white` (600/700 surfaces do not fold, so red stays red in both themes) |
+| Confirm dialog, the emphasis INVERTED (`web/components/ui/ConfirmDialog.tsx`) | safe answer takes the emphasis fill `dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:border-transparent`; confirming answer keeps `bg-gray-900 hover:bg-black text-white` for light mode and states black for dark (`dark:bg-black dark:hover:bg-[#1f1f1f]`) plus the hairline `dark:border-[#3a3a3a]`: `gray-900` is Tailwind's COOL gray (#111827), and this button is the one place in the product that renders it in dark mode, where it reads navy on the #181818 card rather than black; with `destructive` it is `bg-red-600 hover:bg-red-700 text-white` (600/700 surfaces do not fold, so red stays red in both themes) |
 | Toggle ON track | `dark:bg-[#d9d9d9]` |
 | Toggle OFF track | `dark:bg-[#333333]` |
 | Toggle knob (state-dependent, must contrast the track) | ON `dark:bg-[#1a1a1a]`, OFF `dark:bg-[#e8e8e8]` |
@@ -82,14 +82,18 @@ The active/emphasis system is one **light neutral** (no blue, no amber):
 | Sub-agent window surfaces (`WIN_SHELL` / `WIN_CANVAS` / `WIN_CANVAS_ALT` / `WIN_BAR` in `web/components/SubAgentWindow.tsx`) | shell and toolbar `dark:bg-[#202020]`, recessed canvas `dark:bg-[#181818]`, file-row hairline `dark:border-[#262626]`. Raw hex, so nothing folds for them; the constants exist because seventeen sites shared four values and some were bound to be missed (they were - the librarian window shipped with near-white panels). Note the inversion: in light the chrome is the paler surface and the canvas recedes darker, in dark the chrome is the LIGHTER card and the canvas recedes to the page |
 | Thinking-process block | flat `dark:from-[#1e1e1e] dark:to-[#1e1e1e]` (no gradient), header `dark:text-gray-300` |
 
-**The inverted confirm pair, and why it needs almost no classes.** In a costly or
+**The inverted confirm pair, and the one colour it has to state.** In a costly or
 irreversible confirmation the emphasis fill `#e6e6e6` sits on the SAFE answer, not on
-the confirming one, because the confirmed action costs real work. The fold is what makes
-that cheap instead of a fight with the palette: `gray-500..950` and `black` are **not**
-folded on surfaces and `text-white` is **not** folded on text, so `bg-gray-900
-hover:bg-black text-white` is already right in both themes and the confirming button
-needs no `dark:` fill - only `dark:border-[#3a3a3a]`, the hairline that keeps a black
-button from vanishing into the `#181818` card. `bg-white` **is** folded (to `#202020`),
+the confirming one, because the confirmed action costs real work. `gray-500..950` and
+`black` are **not** folded on surfaces and `text-white` is **not** folded on text, so
+`bg-gray-900 hover:bg-black text-white` carries light mode on its own. Dark mode states
+its fill outright, `dark:bg-black dark:hover:bg-[#1f1f1f]`, plus `dark:border-[#3a3a3a]`,
+the hairline that keeps a black button from vanishing into the `#181818` card. Not
+folding cuts both ways: every other primary button inverts to `#e6e6e6` in dark mode and
+never renders `gray-900` there at all, so this button was the only place where Tailwind's
+COOL gray (`#111827`) reached a dark screen, and on the card it reads navy rather than
+black. A surface that must look black in dark mode says `black`; it does not inherit a
+ramp whose neutrals are tinted. `bg-white` **is** folded (to `#202020`),
 which is why the safe button has to state both halves as literals (`dark:bg-[#e6e6e6]`
 for the fill, `dark:text-[#181818]` for the ink - `dark:text-gray-900` would render
 light, see the first trap below).

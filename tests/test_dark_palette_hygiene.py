@@ -62,3 +62,29 @@ def test_no_bare_white_surface_under_a_dark_variant():
         "while reading as white. Use the literal the rest of the app uses "
         "(dark:hover:bg-[#f5f5f5]) or an explicit hex:\n  " + "\n  ".join(hits)
     )
+
+
+def test_a_dark_surface_never_inherits_the_cool_gray_ramp():
+    """Tailwind's `gray` ramp is COOL: `gray-900` is #111827, a dark navy. The fold leaves
+    `gray-500..950` alone on surfaces, which is right for light mode and a trap for dark: every
+    primary button in this product inverts to `#e6e6e6` in dark mode and never renders the
+    value, except the confirm dialog's confirming answer, whose whole design is to stay dark.
+    It shipped reading navy on the `#181818` card, which is what it was reported as.
+
+    So: a surface class that renders in DARK mode says what it is. The dialog states
+    `dark:bg-black`; anything else that wants black in dark mode does the same rather than
+    letting the tinted ramp through.
+
+    MUTATION: drop `dark:bg-black` from ConfirmDialog and this goes red.
+    """
+    dialog = (_REPO / "web" / "components" / "ui" / "ConfirmDialog.tsx").read_text(encoding="utf-8")
+    confirming = [ln for ln in dialog.splitlines() if "bg-gray-900 hover:bg-black" in ln]
+    assert len(confirming) == 1, confirming
+    assert "dark:bg-black" in confirming[0], "the confirming answer must state black for dark mode"
+    assert "dark:border-[#3a3a3a]" in confirming[0], "the hairline keeps it off the #181818 card"
+    # The safe answer keeps the inversion: it is the one carrying the emphasis fill.
+    assert "dark:bg-[#e6e6e6]" in dialog and "dark:text-[#181818]" in dialog
+    # And the doc says the same thing, because this is the trap a reader walks into next.
+    darkmode = (_REPO / "docs" / "web-ui" / "DARKMODE.md").read_text(encoding="utf-8")
+    assert "dark:bg-black dark:hover:bg-[#1f1f1f]" in darkmode
+    assert "no `dark:` fill at all" not in darkmode, "the doc claimed the fill was unnecessary"

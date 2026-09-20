@@ -14,8 +14,10 @@
 //
 // The house dark-mode fold decides the button classes and they are not
 // interchangeable with the usual pair (see docs/web-ui/DARKMODE.md):
-//   - `bg-gray-900` and `text-white` are NOT folded, so the confirm button stays
-//     black with white text in both themes without a `dark:` override.
+//   - `bg-gray-900` and `text-white` are NOT folded, so the confirm button renders
+//     that value as it is in both themes. On white that reads as black; on the
+//     #181818 card it reads NAVY, because Tailwind's gray ramp is cool, so dark
+//     mode states `dark:bg-black` rather than inheriting the tint.
 //   - `bg-white` IS folded (to #202020), so the cancel button needs the literal
 //     `dark:bg-[#e6e6e6]`, and its label needs `dark:text-[#181818]` because
 //     `dark:text-gray-900` renders LIGHT.
@@ -103,12 +105,17 @@ export default function ConfirmDialog({
                     <button
                         type="button"
                         onClick={onConfirm}
-                        // No dark: override on purpose - none of these utilities folds, so
-                        // the button stays black (or red) with white text in both themes.
-                        // The hairline is what keeps the black one off the #181818 card.
+                        // `bg-gray-900` is Tailwind's COOL gray (#111827) and does not fold, so
+                        // in dark mode this button is the one surface in the product that shows
+                        // that tint undisguised: on the #181818 card it reads navy, not black,
+                        // which is what it was reported as. Every other primary button inverts
+                        // to #e6e6e6 in dark mode and never renders the value at all. So dark
+                        // mode states black outright; light mode keeps the house primary, where
+                        // the same colour sits on white and reads as black. Red does not fold
+                        // (a 600 surface), so `destructive` needs nothing.
                         className={destructive
                             ? 'flex-1 py-2.5 rounded-xl font-medium bg-red-600 hover:bg-red-700 text-white border border-transparent transition-colors'
-                            : 'flex-1 py-2.5 rounded-xl font-medium bg-gray-900 hover:bg-black text-white border border-transparent dark:border-[#3a3a3a] transition-colors'}
+                            : 'flex-1 py-2.5 rounded-xl font-medium bg-gray-900 hover:bg-black text-white border border-transparent dark:bg-black dark:hover:bg-[#1f1f1f] dark:border-[#3a3a3a] transition-colors'}
                     >
                         {confirmLabel}
                     </button>

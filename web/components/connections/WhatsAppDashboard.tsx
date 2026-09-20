@@ -17,6 +17,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslations } from 'next-intl';
 import { Phone, UserPlus, Trash2, AlertTriangle, BookUser, Sparkles, Loader2 } from 'lucide-react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { Switch, switchWord } from '@/components/ui/Switch';
 import { cn } from '@/lib/utils';
 import MessagesChart from './MessagesChart';
 import ChannelDashboardShell, { BADGE_CLS, BTN, BTN_PRIMARY, FIELD, INPUT, ComposeBox, KvRow, SettingsCard, ShellChat, fmtUntil } from './ChannelDashboardShell';
@@ -68,6 +69,11 @@ interface WhatsAppSession {
     /** What the owner decided about this person: allowed on every channel, denied everywhere,
      *  or null when nobody has decided and the channel switch answers for them. */
     contact_access?: 'allowed' | 'denied' | null;
+    /** Does the agent answer this person on WhatsApp right now, and why: the decision above
+     *  folded with this channel's Inbound switch by `contacts_store.assistant_reach`. The
+     *  switch shows `assistant_answers`; the reason is the line the window explains it with. */
+    assistant_answers?: boolean;
+    assistant_reason?: 'contact_allowed' | 'contact_denied' | 'front_office_open' | 'not_paired' | string;
     contact_name?: string | null;
     /** When a conversation the agent started still counts as live. It decides nothing about
      *  who is answered (the badge does that); the window shows it and nothing else. */
@@ -107,6 +113,10 @@ interface ComposeStash { composeText: string; turns: ComposerTurn[]; meta: Compo
 
 export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigChange, onOpenSetupWizard, onOpenContacts, initialChatId, initialDraft }: WhatsAppDashboardProps) {
     const t = useTranslations('settings.whatsappDashboard');
+    // The reach hints live with the contact book, which is where the full sentence is read;
+    // this window borrows them for the switch's title rather than keeping a second wording.
+    const tc = useTranslations('settings.contactsDashboard');
+    const tcm = useTranslations('common');
     const [data, setData] = useState<DashboardData | null>(null);
     const [loading, setLoading] = useState(false);
     const [loadFailed, setLoadFailed] = useState(false);
@@ -385,7 +395,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         }
     };
 
-    const handleSetAccess = async (s: WhatsAppSession, access: 'allowed' | 'denied' | 'undecided') => {
+    const handleSetAccess = async (s: WhatsAppSession, access: 'allowed' | 'denied') => {
         if (!s.contact_id) return;
         setAddingContact(true);
         setNote(null);
@@ -713,7 +723,16 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         // A contact-book record gets the decision control, whatever the decision is; the
         // owner's own number never does.
         const hasBookRecord = !s.needs_assign && !!s.contact_id && s.type !== 'owner';
-        const access: 'allowed' | 'denied' | 'undecided' = s.contact_access || 'undecided';
+        // Fail-closed like the contact book: a row from before the verdict existed promises
+        // nothing, an explicit decision still stands.
+        const answers = typeof s.assistant_answers === 'boolean'
+            ? s.assistant_answers : s.contact_access === 'allowed';
+        const reason = String(s.assistant_reason || (s.contact_access === 'allowed' ? 'contact_allowed'
+            : s.contact_access === 'denied' ? 'contact_denied' : 'not_paired'));
+        const reachHint = reason === 'contact_allowed' ? tc('reachHintOn')
+            : reason === 'contact_denied' ? tc('reachHintOff')
+                : reason === 'front_office_open' ? tc('reachHintUndecided')
+                    : tc('reachHintUndecidedDoorClosed');
         return (
             <>
                 {s.needs_assign && (
@@ -732,22 +751,22 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                         <span className="text-xs text-[#9a9a9a] flex items-center gap-1.5" title={s.contact_name || undefined}>
                             <BookUser className="w-4 h-4" />{t('inContacts')}
                         </span>
-                        {/* Three positions, not a switch: "the channel decides" is a state of
-                            its own between allowed and denied, and a two-way switch could only
-                            ever take a decision back, never refuse a person. */}
-                        <div className="flex items-center gap-2 text-xs text-[#d0d0d0]">
+                        {/* One question, two answers, the same switch the contact book shows:
+                            it says whether the agent answers this person right now, which an
+                            open Inbound can decide without anybody having said anything about
+                            them. The reason rides along as the title, because this header is a
+                            strip and the sentence belongs in the contact book. Switching off
+                            writes a refusal, not "no decision", or the switch would spring back
+                            while the channel stands open. */}
+                        <div className="flex items-center gap-2 text-xs text-[#d0d0d0]" title={reachHint}>
                             <span>{t('allowReach')}</span>
-                            <div className="inline-flex rounded-lg border border-[#2e2e2e] overflow-hidden" role="group" aria-label={t('allowReach')}>
-                                {(['allowed', 'undecided', 'denied'] as const).map(value => (
-                                    <button key={value} type="button" disabled={addingContact}
-                                        aria-pressed={access === value}
-                                        onClick={() => value === 'allowed' ? setReachConfirm(s) : handleSetAccess(s, value)}
-                                        className={cn('px-2.5 py-1 whitespace-nowrap transition-colors',
-                                            access === value ? 'bg-[#d9d9d9] text-[#1a1a1a]' : 'bg-[#1f1f1f] text-[#d0d0d0] hover:bg-[#2a2a2a]')}>
-                                        {t(value === 'allowed' ? 'accessAllowed' : value === 'denied' ? 'accessDenied' : 'accessUndecided')}
-                                    </button>
-                                ))}
-                            </div>
+                            {/* The same pair as the contact book: the knob points at the word
+                                that holds, so a single trailing word cannot be read as what
+                                pressing the switch would do. */}
+                            <span className={switchWord(!answers, 'dark')}>{tcm('no')}</span>
+                            <Switch on={answers} disabled={addingContact} tone="dark" label={t('allowReach')}
+                                onClick={() => answers ? handleSetAccess(s, 'denied') : setReachConfirm(s)} />
+                            <span className={switchWord(answers, 'dark')}>{tcm('yes')}</span>
                         </div>
                     </>
                 )}

@@ -160,3 +160,34 @@ def test_discord_sessions_are_the_admin_stores_rows_and_nobody_elses(world):
     assert [(s["chat_id"], s["type"], s["unread"], s["waits"], s["message_count"]) for s in out["sessions"]] == \
         [("42", "admin", 1, True, 1)]
     assert asyncio.run(dr.get_discord_dashboard(_request(scope=OTHER, username="bob")))["sessions"] == []
+
+
+def test_a_whatsapp_row_says_whether_the_agent_answers_that_person_and_why(world):
+    """The window draws one switch per chat whose number is in the book, so the row carries the
+    answer and its reason rather than the bare word on the record: the browser has the policy
+    flag, and the flag is not the whole door.
+
+    MUTATION: drop `assistant_reach` from the row and the reasons go red; read the raw flag
+    instead of `front_office_doors` and the forwarding case does.
+    """
+    from vaf.core import contacts_store
+    from vaf.core.channel_ingress_policy import set_front_office
+    world["channel_ingress_policy"] = set_front_office(None, True, "whatsapp")
+    contacts_store.create_contact("Carol", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000042")
+    blocked = contacts_store.create_contact("Dave", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000050")
+    contacts_store.update_contact(blocked["id"], "alice", user_scope_id=SCOPE, assistant_access="denied")
+    _msg("+491700000042", "hallo", ts=NOW - 100, message_id="v1")
+    _msg("+491700000050", "hallo", ts=NOW - 90, message_id="v2")
+
+    rows = {s["chat_id"]: s for s in asyncio.run(routes.get_whatsapp_dashboard(_request()))["sessions"]}
+    carol, dave = rows["+491700000042"], rows["+491700000050"]
+    assert (carol["assistant_answers"], carol["assistant_reason"]) == (True, "front_office_open")
+    assert (dave["assistant_answers"], dave["assistant_reason"]) == (False, "contact_denied")
+    assert carol["contact_access"] is None and dave["contact_access"] == "denied"
+
+    # Forwarding off stops every sender before the agent, so the open switch answers nobody
+    # here and the row says so instead of showing a switch that promises an answer.
+    world["whatsapp_config"] = dict(world["whatsapp_config"], inbound_to_agent=False)
+    rows = {s["chat_id"]: s for s in asyncio.run(routes.get_whatsapp_dashboard(_request()))["sessions"]}
+    assert rows["+491700000042"]["assistant_answers"] is False
+    assert rows["+491700000042"]["assistant_reason"] == "not_paired"

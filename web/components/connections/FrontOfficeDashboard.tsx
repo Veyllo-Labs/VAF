@@ -20,6 +20,7 @@ import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
 import { useEscapeLayer } from '@/hooks/useEscapeLayer';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { Switch } from '@/components/ui/Switch';
 
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
@@ -67,8 +68,6 @@ export interface FrontOfficeDashboardProps {
     onChanged?: (state: FrontOfficeState) => void;
 }
 
-const SWITCH_TRACK = 'relative w-11 h-6 rounded-full transition-colors shrink-0';
-const SWITCH_KNOB = 'absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform';
 const CARD = 'rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3';
 const BTN = 'px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white hover:bg-gray-100 text-gray-900 transition-colors shrink-0 disabled:opacity-50';
 
@@ -83,22 +82,6 @@ const CHANNEL_ROWS: Array<{ id: string; label: string; icon: React.ElementType; 
     { id: 'discord', label: 'Discord', icon: MessageCircle, color: 'bg-indigo-600' },
     { id: 'email', label: 'E-Mail', icon: Mail, color: 'bg-amber-500' },
 ];
-
-function Switch({ on, disabled, label, onClick }: { on: boolean; disabled?: boolean; label: string; onClick: () => void }) {
-    return (
-        <button
-            type="button"
-            role="switch"
-            aria-checked={on}
-            aria-label={label}
-            disabled={disabled}
-            onClick={onClick}
-            className={cn(SWITCH_TRACK, on ? 'bg-gray-800 dark:bg-[#d9d9d9]' : 'bg-gray-300 dark:bg-[#333333]', disabled && 'opacity-60')}
-        >
-            <div className={cn(SWITCH_KNOB, on ? 'translate-x-6 dark:bg-[#1a1a1a]' : 'translate-x-1 dark:bg-[#e8e8e8]')} />
-        </button>
-    );
-}
 
 export default function FrontOfficeDashboard({ isOpen, onClose, onOpenContacts, onOpenInbox, onChanged }: FrontOfficeDashboardProps) {
     const t = useTranslations('settings.frontOffice');

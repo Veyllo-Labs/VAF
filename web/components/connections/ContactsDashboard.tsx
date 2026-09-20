@@ -23,6 +23,7 @@ import { cn } from '@/lib/utils';
 import { useEscapeLayer } from '@/hooks/useEscapeLayer';
 import { copyText } from '@/lib/clipboard';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { Switch, switchWord } from '@/components/ui/Switch';
 import { fmtWhen, initials } from './ChannelDashboardShell';
 
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
@@ -64,6 +65,12 @@ export interface Contact {
      *  they have, denied everywhere, or absent when nobody has decided and the channel's
      *  Inbound switch answers for them. */
     assistant_access?: 'allowed' | 'denied' | null;
+    /** Does the agent answer this person RIGHT NOW, and why: the decision above folded with
+     *  the Inbound switches by `contacts_store.assistant_reach`. The switch shows `answers`;
+     *  the reason picks the line under it. Absent on a payload from before this existed, and
+     *  then read fail-closed (see `contactReach`). */
+    assistant_answers?: boolean;
+    assistant_reason?: 'contact_allowed' | 'contact_denied' | 'front_office_open' | 'not_paired' | string;
     status?: string | null;
     company?: string | null;
     role?: string | null;
@@ -168,6 +175,22 @@ const REMINDER_CHOICES = [0, 5, 15, 30, 60, 1440];
 export function contactAccess(c: Contact): 'allowed' | 'denied' | 'undecided' {
     if (c.assistant_access === 'allowed' || c.assistant_access === 'denied') return c.assistant_access;
     return c.allow_as_assistant_user ? 'allowed' : 'undecided';
+}
+
+/** What the switch shows and why. The server folds the decision with the Inbound switches
+ *  (`contacts_store.assistant_reach`) because only it knows the whole door: the browser has
+ *  the raw policy flag, and a Telegram bot with two owners or WhatsApp with forwarding off
+ *  answers nobody whatever that flag says. A row from before the verdict existed is read
+ *  fail-closed: an explicit decision stands, anything else counts as "not answered", so the
+ *  switch never promises an answer the bridge would refuse. */
+export function contactReach(c: Contact): { answers: boolean; reason: string } {
+    if (typeof c.assistant_answers === 'boolean' && c.assistant_reason) {
+        return { answers: c.assistant_answers, reason: String(c.assistant_reason) };
+    }
+    const access = contactAccess(c);
+    if (access === 'allowed') return { answers: true, reason: 'contact_allowed' };
+    if (access === 'denied') return { answers: false, reason: 'contact_denied' };
+    return { answers: false, reason: 'not_paired' };
 }
 
 function hashIndex(s: string, n: number): number {
@@ -311,7 +334,6 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
     const [saving, setSaving] = useState(false);
     const [confirm, setConfirm] = useState<Confirm | null>(null);
     const [fileError, setFileError] = useState<string | null>(null);
-    const [frontOffice, setFrontOffice] = useState<{ channels: Record<string, boolean> } | null>(null);
 
     const composerRef = useRef<HTMLInputElement>(null);
     const menuRef = useRef<HTMLDivElement>(null);
@@ -353,20 +375,9 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
         } catch { /* suggestions only */ }
     }, []);
 
-    // The Front Office door per channel (Settings, Connections). The reach switch alone does
-    // not make the agent answer: with the door shut the person is still turned away, and the
-    // hint under the switch says so instead of promising an answer.
-    const fetchFrontOffice = useCallback(async () => {
-        try {
-            const res = await fetch(api('api/front-office'), { credentials: 'include' });
-            const json = await res.json();
-            if (res.ok && json && typeof json.channels === 'object') setFrontOffice({ channels: json.channels || {} });
-        } catch { /* the hint falls back to the flag alone */ }
-    }, []);
-
     useEffect(() => {
         if (isOpen) {
-            fetchContacts(); fetchStatusValues(); fetchTagValues(); fetchFrontOffice();
+            fetchContacts(); fetchStatusValues(); fetchTagValues();
             setTimelineVersion(v => v + 1);           // a reopened window shows what arrived meanwhile
             return;
         }
@@ -374,7 +385,7 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
         setMenuOpen(false); setStatusEditing(false); setTagEditing(false); setShowEventForm(false);
         setSelectedIds(new Set()); setBulkStatus(''); setBulkTag(''); setBulkError(null);
         setConfirm(null); setFileError(null);
-    }, [isOpen, fetchContacts, fetchStatusValues, fetchTagValues, fetchFrontOffice]);
+    }, [isOpen, fetchContacts, fetchStatusValues, fetchTagValues]);
 
     useEffect(() => {
         if (!menuOpen) return;
@@ -451,7 +462,7 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
 
     /** One decision at a time for one person: the group is dead until the PATCH has answered,
      *  so a second click cannot overtake the first. */
-    const setAccess = async (id: string, value: 'allowed' | 'denied' | 'undecided') => {
+    const setAccess = async (id: string, value: 'allowed' | 'denied') => {
         // Per CONTACT, matching the buttons that are disabled: a global guard would silently
         // swallow a click on the person you switched to while the previous PATCH was still in
         // flight, and their buttons look perfectly enabled (only one record is on screen, so
@@ -782,16 +793,14 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
     }, [contacts, searchQuery, statusFilter, sortBy]);
 
     const selectedContact = selectedContactId ? contacts.find(c => c.id === selectedContactId) ?? null : null;
-    // The contacts whose decision is being written right now. Three positions one click apart
-    // invite a second click before the first PATCH has answered, and two in-flight writes can
-    // land in either order: the person would be looking at the position they chose LAST while
-    // the record holds the other one.
+    // The contacts whose decision is being written right now. A second click before the first
+    // PATCH has answered would send two writes that can land in either order: the person would
+    // be looking at the position they chose LAST while the record holds the other one.
     const [accessBusy, setAccessBusy] = useState<Set<string>>(() => new Set());
-    // Explicitly ALLOWED, which is the channel-independent answer. A contact nobody has decided
-    // about may still be answered while their channel's Inbound is open, so the subtitle says
-    // "allowed" rather than "can reach the agent"; the per-channel breakdown is the Inbound
-    // window's job.
-    const reachCount = useMemo(() => contacts.filter(c => contactAccess(c) === 'allowed').length, [contacts]);
+    // How many people the agent actually answers, which is what the switches on this screen
+    // show: an allowed contact plus everybody the open Inbound answers. Counting only the
+    // explicitly allowed made the number disagree with the switches beside it.
+    const reachCount = useMemo(() => contacts.filter(c => contactReach(c).answers).length, [contacts]);
 
     const toggleSelected = (id: string) => {
         setSelectedIds(prev => {
@@ -988,17 +997,11 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
         const lastContact = overview?.last_contact ?? lastSeen(c);
         const created = overview?.created ?? (c.created_at ? { ts: c.created_at, source: c.source || 'manual' } : null);
         const bdays = c.birthday ? birthdayInDays(c.birthday) : null;
-        const access = contactAccess(c);
-        // Only "nobody decided" depends on the channel: that person is answered while their
-        // channel's Inbound stands open and turned away while it does not. An allowed contact
-        // is answered with every switch off, a denied one with every switch on.
-        // Every Front Office channel the person actually has, read from the state's own keys
-        // rather than from a hand-kept pair: with WhatsApp and Telegram hardcoded, a contact
-        // who is only reachable by mail or on Discord was told the channel would answer them
-        // while their channel's Inbound was shut.
-        const foTypes = channelTypes(c).filter(ty => ty in (frontOffice?.channels ?? {}));
-        const doorClosed = frontOffice !== null && foTypes.length > 0
-            && !foTypes.some(ty => !!frontOffice.channels[ty]);
+        // Does the agent answer this person, and why: one verdict from the server, which is
+        // the only side that knows the whole door. This used to be folded here from the raw
+        // policy flag, which said "the channel answers them" for a Telegram bot with two
+        // owners and for WhatsApp with forwarding off, where the bridge answers nobody.
+        const reach = contactReach(c);
         const statusValue = (c.status || '').trim();
         const notesCount = (c.notes_log || []).length;
         const eventsCount = (c.events || []).length;
@@ -1021,8 +1024,8 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
                     <div className="min-w-0 flex-1">
                         <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2 min-w-0">
                             <span className="truncate">{c.name}</span>
-                            {access === 'allowed' && <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" title={tc('canReachAgent')} />}
-                            {access === 'denied' && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title={tc('blockedFromAgent')} />}
+                            {reach.answers && <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" title={tc('canReachAgent')} />}
+                            {reach.reason === 'contact_denied' && <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" title={tc('blockedFromAgent')} />}
                         </h3>
                         {(c.company || c.role) && (
                             <p className="text-sm text-gray-600 truncate">
@@ -1101,32 +1104,30 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
                                 )}
                             </div>
                         </div>
-                        {/* Three positions, because the middle one is a state and not the
-                            absence of one: allowed answers on every channel, denied on none,
-                            and "the channel decides" is what a record carries until the user
-                            says otherwise. A two-way switch could only take a decision back. */}
+                        {/* One question, two answers: does the agent answer this person or
+                            not. The switch shows what is true right now, so a person the open
+                            Inbound answers reads as on without anybody deciding about them;
+                            the line under it says which of the two made it so. Switching off
+                            writes a refusal rather than "no decision", because a switch that
+                            springs back the moment the channel is open is not a switch. */}
                         <div className="flex items-center gap-2 text-xs text-gray-700">
                             <span>{tw('allowReach')}</span>
-                            <div className="inline-flex rounded-lg border border-gray-200 dark:border-[#2e2e2e] overflow-hidden" role="group" aria-label={tw('allowReach')}>
-                                {(['allowed', 'undecided', 'denied'] as const).map(value => (
-                                    <button key={value} type="button" aria-pressed={access === value}
-                                        disabled={accessBusy.has(c.id)}
-                                        onClick={() => value === 'allowed'
-                                            ? setConfirm({ kind: 'reach', contact: c })
-                                            : void setAccess(c.id, value)}
-                                        className={cn('px-2.5 py-1 whitespace-nowrap transition-colors disabled:opacity-50',
-                                            access === value
-                                                ? 'bg-gray-900 text-white dark:bg-[#d9d9d9] dark:text-[#1a1a1a]'
-                                                : 'bg-white text-gray-700 hover:bg-gray-100 dark:bg-[#1f1f1f] dark:text-[#d0d0d0] dark:hover:bg-[#2a2a2a]')}>
-                                        {tw(value === 'allowed' ? 'accessAllowed' : value === 'denied' ? 'accessDenied' : 'accessUndecided')}
-                                    </button>
-                                ))}
-                            </div>
+                            {/* A word on each side, the knob pointing at the one that holds: a
+                                single word after the switch reads as what the switch DOES when
+                                pressed, so "Nein" beside a switch that is already off looked
+                                like the agent was answering. */}
+                            <span className={switchWord(!reach.answers)}>{tcm('no')}</span>
+                            <Switch on={reach.answers} disabled={accessBusy.has(c.id)} label={tw('allowReach')}
+                                onClick={() => reach.answers
+                                    ? void setAccess(c.id, 'denied')
+                                    : setConfirm({ kind: 'reach', contact: c })} />
+                            <span className={switchWord(reach.answers)}>{tcm('yes')}</span>
                         </div>
                         <p className="text-[11px] text-gray-500 text-right max-w-[300px] max-md:text-left">
-                            {access === 'allowed' ? tc('reachHintOn')
-                                : access === 'denied' ? tc('reachHintOff')
-                                    : doorClosed ? tc('reachHintUndecidedDoorClosed') : tc('reachHintUndecided')}
+                            {reach.reason === 'contact_allowed' ? tc('reachHintOn')
+                                : reach.reason === 'contact_denied' ? tc('reachHintOff')
+                                    : reach.reason === 'front_office_open' ? tc('reachHintUndecided')
+                                        : tc('reachHintUndecidedDoorClosed')}
                         </p>
                     </div>
                 </div>
@@ -1467,8 +1468,8 @@ export default function ContactsDashboard({ isOpen, onClose, onOpenChat, onOpenC
                                                         <div className="min-w-0">
                                                             <div className="text-[13px] font-semibold truncate flex items-center gap-1.5">
                                                                 <span className="truncate">{c.name}</span>
-                                                                {contactAccess(c) === 'allowed' && <span className="w-[7px] h-[7px] rounded-full bg-green-500 shrink-0" title={tc('canReachAgent')} />}
-                                                                {contactAccess(c) === 'denied' && <span className="w-[7px] h-[7px] rounded-full bg-red-500 shrink-0" title={tc('blockedFromAgent')} />}
+                                                                {contactReach(c).answers && <span className="w-[7px] h-[7px] rounded-full bg-green-500 shrink-0" title={tc('canReachAgent')} />}
+                                                                {contactReach(c).reason === 'contact_denied' && <span className="w-[7px] h-[7px] rounded-full bg-red-500 shrink-0" title={tc('blockedFromAgent')} />}
                                                             </div>
                                                             <div className="text-[11.5px] text-gray-600 truncate flex items-center gap-1.5 mt-0.5">
                                                                 {status && <span className={cn('px-1.5 rounded text-[10.5px] whitespace-nowrap', STATUS_PILL[status] || PILL_DEFAULT)}>{statusLabel(status)}</span>}

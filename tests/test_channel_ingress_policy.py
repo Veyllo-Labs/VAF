@@ -14,6 +14,7 @@ had ever written to, and the two expert doors in config.json that said the same 
 contact's own decision in a place nobody looked.
 """
 from vaf.core.channel_ingress_policy import (
+    FRONT_OFFICE_CHANNELS,
     _SUPPORTED_CHANNELS,
     evaluate_ingress,
     normalize_policy,
@@ -115,3 +116,41 @@ def test_old_positional_callers_keep_meaning_what_they_meant():
 def test_supported_channels_untouched_by_the_third_state():
     assert set(_SUPPORTED_CHANNELS) == set(ROUTABLE_CHANNELS)
     assert set(normalize_policy(None)) >= set(ROUTABLE_CHANNELS)
+
+
+def test_the_caller_may_hand_in_the_door_it_has_already_asked_for():
+    """The flag in the policy is not the whole door. Telegram answers a stranger only while
+    exactly one account is paired on the shared bot, and WhatsApp forwards nothing at all with
+    `inbound_to_agent` off, so a surface that has asked `front_office_open` hands the answer in
+    and the rule stays in one place instead of being written a second time beside it.
+
+    MUTATION: ignore `door_open` and read the flag anyway, and the first two assertions go red.
+    """
+    opened = set_front_office(None, True, "telegram")
+    assert evaluate_ingress("telegram", opened, explicit_match=False) == (True, "front_office_open")
+    assert evaluate_ingress("telegram", opened, explicit_match=False, door_open=False) == (False, "not_paired")
+    shut = set_front_office(None, False, "telegram")
+    assert evaluate_ingress("telegram", shut, explicit_match=False, door_open=True) == (True, "front_office_open")
+    # It is the DOOR, never the decision: a person's own word still outranks it both ways.
+    assert evaluate_ingress("telegram", shut, explicit_match=False, access="allowed", door_open=False) == (True, "contact_allowed")
+    assert evaluate_ingress("telegram", opened, explicit_match=False, access="denied", door_open=True) == (False, "contact_denied")
+    # Left out, nothing changes for the callers that never pass it.
+    assert evaluate_ingress("telegram", opened, explicit_match=False, door_open=None) == (True, "front_office_open")
+
+
+def test_the_doors_are_read_once_for_a_whole_listing(monkeypatch):
+    """`front_office_doors` answers for every Front Office channel in one call, because a
+    surface listing people would otherwise ask per person AND per channel, rebuilding the
+    Telegram owner set each time.
+
+    MUTATION: drop a channel from the map and this goes red.
+    """
+    import vaf.core.config as cfg_mod
+    from vaf.core.messaging_connections import front_office_doors
+    state = {"channel_ingress_policy": set_front_office(None, True, "whatsapp"),
+             "whatsapp_config": {"enabled": True},
+             "telegram_config": {"whitelist": [{"telegram_user_id": "7", "vaf_username": "alice"}]}}
+    monkeypatch.setattr(cfg_mod.Config, "get", classmethod(lambda cls, key, default=None: state.get(key, default)))
+    doors = front_office_doors(state["channel_ingress_policy"])
+    assert set(doors) == set(FRONT_OFFICE_CHANNELS)
+    assert doors["whatsapp"] is True and doors["telegram"] is False and doors["email"] is False

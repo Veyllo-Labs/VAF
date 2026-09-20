@@ -12,7 +12,7 @@ import logging
 import threading
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 from vaf.core.platform import Platform
@@ -1513,6 +1513,57 @@ def front_office_endpoints(
     for c in get_contacts_allowing_assistant(username, user_scope_id=user_scope_id):
         out.update(contact_endpoints(c).get(chan) or [])
     return out
+
+
+def assistant_reach(
+    contact: Dict[str, Any],
+    *,
+    channels: Optional[Iterable[str]] = None,
+    raw_policy: Any = None,
+    doors: Optional[Dict[str, bool]] = None,
+) -> Dict[str, Any]:
+    """May the agent answer this person right now, and why:
+    `{"answers": bool, "reason": str, "channels": [...]}`.
+
+    The question every surface asks ABOUT A PERSON, folded once here. Two things decide it and
+    they answer different questions: this person's own decision (`contact_access`) holds on
+    every channel, open or closed, and where nobody has decided, that channel's Inbound does.
+    The reason is the ingress vocabulary the bridges log (`contact_allowed`, `contact_denied`,
+    `front_office_open`, `not_paired`), because it IS the bridge's rule: `evaluate_ingress`
+    decides, with the real door handed in.
+
+    Folding it at the surface is what this replaces, and the second half is the half that goes
+    wrong: the contact book read the raw policy flag and would have shown a Telegram chat as
+    answered on a bot with two owners, which the bridge refuses, while the WhatsApp window
+    offered a "the channel decides" position without knowing what that channel decides.
+
+    `channels` narrows the question to one lane (a channel window asks about its own channel);
+    by default it is every Front Office channel this contact has an address on. A contact with
+    no such address is still asked, with no door, so a blocked person reads as blocked rather
+    than as a shut channel. `doors` is `messaging_connections.front_office_doors()`, handed in
+    by a caller listing many people so the doors are read once instead of once per person.
+    """
+    from vaf.core.channel_ingress_policy import FRONT_OFFICE_CHANNELS, evaluate_ingress
+    access = contact_access(contact)
+    if channels is None:
+        endpoints = contact_endpoints(contact)
+        lanes = [ch for ch in FRONT_OFFICE_CHANNELS if endpoints.get(ch)]
+    else:
+        lanes = [str(ch or "").strip().lower() for ch in channels if str(ch or "").strip()]
+    if doors is None:
+        from vaf.core.messaging_connections import front_office_doors
+        doors = front_office_doors(raw_policy)
+    answers, reason = False, "not_paired"
+    for lane in (lanes or [""]):
+        ok, why = evaluate_ingress(lane, raw_policy, explicit_match=False, access=access,
+                                   door_open=bool(doors.get(lane, False)))
+        reason = why
+        if ok:
+            answers = True
+            break
+        if why == "contact_denied":
+            break
+    return {"answers": answers, "reason": reason, "channels": lanes}
 
 
 def denied_endpoints(

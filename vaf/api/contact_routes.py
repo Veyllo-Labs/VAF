@@ -103,13 +103,42 @@ class BulkIds(BaseModel):
     ids: List[str]
 
 
+def _with_reach(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """`assistant_answers` and `assistant_reason` on every contact row.
+
+    The switch in the contact book and in the channel windows says whether the agent answers
+    this person RIGHT NOW, which is their own decision folded with the Inbound switches
+    (`contacts_store.assistant_reach`). It is answered here, once per request with the doors
+    read once, rather than in the browser: the browser only has the raw policy flag, and the
+    flag is not the whole door (a Telegram bot with two owners answers nobody, WhatsApp with
+    forwarding off answers nobody), so a switch built on it would promise what the bridge
+    refuses. A row whose fold fails carries no verdict rather than a wrong one.
+    """
+    try:
+        from vaf.core.config import Config
+        from vaf.core.contacts_store import assistant_reach
+        from vaf.core.messaging_connections import front_office_doors
+        policy = Config.get("channel_ingress_policy")
+        doors = front_office_doors(policy)
+    except Exception:
+        return rows
+    for row in rows:
+        try:
+            reach = assistant_reach(row, raw_policy=policy, doors=doors)
+        except Exception:
+            continue
+        row["assistant_answers"] = bool(reach["answers"])
+        row["assistant_reason"] = str(reach["reason"])
+    return rows
+
+
 @router.get("")
 async def get_contacts_list(request: Request) -> List[Dict[str, Any]]:
     """List all contacts for the current user."""
     user_info = get_current_vaf_user(request)
     username = user_info["username"]
     user_scope_id = user_info.get("user_scope_id")
-    return list_contacts(username, user_scope_id=user_scope_id)
+    return _with_reach(list_contacts(username, user_scope_id=user_scope_id))
 
 
 @router.get("/{contact_id}")
@@ -121,7 +150,7 @@ async def get_contact(contact_id: str, request: Request) -> Dict[str, Any]:
     contact = get_contact_by_id(contact_id, username, user_scope_id=user_scope_id)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
-    return contact
+    return _with_reach([contact])[0]
 
 
 @router.post("")

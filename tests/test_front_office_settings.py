@@ -371,6 +371,17 @@ def test_the_window_owns_the_switch_the_instructions_and_the_knowledge():
 
 
 def test_the_window_is_mounted_from_settings_and_the_contacts_hint_reads_the_door():
+    """The window opens from Settings, and the contact book explains a person's state with the
+    verdict the SERVER folded, never with the raw switch.
+
+    The browser only ever had the policy flag, and the flag is not the whole door: a Telegram
+    bot with two owners and a WhatsApp account with forwarding off answer nobody whatever it
+    says. The book used to fetch that flag and fold it itself, which is how a hint promised an
+    answer the bridge refuses.
+
+    MUTATION: fold the door in the browser again (fetch `api/front-office` and read
+    `channels[...]` per contact) and the last two assertions go red.
+    """
     settings = _SETTINGS.read_text(encoding="utf-8")
     assert "showFrontOfficeDashboard" in settings
     assert "onOpenFrontOfficeDashboard={() => setShowFrontOfficeDashboard(true)}" in settings
@@ -378,9 +389,16 @@ def test_the_window_is_mounted_from_settings_and_the_contacts_hint_reads_the_doo
     index = (REPO / "web" / "components" / "connections" / "index.ts").read_text(encoding="utf-8")
     assert "export { default as FrontOfficeDashboard } from './FrontOfficeDashboard';" in index
     contacts = _CONTACTS.read_text(encoding="utf-8")
-    assert "api('api/front-office')" in contacts
-    assert "tc('reachHintUndecidedDoorClosed')" in contacts, \
-        "only the undecided state depends on the channel; the other two do not"
+    # One line per reason, the words the bridge logs.
+    for reason, key in (("contact_allowed", "reachHintOn"), ("contact_denied", "reachHintOff"),
+                        ("front_office_open", "reachHintUndecided"),
+                        ("", "reachHintUndecidedDoorClosed")):
+        assert f"tc('{key}')" in contacts, key
+        if reason:
+            assert f"reach.reason === '{reason}'" in contacts, reason
+    assert "contactReach(c)" in contacts and "c.assistant_answers" in contacts
+    assert "api('api/front-office')" not in contacts, "the door is folded once, on the server"
+    assert "frontOffice" not in contacts and "doorClosed" not in contacts
 
 
 # ── the profile and the knowledge behind the window ─────────────────────────────────────
@@ -746,3 +764,114 @@ def test_the_contacts_control_tracks_every_decision_in_flight():
     assert "next.delete(id); return next;" in src
     assert "disabled={accessBusy.has(c.id)}" in src
     assert "accessBusy === " not in src and "setAccessBusy(null)" not in src
+
+
+# ── the one verdict the switch shows ────────────────────────────────────────────────────
+
+def test_a_person_is_answered_or_not_and_the_reason_says_which(config):
+    """`assistant_reach` is the whole question the switch asks: does the agent answer this
+    person right now. The word the owner wrote holds on every channel; where they wrote none,
+    the channel's Inbound answers, and Inbound is more than its flag.
+
+    MUTATION: read `resolve_channel_policy(...)["open_to_new_senders"]` instead of the door
+    handed in, and the Telegram assertions go red: the bot is shared, so with two accounts
+    paired it answers nobody whatever the flag says.
+    """
+    from vaf.core import contacts_store
+    from vaf.core.channel_ingress_policy import set_front_office
+    config["channel_ingress_policy"] = set_front_office(set_front_office(None, True, "whatsapp"), True, "telegram")
+    config["telegram_config"] = {"whitelist": [
+        {"telegram_user_id": "7", "vaf_username": "alice", "user_scope_id": SCOPE},
+        {"telegram_user_id": "8", "vaf_username": "bob", "user_scope_id": TENANT}]}
+    policy = config["channel_ingress_policy"]
+
+    wa = contacts_store.create_contact("Carol", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000001")
+    tg = contacts_store.create_contact("Dave", "alice", user_scope_id=SCOPE, telegram_user_id="777")
+
+    # Nobody decided: the open WhatsApp door answers, the shared Telegram bot does not.
+    assert contacts_store.assistant_reach(wa, raw_policy=policy) == {
+        "answers": True, "reason": "front_office_open", "channels": ["whatsapp"]}
+    assert contacts_store.assistant_reach(tg, raw_policy=policy) == {
+        "answers": False, "reason": "not_paired", "channels": ["telegram"]}
+    # WhatsApp forwards nothing at all: the flag still says open, the channel answers nobody.
+    config["whatsapp_config"] = {"enabled": True, "inbound_to_agent": False}
+    assert contacts_store.assistant_reach(wa, raw_policy=policy)["answers"] is False
+    config["whatsapp_config"] = {"enabled": True}
+
+    # The owner's own word outranks both doors, in both directions.
+    contacts_store.apply_contact_access(tg, "allowed")
+    assert contacts_store.assistant_reach(tg, raw_policy=policy) == {
+        "answers": True, "reason": "contact_allowed", "channels": ["telegram"]}
+    contacts_store.apply_contact_access(wa, "denied")
+    assert contacts_store.assistant_reach(wa, raw_policy=policy) == {
+        "answers": False, "reason": "contact_denied", "channels": ["whatsapp"]}
+    # A blocked person with no address anywhere still reads as blocked, not as a shut channel.
+    lonely = contacts_store.create_contact("Erin", "alice", user_scope_id=SCOPE)
+    contacts_store.apply_contact_access(lonely, "denied")
+    assert contacts_store.assistant_reach(lonely, raw_policy=policy) == {
+        "answers": False, "reason": "contact_denied", "channels": []}
+    # And a channel window asks about its own lane only.
+    assert contacts_store.assistant_reach(tg, channels=["whatsapp"], raw_policy=policy)["reason"] == "contact_allowed"
+
+
+def test_the_rows_the_windows_read_carry_the_verdict(config, monkeypatch):
+    """The contact book and the WhatsApp window both draw a switch, so both rows carry the
+    answer and the reason. Folding it in the browser is what this replaces: the browser has
+    the flag, not the door.
+
+    MUTATION: drop `_with_reach` from the contacts route and the first block goes red; drop
+    `assistant_reach` from the WhatsApp row and the second does.
+    """
+    from types import SimpleNamespace
+
+    from vaf.api import contact_routes
+    from vaf.core import contacts_store
+    from vaf.core.channel_ingress_policy import set_front_office
+    config["channel_ingress_policy"] = set_front_office(None, True, "whatsapp")
+    contacts_store.create_contact("Carol", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000001")
+    blocked = contacts_store.create_contact("Dave", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000002")
+    contacts_store.update_contact(blocked["id"], "alice", user_scope_id=SCOPE, assistant_access="denied")
+
+    request = SimpleNamespace(state=SimpleNamespace(user={"username": "alice", "user_scope_id": SCOPE}))
+    rows = {r["name"]: r for r in asyncio.run(contact_routes.get_contacts_list(request))}
+    assert (rows["Carol"]["assistant_answers"], rows["Carol"]["assistant_reason"]) == (True, "front_office_open")
+    assert (rows["Dave"]["assistant_answers"], rows["Dave"]["assistant_reason"]) == (False, "contact_denied")
+    one = asyncio.run(contact_routes.get_contact(rows["Carol"]["id"], request))
+    assert one["assistant_answers"] is True
+
+    src = (REPO / "vaf" / "api" / "whatsapp_routes.py").read_text(encoding="utf-8")
+    assert 'reach = assistant_reach(book, channels=["whatsapp"],' in src
+    assert 'rec["assistant_answers"] = bool(reach["answers"])' in src
+    assert "front_office_doors(_ingress_policy)" in src, "the doors once per listing, not per chat"
+
+
+def test_the_contact_book_and_the_channel_window_show_one_switch_not_three_positions():
+    """Two answers, because that is the question: does the agent answer this person. The third
+    position said "the channel decides", which is a fact about the channel rather than an
+    answer about the person, and it made the owner read two controls to learn one thing.
+    Switching off writes a refusal: with the channel open, writing "no decision" would spring
+    the switch straight back on.
+
+    MUTATION: bring the three-button group back in either window and this goes red.
+    """
+    for name in ("ContactsDashboard.tsx", "WhatsAppDashboard.tsx"):
+        src = (REPO / "web" / "components" / "connections" / name).read_text(encoding="utf-8")
+        assert "from '@/components/ui/Switch'" in src, name
+        assert "<Switch on=" in src, name
+        assert "accessUndecided" not in src and "accessAllowed" not in src and "accessDenied" not in src, name
+        assert "'allowed', 'undecided', 'denied'" not in src, name
+        assert "'denied')" in src, f"{name}: switching off is a refusal, not a cleared decision"
+        # A word on EACH side, the knob pointing at the one that holds: a single word after
+        # the switch reads as what pressing it would do, so "No" beside a switch that was
+        # already off said the opposite of the truth.
+        assert "switchWord" in src, name
+        no_at, yes_at = src.index("tcm('no')"), src.index("tcm('yes')")
+        assert no_at < src.index("<Switch on=") < yes_at, f"{name}: no on the left, yes on the right"
+    # The word is gone from every catalogue too, so nothing renders "the channel decides".
+    for loc in ("de", "en", "tr", "zh", "ja", "ko", "th"):
+        block = json.loads((REPO / "web" / "messages" / f"{loc}.json").read_text(encoding="utf-8"))
+        assert "accessUndecided" not in block["settings"]["whatsappDashboard"], loc
+        assert "inContacts" in block["settings"]["whatsappDashboard"], loc
+    # One switch in the product, not one per window.
+    fo = (REPO / "web" / "components" / "connections" / "FrontOfficeDashboard.tsx").read_text(encoding="utf-8")
+    assert "function Switch(" not in fo and "from '@/components/ui/Switch'" in fo

@@ -559,6 +559,15 @@ async def get_whatsapp_dashboard(request: Request):
         lid_jid = cid if cid.endswith("@lid") else f"{''.join(c for c in cid if c.isdigit())}@lid"
         return (lid_to_e164_cfg.get(lid_jid) or "").strip() or (node_by_lid.get(lid_jid) or "").strip() or None
 
+    # The Inbound doors once for the whole listing, not once per chat: each ask rebuilds the
+    # Telegram owner set, and the answer is the same for every row.
+    _ingress_policy = Config.get("channel_ingress_policy")
+    try:
+        from vaf.core.messaging_connections import front_office_doors
+        _doors = front_office_doors(_ingress_policy)
+    except Exception:
+        _doors = {}
+
     for rec in sessions:
         cid = str(rec.get("chat_id") or "")
         is_lid = "@lid" in cid
@@ -612,20 +621,28 @@ async def get_whatsapp_dashboard(request: Request):
         # person, so the dashboard offers "add as contact" only to a number the book does not
         # know yet (the WhatsApp sync creates records nobody has decided about; those must not
         # look new). `contact_access` carries the decision itself - allowed, denied, or null
-        # when nobody decided - because the window's control has three positions and the
-        # chat's mode cannot tell "denied" from "the channel is closed".
+        # when nobody decided; `assistant_answers` is what that decision MEANS on this channel
+        # right now, folded with the Inbound switch by the one rule the bridge applies
+        # (`contacts_store.assistant_reach`), so the window's switch shows the answer instead
+        # of offering a position whose effect it cannot know.
         rec["contact_id"] = None
         rec["contact_name"] = None
         rec["contact_access"] = None
+        rec["assistant_answers"] = False
+        rec["assistant_reason"] = "not_paired"
         phone_for_book = resolved or (None if is_lid else (rec.get("phone_number") or cid))
         if phone_for_book and "@" not in str(phone_for_book):
             try:
-                from vaf.core.contacts_store import contact_access, find_contact_by_phone
+                from vaf.core.contacts_store import assistant_reach, contact_access, find_contact_by_phone
                 book = find_contact_by_phone(str(phone_for_book), username, user_info.get("user_scope_id"))
                 if book:
                     rec["contact_id"] = book.get("id")
                     rec["contact_name"] = (book.get("name") or "").strip() or None
                     rec["contact_access"] = contact_access(book)
+                    reach = assistant_reach(book, channels=["whatsapp"],
+                                            raw_policy=_ingress_policy, doors=_doors)
+                    rec["assistant_answers"] = bool(reach["answers"])
+                    rec["assistant_reason"] = str(reach["reason"])
             except Exception:
                 pass
 

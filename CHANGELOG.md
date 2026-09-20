@@ -100,6 +100,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   only contacts with the flag, and only after the door had been opened by hand in
   `config.json` (`channel_ingress_policy`), while the contact book said the agent answers
   them; the hint under each person now says what their own state means.
+- **"Let the agent reply" is one switch again, and it shows what is actually true.** The three
+  positions asked you to hold two facts at once: your decision about the person, and whether
+  that channel's Inbound happens to be open. The switch now answers the only question you
+  were asking, whether your agent answers this person right now, and the line under it says
+  which of the two made it so. It is on for somebody you allowed and for somebody the open
+  Inbound answers; switching it off keeps them out for good, so it still holds when you open
+  that channel again. A person nobody has decided about still follows their channel, as
+  before, and the agent tools keep all three words. The WhatsApp window shows the same switch
+  on a chat whose number is in your book, and says "Saved as a contact" where it used to say
+  "Already in your contacts". What the switch shows is now decided where the whole door is
+  known: a Telegram bot with two accounts paired on it and a WhatsApp number with forwarding
+  off answer nobody, and the contact book used to promise an answer in both cases.
 
 ### Security
 - **"Let the agent reply" has three positions, and the 72 hour reply window is gone.** Whether

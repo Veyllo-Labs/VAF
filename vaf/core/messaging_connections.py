@@ -108,6 +108,15 @@ def front_office_open(channel: str, raw_policy: Any = None) -> bool:
     return True
 
 
+def front_office_doors(raw_policy: Any = None) -> Dict[str, bool]:
+    """Every Front Office channel's real answer to "does Inbound answer a stranger here", in
+    one dict. A surface that asks per contact would otherwise ask per contact AND per channel,
+    and each ask rebuilds the Telegram owner set; the answer is the same for the whole listing.
+    """
+    from vaf.core.channel_ingress_policy import FRONT_OFFICE_CHANNELS
+    return {ch: front_office_open(ch, raw_policy) for ch in FRONT_OFFICE_CHANNELS}
+
+
 def _entry_is_mine(entry: Dict[str, Any], username: Optional[str], user_scope_id: Optional[str]) -> bool:
     """Whether a whitelist entry belongs to this identity: by scope when both carry one, by
     VAF username otherwise; the local admin sees every entry."""

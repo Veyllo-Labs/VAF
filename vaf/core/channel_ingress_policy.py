@@ -201,6 +201,7 @@ def evaluate_ingress(
     explicit_match: bool,
     access: Optional[str] = None,
     case_reply: bool = False,
+    door_open: Optional[bool] = None,
 ) -> Tuple[bool, str]:
     """May this sender's message be handed to the agent? (allowed, reason)
 
@@ -218,6 +219,13 @@ def evaluate_ingress(
     about is answered only while the channel stands open, and the bridge then enrols them.
     Anything else is refused and the message is only stored for the owner's inbox.
 
+    `door_open` is the channel switch as the CALLER knows it, and it replaces the flag read
+    here. The flag alone is not the whole door: Telegram answers a stranger only while exactly
+    one account is paired on the shared bot, and WhatsApp forwards nothing at all while
+    `inbound_to_agent` is off (`messaging_connections.front_office_open` folds both). A caller
+    that has asked there passes the answer in, so the row it renders and the bridge that would
+    answer cannot disagree. Left out, the raw flag decides as before.
+
     `case_reply` is MAIL ONLY: a reply that carries the case anchor this agent minted into its
     own outgoing Message-ID (vaf/mail/case_token.py), which is proof that it answers a mail the
     agent sent in that case. A correspondence the owner started themselves is not stranded by a
@@ -233,6 +241,7 @@ def evaluate_ingress(
     resolved = resolve_channel_policy(channel, raw_policy)
     is_mail = str(channel or "").strip().lower() == MAIL_CHANNEL
     decision = str(access or "").strip().lower()
+    door = resolved["open_to_new_senders"] if door_open is None else bool(door_open)
     if explicit_match:
         return True, "explicit_pair"
     if decision == "denied":
@@ -241,7 +250,7 @@ def evaluate_ingress(
         return True, "contact_allowed"
     if case_reply and is_mail:
         return True, "open_conversation"
-    if resolved["open_to_new_senders"]:
+    if door:
         return True, "front_office_open"
     return False, "not_paired"
 

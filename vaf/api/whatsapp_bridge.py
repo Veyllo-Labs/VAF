@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from vaf.core.config import Config
 from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
+from vaf.core.messaging_connections import front_office_open
 from vaf.core.messaging_connections import (
     save_whatsapp_chat_jid, whatsapp_enabled_for_scope, whatsapp_session_id,
 )
@@ -1654,12 +1655,21 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             # The owner's endpoint for proactive sends is the registered main-user number
             # only; a contact's message must never become "where the owner is".
             save_whatsapp_chat_jid(user_scope_id, username, from_jid)
-        if policy_reason == "front_office_open" and raw and chat_id.startswith("+"):
+        if (policy_reason == "front_office_open" and raw and chat_id.startswith("+")
+                and front_office_open("whatsapp", ingress_policy)):
             # A sender the open Front Office let in becomes a contact with NO decision on the
             # record: the open channel is what answers them, and a record that carried a
             # permission would outlive the switch being turned off. The owner sees them in the
             # book and the WhatsApp window and decides there. Recorded like a pairing; the
             # bridge never repeats it for a record that exists.
+            #
+            # `front_office_open` and not the policy flag the reason came from: with
+            # `inbound_to_agent` off this bridge hands NOTHING to the agent (the gate below),
+            # so the door answers nobody however the flag reads. Enrolling there wrote a record
+            # and a security event saying the open Front Office had admitted somebody the agent
+            # would never answer. The ingress verdict itself is left alone on purpose: the
+            # message is still stored for the owner and still logged as accepted, which is what
+            # happened.
             try:
                 from vaf.core.contacts_store import enrol_front_office_contact, find_contact_by_channel
                 from vaf.core.security_events import log_security_event

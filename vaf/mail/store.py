@@ -1480,8 +1480,11 @@ class MailStore:
         now = int(not_before_ts if not_before_ts is not None
                   else datetime.now(timezone.utc).timestamp())
         cur = conn.execute(
+            # `last_error` goes with the attempt count: it described the try that failed, and a
+            # released op carrying it reports a stale failure on a send that is on its way
+            # (`send_outcome` reads the payload).
             "UPDATE ops SET state='pending', attempts=0, updated_at=?, "
-            "payload=json_set(payload, '$.not_before_ts', ?) "
+            "payload=json_remove(json_set(payload, '$.not_before_ts', ?), '$.last_error') "
             "WHERE id=? AND state='held' AND kind='send'", (_now(), now, int(op_id)))
         conn.commit()
         return cur.rowcount == 1

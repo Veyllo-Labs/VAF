@@ -148,6 +148,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the rows learned without a scope, the same fail-closed rule the memory store applies.
 
 ### Fixed
+- **A mail draft is never released for an account you no longer have.** Sending it said the
+  next outbox run would take it, and no run ever could: nothing delivers a mail for an account
+  that is not set up any more. The draft now stays where it is and says so. A send that was
+  handed to the server and never confirmed also says the same thing every time you try it,
+  instead of showing the server's own words once and the explanation afterwards.
+- **A WhatsApp sender is no longer admitted through a door that answers nobody.** With
+  WhatsApp set to send-only, an open Inbound still wrote "added by the open Front Office" into
+  your contact book and your security log, for people the agent would never answer.
 - **The confirming button in a dialog is black in dark mode, not dark blue.** It wore
   Tailwind's cool grey, which is a dark navy, and that button is the only place in the app
   where the colour is visible at all in dark mode: every other one turns light there.

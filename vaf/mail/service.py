@@ -27,6 +27,12 @@ AMBIGUOUS_DRAFT = ("The last attempt was interrupted after the mail was handed t
                    "it may already have been delivered. It is not sent again: check the Sent "
                    "folder, drop the draft if it arrived, and ask for it again if it did not.")
 
+#: What a held draft is told when its account is not in the mail configuration any more.
+#: Nothing can deliver it in that state, the sweep included, so it stays held rather than
+#: becoming a pending op nobody drains.
+NO_ACCOUNT_FOR_DRAFT = ("This draft was written for a mail account that is not set up any more. "
+                        "Add the account again to send it, or discard the draft.")
+
 _ALLOWED_TAGS = {
     "a", "abbr", "b", "blockquote", "br", "caption", "center", "cite", "code",
     "col", "colgroup", "dd", "div", "dl", "dt", "em", "figcaption", "figure",
@@ -840,6 +846,12 @@ def release_held_draft(scope: str, username: str, op_id: int,
     with nothing said). A `failed` op whose ledger stamp is `ambiguous` was handed to the
     server and never confirmed: it goes back to the person too, as `ambiguous`, which the
     approval refuses and only a discard can end.
+
+    The ACCOUNT is resolved before the draft leaves the held state. Nothing but a configured
+    account can deliver this mail: the immediate drain needs it and so does the sweep, so a
+    draft released for an account the config no longer holds becomes a pending op nobody will
+    ever drain, while the person was told the next run would take it. It stays held and says
+    so instead.
     """
     svc = service or MailService(scope)
     op = svc.store.get_op(int(op_id))
@@ -847,8 +859,6 @@ def release_held_draft(scope: str, username: str, op_id: int,
         return {"ok": False, "state": "", "error": "not waiting"}
     if svc.draft_state(op)[0] == "ambiguous":
         return {"ok": False, "state": "ambiguous", "error": AMBIGUOUS_DRAFT}
-    if not svc.approve_draft(int(op_id)):
-        return {"ok": False, "state": "", "error": "not waiting"}
     account_id = str((op.get("payload") or {}).get("account_id") or "")
     try:
         from vaf.core.email_accounts import get_email_config
@@ -856,12 +866,21 @@ def release_held_draft(scope: str, username: str, op_id: int,
         ec = get_email_config(username or "admin", user_scope_id=scope)
         acc = next((a for a in (ec.get("accounts") or [])
                     if (a.get("account_id") or a.get("email") or "").lower() == account_id.lower()), None)
-        if acc is not None:
-            deliver_queued_sends(scope, acc, cred_username_from_kwargs({"username": username}),
-                                 account_id, service=svc)
-    except Exception:
+    except Exception as exc:                                   # noqa: BLE001
+        # A config that cannot be read is not permission to release: the draft is worth more
+        # than the click, so it waits and the person tries again.
+        logger.warning("held draft %s: the account list could not be read: %s", op_id, exc)
+        acc = None
+    if acc is None:
+        return {"ok": False, "state": "held", "error": NO_ACCOUNT_FOR_DRAFT}
+    if not svc.approve_draft(int(op_id)):
+        return {"ok": False, "state": "", "error": "not waiting"}
+    try:
+        deliver_queued_sends(scope, acc, cred_username_from_kwargs({"username": username}),
+                             account_id, service=svc)
+    except Exception as exc:                                   # noqa: BLE001
         # The op stays released, so the sweep delivers it; only the immediate drain failed.
-        pass
+        logger.warning("held draft %s: the immediate drain failed, the sweep takes it: %s", op_id, exc)
     outcome = svc.send_outcome(int(op_id))
     # `done` is delivered, `pending` is released and waiting for the sweep (the immediate drain
     # could not run: no IMAP session, no matching account, a deferred op). Both are a send that
@@ -877,6 +896,11 @@ def release_held_draft(scope: str, username: str, op_id: int,
         # from being overwritten; `last_error` stays in the payload for `draft_state`.
         svc.store.mark_op(int(op_id), "held", expect_state="failed")
         if delivery == "ambiguous":
-            state, error = "ambiguous", (error or AMBIGUOUS_DRAFT)
+            # What the person needs is what to DO, and it must read the same here as on the
+            # second attempt (which refuses before it ever reaches the transport). The
+            # transport's own words stay on the op for `draft_state` and go to the log.
+            logger.warning("held draft %s was handed to the server and not confirmed: %s",
+                           op_id, error or "no reason given")
+            state, error = "ambiguous", AMBIGUOUS_DRAFT
     return {"ok": state in ("done", "pending"), "state": state, "delivery": delivery,
             "error": error}

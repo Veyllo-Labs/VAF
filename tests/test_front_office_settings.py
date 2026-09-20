@@ -674,7 +674,13 @@ def test_the_bridges_read_the_decision_and_enrol_who_the_open_door_let_in():
     wa = (REPO / "vaf" / "api" / "whatsapp_bridge.py").read_text(encoding="utf-8")
     assert "access=access," in wa and "contact_access(" in wa
     assert 'find_contact_by_channel("whatsapp", chat_id, username, user_scope_id)' in wa
-    assert 'if policy_reason == "front_office_open"' in wa and "enrol_front_office_contact(" in wa
+    assert 'policy_reason == "front_office_open"' in wa and "enrol_front_office_contact(" in wa
+    # And the enrolment asks the DOOR, not the flag the reason came from: with
+    # `inbound_to_agent` off this bridge hands nothing to the agent, so nobody is admitted
+    # there however the policy reads, and a record plus a security event saying the open Front
+    # Office let them in would be two lies.
+    # MUTATION: drop the condition and this goes red.
+    assert 'and front_office_open("whatsapp", ingress_policy)):' in wa
     tg = (REPO / "vaf" / "api" / "telegram_bridge.py").read_text(encoding="utf-8")
     assert "def _open_front_office_entry" in tg and "admit_front_office_sender(" in tg, "the stranger path is the shared admission"
     # The single-owner condition moved into the framework, where the inbox rows and the channel

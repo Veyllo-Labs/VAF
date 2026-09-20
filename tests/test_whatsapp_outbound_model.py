@@ -784,3 +784,48 @@ def test_the_owner_origin_travels_through_both_send_paths(isolated, monkeypatch,
     # an agent send carries no origin on either path
     wa.send_whatsapp_with_confirmation("alice", "491700000051@s.whatsapp.net", "hi", allow_contact_send=True)
     assert wa._dequeue_external_send_request()[7] is None
+
+
+def test_forwarding_off_enrols_nobody_through_a_door_that_answers_nobody(isolated, monkeypatch):
+    """`inbound_to_agent` off stops every sender before the agent, so an open Inbound answers
+    nobody on WhatsApp. The enrolment read the policy FLAG, not the door, and wrote a contact
+    record plus a security event saying the open Front Office had admitted a person the agent
+    would never answer, while the row beside it said they were not answered.
+
+    The message is still stored and still logged as accepted: that is what happened, and the
+    owner reads it in the inbox.
+
+    MEASURED BOUNDARY, so the next reader is not surprised: a record still appears in the book
+    either way, because an older lane links every inbound sender to one (`source` "whatsapp").
+    What the door decides is the Front Office ENROLMENT on top of it, which stamps `source`
+    "front_office" and writes the event; that is what must not happen where nobody is answered.
+
+    MUTATION: drop the `front_office_open` condition on the enrolment and the two assertions
+    about the first dispatch go red.
+    """
+    from vaf.core import contacts_store
+    from vaf.core.channel_ingress_policy import set_front_office
+    events = []
+    import vaf.core.security_events as sec
+    monkeypatch.setattr(sec, "log_security_event", lambda kind, **f: events.append((kind, f)))
+    monkeypatch.setattr(wa, "_get_allowed_phones_for_user", lambda u, s: ([], []))
+    isolated["channel_ingress_policy"] = set_front_office(None, True, "whatsapp")
+    isolated["whatsapp_config"] = {"enabled": True, "inbound_to_agent": False}
+
+    assert _dispatch("alice", "491700000042@s.whatsapp.net", body="Hallo?", pushName="Mara") is None, \
+        "forwarding off hands nothing to the agent"
+    assert store.last_message_ts("alice", "+491700000042", direction="in", user_scope_id=SCOPE) is not None, \
+        "the message is still stored for the owner"
+    linked = contacts_store.find_contact_by_channel("whatsapp", "+491700000042", "alice", SCOPE)
+    assert linked is not None and linked.get("source") != "front_office", \
+        "the linking lane records the sender; the closed door enrols nobody"
+    assert [k for k, _ in events if k == "contact_access_changed"] == []
+
+    # With forwarding back on, a sender the door answers IS enrolled: the gate is the door,
+    # not a new rule.
+    isolated["whatsapp_config"] = {"enabled": True, "inbound_to_agent": True}
+    assert _dispatch("alice", "491700000050@s.whatsapp.net", body="Hallo?", pushName="Nora") is not None
+    book = contacts_store.find_contact_by_channel("whatsapp", "+491700000050", "alice", SCOPE)
+    assert book is not None and book.get("source") == "front_office"
+    assert contacts_store.contact_access(book) is None
+    assert [k for k, _ in events if k == "contact_access_changed"] == ["contact_access_changed"]

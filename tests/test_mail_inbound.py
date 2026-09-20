@@ -388,19 +388,30 @@ def test_the_runner_and_the_prompt_know_the_mail_lane():
 USER = {"username": "alice", "user_scope_id": SCOPE, "role": "user"}
 
 
-def test_a_released_draft_the_sweep_delivers_is_not_a_failure():
+def test_a_released_draft_the_sweep_delivers_is_not_a_failure(monkeypatch):
     """`release_held_draft` does two acts, and only the second one puts the mail on the wire.
     When the immediate drain cannot run (no IMAP session, no matching account, a deferred op)
     the op stays `pending` and the sweep takes it: the mail has left the person's hands, so the
     card must not tell them it did not work. `state` keeps the difference.
 
-    MUTATION: compare the state with "done" alone and the pending case goes red.
+    The ACCOUNT decides whether the draft may leave the held state at all: nothing but a
+    configured account can deliver it, the sweep included, so a draft released for an account
+    the config no longer holds would become a pending op nobody ever drains while the person
+    was told the next run would take it.
+
+    MUTATION: compare the state with "done" alone and the pending case goes red; approve
+    before the account is resolved and the last block goes red (the draft leaves and is lost).
     """
     from types import SimpleNamespace
 
-    from vaf.mail.service import release_held_draft
+    import vaf.core.email_accounts as ea
+    from vaf.mail.service import NO_ACCOUNT_FOR_DRAFT, release_held_draft
 
     restored = []
+    # Through monkeypatch, never by assignment: a failing assertion below would otherwise leave
+    # the stub in place for every later test in the run.
+    accounts = {"accounts": [{"account_id": "a@example.com", "email": "a@example.com"}]}
+    monkeypatch.setattr(ea, "get_email_config", lambda *a, **k: accounts)
 
     def _svc(final_state):
         store = SimpleNamespace(get_op=lambda _id: {"kind": "send", "state": "held",
@@ -425,6 +436,24 @@ def test_a_released_draft_the_sweep_delivers_is_not_a_failure():
         approve_draft=lambda _id: True, draft_state=lambda op: ("held", ""),
         send_outcome=lambda _id: {"state": "done", "error": ""})
     assert release_held_draft("scope", "alice", 1, service=not_waiting)["error"] == "not waiting"
+
+    # No account, no release: the draft stays held and says why, instead of turning into a
+    # pending op that nothing will ever drain.
+    approved = []
+    gone = SimpleNamespace(
+        store=SimpleNamespace(get_op=lambda _id: {"kind": "send", "state": "held",
+                                                  "payload": {"account_id": "removed@example.com"}}),
+        approve_draft=lambda _id: approved.append(_id) or True,
+        draft_state=lambda op: ("held", ""), send_outcome=lambda _id: {"state": "pending", "error": ""})
+    assert release_held_draft("scope", "alice", 1, service=gone) == {
+        "ok": False, "state": "held", "error": NO_ACCOUNT_FOR_DRAFT}
+    assert approved == [], "the draft never left the held state"
+    # And a config that cannot be read is not permission either.
+    def _unreadable(*a, **k):
+        raise RuntimeError("config unreadable")
+
+    monkeypatch.setattr(ea, "get_email_config", _unreadable)
+    assert release_held_draft("scope", "alice", 1, service=_svc("pending"))["state"] == "held"
 
 
 def test_the_draft_routes_send_and_discard(world, monkeypatch):
@@ -577,6 +606,10 @@ def test_a_mail_send_that_did_not_leave_comes_back_to_the_person_with_the_reason
         out = release_held_draft(SCOPE, "alice", op_id, service=svc)
         assert out["ok"] is True and out["state"] == "done" and out["delivery"] == "sent", out
         assert svc.list_drafts() == []
+        # The reason the last attempt failed went with that attempt: a released op carrying it
+        # reports a stale failure on a send that is already on its way.
+        # MUTATION: keep `last_error` in approve_op and this goes red.
+        assert "last_error" not in (svc.store.get_op(op_id)["payload"] or {})
     finally:
         svc.store.close()
 
@@ -593,6 +626,7 @@ def test_a_mail_handed_to_the_server_and_never_confirmed_is_never_sent_again(wor
     from vaf.mail.service import AMBIGUOUS_DRAFT, release_held_draft
     calls = []
 
+
     def _handed_off(msg):
         calls.append(msg)
         return sender.SendResult(False, "ambiguous", handed_off=True, error="no reply after DATA")
@@ -605,7 +639,11 @@ def test_a_mail_handed_to_the_server_and_never_confirmed_is_never_sent_again(wor
         monkeypatch.setattr(sender, "send", _handed_off)
         out = release_held_draft(SCOPE, "alice", op_id, service=svc)
         assert out["ok"] is False and out["state"] == "ambiguous" and out["delivery"] == "ambiguous"
-        assert out["error"] == "no reply after DATA" and len(calls) == 1
+        # What the person is told is what to DO, and it reads the same on the second attempt,
+        # which refuses before it reaches the transport at all. The transport's own words stay
+        # on the op, where the row and the log can still show them.
+        assert out["error"] == AMBIGUOUS_DRAFT and len(calls) == 1
+        assert svc.store.get_op(op_id)["payload"]["last_error"] == "no reply after DATA"
         assert svc.store.get_op(op_id)["state"] == "held"
         assert svc.list_drafts()[0]["state"] == "ambiguous"
         row = next(r for r in outbound_hold.pending("alice", SCOPE, session_id="chat-1") if r["kind"] == "mail")

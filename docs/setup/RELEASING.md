@@ -112,6 +112,13 @@ waiting for a stable `X.Y.Z`.
    A fourth place is not a version but moves with one: `web/lib/changelog.ts`
    needs an entry whose `version` matches the new full version exactly, or the
    in-app "what's new" announcement still describes the previous release.
+   `tests/test_release_version_places.py` fails when any of the four disagree
+   with `vaf/version.py`, including both lock fields, the dated `CHANGELOG.md`
+   section the release body is pulled from, and the newest in-app entry. It was
+   written after a bump sat unreleased for twenty-one commits: the section and
+   the in-app entry for that version described only the work of the day it was
+   bumped, and a tag would have shipped everything since with notes naming none
+   of it.
    The llama.cpp build ships pinned as well (`vaf/core/llama_server_pin.json`):
    VAF never updates it on its own, so moving to a newer build is a release
    decision. Run `venv/bin/python scripts/pin_llama_cpp.py b<build>` (it records

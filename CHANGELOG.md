@@ -11,7 +11,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a29] - 2026-09-20
+
 ### Added
+
 - **A message your agent writes for you waits for your word.** Ask for a mail in the chat and
   it is no longer gone the moment the agent has written it: it is prepared in full and parked
   as a draft, and a card under the answer sends or discards it. The same holds for a WhatsApp
@@ -100,29 +103,41 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   only contacts with the flag, and only after the door had been opened by hand in
   `config.json` (`channel_ingress_policy`), while the contact book said the agent answers
   them; the hint under each person now says what their own state means.
-- **"Let the agent reply" is one switch again, and it shows what is actually true.** The three
-  positions asked you to hold two facts at once: your decision about the person, and whether
-  that channel's Inbound happens to be open. The switch now answers the only question you
-  were asking, whether your agent answers this person right now, and the line under it says
-  which of the two made it so. It is on for somebody you allowed and for somebody the open
-  Inbound answers; switching it off keeps them out for good, so it still holds when you open
-  that channel again. A person nobody has decided about still follows their channel, as
-  before, and the agent tools keep all three words. The WhatsApp window shows the same switch
-  on a chat whose number is in your book, and says "Saved as a contact" where it used to say
-  "Already in your contacts". What the switch shows is now decided where the whole door is
-  known: a Telegram bot with two accounts paired on it and a WhatsApp number with forwarding
-  off answer nobody, and the contact book used to promise an answer in both cases.
+
+### Changed
+
+- **The update button now sits with the update it applies.** In the Update and Repair
+  dialog the "Update now" button was pinned to the foot of the version column, a full
+  screen below the card that announces the new version, its release notes and the
+  restart warning; on a laptop the empty space between the two was taller than the
+  card itself. The button, and the confirmation step it opens, now sit inside that card
+  directly under the warning, and only "Check for updates" stays at the foot, where it
+  is the action for the case that there is no update card at all. The card also prints
+  the exact version of the update (for example 0.1.0a28) under the short one, the way
+  the installed-version card already does: during a prerelease series every version
+  reads "v0.1" otherwise, so the line did not say which update it was offering.
 
 ### Security
-- **"Let the agent reply" has three positions, and the 72 hour reply window is gone.** Whether
-  your agent answers somebody was a yes-or-no flag, and its "no" meant two different things:
-  "I switched this person off" and "nobody ever decided". The channel sync had written that
-  same "no" for every chat it had ever named, so the two could not be told apart. Each person
-  now carries **allowed** (answered on every channel where you have their address, even with
-  that channel's Inbound off), **blocked** (answered nowhere, even with Inbound on) or **the
-  channel decides**, the state a new or synced record starts in. Your existing contacts keep
-  their yes as **allowed**; every "no" becomes "the channel decides", because none of them was
-  ever a refusal you typed. The Inbound switch now writes one field and no permission: it used
+
+- **"Let the agent reply" is one switch that tells you the truth, and the 72 hour reply
+  window is gone.** Whether your agent answers somebody was a yes-or-no flag, and its "no"
+  meant two different things: "I switched this person off" and "nobody ever decided". The
+  channel sync had written that same "no" for every chat it had ever named, so the two could
+  not be told apart. Each person now carries **allowed** (answered on every channel where you
+  have their address, even with that channel's Inbound off), **blocked** (answered nowhere,
+  even with Inbound on) or **the channel decides**, the state a new or synced record starts
+  in. **Read this one if you upgrade:** your existing contacts keep their yes as **allowed**,
+  and every "no" becomes "the channel decides", because none of them was ever a refusal you
+  typed. That means somebody you had switched off IS answered once you open Inbound for their
+  channel; block the ones you meant to refuse, in the contact book or in the channel window.
+  What you see there is one switch per person, **Let the agent reply**, because the question
+  you are asking is one: does my agent answer this person right now. It is on for somebody you
+  allowed and for somebody the open Inbound answers, the line under it says which of the two
+  decided, and switching it off keeps them out for good, so it holds when you open that
+  channel again. The switch shows what is true rather than what is written down: a Telegram
+  bot with two accounts paired on it and a WhatsApp number set to send-only answer nobody, and
+  the contact book used to promise an answer in both cases. A chat in the WhatsApp window
+  whose number is in your book carries the same switch and says "Saved as a contact". The Inbound switch now writes one field and no permission: it used
   to switch every contact of that channel on in every book on this machine, which survived
   switching it off again. And a message from your agent no longer opens a door: for three days
   after any message it sent, the recipient could write in and be answered, on channels you had
@@ -147,7 +162,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   security) returned every user's Front Office documents. Such a caller now sees exactly
   the rows learned without a scope, the same fail-closed rule the memory store applies.
 
+- **The local backend runs the llama.cpp build pinned with the release, verified by hash.**
+  `vaf/core/llama_server_pin.json` names the build and the SHA-256 of every release asset
+  the launcher may pick (recorded by `scripts/pin_llama_cpp.py` from the release API and
+  cross-checked against llama.cpp's provenance attestation); the download streams through
+  a verified-download primitive and bytes that hash differently are refused before anything
+  is unpacked, so a release asset replaced after the pin or a poisoned mirror never runs.
+  VAF never updates llama.cpp on its own any more: a newer build arrives with the VAF release
+  that carries a new manifest, and an installed build whose number differs from the pin is
+  replaced on the next start. `vaf info` shows the installed and the pinned build.
+
 ### Fixed
+
 - **A mail draft is never released for an account you no longer have.** Sending it said the
   next outbox run would take it, and no run ever could: nothing delivers a mail for an account
   that is not set up any more. The draft now stays where it is and says so. A send that was
@@ -210,35 +236,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `<｜｜DSML｜｜ invoke ...>` and a bare `calls` wrapper matched no dialect, so three mail
   searches were never run and the user got the markup as the answer. Both forms are read
   and stripped now.
-
-## [0.1.0a29] - 2026-09-17
-
-### Changed
-
-- **The update button now sits with the update it applies.** In the Update and Repair
-  dialog the "Update now" button was pinned to the foot of the version column, a full
-  screen below the card that announces the new version, its release notes and the
-  restart warning; on a laptop the empty space between the two was taller than the
-  card itself. The button, and the confirmation step it opens, now sit inside that card
-  directly under the warning, and only "Check for updates" stays at the foot, where it
-  is the action for the case that there is no update card at all. The card also prints
-  the exact version of the update (for example 0.1.0a28) under the short one, the way
-  the installed-version card already does: during a prerelease series every version
-  reads "v0.1" otherwise, so the line did not say which update it was offering.
-
-### Security
-
-- **The local backend runs the llama.cpp build pinned with the release, verified by hash.**
-  `vaf/core/llama_server_pin.json` names the build and the SHA-256 of every release asset
-  the launcher may pick (recorded by `scripts/pin_llama_cpp.py` from the release API and
-  cross-checked against llama.cpp's provenance attestation); the download streams through
-  a verified-download primitive and bytes that hash differently are refused before anything
-  is unpacked, so a release asset replaced after the pin or a poisoned mirror never runs.
-  VAF never updates llama.cpp on its own any more: a newer build arrives with the VAF release
-  that carries a new manifest, and an installed build whose number differs from the pin is
-  replaced on the next start. `vaf info` shows the installed and the pinned build.
-
-### Fixed
 
 - **A fresh install downloaded a llama.cpp build from 2024.** The launcher used to ask GitHub
   for the "latest" llama.cpp release; since September 2026 that is a semver release without
@@ -760,7 +757,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   last history entry being a tool result, which a nudge or a compaction after the
   results defeats, so the stored answer accumulated every round's think block and the
   reload rendered them as text. The clear is now keyed on the finished round itself.
-
 
 ## [0.1.0a27] - 2026-09-03
 
@@ -1837,7 +1833,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   It found such a disagreement immediately: the committed lockfile was missing a
   package that stricter npm versions insist on, which is why installing on a Mac
   failed. It is regenerated here, and accepted by both npm versions now.
-
 
 ## [0.1.0a24] - 2026-08-23
 
@@ -7188,7 +7183,6 @@ fixes found in live testing.
   instantiate a coder-only tool that needs a project directory, printing
   `Failed to instantiate tool run_tests` on every start (the agent continued fine); it is now
   correctly marked coder-only and no longer logs the error.
-
 
 ## [0.1.0a7] - 2026-07-06
 

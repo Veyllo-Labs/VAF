@@ -32,23 +32,33 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     version: '0.1.0a29',
-    date: '2026-09-17',
+    date: '2026-09-20',
     sections: [
       {
         kind: 'new',
         items: [
+          'A message your agent writes for you waits for your word. Ask for a mail or a WhatsApp message to somebody in the chat and it is prepared in full, then held as a draft: a card under the answer sends it or throws it away, and Send is dead for three seconds so the message gets read first. Timers, automations and anything else running while you are away still send, because nobody is at the screen to agree. "vaf outbox" does the same from a terminal.',
+          'Inbound, per channel, in Connections: with it on, somebody you have not decided about is answered by your agent in Front Office mode and added to your contact book, on WhatsApp, Telegram, Discord and mail. A briefing in your words and documents you hand it say what it may tell them, and a mail answer waits as a draft for you by default.',
           'The local model engine (llama.cpp) is pinned with every VAF release and verified by hash: VAF installs exactly the build the release was tested with, checks the download against the recorded checksum before unpacking it, and never updates the engine on its own. A newer engine arrives with the next VAF release.',
         ],
       },
       {
         kind: 'improved',
         items: [
+          'Every person in your contact book has one switch, "Let the agent reply", and it shows what is true right now: on for somebody you allowed and for somebody an open Inbound answers, with a line under it saying which of the two decided. Worth a look after this update: a contact you had switched off before counts as "the channel decides" now, so they are answered once you open Inbound for their channel. Switch them off there to refuse them for good.',
           'In Settings, "Update now" now sits inside the card that announces the update, directly under the restart warning, instead of at the foot of the page, and the card names the exact version it is offering.',
+        ],
+      },
+      {
+        kind: 'removed',
+        items: [
+          'A message from your agent no longer opens a door: for three days after anything it sent, that person could write in and be answered, even on channels you had closed. What your agent answers is your own decision about the person plus the channel switch, nothing else.',
         ],
       },
       {
         kind: 'fixed',
         items: [
+          'A reply you were reading is never taken off the screen again: the check for invented details could misjudge a correct answer and erased it in the same move, leaving you with the correction instead of the answer.',
           'Updating from Settings refused to run on a desktop install (the app shortcut, run_vaf.sh, or a plain tray start), which is how most installs are launched. It works on macOS, Linux and Windows now, and VAF comes back the way it was started: a windowed app returns with its window and tray icon, a headless service stays headless.',
           'A fresh install could receive a llama.cpp engine from December 2024 that cannot load current models, because the lookup for the "latest" release stopped returning builds with binaries. The pinned build (b10955) replaces it on the next start; you will see one short download.',
           'Windows with an NVIDIA GPU got a CUDA runtime that did not match its engine, Windows with an AMD GPU looked for a build under its old name, and Linux on arm64 had no matching build.',

@@ -56,10 +56,21 @@ def test_the_bubbles_the_compose_field_and_the_history_fetch_have_one_home():
 
 
 def test_the_unread_token_is_the_mail_windows_and_the_chips_keep_their_colours():
+    """One meaning, one colour, on every surface - and in both themes.
+
+    The pill is a literal because white on that red is the same answer in light and in
+    dark. The three chips are not: they name a state in a hue, so they take the accent
+    utilities, which the fold re-points per theme (docs/web-ui/DARKMODE.md). Written as
+    raw hex, as they were, they stayed dark inside a light window.
+    """
     src = _read(SHELL)
     assert "export const UNREAD_PILL = 'text-[11px] leading-[18px] px-1.5 rounded-full bg-[#e05d44] text-white'" in src
-    assert "bg-[#4a3b1e] text-[#e0b866]" in src.split("export const WAITS_CHIP", 1)[1].split("\n", 1)[0]
-    assert "bg-[#1f4d2a] text-[#9fe0b0]" in src.split("export const AGENT_CHIP", 1)[1].split("\n", 1)[0]
+    assert "bg-amber-200 text-amber-700" in src.split("export const WAITS_CHIP", 1)[1].split("\n", 1)[0]
+    assert "bg-green-100 text-green-700" in src.split("export const AGENT_CHIP", 1)[1].split("\n", 1)[0]
+    assert "bg-gray-100 text-gray-500" in src.split("export const DONE_CHIP", 1)[1].split("\n", 1)[0]
+    for token in ("WAITS_CHIP", "AGENT_CHIP", "DONE_CHIP"):
+        line = src.split(f"export const {token}", 1)[1].split("\n", 1)[0]
+        assert "dark:" not in line, f"{token}: an accent tint already folds; a dark: half replaces the design system"
     mail = _read(MAIL)
     assert "bg-[#e05d44] text-white" in mail, "the mail window's own pill is the token the shell copied"
 
@@ -106,7 +117,10 @@ def test_every_window_maps_the_state_and_names_its_channel():
 
 def test_the_mail_page_shows_the_same_chip_and_the_same_header_button():
     src = _read(MAIL)
-    assert "import { WaitsChip } from '@/components/connections/ChannelDashboardShell';" in src
+    # Imported from the shell, beside the surface constants it takes from there too, so
+    # the pin is the name and its home rather than one spelling of the import line.
+    shell_import = src.split("from '@/components/connections/ChannelDashboardShell'", 1)[0].rsplit("import", 1)[1]
+    assert "WaitsChip" in shell_import, "the chip comes from the shell, never a second copy"
     assert "{row.waits && <WaitsChip reason={row.waits_reason} />}" in src
     assert "const tc = useTranslations('settings.channelDashboard');" in src
     assert "tc('waitsHeader', { count: waiting.length })" in src

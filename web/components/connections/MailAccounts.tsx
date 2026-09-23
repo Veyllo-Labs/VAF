@@ -18,6 +18,7 @@ import {
     AlertTriangle, Check, ChevronDown, Loader2, Mail, Pencil, Plus, RefreshCw, ShieldCheck, Trash2, X,
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
+import { SFC_CHROME, SFC_FILL, SFC_HOVER, SFC_WINDOW } from './ChannelDashboardShell';
 
 // What a refused IMAP login comes back with. The guidance arrives in PARTS so
 // the panel renders it in the reader's language; the backend also sends `hint`
@@ -50,13 +51,13 @@ function AuthHint({ detail }: { detail: HintDetail }) {
         <>
             {/* An auth kind this build has no wording for still says something:
                 the backend's English sentence beats an empty line. */}
-            <p className="text-[#c8c8c8]">{key ? t(key, { provider }) : detail.text}</p>
+            <p className="text-gray-700">{key ? t(key, { provider }) : detail.text}</p>
             {detail.enable_imap && (
-                <p className="text-[#c8c8c8]">{t('authHintEnableImap', { provider })}</p>
+                <p className="text-gray-700">{t('authHintEnableImap', { provider })}</p>
             )}
             {detail.help_url && (
                 <a href={detail.help_url} target="_blank" rel="noopener noreferrer"
-                    className="inline-block text-[#7aa7d9] hover:underline">
+                    className="inline-block text-blue-700 hover:underline">
                     {t('authHintHelp', { provider })}
                 </a>
             )}
@@ -258,18 +259,18 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
     };
 
     return (
-        <div className="absolute inset-0 z-20 bg-[#181818] flex flex-col">
-            <div className="flex items-center justify-between px-5 py-3 border-b border-[#2e2e2e]">
+        <div className={cn('absolute inset-0 z-20', SFC_WINDOW, 'flex flex-col text-gray-900')}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
                 <h2 className="text-sm font-semibold flex items-center gap-2">
                     <Mail className="w-4 h-4" /> {t('accountsTitle')}
                 </h2>
                 <button type="button" onClick={onClose} title={t('close')}
-                    className="p-1.5 rounded-md hover:bg-[#262626]"><X className="w-4 h-4" /></button>
+                    className={cn('p-1.5 rounded-md', SFC_HOVER)}><X className="w-4 h-4" /></button>
             </div>
 
             <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
                 {error && (
-                    <div className="px-3 py-2 rounded-lg bg-[#2b2417] border border-[#4a3b1e] text-[#d4a24e] text-[13px] flex items-center gap-2">
+                    <div className="px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-600 text-[13px] flex items-center gap-2">
                         <AlertTriangle className="w-4 h-4 flex-shrink-0" />
                         <span className="flex-1">{error}</span>
                         <button type="button" onClick={() => setError(null)}><X className="w-3.5 h-3.5" /></button>
@@ -277,30 +278,30 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
                 )}
 
                 {connecting && (
-                    <div className="px-3 py-2 rounded-lg bg-[#1b2430] border border-[#2b3b4a] text-[#8fb8dd] text-[13px] flex items-center gap-2">
+                    <div className="px-3 py-2 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 text-[13px] flex items-center gap-2">
                         <Loader2 className="w-4 h-4 flex-shrink-0 animate-spin" />
                         <span className="flex-1">{t('reconnectWaiting')}</span>
                     </div>
                 )}
                 {loading ? (
-                    <div className="py-10 flex justify-center"><Loader2 className="w-5 h-5 animate-spin text-[#9a9a9a]" /></div>
+                    <div className="py-10 flex justify-center"><Loader2 className="w-5 h-5 animate-spin text-gray-500" /></div>
                 ) : accounts.length === 0 ? (
-                    <p className="text-[#9a9a9a] text-sm py-6 text-center">{t('accountsEmpty')}</p>
+                    <p className="text-gray-500 text-sm py-6 text-center">{t('accountsEmpty')}</p>
                 ) : accounts.map(a => {
                     const editing = a.account_id in editLabel;
                     const vs = verify[a.account_id];
                     return (
-                        <div key={a.account_id} className="rounded-xl border border-[#2e2e2e] bg-[#1f1f1f] p-3">
+                        <div key={a.account_id} className={cn('rounded-xl border border-gray-200', SFC_CHROME, 'p-3')}>
                             <div className="flex items-center gap-3">
                                 <div className="flex-1 min-w-0">
                                     <div className="flex items-center gap-2 text-sm">
                                         <span className="font-medium truncate">{a.email}</span>
-                                        <span className="px-1.5 rounded-md bg-[#262626] text-[11px] text-[#9a9a9a] flex-shrink-0">
+                                        <span className={cn('px-1.5 rounded-md', SFC_FILL, 'text-[11px] text-gray-500 flex-shrink-0')}>
                                             {providerName(a.provider)}
                                         </span>
                                         {isImapCapable(a)
-                                            ? <span className="px-1.5 rounded-md bg-[#17301f] text-[11px] text-[#7bbf7b] flex-shrink-0">{t('imapReady')}</span>
-                                            : <span className="px-1.5 rounded-md bg-[#2b2417] text-[11px] text-[#d4a24e] flex-shrink-0">{t('imapNotReady')}</span>}
+                                            ? <span className="px-1.5 rounded-md bg-green-50 text-[11px] text-green-600 flex-shrink-0">{t('imapReady')}</span>
+                                            : <span className="px-1.5 rounded-md bg-amber-50 text-[11px] text-amber-600 flex-shrink-0">{t('imapNotReady')}</span>}
                                     </div>
                                     {editing ? (
                                         <div className="flex items-center gap-1 mt-1.5">
@@ -308,13 +309,13 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
                                                 onChange={e => setEditLabel(p => ({ ...p, [a.account_id]: e.target.value }))}
                                                 onKeyDown={e => { if (e.key === 'Enter') saveLabel(a); if (e.key === 'Escape') setEditLabel(p => { const n = { ...p }; delete n[a.account_id]; return n; }); }}
                                                 placeholder={t('accountLabelPlaceholder')}
-                                                className="bg-[#262626] border border-[#2e2e2e] rounded-md text-xs px-2 py-1 text-white focus:outline-none focus:border-[#444] w-40" />
+                                                className={cn(SFC_FILL, 'border border-gray-200 rounded-md text-xs px-2 py-1 text-gray-900 focus:outline-none focus:border-gray-400 w-40')} />
                                             <button type="button" onClick={() => saveLabel(a)} disabled={busy === a.account_id}
-                                                className="p-1 rounded-md hover:bg-[#262626] text-[#7bbf7b]"><Check className="w-3.5 h-3.5" /></button>
+                                                className={cn('p-1 rounded-md', SFC_HOVER, 'text-green-600')}><Check className="w-3.5 h-3.5" /></button>
                                         </div>
                                     ) : (
                                         <button type="button" onClick={() => setEditLabel(p => ({ ...p, [a.account_id]: a.label }))}
-                                            className="mt-0.5 text-xs text-[#9a9a9a] hover:text-[#c8c8c8] flex items-center gap-1">
+                                            className="mt-0.5 text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1">
                                             <Pencil className="w-3 h-3" /> {a.label || t('accountAddLabel')}
                                         </button>
                                     )}
@@ -322,8 +323,8 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
                             </div>
 
                             <div className="mt-2 flex items-center gap-2 flex-wrap text-xs">
-                                <ShieldCheck className={cn('w-3.5 h-3.5 flex-shrink-0', a.auth_ready ? 'text-[#7bbf7b]' : 'text-[#9a9a9a]')} />
-                                <span className={cn('min-w-0', a.auth_ready ? 'text-[#c8c8c8]' : 'text-[#9a9a9a]')}>
+                                <ShieldCheck className={cn('w-3.5 h-3.5 flex-shrink-0', a.auth_ready ? 'text-green-600' : 'text-gray-500')} />
+                                <span className={cn('min-w-0', a.auth_ready ? 'text-gray-700' : 'text-gray-500')}>
                                     {a.auth_profile === 'microsoft'
                                         ? t('auth.accountMicrosoft')
                                         : a.trusted_authserv_id
@@ -333,7 +334,7 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
                                             : t('auth.accountNone')}
                                 </span>
                                 <button type="button" onClick={() => learnAuth(a)} disabled={learn[a.account_id]?.kind === 'busy'}
-                                    className="text-xs px-2 py-1 rounded-md bg-[#262626] border border-[#2e2e2e] hover:border-[#444] flex items-center gap-1">
+                                    className={cn('text-xs px-2 py-1 rounded-md', SFC_FILL, 'border border-gray-200 hover:border-gray-400 flex items-center gap-1')}>
                                     {learn[a.account_id]?.kind === 'busy' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
                                     <span>{t('auth.learn')}</span>
                                 </button>
@@ -344,11 +345,11 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
                                 const text = st.kind === 'done'
                                     ? (st.profile === 'microsoft' ? t('auth.learnDoneMicrosoft', { count: st.count }) : t('auth.learnDone', { id: st.id, count: st.count }))
                                     : st.kind === 'too_few' ? t('auth.learnTooFew', { count: st.count }) : t('auth.learnFailed');
-                                return <div className={cn('mt-1 text-xs', st.kind === 'done' ? 'text-[#7bbf7b]' : 'text-[#d4a24e]')}>{text}</div>;
+                                return <div className={cn('mt-1 text-xs', st.kind === 'done' ? 'text-green-600' : 'text-amber-600')}>{text}</div>;
                             })()}
 
                             <div className="flex items-center gap-2 mt-2.5 flex-wrap">
-                                <label className="flex items-center gap-1.5 text-xs text-[#9a9a9a] cursor-pointer">
+                                <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer">
                                     <input type="checkbox" checked={a.auto_sync_enabled} onChange={() => toggleAutoSync(a)} />
                                     {t('autoSync')}
                                 </label>
@@ -361,22 +362,22 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
                                     </button>
                                 )}
                                 <button type="button" onClick={() => doVerify(a)} disabled={vs === 'checking'}
-                                    className="text-xs px-2 py-1 rounded-md bg-[#262626] border border-[#2e2e2e] hover:border-[#444] flex items-center gap-1">
+                                    className={cn('text-xs px-2 py-1 rounded-md', SFC_FILL, 'border border-gray-200 hover:border-gray-400 flex items-center gap-1')}>
                                     {vs === 'checking' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
                                     {vs === 'ok' ? t('verifyOk') : vs === 'fail' ? t('verifyFail') : t('verify')}
                                 </button>
                                 {confirmDel === a.account_id ? (
                                     <span className="flex items-center gap-1">
                                         <button type="button" onClick={() => doRemove(a)} disabled={busy === a.account_id}
-                                            className="text-xs px-2 py-1 rounded-md bg-[#3a1d1d] border border-[#5a2b2b] text-[#e08c8c] hover:bg-[#452020]">
+                                            className="text-xs px-2 py-1 rounded-md bg-red-100 border border-red-200 text-red-600 hover:bg-red-200">
                                             {busy === a.account_id ? <Loader2 className="w-3 h-3 animate-spin" /> : t('confirmRemove')}
                                         </button>
                                         <button type="button" onClick={() => setConfirmDel(null)}
-                                            className="text-xs px-2 py-1 rounded-md hover:bg-[#262626]">{t('cancel')}</button>
+                                            className={cn('text-xs px-2 py-1 rounded-md', SFC_HOVER)}>{t('cancel')}</button>
                                     </span>
                                 ) : (
                                     <button type="button" onClick={() => setConfirmDel(a.account_id)} title={t('remove')}
-                                        className="text-xs px-2 py-1 rounded-md hover:bg-[#3a1d1d] text-[#e08c8c] flex items-center gap-1">
+                                        className="text-xs px-2 py-1 rounded-md hover:bg-red-100 text-red-600 flex items-center gap-1">
                                         <Trash2 className="w-3 h-3" /> {t('remove')}
                                     </button>
                                 )}
@@ -396,7 +397,7 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
                         <button key={p} type="button" onClick={() => startOAuth(p)}
                             disabled={busy === p || !ready}
                             title={ready ? undefined : t('oauthNotConfigured')}
-                            className="flex-1 text-sm px-3 py-2 rounded-xl border border-dashed border-[#2e2e2e] text-[#9a9a9a] hover:border-[#444] hover:text-[#c8c8c8] disabled:opacity-40 disabled:hover:border-[#2e2e2e] flex items-center justify-center gap-2">
+                            className="flex-1 text-sm px-3 py-2 rounded-xl border border-dashed border-gray-200 text-gray-500 hover:border-gray-400 hover:text-gray-700 disabled:opacity-40 disabled:hover:border-gray-200 flex items-center justify-center gap-2">
                             {busy === p ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                             {label}
                         </button>
@@ -462,52 +463,52 @@ function AddImapForm({ open, setOpen, onAdded }: { open: boolean; setOpen: (v: b
     if (!open) {
         return (
             <button type="button" onClick={() => setOpen(true)}
-                className="w-full text-sm px-3 py-2 rounded-xl border border-dashed border-[#2e2e2e] text-[#9a9a9a] hover:border-[#444] hover:text-[#c8c8c8] flex items-center justify-center gap-2">
+                className="w-full text-sm px-3 py-2 rounded-xl border border-dashed border-gray-200 text-gray-500 hover:border-gray-400 hover:text-gray-700 flex items-center justify-center gap-2">
                 <Plus className="w-4 h-4" /> {t('addImapAccount')}
             </button>
         );
     }
     const canSubmit = email.trim() && password && state === 'idle';
     return (
-        <div className="rounded-xl border border-[#2e2e2e] bg-[#1f1f1f] p-3 space-y-2">
+        <div className={cn('rounded-xl border border-gray-200', SFC_CHROME, 'p-3 space-y-2')}>
             <div className="flex items-center justify-between">
                 <span className="text-sm font-medium">{t('addImapAccount')}</span>
-                <button type="button" onClick={() => setOpen(false)} className="p-1 rounded-md hover:bg-[#262626]"><X className="w-3.5 h-3.5" /></button>
+                <button type="button" onClick={() => setOpen(false)} className={cn('p-1 rounded-md', SFC_HOVER)}><X className="w-3.5 h-3.5" /></button>
             </div>
             <input value={email} onChange={e => setEmail(e.target.value)} placeholder={t('emailPlaceholder')} type="email"
-                className="w-full bg-[#262626] border border-[#2e2e2e] rounded-md text-sm px-2.5 py-1.5 text-white focus:outline-none focus:border-[#444]" />
+                className={cn('w-full', SFC_FILL, 'border border-gray-200 rounded-md text-sm px-2.5 py-1.5 text-gray-900 focus:outline-none focus:border-gray-400')} />
             <input value={password} onChange={e => setPassword(e.target.value)} placeholder={t('passwordPlaceholder')} type="password"
-                className="w-full bg-[#262626] border border-[#2e2e2e] rounded-md text-sm px-2.5 py-1.5 text-white focus:outline-none focus:border-[#444]" />
+                className={cn('w-full', SFC_FILL, 'border border-gray-200 rounded-md text-sm px-2.5 py-1.5 text-gray-900 focus:outline-none focus:border-gray-400')} />
             <input value={label} onChange={e => setLabel(e.target.value)} placeholder={t('accountLabelPlaceholder')}
-                className="w-full bg-[#262626] border border-[#2e2e2e] rounded-md text-sm px-2.5 py-1.5 text-white focus:outline-none focus:border-[#444]" />
-            <button type="button" onClick={() => setAdvanced(v => !v)} className="text-xs text-[#9a9a9a] hover:text-[#c8c8c8] flex items-center gap-1">
+                className={cn('w-full', SFC_FILL, 'border border-gray-200 rounded-md text-sm px-2.5 py-1.5 text-gray-900 focus:outline-none focus:border-gray-400')} />
+            <button type="button" onClick={() => setAdvanced(v => !v)} className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1">
                 <ChevronDown className={`w-3 h-3 transition-transform ${advanced ? 'rotate-180' : ''}`} /> {t('advanced')}
             </button>
             {advanced && (
                 <div className="space-y-2">
                     <div className="flex gap-2">
                         <input value={imapHost} onChange={e => setImapHost(e.target.value)} placeholder={t('imapHostPlaceholder')}
-                            className="flex-1 bg-[#262626] border border-[#2e2e2e] rounded-md text-sm px-2.5 py-1.5 text-white focus:outline-none focus:border-[#444]" />
+                            className={cn('flex-1', SFC_FILL, 'border border-gray-200 rounded-md text-sm px-2.5 py-1.5 text-gray-900 focus:outline-none focus:border-gray-400')} />
                         <input value={imapPort} onChange={e => setImapPort(e.target.value)} placeholder="993" inputMode="numeric"
-                            className="w-20 bg-[#262626] border border-[#2e2e2e] rounded-md text-sm px-2.5 py-1.5 text-white focus:outline-none focus:border-[#444]" />
+                            className={cn('w-20', SFC_FILL, 'border border-gray-200 rounded-md text-sm px-2.5 py-1.5 text-gray-900 focus:outline-none focus:border-gray-400')} />
                     </div>
                     <div className="flex gap-2">
                         <input value={smtpHost} onChange={e => setSmtpHost(e.target.value)} placeholder={t('smtpHostPlaceholder')}
-                            className="flex-1 bg-[#262626] border border-[#2e2e2e] rounded-md text-sm px-2.5 py-1.5 text-white focus:outline-none focus:border-[#444]" />
+                            className={cn('flex-1', SFC_FILL, 'border border-gray-200 rounded-md text-sm px-2.5 py-1.5 text-gray-900 focus:outline-none focus:border-gray-400')} />
                         <input value={smtpPort} onChange={e => setSmtpPort(e.target.value)} placeholder="587" inputMode="numeric"
-                            className="w-20 bg-[#262626] border border-[#2e2e2e] rounded-md text-sm px-2.5 py-1.5 text-white focus:outline-none focus:border-[#444]" />
+                            className={cn('w-20', SFC_FILL, 'border border-gray-200 rounded-md text-sm px-2.5 py-1.5 text-gray-900 focus:outline-none focus:border-gray-400')} />
                     </div>
                 </div>
             )}
             {msg && (
-                <div className={`text-xs space-y-1 ${msg.kind === 'ok' ? 'text-[#7bbf7b]' : 'text-[#e08c8c]'}`}>
+                <div className={`text-xs space-y-1 ${msg.kind === 'ok' ? 'text-green-600' : 'text-red-600'}`}>
                     <p>{msg.text}</p>
                     {msg.detail && <AuthHint detail={msg.detail} />}
                 </div>
             )}
             <div className="flex gap-2 pt-1">
                 <button type="button" onClick={test} disabled={!canSubmit}
-                    className="text-sm px-3 py-1.5 rounded-md bg-[#262626] border border-[#2e2e2e] hover:border-[#444] disabled:opacity-40 flex items-center gap-1.5">
+                    className={cn('text-sm px-3 py-1.5 rounded-md', SFC_FILL, 'border border-gray-200 hover:border-gray-400 disabled:opacity-40 flex items-center gap-1.5')}>
                     {state === 'testing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null} {t('test')}
                 </button>
                 <button type="button" onClick={add} disabled={!canSubmit}

@@ -11,6 +11,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+
+- **The inbox, the mail window and the messenger windows follow your theme again.** Light mode
+  is the default, and six windows ignored it: the inbox, the mail client with its account
+  panel, and the WhatsApp, Telegram and Discord windows. Every colour in them was written out
+  by hand, which gives a window exactly one appearance, and the one they were written in was
+  dark. So with light mode on you opened the inbox and got a near-black panel sitting in a
+  white app, with grey-on-grey text in it. They now take their surfaces, their text, their
+  chips and their buttons from the same palette as the rest of VAF, so both themes are right
+  and the windows read as one family again. Dark mode keeps the appearance it always had. The
+  two things a window can get wrong here, a dark surface or a pale text colour that only one
+  theme can render, are now caught by a test instead of by somebody opening the window.
+
 ## [0.1.0a29] - 2026-09-20
 
 ### Added

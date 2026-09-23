@@ -270,8 +270,8 @@ function ChannelIcon({ type, className }: { type: string; className?: string }) 
     }
 }
 
-/** Initials in a colour picked from the name. The shell's Avatar is dark-only and carries a
- *  profile picture; a contact has neither, so only the initials helper is shared. */
+/** Initials in a colour picked from the name. The shell's Avatar is a neutral circle that
+ *  carries a profile picture; a contact has neither, so only the initials helper is shared. */
 function ContactAvatar({ name, size }: { name: string; size: 'sm' | 'lg' }) {
     const fam = AVATAR_FAMILIES[hashIndex(name || '', AVATAR_FAMILIES.length)];
     return (

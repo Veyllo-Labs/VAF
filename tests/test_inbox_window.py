@@ -144,13 +144,17 @@ def test_the_inbox_has_no_input_field_and_a_draft_starts_the_composer_in_the_cha
     assert "className={cn('flex items-center gap-1.5', BTN_PRIMARY)}" in draft and "text-white" not in draft and "#25a244" not in draft
     shell = _read(WEB / "components" / "connections" / "ChannelDashboardShell.tsx")
     assert "hover:bg-[#f5f5f5]" in shell.split("export const BTN_PRIMARY", 1)[1].split("\n", 1)[0], "the hover is part of the token, not of one call site"
-    assert "cn(mineClass ?? 'bg-[#1f4d2a]', 'rounded-tr-sm')" in shell and shell.count("mineClass=") == 0, "the channel windows keep their green"
+    assert "cn(mineClass ?? 'bg-green-100', 'rounded-tr-sm')" in shell and shell.count("mineClass=") == 0, "the channel windows keep their green"
     assert "setChannel(null); setView('all'); }" in src, "closing the window widens the list again"
     assert "const requestNo = ++loadRequest.current;" in src and src.count("if (requestNo !== loadRequest.current) return;") == 3, "a stale answer never lands on a newer list"
     assert "if (requestNo === loadRequest.current) setLoading(false);" in src, "and never clears the spinner of the newer one"
     assert "onClick={() => setChannel(null)}" in src and "{t('allChannels')}" in src, "the channel list has its own All, the view's All is a view"
-    assert "on ? 'bg-[#d9d9d9]' : 'bg-[#333333]'" in src and "on ? 'right-0.5 bg-[#1a1a1a]' : 'left-0.5 bg-[#e8e8e8]'" in src
-    assert 'mineClass="bg-[#3a3a3a]"' in src
+    # The rail's small toggle carries the same two faces as the house switch, stated as
+    # pairs: the track and the knob have to contrast each other in BOTH themes, and the
+    # surface ramp folds the other way round from the ink ramp.
+    assert "on ? 'bg-gray-800 dark:bg-[#d9d9d9]' : 'bg-gray-300 dark:bg-[#333333]'" in src
+    assert "on ? 'right-0.5 bg-white dark:bg-[#1a1a1a]' : 'left-0.5 bg-white dark:bg-[#e8e8e8]'" in src
+    assert 'mineClass="bg-gray-300"' in src, "our own bubble is a neutral surface, not the channel's green"
 
 
 def test_mobile_is_additive_and_the_three_panes_stack():
@@ -160,7 +164,7 @@ def test_mobile_is_additive_and_the_three_panes_stack():
     shell = _read(WEB / "components" / "connections" / "ChannelDashboardShell.tsx")
     assert "grid-cols-[320px_1fr] max-md:grid-cols-1" in shell and "gridTemplateColumns" not in shell
     assert "mobilePane === 'preview' && 'max-md:hidden'" in src and "mobilePane === 'list' && 'max-md:hidden'" in src
-    assert 'className="md:hidden p-1.5' in src, "the back button exists on a phone only"
+    assert "cn('md:hidden p-1.5" in src, "the back button exists on a phone only"
     assert "setMobilePane('list')" in src and "!selected) setMobilePane('list')" not in src, \
         "the opened row outlives the list, so the phone never lands on an empty preview and never steps back on its own"
     assert "max-md:flex-row max-md:flex-nowrap max-md:overflow-x-auto" in src, "the rail becomes a chip strip that scrolls sideways"

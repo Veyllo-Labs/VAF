@@ -72,6 +72,7 @@ In light mode the active/emphasis system is **dark** (near-black on white). The
 | Emphasis badge / chip | dark chip with light text |
 | Decorative icon / step badge | `bg-gray-900` (`#111827`) with a white icon |
 | User chat bubble | `bg-gray-800 text-white` (`#1f2937`) |
+| Messenger, inbox and mail window surfaces (the `SFC_*` constants in `web/components/connections/ChannelDashboardShell.tsx`) | window `bg-gray-50` (`#f9fafb`), chrome and cards `bg-white`, the conversation floor `bg-gray-100` (`#f3f4f6`), a bubble on that floor `bg-white`, control fill `bg-gray-100`, selected row `bg-gray-200` (`#e5e7eb`). These windows shipped in raw hex and therefore had no light mode at all until the constants gave them one; [DARKMODE.md](DARKMODE.md) explains why the pair is stated instead of folded |
 | Thinking-process block | subtle vertical gradient `from-[#fcfcfd] to-[#f8fafc]`, header `text-[#3b3f4a]` |
 
 ## Agent avatar & animation

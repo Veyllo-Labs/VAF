@@ -20,7 +20,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { Switch, switchWord } from '@/components/ui/Switch';
 import { cn } from '@/lib/utils';
 import MessagesChart from './MessagesChart';
-import ChannelDashboardShell, { BADGE_CLS, BTN, BTN_PRIMARY, FIELD, INPUT, ComposeBox, KvRow, SettingsCard, ShellChat, fmtUntil } from './ChannelDashboardShell';
+import ChannelDashboardShell, { BADGE_CLS, BTN, BTN_PRIMARY, FIELD, INPUT, SFC_CHROME, SFC_FILL, ComposeBox, KvRow, SettingsCard, ShellChat, fmtUntil } from './ChannelDashboardShell';
 
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
@@ -39,7 +39,7 @@ function growField(el: HTMLTextAreaElement | null, maxRows: number) {
     el.style.height = `${Math.min(el.scrollHeight + border, line * maxRows + padding + border)}px`;
 }
 
-const QUIET_BTN = 'text-xs text-[#9a9a9a] hover:text-white disabled:opacity-40 disabled:hover:text-[#9a9a9a]';
+const QUIET_BTN = 'text-xs text-gray-500 hover:text-gray-900 disabled:opacity-40 disabled:hover:text-gray-500';
 
 export interface WhatsAppDashboardProps {
     isOpen: boolean;
@@ -703,13 +703,13 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const dot = data?.connected ? 'green' : data?.running ? 'amber' : 'gray';
 
     const banner = data && !data.running ? (
-        <div className="px-5 py-2 bg-[#2b2417] border-b border-[#4a3b1e] text-[#d4a24e] text-[13px] flex items-center gap-2 flex-wrap">
+        <div className="px-5 py-2 bg-amber-50 border-b border-amber-200 text-amber-600 text-[13px] flex items-center gap-2 flex-wrap">
             <AlertTriangle className="w-4 h-4 flex-shrink-0" />
             <span className="flex-1 min-w-0">{data.linked ? t('sessionExpired') : t('bridgeNotStartedDesc')}</span>
-            {restartError && <span className="text-[#e08c8c]">{restartError}</span>}
+            {restartError && <span className="text-red-600">{restartError}</span>}
             <button type="button" onClick={handleRestartBridge} disabled={restarting}
-                className="px-2 py-1 rounded-md border border-[#4a3b1e] hover:bg-[#3a2f16] disabled:opacity-50">{restarting ? t('starting') : t('startBridge')}</button>
-            {data.linked && <button type="button" onClick={handleRelink} className="px-2 py-1 rounded-md hover:bg-[#3a2f16]">{t('relinkOpensSetup')}</button>}
+                className="px-2 py-1 rounded-md border border-amber-200 hover:bg-amber-100 disabled:opacity-50">{restarting ? t('starting') : t('startBridge')}</button>
+            {data.linked && <button type="button" onClick={handleRelink} className="px-2 py-1 rounded-md hover:bg-amber-100">{t('relinkOpensSetup')}</button>}
         </div>
     ) : null;
 
@@ -748,7 +748,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 )}
                 {hasBookRecord && (
                     <>
-                        <span className="text-xs text-[#9a9a9a] flex items-center gap-1.5" title={s.contact_name || undefined}>
+                        <span className="text-xs text-gray-500 flex items-center gap-1.5" title={s.contact_name || undefined}>
                             <BookUser className="w-4 h-4" />{t('inContacts')}
                         </span>
                         {/* One question, two answers, the same switch the contact book shows:
@@ -758,15 +758,15 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                             strip and the sentence belongs in the contact book. Switching off
                             writes a refusal, not "no decision", or the switch would spring back
                             while the channel stands open. */}
-                        <div className="flex items-center gap-2 text-xs text-[#d0d0d0]" title={reachHint}>
+                        <div className="flex items-center gap-2 text-xs text-gray-800" title={reachHint}>
                             <span>{t('allowReach')}</span>
                             {/* The same pair as the contact book: the knob points at the word
                                 that holds, so a single trailing word cannot be read as what
                                 pressing the switch would do. */}
-                            <span className={switchWord(!answers, 'dark')}>{tcm('no')}</span>
-                            <Switch on={answers} disabled={addingContact} tone="dark" label={t('allowReach')}
+                            <span className={switchWord(!answers)}>{tcm('no')}</span>
+                            <Switch on={answers} disabled={addingContact} label={t('allowReach')}
                                 onClick={() => answers ? handleSetAccess(s, 'denied') : setReachConfirm(s)} />
-                            <span className={switchWord(answers, 'dark')}>{tcm('yes')}</span>
+                            <span className={switchWord(answers)}>{tcm('yes')}</span>
                         </div>
                     </>
                 )}
@@ -779,7 +779,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         if (!s || s.needs_assign) return null;
         return (
             <button type="button" onClick={() => handleLoadOlder(s.chat_id)} disabled={olderBusy}
-                className="text-[11px] text-[#9a9a9a] bg-[#1f1f1f] hover:text-[#e8e8e8] px-2.5 py-0.5 rounded-full disabled:opacity-50">
+                className={cn('text-[11px] text-gray-500', SFC_CHROME, 'hover:text-gray-900 px-2.5 py-0.5 rounded-full disabled:opacity-50')}>
                 {olderBusy ? t('loadingOlder') : t('loadOlder')}
             </button>
         );
@@ -804,7 +804,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                     <Sparkles className="w-4 h-4 text-[#25a244]" />{t('composer.panelTitle')}
                     {turns.length > 0 && !assistBusy && (
                         <button type="button" onClick={() => { setTurns([]); setAssistMeta(null); }}
-                            className="ml-auto text-[11px] font-normal text-[#7a7a7a] hover:text-white">
+                            className="ml-auto text-[11px] font-normal text-gray-400 hover:text-gray-900">
                             {t('composer.newChat')}
                         </button>
                     )}
@@ -814,23 +814,23 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                     text: the draft is already in the compose box in full. */}
                 <div className="flex-1 min-h-[6rem] overflow-y-auto space-y-2 pr-0.5">
                     {turns.length === 0 && !assistBusy && (
-                        <p className="text-[#7a7a7a] text-xs leading-relaxed">{t('composer.panelHint')}</p>
+                        <p className="text-gray-400 text-xs leading-relaxed">{t('composer.panelHint')}</p>
                     )}
                     {turns.map((turn, i) => turn.role === 'user' ? (
-                        <div key={i} className="ml-6 px-3 py-1.5 rounded-lg bg-[#2e2e2e] text-sm break-words">{turn.content}</div>
+                        <div key={i} className="ml-6 px-3 py-1.5 rounded-lg bg-gray-200 text-sm break-words">{turn.content}</div>
                     ) : (
-                        <div key={i} className="mr-6 px-3 py-1.5 rounded-lg bg-[#262626] border border-[#2e2e2e] text-xs text-[#9a9a9a] leading-relaxed">
+                        <div key={i} className={cn('mr-6 px-3 py-1.5 rounded-lg', SFC_FILL, 'border border-gray-200 text-xs text-gray-500 leading-relaxed')}>
                             {t('composer.inserted')}
                         </div>
                     ))}
                     {assistBusy && (
-                        <div className="mr-6 px-3 py-1.5 rounded-lg bg-[#262626] border border-[#2e2e2e] text-xs text-[#9a9a9a] flex items-center gap-1.5">
+                        <div className={cn('mr-6 px-3 py-1.5 rounded-lg', SFC_FILL, 'border border-gray-200 text-xs text-gray-500 flex items-center gap-1.5')}>
                             <Loader2 className="w-3 h-3 animate-spin" />{t('composer.working')}
                         </div>
                     )}
-                    {assistNote && <div className="text-[#e0b84c] text-xs leading-relaxed">{assistNote}</div>}
+                    {assistNote && <div className="text-amber-600 text-xs leading-relaxed">{assistNote}</div>}
                     {assistMeta && !assistNote && !assistBusy && (
-                        <div className="text-[#7a7a7a] text-[11px] leading-relaxed">
+                        <div className="text-gray-400 text-[11px] leading-relaxed">
                             {t('composer.readCount', { used: assistMeta.included, total: assistMeta.total })}
                             {(assistMeta.truncated || assistMeta.dropped > 0) && <> {t('composer.shortened')}</>}
                             {/* Whether it had a sample of the person's own writing at all.
@@ -889,7 +889,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         <>
             <SettingsCard title={t('cardAgentTitle')} desc={t('cardAgentDesc')}>
                 <KvRow
-                    left={<><span className={cn('w-2 h-2 rounded-full', dot === 'green' ? 'bg-[#3fbf5f]' : dot === 'amber' ? 'bg-[#e0a030]' : 'bg-[#555]')} />{data?.linked_phone || t('notLinked')}</>}
+                    left={<><span className={cn('w-2 h-2 rounded-full', dot === 'green' ? 'bg-[#3fbf5f]' : dot === 'amber' ? 'bg-[#e0a030]' : 'bg-gray-400')} />{data?.linked_phone || t('notLinked')}</>}
                     right={stateText}
                 />
                 <div className="flex gap-2 flex-wrap">
@@ -897,8 +897,8 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                     <button type="button" onClick={handleRelink} className={BTN}>{t('relink')}</button>
                     <button type="button" onClick={handleReloadNames} disabled={namesBusy || !data?.connected} className={BTN}>{namesBusy ? t('reloadingNames') : t('reloadNames')}</button>
                 </div>
-                {restartError && <p className="mt-2 text-xs text-[#e08c8c]">{restartError}</p>}
-                {namesMsg && <p className="mt-2 text-xs text-[#9a9a9a]">{namesMsg}</p>}
+                {restartError && <p className="mt-2 text-xs text-red-600">{restartError}</p>}
+                {namesMsg && <p className="mt-2 text-xs text-gray-500">{namesMsg}</p>}
             </SettingsCard>
 
             <SettingsCard title={t('cardOwnerTitle')} desc={t('cardOwnerDesc')}>
@@ -906,42 +906,42 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                     <KvRow key={i} left={e.phone_number} right={<>
                         {e.vaf_username && <span>{e.vaf_username}</span>}
                         <button type="button" title={t('remove')} onClick={() => { if (confirm(t('removeOwnerConfirm'))) handleOwnerRemove(e.phone_number); }}
-                            className="p-1 rounded hover:bg-[#3a1d1d] text-[#9a9a9a] hover:text-[#e08c8c]"><Trash2 className="w-3.5 h-3.5" /></button>
+                            className="p-1 rounded hover:bg-red-100 text-gray-500 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
                     </>} />
                 ))}
-                {(!data?.owner_numbers || data.owner_numbers.length === 0) && <p className="text-[12.5px] text-[#9a9a9a] mb-2">{t('ownerNone')}</p>}
+                {(!data?.owner_numbers || data.owner_numbers.length === 0) && <p className="text-[12.5px] text-gray-500 mb-2">{t('ownerNone')}</p>}
                 <div className="flex gap-2 flex-wrap">
                     <input type="tel" placeholder={t('numberPlaceholder')} value={ownerAddPhone} onChange={e => setOwnerAddPhone(e.target.value)} className={cn('flex-1 min-w-[10rem]', INPUT)} />
                     <input type="text" placeholder={t('ownerUserPlaceholder')} value={ownerAddUsername} onChange={e => setOwnerAddUsername(e.target.value)} className={cn('flex-1 min-w-[10rem]', INPUT)} />
                     <button type="button" onClick={handleOwnerAdd} disabled={!ownerAddPhone.trim()} className={BTN_PRIMARY}>{t('register')}</button>
                 </div>
-                {ownerAddError && <p className="mt-2 text-xs text-[#e08c8c]">{ownerAddError}</p>}
+                {ownerAddError && <p className="mt-2 text-xs text-red-600">{ownerAddError}</p>}
             </SettingsCard>
 
             <SettingsCard title={t('cardWhoTitle')} desc={t('cardWhoDesc')}>
                 {(data?.front_office_contacts || []).map((c, i) => (
                     <KvRow key={i} left={c.name || c.phone_number} right={c.name ? c.phone_number : undefined} />
                 ))}
-                {(!data?.front_office_contacts || data.front_office_contacts.length === 0) && <p className="text-[12.5px] text-[#9a9a9a] mb-2">{t('noFoContacts')}</p>}
-                {onOpenContacts && <button type="button" onClick={onOpenContacts} className="text-[13px] text-[#6fb3ff] hover:underline">{t('manageContacts')}</button>}
+                {(!data?.front_office_contacts || data.front_office_contacts.length === 0) && <p className="text-[12.5px] text-gray-500 mb-2">{t('noFoContacts')}</p>}
+                {onOpenContacts && <button type="button" onClick={onOpenContacts} className="text-[13px] text-blue-600 hover:underline">{t('manageContacts')}</button>}
             </SettingsCard>
 
             <SettingsCard title={t('cardWindowTitle')} desc={t('cardWindowDesc')}>
                 <div className="flex gap-2 items-center flex-wrap">
                     <input type="number" min={0} value={windowInput} onChange={e => { setWindowInput(e.target.value); setWindowMsg(null); }} className={cn('w-24', INPUT)} />
-                    <span className="text-sm text-[#9a9a9a]">{t('hours')}</span>
+                    <span className="text-sm text-gray-500">{t('hours')}</span>
                     <button type="button" onClick={handleSaveWindow} className={BTN}>{t('save')}</button>
-                    {windowMsg && <span className="text-xs text-[#9a9a9a]">{windowMsg}</span>}
+                    {windowMsg && <span className="text-xs text-gray-500">{windowMsg}</span>}
                 </div>
-                <p className="text-[12.5px] text-[#9a9a9a] mt-3">
+                <p className="text-[12.5px] text-gray-500 mt-3">
                     {data?.inbound_to_agent === false ? t('inboundOff') : t('inboundOn')}{' · '}
-                    <button type="button" onClick={handleToggleInbound} className="text-[#6fb3ff] hover:underline">{data?.inbound_to_agent === false ? t('switchOn') : t('switchOff')}</button>
+                    <button type="button" onClick={handleToggleInbound} className="text-blue-600 hover:underline">{data?.inbound_to_agent === false ? t('switchOn') : t('switchOff')}</button>
                 </p>
             </SettingsCard>
 
             <SettingsCard title={t('cardActivityTitle')} full>
                 <MessagesChart buckets={data?.stats_4h ?? []} chartId="whatsapp-messages-chart" />
-                {data?.log_path && <p className="text-[12px] text-[#9a9a9a] mt-2">{t('logLabel')} <code className="bg-[#262626] px-1 rounded">{data.log_path}</code></p>}
+                {data?.log_path && <p className="text-[12px] text-gray-500 mt-2">{t('logLabel')} <code className={cn(SFC_FILL, 'px-1 rounded')}>{data.log_path}</code></p>}
             </SettingsCard>
         </>
     );
@@ -954,7 +954,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             icon={<Phone className="w-4 h-4 text-white" />}
             iconClass="bg-[#25a244]"
             title={t('title')}
-            subtitle={<>{t('agentNumber')} <span className="text-[#d0d0d0]">{data?.linked_phone || t('notLinked')}</span></>}
+            subtitle={<>{t('agentNumber')} <span className="text-gray-800">{data?.linked_phone || t('notLinked')}</span></>}
             dot={dot}
             dotTitle={stateText}
             chats={chats}

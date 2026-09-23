@@ -196,7 +196,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
         <>
             <SettingsCard title={t('cardBotTitle')} desc={t('cardBotDesc')}>
                 <KvRow
-                    left={<><span className={cn('w-2 h-2 rounded-full', data?.running ? 'bg-[#3fbf5f]' : 'bg-[#555]')} />{data?.bot_username ? `@${data.bot_username}` : t('noBot')}</>}
+                    left={<><span className={cn('w-2 h-2 rounded-full', data?.running ? 'bg-[#3fbf5f]' : 'bg-gray-400')} />{data?.bot_username ? `@${data.bot_username}` : t('noBot')}</>}
                     right={stateText}
                 />
                 {data?.bot_link && (
@@ -210,7 +210,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                 {(data?.admin_whitelist || []).map((e, i) => (
                     <KvRow key={i} left={label(e)} right={e.vaf_username || e.telegram_user_id} />
                 ))}
-                {(!data?.admin_whitelist || data.admin_whitelist.length === 0) && <p className="text-[12.5px] text-[#9a9a9a]">{t('noneFull')}</p>}
+                {(!data?.admin_whitelist || data.admin_whitelist.length === 0) && <p className="text-[12.5px] text-gray-500">{t('noneFull')}</p>}
             </SettingsCard>
 
             <SettingsCard title={t('cardRelayTitle')} desc={t('cardRelayDesc')}>
@@ -218,16 +218,16 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                     <KvRow key={i} left={label(e)} right={<>
                         <span>{e.telegram_user_id}</span>
                         <button type="button" title={t('remove')} onClick={() => { if (confirm(t('removeRelayConfirm'))) handleRelayRemove(e.telegram_user_id); }}
-                            className="p-1 rounded hover:bg-[#3a1d1d] text-[#9a9a9a] hover:text-[#e08c8c]"><Trash2 className="w-3.5 h-3.5" /></button>
+                            className="p-1 rounded hover:bg-red-100 text-gray-500 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
                     </>} />
                 ))}
-                {(!data?.relay_whitelist || data.relay_whitelist.length === 0) && <p className="text-[12.5px] text-[#9a9a9a] mb-2">{t('noneRelay')}</p>}
+                {(!data?.relay_whitelist || data.relay_whitelist.length === 0) && <p className="text-[12.5px] text-gray-500 mb-2">{t('noneRelay')}</p>}
                 <div className="flex gap-2 flex-wrap">
                     <input type="text" placeholder={t('relayIdPlaceholder')} value={relayAddId} onChange={e => setRelayAddId(e.target.value)} className={cn('flex-1 min-w-[10rem]', INPUT)} />
                     <input type="text" placeholder={t('relayUserPlaceholder')} value={relayAddUsername} onChange={e => setRelayAddUsername(e.target.value)} className={cn('flex-1 min-w-[10rem]', INPUT)} />
                     <button type="button" onClick={handleRelayAdd} disabled={!relayAddId.trim()} className={BTN_PRIMARY}>{t('add')}</button>
                 </div>
-                {relayError && <p className="mt-2 text-xs text-[#e08c8c]">{relayError}</p>}
+                {relayError && <p className="mt-2 text-xs text-red-600">{relayError}</p>}
             </SettingsCard>
 
             <SettingsCard title={t('cardActivityTitle')} full>
@@ -243,7 +243,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
             icon={<Send className="w-4 h-4 text-white" />}
             iconClass="bg-[#2aabee]"
             title={t('title')}
-            subtitle={<>{t('bot')} <span className="text-[#d0d0d0]">{data?.bot_username ? `@${data.bot_username}` : t('noBot')}</span></>}
+            subtitle={<>{t('bot')} <span className="text-gray-800">{data?.bot_username ? `@${data.bot_username}` : t('noBot')}</span></>}
             dot={data?.running ? 'green' : 'gray'}
             dotTitle={stateText}
             chats={chats}

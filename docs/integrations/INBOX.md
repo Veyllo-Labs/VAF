@@ -299,10 +299,13 @@ decide, writing happens in the channel window with the Composer beside it (one c
 box per channel, not a second one in the inbox). Opening a row posts its seen mark like the channel windows do, a room row's too (its cursor moves as the room view moves it; an invitation row posts nothing and keeps its chip, it is read by answering it). The window refetches
 on `inbox_changed` and `rooms_changed` (debounced 400 ms), never on a timer; the footer badge
 reads `GET /api/inbox/summary` on the same signal. Its surfaces are the channel shell's
-neutrals (the same as the WhatsApp, Telegram and Discord windows, so the four windows
-read as one family); the one emphasis action ("Write a draft"), the toggles and our own
-bubbles take [DARKMODE.md](../web-ui/DARKMODE.md)'s tokens (the light neutral button, the
-theme's track and knob, a neutral surface), and the only colours are the channel squares
+own, imported from it as the `SFC_*` pairs (the same ones the WhatsApp, Telegram, Discord
+and mail windows render, so the windows read as one family and cannot drift apart), and
+they follow the theme: [LIGHTMODE.md](../web-ui/LIGHTMODE.md) and
+[DARKMODE.md](../web-ui/DARKMODE.md) hold both halves. The one emphasis action ("Write a
+draft"), the toggles and our own bubbles take the same documents' tokens (the emphasis
+button, the theme's track and knob, a neutral surface), and the only colours are the
+channel squares
 (WhatsApp green, Telegram blue, Discord, mail amber, rooms violet) and the status colours
 every surface shares (red for unread and a failed load, amber where somebody waits, green
 for answered and a connected channel). Closing the

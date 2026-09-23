@@ -24,7 +24,8 @@ import { X, Search, RefreshCw, Inbox, ArrowLeft, Sparkles, ExternalLink, CheckCh
 import { cn } from '@/lib/utils';
 import { useEscapeLayer } from '@/hooks/useEscapeLayer';
 import {
-    BTN, BTN_PRIMARY, INPUT, ConversationBubbles, StateChips, WaitsChip, fmtWhen, initials,
+    BTN, BTN_PRIMARY, INPUT, SFC_WINDOW, SFC_CHROME, SFC_CANVAS, SFC_FILL, SFC_HOVER, SFC_ACTIVE,
+    ConversationBubbles, StateChips, WaitsChip, fmtWhen, initials,
     useConversationHistory, type InboxChannel,
 } from '@/components/connections/ChannelDashboardShell';
 
@@ -92,22 +93,24 @@ const CHANNEL_SQUARE: Record<InboxChannel, string> = {
 };
 const VIEWS = ['all', 'waits', 'unread', 'agent'] as const;
 type View = typeof VIEWS[number];
-const MODE_CHIP = 'text-[11px] px-1.5 rounded-md bg-[#262626] text-[#9a9a9a] border border-[#2e2e2e] whitespace-nowrap';
-const RAIL_BTN = 'mx-2 px-3 py-1.5 rounded-lg flex items-center justify-between gap-2 text-left max-md:mx-0 max-md:px-2 max-md:py-1 max-md:text-xs max-md:border max-md:border-[#2e2e2e] max-md:shrink-0 max-md:whitespace-nowrap';
-const RAIL_HEAD = 'px-4 pt-4 pb-1 text-[11px] uppercase tracking-wide text-[#8a8a8a] max-md:hidden';
+const MODE_CHIP = `text-[11px] px-1.5 rounded-md ${SFC_FILL} text-gray-500 border border-gray-200 whitespace-nowrap`;
+const RAIL_BTN = 'mx-2 px-3 py-1.5 rounded-lg flex items-center justify-between gap-2 text-left max-md:mx-0 max-md:px-2 max-md:py-1 max-md:text-xs max-md:border max-md:border-gray-200 max-md:shrink-0 max-md:whitespace-nowrap';
+const RAIL_HEAD = 'px-4 pt-4 pb-1 text-[11px] uppercase tracking-wide text-gray-500 max-md:hidden';
 
 function keyParts(key: string): { channel: string; id: string } {
     const at = key.indexOf(':');
     return at < 0 ? { channel: key, id: '' } : { channel: key.slice(0, at), id: key.slice(at + 1) };
 }
 
-/** One switch row in the rail: the dark theme's toggle, a light track with a dark knob when on. */
+/** One switch row in the rail, in the house switch's two colour pairs: the track carries the
+ *  state, and the knob contrasts it in either theme. */
 function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
     return (
-        <button type="button" onClick={() => onChange(!on)} className="mx-4 py-1 flex items-center gap-2 text-[#c8c8c8] text-left max-md:mx-0 max-md:px-2 max-md:text-xs max-md:shrink-0 max-md:whitespace-nowrap">
-            {/* The dark theme's toggle: a light track with a dark knob when on, a dark track with a light knob when off. */}
-            <span className={cn('w-8 h-4 rounded-full relative shrink-0', on ? 'bg-[#d9d9d9]' : 'bg-[#333333]')}>
-                <span className={cn('absolute top-0.5 w-3 h-3 rounded-full', on ? 'right-0.5 bg-[#1a1a1a]' : 'left-0.5 bg-[#e8e8e8]')} />
+        <button type="button" onClick={() => onChange(!on)} className="mx-4 py-1 flex items-center gap-2 text-gray-700 text-left max-md:mx-0 max-md:px-2 max-md:text-xs max-md:shrink-0 max-md:whitespace-nowrap">
+            {/* The house switch's pairs: in light mode a dark track with a white knob, in dark mode
+                a light track with a dark knob when on and a dark track with a light knob when off. */}
+            <span className={cn('w-8 h-4 rounded-full relative shrink-0', on ? 'bg-gray-800 dark:bg-[#d9d9d9]' : 'bg-gray-300 dark:bg-[#333333]')}>
+                <span className={cn('absolute top-0.5 w-3 h-3 rounded-full shadow', on ? 'right-0.5 bg-white dark:bg-[#1a1a1a]' : 'left-0.5 bg-white dark:bg-[#e8e8e8]')} />
             </span>
             <span className="truncate">{label}</span>
         </button>
@@ -345,17 +348,17 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
     return (
         <div className="fixed inset-0 z-[65] flex items-center justify-center p-4 bg-black/50 max-md:p-0" onClick={onClose}>
             <div
-                className="relative bg-[#181818] text-[#e8e8e8] w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-[#2e2e2e] flex flex-col overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0"
+                className={cn('relative', SFC_WINDOW, 'text-gray-900 w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0')}
                 onClick={e => e.stopPropagation()}
             >
-                <header className="flex items-center gap-3 px-4 py-2.5 border-b border-[#2e2e2e] bg-[#1f1f1f] shrink-0">
-                    <div className="w-8 h-8 rounded-lg grid place-items-center shrink-0 bg-[#e6e6e6] text-[#181818]"><Inbox className="w-4 h-4" /></div>
+                <header className={cn('flex items-center gap-3 px-4 py-2.5 border-b border-gray-200', SFC_CHROME, 'shrink-0')}>
+                    <div className="w-8 h-8 rounded-lg grid place-items-center shrink-0 bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]"><Inbox className="w-4 h-4" /></div>
                     <h1 className="font-semibold text-[15px]">{t('title')}</h1>
-                    <span className="text-[13px] text-[#9a9a9a] flex items-center gap-2 min-w-0 max-md:hidden">
+                    <span className="text-[13px] text-gray-500 flex items-center gap-2 min-w-0 max-md:hidden">
                         <span className={cn('w-2 h-2 rounded-full shrink-0', counts && counts.waits > 0 ? 'bg-[#e0b866]' : 'bg-[#3fbf5f]')} />
                         <span className="truncate">{t('subtitle', { waits: counts?.waits ?? 0, unread: counts?.unread ?? 0 })}</span>
                     </span>
-                    <button type="button" onClick={onClose} title={t('close')} className="ml-auto p-2 rounded-lg hover:bg-[#262626] text-[#9a9a9a] hover:text-white">
+                    <button type="button" onClick={onClose} title={t('close')} className={cn('ml-auto p-2 rounded-lg', SFC_HOVER, 'text-gray-500 hover:text-gray-900')}>
                         <X className="w-4 h-4" />
                     </button>
                 </header>
@@ -364,10 +367,10 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                     class and the phone would keep the three columns. */}
                 <main className="flex-1 grid min-h-0 grid-cols-[210px_380px_1fr] max-md:grid-cols-1 max-md:grid-rows-[auto_1fr]">
                     {/* On a phone the rail is one row that scrolls sideways: a wrapping strip ate half the screen. */}
-                    <nav className="border-r border-[#2e2e2e] bg-[#1a1a1a] flex flex-col text-sm overflow-y-auto max-md:flex-row max-md:flex-nowrap max-md:overflow-x-auto max-md:overflow-y-visible max-md:gap-1 max-md:p-2 max-md:border-r-0 max-md:border-b">
+                    <nav className={cn('border-r border-gray-200', SFC_WINDOW, 'flex flex-col text-sm overflow-y-auto max-md:flex-row max-md:flex-nowrap max-md:overflow-x-auto max-md:overflow-y-visible max-md:gap-1 max-md:p-2 max-md:border-r-0 max-md:border-b')}>
                         <div className={RAIL_HEAD}>{t('rail.view')}</div>
                         {VIEWS.map(v => (
-                            <button key={v} type="button" onClick={() => setView(v)} className={cn(RAIL_BTN, view === v ? 'bg-[#2a2a2a]' : 'hover:bg-[#262626]')}>
+                            <button key={v} type="button" onClick={() => setView(v)} className={cn(RAIL_BTN, view === v ? SFC_ACTIVE : SFC_HOVER)}>
                                 {/* No marker in front of a single view: one dot on one of four rows
                                     indents that row's label against the others, and it was drawn
                                     even at zero, where there is nothing to point at. The count on
@@ -375,20 +378,20 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                     waits, and every label starts at the same x. The channel rows
                                     below mark EVERY row, which is why they line up. */}
                                 <span className="truncate min-w-0">{t(`view.${v}`)}</span>
-                                <span className={cn('text-xs', v === 'waits' && viewCount(v) > 0 ? 'text-[#e0b866] font-medium' : 'text-[#9a9a9a]')}>{viewCount(v)}</span>
+                                <span className={cn('text-xs', v === 'waits' && viewCount(v) > 0 ? 'text-amber-700 font-medium' : 'text-gray-500')}>{viewCount(v)}</span>
                             </button>
                         ))}
                         <div className={RAIL_HEAD}>{t('rail.channels')}</div>
                         {/* "All channels" is its own entry: the view's "All" above is a view, and a person who
                             narrowed the list to one channel looks here to widen it again. */}
-                        <button type="button" onClick={() => setChannel(null)} className={cn(RAIL_BTN, channel === null ? 'bg-[#2a2a2a]' : 'hover:bg-[#262626]')}>
-                            <span className="flex items-center gap-2 min-w-0"><span className="w-2 h-2 rounded-full shrink-0 bg-[#e6e6e6]" /><span className="truncate">{t('allChannels')}</span></span>
-                            <span className={cn('text-xs', (counts?.waits ?? 0) > 0 ? 'text-[#e0b866] font-medium' : 'text-[#9a9a9a]')}>{counts?.all ?? 0}</span>
+                        <button type="button" onClick={() => setChannel(null)} className={cn(RAIL_BTN, channel === null ? SFC_ACTIVE : SFC_HOVER)}>
+                            <span className="flex items-center gap-2 min-w-0"><span className="w-2 h-2 rounded-full shrink-0 bg-gray-900 dark:bg-[#e6e6e6]" /><span className="truncate">{t('allChannels')}</span></span>
+                            <span className={cn('text-xs', (counts?.waits ?? 0) > 0 ? 'text-amber-700 font-medium' : 'text-gray-500')}>{counts?.all ?? 0}</span>
                         </button>
                         {CHANNELS.map(c => (
-                            <button key={c} type="button" onClick={() => setChannel(prev => prev === c ? null : c)} className={cn(RAIL_BTN, channel === c ? 'bg-[#2a2a2a]' : 'hover:bg-[#262626]')}>
+                            <button key={c} type="button" onClick={() => setChannel(prev => prev === c ? null : c)} className={cn(RAIL_BTN, channel === c ? SFC_ACTIVE : SFC_HOVER)}>
                                 <span className="flex items-center gap-2 min-w-0"><span className={cn('w-2 h-2 rounded-sm shrink-0', CHANNEL_SQUARE[c])} /><span className="truncate">{t(`channel.${c}`)}</span></span>
-                                <span className={cn('text-xs', (counts?.waits_per_channel?.[c] ?? 0) > 0 ? 'text-[#e0b866] font-medium' : 'text-[#9a9a9a]')}>{counts?.per_channel?.[c] ?? 0}</span>
+                                <span className={cn('text-xs', (counts?.waits_per_channel?.[c] ?? 0) > 0 ? 'text-amber-700 font-medium' : 'text-gray-500')}>{counts?.per_channel?.[c] ?? 0}</span>
                             </button>
                         ))}
                         <div className={RAIL_HEAD}>{t('rail.filters')}</div>
@@ -397,16 +400,16 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                         <Toggle on={bulk} onChange={setBulk} label={t('showBulk')} />
                         {/* The other side of this window: what arrives here is answered the way
                             Inbound is set up. The inbox closes first, the way a chat jump does. */}
-                        <button type="button" onClick={() => { onClose(); onOpenInbound(); }} className={cn(RAIL_BTN, 'mt-2 hover:bg-[#262626]')}>
-                            <span className="flex items-center gap-2 min-w-0"><Headphones className="w-3.5 h-3.5 shrink-0 text-[#9a9a9a]" /><span className="truncate">{t('rail.inbound')}</span></span>
+                        <button type="button" onClick={() => { onClose(); onOpenInbound(); }} className={cn(RAIL_BTN, 'mt-2', SFC_HOVER)}>
+                            <span className="flex items-center gap-2 min-w-0"><Headphones className="w-3.5 h-3.5 shrink-0 text-gray-500" /><span className="truncate">{t('rail.inbound')}</span></span>
                         </button>
-                        <div className="mt-auto px-4 py-3 border-t border-[#2e2e2e] text-xs text-[#9a9a9a] space-y-1 max-md:hidden">
+                        <div className="mt-auto px-4 py-3 border-t border-gray-200 text-xs text-gray-500 space-y-1 max-md:hidden">
                             {(['whatsapp', 'telegram', 'discord', 'mail'] as const).map(ch => {
                                 const line = statusLine(ch);
                                 if (!line) return null;
                                 return (
                                     <div key={ch} className="flex items-center gap-2">
-                                        <span className={cn('w-2 h-2 rounded-full shrink-0', line.on ? 'bg-[#3fbf5f]' : 'bg-[#555]')} />
+                                        <span className={cn('w-2 h-2 rounded-full shrink-0', line.on ? 'bg-[#3fbf5f]' : 'bg-gray-400')} />
                                         <span className="truncate">{line.text}</span>
                                     </div>
                                 );
@@ -414,8 +417,8 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                         </div>
                     </nav>
 
-                    <section className={cn('border-r border-[#2e2e2e] bg-[#1f1f1f] flex flex-col min-h-0 max-md:border-r-0', mobilePane === 'preview' && 'max-md:hidden')}>
-                        <div className="sticky top-0 z-10 bg-[#1f1f1f] border-b border-[#2e2e2e] shrink-0">
+                    <section className={cn('border-r border-gray-200', SFC_CHROME, 'flex flex-col min-h-0 max-md:border-r-0', mobilePane === 'preview' && 'max-md:hidden')}>
+                        <div className={cn('sticky top-0 z-10', SFC_CHROME, 'border-b border-gray-200 shrink-0')}>
                             {/* The list's own actions sit over the list they act on, in one row that shares
                                 the search field's edges: the refresh as a symbol on the left, "mark all as
                                 read" on the right. Nothing up here has to line up with the preview's buttons. */}
@@ -428,41 +431,41 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                 </button>
                             </div>
                             <div className="relative px-3 pt-2 pb-2">
-                                <Search className="w-4 h-4 absolute left-6 top-1/2 -translate-y-1/2 text-[#9a9a9a] pointer-events-none" />
+                                <Search className="w-4 h-4 absolute left-6 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
                                 <input value={queryInput} onChange={e => setQueryInput(e.target.value)} placeholder={t('search')} className={cn(INPUT, 'w-full pl-9')} />
                             </div>
-                            <div className="px-4 pb-2 text-xs text-[#9a9a9a] flex items-center justify-between gap-2">
+                            <div className="px-4 pb-2 text-xs text-gray-500 flex items-center justify-between gap-2">
                                 <span>{t('listHeader', { count: rows.length })}</span>
                                 <span>{t('newestFirst')}</span>
                             </div>
                         </div>
                         <div className="flex-1 overflow-y-auto min-h-0">
                             {loading && rows.length === 0 ? (
-                                <div className="p-4 text-sm text-[#9a9a9a]">{t('loading')}</div>
+                                <div className="p-4 text-sm text-gray-500">{t('loading')}</div>
                             ) : loadFailed ? (
-                                <div className="p-4 text-sm text-[#e08c8c]">{t('couldNotLoad')}</div>
+                                <div className="p-4 text-sm text-red-600">{t('couldNotLoad')}</div>
                             ) : rows.length === 0 ? (
-                                <div className="p-4 text-sm text-[#9a9a9a]">{t('empty')}</div>
+                                <div className="p-4 text-sm text-gray-500">{t('empty')}</div>
                             ) : rows.map(r => (
                                 <button key={r.key} type="button" onClick={() => select(r)}
-                                    className={cn('w-full text-left px-4 py-2.5 border-b border-[#2e2e2e]', selectedKey === r.key ? 'bg-[#2a2a2a]' : 'hover:bg-[#262626]')}>
+                                    className={cn('w-full text-left px-4 py-2.5 border-b border-gray-200', selectedKey === r.key ? SFC_ACTIVE : SFC_HOVER)}>
                                     <div className="flex items-center gap-3">
                                         <div className="relative shrink-0">
-                                            <div className="w-9 h-9 rounded-full bg-[#2e2e2e] grid place-items-center text-[#c8c8c8] text-xs font-medium">{initials(r.name || r.id)}</div>
-                                            <span className={cn('absolute -right-0.5 -bottom-0.5 w-3.5 h-3.5 rounded-sm border-2 border-[#1f1f1f]', CHANNEL_SQUARE[r.channel])} />
+                                            <div className="w-9 h-9 rounded-full bg-gray-300 dark:bg-[#2e2e2e] grid place-items-center text-gray-700 text-xs font-medium">{initials(r.name || r.id)}</div>
+                                            <span className={cn('absolute -right-0.5 -bottom-0.5 w-3.5 h-3.5 rounded-sm border-2 border-gray-100', CHANNEL_SQUARE[r.channel])} />
                                         </div>
                                         <div className="min-w-0 flex-1">
                                             <div className="flex items-center gap-2 text-[13px]">
-                                                <span className={cn('truncate', unreadOf(r) > 0 ? 'font-semibold text-white' : 'font-medium')}>{r.name || r.id}</span>
-                                                {r.is_group && <span className="text-[10px] text-[#9a9a9a] shrink-0">{t(r.channel === 'room' ? 'kind.room' : 'kind.group')}</span>}
-                                                <span className="ml-auto text-[11px] text-[#9a9a9a] shrink-0">{fmtWhen(r.last_ts)}</span>
+                                                <span className={cn('truncate', unreadOf(r) > 0 ? 'font-semibold text-gray-900' : 'font-medium')}>{r.name || r.id}</span>
+                                                {r.is_group && <span className="text-[10px] text-gray-500 shrink-0">{t(r.channel === 'room' ? 'kind.room' : 'kind.group')}</span>}
+                                                <span className="ml-auto text-[11px] text-gray-500 shrink-0">{fmtWhen(r.last_ts)}</span>
                                             </div>
                                             {/* The preview line keeps its height when there is no preview: a room
                                                 invitation and a room nobody has spoken in carry an empty one
                                                 (vaf/core/inbox.py), and without the floor that row is 16px shorter
                                                 than its neighbours, with its name and its chips riding up. The
                                                 channel window's row has carried this floor from the start. */}
-                                            <div className={cn('text-xs truncate min-h-[1rem]', unreadOf(r) > 0 ? 'text-[#e8e8e8]' : 'text-[#9a9a9a]')}>{r.channel === 'mail' && r.subject ? r.subject : previewLine(r)}</div>
+                                            <div className={cn('text-xs truncate min-h-[1rem]', unreadOf(r) > 0 ? 'text-gray-900' : 'text-gray-500')}>{r.channel === 'mail' && r.subject ? r.subject : previewLine(r)}</div>
                                             <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                                                 <StateChips unread={unreadOf(r)} waits={waitsOf(r)} waitsReason={r.waits_reason} answeredByAgent={r.answered_by_agent} done={r.done} className="mt-0" />
                                                 {r.channel !== 'mail' && <span className={MODE_CHIP}>{t(`modeChip.${r.mode}`)}</span>}
@@ -476,22 +479,22 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
 
                     <section className={cn('flex flex-col min-w-0 min-h-0', mobilePane === 'list' && 'max-md:hidden')}>
                         {!selected ? (
-                            <div className="flex-1 grid place-items-center text-sm text-[#9a9a9a]">{t('selectRow')}</div>
+                            <div className="flex-1 grid place-items-center text-sm text-gray-500">{t('selectRow')}</div>
                         ) : (
                             <>
-                                <div className="px-5 py-3 border-b border-[#2e2e2e] flex items-center gap-3 flex-wrap shrink-0">
-                                    <button type="button" onClick={() => setMobilePane('list')} title={t('back')} className="md:hidden p-1.5 rounded-md hover:bg-[#262626] text-[#9a9a9a]"><ArrowLeft className="w-4 h-4" /></button>
-                                    <div className="w-9 h-9 rounded-full bg-[#2e2e2e] grid place-items-center text-[#c8c8c8] text-xs font-medium shrink-0">{initials(selected.name || selected.id)}</div>
+                                <div className="px-5 py-3 border-b border-gray-200 flex items-center gap-3 flex-wrap shrink-0">
+                                    <button type="button" onClick={() => setMobilePane('list')} title={t('back')} className={cn('md:hidden p-1.5 rounded-md', SFC_HOVER, 'text-gray-500')}><ArrowLeft className="w-4 h-4" /></button>
+                                    <div className="w-9 h-9 rounded-full bg-gray-300 dark:bg-[#2e2e2e] grid place-items-center text-gray-700 text-xs font-medium shrink-0">{initials(selected.name || selected.id)}</div>
                                     {/* The name block keeps a readable width; the actions wrap under it before they squeeze it. */}
                                     <div className="flex-1 min-w-[280px] max-md:min-w-0">
                                         <div className="flex items-center gap-2 min-w-0 flex-wrap">
                                             <span className="font-semibold truncate">{selected.name || selected.id}</span>
-                                            <span className="text-[11px] px-1.5 rounded-md bg-[#262626] text-[#c8c8c8] flex items-center gap-1.5 whitespace-nowrap">
+                                            <span className={cn('text-[11px] px-1.5 rounded-md', SFC_FILL, 'text-gray-700 flex items-center gap-1.5 whitespace-nowrap')}>
                                                 <span className={cn('w-2 h-2 rounded-sm', CHANNEL_SQUARE[selected.channel])} />{t(`channel.${selected.channel}`)}
                                             </span>
                                             {waitsOf(selected) && <WaitsChip reason={selected.waits_reason} />}
                                         </div>
-                                        <div className="text-xs text-[#9a9a9a] truncate">
+                                        <div className="text-xs text-gray-500 truncate">
                                             {t('subline', { mode: t(`mode.${selected.mode}`), id: selected.channel === 'mail' ? (selected.subject || selected.id) : selected.id, when: fmtWhen(selected.last_ts) })}
                                         </div>
                                     </div>
@@ -500,7 +503,7 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                             <ExternalLink className="w-3.5 h-3.5" />{selected.channel === 'room' ? t('openRoom') : t('openIn', { channel: t(`channel.${selected.channel}`) })}
                                         </button>
                                         {/* No done or read button: opening the row read it, and the reader decides. The one
-                                            emphasis action takes the dark theme's light neutral, not a channel colour. */}
+                                            emphasis action takes the emphasis button of either theme, not a channel colour. */}
                                         {canDraft(selected) && (
                                             <button type="button" onClick={() => openElsewhere(selected, true)} className={cn('flex items-center gap-1.5', BTN_PRIMARY)}>
                                                 <Sparkles className="w-4 h-4" />{t('writeDraft')}
@@ -508,40 +511,40 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                         )}
                                     </div>
                                 </div>
-                                <div ref={bubblesRef} className="flex-1 min-h-0 overflow-y-auto bg-[#151515] p-5 flex flex-col gap-2.5">
+                                <div ref={bubblesRef} className={cn('flex-1 min-h-0 overflow-y-auto', SFC_CANVAS, 'p-5 flex flex-col gap-2.5')}>
                                     {historyLoading && bubbles.length === 0 ? (
-                                        <p className="text-sm text-[#9a9a9a]">{t('loading')}</p>
+                                        <p className="text-sm text-gray-500">{t('loading')}</p>
                                     ) : bubbles.length === 0 ? (
-                                        <p className="text-sm text-[#9a9a9a] self-center">{t('noMessages')}</p>
+                                        <p className="text-sm text-gray-500 self-center">{t('noMessages')}</p>
                                     ) : (
-                                        <ConversationBubbles messages={bubbles} iconClass={CHANNEL_SQUARE[selected.channel]} query="" currentMatch={null} mineClass="bg-[#3a3a3a]" />
+                                        <ConversationBubbles messages={bubbles} iconClass={CHANNEL_SQUARE[selected.channel]} query="" currentMatch={null} mineClass="bg-gray-300" />
                                     )}
                                     {noteReason === 'unanswered' && (
-                                        <span className="self-center mt-2 text-[11px] text-[#e0b866] bg-[#2b2417] border border-[#4a3b1e] px-3 py-1 rounded-full text-center">{t('unanswered', { name: selected.name || selected.id })}</span>
+                                        <span className="self-center mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1 rounded-full text-center">{t('unanswered', { name: selected.name || selected.id })}</span>
                                     )}
                                     {noteReason === 'owner_asked' && (
-                                        <span className="self-center mt-2 text-[11px] text-[#e0b866] bg-[#2b2417] border border-[#4a3b1e] px-3 py-1 rounded-full text-center">{t('ownerAsked')}</span>
+                                        <span className="self-center mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1 rounded-full text-center">{t('ownerAsked')}</span>
                                     )}
                                     {noteReason === 'invitation' && (
-                                        <span className="self-center mt-2 text-[11px] text-[#e0b866] bg-[#2b2417] border border-[#4a3b1e] px-3 py-1 rounded-full text-center">{t('invitation')}</span>
+                                        <span className="self-center mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1 rounded-full text-center">{t('invitation')}</span>
                                     )}
                                     {selected.draft && (
-                                        <div className="mt-2 rounded-xl border border-[#4a3b1e] bg-[#2b2417] p-3 text-[13px]">
-                                            <div className="flex items-center gap-2 text-[#e0b866] font-medium"><Sparkles className="w-4 h-4" /><span>{t('draftTitle')}</span></div>
-                                            <p className="text-xs text-[#c8b58a] mt-0.5">{t('draftWaiting')}</p>
-                                            <pre className="mt-2 whitespace-pre-wrap font-sans text-[#e8e8e8] max-h-48 overflow-y-auto">{selected.draft.body}</pre>
+                                        <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[13px]">
+                                            <div className="flex items-center gap-2 text-amber-700 font-medium"><Sparkles className="w-4 h-4" /><span>{t('draftTitle')}</span></div>
+                                            <p className="text-xs text-amber-700 mt-0.5">{t('draftWaiting')}</p>
+                                            <pre className="mt-2 whitespace-pre-wrap font-sans text-gray-900 max-h-48 overflow-y-auto">{selected.draft.body}</pre>
                                             <div className="mt-2 flex items-center gap-2 flex-wrap">
                                                 {/* The one emphasis action takes the theme's light neutral, like "write a draft" above. */}
                                                 <button type="button" disabled={draftBusy} onClick={() => actOnDraft(selected, 'send')}
                                                     className={cn('flex items-center gap-1.5', BTN_PRIMARY)}>{t('draftSend')}</button>
                                                 <button type="button" disabled={draftBusy} onClick={() => actOnDraft(selected, 'discard')}
                                                     className={cn('flex items-center gap-1.5', BTN)}>{t('draftDiscard')}</button>
-                                                {draftNote && <span className="text-xs text-[#c8b58a]">{draftNote}</span>}
+                                                {draftNote && <span className="text-xs text-amber-700">{draftNote}</span>}
                                             </div>
                                         </div>
                                     )}
                                 </div>
-                                <div className="px-5 py-2 border-t border-[#2e2e2e] text-xs text-[#9a9a9a] flex justify-between gap-3 flex-wrap shrink-0">
+                                <div className="px-5 py-2 border-t border-gray-200 text-xs text-gray-500 flex justify-between gap-3 flex-wrap shrink-0">
                                     <span className="min-w-0 truncate">{t(`mode.${selected.mode}`)}</span>
                                     <span className="shrink-0">{selected.channel === 'room' ? t('members', { count: selected.members ?? 0 }) : t('messagesCount', { count: selected.message_count })}</span>
                                 </div>

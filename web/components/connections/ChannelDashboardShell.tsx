@@ -90,21 +90,38 @@ export interface ChannelDashboardShellProps {
     channel?: InboxChannel;
 }
 
+// The window's surface stack: one pair per role, light first, dark stated outright.
+// Most of the UI needs no such pair, because bg-white and bg-gray-50..400 already fold
+// per theme (docs/web-ui/DARKMODE.md). These eight do, because the ramp INVERTS: in
+// light "more recessed" runs white -> gray-100, in dark it runs #1f1f1f -> #151515,
+// while the fold points gray-100 at the LIGHTER dark tone #262626. A folded canvas
+// would therefore rise above the chrome it is supposed to sink into. Stating both ends
+// keeps the light direction right and the dark values exactly what they have always
+// been. Imported by the inbox and the mail window, so the three never disagree.
+export const SFC_WINDOW = 'bg-gray-50 dark:bg-[#181818]';
+export const SFC_CHROME = 'bg-white dark:bg-[#1f1f1f]';
+export const SFC_CARD = 'bg-white dark:bg-[#1c1c1c]';
+export const SFC_CANVAS = 'bg-gray-100 dark:bg-[#151515]';
+export const SFC_RAISED = 'bg-white dark:bg-[#262626]';
+export const SFC_FILL = 'bg-gray-100 dark:bg-[#262626]';
+export const SFC_HOVER = 'hover:bg-gray-100 dark:hover:bg-[#262626]';
+export const SFC_ACTIVE = 'bg-gray-200 dark:bg-[#2a2a2a]';
+
 export const BADGE_CLS = {
-    owner: 'bg-[#1d3550] text-[#8ec3f0]',
-    contact: 'bg-[#1e3a24] text-[#8fd39a]',
-    relay: 'bg-[#3a2f16] text-[#e0b866]',
-    assign: 'bg-[#2b2417] text-[#d4a24e]',
-    readOnly: 'bg-[#262626] text-[#b0b0b0]',
+    owner: 'bg-blue-100 text-blue-700',
+    contact: 'bg-green-100 text-green-700',
+    relay: 'bg-amber-100 text-amber-700',
+    assign: 'bg-amber-50 text-amber-600',
+    readOnly: 'bg-gray-100 text-gray-600',
 } as const;
 
 // The state tokens, the same on every surface: the unread pill is the mail window's
 // (a red pill with the count), "waits for you" is amber, the agent's answer green,
 // and "done" quiet. Two windows never disagree about what a colour means.
 export const UNREAD_PILL = 'text-[11px] leading-[18px] px-1.5 rounded-full bg-[#e05d44] text-white';
-export const WAITS_CHIP = 'text-[11px] px-1.5 rounded-md bg-[#4a3b1e] text-[#e0b866] whitespace-nowrap';
-export const AGENT_CHIP = 'text-[11px] px-1.5 rounded-md bg-[#1f4d2a] text-[#9fe0b0] whitespace-nowrap';
-export const DONE_CHIP = 'text-[11px] px-1.5 rounded-md bg-[#262626] text-[#9a9a9a] border border-[#2e2e2e] whitespace-nowrap';
+export const WAITS_CHIP = 'text-[11px] px-1.5 rounded-md bg-amber-200 text-amber-700 whitespace-nowrap';
+export const AGENT_CHIP = 'text-[11px] px-1.5 rounded-md bg-green-100 text-green-700 whitespace-nowrap';
+export const DONE_CHIP = 'text-[11px] px-1.5 rounded-md bg-gray-100 text-gray-500 border border-gray-200 whitespace-nowrap';
 
 /** The unread count, in the mail window's red pill; nothing when there is nothing unread. */
 export function UnreadPill({ count }: { count?: number }) {
@@ -138,7 +155,7 @@ export function StateChips({ unread, waits, waitsReason, answeredByAgent, done, 
 
 // The compose box a person writes in themselves: one growing field (the caller sizes it
 // through `fieldRef`), Enter sends, Shift+Enter breaks the line, the round button sends.
-export const FIELD = 'bg-[#262626] border border-[#2e2e2e] rounded-2xl px-4 py-2 text-sm leading-5 outline-none focus:border-[#444] resize-none scrollbar-hide';
+export const FIELD = `${SFC_FILL} border border-gray-200 rounded-2xl px-4 py-2 text-sm leading-5 outline-none focus:border-gray-400 resize-none scrollbar-hide`;
 export const ROUND_BTN = 'w-9 h-9 rounded-full grid place-items-center shrink-0 bg-[#25a244] text-white hover:bg-[#2db54e] disabled:opacity-40 disabled:hover:bg-[#25a244]';
 
 export function ComposeBox({ value, onChange, onSend, sending, placeholder, sendTitle, error, fieldRef }: {
@@ -146,7 +163,7 @@ export function ComposeBox({ value, onChange, onSend, sending, placeholder, send
     placeholder: string; sendTitle: string; error?: string | null; fieldRef?: React.RefObject<HTMLTextAreaElement>;
 }) {
     return (
-        <div className="px-4 py-2.5 border-t border-[#2e2e2e] bg-[#1a1a1a] shrink-0 flex flex-col gap-1">
+        <div className={cn(SFC_WINDOW, 'px-4 py-2.5 border-t border-gray-200 shrink-0 flex flex-col gap-1')}>
             <div className="flex items-end gap-2">
                 <textarea ref={fieldRef} value={value} onChange={e => onChange(e.target.value)}
                     onKeyDown={e => {
@@ -161,7 +178,7 @@ export function ComposeBox({ value, onChange, onSend, sending, placeholder, send
                     {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4 -ml-0.5" />}
                 </button>
             </div>
-            {error && <p className="text-xs text-[#e08c8c] px-1">{error}</p>}
+            {error && <p className="text-xs text-red-600 px-1">{error}</p>}
         </div>
     );
 }
@@ -250,17 +267,17 @@ export function ConversationBubbles({ messages, iconClass, query, currentMatch, 
                 return (
                     <React.Fragment key={`${msg.timestamp || 'no-ts'}-${i}`}>
                         {day && day !== prevDay && (
-                            <span className="self-center text-[11px] text-[#8a8a8a] bg-[#1f1f1f] px-2.5 py-0.5 rounded-full">{day}</span>
+                            <span className={cn(SFC_CHROME, 'self-center text-[11px] text-gray-500 px-2.5 py-0.5 rounded-full')}>{day}</span>
                         )}
                         <div data-msg-idx={i} className={cn('flex gap-2', isBot ? 'justify-end' : 'justify-start')}>
                             {!isBot && (
-                                <div className="w-6 h-6 rounded-full bg-[#2e2e2e] grid place-items-center text-[#c8c8c8] shrink-0"><User className="w-3.5 h-3.5" /></div>
+                                <div className="w-6 h-6 rounded-full bg-gray-200 grid place-items-center text-gray-700 shrink-0"><User className="w-3.5 h-3.5" /></div>
                             )}
                             <div className={cn('max-w-[62%] px-3 py-2 rounded-2xl text-[13.5px] leading-relaxed',
-                                isBot ? cn(mineClass ?? 'bg-[#1f4d2a]', 'rounded-tr-sm') : 'bg-[#262626] rounded-tl-sm',
-                                isCurrentMatch && 'ring-2 ring-[#e0b866]')}>
+                                isBot ? cn(mineClass ?? 'bg-green-100', 'rounded-tr-sm') : cn(SFC_RAISED, 'rounded-tl-sm'),
+                                isCurrentMatch && 'ring-2 ring-amber-500')}>
                                 <p className="whitespace-pre-wrap break-words"><HighlightedText text={msg.text} query={query} /></p>
-                                {msg.timestamp && <div className={cn('text-[10px] text-[#8a8a8a] mt-1', isBot && 'text-right')}>{msg.timestamp}</div>}
+                                {msg.timestamp && <div className={cn('text-[10px] text-gray-500 mt-1', isBot && 'text-right')}>{msg.timestamp}</div>}
                             </div>
                             {isBot && (
                                 <div className={cn('w-6 h-6 rounded-full grid place-items-center text-white shrink-0', iconClass)}><Bot className="w-3.5 h-3.5" /></div>
@@ -299,7 +316,7 @@ function Avatar({ label, url, size }: { label: string; url?: string | null; size
     useEffect(() => { setFailed(false); }, [url]);
     const cls = size === 'sm' ? 'w-9 h-9 text-xs' : 'w-8 h-8 text-xs';
     return (
-        <div className={cn('relative rounded-full bg-[#2e2e2e] grid place-items-center text-[#c8c8c8] shrink-0 overflow-hidden', cls)}>
+        <div className={cn('relative rounded-full bg-gray-300 dark:bg-[#2e2e2e] grid place-items-center text-gray-700 shrink-0 overflow-hidden', cls)}>
             <span>{initials(label)}</span>
             {url && !failed && (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -318,9 +335,9 @@ export function initials(label: string): string {
 /** A settings card in the overlay: title, one explaining line, then whatever the channel puts in. */
 export function SettingsCard({ title, desc, full, children }: { title: string; desc?: string; full?: boolean; children?: React.ReactNode }) {
     return (
-        <div className={cn('rounded-xl border border-[#2e2e2e] bg-[#1c1c1c] p-4', full && 'md:col-span-2')}>
+        <div className={cn(SFC_CARD, 'rounded-xl border border-gray-200 p-4', full && 'md:col-span-2')}>
             <h3 className="text-[13px] font-semibold">{title}</h3>
-            {desc && <p className="text-[12.5px] text-[#9a9a9a] mt-1 mb-2.5">{desc}</p>}
+            {desc && <p className="text-[12.5px] text-gray-500 mt-1 mb-2.5">{desc}</p>}
             {children}
         </div>
     );
@@ -329,16 +346,16 @@ export function SettingsCard({ title, desc, full, children }: { title: string; d
 /** One value row inside a card (a number, a user, a state), with an optional right-hand side. */
 export function KvRow({ left, right }: { left: React.ReactNode; right?: React.ReactNode }) {
     return (
-        <div className="flex items-center justify-between px-2.5 py-2 rounded-lg bg-[#232323] text-[13px] mb-1.5 gap-3">
+        <div className={cn(SFC_FILL, 'flex items-center justify-between px-2.5 py-2 rounded-lg text-[13px] mb-1.5 gap-3')}>
             <span className="min-w-0 truncate flex items-center gap-2">{left}</span>
-            {right !== undefined && <span className="flex items-center gap-2 text-xs text-[#9a9a9a] shrink-0">{right}</span>}
+            {right !== undefined && <span className="flex items-center gap-2 text-xs text-gray-500 shrink-0">{right}</span>}
         </div>
     );
 }
 
-export const BTN = 'px-3 py-1.5 rounded-lg bg-[#262626] border border-[#2e2e2e] text-sm hover:border-[#444] disabled:opacity-50';
-export const BTN_PRIMARY = 'px-3 py-1.5 rounded-lg bg-[#e6e6e6] text-[#181818] text-sm font-medium hover:bg-[#f5f5f5] disabled:opacity-50';
-export const INPUT = 'bg-[#262626] border border-[#2e2e2e] rounded-lg px-3 py-1.5 text-sm outline-none focus:border-[#444]';
+export const BTN = `px-3 py-1.5 rounded-lg ${SFC_FILL} border border-gray-200 text-sm hover:border-gray-400 disabled:opacity-50`;
+export const BTN_PRIMARY = 'px-3 py-1.5 rounded-lg bg-gray-900 text-white hover:bg-black dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] text-sm font-medium disabled:opacity-50';
+export const INPUT = `${SFC_FILL} border border-gray-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-gray-400`;
 
 export default function ChannelDashboardShell(props: ChannelDashboardShellProps) {
     const {
@@ -467,26 +484,26 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
 
     if (!isOpen) return null;
 
-    const dotCls = dot === 'green' ? 'bg-[#3fbf5f]' : dot === 'amber' ? 'bg-[#e0a030]' : 'bg-[#555]';
+    const dotCls = dot === 'green' ? 'bg-[#3fbf5f]' : dot === 'amber' ? 'bg-[#e0a030]' : 'bg-gray-400';
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 max-md:p-0" onClick={onClose}>
             <div
-                className="relative bg-[#181818] text-[#e8e8e8] w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-[#2e2e2e] flex flex-col overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0"
+                className={cn(SFC_WINDOW, 'relative text-gray-900 w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0')}
                 onClick={e => e.stopPropagation()}
             >
-                <header className="flex items-center gap-3 px-4 py-2.5 border-b border-[#2e2e2e] bg-[#1f1f1f] shrink-0">
+                <header className={cn(SFC_CHROME, 'flex items-center gap-3 px-4 py-2.5 border-b border-gray-200 shrink-0')}>
                     <div className={cn('w-8 h-8 rounded-lg grid place-items-center shrink-0', iconClass)}>{icon}</div>
                     <h1 className="font-semibold text-[15px]">{title}</h1>
-                    <span className="text-[13px] text-[#9a9a9a] flex items-center gap-2 min-w-0 max-md:hidden">
+                    <span className="text-[13px] text-gray-500 flex items-center gap-2 min-w-0 max-md:hidden">
                         <span className={cn('w-2 h-2 rounded-full shrink-0', dotCls)} title={dotTitle} />
                         <span className="truncate">{subtitle}</span>
                     </span>
                     <button type="button" onClick={() => onSettingsOpenChange(true)} title={t('settings')}
-                        className="ml-auto p-2 rounded-lg bg-[#262626] border border-[#2e2e2e] hover:border-[#444]">
+                        className={cn(SFC_FILL, 'ml-auto p-2 rounded-lg border border-gray-200 hover:border-gray-400')}>
                         <Settings className="w-4 h-4" />
                     </button>
-                    <button type="button" onClick={onClose} title={t('close')} className="p-2 rounded-lg hover:bg-[#262626] text-[#9a9a9a] hover:text-white">
+                    <button type="button" onClick={onClose} title={t('close')} className={cn(SFC_HOVER, 'p-2 rounded-lg text-gray-500 hover:text-gray-900')}>
                         <X className="w-4 h-4" />
                     </button>
                 </header>
@@ -494,8 +511,8 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                 {/* The columns are a class, not an inline style: an inline style outranks the max-md
                     class, and the phone kept both columns (320px beside a sliver). */}
                 <main className="flex-1 grid min-h-0 grid-cols-[320px_1fr] max-md:grid-cols-1 max-md:grid-rows-[38vh_1fr]">
-                    <nav className="border-r border-[#2e2e2e] bg-[#1f1f1f] overflow-y-auto max-md:border-r-0 max-md:border-b">
-                        <div className="sticky top-0 z-10 bg-[#1f1f1f] border-b border-[#2e2e2e]">
+                    <nav className={cn(SFC_CHROME, 'border-r border-gray-200 overflow-y-auto max-md:border-r-0 max-md:border-b')}>
+                        <div className={cn(SFC_CHROME, 'sticky top-0 z-10 border-b border-gray-200')}>
                             {/* The list's own actions sit over the list they act on, in one row that shares the
                                 search field's edges (the inbox window keeps the same row): the refresh as a
                                 symbol on the left, "all read" on the right where the window names its channel. */}
@@ -511,36 +528,36 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                             </div>
                             <div className="relative px-3 pt-2 pb-2">
                                 {/* Deliberate: cn() is tailwind-merge, so the padding override must come AFTER the shared INPUT classes or px-3 silently wins and the icon sits on the text. */}
-                                <Search className="w-4 h-4 absolute left-6 top-1/2 -translate-y-1/2 text-[#9a9a9a] pointer-events-none" />
+                                <Search className="w-4 h-4 absolute left-6 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
                                 <input value={listFilter} onChange={e => setListFilter(e.target.value)} placeholder={t('searchChats')}
                                     className={cn(INPUT, 'w-full pl-9')} />
                             </div>
-                            <div className="px-4 pb-2 text-xs text-[#9a9a9a] flex items-center justify-between gap-2">
+                            <div className="px-4 pb-2 text-xs text-gray-500 flex items-center justify-between gap-2">
                                 <span>{t('chatsHeader', { count: filtered.length })}</span>
                                 {waiting.length > 0 ? (
                                     <button type="button" onClick={jumpToWaiting} title={t('jumpWaiting')}
-                                        className="text-[#e0b866] hover:underline truncate">{t('waitsHeader', { count: waiting.length })}</button>
+                                        className="text-amber-700 hover:underline truncate">{t('waitsHeader', { count: waiting.length })}</button>
                                 ) : <span>{t('newestFirst')}</span>}
                             </div>
                         </div>
                         {loading && chats.length === 0 ? (
-                            <div className="p-4 text-sm text-[#9a9a9a]">{t('loading')}</div>
+                            <div className="p-4 text-sm text-gray-500">{t('loading')}</div>
                         ) : loadFailed ? (
-                            <div className="p-4 text-sm text-[#e08c8c]">{t('couldNotLoad')}</div>
+                            <div className="p-4 text-sm text-red-600">{t('couldNotLoad')}</div>
                         ) : filtered.length === 0 ? (
-                            <div className="p-4 text-sm text-[#9a9a9a]">{t('noChats')}</div>
+                            <div className="p-4 text-sm text-gray-500">{t('noChats')}</div>
                         ) : filtered.map((c) => (
                             <button key={c.id} type="button" onClick={() => onSelect(c.id)}
-                                className={cn('relative w-full text-left px-4 py-2.5 border-b border-[#2e2e2e]',
-                                    selectedId === c.id ? 'bg-[#2a2a2a]' : 'hover:bg-[#262626]')}>
+                                className={cn('relative w-full text-left px-4 py-2.5 border-b border-gray-200',
+                                    selectedId === c.id ? SFC_ACTIVE : SFC_HOVER)}>
                                 <div className="flex items-center gap-3">
                                     <Avatar label={c.label} url={c.avatarUrl} size="sm" />
                                     <div className="min-w-0 flex-1">
                                         <div className="flex justify-between gap-2 text-[13px]">
                                             <span className="font-semibold truncate" title={c.id}>{c.label}</span>
-                                            <span className="text-[#9a9a9a] flex-shrink-0">{fmtWhen(c.ts)}</span>
+                                            <span className="text-gray-500 flex-shrink-0">{fmtWhen(c.ts)}</span>
                                         </div>
-                                        <div className="text-xs text-[#9a9a9a] truncate pr-20 min-h-[1rem]">{c.preview || ''}</div>
+                                        <div className="text-xs text-gray-500 truncate pr-20 min-h-[1rem]">{c.preview || ''}</div>
                                         <StateChips unread={unreadOf(c)} waits={waitsOf(c)} waitsReason={c.waitsReason}
                                             answeredByAgent={c.answeredByAgent} done={c.done} className="pr-20" />
                                     </div>
@@ -553,11 +570,11 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                     <section className="flex flex-col min-w-0 min-h-0">
                         {banner}
                         {!selected ? (
-                            <div className="flex-1 grid place-items-center text-sm text-[#9a9a9a]">{t('selectChat')}</div>
+                            <div className="flex-1 grid place-items-center text-sm text-gray-500">{t('selectChat')}</div>
                         ) : (
                             <div className="flex-1 flex max-md:flex-col min-w-0 min-h-0">
                             <div className="flex-1 flex flex-col min-w-0 min-h-0">
-                                <div className="flex items-center gap-3 px-5 py-2.5 border-b border-[#2e2e2e] shrink-0 flex-wrap">
+                                <div className="flex items-center gap-3 px-5 py-2.5 border-b border-gray-200 shrink-0 flex-wrap">
                                     <Avatar label={selected.label} url={selected.avatarUrl} size="md" />
                                     <div className="min-w-0 flex-1">
                                         <div className="font-semibold flex items-center gap-2 min-w-0">
@@ -566,23 +583,23 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                             <span className={cn('text-[11px] px-1.5 rounded-md font-normal whitespace-nowrap', selected.badge.cls)}>{selected.badge.label}</span>
                                             {waitsOf(selected) && <span className="font-normal"><WaitsChip reason={selected.waitsReason} /></span>}
                                         </div>
-                                        <div className="text-xs text-[#9a9a9a] truncate">{selected.subline}</div>
+                                        <div className="text-xs text-gray-500 truncate">{selected.subline}</div>
                                     </div>
                                     {conversationExtra?.(selected)}
                                     <div className="flex items-center gap-1.5">
                                         {chatSearch.trim() !== '' && (
                                             <>
-                                                <span className="text-xs text-[#9a9a9a] tabular-nums">
+                                                <span className="text-xs text-gray-500 tabular-nums">
                                                     {searchMatches.length === 0 ? '0 / 0' : `${Math.min(chatSearchIdx, searchMatches.length - 1) + 1} / ${searchMatches.length}`}
                                                 </span>
                                                 <button type="button" onClick={() => setChatSearchIdx((i) => (i - 1 + searchMatches.length) % searchMatches.length)} disabled={searchMatches.length === 0}
-                                                    className="p-1 rounded hover:bg-[#262626] text-[#9a9a9a] disabled:opacity-40" title={t('prevMatch')}><ChevronUp className="w-4 h-4" /></button>
+                                                    className={cn(SFC_HOVER, 'p-1 rounded text-gray-500 disabled:opacity-40')} title={t('prevMatch')}><ChevronUp className="w-4 h-4" /></button>
                                                 <button type="button" onClick={() => setChatSearchIdx((i) => (i + 1) % searchMatches.length)} disabled={searchMatches.length === 0}
-                                                    className="p-1 rounded hover:bg-[#262626] text-[#9a9a9a] disabled:opacity-40" title={t('nextMatch')}><ChevronDown className="w-4 h-4" /></button>
+                                                    className={cn(SFC_HOVER, 'p-1 rounded text-gray-500 disabled:opacity-40')} title={t('nextMatch')}><ChevronDown className="w-4 h-4" /></button>
                                             </>
                                         )}
                                         <div className="relative">
-                                            <Search className="w-4 h-4 text-[#9a9a9a] absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                            <Search className="w-4 h-4 text-gray-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                                             <input type="text" value={chatSearch} onChange={(e) => setChatSearch(e.target.value)}
                                                 onKeyDown={(e) => {
                                                     if (e.key === 'Enter' && searchMatches.length > 0) {
@@ -594,22 +611,22 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                                 className={cn(INPUT, 'w-48 pl-8 pr-2')} />
                                         </div>
                                     </div>
-                                    {conversationNote && <p className="w-full text-xs text-[#e08c8c]">{conversationNote}</p>}
+                                    {conversationNote && <p className="w-full text-xs text-red-600">{conversationNote}</p>}
                                     {selected.waits && selected.waitsReason === 'owner_asked' && (
-                                        <p className="w-full text-xs text-[#e0b866]">{t('waitsOwnerAsked')}</p>
+                                        <p className="w-full text-xs text-amber-700">{t('waitsOwnerAsked')}</p>
                                     )}
                                     {selected.waits && selected.waitsReason === 'unanswered' && (
-                                        <p className="w-full text-xs text-[#e0b866]">{t('waitsUnanswered', { name: selected.label })}</p>
+                                        <p className="w-full text-xs text-amber-700">{t('waitsUnanswered', { name: selected.label })}</p>
                                     )}
                                 </div>
-                                <div ref={inlineChatRef} className="flex-1 min-h-0 overflow-y-auto bg-[#151515] p-5 flex flex-col gap-2.5">
+                                <div ref={inlineChatRef} className={cn(SFC_CANVAS, 'flex-1 min-h-0 overflow-y-auto p-5 flex flex-col gap-2.5')}>
                                     {conversationTop && !(historyLoading && sessionHistory.length === 0) && (
                                         <div className="self-center">{conversationTop(selected)}</div>
                                     )}
                                     {historyLoading && sessionHistory.length === 0 ? (
-                                        <p className="text-sm text-[#9a9a9a]">{t('loadingHistory')}</p>
+                                        <p className="text-sm text-gray-500">{t('loadingHistory')}</p>
                                     ) : chatMessages.length === 0 ? (
-                                        <p className="text-sm text-[#9a9a9a] self-center">{t('noMessagesInChat')}</p>
+                                        <p className="text-sm text-gray-500 self-center">{t('noMessagesInChat')}</p>
                                     ) : (
                                         <ConversationBubbles messages={chatMessages} iconClass={iconClass} query={chatSearch.trim()} currentMatch={currentMatch} />
                                     )}
@@ -621,7 +638,7 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                                     const compose = composeBar?.(selected);
                                     if (compose) return compose;
                                     return (
-                                <div className="px-5 py-2 border-t border-[#2e2e2e] text-xs text-[#9a9a9a] flex justify-between gap-3 flex-wrap shrink-0">
+                                <div className="px-5 py-2 border-t border-gray-200 text-xs text-gray-500 flex justify-between gap-3 flex-wrap shrink-0">
                                     <span className="min-w-0 truncate">{selected.footer}</span>
                                     <span className="shrink-0">
                                         {t('messagesCount', { count: chatMessages.length })}
@@ -638,7 +655,7 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                             {(() => {
                                 const column = aside?.(selected);
                                 return column ? (
-                                    <aside className="w-80 shrink-0 border-l border-[#2e2e2e] bg-[#181818] flex flex-col min-h-0 max-md:w-full max-md:border-l-0 max-md:border-t max-md:max-h-[45vh]">
+                                    <aside className={cn(SFC_WINDOW, 'w-80 shrink-0 border-l border-gray-200 flex flex-col min-h-0 max-md:w-full max-md:border-l-0 max-md:border-t max-md:max-h-[45vh]')}>
                                         {column}
                                     </aside>
                                 ) : null;
@@ -649,10 +666,10 @@ export default function ChannelDashboardShell(props: ChannelDashboardShellProps)
                 </main>
 
                 {settingsOpen && (
-                    <div className="absolute inset-0 z-20 bg-[#181818] flex flex-col">
-                        <div className="flex items-center justify-between px-5 py-3 border-b border-[#2e2e2e]">
+                    <div className={cn(SFC_WINDOW, 'absolute inset-0 z-20 flex flex-col')}>
+                        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
                             <h2 className="text-sm font-semibold flex items-center gap-2"><Settings className="w-4 h-4" /> {settingsTitle}</h2>
-                            <button type="button" onClick={() => onSettingsOpenChange(false)} title={t('close')} className="p-1.5 rounded-md hover:bg-[#262626]"><X className="w-4 h-4" /></button>
+                            <button type="button" onClick={() => onSettingsOpenChange(false)} title={t('close')} className={cn(SFC_HOVER, 'p-1.5 rounded-md')}><X className="w-4 h-4" /></button>
                         </div>
                         <div className="flex-1 overflow-y-auto px-5 py-4 grid grid-cols-1 md:grid-cols-2 gap-4 content-start">
                             {settingsContent}

@@ -21,7 +21,14 @@ import {
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import { MailAccounts } from '@/components/connections/MailAccounts';
-import { WaitsChip } from '@/components/connections/ChannelDashboardShell';
+import {
+    SFC_ACTIVE, SFC_CHROME, SFC_FILL, SFC_HOVER, SFC_RAISED, SFC_WINDOW, WaitsChip,
+} from '@/components/connections/ChannelDashboardShell';
+
+// A row hover one step above the window, in the direction each theme means by "lift":
+// white in light, the chrome tone in dark. SFC_CHROME's own pair as a hover, which the
+// shared set has no twin for; SFC_HOVER is the control fill's hover, a step further up.
+const HOVER_CHROME = 'hover:bg-white dark:hover:bg-[#1f1f1f]';
 
 const api = (p: string) => `${getApiBase()}${p.startsWith('/') ? p : `/${p}`}`;
 const jfetch = async (p: string, init?: RequestInit) => {
@@ -131,8 +138,8 @@ function AuthBadge({ auth, compact }: { auth?: AuthSummary; compact?: boolean })
     if (kind && (MACHINE_KINDS as readonly string[]).includes(kind)) {
         const label = t(`auth.machine.${kind}`);
         return compact
-            ? <Bot className="w-3.5 h-3.5 flex-shrink-0 text-[#9a9a9a]" aria-label={label} />
-            : <span className="inline-flex items-center gap-1 text-[11px] text-[#9a9a9a]"><Bot className="w-3.5 h-3.5" />{label}</span>;
+            ? <Bot className="w-3.5 h-3.5 flex-shrink-0 text-gray-500" aria-label={label} />
+            : <span className="inline-flex items-center gap-1 text-[11px] text-gray-500"><Bot className="w-3.5 h-3.5" />{label}</span>;
     }
     if (auth.state === 'verified') {
         // The domain the verdict rests on: the aligned DKIM signer for DKIM, the From domain for
@@ -142,19 +149,19 @@ function AuthBadge({ auth, compact }: { auth?: AuthSummary; compact?: boolean })
         const domain = method === 'dkim' ? (auth.dkim_domain || auth.from_domain || '') : (auth.from_domain || '');
         const label = t('auth.verified', { method: method.toUpperCase(), domain });
         return compact
-            ? <ShieldCheck className="w-3.5 h-3.5 flex-shrink-0 text-[#7bbf7b]" aria-label={label} />
-            : <span className="inline-flex items-center gap-1 text-[11px] text-[#7bbf7b]"><ShieldCheck className="w-3.5 h-3.5" />{label}</span>;
+            ? <ShieldCheck className="w-3.5 h-3.5 flex-shrink-0 text-green-600" aria-label={label} />
+            : <span className="inline-flex items-center gap-1 text-[11px] text-green-600"><ShieldCheck className="w-3.5 h-3.5" />{label}</span>;
     }
     if (auth.state === 'via') {
         const label = t('auth.via', { domain: auth.via_domain || '' });
         return compact
-            ? <Shield className="w-3.5 h-3.5 flex-shrink-0 text-[#9a9a9a]" aria-label={label} />
-            : <span className="inline-flex items-center gap-1 text-[11px] text-[#9a9a9a]"><Shield className="w-3.5 h-3.5" />{label}</span>;
+            ? <Shield className="w-3.5 h-3.5 flex-shrink-0 text-gray-500" aria-label={label} />
+            : <span className="inline-flex items-center gap-1 text-[11px] text-gray-500"><Shield className="w-3.5 h-3.5" />{label}</span>;
     }
     if (auth.state === 'unverified') {
         const spoof = (auth.flags || []).includes('own_domain_spoof');
         const label = spoof ? t('auth.spoof') : t('auth.unverified');
-        const color = spoof ? 'text-[#e08c8c]' : 'text-[#d4a24e]';
+        const color = spoof ? 'text-red-600' : 'text-amber-600';
         return compact
             ? <ShieldAlert className={cn('w-3.5 h-3.5 flex-shrink-0', color)} aria-label={label} />
             : <span className={cn('inline-flex items-center gap-1 text-[11px]', color)}><ShieldAlert className="w-3.5 h-3.5" />{label}</span>;
@@ -353,22 +360,22 @@ function ComposeModal({ prefill, accounts, threadId, anchorPk, composerEnabled, 
         if ((to.trim() || body.trim()) && !window.confirm(t('compose.discardConfirm'))) return;
         onClose();
     }, [to, body, onClose, t]);
-    const field = "w-full bg-[#262626] border border-[#2e2e2e] rounded-lg px-3 py-1.5 text-sm outline-none focus:border-[#444]";
+    const field = `w-full ${SFC_FILL} border border-gray-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-gray-400`;
     return (
         <div className="fixed inset-0 z-50 bg-black/50 grid place-items-center p-4">
-            <div className="w-full max-w-5xl bg-[#1f1f1f] border border-[#2e2e2e] rounded-xl shadow-2xl flex flex-col max-h-[92vh]">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-[#2e2e2e]">
+            <div className={`w-full max-w-5xl ${SFC_CHROME} border border-gray-200 rounded-xl shadow-2xl flex flex-col max-h-[92vh]`}>
+                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
                     <h2 className="font-semibold text-[15px]">{t('compose.title')}</h2>
                     <div className="flex items-center gap-1">
                         {/* Read the draft the way the recipient will: mail is a light
                             medium, and a quoted thread on a dark editor is hard to
                             proof-read against what actually lands in their inbox. */}
                         <button type="button" onClick={() => setPaper(p => !p)} title={t('compose.paperToggle')}
-                            className={cn("p-1.5 rounded-lg text-[#9a9a9a] hover:text-white",
-                                paper && "bg-[#2e2e2e] text-white")}>
+                            className={cn("p-1.5 rounded-lg text-gray-500 hover:text-gray-900",
+                                paper && "bg-gray-200 text-gray-900")}>
                             {paper ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
                         </button>
-                        <button type="button" onClick={requestClose} className="p-1.5 text-[#9a9a9a] hover:text-white"><X className="w-4 h-4" /></button>
+                        <button type="button" onClick={requestClose} className="p-1.5 text-gray-500 hover:text-gray-900"><X className="w-4 h-4" /></button>
                     </div>
                 </div>
 
@@ -388,26 +395,29 @@ function ComposeModal({ prefill, accounts, threadId, anchorPk, composerEnabled, 
                             the whole compose box is. */}
                         <textarea value={body} onChange={e => setBody(e.target.value)} placeholder={t('compose.body')}
                             readOnly={assistBusy}
-                            // Inline style, not classes: this element sits inside a
-                            // dark-themed tree and a utility class for the light look
-                            // is one cascade surprise away from applying the text
-                            // colour without the background - which reads as "the
-                            // toggle does nothing" while actually hiding the draft.
+                            // Paper states its colours inline, all three at once, so the
+                            // recipient's light document cannot inherit half of the
+                            // editor's look - an inline background with a folded text
+                            // colour is what reads as "the toggle does nothing" while
+                            // actually hiding the draft. The editor look takes the theme
+                            // from the classes instead, or it would stay dark in a light
+                            // window the way the whole client used to.
                             style={paper
                                 ? { background: '#ffffff', color: '#222222', borderColor: '#d8d8d8' }
-                                : { background: '#262626', borderColor: '#2e2e2e' }}
-                            className="w-full flex-1 min-h-[27.5rem] border rounded-lg px-3 py-2 text-sm outline-none font-mono resize-none" />
-                        {error && <div className="text-[#e08c8c] text-sm">{error}</div>}
+                                : undefined}
+                            className={cn("w-full flex-1 min-h-[27.5rem] border rounded-lg px-3 py-2 text-sm outline-none font-mono resize-none",
+                                !paper && `${SFC_FILL} border-gray-200`)} />
+                        {error && <div className="text-red-600 text-sm">{error}</div>}
                     </div>
 
                     {/* ── the Mail Composer ───────────────────────────────────── */}
                     {composerEnabled && (
-                        <aside className="md:w-80 shrink-0 border-t md:border-t-0 md:border-l border-[#2e2e2e] p-4 flex flex-col gap-3 overflow-y-auto">
+                        <aside className="md:w-80 shrink-0 border-t md:border-t-0 md:border-l border-gray-200 p-4 flex flex-col gap-3 overflow-y-auto">
                             <div className="flex items-center gap-2 text-[13px] font-semibold shrink-0">
                                 <Sparkles className="w-4 h-4 text-[#e05d44]" />{t('composer.panelTitle')}
                                 {turns.length > 0 && !assistBusy && (
                                     <button type="button" onClick={() => { setTurns([]); setAssistMeta(null); }}
-                                        className="ml-auto text-[11px] font-normal text-[#7a7a7a] hover:text-white">
+                                        className="ml-auto text-[11px] font-normal text-gray-400 hover:text-gray-900">
                                         {t('composer.newChat')}
                                     </button>
                                 )}
@@ -419,23 +429,23 @@ function ComposeModal({ prefill, accounts, threadId, anchorPk, composerEnabled, 
                                 the actual exchange off screen. */}
                             <div className="flex-1 min-h-[8rem] overflow-y-auto space-y-2 pr-0.5">
                                 {turns.length === 0 && !assistBusy && (
-                                    <p className="text-[#7a7a7a] text-xs leading-relaxed">{t('composer.panelHint')}</p>
+                                    <p className="text-gray-400 text-xs leading-relaxed">{t('composer.panelHint')}</p>
                                 )}
                                 {turns.map((turn, i) => turn.role === 'user' ? (
-                                    <div key={i} className="ml-6 px-3 py-1.5 rounded-lg bg-[#2e2e2e] text-sm break-words">{turn.content}</div>
+                                    <div key={i} className="ml-6 px-3 py-1.5 rounded-lg bg-gray-200 text-sm break-words">{turn.content}</div>
                                 ) : (
-                                    <div key={i} className="mr-6 px-3 py-1.5 rounded-lg bg-[#262626] border border-[#2e2e2e] text-xs text-[#9a9a9a] leading-relaxed">
+                                    <div key={i} className={`mr-6 px-3 py-1.5 rounded-lg ${SFC_FILL} border border-gray-200 text-xs text-gray-500 leading-relaxed`}>
                                         {t('composer.inserted')}
                                     </div>
                                 ))}
                                 {assistBusy && (
-                                    <div className="mr-6 px-3 py-1.5 rounded-lg bg-[#262626] border border-[#2e2e2e] text-xs text-[#9a9a9a] flex items-center gap-1.5">
+                                    <div className={`mr-6 px-3 py-1.5 rounded-lg ${SFC_FILL} border border-gray-200 text-xs text-gray-500 flex items-center gap-1.5`}>
                                         <Loader2 className="w-3 h-3 animate-spin" />{t('composer.working')}
                                     </div>
                                 )}
-                                {assistNote && <div className="text-[#e0b84c] text-xs leading-relaxed">{assistNote}</div>}
+                                {assistNote && <div className="text-amber-600 text-xs leading-relaxed">{assistNote}</div>}
                                 {assistMeta && !assistNote && !assistBusy && (
-                                    <div className="text-[#7a7a7a] text-[11px] leading-relaxed">
+                                    <div className="text-gray-400 text-[11px] leading-relaxed">
                                         {t('composer.readCount', { used: assistMeta.included, total: assistMeta.total })}
                                         {assistMeta.hidden_suspicious > 0 &&
                                             <> {t('composer.hidSuspicious', { n: assistMeta.hidden_suspicious })}</>}
@@ -466,13 +476,13 @@ function ComposeModal({ prefill, accounts, threadId, anchorPk, composerEnabled, 
                                     className={cn(field, "resize-none")} />
                                 {assistBusy && (
                                     <button type="button" onClick={() => abortRef.current?.abort()}
-                                        className="w-full px-3 py-1.5 rounded-lg text-sm bg-[#262626] border border-[#2e2e2e] flex items-center justify-center gap-1.5">
+                                        className={`w-full px-3 py-1.5 rounded-lg text-sm ${SFC_FILL} border border-gray-200 flex items-center justify-center gap-1.5`}>
                                         <Loader2 className="w-3.5 h-3.5 animate-spin" />{t('composer.stop')}
                                     </button>
                                 )}
                                 {beforeAssist !== null && beforeAssist !== body && !assistBusy && (
                                     <button type="button" onClick={() => { setBody(beforeAssist); setBeforeAssist(null); }}
-                                        className="w-full px-3 py-1.5 rounded-lg text-sm text-[#9a9a9a] hover:text-white border border-[#2e2e2e]">
+                                        className="w-full px-3 py-1.5 rounded-lg text-sm text-gray-500 hover:text-gray-900 border border-gray-200">
                                         {t('composer.undo')}
                                     </button>
                                 )}
@@ -481,9 +491,9 @@ function ComposeModal({ prefill, accounts, threadId, anchorPk, composerEnabled, 
                     )}
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-t border-[#2e2e2e]">
+                <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-t border-gray-200">
                     <button type="button" onClick={requestClose}
-                        className="px-3 py-1.5 rounded-lg text-sm text-[#9a9a9a] hover:text-white">{t('compose.cancel')}</button>
+                        className="px-3 py-1.5 rounded-lg text-sm text-gray-500 hover:text-gray-900">{t('compose.cancel')}</button>
                     <button type="button" onClick={send} disabled={sending || !to.trim() || !account}
                         className="px-4 py-1.5 rounded-lg text-sm bg-[#e05d44] text-white disabled:opacity-50">
                         {sending ? t('compose.sending') : t('compose.send')}
@@ -492,12 +502,12 @@ function ComposeModal({ prefill, accounts, threadId, anchorPk, composerEnabled, 
                         <div className="ml-auto flex items-center gap-2">
                             <button type="button" onClick={() => runComposer('draft')} disabled={assistBusy || threadId === null}
                                 title={threadId === null ? t('composer.needsThread') : undefined}
-                                className="px-3 py-1.5 rounded-lg text-sm bg-[#262626] border border-[#2e2e2e] hover:border-[#444] disabled:opacity-40 flex items-center gap-1.5">
+                                className={`px-3 py-1.5 rounded-lg text-sm ${SFC_FILL} border border-gray-200 hover:border-gray-400 disabled:opacity-40 flex items-center gap-1.5`}>
                                 <Sparkles className="w-3.5 h-3.5" />{t('composer.draft')}
                             </button>
                             <button type="button" onClick={() => runComposer('rewrite')}
                                 disabled={assistBusy || !splitDraft(body)[0].trim()}
-                                className="px-3 py-1.5 rounded-lg text-sm bg-[#262626] border border-[#2e2e2e] hover:border-[#444] disabled:opacity-40">
+                                className={`px-3 py-1.5 rounded-lg text-sm ${SFC_FILL} border border-gray-200 hover:border-gray-400 disabled:opacity-40`}>
                                 {t('composer.rewrite')}
                             </button>
                         </div>
@@ -540,9 +550,9 @@ function MessageView({ msg, expanded, onToggle, onRelabeled }: {
     if (!expanded) {
         return (
             <button type="button" onClick={onToggle}
-                className="w-full text-left px-5 py-2.5 border-b border-[#2e2e2e] text-[#9a9a9a] text-sm hover:bg-[#1f1f1f] flex items-center gap-2">
+                className={`w-full text-left px-5 py-2.5 border-b border-gray-200 text-gray-500 text-sm ${HOVER_CHROME} flex items-center gap-2`}>
                 <ChevronRight className="w-3.5 h-3.5" />
-                <span className="font-medium text-[#c8c8c8] truncate max-w-[220px]">{msg.from_addr.split('<')[0].trim() || msg.from_addr}</span>
+                <span className="font-medium text-gray-700 truncate max-w-[220px]">{msg.from_addr.split('<')[0].trim() || msg.from_addr}</span>
                 <span className="truncate flex-1">{msg.snippet}</span>
                 <span className="flex-shrink-0">{fmtWhen(msg.date_ts || msg.internaldate_ts)}</span>
             </button>
@@ -550,64 +560,64 @@ function MessageView({ msg, expanded, onToggle, onRelabeled }: {
     }
     const regularAtts = (body?.attachments || []).filter(a => !a.is_inline);
     return (
-        <div className="border-b border-[#2e2e2e]">
+        <div className="border-b border-gray-200">
             <button type="button" onClick={onToggle} className="w-full text-left px-5 pt-4 pb-1">
                 <div className="text-sm flex items-center flex-wrap gap-x-1">
                     <span className="font-semibold">{msg.from_addr.split('<')[0].trim() || msg.from_addr}</span>
-                    <span className="text-[#9a9a9a]"> · {t('toMe', { name: msg.to_addrs.split('<')[0].trim() || '' })} · {fmtWhen(msg.date_ts || msg.internaldate_ts)} · {msg.folder_name}</span>
+                    <span className="text-gray-500"> · {t('toMe', { name: msg.to_addrs.split('<')[0].trim() || '' })} · {fmtWhen(msg.date_ts || msg.internaldate_ts)} · {msg.folder_name}</span>
                     {msg.answered_at && (
-                        <span className="inline-flex items-center gap-1 text-[#7bbf7b] font-medium">
+                        <span className="inline-flex items-center gap-1 text-green-600 font-medium">
                             · <Reply className="w-3.5 h-3.5" />
                             {fmtDateStr(msg.answered_at) ? t('answeredOn', { when: fmtDateStr(msg.answered_at) }) : t('answered')}
                         </span>
                     )}
                     {msg.auth && (msg.auth.state !== 'unknown' || msg.auth.machine_kind) && (
-                        <span className="inline-flex items-center gap-1"><span className="text-[#9a9a9a]">·</span><AuthBadge auth={msg.auth} /></span>
+                        <span className="inline-flex items-center gap-1"><span className="text-gray-500">·</span><AuthBadge auth={msg.auth} /></span>
                     )}
                 </div>
             </button>
             {msg.suspicious_for_agent && (
-                <div className="mx-5 my-2 px-3 py-2 rounded-lg bg-[#2b1a1a] border border-[#5a2b2b] text-[#e08c8c] text-[13px] flex items-center gap-2">
+                <div className="mx-5 my-2 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-600 text-[13px] flex items-center gap-2">
                     <AlertTriangle className="w-4 h-4 flex-shrink-0" />
                     <span className="flex-1">{t('suspiciousWarning')}</span>
                 </div>
             )}
             <div className="px-5 pt-1 pb-1 flex items-center gap-1.5">
-                <Tag className="w-3.5 h-3.5 text-[#9a9a9a]" />
+                <Tag className="w-3.5 h-3.5 text-gray-500" />
                 <label className="sr-only" htmlFor={`cat-${msg.id}`}>{t('categoryLabel')}</label>
                 <select id={`cat-${msg.id}`} value={(STD_CATEGORIES as readonly string[]).includes(cat) ? cat : '__custom'}
                     onChange={e => relabel(e.target.value)} title={t('categoryLabel')}
-                    className="bg-[#262626] border border-[#2e2e2e] rounded-md text-[11px] px-1.5 py-0.5 text-[#c8c8c8] hover:border-[#444] focus:outline-none">
+                    className={`${SFC_FILL} border border-gray-200 rounded-md text-[11px] px-1.5 py-0.5 text-gray-700 hover:border-gray-400 focus:outline-none`}>
                     {STD_CATEGORIES.map(c => <option key={c} value={c}>{catLabel(c)}</option>)}
                     {!(STD_CATEGORIES as readonly string[]).includes(cat) && (
                         <option value={cat}>{catDisplay(cat)}</option>
                     )}
                 </select>
             </div>
-            {loading && <div className="px-5 py-6"><Loader2 className="w-5 h-5 animate-spin text-[#9a9a9a]" /></div>}
+            {loading && <div className="px-5 py-6"><Loader2 className="w-5 h-5 animate-spin text-gray-500" /></div>}
             {body && body.blocked_remote > 0 && (
-                <div className="mx-5 my-2 px-3 py-2 rounded-lg bg-[#2b2417] border border-[#4a3b1e] text-[#d4a24e] text-[13px] flex items-center gap-2">
+                <div className="mx-5 my-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-600 text-[13px] flex items-center gap-2">
                     <ShieldCheck className="w-4 h-4 flex-shrink-0" />
                     <span className="flex-1">{t('remoteBlocked', { count: body.blocked_remote })}</span>
                     <button type="button" onClick={() => setAllowRemote(true)}
-                        className="px-2 py-1 rounded-md border border-[#4a3b1e] hover:bg-[#332a1a] flex-shrink-0">
+                        className="px-2 py-1 rounded-md border border-amber-200 hover:bg-amber-100 flex-shrink-0">
                         {t('loadImages')}
                     </button>
                 </div>
             )}
             {body && !body.cached && (
-                <div className="mx-5 my-2 px-3 py-2 rounded-lg bg-[#262626] text-[#9a9a9a] text-[13px]">{t('notCached')}</div>
+                <div className={`mx-5 my-2 px-3 py-2 rounded-lg ${SFC_FILL} text-gray-500 text-[13px]`}>{t('notCached')}</div>
             )}
             <div className="px-5 pb-3 pt-1">
                 {body?.html
                     ? <BodyFrame html={body.html} />
-                    : <pre className="whitespace-pre-wrap font-sans text-sm text-[#e8e8e8] bg-[#1f1f1f] rounded-lg p-4">{body?.text || msg.snippet || t('noContent')}</pre>}
+                    : <pre className={`whitespace-pre-wrap font-sans text-sm text-gray-900 ${SFC_CHROME} rounded-lg p-4`}>{body?.text || msg.snippet || t('noContent')}</pre>}
             </div>
             {regularAtts.length > 0 && (
                 <div className="flex flex-wrap gap-2 px-5 pb-4">
                     {regularAtts.map(a => (
                         <a key={a.id} href={api(`api/mail/messages/${msg.id}/parts/${a.part_id}`)}
-                            className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-[#262626] border border-[#2e2e2e] hover:border-[#444]">
+                            className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg ${SFC_FILL} border border-gray-200 hover:border-gray-400`}>
                             <Paperclip className="w-3.5 h-3.5" />
                             {a.filename || t('attachment')} {a.size_bytes ? `· ${fmtSize(a.size_bytes)}` : ''}
                         </a>
@@ -934,17 +944,17 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
     }, [sentNotice]);
 
     if (status === null) {
-        return <div className="h-full grid place-items-center bg-[#181818] text-[#9a9a9a]"><Loader2 className="w-6 h-6 animate-spin" /></div>;
+        return <div className={`h-full grid place-items-center ${SFC_WINDOW} text-gray-500`}><Loader2 className="w-6 h-6 animate-spin" /></div>;
     }
     if (statusFailed) {
         return (
-            <div className="h-full grid place-items-center bg-[#181818] text-[#e8e8e8]">
+            <div className={`h-full grid place-items-center ${SFC_WINDOW} text-gray-900`}>
                 <div className="max-w-md text-center space-y-3 p-6">
                     <AlertTriangle className="w-10 h-10 mx-auto text-[#e05d44]" />
                     <h1 className="text-lg font-semibold">{t('statusFailedTitle')}</h1>
-                    <p className="text-sm text-[#9a9a9a]">{t('statusFailedBody')}</p>
+                    <p className="text-sm text-gray-500">{t('statusFailedBody')}</p>
                     <button type="button" onClick={() => loadStatus()}
-                        className="px-3 py-1.5 rounded-lg bg-[#262626] border border-[#2e2e2e] hover:border-[#444] text-sm">
+                        className={`px-3 py-1.5 rounded-lg ${SFC_FILL} border border-gray-200 hover:border-gray-400 text-sm`}>
                         {t('retry')}
                     </button>
                 </div>
@@ -965,8 +975,8 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
     const newestMsg = threadMsgs[threadMsgs.length - 1];
 
     return (
-        <div className="relative h-full flex flex-col bg-[#181818] text-[#e8e8e8]">
-            <header className="flex items-center gap-3 px-4 py-2.5 border-b border-[#2e2e2e] bg-[#1f1f1f]">
+        <div className={`relative h-full flex flex-col ${SFC_WINDOW} text-gray-900`}>
+            <header className={`flex items-center gap-3 px-4 py-2.5 border-b border-gray-200 ${SFC_CHROME}`}>
                 <div className="w-8 h-8 rounded-lg bg-[#e05d44] grid place-items-center"><Mail className="w-4 h-4 text-white" /></div>
                 <h1 className="font-semibold text-[15px]">{t('title')}</h1>
                 <button type="button" onClick={() => openCompose('new')}
@@ -975,56 +985,56 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                 </button>
                 <div className="flex-1 max-w-xl ml-auto flex gap-2">
                     <div className="flex-1 relative">
-                        <Search className="w-4 h-4 absolute left-3 top-2.5 text-[#9a9a9a]" />
+                        <Search className="w-4 h-4 absolute left-3 top-2.5 text-gray-500" />
                         <input value={query} onChange={e => setQuery(e.target.value)}
                             onKeyDown={e => { if (e.key === 'Enter') runSearch(); if (e.key === 'Escape') { setQuery(''); setSearchRows(null); } }}
                             placeholder={t('searchPlaceholder')}
-                            className="w-full bg-[#262626] border border-[#2e2e2e] rounded-lg pl-9 pr-3 py-1.5 text-sm outline-none focus:border-[#444]" />
+                            className={`w-full ${SFC_FILL} border border-gray-200 rounded-lg pl-9 pr-3 py-1.5 text-sm outline-none focus:border-gray-400`} />
                     </div>
                     <button type="button" onClick={runSync} disabled={syncing}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#262626] border border-[#2e2e2e] text-sm hover:border-[#444] disabled:opacity-50">
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg ${SFC_FILL} border border-gray-200 text-sm hover:border-gray-400 disabled:opacity-50`}>
                         <RefreshCw className={cn('w-4 h-4', syncing && 'animate-spin')} /> {t('sync')}
                     </button>
                 </div>
                 <button type="button" onClick={() => setShowAccounts(true)} title={t('manageAccounts')}
-                    className="p-2 rounded-lg bg-[#262626] border border-[#2e2e2e] hover:border-[#444]">
+                    className={`p-2 rounded-lg ${SFC_FILL} border border-gray-200 hover:border-gray-400`}>
                     <Settings className="w-4 h-4" />
                 </button>
                 {onClose && (
                     <button type="button" onClick={onClose} title={t('close')}
-                        className="p-2 rounded-lg hover:bg-[#262626] text-[#9a9a9a] hover:text-white">
+                        className={`p-2 rounded-lg ${SFC_HOVER} text-gray-500 hover:text-gray-900`}>
                         <X className="w-4 h-4" />
                     </button>
                 )}
             </header>
 
             {failedSends.length > 0 && (
-                <div className="px-4 py-2 bg-[#3a1d1d] border-b border-[#5a2b2b] text-[#e08c8c] text-[13px] flex items-center gap-2">
+                <div className="px-4 py-2 bg-red-100 border-b border-red-200 text-red-600 text-[13px] flex items-center gap-2">
                     <AlertTriangle className="w-4 h-4 flex-shrink-0" />
                     <span className="flex-1 truncate">
                         {t('sendFailedBanner', { count: failedSends.length })}
                         {failedSends[0]?.subject ? ` (${failedSends[0].subject})` : ''}
                     </span>
                     <button type="button" onClick={() => resolveOutbox('retry')}
-                        className="px-2 py-1 rounded-md border border-[#5a2b2b] hover:bg-[#452020] flex-shrink-0">
+                        className="px-2 py-1 rounded-md border border-red-200 hover:bg-red-200 flex-shrink-0">
                         {t('sendRetry')}
                     </button>
                     <button type="button" onClick={() => resolveOutbox('discard')}
-                        className="px-2 py-1 rounded-md hover:bg-[#452020] flex-shrink-0">
+                        className="px-2 py-1 rounded-md hover:bg-red-200 flex-shrink-0">
                         {t('sendDiscard')}
                     </button>
                     <button type="button" onClick={() => setShowAccounts(true)}
-                        className="px-2 py-1 rounded-md hover:bg-[#452020] flex-shrink-0">
+                        className="px-2 py-1 rounded-md hover:bg-red-200 flex-shrink-0">
                         {t('manageAccounts')}
                     </button>
                 </div>
             )}
 
             <main className="flex-1 grid min-h-0" style={{ gridTemplateColumns: '220px 380px 1fr' }}>
-                <nav className="border-r border-[#2e2e2e] bg-[#1f1f1f] overflow-y-auto p-2">
+                <nav className={`border-r border-gray-200 ${SFC_CHROME} overflow-y-auto p-2`}>
                     <button type="button" onClick={() => setSel({ account: null, folder: 'INBOX' })}
                         className={cn('w-full text-left flex items-center gap-2 px-3 py-2 rounded-lg text-sm',
-                            sel.account === null ? 'bg-[#2a2a2a] font-semibold' : 'hover:bg-[#262626]')}>
+                            sel.account === null ? `${SFC_ACTIVE} font-semibold` : SFC_HOVER)}>
                         <Inbox className="w-4 h-4" /> {t('allInboxes')}
                     </button>
                     {(status.accounts || []).map(a => {
@@ -1033,9 +1043,9 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                             // re-consent hint so it never looks like a deleted account.
                             return (
                                 <div key={a.account_id} className="mt-3">
-                                    <div className="px-3 text-xs text-[#9a9a9a] truncate">{a.email} ({a.provider})</div>
+                                    <div className="px-3 text-xs text-gray-500 truncate">{a.email} ({a.provider})</div>
                                     <button type="button" onClick={() => setShowAccounts(true)}
-                                        className="mt-1 w-full text-left px-3 py-1.5 rounded-lg text-xs text-[#d4a24e] hover:bg-[#262626] flex items-center gap-1.5">
+                                        className={`mt-1 w-full text-left px-3 py-1.5 rounded-lg text-xs text-amber-600 ${SFC_HOVER} flex items-center gap-1.5`}>
                                         <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
                                         <span className="truncate">{t('accountNeedsReconsent')}</span>
                                     </button>
@@ -1053,20 +1063,20 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                                 onClick={() => setSel({ account: a.account_id, folder: f.name })}
                                 className={cn('w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm',
                                     sel.account === a.account_id && sel.folder === f.name
-                                        ? 'bg-[#2a2a2a] font-semibold' : 'hover:bg-[#262626]')}>
+                                        ? `${SFC_ACTIVE} font-semibold` : SFC_HOVER)}>
                                 <span className="truncate flex-1 text-left">
                                     {SPECIAL_KEYS[f.special_use || ''] ? t(`folders.${SPECIAL_KEYS[f.special_use || '']}`) : f.name}
                                 </span>
                                 {f.unread ? (
                                     <span className="flex-shrink-0 text-[11px] leading-[18px] px-1.5 rounded-full bg-[#e05d44] text-white">{f.unread}</span>
                                 ) : f.total ? (
-                                    <span className="flex-shrink-0 text-[11px] text-[#9a9a9a]">{f.total.toLocaleString()}</span>
+                                    <span className="flex-shrink-0 text-[11px] text-gray-500">{f.total.toLocaleString()}</span>
                                 ) : null}
                             </button>
                         );
                         return (
                             <div key={a.account_id} className="mt-3">
-                                <div className="px-3 text-xs text-[#9a9a9a] truncate">{a.email} ({a.provider})</div>
+                                <div className="px-3 text-xs text-gray-500 truncate">{a.email} ({a.provider})</div>
                                 {special.map(folderBtn)}
                                 {labels.length > 0 && (
                                     <>
@@ -1076,7 +1086,7 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                                                 if (next.has(a.account_id)) next.delete(a.account_id); else next.add(a.account_id);
                                                 return next;
                                             })}
-                                            className="w-full flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-[#9a9a9a] hover:bg-[#262626]">
+                                            className={`w-full flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-gray-500 ${SFC_HOVER}`}>
                                             <ChevronRight className={cn('w-3.5 h-3.5 transition-transform flex-shrink-0', open && 'rotate-90')} />
                                             <span className="truncate">{t('labelsSection', { count: labels.length })}</span>
                                         </button>
@@ -1088,83 +1098,83 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                     })}
                 </nav>
 
-                <section className="border-r border-[#2e2e2e] overflow-y-auto">
+                <section className="border-r border-gray-200 overflow-y-auto">
                     {/* Name the folder the list belongs to: without it a list that
                         failed to reload is indistinguishable from the selected
                         folder's real content. */}
-                    <div className="sticky top-0 z-10 px-4 py-2 bg-[#181818] border-b border-[#2e2e2e] text-xs text-[#9a9a9a] flex items-center justify-between gap-2">
+                    <div className={`sticky top-0 z-10 px-4 py-2 ${SFC_WINDOW} border-b border-gray-200 text-xs text-gray-500 flex items-center justify-between gap-2`}>
                         <span className="truncate">{searchRows !== null ? t('searchResults') : folderLabel}</span>
                         {searchRows === null && waiting.length > 0 && (
                             <button type="button" onClick={jumpToWaiting} title={tc('jumpWaiting')}
-                                className="text-[#e0b866] hover:underline truncate shrink-0">{tc('waitsHeader', { count: waiting.length })}</button>
+                                className="text-amber-700 hover:underline truncate shrink-0">{tc('waitsHeader', { count: waiting.length })}</button>
                         )}
                     </div>
                     {error && (
-                        <div className="m-3 px-3 py-2 rounded-lg bg-[#2b1a1a] border border-[#4a2222] text-[#e08c8c] text-[13px] flex items-center gap-2">
+                        <div className="m-3 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-600 text-[13px] flex items-center gap-2">
                             <AlertTriangle className="w-4 h-4" /> {error}
                         </div>
                     )}
-                    {listLoading && <div className="p-6 grid place-items-center"><Loader2 className="w-5 h-5 animate-spin text-[#9a9a9a]" /></div>}
+                    {listLoading && <div className="p-6 grid place-items-center"><Loader2 className="w-5 h-5 animate-spin text-gray-500" /></div>}
                     {!listLoading && searchRows !== null && (
                         searchRows.length === 0
-                            ? <div className="p-6 text-sm text-[#9a9a9a]">{t('noResults')}</div>
+                            ? <div className="p-6 text-sm text-gray-500">{t('noResults')}</div>
                             : searchRows.map(m => (
                                 <button key={m.id} type="button"
                                     onClick={() => { setActiveThread(null); setThreadMsgs([m]); setExpandedIds(new Set([m.id])); }}
-                                    className="w-full text-left px-4 py-2.5 border-b border-[#2e2e2e] hover:bg-[#1f1f1f]">
+                                    className={`w-full text-left px-4 py-2.5 border-b border-gray-200 ${HOVER_CHROME}`}>
                                     <div className="flex justify-between gap-2 text-[13px]">
                                         <span className="font-semibold truncate">{m.from_addr.split('<')[0].trim() || m.from_addr}</span>
-                                        <span className="text-[#9a9a9a] flex-shrink-0">{fmtWhen(m.date_ts || m.internaldate_ts)}</span>
+                                        <span className="text-gray-500 flex-shrink-0">{fmtWhen(m.date_ts || m.internaldate_ts)}</span>
                                     </div>
                                     <div className="text-[13px] truncate">{m.subject || t('noSubject')}</div>
-                                    <div className="text-xs text-[#9a9a9a] truncate">{m.snippet}</div>
+                                    <div className="text-xs text-gray-500 truncate">{m.snippet}</div>
                                 </button>
                             ))
                     )}
                     {!listLoading && searchRows === null && threads.length === 0 && (
-                        <div className="p-6 text-sm text-[#9a9a9a]">{t('noMessages')}</div>
+                        <div className="p-6 text-sm text-gray-500">{t('noMessages')}</div>
                     )}
                     {!listLoading && searchRows === null && threads.map(row => (
                         <div key={row.thread_id}
-                            className={cn('relative border-b border-[#2e2e2e] group',
-                                activeThread === row.thread_id ? 'bg-[#2a2a2a]' : 'hover:bg-[#1f1f1f]')}>
+                            className={cn('relative border-b border-gray-200 group',
+                                activeThread === row.thread_id ? SFC_ACTIVE : HOVER_CHROME)}>
                             <button type="button" onClick={() => openThread(row)} className="w-full text-left px-4 py-2.5">
                                 {row.unread_count > 0 && <span className="absolute left-1.5 top-4 w-2 h-2 rounded-full bg-[#e05d44]" />}
                                 <div className="flex justify-between gap-2 text-[13px]">
-                                    <span className={cn('truncate', row.unread_count > 0 ? 'font-bold text-white' : 'font-semibold')}>
+                                    <span className={cn('truncate', row.unread_count > 0 ? 'font-bold text-gray-900' : 'font-semibold')}>
                                         {row.from_addr.split('<')[0].trim() || row.from_addr}
                                     </span>
-                                    <span className="text-[#9a9a9a] flex-shrink-0">{fmtWhen(row.last_date_ts)}</span>
+                                    <span className="text-gray-500 flex-shrink-0">{fmtWhen(row.last_date_ts)}</span>
                                 </div>
-                                <div className={cn('text-[13px] truncate flex items-center gap-1', row.unread_count > 0 && 'text-white')}>
+                                <div className={cn('text-[13px] truncate flex items-center gap-1', row.unread_count > 0 && 'text-gray-900')}>
                                     {row.suspicious_for_agent && (
-                                        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 text-[#e08c8c]" aria-label={t('suspiciousBadge')} />
+                                        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 text-red-600" aria-label={t('suspiciousBadge')} />
                                     )}
                                     <AuthBadge auth={row.auth} compact />
                                     <span className="truncate">{row.subject || t('noSubject')}</span>
                                 </div>
-                                <div className="text-xs text-[#9a9a9a] truncate pr-14">{row.snippet}</div>
+                                <div className="text-xs text-gray-500 truncate pr-14">{row.snippet}</div>
                             </button>
-                            <div className="absolute right-3 bottom-2 flex items-center gap-1.5 text-[11px] text-[#9a9a9a] group-hover:hidden">
+                            <div className="absolute right-3 bottom-2 flex items-center gap-1.5 text-[11px] text-gray-500 group-hover:hidden">
                                 {row.waits && <WaitsChip reason={row.waits_reason} />}
                                 {row.category && row.category !== 'primary' && (
-                                    <span className="px-1.5 rounded-md bg-[#262626] text-[#b0b0b0]">{catLabel(row.category)}</span>
+                                    <span className={`px-1.5 rounded-md ${SFC_FILL} text-gray-600`}>{catLabel(row.category)}</span>
                                 )}
-                                {row.answered ? <Reply className="w-3 h-3 text-[#7bbf7b]" aria-label={t('answered')} /> : null}
+                                {row.answered ? <Reply className="w-3 h-3 text-green-600" aria-label={t('answered')} /> : null}
                                 {row.has_attachments ? <Paperclip className="w-3 h-3" /> : null}
                                 {row.message_count > 1 && (
-                                    <span className={cn('px-1.5 rounded-md', row.unread_count > 0 ? 'bg-[#e05d44] text-white' : 'bg-[#262626]')}>
+                                    <span className={cn('px-1.5 rounded-md', row.unread_count > 0 ? 'bg-[#e05d44] text-white' : SFC_FILL)}>
                                         {row.message_count}
                                     </span>
                                 )}
                             </div>
                             <div className="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1">
                                 <button type="button" title={t('archive')} onClick={() => threadAction(row, 'archive')}
-                                    className="p-1.5 rounded-md bg-[#262626] border border-[#2e2e2e] hover:border-[#444]">
+                                    className={`p-1.5 rounded-md ${SFC_FILL} border border-gray-200 hover:border-gray-400`}>
                                     <Archive className="w-3.5 h-3.5" />
                                 </button>
                                 <button type="button" title={t('trash')} onClick={() => threadAction(row, 'trash')}
-                                    className="p-1.5 rounded-md bg-[#262626] border border-[#2e2e2e] hover:border-[#444]">
+                                    className={`p-1.5 rounded-md ${SFC_FILL} border border-gray-200 hover:border-gray-400`}>
                                     <Trash2 className="w-3.5 h-3.5" />
                                 </button>
                             </div>
@@ -1174,45 +1184,45 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
 
                 <section className="overflow-y-auto">
                     {threadMsgs.length === 0 && (
-                        <div className="h-full grid place-items-center text-[#9a9a9a] text-sm">{t('selectConversation')}</div>
+                        <div className="h-full grid place-items-center text-gray-500 text-sm">{t('selectConversation')}</div>
                     )}
                     {threadMsgs.length > 0 && (
                         <>
-                            <div className="px-5 pt-4 pb-2 border-b border-[#2e2e2e] flex items-center gap-2">
+                            <div className="px-5 pt-4 pb-2 border-b border-gray-200 flex items-center gap-2">
                                 <h2 className="text-[17px] font-semibold flex-1 truncate">{newestMsg?.subject || t('noSubject')}</h2>
                                 <button type="button" title={t('reply')} onClick={() => openCompose('reply')}
-                                    className="p-2 rounded-lg bg-[#262626] border border-[#2e2e2e] hover:border-[#444]"><Reply className="w-4 h-4" /></button>
+                                    className={`p-2 rounded-lg ${SFC_FILL} border border-gray-200 hover:border-gray-400`}><Reply className="w-4 h-4" /></button>
                                 <button type="button" title={t('replyAll')} onClick={() => openCompose('replyAll')}
-                                    className="p-2 rounded-lg bg-[#262626] border border-[#2e2e2e] hover:border-[#444]"><ReplyAll className="w-4 h-4" /></button>
+                                    className={`p-2 rounded-lg ${SFC_FILL} border border-gray-200 hover:border-gray-400`}><ReplyAll className="w-4 h-4" /></button>
                                 <button type="button" title={t('forward')} onClick={() => openCompose('forward')}
-                                    className="p-2 rounded-lg bg-[#262626] border border-[#2e2e2e] hover:border-[#444]"><CornerUpRight className="w-4 h-4" /></button>
+                                    className={`p-2 rounded-lg ${SFC_FILL} border border-gray-200 hover:border-gray-400`}><CornerUpRight className="w-4 h-4" /></button>
                             </div>
                             {draft && (
-                                <div className="mx-5 my-3 rounded-xl border border-[#4a3b1e] bg-[#2b2417] p-3 text-[13px]">
-                                    <div className="flex items-center gap-2 text-[#e0b866] font-medium">
+                                <div className="mx-5 my-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[13px]">
+                                    <div className="flex items-center gap-2 text-amber-700 font-medium">
                                         <Sparkles className="w-4 h-4" />
                                         <span>{t('draft.title')}</span>
                                     </div>
-                                    <p className="text-xs text-[#c8b58a] mt-0.5">{t('draft.hint')}</p>
-                                    <pre className="mt-2 whitespace-pre-wrap font-sans text-[#e8e8e8] max-h-64 overflow-y-auto">{draft.body}</pre>
+                                    <p className="text-xs text-amber-700 mt-0.5">{t('draft.hint')}</p>
+                                    <pre className="mt-2 whitespace-pre-wrap font-sans text-gray-900 max-h-64 overflow-y-auto">{draft.body}</pre>
                                     <div className="mt-2 flex items-center gap-2 flex-wrap">
                                         <button type="button" disabled={draftBusy} onClick={() => sendDraft(draft)}
                                             className="px-3 py-1.5 rounded-md bg-[#e05d44] text-white text-xs font-medium hover:bg-[#e8735d] disabled:opacity-50">{t('draft.send')}</button>
                                         <button type="button" disabled={draftBusy} onClick={() => openCompose('reply', false, draft.body, draft.op_id)}
-                                            className="px-3 py-1.5 rounded-md border border-[#4a3b1e] text-xs hover:bg-[#332a1a] disabled:opacity-50">{t('draft.edit')}</button>
+                                            className="px-3 py-1.5 rounded-md border border-amber-200 text-xs hover:bg-amber-100 disabled:opacity-50">{t('draft.edit')}</button>
                                         <button type="button" disabled={draftBusy} onClick={() => discardDraft(draft)}
-                                            className="px-3 py-1.5 rounded-md text-xs hover:bg-[#332a1a] disabled:opacity-50">{t('draft.discard')}</button>
-                                        {draftNote && <span className="text-xs text-[#c8b58a]">{draftNote}</span>}
+                                            className="px-3 py-1.5 rounded-md text-xs hover:bg-amber-100 disabled:opacity-50">{t('draft.discard')}</button>
+                                        {draftNote && <span className="text-xs text-amber-700">{draftNote}</span>}
                                     </div>
                                 </div>
                             )}
                             {!draft && draftNote && (
                                 /* An approved draft is no longer held, so its block is gone; what became of it stays readable. */
-                                <p className="mx-5 my-3 text-xs text-[#c8b58a]">{draftNote}</p>
+                                <p className="mx-5 my-3 text-xs text-amber-700">{draftNote}</p>
                             )}
                             {hiddenCount > 0 && !showOlder && (
                                 <button type="button" onClick={() => setShowOlder(true)}
-                                    className="w-full text-left px-5 py-2.5 text-sm text-[#9a9a9a] border-b border-[#2e2e2e] hover:bg-[#1f1f1f]">
+                                    className={`w-full text-left px-5 py-2.5 text-sm text-gray-500 border-b border-gray-200 ${HOVER_CHROME}`}>
                                     ▸ {t('showOlder', { count: hiddenCount })}
                                 </button>
                             )}
@@ -1261,17 +1271,17 @@ export function MailClientView({ onClose, initialThread, initialDraft }: { onClo
                     }} />
             )}
             {undoState && (
-                <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2.5 rounded-xl bg-[#262626] border border-[#2e2e2e] shadow-xl text-sm">
-                    <MailOpen className="w-4 h-4 text-[#9a9a9a]" />
+                <div className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2.5 rounded-xl ${SFC_RAISED} border border-gray-200 shadow-xl text-sm`}>
+                    <MailOpen className="w-4 h-4 text-gray-500" />
                     {t('undoSent')}
                     <button type="button" onClick={undoSend}
-                        className="flex items-center gap-1 text-[#d4a24e] font-medium hover:underline">
+                        className="flex items-center gap-1 text-amber-600 font-medium hover:underline">
                         <CornerUpLeft className="w-3.5 h-3.5" /> {t('undo')}
                     </button>
                 </div>
             )}
             {sentNotice && (
-                <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#262626] border border-[#2e2e2e] shadow-xl text-sm text-[#9a9a9a]">
+                <div className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2.5 rounded-xl ${SFC_RAISED} border border-gray-200 shadow-xl text-sm text-gray-500`}>
                     <Mail className="w-4 h-4" /> {t('alreadySent')}
                 </div>
             )}

@@ -168,7 +168,7 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
             </SettingsCard>
 
             <SettingsCard title={t('cardBridgeTitle')}>
-                <KvRow left={<><span className={cn('w-2 h-2 rounded-full', data?.running ? 'bg-[#3fbf5f]' : 'bg-[#555]')} />{stateText}</>} />
+                <KvRow left={<><span className={cn('w-2 h-2 rounded-full', data?.running ? 'bg-[#3fbf5f]' : 'bg-gray-400')} />{stateText}</>} />
                 <button type="button" onClick={handleToggle} disabled={toggling || !data?.configured} className={cn('flex items-center gap-1.5', BTN)}>
                     {toggling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Power className="w-4 h-4" />}
                     {toggling ? t('working') : data?.running ? t('stopBridge') : t('startBridge')}
@@ -178,14 +178,14 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
             <SettingsCard title={t('cardAdminTitle')} desc={t('cardAdminDesc')}>
                 {data?.admin_user_id
                     ? <KvRow left={data.admin_username ? `@${data.admin_username}` : String(data.admin_user_id)} right={String(data.admin_user_id)} />
-                    : <p className="text-[12.5px] text-[#9a9a9a]">{t('noAdmin')}</p>}
+                    : <p className="text-[12.5px] text-gray-500">{t('noAdmin')}</p>}
             </SettingsCard>
 
             <SettingsCard title={t('cardActivityTitle')}>
                 {(data?.activity?.length ?? 0) === 0 ? (
-                    <p className="text-[12.5px] text-[#9a9a9a]">{t('noActivity')}</p>
+                    <p className="text-[12.5px] text-gray-500">{t('noActivity')}</p>
                 ) : [...(data?.activity ?? [])].reverse().slice(0, 7).map((a, i) => (
-                    <KvRow key={i} left={<><MessageCircle className="w-3.5 h-3.5 text-[#9a9a9a]" />{a.direction === 'in' ? t('incoming') : t('outgoing')}</>} right={fmtWhen(a.ts)} />
+                    <KvRow key={i} left={<><MessageCircle className="w-3.5 h-3.5 text-gray-500" />{a.direction === 'in' ? t('incoming') : t('outgoing')}</>} right={fmtWhen(a.ts)} />
                 ))}
             </SettingsCard>
         </>
@@ -198,7 +198,7 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
             icon={<MessageCircle className="w-4 h-4 text-white" />}
             iconClass="bg-[#5865f2]"
             title={t('title')}
-            subtitle={<>{t('cardAdminTitle')} <span className="text-[#d0d0d0]">{data?.admin_username ? `@${data.admin_username}` : t('noAdmin')}</span></>}
+            subtitle={<>{t('cardAdminTitle')} <span className="text-gray-800">{data?.admin_username ? `@${data.admin_username}` : t('noAdmin')}</span></>}
             dot={data?.running ? 'green' : 'gray'}
             dotTitle={stateText}
             chats={chats}

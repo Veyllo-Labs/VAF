@@ -11,6 +11,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Changed
+
+- **The inbox rail is one list of channels, and the views unfold under the one you open.**
+  The rail used to carry two groups, "View" on top and "Channels" below, two filters that
+  looked unrelated and were easy to leave set against each other. Now there is only the
+  channel list: click WhatsApp and it opens to show All, Waiting for an answer, Unread and
+  Answered by the agent, each with WhatsApp's own number. "All channels" opens the same way
+  and is the one that is open when the inbox opens. On a phone the open channel's views are
+  a second strip above the list.
+
 ### Fixed
 
 - **The inbox, the mail window and the messenger windows follow your theme again.** Light mode

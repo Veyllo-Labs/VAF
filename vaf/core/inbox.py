@@ -982,6 +982,9 @@ def list_conversations(username: Optional[str], user_scope_id: Optional[str], *,
         "per_channel": {c: sum(1 for r in rows if r["channel"] == c) for c in CHANNELS},
         "waits_per_channel": {c: sum(1 for r in rows if r["channel"] == c and r["waits"]) for c in CHANNELS},
         "unread_per_channel": {c: sum(r["unread"] for r in rows if r["channel"] == c) for c in CHANNELS},
+        # Each view's number per channel, so a surface that nests the views under a channel
+        # reads them here rather than recounting rows it was never sent.
+        "agent_per_channel": {c: sum(1 for r in rows if r["channel"] == c and r["answered_by_agent"]) for c in CHANNELS},
         # Invitations wait for a decision, not for reading: a window subtracts them from what
         # "mark all as read" can clear.
         "invitations": sum(1 for r in rows if r["waits_reason"] == WAITS_INVITATION),

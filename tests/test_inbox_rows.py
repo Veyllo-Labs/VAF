@@ -273,7 +273,10 @@ def test_views_groups_and_the_done_toggle(world):
                                              "waits_per_channel": {"whatsapp": 1, "telegram": 1, "discord": 0, "mail": 0, "room": 0},
                                              "stored_per_channel": {"whatsapp": 3, "telegram": 1, "discord": 0, "mail": 0, "room": 0}}
     assert sum(counts["unread_per_channel"].values()) == counts["unread"] and counts["invitations"] == 0
-    assert set(counts) == set(pinned) | {"unread_per_channel", "invitations", "bulk_hidden"}, "a new count is a doc and a test, not a surprise"
+    # Every view has its number per channel: the inbox rail nests the views under the open channel.
+    assert counts["agent_per_channel"] == {"whatsapp": 1, "telegram": 0, "discord": 0, "mail": 0, "room": 0}
+    assert sum(counts["agent_per_channel"].values()) == counts["agent"]
+    assert set(counts) == set(pinned) | {"unread_per_channel", "agent_per_channel", "invitations", "bulk_hidden"}, "a new count is a doc and a test, not a surprise"
     assert [r["key"] for r in _rows(include_groups=False)["rows"]] == ["whatsapp:+491700000043", "whatsapp:+491700000042"]
     assert [r["key"] for r in _rows(include_done=True)["rows"]][:1] == ["telegram:-500"]
     assert "whatsapp:123@g.us" in [r["key"] for r in _rows(include_done=True)["rows"]]

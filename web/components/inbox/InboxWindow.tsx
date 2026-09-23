@@ -61,7 +61,7 @@ export interface InboxRow {
 interface Counts {
     all: number; waits: number; unread: number; agent: number;
     per_channel: Record<string, number>; waits_per_channel: Record<string, number>;
-    unread_per_channel?: Record<string, number>; invitations?: number;
+    unread_per_channel?: Record<string, number>; agent_per_channel?: Record<string, number>; invitations?: number;
 }
 
 interface Status {
@@ -342,7 +342,34 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
 
     if (!isOpen) return null;
 
-    const viewCount = (v: View) => !counts ? 0 : v === 'all' ? counts.all : v === 'waits' ? counts.waits : v === 'unread' ? counts.unread : counts.agent;
+    // A view's number inside one channel, or across all of them: the rail nests the four views
+    // under the open channel, so each number belongs to the channel it is drawn under.
+    const viewCount = (scope: InboxChannel | null, v: View) => {
+        if (!counts) return 0;
+        if (scope === null) return v === 'all' ? counts.all : v === 'waits' ? counts.waits : v === 'unread' ? counts.unread : counts.agent;
+        const per = v === 'all' ? counts.per_channel : v === 'waits' ? counts.waits_per_channel
+            : v === 'unread' ? counts.unread_per_channel : counts.agent_per_channel;
+        return per?.[scope] ?? 0;
+    };
+    // Opening a channel shows all of it: the views underneath start from "All" again, the way a
+    // freshly opened folder shows its whole content before anybody narrows it.
+    const openChannel = (c: InboxChannel | null) => { setChannel(c); setView('all'); };
+    // The open channel's views, indented under it. Desktop only: on a phone the rail is a
+    // sideways chip strip, and the same four views sit as a second strip above the list.
+    const nestedViews = (scope: InboxChannel | null) => (
+        <div className="ml-5 mr-2 mt-0.5 mb-1 pl-2 border-l border-gray-200 flex flex-col gap-0.5 max-md:hidden">
+            {VIEWS.map(v => (
+                <button key={v} type="button" onClick={() => setView(v)}
+                    className={cn('px-2.5 py-1 rounded-lg flex items-center justify-between gap-2 text-left text-[13px]', view === v ? SFC_ACTIVE : SFC_HOVER)}>
+                    <span className="truncate min-w-0">{t(`view.${v}`)}</span>
+                    <span className={cn('text-xs', v === 'waits' && viewCount(scope, v) > 0 ? 'text-amber-700 font-medium' : 'text-gray-500')}>{viewCount(scope, v)}</span>
+                </button>
+            ))}
+        </div>
+    );
+    // An open channel's own row carries the weight, the chosen view underneath carries the fill;
+    // on a phone there is nothing underneath, so the chip itself is filled.
+    const openRow = 'font-medium text-gray-900 max-md:bg-gray-200 max-md:dark:bg-[#2a2a2a]';
     const canDraft = (r: InboxRow) => (r.channel === 'whatsapp' && r.can_compose) || r.channel === 'mail';
 
     return (
@@ -368,31 +395,24 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                 <main className="flex-1 grid min-h-0 grid-cols-[210px_380px_1fr] max-md:grid-cols-1 max-md:grid-rows-[auto_1fr]">
                     {/* On a phone the rail is one row that scrolls sideways: a wrapping strip ate half the screen. */}
                     <nav className={cn('border-r border-gray-200', SFC_WINDOW, 'flex flex-col text-sm overflow-y-auto max-md:flex-row max-md:flex-nowrap max-md:overflow-x-auto max-md:overflow-y-visible max-md:gap-1 max-md:p-2 max-md:border-r-0 max-md:border-b')}>
-                        <div className={RAIL_HEAD}>{t('rail.view')}</div>
-                        {VIEWS.map(v => (
-                            <button key={v} type="button" onClick={() => setView(v)} className={cn(RAIL_BTN, view === v ? SFC_ACTIVE : SFC_HOVER)}>
-                                {/* No marker in front of a single view: one dot on one of four rows
-                                    indents that row's label against the others, and it was drawn
-                                    even at zero, where there is nothing to point at. The count on
-                                    the right carries the signal instead, amber while somebody
-                                    waits, and every label starts at the same x. The channel rows
-                                    below mark EVERY row, which is why they line up. */}
-                                <span className="truncate min-w-0">{t(`view.${v}`)}</span>
-                                <span className={cn('text-xs', v === 'waits' && viewCount(v) > 0 ? 'text-amber-700 font-medium' : 'text-gray-500')}>{viewCount(v)}</span>
-                            </button>
-                        ))}
+                        {/* One list of channels. The open one unfolds its four views underneath, with
+                            that channel's numbers, so a view always says which channel it counts;
+                            "All channels" unfolds the same way and is the one open when the window
+                            opens. One channel open at a time keeps the rail short. */}
                         <div className={RAIL_HEAD}>{t('rail.channels')}</div>
-                        {/* "All channels" is its own entry: the view's "All" above is a view, and a person who
-                            narrowed the list to one channel looks here to widen it again. */}
-                        <button type="button" onClick={() => setChannel(null)} className={cn(RAIL_BTN, channel === null ? SFC_ACTIVE : SFC_HOVER)}>
+                        <button type="button" onClick={() => openChannel(null)} className={cn(RAIL_BTN, channel === null ? openRow : SFC_HOVER)}>
                             <span className="flex items-center gap-2 min-w-0"><span className="w-2 h-2 rounded-full shrink-0 bg-gray-900 dark:bg-[#e6e6e6]" /><span className="truncate">{t('allChannels')}</span></span>
                             <span className={cn('text-xs', (counts?.waits ?? 0) > 0 ? 'text-amber-700 font-medium' : 'text-gray-500')}>{counts?.all ?? 0}</span>
                         </button>
+                        {channel === null && nestedViews(null)}
                         {CHANNELS.map(c => (
-                            <button key={c} type="button" onClick={() => setChannel(prev => prev === c ? null : c)} className={cn(RAIL_BTN, channel === c ? SFC_ACTIVE : SFC_HOVER)}>
-                                <span className="flex items-center gap-2 min-w-0"><span className={cn('w-2 h-2 rounded-sm shrink-0', CHANNEL_SQUARE[c])} /><span className="truncate">{t(`channel.${c}`)}</span></span>
-                                <span className={cn('text-xs', (counts?.waits_per_channel?.[c] ?? 0) > 0 ? 'text-amber-700 font-medium' : 'text-gray-500')}>{counts?.per_channel?.[c] ?? 0}</span>
-                            </button>
+                            <React.Fragment key={c}>
+                                <button type="button" onClick={() => openChannel(c)} className={cn(RAIL_BTN, channel === c ? openRow : SFC_HOVER)}>
+                                    <span className="flex items-center gap-2 min-w-0"><span className={cn('w-2 h-2 rounded-sm shrink-0', CHANNEL_SQUARE[c])} /><span className="truncate">{t(`channel.${c}`)}</span></span>
+                                    <span className={cn('text-xs', (counts?.waits_per_channel?.[c] ?? 0) > 0 ? 'text-amber-700 font-medium' : 'text-gray-500')}>{counts?.per_channel?.[c] ?? 0}</span>
+                                </button>
+                                {channel === c && nestedViews(c)}
+                            </React.Fragment>
                         ))}
                         <div className={RAIL_HEAD}>{t('rail.filters')}</div>
                         <Toggle on={groups} onChange={setGroups} label={t('showGroups')} />
@@ -419,6 +439,15 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
 
                     <section className={cn('border-r border-gray-200', SFC_CHROME, 'flex flex-col min-h-0 max-md:border-r-0', mobilePane === 'preview' && 'max-md:hidden')}>
                         <div className={cn('sticky top-0 z-10', SFC_CHROME, 'border-b border-gray-200 shrink-0')}>
+                            <div className="md:hidden flex gap-1 px-3 pt-2 overflow-x-auto">
+                                {VIEWS.map(v => (
+                                    <button key={v} type="button" onClick={() => setView(v)}
+                                        className={cn('px-2 py-1 rounded-lg text-xs border border-gray-200 shrink-0 whitespace-nowrap flex items-center gap-1.5', view === v ? SFC_ACTIVE : SFC_HOVER)}>
+                                        <span>{t(`view.${v}`)}</span>
+                                        <span className={v === 'waits' && viewCount(channel, v) > 0 ? 'text-amber-700 font-medium' : 'text-gray-500'}>{viewCount(channel, v)}</span>
+                                    </button>
+                                ))}
+                            </div>
                             {/* The list's own actions sit over the list they act on, in one row that shares
                                 the search field's edges: the refresh as a symbol on the left, "mark all as
                                 read" on the right. Nothing up here has to line up with the preview's buttons. */}

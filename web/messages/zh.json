@@ -2365,7 +2365,6 @@
     "back": "返回",
     "noMessages": "还没有消息。",
     "rail": {
-      "view": "视图",
       "channels": "渠道",
       "filters": "筛选",
       "inbound": "入站"

@@ -148,13 +148,41 @@ def test_the_inbox_has_no_input_field_and_a_draft_starts_the_composer_in_the_cha
     assert "setChannel(null); setView('all'); }" in src, "closing the window widens the list again"
     assert "const requestNo = ++loadRequest.current;" in src and src.count("if (requestNo !== loadRequest.current) return;") == 3, "a stale answer never lands on a newer list"
     assert "if (requestNo === loadRequest.current) setLoading(false);" in src, "and never clears the spinner of the newer one"
-    assert "onClick={() => setChannel(null)}" in src and "{t('allChannels')}" in src, "the channel list has its own All, the view's All is a view"
+    assert "onClick={() => openChannel(null)}" in src and "{t('allChannels')}" in src, "All channels is a row of the channel list"
     # The rail's small toggle carries the same two faces as the house switch, stated as
     # pairs: the track and the knob have to contrast each other in BOTH themes, and the
     # surface ramp folds the other way round from the ink ramp.
     assert "on ? 'bg-gray-800 dark:bg-[#d9d9d9]' : 'bg-gray-300 dark:bg-[#333333]'" in src
     assert "on ? 'right-0.5 bg-white dark:bg-[#1a1a1a]' : 'left-0.5 bg-white dark:bg-[#e8e8e8]'" in src
     assert 'mineClass="bg-gray-300"' in src, "our own bubble is a neutral surface, not the channel's green"
+
+
+def test_the_views_unfold_under_the_open_channel_with_that_channels_numbers():
+    """One list of channels; the open one, "All channels" included, unfolds the four views
+    underneath, and each number there counts inside that channel. A separate "View" group
+    above the channels made the person set two filters that looked unrelated, and its numbers
+    counted the whole inbox while the list showed one channel.
+
+    MUTATION: bring back a views group of its own, draw the views under every channel, or
+    count them from the whole inbox inside a channel, and this goes red.
+    """
+    src = _read(WINDOW)
+    assert "t('rail.view')" not in src, "no views group of its own above the channels"
+    assert "{channel === null && nestedViews(null)}" in src, "All channels unfolds like any channel"
+    assert "{channel === c && nestedViews(c)}" in src, "only the open channel unfolds"
+    assert "const openChannel = (c: InboxChannel | null) => { setChannel(c); setView('all'); };" in src
+    count = src.split("const viewCount = (scope: InboxChannel | null, v: View) => {", 1)[1].split("};", 1)[0]
+    for per in ("counts.per_channel", "counts.waits_per_channel", "counts.unread_per_channel", "counts.agent_per_channel"):
+        assert per in count, f"inside a channel the view counts through {per}"
+    assert "setChannel(prev => prev === c ? null : c)" not in src, "one channel is always the open one"
+    # A phone has no room to unfold: the rail is a sideways strip and the views of the open
+    # channel are a second strip above the list.
+    assert "max-md:hidden" in src.split("const nestedViews = ", 1)[1].split("\n", 2)[1]
+    assert '<div className="md:hidden flex gap-1 px-3 pt-2 overflow-x-auto">' in src
+    for loc in ("de", "en", "tr", "zh", "ja", "ko", "th"):
+        block = json.loads((WEB / "messages" / f"{loc}.json").read_text(encoding="utf-8"))["inbox"]
+        assert "view" not in block["rail"], f"{loc}: the views group's heading is gone"
+        assert set(block["view"]) == {"all", "waits", "unread", "agent"}, loc
 
 
 def test_mobile_is_additive_and_the_three_panes_stack():

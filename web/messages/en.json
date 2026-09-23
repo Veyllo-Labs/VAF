@@ -2365,7 +2365,6 @@
     "back": "Back",
     "noMessages": "No messages yet.",
     "rail": {
-      "view": "View",
       "channels": "Channels",
       "filters": "Filters",
       "inbound": "Inbound"

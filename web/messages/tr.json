@@ -2365,7 +2365,6 @@
     "back": "Geri",
     "noMessages": "Henüz mesaj yok.",
     "rail": {
-      "view": "Görünüm",
       "channels": "Kanallar",
       "filters": "Filtreler",
       "inbound": "Inbound"

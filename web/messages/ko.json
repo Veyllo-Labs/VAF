@@ -2365,7 +2365,6 @@
     "back": "뒤로",
     "noMessages": "아직 메시지가 없어요.",
     "rail": {
-      "view": "보기",
       "channels": "채널",
       "filters": "필터",
       "inbound": "인바운드"

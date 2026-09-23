@@ -2365,7 +2365,6 @@
     "back": "戻る",
     "noMessages": "まだメッセージはありません。",
     "rail": {
-      "view": "表示",
       "channels": "チャンネル",
       "filters": "フィルター",
       "inbound": "インバウンド"

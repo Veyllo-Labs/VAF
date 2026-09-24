@@ -56,6 +56,16 @@ def harden_auth_dir(auth_dir: Path) -> int:
     return touched
 
 
+def harden_linked_auth_dirs() -> int:
+    """harden_auth_dir over every linked account; returns how many files it touched.
+
+    Run at startup whatever the bridge's switch says. The bridge corrects a directory each
+    time it starts Node, but it only starts when WhatsApp is switched on: a linked account
+    that is switched off still holds a working login on disk and would otherwise keep the
+    files an older release wrote readable by every account on the machine indefinitely."""
+    return sum(harden_auth_dir(get_whatsapp_auth_dir(name)) for name in linked_usernames())
+
+
 def whatsapp_auth_exists(username: str) -> bool:
     """Check if this user has linked WhatsApp (creds.json present)."""
     auth_dir = get_whatsapp_auth_dir(username)

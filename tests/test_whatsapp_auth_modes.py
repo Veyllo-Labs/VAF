@@ -90,3 +90,57 @@ def test_node_is_started_in_exactly_one_place():
     assert src.count('"--auth-dir"') == 1
     routes = (REPO / "vaf" / "api" / "whatsapp_routes.py").read_text(encoding="utf-8")
     assert "spawn_node_bridge(node, wa_js, auth_dir)" in routes, "the QR link goes through it too"
+
+
+def _loose_session(auth: Path) -> None:
+    auth.mkdir(parents=True, exist_ok=True)
+    os.chmod(auth, 0o755)
+    for name in ("creds.json", "session-4917.json", "pre-key-7.json"):
+        (auth / name).write_text("{}", encoding="utf-8")
+        os.chmod(auth / name, 0o644)
+
+
+@posix_only
+def test_the_qr_flow_protects_the_directory_even_when_it_ends_early(tmp_path, monkeypatch):
+    """The flow can end before Node is spawned (no Node, or the dependency install fails),
+    and the spawn is the other place the directory is corrected."""
+    import vaf.api.whatsapp_routes as routes
+    import vaf.core.whatsapp_auth as wa
+
+    auth = tmp_path / "users" / "alice" / "whatsapp"
+    _loose_session(auth)
+    monkeypatch.setattr(wa, "get_whatsapp_auth_dir", lambda username: auth)
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda name: None)     # no Node: the flow returns early
+    routes._run_qr_login("alice")
+    assert _mode(auth) == 0o700
+    assert all(_mode(auth / n) == 0o600 for n in ("creds.json", "session-4917.json", "pre-key-7.json"))
+
+
+@posix_only
+def test_every_linked_account_is_protected_at_startup_whatever_the_switch_says(tmp_path, monkeypatch):
+    """The bridge only starts Node when WhatsApp is switched on; a linked account that is
+    switched off still holds a working login on disk."""
+    from vaf.core.config import Config
+    from vaf.core.whatsapp_auth import harden_linked_auth_dirs
+
+    monkeypatch.setattr(Config, "APP_DIR", tmp_path)
+    _loose_session(tmp_path / "users" / "alice" / "whatsapp")
+    _loose_session(tmp_path / "users" / "bob" / "whatsapp")
+    unlinked = tmp_path / "users" / "carol" / "whatsapp"
+    unlinked.mkdir(parents=True)
+    (unlinked / "notes.json").write_text("{}", encoding="utf-8")
+    os.chmod(unlinked / "notes.json", 0o644)
+
+    assert harden_linked_auth_dirs() == 6
+    for who in ("alice", "bob"):
+        auth = tmp_path / "users" / who / "whatsapp"
+        assert _mode(auth) == 0o700 and _mode(auth / "session-4917.json") == 0o600
+    assert _mode(unlinked / "notes.json") == 0o644, "a directory without a login is not an account"
+
+
+def test_the_server_runs_the_startup_pass_before_the_switch_decides():
+    src = (REPO / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    sweep = src.index("harden_linked_auth_dirs()")
+    gate = src.index('if isinstance(whatsapp_config, dict) and whatsapp_config.get("enabled"):')
+    assert sweep < gate, "the pass runs outside the 'switched on' branch"

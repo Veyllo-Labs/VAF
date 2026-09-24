@@ -544,7 +544,7 @@ Each VAF user has a separate WhatsApp session. Credentials and Baileys state are
 ### Sensitive Data
 
 - Do not commit `whatsapp_config` (or any config containing secrets) or the per-user WhatsApp auth directories to version control.
-- The auth directory is the WhatsApp login: Baileys keeps one file per Signal-protocol key in it. VAF keeps it owner-only on POSIX (directory 0700, files 0600): Node starts with umask 077, and `whatsapp_auth.harden_auth_dir` corrects older files before each start. The files are not encrypted (see [ENCRYPTION_AT_REST.md](../security/ENCRYPTION_AT_REST.md), "Still plaintext, and measured"); on Windows the profile directory's ACL is what protects them.
+- The auth directory is the WhatsApp login: Baileys keeps one file per Signal-protocol key in it. VAF keeps it owner-only on POSIX (directory 0700, files 0600): Node starts with umask 077, and `whatsapp_auth.harden_auth_dir` corrects older files: before each start of Node, at the start of a QR link (before anything there can end the flow early), and at VAF startup for every linked account whether or not WhatsApp is switched on, because a switched-off account still holds a working login on disk. The files are not encrypted (see [ENCRYPTION_AT_REST.md](../security/ENCRYPTION_AT_REST.md), "Still plaintext, and measured"); on Windows the profile directory's ACL is what protects them.
 
 ---
 

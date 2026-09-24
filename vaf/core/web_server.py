@@ -1877,6 +1877,15 @@ async def startup_event():
     except Exception as e:
         log("WebServer", f"Discord bridge auto-start skipped or failed: {e}")
 
+    # A linked WhatsApp account's session directory is owner-only whether or not the bridge
+    # is switched on: the bridge corrects it when it starts Node, and a switched-off account
+    # still holds a working login (vaf/core/whatsapp_auth.py, harden_linked_auth_dirs).
+    try:
+        from vaf.core.whatsapp_auth import harden_linked_auth_dirs
+        harden_linked_auth_dirs()
+    except Exception as e:
+        log("WebServer", f"WhatsApp session directory hardening skipped: {e}")
+
     # Auto-start WhatsApp bridge when switched on and at least one account is linked. The
     # linked account is the agent's own number; a registered main-user number is not
     # required to run it (an outbound-only agent is a complete configuration).

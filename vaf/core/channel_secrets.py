@@ -154,7 +154,7 @@ def clear_channel_secrets(channel: str) -> Dict[str, bool]:
     return removed
 
 
-def absorb_channel_secrets(payload: Any) -> Any:
+def absorb_channel_secrets(payload: Any, *, is_admin: bool) -> Any:
     """Take credential fields out of an incoming config payload and into the ring.
 
     Before a block is replaced, whatever config.json still holds for it is moved into the
@@ -165,9 +165,20 @@ def absorb_channel_secrets(payload: Any) -> Any:
     That move RAISES when it fails, unlike the forgiving read in `channel_secret`, and the
     difference is the point. A read that cannot move the token still has it in config.json
     and hands it out; a save that cannot move it is about to overwrite the block that holds
-    the only copy. Aborting the save keeps config.json as it was and tells the caller."""
+    the only copy. Aborting the save keeps config.json as it was and tells the caller.
+
+    Only an admin sets a channel's login. A non-admin's credential fields are dropped, never
+    stored: the save paths already take the whole block out of a non-admin's body, and this
+    is the second lock on that door."""
     if not isinstance(payload, dict):
         return payload
+    if not is_admin:
+        cleaned = dict(payload)
+        for channel, fields in CHANNEL_SECRETS.items():
+            block = cleaned.get(f"{channel}_config")
+            if isinstance(block, dict):
+                cleaned[f"{channel}_config"] = {k: v for k, v in block.items() if k not in fields}
+        return cleaned
     cleaned = dict(payload)
     for channel, fields in CHANNEL_SECRETS.items():
         key = f"{channel}_config"

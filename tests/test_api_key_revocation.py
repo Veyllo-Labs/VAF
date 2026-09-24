@@ -45,7 +45,7 @@ def test_an_empty_field_does_not_delete_a_stored_key():
     """"The form did not re-send it" must never be read as "remove it"."""
     store_api_key("veyllo", "sk-still-wanted")
 
-    absorb_config_keys({"api_key_veyllo": "", "provider": "veyllo"})
+    absorb_config_keys({"api_key_veyllo": "", "provider": "veyllo"}, is_admin=True)
 
     assert resolve_api_key("veyllo") == "sk-still-wanted"
 
@@ -69,7 +69,7 @@ def test_deletion_is_not_reachable_through_the_ordinary_save_path():
     """
     store_api_key("deepseek", "sk-present")
     for payload in ({"api_key_deepseek": ""}, {"api_key_deepseek": "   "}, {}):
-        absorb_config_keys(dict(payload))
+        absorb_config_keys(dict(payload), is_admin=True)
         assert resolve_api_key("deepseek") == "sk-present"
 
 

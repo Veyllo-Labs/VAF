@@ -23,6 +23,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A user account without admin rights can no longer take over your Telegram or Discord bot.**
+  On an installation shared by several people, a non-admin could save their own version of
+  a messenger connection, including its whitelist and its bot token, as long as they left
+  out the on/off switch. That could make them the bot's owner. Only an admin can change a
+  messenger connection now; everyone else can switch it on or off for themselves, as
+  intended.
 - **Your Telegram and Discord bot tokens are no longer stored in plaintext or shown to the
   browser.** They sat in `config.json` in plain text, and the settings page received them
   with the rest of the connection settings - the setup wizard even filled the token in again.

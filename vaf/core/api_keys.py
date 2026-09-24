@@ -222,7 +222,7 @@ def _migrate_into_store(name: str, key: str) -> None:
         pass
 
 
-def absorb_config_keys(config: dict) -> dict:
+def absorb_config_keys(config: dict, *, is_admin: bool) -> dict:
     """Take every `api_key_*` out of an incoming config payload and into the store.
 
     THE WRITE SIDE, and leaving it out would have been a user-visible bug rather than an
@@ -236,6 +236,10 @@ def absorb_config_keys(config: dict) -> dict:
     longer carries secrets. An empty value is dropped rather than stored: the merge helper
     it runs beside treats blank as "keep what you had", and honouring that here is what
     keeps a Settings save from wiping a key the form did not re-send.
+
+    `is_admin` is required, not defaulted: both save paths filter a non-admin's body before
+    this runs, and this is the second lock on the same door, so a third caller has to say
+    who is saving rather than inherit the permissive answer.
     """
     if not isinstance(config, dict):
         return config
@@ -247,7 +251,7 @@ def absorb_config_keys(config: dict) -> dict:
     # A messaging channel's login token rides inside its config block rather than as a
     # top-level key, so the loop above never saw it. Same rule, same two save paths.
     from vaf.core.channel_secrets import absorb_channel_secrets
-    return absorb_channel_secrets(cleaned)
+    return absorb_channel_secrets(cleaned, is_admin=is_admin)
 
 
 def store_api_key(provider: str, key: str, *, is_migration: bool = False) -> None:

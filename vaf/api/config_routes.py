@@ -449,7 +449,8 @@ async def patch_config(
     # agent keeps using the old one. `absorb_config_keys` also fires the Veyllo-STT seed,
     # which used to hang off the key appearing in the config dict.
     from vaf.core.api_keys import absorb_config_keys
-    merged = Config.merge_preserving_nonempty_sensitive(current, absorb_config_keys(body))
+    merged = Config.merge_preserving_nonempty_sensitive(
+        current, absorb_config_keys(body, is_admin=_user.get("role") == "admin"))
     Config.save(merged)
     _note_discord_admin_change(current, merged, _user)
     # Through the same funnel as GET, never raw: `merged` carries everything the file

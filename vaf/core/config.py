@@ -1222,26 +1222,23 @@ class Config:
         and return (body_without_connection_configs, { scope_id: { telegram, whatsapp, discord } }).
         Caller merges the returned dict into connection_enabled_by_scope and merges body_filtered into config (so global connection configs are not overwritten).
         """
-        if not user_scope_id:
-            return body, {}
-        scope_str = str(user_scope_id).strip()
+        # The connection blocks leave a non-admin's body in EVERY case. They used to leave
+        # only when an `enabled` toggle came with them: a block without one (or a caller
+        # without a scope) passed through untouched, and since the blocks are not
+        # admin-only keys, the save then replaced the channel's global config. Measured: a
+        # non-admin PATCH replaced the Telegram whitelist with their own entry, making them
+        # the bot's owner, and replaced the bot token. The only thing a non-admin may say
+        # about a channel is their own on/off, which is what the toggles carry.
+        scope_str = str(user_scope_id).strip() if user_scope_id else ""
         toggles = {}
         body_filtered = dict(body)
         for key in cls.CONNECTION_CONFIG_KEYS:
             if key not in body_filtered:
                 continue
-            val = body_filtered[key]
-            if isinstance(val, dict) and "enabled" in val:
-                if key == "telegram_config":
-                    toggles["telegram"] = bool(val["enabled"])
-                elif key == "whatsapp_config":
-                    toggles["whatsapp"] = bool(val["enabled"])
-                elif key == "discord_config":
-                    toggles["discord"] = bool(val["enabled"])
-            body_filtered.pop(key, None)
-        if not toggles:
-            return body, {}
-        return body_filtered, {scope_str: toggles}
+            val = body_filtered.pop(key)
+            if scope_str and isinstance(val, dict) and "enabled" in val:
+                toggles[key[: -len("_config")]] = bool(val["enabled"])
+        return body_filtered, ({scope_str: toggles} if toggles else {})
 
     @classmethod
     def config_for_user(cls, config: dict, user_scope_id: Optional[str], role: str) -> dict:

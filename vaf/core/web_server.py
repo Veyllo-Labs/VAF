@@ -5671,7 +5671,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # to a file nobody asks any more.
                         from vaf.core.api_keys import absorb_config_keys
                         merged = Config.merge_preserving_nonempty_sensitive(
-                            existing, absorb_config_keys(new_config))
+                            existing, absorb_config_keys(new_config, is_admin=is_admin))
                         Config.save(merged)
                         provider_changed = existing.get("provider") != merged.get("provider")
 

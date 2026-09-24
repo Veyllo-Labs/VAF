@@ -90,7 +90,7 @@ def test_the_first_save_after_the_upgrade_does_not_lose_the_token(config_file):
 
     current = Config.load()
     from vaf.core.api_keys import absorb_config_keys
-    merged = Config.merge_preserving_nonempty_sensitive(current, absorb_config_keys(body))
+    merged = Config.merge_preserving_nonempty_sensitive(current, absorb_config_keys(body, is_admin=True))
     Config.save(merged)
 
     assert cs.channel_secret("telegram") == TOKEN
@@ -100,11 +100,11 @@ def test_the_first_save_after_the_upgrade_does_not_lose_the_token(config_file):
 
 def test_a_saved_token_goes_to_the_ring_and_an_empty_one_changes_nothing(config_file):
     from vaf.core.api_keys import absorb_config_keys
-    cleaned = absorb_config_keys({"discord_config": {"bot_token": f"  {TOKEN}  ", "verified": True}})
+    cleaned = absorb_config_keys({"discord_config": {"bot_token": f"  {TOKEN}  ", "verified": True}}, is_admin=True)
     assert cleaned["discord_config"] == {"verified": True}, "the token never reaches config.json"
     assert cs.channel_secret("discord") == TOKEN
 
-    cleaned = absorb_config_keys({"discord_config": {"bot_token": "", "verified": True}})
+    cleaned = absorb_config_keys({"discord_config": {"bot_token": "", "verified": True}}, is_admin=True)
     assert "bot_token" not in cleaned["discord_config"]
     assert cs.channel_secret("discord") == TOKEN, "blank means not re-sent, never removed"
 
@@ -243,7 +243,7 @@ def test_a_save_that_cannot_move_the_token_is_refused_and_config_json_keeps_it(c
     monkeypatch.setattr(dk, "set_data_secret", boom)
     from vaf.core.api_keys import absorb_config_keys
     with pytest.raises(RuntimeError):
-        absorb_config_keys({"telegram_config": {"verified": True, "enabled": True, "bot_token": ""}})
+        absorb_config_keys({"telegram_config": {"verified": True, "enabled": True, "bot_token": ""}}, is_admin=True)
     assert config_file.on_disk()["telegram_config"]["bot_token"] == TOKEN
     assert config_file.on_disk()["telegram_config"]["enabled"] is False, "nothing of the save landed"
 
@@ -309,3 +309,73 @@ def test_no_bridge_writes_its_timeline_by_hand():
         src = (repo / "vaf" / "api" / f"{bridge}_bridge.py").read_text(encoding="utf-8")
         assert f'append_channel_activity("{bridge}"' in src, bridge
         assert '["chat_activity"] = activity' not in src, f"{bridge} writes chat_activity by hand"
+
+
+# ── a non-admin never writes a channel's login or its block ──────────────────
+
+NON_ADMIN = {"username": "mallory", "role": "user", "user_scope_id": "22222222-2222-2222-2222-222222222222"}
+
+
+def _patch(body, user):
+    import asyncio
+
+    from vaf.api.config_routes import patch_config
+
+    class _Req:
+        state = type("S", (), {})()
+
+    return asyncio.run(patch_config(body, _Req(), user))
+
+
+@pytest.mark.parametrize("extra", [{}, {"enabled": False}], ids=["no-toggle", "with-toggle"])
+def test_a_non_admin_save_cannot_replace_the_bot_token_or_the_whitelist(config_file, extra):
+    """Measured before the fix, on this code and on the release before it: a non-admin PATCH
+    whose block carried no `enabled` passed the connection filter untouched, replaced the
+    Telegram whitelist with their own entry (the bot's owner) and replaced the bot token."""
+    owner = [{"telegram_user_id": "1", "vaf_username": "owner"}]
+    config_file.seed(telegram_config={"verified": True, "enabled": True, "whitelist": owner})
+    cs.set_channel_secret("telegram", "bot_token", TOKEN)
+
+    attacker = "999999999:" + "Z" * 35
+    _patch({"telegram_config": {"bot_token": attacker, "verified": True,
+                                "whitelist": [{"telegram_user_id": "666", "vaf_username": "mallory"}], **extra}},
+           NON_ADMIN)
+
+    assert cs.channel_secret("telegram") == TOKEN
+    assert config_file.on_disk()["telegram_config"]["whitelist"] == owner
+    if extra:
+        by_scope = config_file.on_disk()["connection_enabled_by_scope"]
+        assert by_scope[NON_ADMIN["user_scope_id"]] == {"telegram": False}, "their own toggle is all they set"
+
+
+def test_a_non_admin_without_a_scope_cannot_write_a_block_either(config_file):
+    owner = [{"telegram_user_id": "1"}]
+    config_file.seed(discord_config={"verified": True, "admin_user_id": "1"}, telegram_config={"whitelist": owner})
+    _patch({"discord_config": {"admin_user_id": "666"}, "telegram_config": {"whitelist": []}},
+           {"username": "x", "role": "user", "user_scope_id": ""})
+    disk = config_file.on_disk()
+    assert disk["discord_config"]["admin_user_id"] == "1" and disk["telegram_config"]["whitelist"] == owner
+
+
+def test_the_absorb_step_itself_refuses_a_non_admin(config_file):
+    """The second lock on the door: even a block that reached it is not stored for a non-admin."""
+    config_file.seed(telegram_config={"bot_token": TOKEN})
+    from vaf.core.api_keys import absorb_config_keys
+    cleaned = absorb_config_keys({"telegram_config": {"bot_token": "999999999:" + "Z" * 35}}, is_admin=False)
+    assert cleaned["telegram_config"] == {}
+    assert dk.peek_data_secret(cs.ring_name("telegram", "bot_token")) == "", "nothing stored, nothing moved"
+    assert config_file.on_disk()["telegram_config"]["bot_token"] == TOKEN
+
+
+def test_both_save_paths_say_who_is_saving():
+    """is_admin is a required argument; the two callers must pass the caller's role."""
+    import inspect
+    from pathlib import Path
+
+    from vaf.core.api_keys import absorb_config_keys
+    assert inspect.signature(absorb_config_keys).parameters["is_admin"].default is inspect.Parameter.empty
+    repo = Path(__file__).resolve().parent.parent
+    routes = (repo / "vaf" / "api" / "config_routes.py").read_text(encoding="utf-8")
+    ws = (repo / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    assert 'absorb_config_keys(body, is_admin=_user.get("role") == "admin")' in routes
+    assert "absorb_config_keys(new_config, is_admin=is_admin)" in ws

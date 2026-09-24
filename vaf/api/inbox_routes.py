@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Body, HTTPException, Request
 
 from vaf.api.contact_routes import get_current_vaf_user
+from vaf.core.channel_secrets import has_channel_secret
 
 router = APIRouter(prefix="/api/inbox", tags=["inbox"])
 
@@ -53,7 +54,7 @@ def _status(username: str, user_scope_id: Optional[str]) -> Dict[str, Any]:
         from vaf.api.telegram_bridge import is_bridge_running as tg_running
         tc = Config.get("telegram_config") or {}
         tc = tc if isinstance(tc, dict) else {}
-        out["telegram"] = {"configured": bool(tc.get("bot_token") and tc.get("verified")), "running": bool(tg_running())}
+        out["telegram"] = {"configured": bool(tc.get("verified") and has_channel_secret("telegram")), "running": bool(tg_running())}
     except Exception:
         out["telegram"] = {"configured": False, "running": False}
     out["discord"] = {"configured": False, "running": False}

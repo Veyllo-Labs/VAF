@@ -62,7 +62,10 @@ Telegram User (text or voice reply)
 
 1. Create a bot via [@BotFather](https://t.me/botfather) on Telegram
 2. Copy the bot token
-3. Configure in `~/.vaf/config.json`:
+3. Configure it in **Settings → Connections → Telegram** (the wizard), or by hand in
+   `~/.vaf/config.json`. A token pasted there is moved into the encrypted key ring the
+   first time VAF reads it and removed from config.json; from then on it lives only in the
+   ring (`vaf/core/channel_secrets.py`) and is never shown again:
 
 ```json
 {
@@ -88,7 +91,7 @@ Telegram User (text or voice reply)
 | Key | Type | Description |
 |-----|------|-------------|
 | `enabled` | bool | Enable/disable Telegram bot |
-| `bot_token` | string | Bot token from BotFather |
+| `bot_token` | string | Bot token from BotFather. Accepted here once; VAF moves it into the encrypted key ring and removes it from this file |
 | `bot_username` | string | Bot username (without @) |
 | `verified` | bool | Set to `true` after token verification |
 | `whitelist` | array | List of authorized users |
@@ -455,7 +458,7 @@ VAF tracks Telegram activity for session management:
 ### Proactive Send Fails From Automation Or Background Task
 
 1. **Check that Telegram is configured and verified:**
-   `telegram_config.enabled`, `telegram_config.verified`, and `telegram_config.bot_token` must all be set.
+   `telegram_config.enabled` and `telegram_config.verified` must be set and a bot token must be stored (the key ring, see Token Security).
 
 2. **Check that the user can be resolved:**
    `send_telegram` still needs a valid chat target. The user must either have a persisted chat ID from an earlier Telegram message or match a whitelist entry.
@@ -517,9 +520,10 @@ Each whitelisted user is mapped to a VAF user scope, ensuring:
 
 ### Token Security
 
-- Store bot tokens securely in `~/.vaf/config.json`
+- The token lives in the encrypted key ring, not in `~/.vaf/config.json`; `vaf secure status`
+  names one still left in config.json until it moves
+- The config API never returns it, and **Disconnect** removes it from the ring
 - Never commit tokens to version control
-- Use environment variables in production
 - The Bot API carries the token in every request URL
   (`api.telegram.org/bot<TOKEN>/...`). VAF sets the `httpx`/`httpcore`
   loggers to WARNING in the Telegram bridge so request URLs (and the token)

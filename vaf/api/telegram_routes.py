@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel
 
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
+from vaf.core.channel_secrets import channel_secret, has_channel_secret
 from vaf.core.security_events import log_security_event
 
 logger = logging.getLogger("vaf.api.telegram")
@@ -244,7 +245,7 @@ async def get_telegram_status(request: Request):
             if isinstance(e, dict) and str(e.get("user_scope_id") or "").strip() == scope_str
         ]
 
-    configured = bool(telegram_config.get("bot_token") and telegram_config.get("verified") and len(visible_whitelist) > 0)
+    configured = bool(telegram_config.get("verified") and len(visible_whitelist) > 0 and has_channel_secret("telegram"))
     return {
         "configured": configured,
         "enabled": enabled,
@@ -261,7 +262,7 @@ def _get_bot_username() -> Optional[str]:
     cached = telegram_config.get("bot_username")
     if cached:
         return cached
-    token = (telegram_config.get("bot_token") or "").strip()
+    token = channel_secret("telegram")
     if not token:
         return None
     try:
@@ -628,7 +629,7 @@ async def start_telegram_bridge():
         telegram_config = {}
     if not telegram_config.get("verified"):
         raise HTTPException(status_code=400, detail="Telegram not configured. Please complete setup first.")
-    if not telegram_config.get("bot_token"):
+    if not has_channel_secret("telegram"):
         raise HTTPException(status_code=400, detail="Bot token missing.")
 
     try:

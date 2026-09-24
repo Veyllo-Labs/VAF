@@ -54,15 +54,20 @@ class Channel:
     """The Front Office can open this channel to new senders. Separate from `bridge` on
     purpose: a channel that gains a bridge without a contact lane must not become a Front
     Office channel by being routable (vaf/core/channel_ingress_policy.py)."""
+    secrets: Tuple[str, ...] = ()
+    """The fields of `<name>_config` that are credentials. They never stay in config.json
+    and never travel to a browser: vaf/core/channel_secrets.py keeps them in the encrypted
+    key ring. A channel whose login is not a field (WhatsApp keeps a session directory)
+    declares none."""
 
 
 CHANNELS: Tuple[Channel, ...] = (
     Channel("whatsapp", "WhatsApp", bridge=True, send_tool="send_whatsapp",
             read_tool="read_whatsapp_chat", front_office=True),
     Channel("telegram", "Telegram", bridge=True, send_tool="send_telegram",
-            read_tool="read_telegram_chat", front_office=True),
+            read_tool="read_telegram_chat", front_office=True, secrets=("bot_token",)),
     Channel("discord", "Discord", bridge=True, send_tool="send_discord",
-            read_tool="read_discord_chat", front_office=True),
+            read_tool="read_discord_chat", front_office=True, secrets=("bot_token",)),
     # Known, not built: `send_slack` exists and answers that it cannot send yet.
     Channel("slack", "Slack", bridge=False, send_tool="send_slack"),
 )
@@ -91,6 +96,8 @@ ALL_SEND_TOOLS: Tuple[str, ...] = tuple(c.send_tool for c in CHANNELS)
 CHAT_SEND_TOOLS: Tuple[str, ...] = tuple(c.send_tool for c in CHANNELS if c.bridge)
 CHANNEL_READ_TOOLS: Dict[str, str] = {c.name: c.read_tool for c in CHANNELS if c.read_tool}
 CHANNEL_LABELS: Dict[str, str] = {c.name: c.label for c in CHANNELS}
+# channel -> its credential fields, for the channels that have any.
+CHANNEL_SECRETS: Dict[str, Tuple[str, ...]] = {c.name: c.secrets for c in CHANNELS if c.secrets}
 
 
 def channel_label(name: Optional[str], default: Optional[str] = None) -> str:

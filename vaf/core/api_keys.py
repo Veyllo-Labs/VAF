@@ -244,7 +244,10 @@ def absorb_config_keys(config: dict) -> dict:
         value = cleaned.pop(key)
         if isinstance(value, str) and value.strip():
             store_api_key(key[len("api_key_"):], value.strip())
-    return cleaned
+    # A messaging channel's login token rides inside its config block rather than as a
+    # top-level key, so the loop above never saw it. Same rule, same two save paths.
+    from vaf.core.channel_secrets import absorb_channel_secrets
+    return absorb_channel_secrets(cleaned)
 
 
 def store_api_key(provider: str, key: str, *, is_migration: bool = False) -> None:

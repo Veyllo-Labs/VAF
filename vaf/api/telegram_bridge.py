@@ -34,6 +34,7 @@ for _noisy in ("httpx", "httpcore"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 from vaf.core.config import Config
+from vaf.core.channel_secrets import channel_secret
 from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
 from vaf.core.task_queue import TaskQueue
 from vaf.core.telegram_reply import set_telegram_reply_callback
@@ -522,9 +523,9 @@ def send_telegram_message_direct(
     if not isinstance(telegram_config, dict):
         return False, "telegram_config missing or invalid"
 
-    bot_token = (telegram_config.get("bot_token") or "").strip()
+    bot_token = channel_secret("telegram")
     if not bot_token:
-        return False, "telegram_config.bot_token missing"
+        return False, "telegram bot token missing"
 
     if not chat_id or not text:
         return False, "chat_id and text are required"
@@ -729,9 +730,7 @@ def _enqueue_reply(chat_id: str, text: str, voice_lang: Optional[str] = None, *,
     # If that happens, replies get enqueued but never delivered.
     if _sender_thread is None or not _sender_thread.is_alive() or _outgoing_queue is None:
         try:
-            cfg = Config.get("telegram_config") or {}
-            token = (cfg.get("bot_token") or "").strip() if isinstance(cfg, dict) else ""
-            _ensure_sender_thread(token)
+            _ensure_sender_thread(channel_secret("telegram"))
         except Exception:
             pass
 
@@ -766,9 +765,9 @@ def _run_bot():
     if not isinstance(telegram_config, dict):
         logger.error("telegram_config missing or invalid")
         return
-    bot_token = (telegram_config.get("bot_token") or "").strip()
+    bot_token = channel_secret("telegram")
     if not bot_token:
-        logger.error("telegram_config.bot_token missing")
+        logger.error("telegram bot token missing")
         return
 
     application = Application.builder().token(bot_token).build()
@@ -1282,10 +1281,9 @@ def _run_bot():
 def start_bridge() -> bool:
     """Start the Telegram bridge (bot + sender thread). Returns True if started."""
     global _bridge_thread, _sender_thread, _outgoing_queue, _bridge_stop_requested
-    telegram_config = Config.get("telegram_config") or {}
-    if not isinstance(telegram_config, dict) or not telegram_config.get("bot_token"):
+    bot_token = channel_secret("telegram")
+    if not bot_token:
         return False
-    bot_token = (telegram_config.get("bot_token") or "").strip()
     _bridge_stop_requested = False
     sender_started = _ensure_sender_thread(bot_token)
     if _bridge_thread is not None and _bridge_thread.is_alive():

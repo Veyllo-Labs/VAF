@@ -127,12 +127,13 @@ The Discord window (Settings → Connections → Discord) uses the shared channe
 
 ### Configuration
 
-The Discord configuration is stored locally in your VAF config:
+The Discord configuration is stored locally in your VAF config. The bot token is not part
+of it: the wizard stores it in the encrypted key ring (`vaf/core/channel_secrets.py`), it is
+never sent back to the browser, and **Disconnect** removes it together with the block.
 
 ```json
 {
   "discord_config": {
-    "bot_token": "your-bot-token",
     "admin_user_id": "123456789",
     "admin_username": "YourUsername",
     "verified": true,
@@ -175,7 +176,7 @@ The Discord configuration is stored locally in your VAF config:
 - **Whitelist**: Only whitelisted Telegram users can use the bot; each entry maps one Telegram user to one VAF user (user_scope_id, username).
 - **Message history**: The per-chat conversation is the source of truth; `read_telegram_chat` reads it directly (always complete), and `find_telegram_messages` / `inbox` query a searchable index re-synced from it on use.
 - **Edits**: Editing a Telegram message updates the stored history (matched by the originating message id). Limitations: rapidly-sent messages that were debounced into one turn only track the last id of the burst, and the Telegram Bot API does not deliver message deletions, so deletes are not reflected.
-- **Local storage**: Bot token and whitelist are stored in your local VAF config only.
+- **Local storage**: The whitelist is stored in your local VAF config; the bot token in the encrypted key ring on this machine (`vaf/core/channel_secrets.py`). The token never comes back to the browser, and **Disconnect** removes both.
 
 ### Setup
 
@@ -507,9 +508,16 @@ differ per channel, NOT a change to the rule. The prompt surfaces that teach del
 (automation workflow generator, calendar check prompt) stay unchanged.
 
 **The registry** is `vaf/core/channels.py`: one `Channel` row per platform with its name,
-label, whether a bridge exists (`bridge`), its send and read tools, and whether the Front
+label, whether a bridge exists (`bridge`), its send and read tools, whether the Front
 Office can open it (`front_office`, off by default: a channel that gains a bridge without
-a contact lane must not become a Front Office channel by being routable). Everything that
+a contact lane must not become a Front Office channel by being routable), and which fields
+of its config block are credentials (`secrets`). Those fields never stay in config.json and
+never reach a browser: `vaf/core/channel_secrets.py` keeps them in the encrypted key ring,
+takes them out of every save on both save paths (`api_keys.absorb_config_keys`), blanks
+them in the config the browser receives, and removes them only through
+`DELETE /api/config/channels/{channel}/credentials` (a disconnect), because an empty field
+means "not re-sent". `tests/test_channel_secrets.py` refuses any other module reading a
+credential field out of a config block. Everything that
 has to know "which channels are there" reads it: the chat sources the tool policy and
 host_bash's own guard recognise (`CHAT_CHANNELS`, `CHAT_SESSION_PREFIXES`), the ingress
 policy and its closed-by-default doors, the main messengers an owner can pick
@@ -543,7 +551,8 @@ Session-id prefixes count as channel names: a chat session id starts with `<chan
 
 What a new channel still needs, because it differs per channel:
 
-1. The bridge, its `<platform>_config`, the availability detection in
+1. Its login fields in the row's `secrets`, read through `channel_secrets.channel_secret`
+   and never out of the config block. Then the bridge, its `<platform>_config`, the availability detection in
    `get_messaging_connections()` and its paired-endpoint count in the security perimeter
    (`security_routes.collect_channels_status`, which reads each channel's own config
    shape), then `bridge=True` in its row.

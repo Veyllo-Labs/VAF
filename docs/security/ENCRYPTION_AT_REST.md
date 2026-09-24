@@ -80,10 +80,20 @@ THE MASTER KEY, per platform (secure_store_kek_backend = "auto"):
         +-- local_network_jwt_secret     token signing (and, derived, the TOTP column)
         +-- redis_password               the cache that holds DECRYPTED memory
         +-- admin_password_hash          Argon2 hash, so the terminal can verify offline
+        +-- channel_<name>_<field>       a messaging channel's login (the Telegram and
+                                         Discord bot tokens), vaf/core/channel_secrets.py
 ```
 
-`~/.vaf/config.json` holds **no key material**. It used to hold all of it, which
-made every "encrypted" store equivalent to chmod protection.
+`~/.vaf/config.json` holds **no key material and no messenger login**. It used to
+hold all of it, which made every "encrypted" store equivalent to chmod protection. The
+bot tokens were the last to leave: they are a field inside a channel's block
+(`telegram_config.bot_token`) rather than a key of their own, so the top-level move
+missed them, and the config API sent that block, token included, to every admin's
+browser. A token found in config.json (pasted there by hand, which stays a valid way to
+set a bot up, or left by an older release) moves into the ring on the next read. No
+pre-keyring backup is written for it: that backup is a plaintext copy of config.json,
+and a bot token can be re-issued by the platform, so a downgrade costs one re-entry of
+the token rather than a second plaintext copy of it.
 
 Check any installation with:
 

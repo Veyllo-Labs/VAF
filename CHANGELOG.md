@@ -23,6 +23,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Your Telegram and Discord bot tokens are no longer stored in plaintext or shown to the
+  browser.** They sat in `config.json` in plain text, and the settings page received them
+  with the rest of the connection settings - the setup wizard even filled the token in again.
+  They now live in VAF's encrypted key ring beside its other secrets, and the browser never
+  receives them: reopening the wizard shows that a token is stored instead of the token.
+  Existing installations move over by themselves the first time the token is used, with
+  nothing to re-enter. Pasting a token into `config.json` by hand still works; it is moved
+  the same way. If you ever go back to an older VAF version, enter the bot token once more
+  (a token can always be taken from BotFather or the Discord developer portal again).
+- **Disconnecting Discord now actually disconnects it.** The button looked like it worked,
+  but the bot token and the whole Discord configuration stayed on disk. Disconnecting
+  Telegram or Discord now stops the bot and removes its token and settings in one step.
 - **Your main messenger can only be one VAF can deliver to.** Settings offered Slack, Signal
   and Mail as the channel for proactive messages. None of them can deliver today: Signal and
   Mail were thrown away when saved, and Slack was kept while every message meant for it

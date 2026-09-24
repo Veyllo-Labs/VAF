@@ -686,7 +686,7 @@ class Config:
         "browser_image_max_age_days": 14,                          # Rebuild the browser image with a fresh base beyond this age (0 = off)
 
         # Connections: Telegram (bot token, whitelist per user_scope_id)
-        "telegram_config": None,                                   # { bot_token, enabled, verified?, whitelist: [...] }
+        "telegram_config": None,                                   # { enabled, verified?, whitelist: [...] }; the bot token lives in the key ring (channel_secrets)
         # Connections: WhatsApp (Baileys via Node, per-user auth). The linked account is the
         # AGENT's number; `whitelist` holds the numbers users chat FROM (main user per VAF
         # account), never the linked number itself. `reply_window_hours`: a number the agent
@@ -1267,7 +1267,13 @@ class Config:
             out = dict(config)
             for k in [k for k in out if cls.is_secret_config_key(k)]:
                 out[k] = ""
-            return out
+            # The same rule one level down: a channel's login token lives in its config
+            # block (`telegram_config.bot_token`), which the key classifier above cannot
+            # see. It left config.json for the key ring, and a copy still sitting here
+            # (hand-pasted, or written by an older release) must not reach the browser
+            # before the next read moves it.
+            from vaf.core.channel_secrets import redact_channel_secrets
+            return redact_channel_secrets(out)
         out = dict(config)
         scope_str = str(user_scope_id).strip() if user_scope_id else None
 

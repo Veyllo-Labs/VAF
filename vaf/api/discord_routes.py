@@ -13,6 +13,8 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from vaf.core.channel_secrets import has_channel_secret
+
 logger = logging.getLogger("vaf.api.discord")
 
 router = APIRouter(prefix="/api/discord", tags=["discord"])
@@ -313,7 +315,7 @@ async def start_discord_bridge():
     if not discord_config.get("verified"):
         raise HTTPException(status_code=400, detail="Discord not configured. Please complete setup first.")
 
-    if not discord_config.get("bot_token"):
+    if not has_channel_secret("discord"):
         raise HTTPException(status_code=400, detail="Bot token missing.")
 
     if not discord_config.get("admin_user_id"):

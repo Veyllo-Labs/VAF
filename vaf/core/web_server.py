@@ -25,6 +25,7 @@ from vaf.cli.autosuggest import SmartAutoSuggest
 import json
 from vaf.core.config import Config
 from vaf.core.channels import CHAT_SESSION_PREFIXES
+from vaf.core.channel_secrets import has_channel_secret
 from vaf.version import __version__
 from vaf.core.log_helper import append_domain_log, get_dated_log_path, is_debug_logging_enabled
 from pathlib import Path
@@ -1855,7 +1856,7 @@ async def startup_event():
     # Auto-start Telegram bridge when configured and enabled (so Web UI shows "Connected" after restart)
     try:
         telegram_config = Config.get("telegram_config") or {}
-        if isinstance(telegram_config, dict) and telegram_config.get("verified") and telegram_config.get("bot_token") and telegram_config.get("enabled"):
+        if isinstance(telegram_config, dict) and telegram_config.get("verified") and telegram_config.get("enabled") and has_channel_secret("telegram"):
             from vaf.api.telegram_bridge import start_bridge, is_bridge_running
             if not is_bridge_running() and start_bridge():
                 log("WebServer", "Telegram bridge auto-started (configured and enabled)")
@@ -1867,7 +1868,7 @@ async def startup_event():
     # Auto-start Discord bridge when configured and enabled
     try:
         discord_config = Config.get("discord_config") or {}
-        if isinstance(discord_config, dict) and discord_config.get("verified") and discord_config.get("bot_token") and discord_config.get("admin_user_id") and discord_config.get("enabled"):
+        if isinstance(discord_config, dict) and discord_config.get("verified") and discord_config.get("admin_user_id") and discord_config.get("enabled") and has_channel_secret("discord"):
             from vaf.api.discord_bridge import start_bridge, is_bridge_running
             if not is_bridge_running() and start_bridge():
                 log("WebServer", "Discord bridge auto-started (configured and enabled)")

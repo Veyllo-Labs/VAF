@@ -498,6 +498,48 @@ async def list_api_keys(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str,
         ) from exc
 
 
+@router.delete("/config/channels/{channel}/credentials")
+async def disconnect_channel(
+    channel: str,
+    _: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Disconnect a messaging channel: stop its bridge, remove its login token from the key
+    ring and from config.json, and clear its config block.
+
+    The one way a channel's token goes away. A save cannot do it: an empty token field
+    means "not re-sent" (the browser never receives the token, so every save echoes an
+    empty one), and a saved `null` block is kept by the merge on purpose. That second rule
+    is why "disconnect" on Discord used to change nothing on disk - the panel saved `null`
+    and the whole block, token included, survived.
+
+    The bridge stops first, so nothing is still sending with the token being removed.
+    """
+    import importlib
+
+    from vaf.core.channel_secrets import clear_channel_secrets, has_channel_secret
+    from vaf.core.channels import CHANNEL_SECRETS
+
+    name = (channel or "").strip().lower()
+    if name not in CHANNEL_SECRETS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"'{name}' has no login stored by VAF (channels with one: {', '.join(sorted(CHANNEL_SECRETS))}).",
+        )
+    try:
+        importlib.import_module(f"vaf.api.{name}_bridge").stop_bridge()
+    except Exception as e:  # noqa: BLE001 - a bridge that will not stop must not keep its token
+        logger.warning("Could not stop the %s bridge before disconnecting: %s", name, e)
+    removed = clear_channel_secrets(name)
+    # Explicit removal of the block: a save of None is kept by the merge, a direct set is not.
+    Config.set(f"{name}_config", None)
+    if has_channel_secret(name) or Config.get(f"{name}_config"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"{name} still holds a login after the disconnect; treat it as still connected.",
+        )
+    return {"status": "disconnected", "channel": name, "removed": removed}
+
+
 @router.delete("/config/secrets/{key_name}")
 async def delete_config_secret(
     key_name: str,

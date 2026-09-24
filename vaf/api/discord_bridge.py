@@ -13,6 +13,7 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 from vaf.core.config import Config
+from vaf.core.channel_secrets import channel_secret, has_channel_secret
 from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
 from vaf.core.task_queue import TaskQueue
 from vaf.core.discord_reply import set_discord_reply_callback
@@ -280,7 +281,7 @@ def _run_bot() -> None:
     if not isinstance(discord_config, dict):
         logger.error("discord_config missing or invalid")
         return
-    bot_token = (discord_config.get("bot_token") or "").strip()
+    bot_token = channel_secret("discord")
     admin_user_id = (discord_config.get("admin_user_id") or "").strip()
     if not bot_token or not admin_user_id:
         logger.error("discord_config bot_token or admin_user_id missing")
@@ -433,7 +434,7 @@ def start_bridge() -> bool:
     global _bridge_thread, _sender_thread, _outgoing_queue, _bridge_stop_requested
 
     discord_config = Config.get("discord_config") or {}
-    if not isinstance(discord_config, dict) or not discord_config.get("bot_token"):
+    if not isinstance(discord_config, dict) or not has_channel_secret("discord"):
         return False
     if not discord_config.get("verified") or not discord_config.get("admin_user_id"):
         return False
@@ -445,7 +446,7 @@ def start_bridge() -> bool:
 
     _bridge_stop_requested = False
     _outgoing_queue = queue.Queue()
-    bot_token = (discord_config.get("bot_token") or "").strip()
+    bot_token = channel_secret("discord")
 
     _sender_thread = threading.Thread(target=_sender_loop, args=(bot_token,), daemon=True)
     _sender_thread.start()

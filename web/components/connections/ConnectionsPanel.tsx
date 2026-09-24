@@ -651,38 +651,21 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         const app = CONNECTION_APPS.find(a => a.id === appId);
         const appName = app?.name ?? appId;
         if (!confirm(`Are you sure you want to disconnect ${appName}? This will remove the connection and associated data.`)) return;
-        if (appId === 'discord') {
-            onConfigChange('discord_config', null);
-            setConnectionStatus(prev => ({ ...prev, discord: 'disconnected' }));
-        }
-        if (appId === 'telegram') {
+        if (appId === 'discord' || appId === 'telegram') {
+            // One route stops the bridge and removes the login from the key ring and the block
+            // from config.json. A save cannot: an empty token means "not re-sent" and a saved
+            // null block is kept by the merge, which is how Discord's disconnect used to leave
+            // everything on disk.
             try {
-                await fetch(api('api/telegram/stop'), { method: 'POST', credentials: 'include' });
+                const res = await fetch(api(`api/config/channels/${appId}/credentials`), { method: 'DELETE', credentials: 'include' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
             } catch (e) {
-                console.error('Failed to stop Telegram bridge:', e);
+                console.error(`Failed to disconnect ${appName}:`, e);
+                alert(`${appName} could not be disconnected. Its login is still stored; try again.`);
+                return;
             }
-            // Explicitly overwrite telegram_config with a disabled/empty object.
-            // Using null would be preserved by backend safety-merge and old config would survive restarts.
-            const clearedTelegramConfig = {
-                bot_token: '',
-                verified: false,
-                enabled: false,
-                whitelist: [],
-                relay_whitelist: [],
-                bot_username: null,
-            };
-            onConfigChange('telegram_config', clearedTelegramConfig);
-            try {
-                await fetch(api('api/config'), {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ telegram_config: clearedTelegramConfig }),
-                    credentials: 'include',
-                });
-            } catch (e) {
-                console.error('Failed to clear Telegram config:', e);
-            }
-            setConnectionStatus(prev => ({ ...prev, telegram: 'disconnected' }));
+            onConfigChange(`${appId}_config`, null);
+            setConnectionStatus(prev => ({ ...prev, [appId]: 'disconnected' }));
         }
         if (appId === 'whatsapp') {
             try {

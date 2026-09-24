@@ -312,6 +312,24 @@ def peek_data_secret(name: str) -> str:
         raise RuntimeError(f"The data keyring cannot be opened while reading {name!r}.")
 
 
+def delete_data_secret(name: str) -> bool:
+    """Remove a named secret; True when there was one. For credentials a person revokes
+    (a disconnected bot), never for a data key: deleting a key orphans what it encrypted.
+
+    Same vanished-ring guard as set_data_secret, and strict for the same reason: a write
+    to a ring that is gone would create a fresh, empty one that silences the guard."""
+    _refuse_if_the_ring_vanished()
+    removed = {"hit": False}
+
+    def _drop(payload):
+        if name in payload:
+            del payload[name]
+            removed["hit"] = True
+
+    _ring().update(_drop, strict=True)
+    return removed["hit"]
+
+
 def ensure_recovery_kit() -> None:
     """Create the recovery key the first time the keyring has a DEK.
 
@@ -358,6 +376,13 @@ def ring_status() -> dict:
             "secure_store_kek",
         )
     }
+    # A channel's login token is a field of its config block rather than a top-level key;
+    # it moves on the next read like the keys above (vaf/core/channel_secrets.py).
+    from vaf.core.channels import CHANNEL_SECRETS
+    for channel, fields in CHANNEL_SECRETS.items():
+        block = Config.get(f"{channel}_config")
+        for field in fields:
+            legacy[f"{channel}_config.{field}"] = bool(isinstance(block, dict) and block.get(field))
     return {
         "kek_backend": kek_backend(),
         "entries": names,

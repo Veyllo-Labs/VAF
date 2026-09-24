@@ -39,7 +39,10 @@ const STEPS = [
 
 export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existingConfig }: DiscordSetupWizardProps) {
     const [currentStep, setCurrentStep] = useState(0);
-    const [botToken, setBotToken] = useState(existingConfig?.bot_token || '');
+    // The stored token never comes back to the browser (vaf/core/channel_secrets.py): the
+    // field starts empty, and a bot that is already verified says so instead.
+    const [botToken, setBotToken] = useState('');
+    const tokenStored = Boolean(existingConfig?.verified);
     const [verificationCode, setVerificationCode] = useState('');
     const [userInputCode, setUserInputCode] = useState('');
     const [isVerifying, setIsVerifying] = useState(false);
@@ -363,8 +366,11 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                                     className="w-full px-4 py-3 rounded-xl bg-white border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-transparent"
                                 />
                                 <p className="text-xs text-gray-400">
-                                    Your token is stored locally and never sent to external servers.
+                                    Your token is stored encrypted on this machine and sent only to Discord, to sign the bot in.
                                 </p>
+                                {tokenStored && !botToken && (
+                                    <p className="text-xs text-gray-500">A token is already stored for this bot and is never shown again. Paste it (or a new one) only to set the bot up again.</p>
+                                )}
                             </div>
                             {botToken.length > 0 && botToken.length < 50 && (
                                 <div className="flex items-center gap-2 text-amber-600 text-sm">

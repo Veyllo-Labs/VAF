@@ -29,14 +29,20 @@ def _cfg(key: str):
         return None
 
 
+def _has_token(channel: str) -> bool:
+    try:
+        from vaf.core.channel_secrets import has_channel_secret
+        return has_channel_secret(channel)
+    except Exception:
+        return False
+
+
 def _telegram_configured() -> bool:
-    c = _cfg("telegram_config")
-    return bool(isinstance(c, dict) and c.get("bot_token"))
+    return isinstance(_cfg("telegram_config"), dict) and _has_token("telegram")
 
 
 def _discord_configured() -> bool:
-    c = _cfg("discord_config")
-    return bool(isinstance(c, dict) and c.get("bot_token"))
+    return isinstance(_cfg("discord_config"), dict) and _has_token("discord")
 
 
 def _whatsapp_configured() -> bool:

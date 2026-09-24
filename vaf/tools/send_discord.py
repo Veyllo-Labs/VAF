@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 from vaf.tools.base import BaseTool
+from vaf.core.channel_secrets import channel_secret
 from vaf.tools.send_telegram import _resolve_path
 
 
@@ -67,7 +68,6 @@ class SendDiscordTool(BaseTool):
 
         try:
             from vaf.core.messaging_connections import get_discord_user_id
-            from vaf.core.config import Config
             from vaf.core.discord_send import send_discord_dm
         except ImportError as e:
             return f"Discord send unavailable: {e}"
@@ -80,8 +80,7 @@ class SendDiscordTool(BaseTool):
                 "Once verified, you can send proactive messages via Discord."
             )
 
-        discord_config = Config.get("discord_config") or {}
-        bot_token = (discord_config.get("bot_token") or "").strip()
+        bot_token = channel_secret("discord")
         if not bot_token:
             return "Discord bot token missing. Please complete Discord setup in Settings → Connections."
 

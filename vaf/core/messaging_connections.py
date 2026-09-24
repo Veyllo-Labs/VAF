@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from vaf.core.config import Config
 from vaf.core.platform import Platform
+from vaf.core.channel_secrets import channel_secret, has_channel_secret
 
 # ── Channel registry ─────────────────────────────────────────────────────────
 # Declared once in vaf/core/channels.py; these names stay importable from here for the
@@ -465,7 +466,7 @@ def get_messaging_connections(
     # Telegram: enabled + verified + user has a whitelist entry
     telegram_config = Config.get("telegram_config") or {}
     if isinstance(telegram_config, dict):
-        if telegram_config.get("enabled") and telegram_config.get("verified") and telegram_config.get("bot_token"):
+        if telegram_config.get("enabled") and telegram_config.get("verified") and has_channel_secret("telegram"):
             whitelist = telegram_config.get("whitelist") or []
             scope_str = str(user_scope_id) if user_scope_id is not None else None
             vaf_username = (username or "").strip() or "admin"
@@ -694,8 +695,7 @@ def send_to_main_messenger(
         elif main == "discord":
             user_id = get_discord_user_id(user_scope_id, username)
             if user_id:
-                discord_config = Config.get("discord_config") or {}
-                bot_token = (discord_config.get("bot_token") or "").strip()
+                bot_token = channel_secret("discord")
                 if bot_token:
                     from vaf.core.discord_send import send_discord_dm
                     if text:

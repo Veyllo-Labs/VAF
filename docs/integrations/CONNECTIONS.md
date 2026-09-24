@@ -215,12 +215,13 @@ never sent back to the browser, and **Disconnect** removes it together with the 
 
 ### Configuration
 
-Stored in your VAF config (locally):
+Stored in your VAF config (locally). The bot token is not part of it: it lives in the
+encrypted key ring (`vaf/core/channel_secrets.py`); a `bot_token` written into this block by
+hand is moved there on the next read.
 
 ```json
 {
   "telegram_config": {
-    "bot_token": "your-bot-token",
     "verified": true,
     "enabled": true,
     "whitelist": [
@@ -252,7 +253,7 @@ Global options (top-level in config):
 - **No reply for a non-whitelisted Telegram account**: Expected behavior. Unauthorized traffic is not answered by design; the messages are still stored for you to read.
 - **No reply for a whitelisted account**: Ensure the bridge is running (Settings → Connections, Telegram toggle on). After a VAF restart, the bridge auto-starts if Telegram is enabled.
 - **High unauthorized traffic**: Unauthorized drops are logged with per-user throttling to avoid log amplification under spam/flood attempts, into the channel's inbound log (`telegram_inbound_<date>.log`), which is written with debug logging off too. The sender sees nothing; the owner reads the kept message in the Telegram window and the inbox.
-- **Telegram reconnects after restart even after Disconnect**: Disconnect now clears token + verification + whitelist and persists `enabled=false`. After disconnect, Telegram should stay off across restarts. If it still reconnects, refresh Settings and verify `telegram_config` is empty/disabled in the saved config.
+- **Telegram reconnects after restart even after Disconnect**: Disconnect stops the bridge, removes the bot token from the key ring and removes `telegram_config` from the saved config (`DELETE /api/config/channels/telegram/credentials`), so there is nothing left to start from after a restart. If it still reconnects, run `vaf secure status`: it names a bot token still sitting in config.json, which would be picked up again on the next read.
 
 ## WhatsApp Integration
 

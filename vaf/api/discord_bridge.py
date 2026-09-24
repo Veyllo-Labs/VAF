@@ -71,18 +71,8 @@ def _sender_loop(bot_token: str) -> None:
 
 def _append_discord_activity(channel_id: str, direction: str = "in") -> None:
     """Append one activity entry for the dashboard timeline (keeps last 20, older are dropped)."""
-    try:
-        config = Config.load()
-        dc = config.get("discord_config") or {}
-        if not isinstance(dc, dict):
-            return
-        activity = list(dc.get("chat_activity") or [])
-        activity.append({"channel_id": str(channel_id), "ts": time.time(), "direction": direction})
-        dc["chat_activity"] = activity[-20:]
-        config["discord_config"] = dc
-        Config.save(config)
-    except Exception:
-        pass
+    from vaf.core.messaging_connections import append_channel_activity
+    append_channel_activity("discord", {"channel_id": str(channel_id), "ts": time.time(), "direction": direction}, keep=20)
 
 
 def _keep_rejected_discord_message(author_id: str, content: str, message_id: str, is_dm: bool) -> bool:

@@ -44,6 +44,32 @@ def reply_window_hours() -> float:
     return max(0.0, hours)
 
 
+def append_channel_activity(channel: str, entry: Dict[str, Any], keep: int) -> None:
+    """Append one entry to a channel's dashboard timeline (`<channel>_config.chat_activity`,
+    newest `keep` kept). Never raises: a timeline entry must not cost a message.
+
+    The three bridges each carried this read-modify-write by hand, with two faults between
+    them. It ran without the config lock, so an entry written around a disconnect could
+    load the block before the disconnect removed it and save it back after, and it turned a
+    missing block into an empty dict, so an entry arriving after the disconnect created a
+    fresh `{"chat_activity": [...]}` block for a channel that is gone. Held under the lock
+    from load to save, and a channel without a block gets no entry.
+    """
+    key = f"{channel}_config"
+    try:
+        with Config._locked():
+            config = Config.load()
+            block = config.get(key)
+            if not isinstance(block, dict):
+                return
+            activity = list(block.get("chat_activity") or [])
+            activity.append(entry)
+            config[key] = {**block, "chat_activity": activity[-keep:]}
+            Config.save(config)
+    except Exception:
+        pass
+
+
 def whatsapp_inbound_to_agent() -> bool:
     """Does an accepted WhatsApp message reach the agent at all? `whatsapp_config.inbound_to_agent`,
     on unless it says False: the bridge stops EVERY sender before the policy when it is off, the

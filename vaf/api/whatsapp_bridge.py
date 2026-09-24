@@ -456,18 +456,9 @@ def _e164_to_jid(phone: str) -> str:
 
 def _append_chat_activity(chat_id: str, user_scope_id: Any, direction: str = "in") -> None:
     """Append one activity entry for the dashboard timeline (keeps last 100)."""
-    try:
-        config = Config.load()
-        wc = config.get("whatsapp_config") or {}
-        if not isinstance(wc, dict):
-            return
-        activity = list(wc.get("chat_activity") or [])
-        activity.append({"chat_id": str(chat_id), "user_scope_id": str(user_scope_id) if user_scope_id else None, "ts": time.time(), "direction": direction})
-        wc["chat_activity"] = activity[-100:]
-        config["whatsapp_config"] = wc
-        Config.save(config)
-    except Exception:
-        pass
+    from vaf.core.messaging_connections import append_channel_activity
+    append_channel_activity("whatsapp", {"chat_id": str(chat_id), "user_scope_id": str(user_scope_id) if user_scope_id else None,
+                                    "ts": time.time(), "direction": direction}, keep=100)
 
 
 def _synthesize_voice_for_reply(text: str, lang: str) -> Optional[str]:

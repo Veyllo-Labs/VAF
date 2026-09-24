@@ -246,3 +246,66 @@ def test_a_save_that_cannot_move_the_token_is_refused_and_config_json_keeps_it(c
         absorb_config_keys({"telegram_config": {"verified": True, "enabled": True, "bot_token": ""}})
     assert config_file.on_disk()["telegram_config"]["bot_token"] == TOKEN
     assert config_file.on_disk()["telegram_config"]["enabled"] is False, "nothing of the save landed"
+
+
+@pytest.mark.parametrize("channel", ["discord", "telegram", "whatsapp"])
+def test_a_timeline_entry_after_a_disconnect_does_not_bring_the_channel_back(config_file, channel):
+    """The bridges' activity writer turned a missing block into an empty dict, so an entry
+    arriving after a disconnect created `{"chat_activity": [...]}` for a channel that is gone."""
+    from vaf.core.messaging_connections import append_channel_activity
+    config_file.seed(**{f"{channel}_config": None})
+    append_channel_activity(channel, {"chat_id": "1", "ts": 1.0, "direction": "in"}, keep=100)
+    assert config_file.on_disk().get(f"{channel}_config") is None
+
+
+def test_a_timeline_entry_keeps_the_block_and_the_newest_entries(config_file):
+    from vaf.core.messaging_connections import append_channel_activity
+    config_file.seed(discord_config={"verified": True, "admin_user_id": "42",
+                                     "chat_activity": [{"n": i} for i in range(20)]})
+    append_channel_activity("discord", {"n": 20}, keep=20)
+    block = config_file.on_disk()["discord_config"]
+    assert block["verified"] is True and block["admin_user_id"] == "42"
+    assert [e["n"] for e in block["chat_activity"]] == list(range(1, 21))
+
+
+def test_a_timeline_entry_loads_and_saves_inside_one_config_lock(config_file, monkeypatch):
+    """Without the lock, an entry that loaded the block before a disconnect and saved after
+    it wrote the whole old block back."""
+    import contextlib
+
+    from vaf.core.messaging_connections import append_channel_activity
+    events = []
+    real_load, real_save = Config.load.__func__, Config.save.__func__
+
+    @contextlib.contextmanager
+    def spy_lock(cls):
+        events.append("lock")
+        yield
+        events.append("unlock")
+
+    monkeypatch.setattr(Config, "_locked", classmethod(spy_lock))
+    monkeypatch.setattr(Config, "load", classmethod(lambda cls: (events.append("load"), real_load(cls))[1]))
+    monkeypatch.setattr(Config, "save", classmethod(lambda cls, c: (events.append("save"), real_save(cls, c))[1]))
+    config_file.seed(telegram_config={"verified": True})
+    events.clear()
+    append_channel_activity("telegram", {"chat_id": "1"}, keep=100)
+    # Config.save takes the (reentrant) lock again itself, so count the nesting: every
+    # load and save must happen while the OUTER lock is held, released only at the end.
+    depth, seen = 0, []
+    for e in events:
+        depth += {"lock": 1, "unlock": -1}.get(e, 0)
+        if e in ("load", "save"):
+            seen.append((e, depth))
+    assert events[0] == "lock" and events[-1] == "unlock", events
+    assert seen[0] == ("load", 1) and ("save", 1) in seen, seen
+    assert all(d >= 1 for _, d in seen), seen
+
+
+def test_no_bridge_writes_its_timeline_by_hand():
+    """Three hand copies of the same read-modify-write carried the same two faults."""
+    from pathlib import Path
+    repo = Path(__file__).resolve().parent.parent
+    for bridge in ("discord", "telegram", "whatsapp"):
+        src = (repo / "vaf" / "api" / f"{bridge}_bridge.py").read_text(encoding="utf-8")
+        assert f'append_channel_activity("{bridge}"' in src, bridge
+        assert '["chat_activity"] = activity' not in src, f"{bridge} writes chat_activity by hand"

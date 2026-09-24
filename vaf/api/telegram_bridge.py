@@ -270,18 +270,9 @@ def _open_front_office_entry(telegram_user_id: str, policy: Any, sender: Any) ->
 
 def _append_chat_activity(chat_id: str, user_scope_id: Any, direction: str = "in") -> None:
     """Append one activity entry for the dashboard timeline (keeps last 100)."""
-    try:
-        config = Config.load()
-        tc = config.get("telegram_config") or {}
-        if not isinstance(tc, dict):
-            return
-        activity = list(tc.get("chat_activity") or [])
-        activity.append({"chat_id": str(chat_id), "user_scope_id": str(user_scope_id) if user_scope_id else None, "ts": time.time(), "direction": direction})
-        tc["chat_activity"] = activity[-100:]
-        config["telegram_config"] = tc
-        Config.save(config)
-    except Exception:
-        pass
+    from vaf.core.messaging_connections import append_channel_activity
+    append_channel_activity("telegram", {"chat_id": str(chat_id), "user_scope_id": str(user_scope_id) if user_scope_id else None,
+                                    "ts": time.time(), "direction": direction}, keep=100)
 
 
 async def _transcribe_voice(bot_token: str, file_id: str) -> tuple[Optional[str], Optional[str]]:

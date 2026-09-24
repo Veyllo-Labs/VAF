@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import math
 import threading
 import time
 from typing import Callable, Optional
@@ -75,7 +76,9 @@ def tool_budget_seconds(tool, args: dict | None = None) -> float:
     used to be a list of tool NAMES here (librarian 60 s, browser 1800 s, the sub-agents
     300 s, everything else 120 s), which a tool registered by an embedder could never join,
     and which cut host_bash at 120 s while it accepted a 300-second command. A declaration
-    that fails or answers nonsense falls back to the default rather than to "wait forever".
+    that fails or answers nonsense falls back to the default rather than to "wait forever" -
+    which includes infinity and NaN: the deadline arithmetic would never be reached with
+    either, so the call could only ever end by Stop.
     """
     declared = None
     fn = getattr(tool, "budget_seconds", None)
@@ -87,7 +90,7 @@ def tool_budget_seconds(tool, args: dict | None = None) -> float:
         value = float(declared) if declared is not None else None
     except (TypeError, ValueError):
         value = None
-    if value is None or value <= 0:
+    if value is None or not math.isfinite(value) or value <= 0:
         return default_timeout_seconds()
     return value
 

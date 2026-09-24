@@ -141,6 +141,29 @@ def test_the_other_self_supervised_tools_stay_exempt():
     assert exempt == frozenset(), "browser_agent declares itself, and the engine still bounds it"
 
 
+def test_a_spawned_step_waits_for_the_tool_s_own_budget(monkeypatch):
+    """The spawn branch waits OFF the funnel, so the engine must hand it the step tool's
+    own budget itself. By name alone a spawned browser_agent step fell to the generic 120 s
+    instead of its declared browser budget. MUTATION: resolve _step_timeout by name only."""
+    for key in ("VAF_SPAWN_BROWSER_SUBAGENT", "VAF_IN_SUBAGENT_TERMINAL",
+                "VAF_AGENT_TYPE", "VAF_TASK_ID"):
+        monkeypatch.delenv(key, raising=False)   # the spawn branch writes these; restored after
+    seen = {}
+
+    def _await(self, spawn_output, tool_name, check_stop, timeout, poll):
+        seen[tool_name] = timeout
+        return "DONE"
+
+    monkeypatch.setattr(WorkflowEngine, "_await_subagent", _await)
+    engine = WorkflowEngine(tools={"browser_agent": _Browser(lambda **kw: "[SUBAGENT_ASYNC:t1:browser_agent]")},
+                            callback=lambda *a, **k: None)
+    with patch("vaf.core.config.Config.get",
+               side_effect=lambda k, d=None: 1234.0 if k == "browser_timeout_seconds" else d):
+        engine.execute([WorkflowStep(tool="browser_agent", input_template="do it", output_name="out")],
+                       variables={}, wait_for_subagents=True)
+    assert seen.get("browser_agent") == 1234.0, seen
+
+
 def test_browser_agent_really_is_cut_off_and_not_just_declared_so():
     """The end-to-end half: passing the argument and the argument taking effect are two
     different claims. Runs a browser_agent step that would outlast a tiny budget."""

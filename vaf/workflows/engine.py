@@ -1115,7 +1115,12 @@ class WorkflowEngine:
                 retry_count = 0
                 result = None
 
-                _step_timeout = _workflow_step_timeout(step.tool)  # still needed by the spawn branch below
+                # Still needed by the spawn branch below, which waits OFF the funnel and so
+                # must be handed the step tool's own budget explicitly: by name alone a
+                # spawned browser_agent step fell to the generic 120 s instead of its 1800.
+                from vaf.core.bounded_run import tool_budget_seconds
+                _step_timeout = _workflow_step_timeout(
+                    step.tool, default=tool_budget_seconds(tool, args))
 
                 while retry_count < max_retries:
                     # Route file-producing steps into the shared project dir. Inside the

@@ -408,7 +408,14 @@ class ExecuteWorkflowTool(BaseTool):
                 tool = _running_tool[0]
                 if tool in SPAWNABLE_STEP_TOOLS or tool == "document_writer":
                     try:
-                        return max(float(_workflow_step_timeout(tool)), _TIMEOUT_HEAVY_FLOOR)
+                        # The tool's OWN budget, from the registry this run executes with:
+                        # by name alone a quiet browser step fell back to the generic budget
+                        # and counted as wedged after five minutes instead of thirty.
+                        from vaf.core.bounded_run import tool_budget_seconds
+                        _inst = tools.get(tool)
+                        _own = tool_budget_seconds(_inst, {}) if _inst is not None else None
+                        return max(float(_workflow_step_timeout(tool, default=_own)),
+                                   _TIMEOUT_HEAVY_FLOOR)
                     except Exception:
                         return _TIMEOUT_HEAVY_FLOOR
                 return float(_TIMEOUT_ACTIVE)

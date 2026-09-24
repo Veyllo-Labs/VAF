@@ -35,7 +35,7 @@ and return early - see "Cooperative cancel" below.
 
 The per-call budget is DECLARED by the tool: `BaseTool.timeout_seconds`, or `budget_seconds(args)`
 when it follows the call's own arguments (`vaf.core.bounded_run.tool_budget_seconds` resolves it;
-without a declaration, or with one that fails or answers nonsense, it is `tool_timeout_seconds`).
+without a declaration, or with one that fails or answers nonsense - zero, negative, infinity, NaN - it is `tool_timeout_seconds`).
 A filesystem agent is not forced to wait the full research budget: the librarian declares
 `librarian_timeout_seconds`, the sub-agents `subagent_timeout_seconds`, the browser
 `browser_timeout_seconds`, and `host_bash` the command's own timeout (up to 600 s) plus a margin -
@@ -61,7 +61,8 @@ declared self-supervised tools of its registry minus `browser_agent`, handed to 
 stays self-supervised as a standalone `execute_tool` call. A workflow must not be able to
 stall forever on one browsing step. Its `timeout_for` (`_workflow_step_timeout`) accepts
 the `default` keyword, so it receives each tool's own budget and only raises the floor for
-heavy sub-agent steps.
+heavy sub-agent steps. The spawn branch (a sub-agent step run as a child and awaited over
+IPC) and the executor's silence watchdog ask for the step tool's own budget the same way.
 
 ### Cooperative cancel
 

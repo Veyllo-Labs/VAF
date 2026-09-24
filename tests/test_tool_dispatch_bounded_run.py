@@ -184,7 +184,8 @@ def test_a_broken_declaration_falls_back_to_the_default_not_to_forever(monkeypat
         def budget_seconds(self, args):
             raise RuntimeError("boom")
 
-    for bad in (_Broken(_sleeper(5)), _Tool(_sleeper(5), budget=-1), _Tool(_sleeper(5), budget="x")):
+    for bad in (_Broken(_sleeper(5)), _Tool(_sleeper(5), budget=-1), _Tool(_sleeper(5), budget="x"),
+                _Tool(_sleeper(5), budget=float("inf")), _Tool(_sleeper(5), budget=float("nan"))):
         assert is_abort_sentinel(run_tool_bounded(bad, {}, tool_name="probe", poll=0.05))
 
 

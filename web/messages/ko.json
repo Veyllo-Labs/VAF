@@ -367,7 +367,9 @@
     "gateAllowChat": "이 대화에서만",
     "gateAllowAlways": "항상 허용",
     "gateAllowChatHint": "이 대화에서는 이 도구를 계속 허용해요. 다른 대화에서는 계속 물어봐요. VAF를 다시 시작하면 해제돼요.",
-    "gateAllowAlwaysHint": "이 도구를 어디서나 허용하고, 확인이 필요한 모든 도구에 대해 현재 폴더를 신뢰해요."
+    "gateAllowAlwaysHint": "이 도구를 어디서나 허용하고, 확인이 필요한 모든 도구에 대해 현재 폴더를 신뢰해요.",
+    "wakeTimer": "타이머",
+    "wakeProcess": "백그라운드 명령"
   },
   "nav": {
     "settings": "설정",

@@ -305,6 +305,13 @@ account has it unless the admin takes it away). How each use is controlled:
      not the unattended lanes in 2 - a coder started from a Telegram message may still build.
 
    **The main agent: local Web UI / CLI only.**
+4. **Background mode** (`background=true`) starts the command detached and returns its id;
+   the approval above is given once, at the start, and `host_process` then reads its log,
+   writes to its input or stops it without asking again. The command's log is private
+   (0600, owner-only folder, outside the project folder), the process is visible only to the
+   chat and person that started it, and it ends with VAF. It is refused in a messaging-channel
+   chat and inside a sub-agent's process, where nobody could be told when it ends. Details:
+   [TOOL_SUPERVISION.md](../agents/TOOL_SUPERVISION.md), "Background host commands".
 
 An offline classifier (`vaf/core/command_policy.py`, shared with `bash` but run with the
 strict `host` profile) refuses the catastrophic set even after confirmation: code fetched

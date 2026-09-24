@@ -367,7 +367,9 @@
     "gateAllowChat": "Bu sohbet için",
     "gateAllowAlways": "Her zaman izin ver",
     "gateAllowChatHint": "Bu aracı bu sohbetin geri kalanında senin için serbest bırakır. Diğer sohbetler sormaya devam eder. VAF yeniden başlayınca sona erer.",
-    "gateAllowAlwaysHint": "Bu aracı senin için her yerde serbest bırakır ve onay isteyen her araç için geçerli klasöre güvenir."
+    "gateAllowAlwaysHint": "Bu aracı senin için her yerde serbest bırakır ve onay isteyen her araç için geçerli klasöre güvenir.",
+    "wakeTimer": "Zamanlayıcı",
+    "wakeProcess": "Arka plan komutu"
   },
   "nav": {
     "settings": "Ayarlar",

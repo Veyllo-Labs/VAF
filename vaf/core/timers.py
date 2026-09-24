@@ -29,7 +29,7 @@ import threading
 import time
 import uuid as _uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 @dataclass
 class Timer:
@@ -138,8 +138,8 @@ def cancel_timer(timer_id: str) -> bool:
 
 
 def _fire(timer: Timer) -> None:
-    """Deliver a due timer by enqueuing an AgentTask into THIS process's TaskQueue."""
-    from vaf.core.task_queue import TaskQueue
+    """Deliver a due timer by enqueuing a wake turn into THIS process's TaskQueue."""
+    from vaf.core.task_queue import enqueue_wake_turn
 
     if timer.message is not None:
         # A message timer WAKES the agent: the note is fed in as a normal turn,
@@ -153,24 +153,10 @@ def _fire(timer: Timer) -> None:
     else:
         input_text = timer.task or ""
 
-    metadata: Dict[str, Any] = {
-        "timer": True,
-        "timer_id": timer.id,
-        # Mirror normal enqueues so the headless routing-integrity check is satisfied.
-        "enqueue_session_id": timer.session_id,
-    }
-    if timer.user_scope_id is not None:
-        metadata["user_scope_id"] = timer.user_scope_id
-    if timer.username is not None:
-        metadata["username"] = timer.username
-    if timer.role is not None:
-        metadata["role"] = timer.role
-
-    TaskQueue().add(
-        session_id=timer.session_id,
-        input_text=input_text,
-        source=timer.source,
-        metadata=metadata,
+    enqueue_wake_turn(
+        kind="timer", session_id=timer.session_id, text=input_text, source=timer.source,
+        user_scope_id=timer.user_scope_id, username=timer.username, role=timer.role,
+        extra={"timer_id": timer.id},
     )
 
 

@@ -863,6 +863,15 @@ governs its own lifetime - its own deadline, its own reaction to Stop - declares
 itself. Both used to be lists of VAF's own tool names, which a tool of yours
 could never join.
 
+**Background host commands** (`host_bash(background=true)`, then `host_process`)
+report their end as a wake turn queued on VAF's `TaskQueue`, the lane a fired
+timer uses. VAF's own runners (the web server, the terminal apps) consume that
+queue. A loop of your own around `CoreAgent` does not, so there the command
+runs, its log and `host_process` work, but no turn arrives when it ends: poll
+with `host_process(action="list")`, or drain the queue yourself
+(`vaf.core.task_queue.TaskQueue().get(...)`, `wake_kind(task.metadata)` says
+what woke you).
+
 `self.log(message)` is the supported way for a tool to write a diagnostic
 line. It appends to `tools_<date>.log` in the VAF log directory, filling in
 your tool's name and the current session id, and it inherits everything the

@@ -432,7 +432,8 @@ def test_the_runner_marks_the_unattended_turn_where_it_names_the_source():
 
     runner = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
     region = runner.split('agent._current_chat_source = getattr(task, "source", "web")', 1)[1][:900]
-    assert 'agent._unattended_turn = bool(_meta.get("timer") or _meta.get("compaction"))' in region
+    # Every wake kind is unattended (a fired timer, a finished background command).
+    assert 'agent._unattended_turn = bool(_wake_kind(_meta) or _meta.get("compaction"))' in region
 
 
 # ---- one chat, one card --------------------------------------------------------

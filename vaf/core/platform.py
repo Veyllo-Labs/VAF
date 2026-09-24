@@ -1079,37 +1079,7 @@ class Platform:
         stopped = 0
         for pid, _meta in matches:
             try:
-                try:
-                    import psutil  # type: ignore
-                    p = psutil.Process(pid)
-                    children = p.children(recursive=True)
-                    for c in children:
-                        try:
-                            c.terminate()
-                        except Exception:
-                            pass
-                    try:
-                        p.terminate()
-                    except Exception:
-                        pass
-                    # Give processes a brief grace period
-                    gone, alive = psutil.wait_procs([p] + children, timeout=1.5)
-                    for a in alive:
-                        try:
-                            a.kill()
-                        except Exception:
-                            pass
-                except Exception:
-                    # Fallback without psutil
-                    if Platform.is_windows():
-                        subprocess.run(
-                            ["taskkill", "/PID", str(pid), "/T", "/F"],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            check=False,
-                        )
-                    else:
-                        os.kill(pid, 15)
+                Platform.terminate_process_tree(pid)
                 stopped += 1
             except Exception:
                 pass
@@ -1119,6 +1089,42 @@ class Platform:
                 except Exception:
                     pass
         return stopped
+
+    @staticmethod
+    def terminate_process_tree(pid: int, grace: float = 1.5) -> None:
+        """Stop a process AND everything it started: terminate, a grace period, then kill.
+
+        One implementation for every caller that owns a child process tree - the sub-agent
+        children and the agent's background host commands. A shell started with
+        ``shell=True`` is only the parent of the real command, so stopping the parent alone
+        would leave the work running. Without psutil: ``taskkill /T /F`` on Windows, SIGTERM
+        to the pid elsewhere.
+        """
+        try:
+            import psutil  # type: ignore
+            p = psutil.Process(pid)
+            children = p.children(recursive=True)
+            for c in children:
+                try:
+                    c.terminate()
+                except Exception:
+                    pass
+            try:
+                p.terminate()
+            except Exception:
+                pass
+            _gone, alive = psutil.wait_procs([p] + children, timeout=grace)
+            for a in alive:
+                try:
+                    a.kill()
+                except Exception:
+                    pass
+        except Exception:
+            if Platform.is_windows():
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            else:
+                os.kill(pid, 15)
 
     @staticmethod
     def stop_webui_subagent_process_by_task(task_id: str) -> int:
@@ -1142,25 +1148,7 @@ class Platform:
         stopped = 0
         for pid, _meta in matches:
             try:
-                try:
-                    import psutil  # type: ignore
-                    p = psutil.Process(pid)
-                    children = p.children(recursive=True)
-                    for c in children:
-                        try: c.terminate()
-                        except Exception: pass
-                    try: p.terminate()
-                    except Exception: pass
-                    _gone, alive = psutil.wait_procs([p] + children, timeout=1.5)
-                    for a in alive:
-                        try: a.kill()
-                        except Exception: pass
-                except Exception:
-                    if Platform.is_windows():
-                        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                    else:
-                        os.kill(pid, 15)
+                Platform.terminate_process_tree(pid)
                 stopped += 1
             except Exception:
                 pass

@@ -554,3 +554,48 @@ class TaskQueue:
         if self.active_task is not None and self.active_task.session_id not in self._session_inflight:
             self.active_task = next(iter(self._inflight_by_worker.values()), None)
         self._cv.notify_all()
+
+
+# The kinds of wake turn a consumer knows how to announce. A wake turn is a task no person
+# typed: something the agent set in motion earlier tells it that it is due or done, and the
+# agent runs a real turn in that chat. Consumers gate their wake card on
+# ``metadata["wake"]`` (the kind), never on the text.
+WAKE_KINDS = ("timer", "process")
+
+
+def enqueue_wake_turn(*, kind: str, session_id: str, text: str, source: str = "web",
+                      user_scope_id: Any = None, username: Optional[str] = None,
+                      role: Optional[str] = None, extra: Optional[Dict[str, Any]] = None) -> None:
+    """Queue a wake turn for ONE chat, carrying the identity of the person it belongs to.
+
+    One implementation for every wake lane - a fired timer, a finished background process -
+    so the routing check (``enqueue_session_id``), the identity keys the runner rebinds
+    from, and the kind the cards read cannot drift apart between them. ``extra`` adds the
+    lane's own keys (``timer_id``, ``process_id``).
+    """
+    if kind not in WAKE_KINDS:
+        raise ValueError(f"unknown wake kind {kind!r}")
+    metadata: Dict[str, Any] = {
+        "wake": kind,
+        # Mirror normal enqueues so the headless routing-integrity check is satisfied.
+        "enqueue_session_id": session_id,
+    }
+    if kind == "timer":
+        metadata["timer"] = True   # the key the timer lane has always carried
+    if user_scope_id is not None:
+        metadata["user_scope_id"] = user_scope_id
+    if username is not None:
+        metadata["username"] = username
+    if role is not None:
+        metadata["role"] = role
+    metadata.update(extra or {})
+    TaskQueue().add(session_id=session_id, input_text=text, source=source, metadata=metadata)
+
+
+def wake_kind(metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The wake kind of a task's metadata, or None for a turn a person started."""
+    meta = metadata or {}
+    kind = meta.get("wake")
+    if kind in WAKE_KINDS:
+        return kind
+    return "timer" if meta.get("timer") else None

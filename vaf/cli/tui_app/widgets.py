@@ -117,7 +117,7 @@ class WakeMessage(Vertical):
     trigger; this is that card in the terminal.
     """
 
-    LABELS = {"timer": ("(!)", "Timer")}
+    LABELS = {"timer": ("(!)", "Timer"), "process": ("(>)", "Background command")}
 
     def __init__(self, text: str, kind: str = "timer") -> None:
         super().__init__()

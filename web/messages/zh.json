@@ -367,7 +367,9 @@
     "gateAllowChat": "仅限这个对话",
     "gateAllowAlways": "始终允许",
     "gateAllowChatHint": "在这个对话接下来的部分为你允许这个工具。其他对话仍会询问。VAF 重启后失效。",
-    "gateAllowAlwaysHint": "在所有位置为你允许这个工具，并在当前文件夹中信任每个需要确认的工具。"
+    "gateAllowAlwaysHint": "在所有位置为你允许这个工具，并在当前文件夹中信任每个需要确认的工具。",
+    "wakeTimer": "定时器",
+    "wakeProcess": "后台命令"
   },
   "nav": {
     "settings": "设置",

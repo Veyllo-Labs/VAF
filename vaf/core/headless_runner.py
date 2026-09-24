@@ -1517,7 +1517,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # outward hold reads this: a message the person SCHEDULED must leave at
                     # the scheduled time, not wait for a click they are not there to give
                     # (vaf/core/outbound_hold.py).
-                    agent._unattended_turn = bool(_meta.get("timer") or _meta.get("compaction"))
+                    from vaf.core.task_queue import wake_kind as _wake_kind
+                    agent._unattended_turn = bool(_wake_kind(_meta) or _meta.get("compaction"))
                     if _meta.get("from_contact"):
                         agent._front_office_mode = True
                         agent._front_office_chat = _front_office_chat_ref(_meta, _meta.get("username"))
@@ -2052,9 +2053,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # marker. The agent uses it for the ask-first latch and for the room
                     # streak, and it is restored on every exit path below (Rule 4.5) so
                     # one task's answer can never colour the next one's.
+                    from vaf.core.task_queue import wake_kind as _wake_kind
+                    _wake = _wake_kind(task_meta_for_env)
                     _turn_is_human = bool(
                         getattr(task, "task_class", "") == "interactive"
-                        and not task_meta_for_env.get("timer")
+                        and not _wake
                         and str(task.input_text or "").strip()
                     )
                     _prev_turn_is_human = getattr(agent, "_turn_is_human", None)
@@ -2065,14 +2068,14 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # renders it in its own LEFT-side area (not the user side), and it also serves as the
                     # boundary so the agent's reply lands in its OWN new bubble with a correct timestamp.
                     # chat_step persists the input to history itself, so this is a live-display emit only.
-                    if task_meta_for_env.get("timer"):
+                    if _wake:
                         try:
                             # role="user" keeps the (proven) bubble boundary so the agent's reply lands in
-                            # its own new bubble; kind="timer" tells the Web UI to render it as a LEFT-side
-                            # wake card (clock + amber) instead of a user bubble.
+                            # its own new bubble; kind (timer / process) tells the Web UI to render it as a
+                            # LEFT-side wake card instead of a user bubble.
                             get_web_interface().emit_agent_message_append(
                                 content=str(effective_input), session_id=task.session_id,
-                                role="user", kind="timer",
+                                role="user", kind=_wake,
                             )
                         except Exception:
                             pass

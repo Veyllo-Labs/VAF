@@ -367,7 +367,9 @@
     "gateAllowChat": "Für diesen Chat",
     "gateAllowAlways": "Immer erlauben",
     "gateAllowChatHint": "Erlaubt dir dieses Werkzeug für den Rest dieses Chats. In anderen Chats wird weiter gefragt. Gilt bis zum nächsten Neustart von VAF.",
-    "gateAllowAlwaysHint": "Erlaubt dir dieses Werkzeug überall und vertraut dem aktuellen Ordner bei jedem Werkzeug, das nach einer Bestätigung fragt."
+    "gateAllowAlwaysHint": "Erlaubt dir dieses Werkzeug überall und vertraut dem aktuellen Ordner bei jedem Werkzeug, das nach einer Bestätigung fragt.",
+    "wakeTimer": "Timer",
+    "wakeProcess": "Hintergrundbefehl"
   },
   "nav": {
     "settings": "Einstellungen",

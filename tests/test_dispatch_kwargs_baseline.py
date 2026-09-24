@@ -126,7 +126,10 @@ KWARGS_BASELINE = {
     "github_list_repos":         ("chat", ["user_scope_id", "username"]),
     "github_search_files":       ("chat", ["user_scope_id", "username"]),
     "github_update_file":        ("chat", ["user_scope_id", "username"]),
-    "host_bash":                 ("chat", ["_is_channel_session"]),
+    # Measured. host_bash declares the caller's identity since a background command belongs
+    # to one person's chat; host_process is the handle on those commands.
+    "host_bash":                 ("chat", ["_is_channel_session", "user_role", "user_scope_id", "username"]),
+    "host_process":              ("chat", ["user_scope_id"]),
     "label_mail":                ("chat", ["user_scope_id", "username"]),
     "learn_attached_knowledge":  ("chat", ["_agent", "session_id", "user_scope_id"]),
     "learn_document":            ("chat", ["_agent", "user_role", "user_scope_id"]),

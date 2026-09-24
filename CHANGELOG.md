@@ -13,6 +13,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **The agent can run a command in the background and gets told when it is done.** A
+  local test server, an upload or a long build used to hold up the agent's whole answer,
+  and anything longer than a few minutes was given up on. Now the agent can start such a
+  command in the background, keep working, look at its output, type into it (a server
+  console) or stop it, and when the command ends the chat continues with the result on
+  its own. A background command belongs to the chat and the person that started it,
+  its output is kept private, at most eight run per chat, and they end when VAF ends.
+  They are not available over Telegram, WhatsApp or Discord, where nobody could be told
+  when they end.
 - **Every account can pair its own Telegram with a code.** On an installation shared by
   several people, only the person who set the bot up could pair a Telegram account, because
   pairing needed the bot token. Now the Telegram card offers **Pair my Telegram** to anyone

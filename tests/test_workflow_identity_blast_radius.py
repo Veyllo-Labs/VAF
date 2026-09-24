@@ -153,6 +153,9 @@ NEWLY_IDENTIFIED = {
     "github_list_repos": ('user_scope_id', 'username'),
     "github_search_files": ('user_scope_id', 'username'),
     "github_update_file": ('user_scope_id', 'username'),
+    # A background command belongs to one person's chat, in a workflow step as anywhere.
+    "host_bash": ('user_role', 'user_scope_id', 'username'),
+    "host_process": ('user_scope_id',),
     "learn_attached_knowledge": ('user_scope_id',),
     "learn_document": ('user_role', 'user_scope_id'),
     # Added 2026-08-21 with the tool itself (memory_save's update sibling): a workflow

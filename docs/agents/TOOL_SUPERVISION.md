@@ -84,6 +84,34 @@ rather than being abandoned, in one of two ways:
   incident 2026-07-16: an abandoned search kept feeding the single local llama-server for 40+
   seconds after Stop). New long-loop tools should adopt the same checkpoints.
 
+## Background host commands (`vaf/core/processes.py`)
+
+A command that runs longer than anybody wants to wait - a local test server, an upload, a
+build - used to block the whole turn, and past the tool's budget it was abandoned.
+`host_bash(background=true)` starts it detached instead and returns its id at once; the
+agent works with it through `host_process` (`list`, `log`, `write` a line to its input,
+`stop`). When the command ends on its own, the chat that started it gets a **wake turn**
+through the same lane a fired timer uses (`task_queue.enqueue_wake_turn`, `metadata.wake =
+"process"`), carrying the person's identity and the end of the output.
+
+Boundaries, each deliberate:
+
+- **One chat, one person.** Every lookup takes the user scope AND the session; an id from
+  another chat or another person reads as unknown.
+- **A private log** under `<config dir>/processes/<session>/`: owner-only folder, 0600 file,
+  never the project folder. This run's logs are removed when VAF ends the commands.
+- **At most 8 running per chat** (`MAX_PER_CHAT`).
+- **They end with VAF**: an atexit hook, and the tray's quit calls `terminate_all()` before
+  its hard exit, which runs no atexit hooks. A crash that bypasses both leaves them running;
+  the registry is in memory.
+- **Not where nobody can be woken**: a messaging-channel chat has no wake delivery, and a
+  sub-agent's own process ends before the command, so the tool refuses both.
+- **Stopped as a tree**: `Platform.terminate_process_tree`, the one kill used for sub-agent
+  children too - a command run through a shell is only the shell's child.
+- **The Stop button leaves them running**, deliberately: it stops the turn, and a command the
+  agent put in the background on purpose is not part of the turn. `host_process(stop)` is
+  how one ends early.
+
 ## Subprocess units: bounded IPC wait, liveness, real kill
 
 Heavy sub-agents run as their own process and report back through the file-based IPC queue
@@ -99,7 +127,7 @@ each tick:
 4. a worst-case hard deadline (the per-agent budget) as the absolute ceiling.
 
 The kill is real: spawned children are tracked in `Platform` and stopped with a SIGTERM then SIGKILL
-of the process tree (`Platform.stop_webui_subagent_processes(session)` for a whole session,
+of the process tree (`Platform.terminate_process_tree`) (`Platform.stop_webui_subagent_processes(session)` for a whole session,
 `Platform.stop_webui_subagent_process_by_task(task_id)` for one unit). On kill the IPC task is failed
 so any waiter unblocks.
 

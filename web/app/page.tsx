@@ -11,7 +11,7 @@ import { toWav16k } from '@/lib/wav';
 import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, ChevronLeft, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
-    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock, Inbox,
+    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock, Terminal, Inbox,
     Folder, FolderOpen, FolderPlus, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X, Users, UserMinus,
     Lock, Unlock, Globe, Code2, MousePointer2, Microscope, PenLine, BookOpen,
     Copy, RotateCcw,
@@ -9554,12 +9554,20 @@ function VAFDashboardContent() {
                                                     // chat row — a timer-icon avatar (in the agent-avatar slot) + a speech bubble,
                                                     // but with an amber border (the same accent as the Action tag). Not a plain
                                                     // user/bot bubble. Sent as role="user" so it still creates a bubble boundary;
-                                                    // matched here by kind, or by the "⏰ Timer fired" prefix when reloaded.
-                                                    const _isWake = msg.kind === 'timer' || String(msg.content ?? '').startsWith('⏰ Timer fired');
+                                                    // matched here by kind, or by the lane's own prefix when reloaded: a fired
+                                                    // timer ("⏰ Timer fired") or a finished background command ("⚙ Background
+                                                    // command finished", vaf/core/processes.py).
+                                                    const _wakeContent = String(msg.content ?? '');
+                                                    const _isProcessWake = msg.kind === 'process' || _wakeContent.startsWith('⚙ Background command finished');
+                                                    const _isWake = _isProcessWake || msg.kind === 'timer' || _wakeContent.startsWith('⏰ Timer fired');
                                                     if (_isWake) {
-                                                        // Show only the user's note, not the internal "Act on it…" framing.
-                                                        const _noteMatch = String(msg.content ?? '').match(/your note:\s*"([\s\S]*?)"/);
-                                                        const _wakeText = (_noteMatch ? _noteMatch[1] : String(msg.content ?? '').replace(/^⏰\s*/, '')).trim();
+                                                        // Show only the user's note (timer) or the one-line outcome (process),
+                                                        // not the internal "Act on it…" / "Continue with…" framing.
+                                                        const _noteMatch = _isProcessWake ? null : _wakeContent.match(/your note:\s*"([\s\S]*?)"/);
+                                                        const _wakeText = _isProcessWake
+                                                            ? _wakeContent.split('\n')[0].replace(/^⚙\s*/, '').trim()
+                                                            : (_noteMatch ? _noteMatch[1] : _wakeContent.replace(/^⏰\s*/, '')).trim();
+                                                        const WakeIcon = _isProcessWake ? Terminal : AlarmClock;
                                                         // Two states: ACTIVE (E) while the agent is still handling the timer — real (dark) agent
                                                         // avatar + amber clock BADGE + amber bubble ("look here"); DONE (J) once it has replied —
                                                         // neutral dim avatar, neutral bubble, amber only in the "TIMER" label (quietly marked,
@@ -9575,7 +9583,7 @@ function VAFDashboardContent() {
                                                                         <AgentAvatar mode="idle" dim={_wakeDone} />
                                                                         {!_wakeDone && (
                                                                             <span className="absolute -right-1.5 -bottom-1.5 flex h-[18px] w-[18px] items-center justify-center rounded-full border-2 border-white bg-amber-500 text-white shadow-sm">
-                                                                                <AlarmClock className="h-2.5 w-2.5" />
+                                                                                <WakeIcon className="h-2.5 w-2.5" />
                                                                             </span>
                                                                         )}
                                                                     </div>
@@ -9583,11 +9591,11 @@ function VAFDashboardContent() {
                                                                     <div className="flex flex-col items-start min-w-0">
                                                                         <div className={cn(
                                                                             "rounded-2xl rounded-tl-none border px-5 py-3 text-[15px] leading-relaxed shadow-sm",
-                                                                            _wakeDone ? "border-gray-200 bg-gray-50 text-gray-700" : "border-amber-300 bg-amber-50 text-amber-900"
+                                                                            _wakeDone ? "border-gray-200 bg-gray-50 text-gray-700" : "border-amber-300 bg-amber-50 text-amber-800"
                                                                         )}>
                                                                             <div className="mb-1 flex items-center gap-1.5 text-amber-500">
-                                                                                <AlarmClock className="h-3.5 w-3.5" />
-                                                                                <span className="text-[11px] font-semibold uppercase tracking-wide">Timer</span>
+                                                                                <WakeIcon className="h-3.5 w-3.5" />
+                                                                                <span className="text-[11px] font-semibold uppercase tracking-wide">{_isProcessWake ? tMain('wakeProcess') : tMain('wakeTimer')}</span>
                                                                             </div>
                                                                             <div className="chat-markdown"><ChatMarkdown>{_wakeText}</ChatMarkdown></div>
                                                                         </div>

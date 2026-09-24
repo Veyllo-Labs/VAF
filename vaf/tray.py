@@ -1200,6 +1200,15 @@ def quit_app(icon=None, item=None):
     except Exception:
         pass
 
+    # The agent's background host commands end with VAF (vaf/core/processes.py). Their
+    # atexit hook would do it, but this function leaves through os._exit below, which runs
+    # no atexit hooks at all.
+    try:
+        from vaf.core.processes import terminate_all as _terminate_background
+        _terminate_background()
+    except Exception:
+        pass
+
     # Kill any remaining Node.js / Python VAF processes.
     # Use SIGTERM first (allows graceful shutdown), then the force_exit
     # timer acts as the SIGKILL backstop after 25s.

@@ -286,8 +286,9 @@ What it can change is decided by where a key is READ, not by how it looks:
   the 100 ms interval running forever (the avatar-leak class). What still
   blocks the `__CMD__` session commands is only their producer wiring.
 - The in-process TaskQueue IS consumed now, once a second, and a fired timer
-  arrives as an amber wake card followed by a real turn. There is exactly one
-  producer in this process: the timer scheduler. The `__CMD__` session commands
+  or a finished background command arrives as an amber wake card (labelled by its
+  wake kind) followed by a real turn. Two producers exist in this process: the
+  timer scheduler and the background-command watcher (`vaf/core/processes.py`). The `__CMD__` session commands
   are deliberately not handled - all four of their producers live in the web
   server, and an explicit `vaf run --web` routes to the modern lane, so no such
   task can reach this process. That branch lands when a producer for it does.

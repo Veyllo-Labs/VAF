@@ -422,13 +422,15 @@ class AgentBridge:
             text = str(task.input_text or "")
             if not text.strip():
                 return
-            if (task.metadata or {}).get("timer"):
+            from vaf.core.task_queue import wake_kind
+            _kind = wake_kind(task.metadata)
+            if _kind:
                 # Same concept and same trigger the web lane already ships: it emits
                 # the wake text as its own card before the turn, gated on this very
-                # metadata flag. One vocabulary, two lanes. `_emit`, never a direct
-                # call - an events object that predates this callback stays quiet
-                # instead of raising into the turn.
-                self._emit("wake_message", text, "timer")
+                # metadata. One vocabulary, two lanes. `_emit`, never a direct call -
+                # an events object that predates this callback stays quiet instead of
+                # raising into the turn.
+                self._emit("wake_message", text, _kind)
             self._run_turn(text, inline_attachments=False)
         finally:
             tq.task_done(task=task)

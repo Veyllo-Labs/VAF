@@ -262,7 +262,10 @@ def test_a_timer_and_an_automation_are_not_a_person():
     # person" would drift, and one of them would be the enforcing one.
     decision = runner_src.split("_turn_is_human = bool(")[1].split("\n                    )")[0]
     assert 'task_class", "") == "interactive"' in decision
-    assert 'get("timer")' in decision
+    # A wake turn (a fired timer, a finished background command) is nobody typing: the
+    # runner reads its kind once, from the metadata, right above the decision.
+    assert "not _wake" in decision
+    assert "_wake = _wake_kind(task_meta_for_env)" in runner_src.split("_turn_is_human = bool(")[0][-300:]
     assert "task.input_text" in decision
     assert "if _turn_is_human:" in runner_src.split("agent.note_human_turn()")[0][-200:]
 

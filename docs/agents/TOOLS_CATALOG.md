@@ -88,7 +88,8 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `python_sandbox` | write | Run Python in a Docker-isolated sandbox; `export_files` copies produced artifacts (images, PDFs) into the chat workspace after the run. |
 | `python_exec` | dangerous | Run Python on the host (no sandbox) - confirmed; runs only with the person's stored "always" or their grant for this chat (the tool re-checks it itself, because a workflow step runs without the gate). |
 | `run_tests` | read | *(coder-only)* Run the project's tests in the isolated sandbox and return the real pass/fail. |
-| `host_bash` | dangerous | Run a shell command on the HOST for host/docker tasks. An account permission, outside the file jail. In the chat the person answers once / for this chat / always; the coder and workflow steps run it without asking. The main agent's direct call is hard-blocked on remote channels (Telegram/WhatsApp/Discord). |
+| `host_bash` | dangerous | Run a shell command on the HOST for host/docker tasks. An account permission, outside the file jail. In the chat the person answers once / for this chat / always; the coder and workflow steps run it without asking. The main agent's direct call is hard-blocked on remote channels (Telegram/WhatsApp/Discord). `background=true` starts it detached and returns an id; the chat is woken when it ends. |
+| `host_process` | write | The handle on this chat's background commands: `list`, `log` (end of the output), `write` (a line to its input), `stop` (the whole tree). Visible only to the chat and person that started them. |
 
 > **Two different shells.** The coder's `bash` (`coder_only`) runs inside a kernel jail
 > (bubblewrap): full access to its project workspace, but VAF's source, `~/.vaf`, secrets and

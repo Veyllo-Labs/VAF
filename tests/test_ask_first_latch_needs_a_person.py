@@ -107,7 +107,12 @@ def test_the_queue_boundary_decides_and_excludes_timers_and_automations():
     decision = source.split("_turn_is_human = bool(")[1].split("\n                    )")[0]
 
     assert 'task_class", "") == "interactive"' in decision
-    assert 'get("timer")' in decision
+    # The metadata half: every wake kind (a timer, a finished background command) is kept
+    # out, read once from the metadata right above the decision.
+    assert "not _wake" in decision
+    assert "_wake = _wake_kind(task_meta_for_env)" in source.split("_turn_is_human = bool(")[0][-300:]
+    from vaf.core.task_queue import wake_kind
+    assert wake_kind({"timer": True}) == "timer" and wake_kind({"wake": "process"}) == "process"
     assert "task.input_text" in decision
 
 

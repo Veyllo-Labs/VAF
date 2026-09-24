@@ -66,6 +66,11 @@ class BackgroundProcess:
     finished_at: Optional[float] = None
     stopped_by_agent: bool = False
     popen: Any = None
+    # The process group the command leads (POSIX, start_new_session: the pid). Recorded
+    # at start, so a group whose leader has exited - a detached server left behind by the
+    # shell - can still be stopped. After the leader has exited only the GROUP is ever
+    # signalled, never the pid, which may belong to an unrelated process by then.
+    pgid: Optional[int] = None
 
     @property
     def running(self) -> bool:
@@ -157,6 +162,7 @@ def start(command: str, *, session_id: str, user_scope_id: Any = None,
     record = BackgroundProcess(
         id=proc_id, command=command, session_id=session_id, user_scope_id=user_scope_id,
         username=username, role=role, source=source or "web", log_path=log_path, popen=popen,
+        pgid=None if os.name == "nt" else popen.pid,
     )
     with _lock:
         _registry[proc_id] = record
@@ -262,13 +268,19 @@ def write(record: BackgroundProcess, text: str) -> str:
 
 
 def stop(record: BackgroundProcess) -> str:
+    from vaf.core.platform import Platform
     if not record.running:
-        return f"{record.id} has already ended (exit {record.exit_code})."
+        # The command itself has ended; what it detached into its group may not have.
+        try:
+            Platform.terminate_process_group(record.pgid, grace=1.0)
+        except Exception:
+            pass
+        return (f"{record.id} had already ended (exit {record.exit_code}); anything it left "
+                f"running in its process group is stopped now.")
     with _lock:
         record.stopped_by_agent = True
     try:
-        from vaf.core.platform import Platform
-        Platform.terminate_process_tree(record.popen.pid, grace=3.0)
+        Platform.terminate_process_tree(record.popen.pid, grace=3.0, pgid=record.pgid)
     except Exception as e:
         return f"{record.id} could not be stopped: {e}"
     try:
@@ -283,16 +295,21 @@ def terminate_all() -> int:
     with _lock:
         records = list(_registry.values())
         _registry.clear()
+    from vaf.core.platform import Platform
     stopped = 0
     for record in records:
-        if record.running:
-            record.stopped_by_agent = True
-            try:
-                from vaf.core.platform import Platform
-                Platform.terminate_process_tree(record.popen.pid, grace=2.0)
+        was_running = record.running
+        record.stopped_by_agent = True
+        try:
+            if was_running:
+                Platform.terminate_process_tree(record.popen.pid, grace=2.0, pgid=record.pgid)
                 stopped += 1
-            except Exception:
-                pass
+            else:
+                # The shell has ended; its group may still hold what it detached (a server
+                # started with "&"). The group only - the pid may not be ours any more.
+                Platform.terminate_process_group(record.pgid, grace=1.0)
+        except Exception:
+            pass
         try:
             record.log_path.unlink()
         except OSError:

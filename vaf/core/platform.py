@@ -1091,7 +1091,7 @@ class Platform:
         return stopped
 
     @staticmethod
-    def terminate_process_tree(pid: int, grace: float = 1.5) -> None:
+    def terminate_process_tree(pid: int, grace: float = 1.5, *, pgid: Optional[int] = None) -> None:
         """Stop a process AND everything it started: terminate, a grace period, then kill.
 
         One implementation for every caller that owns a child process tree - the sub-agent
@@ -1099,23 +1099,34 @@ class Platform:
         ``shell=True`` is only the parent of the real command, so stopping the parent alone
         would leave the work running.
 
-        On POSIX a process that leads its OWN process group (both callers start their child
-        with ``start_new_session``) is stopped as that group too: a grandchild that detached
-        from the tree - ``( server & )`` in a shell, a double fork - is no longer anybody's
-        child, so the recursive child list misses it, but it keeps the group. Our own group
-        is never signalled. A process that has already exited counts as stopped. Without
-        psutil: ``taskkill /T /F`` on Windows, SIGTERM to the group or the pid elsewhere.
+        On POSIX the process GROUP the child leads is stopped too (both callers start their
+        child with ``start_new_session``): a grandchild that detached from the tree - ``(
+        server & )`` in a shell, a double fork - is no longer anybody's child, so the
+        recursive child list misses it, but it keeps the group. ``pgid`` is the group the
+        caller recorded when it started the child; with it the group is still reached after
+        its leader has exited, which is exactly when a detached server is all that is left.
+        Without it, the group is read from the live process. Our own group is never
+        signalled. A process that has already exited counts as stopped. Without psutil:
+        ``taskkill /T /F`` on Windows; elsewhere SIGTERM, the same grace period, then
+        SIGKILL, to the group or the pid.
         """
         import signal as _signal
 
         group = None
         if not Platform.is_windows():
+            if pgid is not None:
+                group = int(pgid)
+            else:
+                try:
+                    candidate = os.getpgid(pid)
+                    group = candidate if candidate == pid else None
+                except ProcessLookupError:
+                    group = None
+                except Exception:
+                    group = None
             try:
-                pgid = os.getpgid(pid)
-                if pgid == pid and pgid != os.getpgrp():
-                    group = pgid
-            except ProcessLookupError:
-                return
+                if group is not None and group == os.getpgrp():
+                    group = None
             except Exception:
                 group = None
 
@@ -1135,7 +1146,8 @@ class Platform:
             try:
                 p = psutil.Process(pid)
             except psutil.NoSuchProcess:
-                _signal_group(_signal.SIGKILL)   # the leader is gone; its group may not be
+                # The leader is gone; what it left in its group may not be.
+                Platform.terminate_process_group(group, grace)
                 return
             try:
                 children = p.children(recursive=True)
@@ -1163,12 +1175,59 @@ class Platform:
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
             return
+
+        def _send(sig) -> bool:
+            """Signal the group, or the pid; False once nothing is left to signal."""
+            try:
+                if group is not None:
+                    os.killpg(group, sig)
+                else:
+                    os.kill(pid, sig)
+                return True
+            except ProcessLookupError:
+                return False
+            except PermissionError:
+                return False
+
+        if not _send(_signal.SIGTERM):
+            return
+        deadline = time.monotonic() + max(0.0, grace)
+        while time.monotonic() < deadline:
+            if not _send(0):
+                return
+            time.sleep(0.05)
+        _send(_signal.SIGKILL)
+
+    @staticmethod
+    def terminate_process_group(pgid: Optional[int], grace: float = 1.0) -> None:
+        """Stop what is left of a process group whose leader has already exited (POSIX).
+
+        Signals the GROUP only, never a pid: once the leader has been reaped its pid may
+        belong to an unrelated process by now, while the group id cannot be handed out
+        again as long as any member of the group is alive. SIGTERM, the grace period, then
+        SIGKILL. Our own group is never signalled; on Windows this does nothing.
+        """
+        import signal as _signal
+
+        if pgid is None or Platform.is_windows():
+            return
         try:
-            if group is not None:
-                os.killpg(group, _signal.SIGTERM)
-            else:
-                os.kill(pid, _signal.SIGTERM)
-        except ProcessLookupError:
+            pgid = int(pgid)
+            if pgid <= 1 or pgid == os.getpgrp():
+                return
+            os.killpg(pgid, _signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, ValueError, TypeError):
+            return
+        deadline = time.monotonic() + max(0.0, grace)
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(pgid, 0)
+            except (ProcessLookupError, PermissionError):
+                return
+            time.sleep(0.05)
+        try:
+            os.killpg(pgid, _signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
             pass
 
     @staticmethod

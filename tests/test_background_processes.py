@@ -268,3 +268,110 @@ def test_a_grandchild_that_left_the_tree_is_stopped_with_the_group():
     assert _wait(lambda: len(members()) >= 2), "the detached grandchild never started"
     processes.stop(record)
     assert _wait(lambda: members() == []), f"left running in the group: {members()}"
+
+
+
+# ── the recorded group, from the third audit ─────────────────────────────────
+
+def _group_members(group):
+    import psutil
+
+    out = []
+    for proc in psutil.process_iter(["pid"]):
+        try:
+            if os.getpgid(proc.info["pid"]) == group and proc.status() != psutil.STATUS_ZOMBIE:
+                out.append(proc.info["pid"])
+        except (ProcessLookupError, psutil.Error):
+            pass
+    return out
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_a_server_left_behind_by_an_ended_shell_is_still_stoppable():
+    """The shell exits at once and leaves a detached server in its group. The leader is
+    gone, so a lookup of its group fails - the group recorded at start still reaches it.
+    MUTATION: stop() returns for an ended command without signalling the group - red."""
+    record = _start(f'( {PY} -c "import time; time.sleep(61)" & )')
+    assert record.pgid == record.popen.pid
+    assert _wait(lambda: not record.running), "the shell did not end"
+    assert _wait(lambda: len(_group_members(record.pgid)) >= 1), "the detached server never started"
+    out = processes.stop(record)
+    assert "already ended" in out
+    assert _wait(lambda: _group_members(record.pgid) == []), "the detached server outlived the stop"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_ending_vaf_also_reaches_what_an_ended_shell_left_behind():
+    record = _start(f'( {PY} -c "import time; time.sleep(61)" & )')
+    assert _wait(lambda: not record.running)
+    assert _wait(lambda: len(_group_members(record.pgid)) >= 1)
+    processes.terminate_all()
+    assert _wait(lambda: _group_members(record.pgid) == [])
+
+
+def test_a_group_stop_never_touches_our_own_group_or_nothing():
+    """Signalling our own group would end this test run right here."""
+    from vaf.core.platform import Platform
+
+    Platform.terminate_process_group(None)
+    if os.name != "nt":
+        Platform.terminate_process_group(os.getpgrp(), grace=0.1)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_the_tree_stop_reaches_the_group_when_the_leader_is_already_gone():
+    """The race between "still running" and the signal: the shell exits in between. The
+    tree stop finds no process and must still stop the recorded group.
+    MUTATION: return on NoSuchProcess without the group stop - red."""
+    import subprocess
+
+    from vaf.core.platform import Platform
+
+    shell = subprocess.Popen(["/bin/sh", "-c", f'( {PY} -c "import time; time.sleep(61)" & )'],
+                             start_new_session=True)
+    shell.wait(timeout=10)
+    assert _wait(lambda: len(_group_members(shell.pid)) >= 1)
+    Platform.terminate_process_tree(shell.pid, grace=1.0, pgid=shell.pid)
+    assert _wait(lambda: _group_members(shell.pid) == [])
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
+def test_a_group_member_that_ignores_sigterm_is_killed():
+    """MUTATION: drop the SIGKILL in terminate_process_group - red."""
+    import subprocess
+
+    from vaf.core.platform import Platform
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                               "print('ready', flush=True); time.sleep(60)"],
+        stdout=subprocess.PIPE, start_new_session=True)
+    assert child.stdout.readline().strip() == b"ready"
+    Platform.terminate_process_group(child.pid, grace=0.3)
+    assert _wait(lambda: child.poll() is not None, timeout=5)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
+def test_without_psutil_a_process_that_ignores_sigterm_is_still_killed(monkeypatch):
+    """The fallback sent SIGTERM and stopped there. MUTATION: drop the SIGKILL - red."""
+    import builtins
+    import subprocess
+
+    from vaf.core.platform import Platform
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                               "print('ready', flush=True); time.sleep(60)"],
+        stdout=subprocess.PIPE, start_new_session=True)
+    assert child.stdout.readline().strip() == b"ready"
+    real_import = builtins.__import__
+
+    def _no_psutil(name, *args, **kwargs):
+        if name == "psutil":
+            raise ImportError("hidden for this test")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_psutil)
+    Platform.terminate_process_tree(child.pid, grace=0.5)
+    monkeypatch.setattr(builtins, "__import__", real_import)
+    assert _wait(lambda: child.poll() is not None, timeout=5), "SIGTERM was ignored and nothing followed"

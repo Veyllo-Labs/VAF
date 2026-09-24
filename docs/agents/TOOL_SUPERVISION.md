@@ -109,7 +109,12 @@ Boundaries, each deliberate:
 - **Stopped as a tree and as its process group**: `Platform.terminate_process_tree`, the one
   kill used for sub-agent children too - a command run through a shell is only the shell's
   child, and a grandchild that detached (`( server & )`) is nobody's child any more but keeps
-  the group the command started. A process that already ended counts as stopped.
+  the group the command started. The group id is recorded at start, because once the shell
+  has exited a lookup of its group fails, and a detached server is then all that is left.
+  After the shell has ended only the GROUP is signalled (`Platform.terminate_process_group`),
+  never the recorded pid: that pid may belong to an unrelated process by then, while a group
+  id is not handed out again while a member lives. Without psutil the same order holds:
+  SIGTERM, the grace period, then SIGKILL.
 - **The wake is not an unattended turn.** A fired timer is the person's own scheduled order,
   so what it sends leaves at its time; a finished command orders no send, so anything the
   agent drafts after it stays behind the outward hold like any chat turn

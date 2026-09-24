@@ -8413,6 +8413,10 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
 
             for tc in tool_calls:
                 fn_name = tc['function']['name'].strip()
+                # The name the model asked for, before any alias is resolved below: the
+                # allowlists name the ADVERTISED tools (web_search), not the handler an
+                # alias is routed to (web_deep_search), so authorisation asks with this one.
+                _requested_fn_name = fn_name
                 fn_args_str = tc['function']['arguments']
 
                 # CRITICAL: Save history reference NOW, before tool execution.
@@ -9401,7 +9405,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                     # Handled inline rather than through local_tools, so the dispatch questions
                     # are asked here too: an account without web access has none in the coder.
                     _refusal = _coder_dispatch_refusal(
-                        fn_name, None, coder_allowed=_coder_allowed,
+                        _requested_fn_name, None, coder_allowed=_coder_allowed,
                         caller_allowed=caller_allowed, scope=caller_scope, role=caller_role,
                         session_id=caller_session,
                     )
@@ -9443,7 +9447,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 
                 elif fn_name == "web_deep_search":
                     _refusal = _coder_dispatch_refusal(
-                        fn_name, None, coder_allowed=_coder_allowed,
+                        _requested_fn_name, None, coder_allowed=_coder_allowed,
                         caller_allowed=caller_allowed, scope=caller_scope, role=caller_role,
                         session_id=caller_session,
                     )
@@ -9556,7 +9560,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 elif fn_name in self.local_tools:
                     tool = self.local_tools[fn_name]
                     _refusal = _coder_dispatch_refusal(
-                        fn_name, tool, coder_allowed=_coder_allowed,
+                        _requested_fn_name, tool, coder_allowed=_coder_allowed,
                         caller_allowed=caller_allowed, scope=caller_scope, role=caller_role,
                         session_id=caller_session,
                     )

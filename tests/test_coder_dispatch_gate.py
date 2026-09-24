@@ -202,3 +202,27 @@ def test_a_refusal_answers_the_call_and_nothing_else_runs():
     for site in sites:
         block = site[:1100]
         assert "history.append(" in block and "\n                        continue\n" in block, block[:500]
+
+
+
+def test_an_advertised_alias_is_authorised_by_its_own_name():
+    """The model calls web_search; the coder routes it to its web_deep_search handler. The
+    account allowlist names web_search (the tool the picker offers), so the check must ask
+    with the requested name. MUTATION: authorise with the canonical name - red."""
+    import inspect
+
+    import vaf.tools.coder as mod
+
+    allowed = {"web_search", "web_deep_search", "web_fetch"}
+    assert _coder_dispatch_refusal("web_search", None, coder_allowed=allowed,
+                                   caller_allowed={"web_search"}, scope=SCOPE, role="user",
+                                   session_id=CHAT) is None
+    # The canonical name alone would have refused this account:
+    assert _coder_dispatch_refusal("web_deep_search", None, coder_allowed=allowed,
+                                   caller_allowed={"web_search"}, scope=SCOPE, role="user",
+                                   session_id=CHAT) is not None
+    src = inspect.getsource(mod.CodingAgentTool.run)
+    calls = src.split("_refusal = _coder_dispatch_refusal(")[1:]
+    assert all(c.lstrip().startswith("_requested_fn_name,") for c in calls), \
+        "a dispatch check asks with the resolved alias instead of the requested name"
+    assert "_requested_fn_name = fn_name" in src.split('if fn_name == "web_search":')[0]

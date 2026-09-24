@@ -50,8 +50,10 @@ def test_the_sandbox_timeout_is_bounded_and_defaults_on_nonsense():
 def test_the_research_budget_covers_its_own_runtime():
     from vaf.tools.research_agent import ResearchAgentTool
 
-    values = {"research_overall_timeout_seconds": 900, "research_section_timeout_seconds": 180,
-              "subagent_timeout_seconds": 300}
+    values = {"research_overall_timeout_seconds": 900, "research_web_search_timeout_seconds": 60,
+              "research_section_llm_timeout_seconds": 240, "subagent_timeout_seconds": 300}
     with patch("vaf.core.config.Config.get", side_effect=lambda k, d=None: values.get(k, d)):
         budget = ResearchAgentTool().budget_seconds({})
-    assert budget >= 900 + 180, budget
+    # The loop checks the overall limit between sections; the section running then can
+    # still make three searches and three generations in sequence.
+    assert budget >= 900 + 3 * 60 + 3 * 240, budget

@@ -466,15 +466,22 @@ class ResearchAgentTool(BaseTool):
 
     name = "research_agent"
     # A sub-agent step legitimately runs for minutes (the workflow engine raises its own
-    # floor on top of this). Its section loop stops at research_overall_timeout_seconds, a
-    # section already running may take research_section_timeout_seconds more, and planning
-    # and the final report come on top - the same keys run() reads. The generic sub-agent
-    # budget alone (300 s) cut an in-process run long before its own 900-second limit.
+    # floor on top of this). Its section loop checks research_overall_timeout_seconds only
+    # BETWEEN sections, and the section running at that moment still makes its calls in
+    # sequence: up to three searches (the first, the fallback, the retry after an empty
+    # result) and up to three generations (the first, the retry after an empty result, the
+    # retry when too short), each bounded by its own key. research_section_timeout_seconds
+    # is no bound here - it only decides whether a retry is attempted. Planning and the
+    # final report come on top. The same keys run() reads. On the local provider a
+    # generation is bounded by an idle timeout rather than a total one, so there this
+    # budget is the backstop.
     def budget_seconds(self, args):
         from vaf.core.config import Config
         overall = float(Config.get("research_overall_timeout_seconds", 900) or 900)
-        section = float(Config.get("research_section_timeout_seconds", 180) or 180)
-        return max(float(Config.get("subagent_timeout_seconds", 300)), overall + section + 120)
+        search = float(Config.get("research_web_search_timeout_seconds", 60) or 60)
+        generate = float(Config.get("research_section_llm_timeout_seconds", 240) or 240)
+        worst_section = 3 * search + 3 * generate
+        return max(float(Config.get("subagent_timeout_seconds", 300)), overall + worst_section + 120)
 
     category    = "web"
     permission_level = "read"

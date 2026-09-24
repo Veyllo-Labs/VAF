@@ -17,7 +17,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   local test server, an upload or a long build used to hold up the agent's whole answer,
   and anything longer than a few minutes was given up on. Now the agent can start such a
   command in the background, keep working, look at its output, type into it (a server
-  console) or stop it, and when the command ends the chat continues with the result on
+  console) or stop it - which also stops a server the command left running after it
+  ended - and when the command ends the chat continues with the result on
   its own - in VAF's own app and terminal app; an application that embeds VAF with a loop
   of its own has to read VAF's task queue to be told. A background command belongs to the
   chat and the person that started it, its output is kept private, at most eight run per

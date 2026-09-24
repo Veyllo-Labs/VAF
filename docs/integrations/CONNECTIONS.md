@@ -419,7 +419,7 @@ Notes and events are added and removed through `POST/DELETE /api/contacts/{id}/n
 **What the agent sends on your own chat turn waits for you.** A WhatsApp message the agent
 addresses to an explicit number (`send_whatsapp(to_phone=...)`, the only messenger call that can
 reach a stranger) is parked as a draft when
-you ordered it in the web chat, and a card in the conversation sends or discards it. `send_telegram`
+you ordered it in the web chat, the turn ends there, and a card in the conversation sends, edits or discards it. `send_telegram`
 and `send_discord` are deliberately NOT parked: their parameters carry no recipient at all, so
 they reach your own endpoint, and holding one would ask you to approve a message to yourself.
 Nothing that runs unattended is held: automations, workflow steps, channel turns, Front Office

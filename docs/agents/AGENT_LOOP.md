@@ -168,7 +168,23 @@ becomes the tool result without the tool running. That is where a send the perso
 the web chat is turned into a draft: a mail is built and parked by its own tool, a WhatsApp
 message to an explicit number is parked as a call and re-dispatched when the person says so.
 Only that surface holds, because the workflow engine and the automations dispatch through the
-same funnel with nobody watching. The rule, the measurements and the named boundaries are in
+same funnel with nobody watching.
+
+**The turn ends at the draft.** `_announce_held_send` (the post-dispatch hook, keyed on the
+held marker) notes the draft for the round and retires an older waiting draft to the same
+person in the same chat (`replace_older_drafts`). Once every result of that round is in the
+history, `chat_step` appends the fixed `TURN_ENDS_AT_DRAFT` sentence and returns it: no
+further model call, every tool call answered. The turn is not held open for the click: one
+chat worker serves every chat by default, so a turn waiting on a person would stall every
+other chat and channel for as long as they read. Send wakes the chat instead (a queued wake
+turn, `kind="draft"`), Discard ends it. At the start of the chat's next turn, right after the
+input, `_note_decided_drafts` adds one `[Context:` note for every draft the history created
+and nothing since has reported (`outbound_hold.decision_notes`), so the agent learns about a
+discard, a replacement or a send from the terminal once; the runner persists the note with
+the turn. NAMED BOUNDARY: this is the only tool result that ends a turn, so it is keyed on the
+hold's own marker rather than offered as a general "end the turn" result.
+
+The rule, the measurements and the named boundaries are in
 [`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py); the card and the verbs are in
 [WEB_UI.md](../web-ui/WEB_UI.md).
 

@@ -369,7 +369,8 @@
     "gateAllowChatHint": "Bu aracı bu sohbetin geri kalanında senin için serbest bırakır. Diğer sohbetler sormaya devam eder. VAF yeniden başlayınca sona erer.",
     "gateAllowAlwaysHint": "Bu aracı senin için her yerde serbest bırakır ve onay isteyen her araç için geçerli klasöre güvenir.",
     "wakeTimer": "Zamanlayıcı",
-    "wakeProcess": "Arka plan komutu"
+    "wakeProcess": "Arka plan komutu",
+    "wakeDraft": "Taslak gönderildi"
   },
   "nav": {
     "settings": "Ayarlar",
@@ -2359,18 +2360,31 @@
     "resultReady": "Görev tamamlandı. Ayrıntılar sohbette."
   },
   "outbox": {
-    "title": "Ajanının taslağı",
-    "to": "{recipient} için, henüz gönderilmedi",
+    "titleMail": "{recipient} için e-posta",
+    "titleWhatsapp": "{recipient} için WhatsApp mesajı",
+    "titleOther": "{recipient} için {channel}",
+    "notSent": "Taslak, henüz gönderilmedi",
+    "edited": "düzenlendi",
     "noRecipient": "bilinmiyor",
+    "subjectPlaceholder": "Konu",
+    "editHint": "Düzenlemek için metne tıkla",
+    "showMore": "Metnin tamamını göster",
+    "showLess": "Daha az göster",
+    "revert": "Değişikliği geri al",
+    "emptyText": "Metin olmadan gönderilecek bir şey yok.",
     "send": "Gönder",
     "discard": "At",
+    "countdown": "Önce oku ({seconds})",
     "more": "ve {count} tane daha bekliyor",
     "failed": "Olmadı ({error}); taslak duruyor.",
     "ambiguous": "Son deneme yarıda kaldı, bu yüzden mesaj gönderilmiş olabilir. Yeniden istemeden önce sohbete bak.",
     "cc": "Cc {recipients}",
     "bcc": "Bcc {recipients}",
     "attachments": "Ekler: {names}",
-    "countdown": "Önce oku ({seconds})"
+    "sent": "Gönderildi",
+    "sending": "Gönderiliyor",
+    "discarded": "Atıldı",
+    "replaced": "Daha yeni bir sürümle değiştirildi"
   },
   "inbox": {
     "title": "Gelen kutusu",

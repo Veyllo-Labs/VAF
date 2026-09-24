@@ -181,3 +181,32 @@ def build_message(from_addr: str, to: str, subject: str, body_text: str,
                            subtype=subtype or "octet-stream",
                            filename=att.get("filename") or "attachment")
     return msg
+
+
+def revise_message(raw: bytes, *, subject: Optional[str] = None,
+                   body_text: Optional[str] = None) -> bytes:
+    """A built message with a new subject and/or text, everything else as it was.
+
+    The message is edited, not rebuilt: rebuilding would need the attachment bytes again,
+    which the outbox keeps only inside these bytes, and it would mint a new Date and
+    Message-ID for what is still the same draft. So the text part is replaced in place, with
+    the same format=flowed encoding `build_message` writes, and the Subject header is
+    swapped in its own position. From, every recipient (the Bcc included), the Message-ID,
+    the threading headers and every attachment leave byte for byte as they were built.
+    """
+    from email import policy
+    from email.parser import BytesParser
+    msg = BytesParser(policy=policy.default).parsebytes(raw)
+    if subject is not None:
+        if msg["Subject"] is None:
+            msg["Subject"] = subject or "(No subject)"
+        else:
+            msg.replace_header("Subject", subject or "(No subject)")
+    if body_text is not None:
+        part = msg.get_body(preferencelist=("plain",))
+        if part is None:
+            raise ValueError("the message has no plain text part to revise")
+        part.set_content(_flow_encode(body_text or ""), subtype="plain",
+                         cte="quoted-printable",
+                         params={"format": "flowed", "delsp": "yes"})
+    return bytes(msg)

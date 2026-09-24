@@ -369,7 +369,8 @@
     "gateAllowChatHint": "Allows this tool for you for the rest of this chat. Other chats still ask. Ends when VAF restarts.",
     "gateAllowAlwaysHint": "Allows this tool for you everywhere, and trusts the current folder for every tool that asks for confirmation.",
     "wakeTimer": "Timer",
-    "wakeProcess": "Background command"
+    "wakeProcess": "Background command",
+    "wakeDraft": "Draft sent"
   },
   "nav": {
     "settings": "Settings",
@@ -2359,18 +2360,31 @@
     "resultReady": "The task is done. The details are in the chat."
   },
   "outbox": {
-    "title": "Your agent's draft",
-    "to": "To {recipient}, not sent yet",
+    "titleMail": "Email to {recipient}",
+    "titleWhatsapp": "WhatsApp to {recipient}",
+    "titleOther": "{channel} to {recipient}",
+    "notSent": "Draft, not sent yet",
+    "edited": "edited",
     "noRecipient": "unknown",
+    "subjectPlaceholder": "Subject",
+    "editHint": "Click the text to edit it",
+    "showMore": "Show the whole text",
+    "showLess": "Show less",
+    "revert": "Undo my changes",
+    "emptyText": "There is nothing to send without text.",
     "send": "Send",
     "discard": "Discard",
+    "countdown": "Read first ({seconds})",
     "more": "and {count} more waiting",
     "failed": "That did not work ({error}); the draft stays.",
     "ambiguous": "The last attempt was interrupted, so this message may already have been sent. Check the conversation before you ask for it again.",
     "cc": "Cc {recipients}",
     "bcc": "Bcc {recipients}",
     "attachments": "Attachments: {names}",
-    "countdown": "Read first ({seconds})"
+    "sent": "Sent",
+    "sending": "Sending",
+    "discarded": "Discarded",
+    "replaced": "Replaced by a newer version"
   },
   "inbox": {
     "title": "Inbox",

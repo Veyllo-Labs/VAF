@@ -19,6 +19,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 AGENT = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
 PAGE = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+CARD = (ROOT / "web" / "components" / "outbox" / "HeldSendCard.tsx").read_text(encoding="utf-8")
+HOOK = (ROOT / "web" / "components" / "outbox" / "useChatDrafts.ts").read_text(encoding="utf-8")
+REFS = (ROOT / "web" / "components" / "outbox" / "draftRefs.ts").read_text(encoding="utf-8")
 
 
 def _region(source: str, start: str, end: str) -> str:
@@ -127,61 +130,56 @@ def test_every_mail_send_tool_passes_the_flag_into_the_one_funnel():
 # ---- the harness --------------------------------------------------------------
 
 def test_the_card_is_mounted_and_fed_by_signals_not_by_a_timer():
-    """MUTATION: poll the outbox on an interval.
+    """MUTATION: poll the outbox on an interval, or mount the card only at the chat's end.
 
-    The store announces a parked draft exactly as it announces a message, so the card rides
-    `outbound_held` and `inbox_changed`. A timer would be a third refresh policy in a file
-    whose interval count is itself guarded.
+    The store announces a parked draft exactly as it announces a message, so the listing rides
+    `outbound_held` and `inbox_changed`. A timer would be a third refresh policy in a file whose
+    interval count is itself guarded.
     """
-    assert "import HeldSendCard from '@/components/outbox/HeldSendCard';" in PAGE
-    assert "<HeldSendCard apiBase={getApiBase()} version={heldVersion}" in PAGE
+    assert "import { useChatDrafts } from '@/components/outbox/useChatDrafts';" in PAGE
+    assert "useChatDrafts(getApiBase(), currentSessionId || '', heldVersion)" in PAGE
     assert "data.type === 'outbound_held'" in PAGE
-    # IN the conversation, not over the header: the card is the agent's own output waiting for
-    # a word: it belongs to that one answer in that one chat, while a banner over the header
-    # would read as a system alert about the whole app. It is the last row of the chat's own
-    # list, in a bot row wrapper, so it lines up under the answer that produced it.
-    assert PAGE.index("<HeldSendCard") < PAGE.index("<div ref={scrollRef} />")
-    card = (ROOT / "web" / "components" / "outbox" / "HeldSendCard.tsx").read_text(encoding="utf-8")
-    # The bot row's geometry, all three parts: the row, the 85 percent block, and the avatar
-    # gutter as a spacer. The row centers its child, so a card without the block starts left of
-    # the whole column, and one without the spacer starts under the avatar instead of under the
-    # text (both measured live, both looked wrong in exactly that way).
-    # It lives in the CARD, not around the call: the card is what knows whether anything is
-    # waiting, and a wrapper in page.tsx rendered an empty padded row at the end of every
-    # conversation, every time. MUTATION: move it back and the last two assertions go red.
-    assert "flex gap-4 pt-4 vaf-msg-row" in card
-    assert 'w-full max-w-[85%] max-md:max-w-full flex gap-4' in card
-    assert '<div className="w-9 shrink-0" aria-hidden="true" />' in card
-    assert "if (!rows.length) return null;" in card
-    assert card.index("if (!rows.length) return null;") < card.index("vaf-msg-row")
-    wrapper = PAGE.split("<HeldSendCard", 1)[0][-400:]
-    assert "vaf-msg-row" not in wrapper, "the wrapper moved into the card"
-    # No POLLING. The one interval in the file drives the reading pause's own countdown, and it
-    # must not be a refresh in disguise: the listing is fetched on the signal and on a chat
-    # change, never on a clock.
-    assert card.count("setInterval(") == 1
-    tick = card.split("setInterval(", 1)[1][:260]
-    assert "setNow(t)" in tick and "load()" not in tick
-    # And it stops itself twice over: no card, no timer, and once the last reading pause has
-    # run out the tick clears itself. Without the second stop a card sitting on screen
-    # re-rendered the whole chat four times a second for as long as it was there.
-    assert "if (!rows.length) return;" in card
-    assert "if (stopAt <= stamp) return;" in card
-    assert "if (t >= stopAt && tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }" in tick
-    assert "useTranslations('outbox')" in card
-
+    assert "setInterval(" not in HOOK, "the listing is fetched on the signal, never on a clock"
+    assert "useEffect(() => { void load(); }, [load, version]);" in HOOK
+    # UNDER THE TURN THAT WROTE IT: the grouped turn renders its drafts in its own column, and a
+    # tool row that has no rail renders its draft right under the tool window. Only a WAITING
+    # draft whose turn is not on screen falls back to the chat's last row.
+    assert "<TurnDrafts rows={draftsOfTools(turnTl!.actions.filter(a => a.kind === 'tool').map(a => a.msg))}" in PAGE
+    assert "<TurnDrafts rows={draftsOfTools([msg])} indent={false}" in PAGE
+    assert "return chatDrafts.rows.filter(r => isWaitingDraft(r) && !placed.has(r.ref));" in PAGE
+    assert PAGE.index("<UnplacedDrafts") < PAGE.index("<div ref={scrollRef} />")
+    assert "<HeldSendCard" not in PAGE, "the one card at the end of the chat is gone"
+    # The fallback brings the bot row's geometry with it and renders NOTHING when nothing is
+    # unplaced: a wrapper in page.tsx would be an empty padded row after every conversation.
+    unplaced = CARD.split("export function UnplacedDrafts", 1)[1]
+    assert "if (!rows.length) return null;" in unplaced
+    assert unplaced.index("if (!rows.length) return null;") < unplaced.index("vaf-msg-row")
+    assert 'w-full max-w-[85%] max-md:max-w-full flex gap-4' in unplaced
+    # The reading pause's own tick is the card's only interval, and it stops itself.
+    assert CARD.count("setInterval(") == 1
+    tick = CARD.split("setInterval(", 1)[1][:200]
+    assert "setNow(at)" in tick and "if (at >= unlockAt) clearInterval(tick);" in tick
+    assert "if (Date.now() >= unlockAt) return;" in CARD
+    assert CARD.count("useTranslations('outbox')") >= 2
 
 def test_the_card_has_no_hardcoded_copy():
     """Every string the person reads comes from the catalogues, in all seven languages."""
-    card = (ROOT / "web" / "components" / "outbox" / "HeldSendCard.tsx").read_text(encoding="utf-8")
-    keys = {"title", "to", "noRecipient", "send", "discard", "more", "failed", "ambiguous",
-            "countdown", "cc", "bcc", "attachments"}
+    keys = {"titleMail", "titleWhatsapp", "titleOther", "notSent", "edited", "noRecipient",
+            "subjectPlaceholder", "editHint", "showMore", "showLess", "revert", "emptyText",
+            "send", "discard", "countdown", "more", "failed", "ambiguous", "cc", "bcc",
+            "attachments", "sent", "sending", "discarded", "replaced"}
     for key in keys:
-        assert f"t('{key}'" in card, key
+        assert f"t('{key}'" in CARD, key
     for lang in ("de", "en", "tr", "zh", "ja", "ko", "th"):
-        block = json.loads((ROOT / "web" / "messages" / f"{lang}.json").read_text(encoding="utf-8"))["outbox"]
-        assert set(block) == keys, (lang, set(block) ^ keys)
-
+        cat = json.loads((ROOT / "web" / "messages" / f"{lang}.json").read_text(encoding="utf-8"))
+        assert set(cat["outbox"]) == keys, (lang, set(cat["outbox"]) ^ keys)
+        assert cat["main"].get("wakeDraft"), lang
+    # The separator between the state and the title is the catalogue's (zh writes a full-width
+    # colon), and a title is one sentence per channel, never "{channel} an {recipient}" for
+    # the channels that exist: the words around a channel name are grammar in ko and th.
+    assert "tCommon('labelSeparator')" in CARD
+    assert "t('titleMail', { recipient })" in CARD and "t('titleWhatsapp', { recipient })" in CARD
+    assert "tMain('wakeDraft')" in PAGE
 
 # ---- the CLI ------------------------------------------------------------------
 
@@ -253,6 +251,47 @@ def test_the_cli_prints_and_decides(monkeypatch, tmp_path):
     assert store.held_send(third, "alice", "scope-1")["state"] == "held"
     # The file that would leave with it is on the row by name, escaped like everything else.
     assert "files:" in shown.output and "[red]note.ogg" in shown.output and "/home/user" not in shown.output
+
+
+def test_the_cli_edits_through_the_same_function(monkeypatch, tmp_path):
+    """The terminal can change a draft's words like the card can, through `revise_draft`, and
+    a send from here wakes nothing: this process has no queue anybody drains (the NAMED
+    BOUNDARY in vaf/cli/cmd/outbox.py). MUTATION: pass wake=True in the CLI and the wake
+    assertion goes red."""
+    from types import SimpleNamespace
+
+    from typer.testing import CliRunner
+
+    from vaf.core import channel_message_store as store
+    from vaf.core.platform import Platform
+
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
+    import vaf.core.config as cfg_mod
+    monkeypatch.setattr(cfg_mod.Config, "get", classmethod(lambda cls, key, default=None: default))
+    import vaf.core.web_interface as wi
+    monkeypatch.setattr(wi, "notify_inbox_changed", lambda scope: None)
+    store._reset_announce_state()
+    import vaf.cli.cmd.outbox as cmd
+    monkeypatch.setattr(cmd, "_identity", lambda: ("alice", "scope-1"))
+    import vaf.core.task_queue as tq
+    woken = []
+    monkeypatch.setattr(tq, "enqueue_wake_turn", lambda **kw: woken.append(kw))
+    from vaf.core.outbound_hold import park_messenger_call
+    entry_id = park_messenger_call("send_whatsapp", {"to_phone": "+49170", "message": "Hallo"},
+                                   username="alice", user_scope_id="scope-1", session_id="chat-a")
+    runner = CliRunner()
+    assert runner.invoke(cmd.app, ["edit", "call", str(entry_id)]).exit_code == 1, "nothing to change"
+    assert runner.invoke(cmd.app, ["edit", "call", str(entry_id), "--text", "  "]).exit_code == 1
+    out = runner.invoke(cmd.app, ["edit", "call", str(entry_id), "--text", "Hallo Uwe"])
+    assert out.exit_code == 0, out.output
+    assert store.held_send(entry_id, "alice", "scope-1")["preview"] == "Hallo Uwe"
+    sent = []
+    import vaf.core.outbound_hold as oh
+    monkeypatch.setattr(oh, "resolve_tool", lambda name: SimpleNamespace(
+        run=lambda **kw: sent.append(kw) or "Message sent via WhatsApp."))
+    assert runner.invoke(cmd.app, ["send", "call", str(entry_id)]).exit_code == 0
+    assert sent[0]["message"] == "Hallo Uwe" and woken == []
+    assert runner.invoke(cmd.app, ["edit", "call", str(entry_id), "--text", "zu spät"]).exit_code == 1
 
 
 def test_the_outbox_group_sits_behind_the_terminal_door():
@@ -370,23 +409,19 @@ def test_the_other_chat_gets_the_red_dot():
 
 
 def test_the_card_asks_only_for_its_own_chat():
-    """MUTATION: fetch /api/outbox without the session.
+    """MUTATION: fetch /api/outbox without the session, or keep a late answer.
 
-    Without the filter the card shows every waiting draft of the person, so a message being
-    written in one chat appears in the next one they open - the one thing this must never do.
+    Without the filter the cards show every draft of the person, so a message being written in
+    one chat appears in the next one they open - the one thing this must never do.
     """
-    card = (ROOT / "web" / "components" / "outbox" / "HeldSendCard.tsx").read_text(encoding="utf-8")
-    assert "api/outbox?session_id=" in card
-    assert "if (!sessionId) { setRows([]); return; }" in card
-    # And a listing that answers AFTER the person switched chats is dropped: the request
-    # remembers which chat it asked for, and the answer is compared against the chat on screen
-    # before it becomes rows. Without that, the previous chat's drafts landed under the new
-    # chat's last message, which is the same mix-up one step later.
-    assert "const asked = sessionId;" in card
-    assert "if (sessionRef.current !== asked) return;" in card
-    assert "sessionRef.current = sessionId;" in card
-    assert "sessionId={currentSessionId || ''}" in PAGE
-
+    assert "api/outbox?session_id=${encodeURIComponent(asked)}&settled=true" in HOOK
+    assert "if (!sessionId) { setRows([]); return; }" in HOOK
+    # A listing that answers AFTER the person switched chats is dropped: the request remembers
+    # which chat it asked for, and the answer is compared against the chat on screen before it
+    # becomes rows.
+    assert "const asked = sessionId;" in HOOK
+    assert "if (sessionRef.current !== asked) return;" in HOOK
+    assert "sessionRef.current = sessionId;" in HOOK
 
 def test_the_send_button_is_the_house_white_and_locked_until_it_is_read():
     """MUTATION: enable the send button at once, or animate the card's own border.
@@ -398,37 +433,28 @@ def test_the_send_button_is_the_house_white_and_locked_until_it_is_read():
     because animating the card's border or shadow repaints the card every frame (the measured
     GPU leak the repaint rule was written for).
     """
-    card = (ROOT / "web" / "components" / "outbox" / "HeldSendCard.tsx").read_text(encoding="utf-8")
-    assert "dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5]" in card
-    assert "dark:bg-white" not in card
-    assert "const SEND_DELAY_SECONDS = 3;" in card
-    # The lane belongs in the busy key: mail op ids and parked-call ids are two sequences, so
-    # a bare number would disable a mail draft's buttons while a call of the same id is sending.
-    # And it is a SET of rows in flight: a single slot let the first request answering re-enable
-    # the second row's buttons while its own request was still on the wire.
-    assert "disabled={busy.has(`${r.kind}-${r.id}`) || locked > 0}" in card
-    assert "const key = `${row.kind}-${row.id}`;" in card and "setBusy(prev => new Set(prev).add(key));" in card
-    assert "useState<Set<string>>(() => new Set())" in card and "next.delete(key); return next;" in card
-    assert "busy === " not in card and "setBusy(null)" not in card
-    # The failure note is keyed the same way and shown under ITS row only: a bare string was
-    # rendered under every card on screen, so one refusal read as three. Acting on one row
-    # clears that row's note and nobody else's.
-    assert "setNote({ key, text:" in card and "note?.key === `${r.kind}-${r.id}`" in card
-    assert "setNote(prev => (prev?.key === key ? null : prev));" in card and "setNote(null);" not in card.split("const act =", 1)[1]
-    assert "t('countdown', { seconds: locked })" in card
+    assert "dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5]" in CARD
+    assert "dark:bg-white" not in CARD
+    assert "const SEND_DELAY_SECONDS = 3;" in CARD
+    assert "disabled={busy || locked > 0}" in CARD
+    assert "t('countdown', { seconds: locked })" in CARD
+    # The pause belongs to the DRAFT, not to one mount of the card: the card moves from the
+    # chat's last row into its turn when the tool result arrives, and a pause that restarted
+    # there would lock the button again for a text the person has been reading.
+    assert "const FIRST_SEEN = new Map<string, number>();" in CARD
+    assert "FIRST_SEEN.get(row.ref) ?? Date.now()" in CARD
     # Discard is never locked: throwing away something unread costs nothing.
-    assert 'disabled={busy.has(`${r.kind}-${r.id}`)} onClick={() => act(r, \'discard\')}' in card
-    assert 'className="vaf-draft-rim pointer-events-none absolute inset-0 rounded-2xl"' in card
-    # A draft whose send was interrupted offers no Send button at all: it may have arrived, and
-    # the click that would repeat it is the one thing this card must not hand out.
-    assert "{r.state !== 'ambiguous' && (" in card and "t('ambiguous')" in card
-    # Every address and every file: approving is approving what leaves, and a card with the To
-    # line alone let a Bcc or a document go out unseen.
-    assert "t('cc', { recipients: r.cc })" in card and "t('bcc', { recipients: r.bcc })" in card
-    assert "t('attachments', { names: r.attachments.join(', ') })" in card
-    # The failure is said ONCE per row: the note is set on the failed click and the reload
-    # brings the row back as failed, so the row's own line yields to the note for that row.
-    assert "{r.state === 'failed' && note?.key !== `${r.kind}-${r.id}` && (" in card
+    assert "<button type=\"button\" disabled={busy} onMouseDown={e => e.preventDefault()} onClick={() => act('discard')}" in CARD
+    assert 'className="vaf-draft-rim pointer-events-none absolute inset-0 rounded-2xl"' in CARD
+    # A draft whose send was interrupted offers no Send button and no editing: it may have
+    # arrived, and the click that would repeat it is the one thing this card must not hand out.
+    assert "{row.state !== 'ambiguous' && (" in CARD and "t('ambiguous')" in CARD
+    assert "const editable = row.state !== 'ambiguous';" in CARD
+    # Every address and every file: approving is approving what leaves.
+    assert "t('cc', { recipients: row.cc })" in CARD and "t('bcc', { recipients: row.bcc })" in CARD
+    assert "t('attachments', { names: row.attachments.join(', ') })" in CARD
+    # The failure is said ONCE: the row's own line yields to the note set by the failed click.
+    assert "{row.state === 'failed' && !note && (" in CARD
 
     css = (ROOT / "web" / "app" / "globals.css").read_text(encoding="utf-8")
     rim = css.split("@keyframes vafDraftRim", 1)[1][:200]
@@ -441,6 +467,77 @@ def test_the_send_button_is_the_house_white_and_locked_until_it_is_read():
     assert "rgba(17,24,39" in light, "the light theme needs dark ink"
     assert ".dark .vaf-draft-rim {" in css and "rgba(255,255,255,.35)" in css.split(".dark .vaf-draft-rim {", 1)[1][:200]
 
+
+def test_the_card_lines_up_with_the_tool_windows():
+    """MUTATION: drop the rail offset from TurnDrafts or from UnplacedDrafts.
+
+    Reported from the live app: the card started left of the tool windows above it. Inside a
+    turn's actions rail every tool window is indented by `pl-[26px]` (TurnActionsTimeline),
+    and the card sat in the answer column without it, 26 pixels to the left - measured in a
+    render of these class strings, 148 against 174. The fallback row takes the same offset,
+    so a card that moves from the chat's last row into its turn does not jump sideways.
+    """
+    timeline = (ROOT / "web" / "components" / "TurnActionsTimeline.tsx").read_text(encoding="utf-8")
+    assert '<div className="relative pl-[26px]">' in timeline, "the rail's offset moved; move the card's with it"
+    turn = CARD.split("export function TurnDrafts", 1)[1].split("export function UnplacedDrafts", 1)[0]
+    assert "indent && 'pl-[26px] max-md:pl-0'" in turn
+    unplaced = CARD.split("export function UnplacedDrafts", 1)[1]
+    assert "flex flex-col gap-3 flex-1 min-w-0 pl-[26px] max-md:pl-0" in unplaced
+
+
+def test_the_card_is_editable_and_what_is_typed_is_what_leaves():
+    """MUTATION: send without saving the field first, or let Send take focus before the click.
+
+    Clicking into the text turns it into a field; leaving the field saves it (PATCH), and Send
+    saves whatever is still in the field before it sends, so the person never sends the
+    agent's version while their own is on screen. The buttons keep the field's focus
+    (mousedown is prevented), so the click is the one place that decides.
+    """
+    assert "method: 'PATCH'" in CARD and "`${apiBase}/api/outbox/${row.kind}/${row.id}`" in CARD
+    send = CARD.split("const act = async", 1)[1].split("const named", 1)[0]
+    assert send.index("await save()") < send.index("/send"), "saved before it is sent"
+    assert "if (saving.current && !(await saving.current)) return;" in send
+    assert CARD.count("onMouseDown={e => e.preventDefault()}") == 3
+    assert "if (e.key === 'Escape') { e.preventDefault(); revert(); }" in CARD
+    assert "setNote(t('emptyText'))" in CARD
+    # A long text is folded until asked for, and clicking into it unfolds it.
+    assert "line-clamp-[8]" in CARD and "setUnfolded(true); setEditing('body');" in CARD
+
+
+def test_the_wire_literals_match_on_both_sides():
+    """MUTATION: rename one of the three literals on one side only.
+
+    The history holds TEXT, so a reloaded chat has nothing but these to find a draft's turn,
+    to hide the turn's closing sentence and to draw the wake row.
+    """
+    from vaf.core import outbound_hold
+    assert f'export const DRAFT_TURN_END = "{outbound_hold.TURN_ENDS_AT_DRAFT}";' in REFS
+    assert f"export const DRAFT_WAKE_PREFIX = '{outbound_hold.DRAFT_WAKE_PREFIX}';" in REFS
+    assert "const CREATED = /^NOT SENT YET\\. Draft (mail|call):(\\d+)/;" in REFS
+    assert outbound_hold.HELD_PREFIX == "NOT SENT YET."
+    result = outbound_hold.held_result("send_whatsapp", {"to_phone": "+1"}, entry_id=3)
+    import re
+    assert re.match(r"^NOT SENT YET\. Draft (mail|call):(\d+)", result)
+    # The page hides exactly the closing sentence and draws the wake row by the prefix.
+    assert "const cleanAnswer = isBot ? (isDraftTurnEnd(answer) ? '' : stripToolCallsJSON(answer)) : answer;" in PAGE
+    assert "msg.kind === 'draft' || _wakeContent.startsWith(DRAFT_WAKE_PREFIX)" in PAGE
+    assert "return String(content ?? '').trim() === DRAFT_TURN_END;" in REFS
+
+
+def test_the_runner_shows_a_draft_turn_as_the_card():
+    """MUTATION: let the fixed sentence fall into the ordinary branch.
+
+    An empty-looking answer there becomes "No response was produced", the sentence would be
+    spoken by the browser's auto-TTS and opened in the document editor, and the session would
+    store the pre-draft stream instead of the sentence the browser hides.
+    """
+    runner = (ROOT / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
+    assert "_turn_ends_at_draft = response_text.strip() == _DRAFT_END" in runner
+    branch = runner.split("elif _turn_ends_at_draft:", 1)[1][:900]
+    assert "final_text = response_text" in branch and "emit_agent_message(" in branch
+    assert "or _turn_ends_at_draft) else str(final_text)" in runner, "nothing to speak"
+    assert "and not _turn_ends_at_draft):" in runner, "no document editor for the sentence"
+    assert "_assistant_response = response_text" in runner.split("if _turn_ends_at_draft:", 2)[-1][:400]
 
 def test_the_card_carries_no_colour_of_its_own():
     """MUTATION: bring the amber back.

@@ -559,8 +559,9 @@ class TaskQueue:
 # The kinds of wake turn a consumer knows how to announce. A wake turn is a task no person
 # typed: something the agent set in motion earlier tells it that it is due or done, and the
 # agent runs a real turn in that chat. Consumers gate their wake card on
-# ``metadata["wake"]`` (the kind), never on the text.
-WAKE_KINDS = ("timer", "process")
+# ``metadata["wake"]`` (the kind), never on the text. ``draft``: the person sent a draft the
+# agent's turn had stopped at (vaf/core/outbound_hold.py), and the agent carries on.
+WAKE_KINDS = ("timer", "process", "draft")
 
 
 def enqueue_wake_turn(*, kind: str, session_id: str, text: str, source: str = "web",

@@ -1489,13 +1489,56 @@ class MailStore:
         conn.commit()
         return cur.rowcount == 1
 
-    def discard_op(self, op_id: int) -> bool:
-        """A held send is discarded: the person did not want it. Only a held op."""
+    def discard_op(self, op_id: int, *, replaced_by: str = "") -> bool:
+        """A held send is discarded: the person did not want it. Only a held op.
+
+        `replaced_by` names the newer draft that took its place (`mail:13`), for a draft the
+        agent rewrote before anybody decided on it. It is still a discard, so every reader
+        of the op state keeps its meaning; the name only says why."""
         conn = self._conn()
-        cur = conn.execute(
-            "UPDATE ops SET state='discarded', updated_at=? WHERE id=? AND state='held'", (_now(), int(op_id)))
+        if replaced_by:
+            cur = conn.execute(
+                "UPDATE ops SET state='discarded', updated_at=?, "
+                "payload=json_set(payload, '$.replaced_by', ?) WHERE id=? AND state='held'",
+                (_now(), str(replaced_by), int(op_id)))
+        else:
+            cur = conn.execute(
+                "UPDATE ops SET state='discarded', updated_at=? WHERE id=? AND state='held'",
+                (_now(), int(op_id)))
         conn.commit()
         return cur.rowcount == 1
+
+    def revise_held_op(self, op_id: int, *, subject: str, body: str, raw_b64: str) -> bool:
+        """A held send gets new words before anybody sent it. Only a held op: a released one
+        is on its way and its bytes are the ones that leave. The subject and the text travel
+        twice, as payload fields (an API sender builds from them) and inside the stored
+        RFC822 bytes (the SMTP sender and the Sent copy use those), so both change in one
+        UPDATE. `edited` marks the draft for the card and for the agent's next turn."""
+        conn = self._conn()
+        cur = conn.execute(
+            "UPDATE ops SET updated_at=?, payload=json_set(payload, '$.subject', ?, '$.body', ?, "
+            "'$.raw_b64', ?, '$.edited', json('true')) WHERE id=? AND state='held' AND kind='send'",
+            (_now(), subject, body, raw_b64, int(op_id)))
+        conn.commit()
+        return cur.rowcount == 1
+
+    def chat_send_ops(self, chat_session_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
+        """Every send one chat asked for, in any state, newest first, payload decoded.
+
+        The chat card shows a draft after the decision too (sent, discarded, replaced), as the
+        record of what happened to it; `held_ops` lists only what still waits."""
+        sid = str(chat_session_id or "").strip()
+        if not sid:
+            return []
+        rows = self._conn().execute(
+            "SELECT * FROM ops WHERE kind='send' AND json_extract(payload, '$.chat_session_id')=? "
+            "ORDER BY id DESC LIMIT ?", (sid, max(1, int(limit)))).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["payload"] = json.loads(d["payload"] or "{}")
+            out.append(d)
+        return out
 
     def pending_ops(self, account_pk: Optional[int] = None,
                     now_ts: Optional[int] = None) -> List[Dict[str, Any]]:

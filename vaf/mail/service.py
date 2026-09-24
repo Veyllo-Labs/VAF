@@ -695,15 +695,83 @@ class MailService:
             self.store.mark_sent_delivery(apk, op["payload"].get("message_id") or "", "queued")
         return ok
 
-    def discard_draft(self, op_id: int) -> bool:
-        """A held answer is dropped; its sent-id row records the discard."""
+    def discard_draft(self, op_id: int, *, replaced_by: str = "") -> bool:
+        """A held answer is dropped; its sent-id row records the discard. `replaced_by` is the
+        newer draft that took its place, when that is why it goes (`MailStore.discard_op`)."""
         op = self.store.get_op(int(op_id))
         if not op or op.get("kind") != "send":
             return False
-        ok = self.store.discard_op(int(op_id))
+        ok = self.store.discard_op(int(op_id), replaced_by=replaced_by)
         if ok:
             self.store.mark_sent_delivery(int(op["account_id"]), op["payload"].get("message_id") or "", "discarded")
         return ok
+
+    def revise_draft(self, op_id: int, *, subject: Optional[str] = None,
+                     body: Optional[str] = None) -> bool:
+        """New words for a held draft, before anybody sent it: False when it is not waiting.
+
+        The stored message is edited in place (`compose.revise_message`), so what the person
+        approves afterwards is still byte for byte what leaves, with the same recipients,
+        attachments and Message-ID. Refused for a draft whose last attempt may already have
+        delivered it (`draft_state` ambiguous): that one can only be dropped, and new words on
+        it would be words nobody can send."""
+        op = self.store.get_op(int(op_id))
+        if not op or op.get("kind") != "send" or op.get("state") != "held":
+            return False
+        if self.draft_state(op)[0] == "ambiguous":
+            return False
+        payload = op.get("payload") or {}
+        new_subject = str(payload.get("subject") or "") if subject is None else str(subject)
+        new_body = str(payload.get("body") or "") if body is None else str(body)
+        import base64 as _b64
+        from vaf.mail import compose
+        raw = _b64.b64decode(payload.get("raw_b64") or "")
+        revised = compose.revise_message(raw, subject=subject, body_text=body)
+        return self.store.revise_held_op(int(op_id), subject=new_subject, body=new_body,
+                                         raw_b64=_b64.b64encode(revised).decode("ascii"))
+
+    def chat_draft(self, op: Dict[str, Any]) -> Dict[str, Any]:
+        """One send a chat asked for, in the words the chat card uses, whatever its state.
+
+        `held`, `failed` and `ambiguous` are `draft_state`'s own answer for a draft that still
+        waits. A released op (`pending`, `sending`, `done`) is `sent`: it left the person's
+        hands, which is what `release_held_draft` answers ok for too. A discard is `replaced`
+        when a newer draft took its place, else `discarded`; a cancelled send is a discard."""
+        p = op.get("payload") or {}
+        raw_state = str(op.get("state") or "")
+        error = ""
+        if raw_state == "held":
+            state, error = self.draft_state(op)
+        elif raw_state in ("pending", "sending", "done"):
+            state = "sent"
+        elif raw_state == "failed":
+            state, error = "failed", str(p.get("last_error") or "")
+        elif raw_state == "discarded" and p.get("replaced_by"):
+            state = "replaced"
+        else:
+            state = "discarded"
+        return {
+            "op_id": int(op["id"]), "account_id": p.get("account_id") or "",
+            "to": p.get("to") or "", "cc": p.get("cc") or "", "bcc": p.get("bcc") or "",
+            "subject": p.get("subject") or "", "body": p.get("body") or "",
+            "attachments": [str(a.get("filename") or a.get("path") or "")
+                            for a in (p.get("attachments") or []) if isinstance(a, dict)],
+            "created_at": op.get("created_at") or "", "decided_at": op.get("updated_at") or "",
+            "chat_session_id": p.get("chat_session_id") or "",
+            "state": state, "error": error, "edited": bool(p.get("edited")),
+            "replaced_by": str(p.get("replaced_by") or ""),
+        }
+
+    def list_chat_drafts(self, chat_session_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
+        """Every mail one chat asked for, newest first, in `chat_draft`'s shape."""
+        return [self.chat_draft(op) for op in self.store.chat_send_ops(chat_session_id, limit=limit)]
+
+    def get_chat_draft(self, op_id: int) -> Optional[Dict[str, Any]]:
+        """One send by its op id in `chat_draft`'s shape, or None when it is no send."""
+        op = self.store.get_op(int(op_id))
+        if not op or op.get("kind") != "send":
+            return None
+        return self.chat_draft(op)
 
     def list_drafts(self, *, account_id: Optional[str] = None, thread_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Held answers awaiting approval: op id, account, thread, every recipient (to, cc,

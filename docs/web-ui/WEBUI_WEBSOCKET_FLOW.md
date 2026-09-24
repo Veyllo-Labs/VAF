@@ -337,8 +337,11 @@ Key rules:
   parked WhatsApp call in `held_sends`; see
   [`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py)). A signal, not the draft,
   for the same reason as `inbox_changed` and one more: the two lanes park in different stores
-  and neither id belongs in a chat event, so the card reads `GET /api/outbox` and cannot
-  disagree with the store. Pushed to the session by the agent's post-dispatch hook whenever a
+  and neither id belongs in a chat event, so the cards read `GET /api/outbox?session_id=&settled=true`
+  (every draft of the chat, decided ones included) and cannot disagree with the store. The
+  turn that parked the draft ends right after it, and a Send from the card queues a wake turn
+  for the chat whose trigger arrives as `agent_message_append` with `kind="draft"`, drawn as a
+  wake row like a timer's. Pushed to the session by the agent's post-dispatch hook whenever a
   tool result carries the held marker, so mail and messenger need one line between them. The
   same moment also emits `session_unread` for that chat, so a person who has moved to another
   conversation sees the chat list's red dot on the one that is waiting; the browser ignores

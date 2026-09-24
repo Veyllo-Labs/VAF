@@ -3,18 +3,18 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """The outbox routes (/api/outbox/*): what the agent prepared and the person has not sent yet.
 
-A send the agent makes on the person's own web chat turn is parked instead of delivered
-(`vaf/core/outbound_hold.py`); these are the three verbs the card needs: what is waiting, send
-it, drop it.
+A send the agent makes on the person's own web chat turn is parked instead of delivered, and
+the turn ends at it (`vaf/core/outbound_hold.py`); these are the verbs the card needs: what
+this chat's drafts are, send one, drop one, change its words.
 
 Rules, the same ones the inbox routes follow:
 - The caller is `contact_routes.get_current_vaf_user`, and the identity for the store comes
   from that dependency, NEVER from the request body: a draft belongs to whoever parked it.
 - Every store call runs under `asyncio.to_thread`; nothing here blocks the event loop.
-- Two lanes, two verbs behind one surface. A mail draft is an artifact that already exists in
-  the mail outbox, so sending it means releasing and draining it; a parked messenger call is
-  re-dispatched through its own tool. `kind` says which lane an id belongs to, and an id is
-  only ever looked up in the caller's own store.
+- The verbs themselves are `outbound_hold.send_draft` / `discard_draft` / `revise_draft`, the
+  same functions `vaf outbox` calls, so the two surfaces cannot disagree about what a click
+  does. `kind` says which lane an id belongs to, and an id is only ever looked up in the
+  caller's own store.
 """
 import asyncio
 from typing import Any, Dict, Optional
@@ -26,128 +26,93 @@ from vaf.api.contact_routes import get_current_vaf_user
 router = APIRouter(prefix="/api/outbox", tags=["outbox"])
 
 _LIMIT_MAX = 100
+_KINDS = ("mail", "call")
 
 
-def _mail_service(user: Dict[str, Any]):
-    """The caller's own mail service, or None when this identity has no mail lane at all.
-
-    None rather than an exception for the two cases that MEAN "no mail here": a scope the
-    fail-closed constructor refuses, and an install whose mail module is not importable. Not
-    for anything else. `MailStore` creates its file on construction, so a missing store is not
-    an error at all - it answers with an empty outbox - and a broad `except` could only ever
-    turn a real failure (a permission error, a corrupt database) into "no mail account", which
-    is the one answer that sends the person looking in the wrong place. Those propagate and
-    the route reports an operational error. The scope comes from the auth dependency, so a
-    mail id can only ever be looked up in the caller's own outbox.
-    """
-    scope = (user.get("user_scope_id") or "").strip()
-    if not scope:
-        return None
-    try:
-        from vaf.mail.service import MailService
-    except ImportError:
-        return None
-    try:
-        return MailService(scope)
-    except ValueError:
-        return None
-
-
-def _close_quietly(svc: Any) -> None:
-    """Close the store's thread-local connection. Housekeeping, so it must never replace the
-    verb's answer: a discard that succeeded and then failed to close is a discard."""
-    try:
-        svc.store.close()
-    except Exception:
-        pass
-
-
-def _send_mail_draft(user: Dict[str, Any], op_id: int) -> Dict[str, Any]:
-    """Release a held mail draft and drain it. The act itself lives in the mail layer
-    (`vaf.mail.service.release_held_draft`), so this route and `vaf outbox send` cannot
-    disagree about what Send does. Synchronous on purpose: the route runs it under
-    `asyncio.to_thread`, and the store's thread-local connection is closed here, on the
-    thread that opened it, so a pool thread does not keep a handle to somebody's mail.db."""
-    svc = _mail_service(user)
-    if svc is None:
-        return {"ok": False, "error": "no mail account"}
-    from vaf.mail.service import release_held_draft
-    try:
-        return release_held_draft(str(user.get("user_scope_id") or ""), str(user.get("username") or ""),
-                                  int(op_id), service=svc)
-    finally:
-        _close_quietly(svc)
-
-
-def _discard_mail_draft(user: Dict[str, Any], op_id: int) -> Optional[bool]:
-    """Drop a held mail draft: None when this identity has no mail lane, else whether a
-    waiting draft with that id was dropped. Same shape and same reason as the send helper:
-    constructing `MailService` opens the store (a mkdir and a schema check), and that belongs
-    on the worker thread with the discard, not on the event loop next to it."""
-    svc = _mail_service(user)
-    if svc is None:
-        return None
-    try:
-        return bool(svc.discard_draft(int(op_id)))
-    finally:
-        _close_quietly(svc)
+def _kind(kind: str) -> str:
+    if kind not in _KINDS:
+        raise HTTPException(status_code=400, detail="unknown kind")
+    return kind
 
 
 @router.get("")
-async def list_outbox(request: Request, limit: int = 50,
-                      session_id: Optional[str] = None) -> Dict[str, Any]:
-    """What is waiting for this person's word, newest first, in one row shape.
+async def list_outbox(request: Request, limit: int = 50, session_id: Optional[str] = None,
+                      settled: bool = False) -> Dict[str, Any]:
+    """This person's drafts, newest first, in one row shape.
 
-    `session_id` narrows it to one conversation, which is what the card in a chat asks for: a
-    message the agent is preparing in one chat must not turn up in another. Without it the
-    whole person's list comes back, which is what the CLI and any overview want.
+    Without `settled`: what is still waiting (`pending`), for the whole person or, with
+    `session_id`, for one conversation - a message the agent is preparing in one chat must not
+    turn up in another. With `settled` and a `session_id`: every draft that chat produced,
+    decided ones included, which is what the card in the conversation shows, each under the
+    turn that wrote it.
     """
     user = get_current_vaf_user(request)
-    from vaf.core.outbound_hold import pending
-    rows = await asyncio.to_thread(pending, user["username"], user["user_scope_id"],
-                                   limit=min(max(int(limit or 1), 1), _LIMIT_MAX),
-                                   session_id=session_id)
+    from vaf.core import outbound_hold
+    n = min(max(int(limit or 1), 1), _LIMIT_MAX)
+    if settled and session_id:
+        rows = await asyncio.to_thread(outbound_hold.chat_drafts, user["username"],
+                                       user["user_scope_id"], session_id, limit=n)
+    else:
+        rows = await asyncio.to_thread(outbound_hold.pending, user["username"],
+                                       user["user_scope_id"], limit=n, session_id=session_id)
     return {"rows": rows, "count": len(rows)}
 
 
 @router.post("/{kind}/{entry_id}/send")
 async def send_entry(kind: str, entry_id: int, request: Request) -> Dict[str, Any]:
-    """Send one waiting draft now. A failure leaves it waiting, with the reason."""
+    """Send one waiting draft now. A failure leaves it waiting, with the reason. A send that
+    left wakes the chat it came from, so the agent carries on where its turn stopped."""
     user = get_current_vaf_user(request)
-    if kind == "mail":
-        result = await asyncio.to_thread(_send_mail_draft, user, int(entry_id))
-        if not result.get("ok") and result.get("error") == "not waiting":
-            raise HTTPException(status_code=404, detail="draft not found")
-        return result
-    if kind == "call":
-        from vaf.core.outbound_hold import approve_call
-        # The role comes from the SESSION, not from the auth helper's two-key answer, which
-        # carries none: reading `user["role"]` there sent every approval as a plain user, and a
-        # tool that installs a file jail from the role would attach a second administrator's
-        # file under a jail their own chat turn never had.
-        role = str(((getattr(request.state, "user", None) or {}).get("role")) or "user")
-        result = await asyncio.to_thread(
-            approve_call, int(entry_id), username=user["username"],
-            user_scope_id=user["user_scope_id"], user_role=role)
-        return {"ok": bool(result.get("ok")),
-                "error": "" if result.get("ok") else result.get("result", "")}
-    raise HTTPException(status_code=400, detail="unknown kind")
+    from vaf.core import outbound_hold
+    # The role comes from the SESSION, not from the auth helper's two-key answer, which
+    # carries none: reading `user["role"]` there sent every approval as a plain user, and a
+    # tool that installs a file jail from the role would attach a second administrator's
+    # file under a jail their own chat turn never had.
+    role = str(((getattr(request.state, "user", None) or {}).get("role")) or "user")
+    result = await asyncio.to_thread(
+        outbound_hold.send_draft, _kind(kind), int(entry_id), username=user["username"],
+        user_scope_id=user["user_scope_id"], user_role=role)
+    if kind == "mail" and not result.get("ok") and result.get("error") in ("not waiting", "no mail account"):
+        raise HTTPException(status_code=404, detail="draft not found")
+    return result
 
 
 @router.delete("/{kind}/{entry_id}")
 async def discard_entry(kind: str, entry_id: int, request: Request) -> Dict[str, Any]:
-    """Drop one waiting draft. Nothing was on the wire, so nothing is recalled."""
+    """Drop one waiting draft. Nothing was on the wire, so nothing is recalled, and the turn
+    that stopped at it stays ended."""
     user = get_current_vaf_user(request)
-    if kind == "mail":
-        ok = await asyncio.to_thread(_discard_mail_draft, user, int(entry_id))
-        if not ok:
-            raise HTTPException(status_code=404, detail="draft not found")
-        return {"ok": True}
-    if kind == "call":
-        from vaf.core.outbound_hold import discard_call
-        ok = await asyncio.to_thread(discard_call, int(entry_id), username=user["username"],
-                                     user_scope_id=user["user_scope_id"])
-        if not ok:
-            raise HTTPException(status_code=404, detail="draft not found")
-        return {"ok": True}
-    raise HTTPException(status_code=400, detail="unknown kind")
+    from vaf.core import outbound_hold
+    ok = await asyncio.to_thread(outbound_hold.discard_draft, _kind(kind), int(entry_id),
+                                 username=user["username"], user_scope_id=user["user_scope_id"])
+    if not ok:
+        raise HTTPException(status_code=404, detail="draft not found")
+    return {"ok": True}
+
+
+@router.patch("/{kind}/{entry_id}")
+async def revise_entry(kind: str, entry_id: int, request: Request) -> Dict[str, Any]:
+    """Change a waiting draft's words: `{"body": ..., "subject": ...}` (subject for a mail
+    only). The recipients are not editable here - a different recipient is a different
+    message, and the agent writes that one."""
+    user = get_current_vaf_user(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="expected a JSON object")
+    body, subject = payload.get("body"), payload.get("subject")
+    if (body is not None and not isinstance(body, str)) or (subject is not None and not isinstance(subject, str)):
+        raise HTTPException(status_code=400, detail="body and subject are text")
+    if body is None and subject is None:
+        raise HTTPException(status_code=400, detail="nothing to change")
+    from vaf.core import outbound_hold
+    result = await asyncio.to_thread(
+        outbound_hold.revise_draft, _kind(kind), int(entry_id), username=user["username"],
+        user_scope_id=user["user_scope_id"], body=body, subject=subject)
+    if not result.get("ok"):
+        if result.get("error") == "empty":
+            raise HTTPException(status_code=400, detail="the text is empty")
+        raise HTTPException(status_code=404, detail="draft not found")
+    return result

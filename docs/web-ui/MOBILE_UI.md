@@ -26,13 +26,15 @@ match whatever the file already uses.
 ## The held-send card
 
 What the agent prepared and nobody has sent (`web/components/outbox/HeldSendCard.tsx`). It is
-not a banner: it is the last row IN the conversation, in the same bot-row wrapper as an answer,
-so the phone needs nothing of its own for the card itself. What the phone does need is the
-wrapper, and the card brings it along itself (`page.tsx` renders only `<HeldSendCard>`, because
-only the card knows whether anything is waiting): `w-full max-w-[85%] max-md:max-w-full`, the
-message column's own rule, so the card uses the full width on a phone and the message column on
-a desktop. The card's insides stack by construction (a column of short rows, three at most, then
-a count), and both buttons stay side by side because they are two short labels.
+not a banner: it sits under the turn that wrote it, so on a phone it follows that turn's answer,
+which the actions timeline drops below the avatar row at full width; the card's rail offset
+(`pl-[26px]`, which lines it up with the tool windows on a desktop) is `max-md:pl-0` for the
+same reason. A draft with no turn on screen takes the chat's last row (`UnplacedDrafts`), which
+brings the bot-row wrapper along itself: `w-full max-w-[85%] max-md:max-w-full`, the message
+column's own rule, with the avatar gutter hidden on a phone (`max-md:hidden`), so the card uses
+the full width there too. The card's insides stack by construction (a column of short rows),
+the text field grows with the text instead of scrolling, and the buttons wrap
+(`flex-wrap`) when the "take the change back" link joins them on a narrow screen.
 
 ## Reusable patterns (copy the class strings)
 

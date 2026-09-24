@@ -182,3 +182,53 @@ def test_a_broken_mail_store_is_an_error_and_not_a_missing_account(world, monkey
     with pytest.raises(HTTPException) as exc:
         asyncio.run(orr.discard_entry("mail", 7, _request()))
     assert exc.value.status_code == 404
+
+
+def _json_request(body, scope=SCOPE, username="alice"):
+    async def _json():
+        if isinstance(body, Exception):
+            raise body
+        return body
+    return SimpleNamespace(state=SimpleNamespace(user={"username": username, "user_scope_id": scope}),
+                           json=_json)
+
+
+def _park_in(session, message="Hallo", username="alice"):
+    from vaf.core.outbound_hold import park_messenger_call
+    return park_messenger_call("send_whatsapp", {"to_phone": "+491700000000", "message": message},
+                               username=username, user_scope_id=SCOPE, session_id=session)
+
+
+def test_the_card_reads_its_chat_with_the_decided_drafts(world):
+    """The card keeps a decided draft in the conversation as its record; the default listing
+    (terminal, inbox) stays what still waits. MUTATION: drop the `settled` branch and the
+    discarded row vanishes from the card's listing."""
+    kept = _park_in("chat-a")
+    dropped = _park_in("chat-a", "zwei")
+    asyncio.run(orr.discard_entry("call", dropped, _request()))
+    _park_in("chat-b")
+    card = asyncio.run(orr.list_outbox(_request(), session_id="chat-a", settled=True))
+    assert [(r["id"], r["state"]) for r in card["rows"]] == [(dropped, "discarded"), (kept, "held")]
+    waiting = asyncio.run(orr.list_outbox(_request(), session_id="chat-a"))
+    assert [r["id"] for r in waiting["rows"]] == [kept]
+    assert asyncio.run(orr.list_outbox(_request(username="bob"), session_id="chat-a", settled=True))["count"] == 0
+
+
+def test_editing_is_the_callers_own_and_never_empty(world):
+    """MUTATION: read the identity from the body, or accept a blank text."""
+    entry_id = _park_in("chat-a")
+    out = asyncio.run(orr.revise_entry("call", entry_id, _json_request({"body": "Hallo Uwe"})))
+    assert out["ok"] is True
+    assert store.held_send(entry_id, "alice", SCOPE)["preview"] == "Hallo Uwe"
+    for bad, code in (({"body": "   "}, 400), ({"body": 5}, 400), ({}, 400), (["x"], 400),
+                      (ValueError("no json"), 400)):
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(orr.revise_entry("call", entry_id, _json_request(bad)))
+        assert exc.value.status_code == code, bad
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(orr.revise_entry("call", entry_id, _json_request({"body": "fremd"}, username="bob")))
+    assert exc.value.status_code == 404
+    assert store.held_send(entry_id, "alice", SCOPE)["preview"] == "Hallo Uwe"
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(orr.revise_entry("pigeon", entry_id, _json_request({"body": "x"})))
+    assert exc.value.status_code == 400

@@ -270,9 +270,10 @@ it MOVEs to the trash folder and never expunges.
 incident a mail left to a real external address the moment the person asked for one to be
 written. A chat turn on the web surface now passes `hold=True` into `queue_send`, so the message
 is BUILT (bytes, Message-ID, ledger row) and parked as a held draft, and the tool answers that
-nothing was sent. The card in the conversation sends or discards it, and so do
-`vaf outbox send|discard`
-and the mail window's own draft buttons; the decision itself is
+nothing was sent. The chat turn ends there, and the card in the conversation sends, edits or
+discards it, and so do `vaf outbox send|discard|edit`
+and the mail window's own draft buttons (a send from the card or the mail window wakes the chat
+the draft came from, `outbound_hold.wake_after_send`); the decision itself is
 [`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py) and the switch is
 `outward_send_hold`. Every other lane is untouched: automations, workflow steps, channel
 turns, the Front Office answer and a timer the person scheduled all send as before, because
@@ -292,6 +293,17 @@ tries on its own after one approval). A `failed` op whose ledger stamp is `ambig
 handed to the server and never confirmed: it goes back to the person as `ambiguous`, the
 approval itself refuses it (`approve_draft`), and only a discard ends it, because SMTP has no
 idempotency key and nobody may send it twice on the person's behalf.
+
+**Editing a held draft keeps it the same mail.** `MailService.revise_draft` changes the subject
+and the text INSIDE the stored RFC822 bytes (`compose.revise_message`: the plain part is
+replaced with the same format=flowed encoding, the Subject header in its own position) and in
+the payload fields an API sender builds from, in one UPDATE (`MailStore.revise_held_op`), and
+marks the op `edited`. Every recipient, the Bcc, the Message-ID and every attachment stay byte
+for byte as built, so what the person approves is still what leaves. Only a `held` op can be
+revised, and not one whose last attempt may have gone out (`ambiguous`). A draft a newer one
+replaced is a discard with `replaced_by` on the op (`MailStore.discard_op`), so every reader of
+the op state keeps its meaning. `list_chat_drafts` lists every send one chat asked for, in
+every state, for the cards in that conversation.
 
 The agent stamps `username` + `user_scope_id` into tool kwargs at dispatch
 (`agent.py`) and the workflow engine does the same (`workflows/engine.py`); tools

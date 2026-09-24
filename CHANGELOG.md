@@ -35,6 +35,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **The agent stops at a message it wrote for you, and you can change it before it goes.**
+  When the agent writes a mail or a WhatsApp message to somebody else in the chat, its turn now
+  ends at the draft instead of carrying on and saying the draft is ready. Click into the text
+  (or a mail's subject) to change it; Send sends exactly what you see and lets the agent carry
+  on where it stopped, Discard ends it there. The card sits under the answer that wrote it,
+  lined up with the tool windows (it used to hang at the bottom of the chat, a little too far
+  left), names the person from your contact book and says whether it is a mail or a WhatsApp
+  message, and folds a long text. Afterwards it stays as one line saying what became of the
+  message, and a new draft to the same person replaces the old one instead of adding a second
+  card. The agent is told what you did with each draft. From a terminal: `vaf outbox edit`.
+
 - **The inbox rail is one list of channels, and the views unfold under the one you open.**
   The rail used to carry two groups, "View" on top and "Channels" below, two filters that
   looked unrelated and were easy to leave set against each other. Now there is only the

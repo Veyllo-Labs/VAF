@@ -483,3 +483,194 @@ def test_a_draft_that_belongs_to_no_chat_stays_out_of_every_chat(scratch, monkey
     in_chat = outbound_hold.pending(USER, SCOPE, session_id="chat-a")
     assert [r["id"] for r in in_chat] == [6]
     assert len(outbound_hold.pending(USER, SCOPE)) == 2, "the inbox still sees both"
+
+
+# ---- the draft has a name, new words, a successor and an outcome ---------------
+
+def test_the_result_names_its_draft():
+    """MUTATION: drop the ref from `held_result`.
+
+    The chat finds the card's place under the turn that wrote it by this ref, and the next
+    turn's note finds the draft again by it. The two lanes number independently, so the ref
+    carries the lane: a bare "draft 7" is two different drafts.
+    """
+    mail = outbound_hold.held_result("send_mail", {"to": "a@b.c"}, entry_id=12)
+    call = outbound_hold.held_result("send_whatsapp", {"to_phone": "+49170", "message": "x"}, entry_id=7)
+    assert mail.startswith(f"{outbound_hold.HELD_PREFIX} Draft mail:12 ")
+    assert call.startswith(f"{outbound_hold.HELD_PREFIX} Draft call:7 ")
+    assert outbound_hold.created_refs(mail + "\n" + call) == ["mail:12", "call:7"]
+    assert "Your turn ends here" in call, "the model is told the turn is over, not to announce it"
+    assert outbound_hold.parse_ref("mail:12") == ("mail", 12)
+    assert outbound_hold.parse_ref("pigeon:1") is None and outbound_hold.parse_ref("call:x") is None
+
+
+def test_a_parked_call_takes_new_words_until_it_is_sent(scratch):
+    """MUTATION: write the new text into the preview only (or the args only).
+
+    What the person reads and what the tool is called with are the same text, or the edit is
+    a card that lies: the approval replays the parked ARGUMENTS.
+    """
+    entry_id = outbound_hold.park_messenger_call(
+        "send_whatsapp", {"to_phone": "+491700000000", "message": "Hallo", "voice_lang": "de"},
+        username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    out = outbound_hold.revise_draft("call", entry_id, username=USER, user_scope_id=SCOPE,
+                                     body="Hallo Uwe, bis morgen!")
+    assert out == {"ok": True, "error": ""}
+    row = store.held_send(entry_id, USER, SCOPE)
+    assert row["preview"] == "Hallo Uwe, bis morgen!" and row["edited"] == 1
+    assert json.loads(row["args"]) == {"to_phone": "+491700000000", "message": "Hallo Uwe, bis morgen!",
+                                       "voice_lang": "de"}, "only the text changes"
+    assert outbound_hold.revise_draft("call", entry_id, username=USER, user_scope_id=SCOPE,
+                                      body="   ") == {"ok": False, "error": "empty"}
+    assert outbound_hold.revise_draft("call", entry_id, username="bob", user_scope_id=SCOPE,
+                                      body="x")["ok"] is False, "somebody else's draft"
+
+    tool = _FakeTool()
+    sent = outbound_hold.send_draft("call", entry_id, username=USER, user_scope_id=SCOPE,
+                                    tools={"send_whatsapp": tool}, wake=False)
+    assert sent["ok"] is True and tool.calls[0]["message"] == "Hallo Uwe, bis morgen!"
+    assert outbound_hold.revise_draft("call", entry_id, username=USER, user_scope_id=SCOPE,
+                                      body="zu spät") == {"ok": False, "error": "not waiting"}
+
+
+def test_a_newer_draft_to_the_same_person_replaces_the_waiting_one(scratch):
+    """MUTATION: drop the recipient comparison, or the `keep` of the round.
+
+    Asked in words to change a draft, the agent writes it again; the old card must not stay
+    beside the new one, sendable. Everything else stays: another person, another channel,
+    another chat, a draft of the SAME round (two messages meant together) and one whose send
+    may already have arrived.
+    """
+    def park(to, msg, session="chat-a"):
+        return outbound_hold.park_messenger_call(
+            "send_whatsapp", {"to_phone": to, "message": msg},
+            username=USER, user_scope_id=SCOPE, session_id=session)
+
+    old = park("+49 170 0000000", "Erste Fassung")
+    other_person = park("+491711111111", "Andere Person")
+    other_chat = park("+491700000000", "Anderer Chat", session="chat-b")
+    same_round = park("+491700000000", "Zweite Nachricht derselben Runde")
+    stranded = park("+491700000000", "Vielleicht schon draussen")
+    store.settle_held_send(stranded, USER, "ambiguous", SCOPE)
+    new = park("+491700000000", "Neue Fassung")
+
+    replaced = outbound_hold.replace_older_drafts(
+        f"call:{new}", session_id="chat-a", username=USER, user_scope_id=SCOPE,
+        keep=[f"call:{same_round}", f"call:{new}"])
+    assert replaced == [f"call:{old}"]
+    row = store.held_send(old, USER, SCOPE)
+    assert (row["state"], row["replaced_by"]) == ("replaced", f"call:{new}")
+    for kept in (other_person, other_chat, same_round, new):
+        assert store.held_send(kept, USER, SCOPE)["state"] == "held", kept
+    assert store.held_send(stranded, USER, SCOPE)["state"] == "ambiguous"
+    # A replaced draft cannot be sent any more, and it is not in the terminal's list.
+    tool = _FakeTool()
+    out = outbound_hold.send_draft("call", old, username=USER, user_scope_id=SCOPE,
+                                   tools={"send_whatsapp": tool}, wake=False)
+    assert out["ok"] is False and tool.calls == []
+    assert old not in [r["id"] for r in outbound_hold.pending(USER, SCOPE)]
+
+
+def test_the_chat_listing_keeps_what_was_decided(scratch):
+    """The card stays in the conversation after the decision, as the record of what happened
+    to the draft. The terminal and the inbox list only what still waits."""
+    waiting = outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+1", "message": "a"},
+                                                username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    dropped = outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+2", "message": "b"},
+                                                username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    outbound_hold.discard_draft("call", dropped, username=USER, user_scope_id=SCOPE)
+    outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+3", "message": "c"},
+                                      username=USER, user_scope_id=SCOPE, session_id="chat-b")
+    rows = outbound_hold.chat_drafts(USER, SCOPE, "chat-a")
+    assert [(r["ref"], r["state"]) for r in rows] == [(f"call:{dropped}", "discarded"),
+                                                      (f"call:{waiting}", "held")]
+    assert [r["id"] for r in outbound_hold.pending(USER, SCOPE, session_id="chat-a")] == [waiting]
+    assert outbound_hold.chat_drafts(USER, SCOPE, "") == []
+
+
+def test_a_decided_draft_is_reported_once(scratch):
+    """MUTATION: report every created draft (drop the `reported` set), or report one still
+    waiting.
+
+    The history is the ledger: a draft the agent created there and nothing later reports is
+    looked up, and the note carries the very shape that marks it reported, so the next turn
+    stays quiet about it.
+    """
+    sent = outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+1", "message": "a"},
+                                             username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    dropped = outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+2", "message": "b"},
+                                                username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    waiting = outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+3", "message": "c"},
+                                                username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    history = [outbound_hold.held_result("send_whatsapp", {"to_phone": p}, entry_id=i)
+               for p, i in (("+1", sent), ("+2", dropped), ("+3", waiting))]
+    outbound_hold.send_draft("call", sent, username=USER, user_scope_id=SCOPE,
+                             tools={"send_whatsapp": _FakeTool()}, wake=False)
+    outbound_hold.discard_draft("call", dropped, username=USER, user_scope_id=SCOPE)
+
+    note = outbound_hold.decision_notes(history, username=USER, user_scope_id=SCOPE)
+    assert note.startswith("[Context:")
+    assert f"Draft call:{sent} was SENT by the user" in note
+    assert f"Draft call:{dropped} was DISCARDED by the user" in note
+    assert f"call:{waiting}" not in note, "a draft still waiting is not news"
+    assert outbound_hold.decision_notes(history + [note], username=USER, user_scope_id=SCOPE) == ""
+    assert outbound_hold.decision_notes(["no drafts here"], username=USER, user_scope_id=SCOPE) == ""
+
+
+def test_a_send_wakes_the_chat_once_nothing_else_waits(scratch, monkeypatch):
+    """MUTATION: wake on every send, or on a discard.
+
+    Two drafts from one turn wake the chat once, after the second decision. A discard wakes
+    nothing (the person said stop). The terminal passes wake=False: its process has no queue
+    anybody drains."""
+    import vaf.core.task_queue as tq
+    woken = []
+    monkeypatch.setattr(tq, "enqueue_wake_turn", lambda **kw: woken.append(kw))
+    first = outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+1", "message": "a"},
+                                              username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    second = outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+2", "message": "b"},
+                                               username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    tools = {"send_whatsapp": _FakeTool()}
+    outbound_hold.send_draft("call", first, username=USER, user_scope_id=SCOPE, user_role="user", tools=tools)
+    assert woken == [], "the other draft of the chat still waits"
+    outbound_hold.revise_draft("call", second, username=USER, user_scope_id=SCOPE, body="b, geändert")
+    outbound_hold.send_draft("call", second, username=USER, user_scope_id=SCOPE, user_role="user", tools=tools)
+    assert len(woken) == 1
+    wake = woken[0]
+    assert (wake["kind"], wake["session_id"], wake["source"]) == ("draft", "chat-a", "web")
+    assert (wake["username"], wake["user_scope_id"], wake["role"]) == (USER, SCOPE, "user")
+    assert wake["text"].startswith(outbound_hold.DRAFT_WAKE_PREFIX)
+    assert f"Draft call:{second} was SENT by the user after changing its text" in wake["text"]
+    assert "b, geändert" in wake["text"], "the agent learns what actually left"
+    assert wake["extra"] == {"draft": f"call:{second}"}
+
+    third = outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+3", "message": "c"},
+                                              username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    outbound_hold.discard_draft("call", third, username=USER, user_scope_id=SCOPE)
+    fourth = outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+4", "message": "d"},
+                                               username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    outbound_hold.send_draft("call", fourth, username=USER, user_scope_id=SCOPE, tools=tools, wake=False)
+    assert len(woken) == 1, "a discard and a terminal send wake nothing"
+
+
+def test_the_recipient_is_named_from_the_contact_book(scratch, monkeypatch):
+    """The card and the agent name the person, not only the number: the contact book first,
+    then a mail's own display name. A name is a convenience, so a failing lookup is ""."""
+    from vaf.core import contacts_store
+    monkeypatch.setattr(contacts_store, "get_contact_name_by_phone",
+                        lambda phone, username=None, user_scope_id=None: "Uwe Berg" if phone == "+49170" else None)
+    monkeypatch.setattr(contacts_store, "find_contact_by_channel",
+                        lambda ch, value, username=None, user_scope_id=None:
+                        {"name": "Anna Berg"} if value == "anna@example.com" else None)
+    assert outbound_hold.recipient_name("whatsapp", "+49170", USER, SCOPE) == "Uwe Berg"
+    assert outbound_hold.recipient_name("whatsapp", "+49999", USER, SCOPE) == ""
+    assert outbound_hold.recipient_name("mail", "anna@example.com, b@example.com", USER, SCOPE) == "Anna Berg"
+    assert outbound_hold.recipient_name("mail", "Carl Kranz <carl@example.com>", USER, SCOPE) == "Carl Kranz"
+    outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+49170", "message": "x"},
+                                      username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    assert outbound_hold.chat_drafts(USER, SCOPE, "chat-a")[0]["recipient_name"] == "Uwe Berg"
+
+    def _boom(*a, **k):
+        raise RuntimeError("contacts locked")
+    monkeypatch.setattr(contacts_store, "get_contact_name_by_phone", _boom)
+    assert outbound_hold.recipient_name("whatsapp", "+49170", USER, SCOPE) == ""

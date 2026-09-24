@@ -861,6 +861,17 @@ async def send_draft(op_id: int, _user: Dict[str, Any] = Depends(_get_current_us
                                       int(op_id), svc)
     if outcome.get("error") == "not waiting":
         raise HTTPException(status_code=409, detail="the draft is no longer held")
+    if outcome.get("ok"):
+        # A draft a chat turn stopped at wakes that chat, whichever window sent it: the same
+        # call the card's route makes (`outbound_hold.send_draft`). A Front Office answer
+        # belongs to no chat and wakes nothing.
+        try:
+            from vaf.core.outbound_hold import wake_after_send
+            await asyncio.to_thread(wake_after_send, "mail", int(op_id),
+                                    username=str(_user.get("username") or ""), user_scope_id=scope,
+                                    user_role=str(_user.get("role") or "user"))
+        except Exception:
+            pass
     try:
         from vaf.core.web_interface import notify_inbox_changed
         notify_inbox_changed(scope)

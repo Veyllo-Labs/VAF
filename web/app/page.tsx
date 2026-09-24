@@ -32,7 +32,9 @@ import { useVoiceCallStore } from '@/lib/voiceCallStore';
 import { TurnActionsTimeline, type TimelineAction } from '@/components/TurnActionsTimeline';
 import AutomationCalendarModal from '@/components/AutomationCalendarModal';
 import InboxWindow from '@/components/inbox/InboxWindow';
-import HeldSendCard from '@/components/outbox/HeldSendCard';
+import { TurnDrafts, UnplacedDrafts, isWaitingDraft, type HeldSendRow } from '@/components/outbox/HeldSendCard';
+import { useChatDrafts } from '@/components/outbox/useChatDrafts';
+import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX } from '@/components/outbox/draftRefs';
 import type { SettingsChatJump } from '@/components/SettingsModal';
 import CreateAutomationPopup, { type CreateAutomationPayload, type EditAutomationTask } from '@/components/CreateAutomationPopup';
 import NotificationsModal, { type NotificationItem } from '@/components/NotificationsModal';
@@ -3774,6 +3776,20 @@ function VAFDashboardContent() {
         return filteredMessages.slice(start);
     }, [filteredMessages, msgOffset]);
     const hiddenCount = filteredMessages.length - visibleMessages.length;
+
+    // Every draft this chat produced, in every state (vaf/core/outbound_hold.chat_drafts). A
+    // card sits under the turn whose tool result names it; a waiting draft with no such turn on
+    // screen takes the chat's last row instead, so no draft is ever out of reach.
+    const chatDrafts = useChatDrafts(getApiBase(), currentSessionId || '', heldVersion);
+    const draftTime = useCallback((ts: number) => formatMessageTime(ts * 1000, userTimeFormat), [userTimeFormat]);
+    const draftsOfTools = useCallback((tools: { content: string }[]): HeldSendRow[] => tools
+        .map(m => draftRefOf(m.content))
+        .map(ref => (ref ? chatDrafts.byRef.get(ref) : undefined))
+        .filter((r): r is HeldSendRow => !!r), [chatDrafts.byRef]);
+    const unplacedDrafts = useMemo(() => {
+        const placed = new Set(visibleMessages.filter(m => m.role === 'tool').map(m => draftRefOf(m.content)));
+        return chatDrafts.rows.filter(r => isWaitingDraft(r) && !placed.has(r.ref));
+    }, [chatDrafts.rows, visibleMessages]);
 
     const contextBreakdown = useMemo(() => {
         if (!contextStats) return null;
@@ -9559,15 +9575,20 @@ function VAFDashboardContent() {
                                                     // command finished", vaf/core/processes.py).
                                                     const _wakeContent = String(msg.content ?? '');
                                                     const _isProcessWake = msg.kind === 'process' || _wakeContent.startsWith('⚙ Background command finished');
-                                                    const _isWake = _isProcessWake || msg.kind === 'timer' || _wakeContent.startsWith('⏰ Timer fired');
+                                                    // A draft the person sent wakes the chat that stopped at it
+                                                    // (vaf/core/outbound_hold.py); its first line names the addressee.
+                                                    const _isDraftWake = msg.kind === 'draft' || _wakeContent.startsWith(DRAFT_WAKE_PREFIX);
+                                                    const _isWake = _isProcessWake || _isDraftWake || msg.kind === 'timer' || _wakeContent.startsWith('⏰ Timer fired');
                                                     if (_isWake) {
                                                         // Show only the user's note (timer) or the one-line outcome (process),
                                                         // not the internal "Act on it…" / "Continue with…" framing.
-                                                        const _noteMatch = _isProcessWake ? null : _wakeContent.match(/your note:\s*"([\s\S]*?)"/);
-                                                        const _wakeText = _isProcessWake
+                                                        const _noteMatch = (_isProcessWake || _isDraftWake) ? null : _wakeContent.match(/your note:\s*"([\s\S]*?)"/);
+                                                        const _wakeText = _isDraftWake
+                                                            ? _wakeContent.split('\n')[0].slice(DRAFT_WAKE_PREFIX.length).trim()
+                                                            : _isProcessWake
                                                             ? _wakeContent.split('\n')[0].replace(/^⚙\s*/, '').trim()
                                                             : (_noteMatch ? _noteMatch[1] : _wakeContent.replace(/^⏰\s*/, '')).trim();
-                                                        const WakeIcon = _isProcessWake ? Terminal : AlarmClock;
+                                                        const WakeIcon = _isDraftWake ? Send : _isProcessWake ? Terminal : AlarmClock;
                                                         // Two states: ACTIVE (E) while the agent is still handling the timer — real (dark) agent
                                                         // avatar + amber clock BADGE + amber bubble ("look here"); DONE (J) once it has replied —
                                                         // neutral dim avatar, neutral bubble, amber only in the "TIMER" label (quietly marked,
@@ -9595,7 +9616,7 @@ function VAFDashboardContent() {
                                                                         )}>
                                                                             <div className="mb-1 flex items-center gap-1.5 text-amber-500">
                                                                                 <WakeIcon className="h-3.5 w-3.5" />
-                                                                                <span className="text-[11px] font-semibold uppercase tracking-wide">{_isProcessWake ? tMain('wakeProcess') : tMain('wakeTimer')}</span>
+                                                                                <span className="text-[11px] font-semibold uppercase tracking-wide">{_isDraftWake ? tMain('wakeDraft') : _isProcessWake ? tMain('wakeProcess') : tMain('wakeTimer')}</span>
                                                                             </div>
                                                                             <div className="chat-markdown"><ChatMarkdown>{_wakeText}</ChatMarkdown></div>
                                                                         </div>
@@ -9661,6 +9682,10 @@ function VAFDashboardContent() {
                                                                                 } : undefined}
                                                                             />
                                                                         </div>
+                                                                        {/* A draft this call parked, when its turn has no actions
+                                                                            rail: right under the tool window, in its column. */}
+                                                                        <TurnDrafts rows={draftsOfTools([msg])} indent={false}
+                                                                            apiBase={getApiBase()} onChanged={chatDrafts.reload} formatTime={draftTime} />
                                                                     </div>
                                                                 </div>
                                                             </div>
@@ -9728,8 +9753,10 @@ function VAFDashboardContent() {
                                                     const displayAnswer = !isBot && attachmentStripped ? attachmentStripped.text : answer;
                                                     const displayFiles = !isBot && (msg.files?.length ? msg.files : (attachmentStripped?.fileNames.length ? attachmentStripped.fileNames.map(name => ({ name, mimeType: '' })) : undefined));
 
-                                                    // Filter out tool_calls JSON from bot answers
-                                                    const cleanAnswer = isBot ? stripToolCallsJSON(answer) : answer;
+                                                    // Filter out tool_calls JSON from bot answers. A turn that stopped at a
+                                                    // draft ends with one fixed sentence (vaf/core/outbound_hold.py); it
+                                                    // shows as nothing, because the draft's card is that turn's answer.
+                                                    const cleanAnswer = isBot ? (isDraftTurnEnd(answer) ? '' : stripToolCallsJSON(answer)) : answer;
                                                     // Add top margin if following a system step
                                                     const prevWasSystem = i > 0 && visibleMessages[i - 1].role === 'system';
                                                     // Only show the speech bubble when there is visible content (avoid empty bubbles)
@@ -10161,6 +10188,10 @@ function VAFDashboardContent() {
                                                                             })}
                                                                         >
                                                                             {bubbleContent}
+                                                                            {/* The drafts this turn's tool calls parked, under its answer,
+                                                                                lined up with its tool windows (HeldSendCard.tsx). */}
+                                                                            <TurnDrafts rows={draftsOfTools(turnTl!.actions.filter(a => a.kind === 'tool').map(a => a.msg))}
+                                                                                apiBase={getApiBase()} onChanged={chatDrafts.reload} formatTime={draftTime} />
                                                                         </TurnActionsTimeline>
                                                                     </div>
                                                                 ) : (
@@ -10233,14 +10264,13 @@ function VAFDashboardContent() {
 
                                 {/* Active Tools Panel Removed (Now Inline) */}
 
-                                {/* What the agent prepared and nobody has sent yet. It belongs in the
-                                    conversation, under the answer that produced it, not in a banner
-                                    over the header: it is the agent's own output waiting for a word,
-                                    the way a tool result is. The card brings the bot row's geometry
-                                    with it and renders NOTHING when nothing is waiting, which is why
-                                    there is no wrapper here: a wrapper would be an empty padded row
-                                    at the end of every conversation. */}
-                                <HeldSendCard apiBase={getApiBase()} version={heldVersion} sessionId={currentSessionId || ''} />
+                                {/* A waiting draft whose turn is not on screen (its tool result has not
+                                    arrived yet, or the turn is outside the loaded history) takes the chat's
+                                    last row, where the card in a turn would be. Every other draft sits under
+                                    the turn that wrote it. The component renders NOTHING when nothing is
+                                    unplaced, which is why there is no wrapper here: a wrapper would be an
+                                    empty padded row at the end of every conversation. */}
+                                <UnplacedDrafts rows={unplacedDrafts} apiBase={getApiBase()} onChanged={chatDrafts.reload} formatTime={draftTime} />
 
                                 </>)}
                                 {/* The bottom anchor the autoscroll aims at. OUTSIDE the

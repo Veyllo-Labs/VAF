@@ -369,7 +369,8 @@
     "gateAllowChatHint": "このチャットの間、このツールを許可します。ほかのチャットでは引き続き確認します。VAFを再起動すると解除されます。",
     "gateAllowAlwaysHint": "このツールをどこでも許可し、確認が必要なすべてのツールについて現在のフォルダーを信頼します。",
     "wakeTimer": "タイマー",
-    "wakeProcess": "バックグラウンドコマンド"
+    "wakeProcess": "バックグラウンドコマンド",
+    "wakeDraft": "送信した下書き"
   },
   "nav": {
     "settings": "設定",
@@ -2359,18 +2360,31 @@
     "resultReady": "タスクが完了しました。詳細はチャットにあります。"
   },
   "outbox": {
-    "title": "エージェントの下書き",
-    "to": "宛先{recipient}、まだ送信していません",
+    "titleMail": "{recipient}宛てのメール",
+    "titleWhatsapp": "{recipient}宛てのWhatsApp",
+    "titleOther": "{recipient}宛ての{channel}",
+    "notSent": "未送信の下書き",
+    "edited": "編集済み",
     "noRecipient": "不明",
+    "subjectPlaceholder": "件名",
+    "editHint": "クリックすると文面を編集できます",
+    "showMore": "全文を表示",
+    "showLess": "折りたたむ",
+    "revert": "変更を元に戻す",
+    "emptyText": "本文がないと送信できません。",
     "send": "送信",
     "discard": "破棄",
+    "countdown": "先に読む（{seconds}）",
     "more": "ほかに{count}件待機中",
     "failed": "実行できませんでした（{error}）。下書きは残ります。",
     "ambiguous": "前回の送信が途中で止まったため、このメッセージはすでに届いている可能性があります。もう一度頼む前に会話を確認してください。",
     "cc": "Cc: {recipients}",
     "bcc": "Bcc: {recipients}",
     "attachments": "添付ファイル：{names}",
-    "countdown": "先に読む（{seconds}）"
+    "sent": "送信済み",
+    "sending": "送信中",
+    "discarded": "破棄済み",
+    "replaced": "新しい版に置き換え済み"
   },
   "inbox": {
     "title": "受信箱",

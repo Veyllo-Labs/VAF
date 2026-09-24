@@ -369,7 +369,8 @@
     "gateAllowChatHint": "Erlaubt dir dieses Werkzeug für den Rest dieses Chats. In anderen Chats wird weiter gefragt. Gilt bis zum nächsten Neustart von VAF.",
     "gateAllowAlwaysHint": "Erlaubt dir dieses Werkzeug überall und vertraut dem aktuellen Ordner bei jedem Werkzeug, das nach einer Bestätigung fragt.",
     "wakeTimer": "Timer",
-    "wakeProcess": "Hintergrundbefehl"
+    "wakeProcess": "Hintergrundbefehl",
+    "wakeDraft": "Entwurf gesendet"
   },
   "nav": {
     "settings": "Einstellungen",
@@ -2359,18 +2360,31 @@
     "resultReady": "Die Aufgabe ist fertig. Die Details stehen im Chat."
   },
   "outbox": {
-    "title": "Entwurf deines Agenten",
-    "to": "An {recipient}, noch nicht gesendet",
+    "titleMail": "E-Mail an {recipient}",
+    "titleWhatsapp": "WhatsApp an {recipient}",
+    "titleOther": "{channel} an {recipient}",
+    "notSent": "Entwurf, noch nicht gesendet",
+    "edited": "bearbeitet",
     "noRecipient": "unbekannt",
+    "subjectPlaceholder": "Betreff",
+    "editHint": "Zum Bearbeiten in den Text klicken",
+    "showMore": "Ganzen Text zeigen",
+    "showLess": "Weniger zeigen",
+    "revert": "Änderung zurücknehmen",
+    "emptyText": "Ohne Text lässt sich nichts senden.",
     "send": "Senden",
     "discard": "Verwerfen",
+    "countdown": "Erst lesen ({seconds})",
     "more": "und {count} weitere warten",
     "failed": "Das hat nicht geklappt ({error}); der Entwurf bleibt.",
     "ambiguous": "Der letzte Versuch wurde unterbrochen, die Nachricht kann also schon unterwegs sein. Sieh im Chat nach, bevor du sie noch einmal anforderst.",
     "cc": "Cc {recipients}",
     "bcc": "Bcc {recipients}",
     "attachments": "Anhänge: {names}",
-    "countdown": "Erst lesen ({seconds})"
+    "sent": "Gesendet",
+    "sending": "Wird gesendet",
+    "discarded": "Verworfen",
+    "replaced": "Durch eine neuere Fassung ersetzt"
   },
   "inbox": {
     "title": "Posteingang",

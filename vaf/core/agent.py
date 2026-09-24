@@ -9552,6 +9552,7 @@ class Agent:
                 self._ensure_image_base_descriptions(images)
                 _user_msg["images"] = images  # [{data, mime_type, name, base_description}] — see _prepare_messages
             self.history.append(_user_msg)
+            self._note_decided_drafts()
             self._orchestrator_heavy_calls_this_turn = 0  # New turn: reset heavy-tool budget for orchestrator gate
             self._plan_gate_blocks = 0  # New turn: fresh plan-gate budget
             self._anti_spin_streak = 0  # New turn: fresh anti-spin streak
@@ -11350,6 +11351,9 @@ class Agent:
                 # consecutive role:tool messages (for the same TC batch) causes
                 # DeepSeek 400 "insufficient tool messages following tool_calls".
                 _post_tc_messages: list = []
+                # Filled by `_announce_held_send` when a call of THIS round parks a draft.
+                self._held_this_round = []
+                self._turn_stops_for_draft = False
 
                 for tc in tool_calls_detected:
                     function_name = tc['function']['name']
@@ -11922,6 +11926,24 @@ class Agent:
                 # tool results are in history — safe to insert non-tool messages here.
                 for _ptm in _post_tc_messages:
                     self.history.append(_ptm)
+
+                # A draft the person has to decide on ENDS the turn here, with every call of
+                # the round answered (so the history stays a valid tool sequence). No further
+                # model call: the card is the answer, and the person's word decides what comes
+                # next - Send wakes this chat again, Discard is the end of it
+                # (vaf/core/outbound_hold.py, "THE TURN ENDS AT THE DRAFT"). NAMED BOUNDARY:
+                # this is the only tool result that ends a turn, so it is keyed on the hold's
+                # own marker rather than offered as a general "end the turn" result; a second
+                # such tool is the moment it becomes a declaration on the tool.
+                if getattr(self, "_turn_stops_for_draft", False):
+                    self._turn_stops_for_draft = False
+                    from vaf.core.outbound_hold import TURN_ENDS_AT_DRAFT
+                    UI.event("System", "Draft parked for the user: the turn ends here", style="info")
+                    append_domain_log(
+                        "backend",
+                        f"[OUTBOUND_HOLD] turn ends at draft {','.join(self._held_this_round or [])}")
+                    self.history.append({"role": "assistant", "content": TURN_ENDS_AT_DRAFT})
+                    return TURN_ENDS_AT_DRAFT
 
                 # ═══════════════════════════════════════════════════════════════
                 # LOOP PROTECTION: Turn limit check
@@ -13128,17 +13150,64 @@ class Agent:
                     pass
         return None
 
-    def _announce_held_send(self, result) -> None:
-        """Tell this session's browser that a draft is waiting, so the card appears without a
-        refresh. Keyed on the result marker rather than on the tool name, because the two
-        lanes park in different stores and neither id belongs in a chat event: the browser
-        fetches what is waiting. Never raises."""
+    def _note_decided_drafts(self) -> None:
+        """What became of the drafts earlier turns of this chat stopped at, as one `[Context:`
+        note right after the new input (`outbound_hold.decision_notes`).
+
+        After the input and before the turn's snapshot, so the note is part of the context a
+        retry falls back to, and the runner persists it with the turn (it keeps `[Context:`
+        system messages) - a chat reloaded later does not hear the same news twice. The input
+        itself is read too: a wake turn's text already reports the draft it was woken for.
+        Only a history that ever held a draft pays for the lookup. Never raises."""
         try:
-            from vaf.core.outbound_hold import HELD_PREFIX
-            if not str(result or "").startswith(HELD_PREFIX):
+            from vaf.core import outbound_hold
+            texts = [str(m.get("content") or "") for m in (self.history or [])
+                     if isinstance(m, dict)]
+            if not any(outbound_hold.HELD_PREFIX in t for t in texts):
                 return
+            note = outbound_hold.decision_notes(
+                texts, username=getattr(self, "_current_username", None),
+                user_scope_id=getattr(self, "_current_user_scope_id", None))
+            if note:
+                self.history.append({"role": "system", "content": note})
+        except Exception as _dn_exc:
+            append_domain_log("backend", f"[OUTBOUND_HOLD] decision note skipped: {_dn_exc}")
+
+    def _announce_held_send(self, result) -> None:
+        """A draft was parked: note it for this round, retire the drafts it replaces, and tell
+        this session's browser, so the card appears without a refresh.
+
+        Keyed on the result marker rather than on the tool name, because the two lanes park in
+        different stores and one line covers both. The note is what ends the turn once the
+        round's results are all in (`chat_step`), so it is written first and on its own: a
+        browser that cannot be told must not keep the turn running past a draft. Never raises.
+        """
+        try:
+            from vaf.core import outbound_hold
+            if not str(result or "").startswith(outbound_hold.HELD_PREFIX):
+                return
+        except Exception:
+            return
+        refs = outbound_hold.created_refs(result)
+        held = getattr(self, "_held_this_round", None)
+        if not isinstance(held, list):
+            held = []
+        held.extend(r for r in refs if r not in held)
+        self._held_this_round = held
+        self._turn_stops_for_draft = True
+        sid = getattr(self, "current_session_id", None)
+        # Before the browser is told, so the listing it fetches already shows the older
+        # draft as replaced rather than as a second card waiting next to the new one.
+        for ref in refs:
+            try:
+                outbound_hold.replace_older_drafts(
+                    ref, session_id=str(sid or ""),
+                    username=getattr(self, "_current_username", None),
+                    user_scope_id=getattr(self, "_current_user_scope_id", None), keep=held)
+            except Exception as _rep_exc:
+                append_domain_log("backend", f"[OUTBOUND_HOLD] replace skipped: {_rep_exc}")
+        try:
             from vaf.core.web_interface import get_web_interface
-            sid = getattr(self, "current_session_id", None)
             wi = get_web_interface()
             wi._push_session_update(sid, {"type": "outbound_held"})
             # And the chat list's own red dot, the one a background answer already uses. The

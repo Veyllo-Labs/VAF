@@ -2148,6 +2148,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # Handle async-ack markers (sub-agent dispatched, no stream output)
                     response_text = str(response) if response is not None else ""
                     _is_system_log_only = response_text.startswith("[SYSTEM_LOG_ONLY]")
+                    from vaf.core.outbound_hold import TURN_ENDS_AT_DRAFT as _DRAFT_END
+                    _turn_ends_at_draft = response_text.strip() == _DRAFT_END
                     if response_text.startswith("[ASYNC_ACK]"):
                         clean_ack = response_text.replace("[ASYNC_ACK]", "").strip()
                         final_text = clean_ack or response_text
@@ -2161,6 +2163,19 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         # Agent already sent this as system log; do NOT add assistant bubble
                         # and do NOT send to any external channel (Telegram/WhatsApp/Discord)
                         final_text = response_text.replace("[SYSTEM_LOG_ONLY]", "").strip()
+                    elif _turn_ends_at_draft:
+                        # The turn stopped at a draft (vaf/core/outbound_hold.py): the card is
+                        # the answer. The fixed sentence goes out as the turn's final message,
+                        # which the browser shows as nothing, so the live chat and a reloaded
+                        # one hold the same thing - and it must not fall into the branch below,
+                        # which would answer an empty-looking turn with "No response was
+                        # produced".
+                        final_text = response_text
+                        get_web_interface().emit_agent_message(
+                            role="assistant",
+                            content=final_text,
+                            session_id=task.session_id
+                        )
                     else:
                         # Final response broadcast: always send full content once so UI has complete message.
                         # (Streaming is throttled, so the last chunk(s) may never have been emitted.)
@@ -2194,7 +2209,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # Emit message_complete event for Auto-TTS (skip speaking for SYSTEM_LOG_ONLY)
                     try:
                         get_web_interface().emit_message_complete(
-                            content="" if response_text.startswith("[SYSTEM_LOG_ONLY]") else str(final_text),
+                            content="" if (response_text.startswith("[SYSTEM_LOG_ONLY]")
+                                           or _turn_ends_at_draft) else str(final_text),
                             session_id=task.session_id
                         )
                     except Exception:
@@ -2301,7 +2317,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # ── End hallucination guard ───────────────────────────────────────
 
                     # When user asked for a text (e.g. "Schreib mir einen Text"), open it in Document Editor
-                    if not response_text.startswith("[ASYNC_ACK]") and not response_text.startswith("[SYSTEM_LOG_ONLY]"):
+                    # Not for a turn that stopped at a draft: its text is the fixed turn-end
+                    # sentence, and the message it wrote is in the card, not in an editor.
+                    if (not response_text.startswith("[ASYNC_ACK]") and not response_text.startswith("[SYSTEM_LOG_ONLY]")
+                            and not _turn_ends_at_draft):
                         try:
                             _maybe_open_draft_in_editor(
                                 task.session_id or "",
@@ -2470,6 +2489,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 session.metadata["user_scope_id"] = meta_save["user_scope_id"]
                         _user_input = input_text or ""
                         _assistant_response = "".join(response_parts) if response_parts else str(response_text or "")
+                        if _turn_ends_at_draft:
+                            # What streamed before the draft is in the tool-call message; the
+                            # turn's own answer is the fixed sentence the browser hides.
+                            _assistant_response = response_text
 
                         def _clean_for_session(text: str) -> str:
                             """Keep full content for display; only strip redacted blocks."""

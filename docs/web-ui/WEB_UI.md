@@ -339,35 +339,62 @@ many frames have not been read.
 
 ### 2b-1. What the agent prepared and you have not sent
 
-A card in the conversation, as the last row under the answer that produced it: what the agent
-wrote on your own chat turn and parked for you rather than sending. It sits where the agent's
-own output sits, in a bot row so it lines up with the text above it, and deliberately NOT as a
-banner over the header, which reads as a system alert and loses the connection to the reply it
-belongs to. Each card names the recipient, the subject where there is one, and the text, with
-**Send** and **Discard**; up to three at once, then a count. **Send is locked for the first
-three seconds** and counts them down on the button, so a message nobody has read cannot leave
-on a reflex click; Discard is never locked, because throwing away something unread costs
-nothing. While the lock lasts the card wears a breathing rim (`vaf-draft-rim`), which is an
-element of its own animated in opacity only: animating the card's border or shadow would
-repaint it every frame, which is the measured leak the repaint rule in `globals.css` exists
-for. A person who asked for reduced motion gets the rim standing still. It shows the drafts of THAT
-conversation only (`GET /api/outbox?session_id=`): switching chats while the agent is still
-writing is the ordinary case, and a message being prepared in one chat must never turn up in
-another. The chat that holds the draft carries the sidebar's red dot, the same one a
-background reply uses, until the person goes back to it. A draft that belongs to no chat (a
-Front Office answer) appears in no conversation at all: its home is the inbox and the mail
-window. A failed send keeps the draft and says why,
-because a mail server or a bridge that is down must not consume a message.
+When the agent writes a message to somebody else on your own chat turn, it is parked for you
+rather than sent, and **the turn ends at it**: no further model call, no "your draft is ready"
+sentence. The draft's card is that turn's answer. It sits under the turn that wrote it, lined
+up with that turn's tool windows (`web/components/outbox/HeldSendCard.tsx`, `TurnDrafts`), and
+deliberately NOT as a banner over the header, which reads as a system alert and loses the
+connection to the reply it belongs to. The page finds the turn by the draft's ref in the tool
+result (`NOT SENT YET. Draft mail:12`, `web/components/outbox/draftRefs.ts`); a card under a
+turn with an actions rail takes the rail's `pl-[26px]`, so it starts where the tool windows
+above it start rather than 26 pixels left of them, which is where the card used to sit.
+
+Each card names the channel and the person (`WhatsApp an Anna Berg`, the name from your
+contact book or a mail's display name, the number or address under it), every other address
+and every file that leaves with it, and the text. **Click into the text to change it** (a
+mail's subject too): the field saves when you leave it, Escape takes the change back, and Send
+saves whatever is still in the field before it sends, so what leaves is what you see. The
+recipients are not editable here: a different recipient is a different message, and the agent
+writes that one. A long text is folded after eight lines until you ask for all of it.
+**Send is locked for the first three seconds** and counts them down on the button, so a
+message nobody has read cannot leave on a reflex click; Discard is never locked, because
+throwing away something unread costs nothing. The pause belongs to the draft, not to one
+mount of the card, so it does not restart when the card moves into its turn. While the lock
+lasts the card wears a breathing rim (`vaf-draft-rim`), which is an element of its own animated
+in opacity only: animating the card's border or shadow would repaint it every frame, which is
+the measured leak the repaint rule in `globals.css` exists for. A person who asked for reduced
+motion gets the rim standing still.
+
+**Send** delivers it and wakes the chat, so the agent carries on where its turn stopped (a
+wake row "Draft sent" with the person's name, then the agent's answer). **Discard** ends it:
+nothing more happens. Either way the card stays in the conversation as one line, the record of
+what became of the draft (`Gesendet: WhatsApp an Anna Berg · 14:32`, `Verworfen: ...`), and
+opens to the words it held. When the agent writes a new draft to the same person in the same
+chat while an older one still waits, the new one replaces it (`Durch eine neuere Fassung
+ersetzt`), so one message never has two cards. The agent learns what happened to a draft at
+its next turn in that chat. A failed send keeps the draft and says why, because a mail server
+or a bridge that is down must not consume a message; a send that was interrupted after the
+hand-off shows no Send button and cannot be edited, only discarded.
+
+The cards show the drafts of THAT conversation only (`GET /api/outbox?session_id=&settled=true`,
+every state): switching chats while the agent is still writing is the ordinary case, and a
+message being prepared in one chat must never turn up in another. The chat that holds the
+draft carries the sidebar's red dot, the same one a background reply uses, until the person
+goes back to it. A draft whose turn is not on screen (its tool result has not arrived yet, or
+the turn is outside the loaded history) takes the chat's last row instead (`UnplacedDrafts`),
+up to three, then a count. A draft that belongs to no chat (a Front Office answer) appears in
+no conversation at all: its home is the inbox and the mail window.
 
 It appears for a mail the agent wrote (`send_mail`, `reply_mail`, `forward_mail`) and for a
 WhatsApp message addressed to an explicit number, which is the only messenger call that can
 reach a stranger. It does NOT appear for `send_telegram` or `send_discord`: their parameters
 carry no recipient, so those reach your own endpoint and there would be nothing to approve.
-The card reads `GET /api/outbox` on the `outbound_held` and `inbox_changed` signals, never on
-a timer, and the same two verbs exist on the command line as `vaf outbox send|discard` for a
-headless install. It holds only what the person ordered while they were there: a timer they scheduled fires and
-sends, and so do automations, workflows and every channel turn. The switch is
-`outward_send_hold`; the rule and the reasons behind it are in
+The cards read `GET /api/outbox` on the `outbound_held` and `inbox_changed` signals, never on
+a timer, and the same verbs exist on the command line as `vaf outbox send|discard|edit` for a
+headless install (a send from there wakes no chat; the agent hears about it at that chat's
+next turn). It holds only what the person ordered while they were there: a timer they
+scheduled fires and sends, and so do automations, workflows and every channel turn. The switch
+is `outward_send_hold`; the rule, the turn end and the reasons behind them are in
 [`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py).
 
 ### 2c. The Inbox Window
@@ -494,9 +521,10 @@ A proactive backend message can carry a `kind` tag: `emit_agent_message_append(c
 
 **The tag has a second job**, and it is why an untagged proactive message is a defect rather than a missing decoration: `kind` is what keeps the message OUT of the preceding turn's actions timeline (see **Actions Timeline** above). So every proactive lane passes one **and persists it on the stored message** (`Session.add_message(..., kind=…)`) - after a reload the transcript has nothing else to tell such a message from the tail of the turn before it. The only lane that legitimately passes no assistant `kind` is the timer trigger, which is emitted as `role="user"` and is therefore already a turn boundary.
 
-- **Frontend:** `Message.kind` carries the tag; the `agent_message_append` handler stores it; the message render loop has an `_isWake` branch (matched by `msg.kind`, or by the lane's content prefix when reloaded from history: `⏰ Timer fired`, `⚙ Background command finished`) that draws the wake row **before** the normal role branches. The trigger is sent as `role="user"` so it still creates a bubble boundary (the agent's reply lands in its own bubble), but `kind` overrides how it is drawn. The row mirrors the agent layout (`justify-center` → `max-w-[85%]` avatar + bubble) so the avatar aligns with the agent's, shows only the user's note (the internal "Act on it…" framing is stripped), and carries the same timestamp as the agent messages. See `web/app/page.tsx` (`_isWake`).
+- **Frontend:** `Message.kind` carries the tag; the `agent_message_append` handler stores it; the message render loop has an `_isWake` branch (matched by `msg.kind`, or by the lane's content prefix when reloaded from history: `⏰ Timer fired`, `⚙ Background command finished`, `✉ Draft sent:`) that draws the wake row **before** the normal role branches. The trigger is sent as `role="user"` so it still creates a bubble boundary (the agent's reply lands in its own bubble), but `kind` overrides how it is drawn. The row mirrors the agent layout (`justify-center` → `max-w-[85%]` avatar + bubble) so the avatar aligns with the agent's, shows only the user's note (the internal "Act on it…" framing is stripped), and carries the same timestamp as the agent messages. See `web/app/page.tsx` (`_isWake`).
 - **Timer - two states (`_wakeDone`):** while the agent is still handling the fired timer it shows an **active** look (the real agent avatar + an amber clock **badge** in the corner + an amber bubble - "look here"); once the agent has replied (a completed assistant message follows and generation has stopped, or a newer user turn exists) it **settles** to a quiet look (neutral dim avatar, no badge, neutral bubble, amber only in the small "TIMER" label). On reload a past timer is already in the settled state.
-- **Background command (`kind="process"`):** a finished `host_bash(background=true)` command wakes the chat with the same row, a terminal icon instead of the clock, the label "Background command" (`main.wakeProcess`), and only the one-line outcome (command, id, exit code, duration) instead of the whole wake text. Both labels are translated (`main.wakeTimer`, `main.wakeProcess`).
+- **Sent draft (`kind="draft"`):** a draft the person sent from its card wakes the chat whose turn stopped at it (`vaf/core/outbound_hold.py`). Same row, a send icon, the label "Draft sent" (`main.wakeDraft`) and only the addressee from the wake text's first line (`✉ Draft sent: Anna Berg`); the rest of the text is for the agent.
+- **Background command (`kind="process"`):** a finished `host_bash(background=true)` command wakes the chat with the same row, a terminal icon instead of the clock, the label "Background command" (`main.wakeProcess`), and only the one-line outcome (command, id, exit code, duration) instead of the whole wake text. All three labels are translated (`main.wakeTimer`, `main.wakeProcess`, `main.wakeDraft`).
 - **Extending it:** to add a new activity (e.g. `kind="thinking"` or `kind="background"`), emit it from the backend with that `kind` and add a branch in the `_isWake` render. For kind-specific avatars, `AgentAvatar` takes an optional `tint={{ body, dot }}` (added for this) - e.g. the intended **purple agent-avatar** for `thinking`. See [AgentAvatar.md](AgentAvatar.md).
 
 ### 6. Settings

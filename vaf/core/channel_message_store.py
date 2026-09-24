@@ -197,6 +197,15 @@ def init_store(username: Optional[str] = None, user_scope_id: Optional[str] = No
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_held_sends_state "
                      "ON held_sends(username, state, created_ts)")
+        # What happened to a draft besides its state: the person changed its words before
+        # sending (`edited`), or a newer draft to the same person took its place
+        # (`replaced_by`, a draft ref such as `call:13`). Added idempotently for stores that
+        # predate them.
+        for _col in ("edited INTEGER NOT NULL DEFAULT 0", "replaced_by TEXT NOT NULL DEFAULT ''"):
+            try:
+                conn.execute(f"ALTER TABLE held_sends ADD COLUMN {_col}")
+            except sqlite3.OperationalError:
+                pass  # column already exists
         conn.commit()
     finally:
         conn.close()
@@ -444,8 +453,12 @@ def park_held_send(username: str, channel: str, tool: str, args_json: str, *,
 
 
 def held_sends(username: str, user_scope_id: Optional[str] = None, *,
-               state: str = "held", limit: int = 50) -> List[Dict[str, Any]]:
-    """The parked calls of this identity, newest first. A missing store answers []."""
+               state: str = "held", limit: int = 50,
+               session_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The parked calls of this identity, newest first. A missing store answers [].
+
+    `state=""` lists every state; `session_id` narrows the list to the calls one chat asked
+    for, in the query, so a chat's drafts are never cut off by another chat's newer ones."""
     if not store_exists(username, user_scope_id):
         return []
     init_store(username, user_scope_id)
@@ -455,6 +468,9 @@ def held_sends(username: str, user_scope_id: Optional[str] = None, *,
         if state:
             clauses.append("state = ?")
             params.append(state)
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(str(session_id))
         cur = conn.execute(
             f"SELECT * FROM held_sends WHERE {' AND '.join(clauses)} "
             "ORDER BY created_ts DESC, id DESC LIMIT ?",
@@ -482,26 +498,55 @@ def held_send(entry_id: int, username: str, user_scope_id: Optional[str] = None)
         conn.close()
 
 
-def settle_held_send(entry_id: int, username: str, state: str,
-                     user_scope_id: Optional[str] = None, error: str = "",
-                     expect: Any = "held") -> bool:
-    """Move a parked call from `expect` to `state`. False when it was not in `expect` any
-    more, which is what makes a double click harmless: the guard is in the WHERE, so two
-    approvals cannot both claim the same draft. The states are the mail outbox's vocabulary:
-    held, sending (claimed by an approval), sent, discarded, failed (the tool answered and the
-    message did not leave), ambiguous (a worker died mid-send; nobody knows). `expect` may be several
-    states, because a draft the person may act on is either waiting or one whose last attempt
-    failed, and both are theirs to send or drop."""
+def revise_held_send(entry_id: int, username: str, args_json: str, preview: str,
+                     user_scope_id: Optional[str] = None,
+                     expect: Any = ("held", "failed")) -> bool:
+    """New words for a parked call before anybody sent it: the call's arguments and the
+    preview the person reads, in one UPDATE, and `edited` set. False when the call was not in
+    `expect` any more: a call being sent, sent, or dropped keeps the words it had. The guard
+    is in the WHERE, like `settle_held_send`, so an edit cannot land on a draft an approval
+    has just claimed."""
     init_store(username, user_scope_id)
     expected = (expect,) if isinstance(expect, str) else tuple(expect or ())
     expected = tuple(e for e in expected if e) or ("held",)
     conn = _get_conn(username, user_scope_id)
     try:
         cur = conn.execute(
-            "UPDATE held_sends SET state = ?, decided_ts = ?, error = ? "
+            "UPDATE held_sends SET args = ?, preview = ?, edited = 1 "
             f"WHERE id = ? AND username = ? AND state IN ({','.join('?' for _ in expected)})",
-            (state, time.time(), error or "", int(entry_id), (username or "").strip() or "",
+            (args_json or "{}", preview or "", int(entry_id), (username or "").strip() or "",
              *expected),
+        )
+        conn.commit()
+        changed = cur.rowcount == 1
+    finally:
+        conn.close()
+    if changed:
+        _announce_changed(username, user_scope_id)
+    return changed
+
+
+def settle_held_send(entry_id: int, username: str, state: str,
+                     user_scope_id: Optional[str] = None, error: str = "",
+                     expect: Any = "held", replaced_by: str = "") -> bool:
+    """Move a parked call from `expect` to `state`. False when it was not in `expect` any
+    more, which is what makes a double click harmless: the guard is in the WHERE, so two
+    approvals cannot both claim the same draft. The states are the mail outbox's vocabulary:
+    held, sending (claimed by an approval), sent, discarded, failed (the tool answered and the
+    message did not leave), ambiguous (a worker died mid-send; nobody knows). `expect` may be several
+    states, because a draft the person may act on is either waiting or one whose last attempt
+    failed, and both are theirs to send or drop. `replaced` is the one more: a newer draft to
+    the same person took its place, and `replaced_by` names it."""
+    init_store(username, user_scope_id)
+    expected = (expect,) if isinstance(expect, str) else tuple(expect or ())
+    expected = tuple(e for e in expected if e) or ("held",)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        cur = conn.execute(
+            "UPDATE held_sends SET state = ?, decided_ts = ?, error = ?, replaced_by = ? "
+            f"WHERE id = ? AND username = ? AND state IN ({','.join('?' for _ in expected)})",
+            (state, time.time(), error or "", replaced_by or "", int(entry_id),
+             (username or "").strip() or "", *expected),
         )
         conn.commit()
         changed = cur.rowcount == 1

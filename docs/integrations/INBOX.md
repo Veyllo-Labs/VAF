@@ -113,7 +113,7 @@ the routes show them, and "mark all as read" follows the same toggle.
 
 This document is about what came IN. What the agent wrote and nobody has sent yet is the
 outbox: a send the person ordered on their own web chat turn is parked for them rather than
-delivered, and a card in the conversation (plus `vaf outbox list|send|discard`) decides it. A mail
+delivered, and a card in the conversation (plus `vaf outbox list|send|discard|edit`) decides it. A mail
 draft appears in both places, because a held answer is a row here as well (`waits_reason`
 `draft`); a parked messenger call appears only in the outbox, since there is no conversation
 row for a message that was never sent. The rule is in

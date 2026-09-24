@@ -369,7 +369,8 @@
     "gateAllowChatHint": "在这个对话接下来的部分为你允许这个工具。其他对话仍会询问。VAF 重启后失效。",
     "gateAllowAlwaysHint": "在所有位置为你允许这个工具，并在当前文件夹中信任每个需要确认的工具。",
     "wakeTimer": "定时器",
-    "wakeProcess": "后台命令"
+    "wakeProcess": "后台命令",
+    "wakeDraft": "草稿已发送"
   },
   "nav": {
     "settings": "设置",
@@ -2359,18 +2360,31 @@
     "resultReady": "任务已完成。详情在对话里。"
   },
   "outbox": {
-    "title": "智能体的草稿",
-    "to": "发给 {recipient}，尚未发送",
+    "titleMail": "发给 {recipient} 的邮件",
+    "titleWhatsapp": "发给 {recipient} 的 WhatsApp 消息",
+    "titleOther": "发给 {recipient} 的 {channel}",
+    "notSent": "草稿，尚未发送",
+    "edited": "已编辑",
     "noRecipient": "未知",
+    "subjectPlaceholder": "主题",
+    "editHint": "点击文字即可编辑",
+    "showMore": "显示全文",
+    "showLess": "收起",
+    "revert": "撤销修改",
+    "emptyText": "没有文字，无法发送。",
     "send": "发送",
     "discard": "丢弃",
+    "countdown": "先读一下（{seconds}）",
     "more": "另有 {count} 条等待",
     "failed": "操作失败（{error}），草稿仍保留。",
     "ambiguous": "上一次尝试被中断，所以这条消息可能已经发出去了。再要一次之前先看看对话。",
     "cc": "抄送 {recipients}",
     "bcc": "密送 {recipients}",
     "attachments": "附件：{names}",
-    "countdown": "先读一下（{seconds}）"
+    "sent": "已发送",
+    "sending": "正在发送",
+    "discarded": "已丢弃",
+    "replaced": "已被新版本取代"
   },
   "inbox": {
     "title": "收件箱",

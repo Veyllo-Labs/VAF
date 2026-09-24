@@ -9,12 +9,19 @@ answers: what is waiting, and does it go out or not. The command runs as the mac
 so there is no `--scope` (the rule of `vaf memory` and `vaf inbox`), and the group sits
 behind the same terminal door, because it prints messages.
 
-Unlike `vaf inbox`, this group DOES write: `send` and `discard` are the whole point of a
-draft, and a person on a headless box has no other way to reach one. Both go through the
-same functions the route calls, so the two surfaces cannot disagree about what a click does.
+Unlike `vaf inbox`, this group DOES write: `send`, `discard` and `edit` are the whole point
+of a draft, and a person on a headless box has no other way to reach one. All three are the
+functions the card's route calls (`outbound_hold.send_draft` / `discard_draft` /
+`revise_draft`), so the two surfaces cannot disagree about what a click does.
+
+NAMED BOUNDARY: a send from here does not wake the chat the draft came from. The wake turn is
+queued on the task queue of the process that runs the chats, and this command is a process of
+its own with a queue nobody drains. The agent hears about the send at that chat's next turn
+instead (`outbound_hold.decision_notes`), the same way it hears about a discard.
 """
 import json
 import sys
+from typing import Optional
 
 import typer
 
@@ -91,7 +98,15 @@ def list_pending(
         table.add_row(_when(row["created_ts"]), escape(str(row["kind"])), str(row["id"]),
                       escape(str(row["channel"])), to, preview)
     UI.console.print(table)
-    UI.console.print("[dim]vaf outbox send <kind> <id>   vaf outbox discard <kind> <id>[/dim]")
+    UI.console.print("[dim]vaf outbox send <kind> <id>   vaf outbox discard <kind> <id>   "
+                     "vaf outbox edit <kind> <id> --text ...[/dim]")
+
+
+def _kind_or_exit(kind: str) -> str:
+    if kind not in ("mail", "call"):
+        UI.console.print("[red]Unknown kind.[/red] Use 'mail' or 'call', as the list prints it.")
+        raise typer.Exit(1)
+    return kind
 
 
 @app.command("send")
@@ -100,41 +115,29 @@ def send_entry(
     entry_id: int = typer.Argument(..., help="The id the list prints"),
 ) -> None:
     """Send one waiting draft now. A failure leaves it waiting, with the reason."""
-    username, scope = _identity()
-    if kind == "call":
-        from vaf.core.outbound_hold import approve_call
-        result = approve_call(int(entry_id), username=username, user_scope_id=scope,
-                              user_role="admin")
-        if result.get("ok"):
-            UI.console.print(f"[green]Sent.[/green] {result.get('result', '')}")
-            return
-        UI.console.print(f"[red]Not sent:[/red] {result.get('result', '')}")
-        raise typer.Exit(1)
-    if kind == "mail":
-        # The same two acts the card performs (release AND drain), through the one function
-        # both call: a terminal that only released printed "Sent." over a mail still waiting.
-        from rich.markup import escape
+    from rich.markup import escape
 
-        from vaf.mail.service import release_held_draft
-        outcome = release_held_draft(scope, username, int(entry_id))
-        if outcome.get("error") == "not waiting":
-            UI.console.print("[red]No draft with that id is waiting.[/red]")
-            raise typer.Exit(1)
-        state = str(outcome.get("state") or "")
-        if state == "done":
-            UI.console.print("[green]Sent.[/green]")
-            return
+    from vaf.core.outbound_hold import send_draft
+    username, scope = _identity()
+    # The same acts the card performs, through the one function both call: for a mail that is
+    # release AND drain (a terminal that only released printed "Sent." over a mail still
+    # waiting), for a call the claimed re-dispatch through its own tool.
+    outcome = send_draft(_kind_or_exit(kind), int(entry_id), username=username,
+                         user_scope_id=scope, user_role="admin", wake=False)
+    state, error = str(outcome.get("state") or ""), escape(str(outcome.get("error") or ""))
+    if outcome.get("ok"):
         if state == "pending":
             UI.console.print("[green]Released.[/green] The next outbox run delivers it.")
-            return
-        if state == "ambiguous":
-            # Handed to the server and never confirmed: nobody may send it again, only drop it.
-            UI.console.print(f"[yellow]May already have been sent.[/yellow] {escape(str(outcome.get('error') or ''))}")
-            raise typer.Exit(1)
-        UI.console.print(f"[red]Not sent[/red] (state: {state or 'unknown'}), the draft stays. "
-                         f"{escape(str(outcome.get('error') or ''))}".rstrip())
-        raise typer.Exit(1)
-    UI.console.print("[red]Unknown kind.[/red] Use 'mail' or 'call', as the list prints it.")
+        else:
+            UI.console.print("[green]Sent.[/green]")
+        return
+    if error in ("not waiting", "no mail account"):
+        UI.console.print("[red]No draft with that id is waiting.[/red]")
+    elif state == "ambiguous":
+        # Handed to the server and never confirmed: nobody may send it again, only drop it.
+        UI.console.print(f"[yellow]May already have been sent.[/yellow] {error}")
+    else:
+        UI.console.print(f"[red]Not sent[/red] (state: {state or 'unknown'}), the draft stays. {error}".rstrip())
     raise typer.Exit(1)
 
 
@@ -144,17 +147,35 @@ def discard_entry(
     entry_id: int = typer.Argument(..., help="The id the list prints"),
 ) -> None:
     """Drop one waiting draft. Nothing was on the wire, so nothing is recalled."""
+    from vaf.core.outbound_hold import discard_draft
     username, scope = _identity()
-    if kind == "call":
-        from vaf.core.outbound_hold import discard_call
-        ok = discard_call(int(entry_id), username=username, user_scope_id=scope)
-    elif kind == "mail":
-        from vaf.mail.service import MailService
-        ok = MailService(scope).discard_draft(int(entry_id))
-    else:
-        UI.console.print("[red]Unknown kind.[/red] Use 'mail' or 'call', as the list prints it.")
-        raise typer.Exit(1)
-    if not ok:
+    if not discard_draft(_kind_or_exit(kind), int(entry_id), username=username,
+                         user_scope_id=scope):
         UI.console.print("[red]No draft with that id is waiting.[/red]")
         raise typer.Exit(1)
     UI.console.print("[green]Dropped.[/green]")
+
+
+@app.command("edit")
+def edit_entry(
+    kind: str = typer.Argument(..., help="mail or call, as the list prints it"),
+    entry_id: int = typer.Argument(..., help="The id the list prints"),
+    text: Optional[str] = typer.Option(None, "--text", help="The new text of the message"),
+    subject: Optional[str] = typer.Option(None, "--subject", help="A mail's new subject"),
+) -> None:
+    """Change a waiting draft's words before it is sent. The recipients stay as they are."""
+    from vaf.core.outbound_hold import revise_draft
+    if text is None and subject is None:
+        UI.console.print("[red]Nothing to change.[/red] Pass --text, --subject or both.")
+        raise typer.Exit(1)
+    username, scope = _identity()
+    result = revise_draft(_kind_or_exit(kind), int(entry_id), username=username,
+                          user_scope_id=scope, body=text, subject=subject)
+    if result.get("ok"):
+        UI.console.print("[green]Changed.[/green] vaf outbox send sends it.")
+        return
+    if result.get("error") == "empty":
+        UI.console.print("[red]The text is empty.[/red] Discard the draft instead.")
+    else:
+        UI.console.print("[red]No draft with that id is waiting.[/red]")
+    raise typer.Exit(1)

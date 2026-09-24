@@ -82,7 +82,7 @@ WhatsApp User (text, voice, or document reply)
 
 Key components:
 
-- **Node (vaf/whatsapp_node/wa-bridge.js)**: Started by Python with `node wa-bridge.js --auth-dir <path>`. Reads JSON commands from stdin (`send`, `send_voice`, `send_document`, `getChats`), writes events to stdout (`message`, `send_result`, `qr`, `connected`, etc.).
+- **Node (vaf/whatsapp_node/wa-bridge.js)**: Started by Python with `node wa-bridge.js --auth-dir <path>`, in exactly one place (`whatsapp_bridge.spawn_node_bridge`, used by the running bridge and the QR link alike), with umask 077 so every key file it writes is owner-only. Reads JSON commands from stdin (`send`, `send_voice`, `send_document`, `getChats`), writes events to stdout (`message`, `send_result`, `qr`, `connected`, etc.).
 - **Python (vaf/api/whatsapp_bridge.py)**: Spawns and manages the Node process with **stdout/stderr opened as UTF-8** so JSON lines (including transcribed text with non-ASCII) decode correctly on all platforms. Maintains `_outgoing_queue`, implements STT/TTS for voice, and enqueues incoming messages to the VAF task queue with session ID `whatsapp_{username}_{digits}`.
 - **Background send IPC**: Proactive sends from background/subprocess runs (for example automations) do not share the main process memory. For those cases, `send_whatsapp` writes a request into a small file-based IPC queue under the platform data directory. The main WhatsApp bridge process reads that request, forwards it to the correct Node session, and writes back the delivery result. This lets background runs use the same live WhatsApp connection without needing their own bridge process.
 
@@ -544,7 +544,7 @@ Each VAF user has a separate WhatsApp session. Credentials and Baileys state are
 ### Sensitive Data
 
 - Do not commit `whatsapp_config` (or any config containing secrets) or the per-user WhatsApp auth directories to version control.
-- Auth directories are created and used by the bridge; ensure appropriate filesystem permissions.
+- The auth directory is the WhatsApp login: Baileys keeps one file per Signal-protocol key in it. VAF keeps it owner-only on POSIX (directory 0700, files 0600): Node starts with umask 077, and `whatsapp_auth.harden_auth_dir` corrects older files before each start. The files are not encrypted (see [ENCRYPTION_AT_REST.md](../security/ENCRYPTION_AT_REST.md), "Still plaintext, and measured"); on Windows the profile directory's ACL is what protects them.
 
 ---
 

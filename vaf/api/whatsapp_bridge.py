@@ -628,7 +628,26 @@ def _run_user_process(username: str, auth_dir: Path) -> Optional[subprocess.Pope
     if not wa_js.exists():
         logger.error("wa-bridge.js not found at %s", wa_js)
         return None
-    auth_str = str(auth_dir.resolve())
+    try:
+        return spawn_node_bridge(node, wa_js, auth_dir)
+    except Exception as e:
+        logger.exception("Failed to start WhatsApp bridge for %s: %s", username, e)
+        return None
+
+
+def spawn_node_bridge(node: str, wa_js: Path, auth_dir: Path) -> subprocess.Popen:
+    """Start wa-bridge.js on one account's session directory. The one place Node is spawned:
+    the running bridge and the QR link both come through here, so both get the same pipes
+    and the same owner-only files.
+
+    The session directory is the WhatsApp login (whatsapp_auth.harden_auth_dir has the
+    measurement), so Node runs with umask 077 and every key file Baileys writes is born
+    0600, and whatever an earlier start wrote is fixed first. `umask=` rather than a
+    preexec_fn, which is not safe in a threaded process; POSIX only, Windows ignores both.
+    """
+    from vaf.core.whatsapp_auth import harden_auth_dir
+    auth_dir.mkdir(parents=True, exist_ok=True)
+    harden_auth_dir(auth_dir)
     kwargs: dict = {
         "stdin": subprocess.PIPE,
         "stdout": subprocess.PIPE,
@@ -640,15 +659,9 @@ def _run_user_process(username: str, auth_dir: Path) -> Optional[subprocess.Pope
     }
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-    try:
-        proc = subprocess.Popen(
-            [node, str(wa_js), "--auth-dir", auth_str],
-            **kwargs,
-        )
-        return proc
-    except Exception as e:
-        logger.exception("Failed to start WhatsApp bridge for %s: %s", username, e)
-        return None
+    else:
+        kwargs["umask"] = 0o077
+    return subprocess.Popen([node, str(wa_js), "--auth-dir", str(auth_dir.resolve())], **kwargs)
 
 
 def _sender_loop() -> None:

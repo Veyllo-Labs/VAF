@@ -9,7 +9,6 @@ Handles WhatsApp bridge start/stop, QR display for linking, status, and whitelis
 import json
 import logging
 import subprocess
-import sys
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -913,20 +912,9 @@ def _run_qr_login(username: str) -> None:
         with _qr_lock:
             _qr_state[username] = {"error": deps_msg, "ts": 0}
         return
-    kwargs = {
-        "stdin": subprocess.PIPE,
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
-        "text": True,
-        "bufsize": 1,
-    }
-    if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     try:
-        proc = subprocess.Popen(
-            [node, str(wa_js), "--auth-dir", str(auth_dir.resolve())],
-            **kwargs,
-        )
+        from vaf.api.whatsapp_bridge import spawn_node_bridge
+        proc = spawn_node_bridge(node, wa_js, auth_dir)
         log_whatsapp_qr(f"[VAF] Node process spawned pid={proc.pid}")
         with _qr_lock:
             _qr_procs[username] = proc

@@ -31,6 +31,31 @@ def get_whatsapp_auth_dir(username: str) -> Path:
     return Config.APP_DIR / "users" / username / "whatsapp"
 
 
+def harden_auth_dir(auth_dir: Path) -> int:
+    """Make a linked account's session directory owner-only: the directory 0700, every file
+    in it 0600. Returns how many files it touched.
+
+    The directory is the WhatsApp login itself. Baileys keeps the Signal-protocol state in
+    it, one file per key (creds.json with the identity key, pre-keys, sessions, sender
+    keys, app-state keys), and wrote them with the process's default umask: measured on a
+    linked install, 379 of 381 files were readable by every account on the machine and only
+    creds.json was not. The bridge now starts Node with umask 077, so new files are born
+    0600; this pass fixes what an earlier start already wrote. POSIX only, like every
+    chmod: on Windows the profile directory's ACL is what protects the files
+    (secure_store.harden_path says why).
+    """
+    from vaf.core.secure_store import harden_dir, harden_path
+    if not auth_dir.is_dir():
+        return 0
+    harden_dir(auth_dir)
+    touched = 0
+    for entry in auth_dir.iterdir():
+        if entry.is_file() and not entry.is_symlink():
+            harden_path(entry)
+            touched += 1
+    return touched
+
+
 def whatsapp_auth_exists(username: str) -> bool:
     """Check if this user has linked WhatsApp (creds.json present)."""
     auth_dir = get_whatsapp_auth_dir(username)

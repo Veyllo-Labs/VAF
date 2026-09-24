@@ -35,6 +35,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **Disconnecting Discord now actually disconnects it.** The button looked like it worked,
   but the bot token and the whole Discord configuration stayed on disk. Disconnecting
   Telegram or Discord now stops the bot and removes its token and settings in one step.
+- **Your WhatsApp login files are private to your user account.** The files that make up a
+  linked WhatsApp session were readable by every other account on the same computer. They
+  are now owner-only (Linux and macOS), including the ones written before this update.
 - **Your main messenger can only be one VAF can deliver to.** Settings offered Slack, Signal
   and Mail as the channel for proactive messages. None of them can deliver today: Signal and
   Mail were thrown away when saved, and Slack was kept while every message meant for it

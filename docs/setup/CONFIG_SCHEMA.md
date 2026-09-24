@@ -206,14 +206,14 @@ These are sent only on the local path; cloud APIs ignore them.
 | `sub_agents_in_separate_terminals` | `True` | Run each sub-agent in its own terminal window. |
 | `subagent_timeout_enabled` | `True` | Enable sub-agent timeouts. |
 | `subagent_timeout_minutes` | `120` | Legacy IPC zombie-cleanup window. |
-| `subagent_timeout_seconds` | `300` | Hard cap for a research/coding/document step. |
+| `subagent_timeout_seconds` | `300` | Hard cap for a research/coding/document step (declared by those tools as their `budget_seconds`). |
 | `workflow_agent_step_timeout_seconds` | `1800` | Worst-case cap for a heavy agent step (coder/research/document) INSIDE a workflow - a floor over the generic cap, which killed a healthy coder mid-run at minute five. Dead children are caught much earlier by heartbeat liveness. |
 | `subagent_liveness_timeout_seconds` | `60` | Kill a sub-agent after this long with no heartbeat (primary guard). |
-| `tool_timeout_seconds` | `120` | Hard cap for a generic in-process tool call. |
+| `tool_timeout_seconds` | `120` | Hard cap for an in-process tool call whose tool declares no budget of its own (`BaseTool.timeout_seconds` / `budget_seconds`). |
 | `coder_tool_allowlist` | `""` | Admin-only. WHICH tools the coding agent is offered, as a comma-separated list of tool names. Empty = the built-in whitelist in [vaf/core/coder_tools.py](../../vaf/core/coder_tools.py) (`CODER_ALLOWED_TOOLS`): files, code, git, shell, tests and lookups, deliberately without mail, messengers, calendars or contacts. A non-empty value REPLACES that set. The names a run cannot work without (`set_todos`, `write_file`, `read_file`, `edit_file`, `list_files`, `task_done`, `ask_user`, `request_clarification`) are added back regardless, so a typo costs optional tools rather than the coder. Admin-only because it decides what a build step may reach for, and `coder_` is not a global prefix. |
 | `coder_tool_allowlist_extra` | `""` | Admin-only. Tool names ADDED to whichever allow-list is in force, same format. This is the key to reach for when the coder should gain one specific tool; it survives changes to the built-in list. |
-| `librarian_timeout_seconds` | `60` | Hard cap for the filesystem/document agent. |
-| `browser_timeout_seconds` | `1800` | Worst-case browser cap (liveness is the real guard). |
+| `librarian_timeout_seconds` | `60` | Hard cap for the filesystem/document agent (its declared `budget_seconds`). |
+| `browser_timeout_seconds` | `1800` | Worst-case browser cap (liveness is the real guard); applies where a lane bounds the self-supervised browser anyway, a workflow step. |
 | `tool_stop_poll_seconds` | `0.5` | How often the bounded wait checks stop/deadline. |
 
 ## Memory & RAG

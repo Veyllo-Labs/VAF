@@ -274,9 +274,11 @@ gets the caller's identity through the framework's one assignment rule
 `username` the old copy never passed. Pinned by `tests/test_coder_dispatch_gate.py`.
 
 Why the coder still calls `tool.run()` itself instead of going through `ToolCaller`: the
-funnel's bounded run would cut a legitimate 300-second build at the generic 120-second
-budget. A per-tool timeout declaration on `BaseTool` answers that; the conversion follows
-it (`ToolCaller(gate_enabled=False)`, like the workflow lane) and deletes the stages above.
+funnel's bounded run would have cut a legitimate long build at the generic 120-second
+budget. That reason is gone - every tool now declares its own budget
+(`BaseTool.budget_seconds`, see [TOOL_SUPERVISION.md](TOOL_SUPERVISION.md)) - so the
+conversion to `ToolCaller(gate_enabled=False)`, like the workflow lane, can delete the
+stages above; until it lands they are the coder's own.
 
 ### E. LLM Interaction & Safety Nets
 *   **Call:** `self.llm.chat_completion(...)`.

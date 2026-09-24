@@ -56,10 +56,26 @@ class HostBashTool(BaseTool):
         "type": "object",
         "properties": {
             "command": {"type": "string", "description": "Shell command to run on the host."},
-            "timeout": {"type": "integer", "description": "Timeout seconds (default 120, max 300).", "default": 120},
+            "timeout": {"type": "integer", "description": "Timeout seconds (default 120, max 600). Raise it for a build or an upload that legitimately runs for minutes.", "default": 120},
         },
         "required": ["command"],
     }
+
+    MAX_TIMEOUT_SECONDS = 600   # a real build (a Maven package run was measured at 5 min)
+
+    @classmethod
+    def _command_timeout(cls, args) -> int:
+        try:
+            requested = int(args.get("timeout") or 120)
+        except (TypeError, ValueError):
+            requested = 120
+        return min(max(10, requested), cls.MAX_TIMEOUT_SECONDS)
+
+    def budget_seconds(self, args):
+        # The dispatcher waits for the command's OWN timeout plus a margin to collect the
+        # output. It used to stop waiting at the generic 120 s while the command itself was
+        # allowed 300, so a long build was abandoned half-way and reported as a timeout.
+        return self._command_timeout(args) + 15
 
     def run(self, **kwargs) -> str:
         command = str(kwargs.get("command") or "").strip()
@@ -79,7 +95,7 @@ class HostBashTool(BaseTool):
                 "app, where each command is shown and confirmed before it executes."
             )
 
-        timeout = min(max(10, int(kwargs.get("timeout") or 120)), 300)
+        timeout = self._command_timeout(kwargs)
 
         # Reisleine: refuse the handful of catastrophic patterns even after confirmation.
         is_safe, warning = is_command_safe(command, profile="host")
@@ -99,14 +115,16 @@ class HostBashTool(BaseTool):
         except Exception as e:
             return f"[HOST][ERROR] {e}"
 
-        parts = ["[HOST EXECUTION - confirmed]", f"$ {command}"]
+        parts = ["[HOST EXECUTION]", f"$ {command}"]
         if warning:
             parts.insert(0, warning)
         out = (proc.stdout or "").strip()
         err = (proc.stderr or "").strip()
+        # Start AND end of each stream: a build prints its error last.
+        from vaf.core.tool_dispatch import clip_middle
         if out:
-            parts.append("\n" + (out[:8000] + "\n... (truncated)" if len(out) > 8000 else out))
+            parts.append("\n" + clip_middle(out, 8000, marker="... ({left_out} chars left out) ..."))
         if err:
-            parts.append("\n[stderr]\n" + (err[:4000] + "\n... (truncated)" if len(err) > 4000 else err))
+            parts.append("\n[stderr]\n" + clip_middle(err, 4000, marker="... ({left_out} chars left out) ..."))
         parts.append("\nOK" if proc.returncode == 0 else f"\nExit {proc.returncode}")
         return "\n".join(parts)

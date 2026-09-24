@@ -514,7 +514,7 @@ class LearnDocumentTool(BaseTool):
             # Spawn failed (task already cancelled) -> honest sync fallback below.
 
         # ── Sync fallback: ONE batch per call, inside the tool budget ───────
-        # Deliberately NOT in SELF_SUPERVISED_TOOLS: an hour-long in-process
+        # Deliberately NOT self_supervised: an hour-long in-process
         # learn on the single worker is exactly the chat freeze the background
         # job exists to avoid. One batch fits the budget (on slow local models
         # the parse+10 LLM calls can still exceed it - the honest TIMEOUT then

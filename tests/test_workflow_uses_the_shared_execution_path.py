@@ -32,7 +32,8 @@ from unittest.mock import patch
 
 import pytest
 
-from vaf.core.bounded_run import SELF_SUPERVISED_TOOLS, is_abort_sentinel
+from vaf.core.bounded_run import default_timeout_seconds, is_abort_sentinel
+from vaf.tools.browser_agent import BrowserAgentTool
 from vaf.workflows.engine import WorkflowEngine, WorkflowStep, _workflow_step_timeout
 
 
@@ -42,6 +43,17 @@ class _Tool:
 
     def run(self, **kwargs):
         return self._fn(**kwargs)
+
+
+class _SelfSupervised(_Tool):
+    """Wears the declaration the real coding_agent carries."""
+    self_supervised = True
+
+
+class _Browser(_Tool):
+    """Wears the real browser_agent's declarations: self-supervised, with its own budget."""
+    self_supervised = BrowserAgentTool.self_supervised
+    budget_seconds = BrowserAgentTool.budget_seconds
 
 
 def _run_step(tool_name, tool, check_stop=None, **engine_kwargs):
@@ -89,7 +101,7 @@ def test_the_engine_no_longer_carries_its_own_bounded_run():
 # ── difference 1: the timeout floor ──────────────────────────────────────────
 
 def test_the_engine_passes_its_own_timeout_resolver():
-    """Not agent_timeout_seconds. The difference is 300 vs 1800 seconds for a coder step."""
+    """Not the generic default. The difference is 300 vs 1800 seconds for a coder step."""
     assert _captured_call("coding_agent")["timeout_for"] is _workflow_step_timeout
 
 
@@ -97,18 +109,18 @@ def test_the_engine_passes_its_own_timeout_resolver():
 def test_the_floor_is_still_worth_passing(tool_name):
     """Guards the premise: if the floor ever equalled the generic budget, the argument above
     would be pinning nothing and this file would pass while protecting nothing."""
-    from vaf.core.bounded_run import agent_timeout_seconds
-
-    assert _workflow_step_timeout(tool_name) > agent_timeout_seconds(tool_name)
+    assert _workflow_step_timeout(tool_name) > default_timeout_seconds()
     assert _workflow_step_timeout(tool_name) >= 1800
+    # The floor beats the sub-agent's own declared budget too.
+    assert _workflow_step_timeout(tool_name, default=300.0) >= 1800
 
 
 def test_an_ordinary_tool_keeps_its_normal_budget():
     """The floor is for heavy agent steps only - it must not silently make every step
-    unbounded in practice."""
-    from vaf.core.bounded_run import agent_timeout_seconds
-
-    assert _workflow_step_timeout("web_search") == agent_timeout_seconds("web_search")
+    unbounded in practice. An ordinary step keeps the tool's OWN budget when it has one."""
+    assert _workflow_step_timeout("web_search") == default_timeout_seconds()
+    assert _workflow_step_timeout("host_bash", default=615.0) == 615.0
+    assert _workflow_step_timeout("librarian_agent", default=60.0) == 60.0
 
 
 # ── difference 2: browser_agent is bounded in a workflow ─────────────────────
@@ -122,9 +134,11 @@ def test_browser_agent_is_not_exempt_inside_a_workflow():
 
 def test_the_other_self_supervised_tools_stay_exempt():
     """Only browser_agent is reversed. Bounding e.g. coding_agent here would abandon it
-    mid-edit, which is what SELF_SUPERVISED_TOOLS exists to prevent."""
-    exempt = _captured_call("coding_agent")["self_supervised"]
-    assert exempt == SELF_SUPERVISED_TOOLS - {"browser_agent"}
+    mid-edit, which is what its self_supervised declaration exists to prevent."""
+    exempt = _captured_call("coding_agent", tool=_SelfSupervised())["self_supervised"]
+    assert exempt == frozenset({"coding_agent"})
+    exempt = _captured_call("browser_agent", tool=_Browser())["self_supervised"]
+    assert exempt == frozenset(), "browser_agent declares itself, and the engine still bounds it"
 
 
 def test_browser_agent_really_is_cut_off_and_not_just_declared_so():
@@ -139,7 +153,7 @@ def test_browser_agent_really_is_cut_off_and_not_just_declared_so():
     with patch("vaf.core.config.Config.get",
                side_effect=lambda k, d=None: 0.2 if k == "browser_timeout_seconds"
                else (0.05 if k == "tool_stop_poll_seconds" else d)):
-        result = _run_step("browser_agent", _Tool(_slow))
+        result = _run_step("browser_agent", _Browser(_slow))
     step_result = str(result.steps[0].result or "")
     assert is_abort_sentinel(step_result) or not result.success, (
         f"browser_agent ran unbounded as a workflow step: {step_result[:120]!r}"

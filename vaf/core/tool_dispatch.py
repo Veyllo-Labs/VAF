@@ -468,43 +468,69 @@ def session_stop_check(session_id: str | None):
     return _check
 
 
+def clip_middle(text: str, limit: int, *, marker: str) -> str:
+    """``text`` cut to ``limit`` characters by leaving out its MIDDLE.
+
+    The end of a tool's output is where a build error, an exit code or the last line of a
+    log lives, and a head-only cut threw exactly that away: host_bash appends its
+    ``Exit <code>`` AFTER the output, so a long failing build read as a clean truncated one.
+    Six tenths of the budget go to the start, the rest to the end. ``marker`` is placed
+    between them and may use ``{total}`` and ``{left_out}`` (both in characters).
+    """
+    text = str(text)
+    if limit <= 0 or len(text) <= limit:
+        return text
+    head = int(limit * 0.6)
+    tail = limit - head
+    note = marker.format(total=len(text), left_out=len(text) - head - tail)
+    return f"{text[:head]}\n{note}\n{text[len(text) - tail:]}"
+
+
 def run_tool_bounded(tool: Any, args: dict, *, tool_name: str,
                      timeout_for=None, self_supervised=None, stop_check=None,
                      poll: float | None = None):
     """Run one tool call, bounded in wall-clock time unless the tool supervises itself.
 
-    Three things differ per caller, and each is an argument rather than a second copy of this
-    function:
+    The TOOL declares both answers (``BaseTool.budget_seconds`` / ``timeout_seconds`` and
+    ``BaseTool.self_supervised``); a caller can override each, and each override is an
+    argument rather than a second copy of this function:
 
-    - ``timeout_for(name) -> seconds``. Defaults to the per-agent budget. The workflow engine
-      passes its own, which raises a floor for heavy sub-agent steps: the generic cap once
-      killed a healthy coder mid-loop at minute five.
-    - ``self_supervised``: the names that must NOT be wrapped, because a hard timeout would
-      abandon them mid-work while they are still making progress. The engine deliberately
-      excludes ``browser_agent`` from its own set - a workflow must not stall forever on one
-      browsing step, even though a standalone call may.
+    - ``timeout_for(name) -> seconds``: the caller's own budget, replacing the tool's. A
+      caller that wants to ADJUST the tool's budget rather than replace it accepts a
+      ``default`` keyword and receives the tool's own budget for this call: the workflow
+      engine raises a floor for heavy sub-agent steps that way (the generic cap once killed
+      a healthy coder mid-loop at minute five), and every other step keeps the tool's own.
+    - ``self_supervised``: the caller's own set of names that must NOT be wrapped. The engine
+      passes the declared ones minus ``browser_agent`` - a workflow must not stall forever on
+      one browsing step, even though a standalone call may.
     - ``stop_check``: how this caller learns the user pressed Stop. The chat lane polls the
       task queue by session; the workflow engine is handed a callback from outside.
 
     Returns whatever the tool returns, or one of the abort sentinels from
     ``vaf/core/bounded_run.py`` on timeout or stop.
     """
-    from vaf.core.bounded_run import (
-        SELF_SUPERVISED_TOOLS,
-        agent_timeout_seconds,
-        run_bounded,
-    )
-    supervised = SELF_SUPERVISED_TOOLS if self_supervised is None else self_supervised
-    if tool_name in supervised:
+    from vaf.core.bounded_run import is_self_supervised, run_bounded, tool_budget_seconds
+    supervised = (tool_name in self_supervised) if self_supervised is not None \
+        else is_self_supervised(tool)
+    if supervised:
         return tool.run(**args)
 
     if poll is None:
         from vaf.core.config import Config
         poll = float(Config.get("tool_stop_poll_seconds", 0.5))
-    resolve_timeout = timeout_for or agent_timeout_seconds
+    own_budget = tool_budget_seconds(tool, args)
+    if timeout_for is None:
+        timeout = own_budget
+    else:
+        try:
+            import inspect as _inspect
+            _adjusts = "default" in _inspect.signature(timeout_for).parameters
+        except (TypeError, ValueError):
+            _adjusts = False
+        timeout = timeout_for(tool_name, default=own_budget) if _adjusts else timeout_for(tool_name)
     return run_bounded(
         lambda: tool.run(**args),
-        timeout=resolve_timeout(tool_name),
+        timeout=timeout,
         stop_check=stop_check,
         poll=poll,
         label=tool_name,
@@ -1245,8 +1271,9 @@ class ToolCaller:
         text = str(result)
         if len(text) <= limit:
             return result
-        return (f"{text[:limit]}\n... [Output Truncated. Total length: {len(text)} chars. "
-                f"Use specific filters or read sub-parts.]")
+        return clip_middle(text, limit, marker=(
+            "... [Output Truncated. Total length: {total} chars; {left_out} chars in the "
+            "middle are left out, the end follows. Use specific filters or read sub-parts.]"))
 
 
 def normalize_tool_name(raw_name: str | None) -> str | None:

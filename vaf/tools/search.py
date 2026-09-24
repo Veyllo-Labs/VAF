@@ -766,8 +766,8 @@ Final Answer:"""
             # fetch + LLM synthesis is the slow part with a reasoning model, so it is gated on the budget.
             import time as _t
             try:
-                from vaf.core.bounded_run import agent_timeout_seconds as _ats
-                _tool_budget = float(_ats("web_search"))
+                from vaf.core.bounded_run import tool_budget_seconds as _tbs
+                _tool_budget = float(_tbs(self, kwargs))
             except Exception:
                 _tool_budget = 120.0
             _budget = max(40.0, _tool_budget - 10.0)          # safety margin before the hard kill

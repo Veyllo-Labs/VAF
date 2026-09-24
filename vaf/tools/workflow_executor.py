@@ -53,6 +53,9 @@ _HEARTBEAT_INTERVAL_S = 5.0
 
 class ExecuteWorkflowTool(BaseTool):
     name = "execute_workflow"
+    # An orchestrator: the engine inside already bounds every step, so bounding the whole
+    # run again would double-bound it.
+    self_supervised = True
     category    = "workflows"
     permission_level = "write"
     side_effect_class = "reversible"

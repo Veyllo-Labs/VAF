@@ -188,6 +188,27 @@ def test_a_long_result_is_truncated_with_a_notice():
     assert "[Output Truncated." in result
 
 
+def test_the_cut_keeps_the_start_and_the_end():
+    """host_bash writes `Exit <code>` AFTER a command's output, and a build prints its error
+    last: a head-only cut returned a long failing build as a clean truncated one.
+    MUTATION: go back to a head-only cut - this goes red."""
+    long = "BEGIN\n" + "x" * 6000 + "\nERROR: cannot find symbol\nExit 1"
+    result = _caller(_tool(fn=lambda **kw: long)).execute("probe", {})
+    assert result.startswith("BEGIN")
+    assert result.endswith("ERROR: cannot find symbol\nExit 1")
+    assert "[Output Truncated." in result and "the end follows" in result
+    assert len(result) < 2400, "the cut must still be a cut"
+
+
+def test_the_context_prune_keeps_the_end_as_well():
+    from vaf.core.context import ContextManager
+
+    long = "BEGIN\n" + "x\n" * 3000 + "Exit 1"
+    pruned = ContextManager(max_tokens=32000).process_tool_output("host_bash", long)
+    assert "BEGIN" in pruned and pruned.rstrip().endswith("Exit 1")
+    assert len(pruned) < 2000
+
+
 def test_a_caller_can_switch_truncation_off():
     """The workflow engine chains step outputs; cutting them at 2000 chars would break the
     substitution it does on them."""

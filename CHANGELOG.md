@@ -33,6 +33,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Long host commands are no longer cut off after two minutes.** A shell command on the
+  machine could be given up to five minutes, but VAF stopped waiting for it after two and
+  reported a timeout while the build was still running. It now waits as long as the command
+  was allowed to run, now up to ten minutes. Tools that come from a plugin or an embedding
+  application can say the same for themselves.
+- **Long tool output keeps its end.** When a tool's output was too long, only its beginning
+  reached the agent, so a failing build looked like a clean one: the error and the exit code
+  are printed last. The agent now sees the beginning and the end, with a note of how much
+  was left out in between.
 - **A user account without admin rights can no longer take over your Telegram or Discord bot.**
   On an installation shared by several people, a non-admin could save their own version of
   a messenger connection, including its whitelist and its bot token, as long as they left

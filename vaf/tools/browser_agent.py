@@ -986,6 +986,15 @@ class BrowserAgentTool(BaseTool):
 
     identity_kwargs = ("user_scope_id",)
     name = "browser_agent"
+    # Runs an asyncio browser session for minutes and supervises itself: its own stop
+    # monitor, browser-use's max_steps/max_failures, and a stop watchdog thread that survives
+    # a starved event loop. The budget applies where a lane bounds it anyway (a workflow
+    # step): generous, so a normal task is never cut off, but bounded.
+    self_supervised = True
+    def budget_seconds(self, args):
+        from vaf.core.config import Config
+        return float(Config.get("browser_timeout_seconds", 1800))
+
     category    = "web"
     permission_level = "write"
     side_effect_class = "irreversible"

@@ -104,6 +104,9 @@ def _repair_raw_step(s: dict) -> dict:
 
 class AgentWorkflowBuilderTool(BaseTool):
     name = "create_agent_workflow"
+    # An orchestrator: the engine inside already bounds every step, so bounding the whole
+    # run again would double-bound it.
+    self_supervised = True
     category    = "workflows"
     description = (
         "Plan and run multi-step workflows. Use action='run_temp' for any complex "

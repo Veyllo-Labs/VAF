@@ -89,6 +89,12 @@ class LibrarianTool(BaseTool):
     
     identity_kwargs = ("user_role", "user_scope_id")
     name = "librarian_agent"
+    # Filesystem work should return fast; if it does not, it is stuck on a huge tree or a
+    # hung mount, and a long wait helps nobody.
+    def budget_seconds(self, args):
+        from vaf.core.config import Config
+        return float(Config.get("librarian_timeout_seconds", 60))
+
     category    = "files"
     permission_level = "write"
     side_effect_class = "reversible"

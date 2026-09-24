@@ -273,8 +273,12 @@ def identity_for_engine(user_scope_id: Optional[str] = None, username: Optional[
     return out
 
 
-def _workflow_step_timeout(tool_name: str) -> float:
+def _workflow_step_timeout(tool_name: str, default: float | None = None) -> float:
     """Worst-case hard cap for one workflow step.
+
+    ``default`` is the step tool's OWN budget for this call (BaseTool.budget_seconds), handed
+    in by the shared bounded run; without it (a caller that only knows the name) the
+    generic default stands in.
 
     Heavy agent steps (coder/research/document) get a WORKFLOW-specific floor
     (workflow_agent_step_timeout_seconds, default 1800s): the generic
@@ -284,8 +288,8 @@ def _workflow_step_timeout(tool_name: str) -> float:
     a dead/stuck child is caught much earlier by the heartbeat liveness lane
     (subagent_liveness_timeout_seconds, ~60s), so generous is correct here.
     Every other tool keeps its normal per-tool budget."""
-    from vaf.core.bounded_run import agent_timeout_seconds
-    base = agent_timeout_seconds(tool_name)
+    from vaf.core.bounded_run import default_timeout_seconds
+    base = float(default) if default is not None else default_timeout_seconds()
     if tool_name in ("coding_agent", "research_agent", "document_agent"):
         try:
             from vaf.core.config import Config
@@ -633,7 +637,7 @@ class WorkflowEngine:
         # backend and the Stop button works mid-step. See vaf/core/bounded_run.py.
         # Loop-invariant, hoisted: recomputing these per step answered the same
         # question once per retry for no gain.
-        from vaf.core.bounded_run import is_abort_sentinel, SELF_SUPERVISED_TOOLS
+        from vaf.core.bounded_run import is_abort_sentinel, is_self_supervised
         from vaf.core.config import Config as _CfgTO
         from vaf.core.tool_dispatch import ToolCaller, run_tool_bounded
         # As a WORKFLOW STEP, browser_agent must be BOUNDED: it runs in-process and
@@ -645,7 +649,8 @@ class WorkflowEngine:
         # The exempt set this lane uses, as a value rather than a branch - it is one of
         # the three arguments run_tool_bounded takes precisely so a second caller does
         # not have to reimplement execution control.
-        _workflow_self_supervised = SELF_SUPERVISED_TOOLS - {"browser_agent"}
+        _workflow_self_supervised = frozenset(
+            n for n, t in self.tools.items() if is_self_supervised(t)) - {"browser_agent"}
         _stop_poll = float(_CfgTO.get("tool_stop_poll_seconds", 0.5))
 
         # THE FUNNEL for non-spawn steps: one ToolCaller, built once per run, carrying

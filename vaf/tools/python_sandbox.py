@@ -70,6 +70,10 @@ class PythonSandboxTool(BaseTool):
     
     identity_kwargs = ("user_scope_id",)
     name = "python_sandbox"
+    # A stop-aware poll loop with its own deadline that kills the docker exec the moment Stop
+    # is requested. Abandoned by a bounded run instead, the thread could lose the stop flag
+    # to clear_stop before it gets to kill the exec.
+    self_supervised = True
     category    = "code"
     permission_level = "write"
     side_effect_class = "reversible"

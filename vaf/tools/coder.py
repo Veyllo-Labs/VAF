@@ -2883,6 +2883,15 @@ def _coder_dispatch_refusal(fn_name: str, tool, *, coder_allowed, caller_allowed
 
 class CodingAgentTool(BaseTool):
     name = "coding_agent"
+    # A large edit legitimately takes many minutes; the agentic loop governs itself (idle-based
+    # safety timeout, stuck detection, a final commit on every exit path) and polls
+    # should_stop each iteration, so a flat wall-clock bound would ABANDON it mid-edit and
+    # leave the file half-written.
+    self_supervised = True
+    def budget_seconds(self, args):
+        from vaf.core.config import Config
+        return float(Config.get("subagent_timeout_seconds", 300))
+
     category    = "code"
     permission_level = "write"
     side_effect_class = "reversible"

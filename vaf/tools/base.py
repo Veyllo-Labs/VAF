@@ -73,6 +73,25 @@ class BaseTool(ABC):
     # the event stream applies its own limit independently of this.
     result_is_deliverable: bool = False
 
+    # How long ONE call may run before the dispatcher stops waiting for it, in seconds.
+    # None means the caller's default (`tool_timeout_seconds`, 120 in a chat turn). A tool
+    # whose calls legitimately take longer - or should give up sooner - says so here, or
+    # overrides budget_seconds() when the budget follows its own arguments (host_bash: the
+    # command's own timeout plus a margin). The dispatcher used to know these budgets by
+    # tool NAME, so a tool registered by an embedder could never have one, and host_bash
+    # was abandoned at 120 s while it accepted a 300-second command.
+    timeout_seconds: Optional[float] = None
+
+    # Set to True when the tool governs its own lifetime - its own deadline and its own
+    # reaction to Stop - so the dispatcher must NOT wrap it in a hard wall-clock bound:
+    # being abandoned mid-work would leave a half-written file or race its own cleanup
+    # (python_sandbox kills its container exec on Stop, the coder commits on every exit).
+    self_supervised: bool = False
+
+    def budget_seconds(self, args: Dict[str, Any]) -> Optional[float]:
+        """The wall-clock budget for one call with these arguments, or None for the default."""
+        return self.timeout_seconds
+
     # JSON Schema for parameters (optional but recommended).
     # Validated at dispatch: common weak-model shape mistakes are repaired before
     # run() is called; `content` / `code` fields are passed through verbatim.

@@ -189,7 +189,6 @@ def test_the_engine_configures_the_funnel_for_this_lane():
     Patched on vaf.core.tool_dispatch, not on the engine module: execute() imports
     ToolCaller function-locally at call time, so the registry module is the seam."""
     import vaf.core.tool_dispatch as td
-    from vaf.core.bounded_run import SELF_SUPERVISED_TOOLS
     from vaf.core.tool_dispatch import ToolCaller
     from vaf.workflows.engine import _workflow_step_timeout
 
@@ -221,7 +220,8 @@ def test_the_engine_configures_the_funnel_for_this_lane():
     assert captured["gate_enabled"] is False
     assert captured["max_result_chars"] is None
     assert captured["timeout_for"] is _workflow_step_timeout
-    assert captured["self_supervised"] == SELF_SUPERVISED_TOOLS - {"browser_agent"}
+    # The declared ones in this engine's registry, minus browser_agent: the probe declares none.
+    assert captured["self_supervised"] == frozenset()
     assert captured["stop_check"] is _stop
     assert captured["user_scope_id"] == SCOPE
     assert captured["username"] == "tenant"

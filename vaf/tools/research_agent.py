@@ -465,6 +465,12 @@ class ResearchAgentTool(BaseTool):
     """
 
     name = "research_agent"
+    # A sub-agent step legitimately runs for minutes (the workflow engine raises its own
+    # floor on top of this).
+    def budget_seconds(self, args):
+        from vaf.core.config import Config
+        return float(Config.get("subagent_timeout_seconds", 300))
+
     category    = "web"
     permission_level = "read"
     side_effect_class = "none"

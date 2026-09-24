@@ -112,9 +112,9 @@ def test_the_history_compressor_honors_the_declaration():
     from vaf.core.context import ContextManager
 
     cm = ContextManager(max_tokens=32000)
-    # The ticket sits past the default prune's 1500-char window, like the real
-    # briefing's remote-join block did.
-    big = "line\n" * 400 + "the ticket line t-ab12cd34"
+    # The ticket sits in the MIDDLE, outside both ends the default prune keeps (it keeps
+    # the start and the end since a head-only cut threw away exit codes and build errors).
+    big = "line\n" * 200 + "the ticket line t-ab12cd34\n" + "line\n" * 200
     pruned = cm.process_tool_output("room_invite", big)
     assert "t-ab12cd34" not in pruned, "the default prune must still prune"
     whole = cm.process_tool_output("room_invite", big, deliverable=True)

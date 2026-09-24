@@ -667,9 +667,13 @@ class ContextManager:
             hidden_count = max(0, tail_start - head_lines)
             return f"{pruned_msg}\n{head}\n\n[... {hidden_count} lines hidden ...]\n\n{tail}\n\nNOTE: The facts from this output are stored in the State Context."
         
-        # Default pruning - preserved more content (1500 chars)
+        # Default pruning - the start AND the end survive (1500 chars): the end is where a
+        # command's exit code, a build error or a summary line sits.
+        from vaf.core.tool_dispatch import clip_middle
         trunc_limit = 800 if is_small_context else 1500
-        return f"{pruned_msg}\n{content_str[:trunc_limit]}...\n\n[... truncated for context stability ...]"
+        return f"{pruned_msg}\n" + clip_middle(
+            content_str, trunc_limit,
+            marker="\n[... {left_out} chars left out for context stability; the end follows ...]\n")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # CONTEXT COMPRESSION (Cursor-Style)

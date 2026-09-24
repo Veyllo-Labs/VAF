@@ -61,55 +61,40 @@ def is_abort_sentinel(value) -> bool:
     return s.startswith(TIMEOUT_PREFIX) or s.startswith(STOPPED_PREFIX)
 
 
-# Tools that manage their OWN cancellation + lifecycle and are legitimately long-running,
-# so they must NOT be wrapped by run_bounded — a hard timeout would abandon them mid-work
-# while they are actively making progress (the abandoned thread keeps running).
-#   - browser_agent: runs an asyncio browser session for minutes; has its own _stop_monitor
-#     polling TaskQueue.should_stop + browser-use max_steps/max_failures internal limits.
-#   - create_agent_workflow / execute_workflow: orchestrators that run an already per-step
-#     bounded, stop-aware WorkflowEngine internally (bounding them again double-bounds).
-#   - python_sandbox: runs code in a Docker container and already supervises itself — its
-#     persistent-container path is a stop-aware poll loop with its own deadline that kills the
-#     docker exec (and the in-container process) the moment Stop is requested. Wrapping it in
-#     run_bounded would instead *abandon* the thread, and the abandoned thread can lose the
-#     should_stop flag to clear_stop before it gets to kill the exec. Self-supervising keeps the
-#     poll loop running in the worker thread, where should_stop is still set, so the kill is prompt.
-#   - coding_agent: a real edit on a large file legitimately takes many minutes; the agentic
-#     loop governs itself (idle-based safety timeout + stuck-detection + a final_commit on every
-#     exit path) and polls TaskQueue.should_stop each iteration so the Stop button breaks it
-#     cleanly. A flat run_bounded timeout would instead ABANDON it mid-edit — leaving the file
-#     half-written and telling the user to "try a smaller task" while the coder was making progress.
-SELF_SUPERVISED_TOOLS = frozenset({
-    "browser_agent",
-    "create_agent_workflow",
-    "execute_workflow",
-    "python_sandbox",
-    "coding_agent",
-})
-
-
-def agent_timeout_seconds(tool_name: str) -> float:
-    """
-    Wall-clock budget (seconds) for a single in-line tool / sub-agent call, used by the
-    bounded wait in both the agent and the workflow engine. Per-agent so a fast filesystem
-    agent isn't forced to make the user wait the full research budget.
-    """
+def default_timeout_seconds() -> float:
+    """The wall-clock budget of a tool call whose tool declares none (``tool_timeout_seconds``)."""
     from vaf.core.config import Config
-    if tool_name == "librarian_agent":
-        # Filesystem ops should return fast; if they don't they're stuck on a huge tree
-        # or a hung mount, and a long wait helps nobody.
-        return float(Config.get("librarian_timeout_seconds", 60))
-    if tool_name == "browser_agent":
-        # Browsing is legitimately slow (page loads, multi-step). Generous budget so a
-        # normal task is never cut off, but bounded so a hung browser can't block a
-        # workflow forever. (browser-use also caps itself via max_steps.)
-        # The literal must match Config.DEFAULTS: DEFAULTS wins over this fallback, so a
-        # divergent number here is unreachable AND misleading - a reader (or an audit) takes
-        # it for the effective default and concludes the docs are wrong.
-        return float(Config.get("browser_timeout_seconds", 1800))
-    if tool_name in ("coding_agent", "research_agent", "document_agent"):
-        return float(Config.get("subagent_timeout_seconds", 300))
     return float(Config.get("tool_timeout_seconds", 120))
+
+
+def tool_budget_seconds(tool, args: dict | None = None) -> float:
+    """How long the dispatcher waits for ONE call of ``tool`` with ``args``.
+
+    The tool declares it (``BaseTool.timeout_seconds``, or ``budget_seconds(args)`` when the
+    budget follows the call's own arguments); without a declaration it is the default. This
+    used to be a list of tool NAMES here (librarian 60 s, browser 1800 s, the sub-agents
+    300 s, everything else 120 s), which a tool registered by an embedder could never join,
+    and which cut host_bash at 120 s while it accepted a 300-second command. A declaration
+    that fails or answers nonsense falls back to the default rather than to "wait forever".
+    """
+    declared = None
+    fn = getattr(tool, "budget_seconds", None)
+    try:
+        declared = fn(dict(args or {})) if callable(fn) else getattr(tool, "timeout_seconds", None)
+    except Exception:
+        declared = None
+    try:
+        value = float(declared) if declared is not None else None
+    except (TypeError, ValueError):
+        value = None
+    if value is None or value <= 0:
+        return default_timeout_seconds()
+    return value
+
+
+def is_self_supervised(tool) -> bool:
+    """Whether ``tool`` governs its own lifetime and must not be wrapped (``BaseTool.self_supervised``)."""
+    return bool(getattr(tool, "self_supervised", False))
 
 
 def run_bounded(

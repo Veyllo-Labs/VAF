@@ -842,7 +842,9 @@ class WeatherTool(BaseTool):
 ```
 
 Results are capped by the dispatch funnel (`max_result_chars`, 2000 by default)
-before they reach the model. A tool whose result IS the deliverable - a briefing
+before they reach the model. The cut leaves out the MIDDLE: the start and the end
+both survive, because the end is where an exit code or a build error sits. A tool
+whose result IS the deliverable - a briefing
 to hand over, a document body to follow - declares `result_is_deliverable = True`
 and is returned whole; the flag is a promise in return that the tool keeps its
 own output bounded. The full agent honors the same declaration downstream: its
@@ -850,6 +852,16 @@ history compression never prunes such a result, and its error classifier judges
 it by anchored belts only (a document is not a failure for containing the word
 "failed"). Observation is unaffected either way: the event stream caps tool
 results independently.
+
+**How long one call may take.** The funnel waits `tool_timeout_seconds` (120 s)
+for a call and then stops waiting. A tool whose calls legitimately take longer -
+or should give up sooner - declares `timeout_seconds = 600`, or overrides
+`budget_seconds(self, args)` when the budget follows its own arguments (VAF's
+`host_bash` waits for the command's own timeout plus a margin). A tool that
+governs its own lifetime - its own deadline, its own reaction to Stop - declares
+`self_supervised = True` and is not bounded at all; it must then honour Stop
+itself. Both used to be lists of VAF's own tool names, which a tool of yours
+could never join.
 
 `self.log(message)` is the supported way for a tool to write a diagnostic
 line. It appends to `tools_<date>.log` in the VAF log directory, filling in
@@ -976,7 +988,7 @@ The supported arguments:
 | `source`, `session_id` | Where the call comes from. Feeds `channel_restrictions`: a `source` that names a chat channel (`"whatsapp"`, `"telegram"`, `"discord"`) or a session id with that channel's prefix makes the call a chat call, which a tool's `("channel",)` refuses. `session_id` is also the chat a "for this chat" grant is kept for. Leave them out if you have no messaging channels and no chats. |
 | `interactive`, `decide` | Set `interactive=True` and pass `decide(tool_name, reason) -> "allow_once" \| "allow_chat" \| "allow_always" \| "cancel"` to plug your own confirmation UI into the gate. `allow_chat` remembers the tool for this person in this chat (`session_id`), in memory only. Left out, gated tools are refused rather than run. |
 | `trust_dir` | Which directory a standing grant applies to. Defaults to the process's current one. |
-| `timeout_for` | `f(tool_name) -> seconds`, for your own timeout policy. Defaults to the configured agent timeout. |
+| `timeout_for` | `f(tool_name) -> seconds`, for your own timeout policy; it replaces the tool's own budget. Accept a `default` keyword instead (`f(tool_name, default=None)`) to ADJUST it: you receive the tool's own budget for this call and return yours. Left out, the tool's declared budget applies (`timeout_seconds` / `budget_seconds`), else `tool_timeout_seconds`. |
 | `stop_check` | `f() -> bool`, polled during the run so you can cancel from outside. |
 | `max_result_chars` | Result cut, `2000` like a chat turn. Pass `None` to switch it off - do that when you chain a result into something else, because a cut result can lose a trailing marker. |
 | `authorize` | Your per-call decision hook, exactly as in the next section. `ToolCaller(..., authorize=fn)` is the same thing `Agent.set_tool_authorizer(fn)` installs. An account-level ban (the allowlist section below) is checked before it and cannot be lifted by an `allow()`. |
@@ -1183,9 +1195,9 @@ Four limits worth knowing before you rely on it:
   section) and the declarative policy (`admin_only`, `channel_restrictions`). It asks
   no confirmation, deliberately, like a workflow step: whether an account has a
   `dangerous` tool at all is the allowlist's answer. The remaining gap is the
-  callback, and it closes when the coder's loop moves onto `ToolCaller`; that move
-  waits for a per-tool timeout declaration, because the funnel's generic 120-second
-  budget would cut a legitimate long build.
+  callback, and it closes when the coder's loop moves onto `ToolCaller`. The per-tool
+  budget that move needed (the funnel's generic 120 seconds would have cut a long build)
+  is declared on the tools now, so nothing technical stands in the way.
 - **The workflow engine consults it for non-spawn steps - with three limits of its
   own.** A workflow step now runs through the full pipeline: your authorizer, the
   account allowlist and the hard policy blocks all apply. Still outside: `ask()` -

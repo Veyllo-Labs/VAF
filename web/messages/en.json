@@ -176,6 +176,7 @@
     "msgActionRegenerateBusy": "Wait until the current answer is finished",
     "msgActionRegenerateSubagent": "A specialist of this chat is still working",
     "msgActionRegenerateFailed": "That answer could not be replaced",
+    "settingsSaveFailed": "The settings could not be saved.",
     "documentViewerTitle": "Document Viewer",
     "openBrowserWindow": "Open the Browser Agent window",
     "closeBrowserWindow": "Close the Browser Agent window",

@@ -587,10 +587,16 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         } catch { /* the card keeps its last state */ }
     };
 
+    // Discord and Telegram each run ONE bot for the whole instance. Starting, stopping and
+    // removing it is an admin's (the routes refuse anybody else); another user's switch is
+    // their own lane, which the save stores per scope, and the bot keeps running for the rest.
+    const isAdmin = currentUser?.role === 'admin';
+
     const handleToggleConnection = async (appId: string, enabled: boolean) => {
         if (appId === 'discord') {
             const currentConfig = config.discord_config || {};
             onConfigChange('discord_config', { ...currentConfig, enabled });
+            if (!isAdmin) return;
             try {
                 if (enabled) {
                     await fetch(api('api/discord/start'), { method: 'POST', credentials: 'include' });
@@ -605,6 +611,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         if (appId === 'telegram') {
             const currentConfig = config.telegram_config || {};
             onConfigChange('telegram_config', { ...currentConfig, enabled });
+            if (!isAdmin) return;
             try {
                 if (enabled) {
                     await fetch(api('api/telegram/start'), { method: 'POST', credentials: 'include' });
@@ -646,6 +653,12 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                 ? 'Calendar uses your Gmail account. To disconnect, remove the Gmail account under Email.'
                 : 'Calendar uses your Outlook account. To disconnect, remove the Outlook account under Email.';
             alert(msg);
+            return;
+        }
+        if ((appId === 'discord' || appId === 'telegram') && !isAdmin) {
+            // What this user can disconnect is their own lane, the same switch as the toggle;
+            // the bot and its stored login stay for everybody else.
+            await handleToggleConnection(appId, false);
             return;
         }
         const app = CONNECTION_APPS.find(a => a.id === appId);

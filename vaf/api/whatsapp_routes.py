@@ -894,12 +894,21 @@ def _run_qr_login(username: str) -> None:
 
     log_whatsapp_qr(f"[VAF] QR flow started for user={username}")
     auth_dir = get_whatsapp_auth_dir(username)
-    auth_dir.mkdir(parents=True, exist_ok=True)
     # Owner-only before anything can return early: a missing Node or a failed dependency
     # install below ends this flow before Node is spawned, which is the other place the
-    # directory is corrected, and an earlier link's key files would stay readable.
+    # directory is corrected, and an earlier link's key files would stay readable. A
+    # directory this process cannot create or list is an answer for the setup screen, not
+    # an exception: this runs in a thread, so an uncaught one would leave nothing in
+    # _qr_state and the screen would wait for a QR code that never comes.
     from vaf.core.whatsapp_auth import harden_auth_dir
-    harden_auth_dir(auth_dir)
+    try:
+        auth_dir.mkdir(parents=True, exist_ok=True)
+        harden_auth_dir(auth_dir)
+    except OSError as e:
+        log_whatsapp_qr(f"[VAF] Session directory not usable: {e}")
+        with _qr_lock:
+            _qr_state[username] = {"error": f"The WhatsApp session folder could not be prepared: {e}", "ts": 0}
+        return
     node = shutil.which("node")
     wa_js = Path(__file__).resolve().parents[1] / "whatsapp_node" / "wa-bridge.js"
     if not node or not wa_js.exists():

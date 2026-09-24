@@ -155,7 +155,7 @@ never sent back to the browser, and **Disconnect** removes it together with the 
 
 **"Bot not responding"**
 - Ensure Message Content Intent is enabled in Discord Developer Portal
-- Verify the Discord bridge is running (Settings → Connections → Discord toggle)
+- Verify the Discord bridge is running (Settings → Connections → Discord toggle, as an admin)
 - Send your message as a **Direct Message** to the bot (DMs are supported; server channels require additional setup)
 
 **"Can't find the bot" / "Bot not found"**
@@ -188,6 +188,7 @@ never sent back to the browser, and **Disconnect** removes it together with the 
    - Verify: send the 6-digit code to your bot in a Telegram DM
    - **Whitelist**: Add your own Telegram (username or account). Enter only your own number or username.
 4. Turn the connection **on**; the bridge runs in the same process as the Web server and starts automatically on VAF restart when enabled.
+   The bot is one per installation, so only an admin starts or stops it (`POST /api/telegram/start` and `/stop`, and the same pair for Discord, refuse anybody else). Another user's switch, and their Disconnect button, turns only their own lane on or off (`connection_enabled_by_scope`); the bot keeps running for everybody else.
 
 ### Message handling
 
@@ -251,7 +252,7 @@ Global options (top-level in config):
 ### Troubleshooting
 
 - **No reply for a non-whitelisted Telegram account**: Expected behavior. Unauthorized traffic is not answered by design; the messages are still stored for you to read.
-- **No reply for a whitelisted account**: Ensure the bridge is running (Settings → Connections, Telegram toggle on). After a VAF restart, the bridge auto-starts if Telegram is enabled.
+- **No reply for a whitelisted account**: Ensure the bridge is running (Settings → Connections, the admin's Telegram toggle on; another user's toggle does not start the bot). After a VAF restart, the bridge auto-starts if Telegram is enabled.
 - **High unauthorized traffic**: Unauthorized drops are logged with per-user throttling to avoid log amplification under spam/flood attempts, into the channel's inbound log (`telegram_inbound_<date>.log`), which is written with debug logging off too. The sender sees nothing; the owner reads the kept message in the Telegram window and the inbox.
 - **Telegram reconnects after restart even after Disconnect**: Disconnect stops the bridge, removes the bot token from the key ring and removes `telegram_config` from the saved config (`DELETE /api/config/channels/telegram/credentials`), so there is nothing left to start from after a restart. If it still reconnects, run `vaf secure status`: it names a bot token still sitting in config.json, which would be picked up again on the next read.
 

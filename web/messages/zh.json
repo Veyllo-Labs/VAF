@@ -176,6 +176,7 @@
     "msgActionRegenerateBusy": "请等当前这条回答结束",
     "msgActionRegenerateSubagent": "这个对话里还有专用智能体在工作",
     "msgActionRegenerateFailed": "这条回答无法替换",
+    "settingsSaveFailed": "无法保存设置。",
     "documentViewerTitle": "文档查看器",
     "openBrowserWindow": "打开浏览器智能体窗口",
     "closeBrowserWindow": "关闭浏览器智能体窗口",

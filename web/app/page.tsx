@@ -6771,7 +6771,13 @@ function VAFDashboardContent() {
                     setConfig(data.config);
                 }
                 else if (data.type === 'config_saved') {
+                    // Refetched either way: after a refused save this puts the stored
+                    // settings back in place of the change the page already shows.
                     ws?.send(JSON.stringify({ type: 'get_config' }));
+                    if (data.status === 'error') {
+                        console.error('Settings not saved:', data.error);
+                        alert(tMain('settingsSaveFailed'));
+                    }
                     // Provider or other critical change: show overlay and reload after 5s
                     if (data.requires_refresh) {
                         setShowChangingModelOverlay(true);

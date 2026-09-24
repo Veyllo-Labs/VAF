@@ -176,6 +176,7 @@
     "msgActionRegenerateBusy": "지금 답변이 끝날 때까지 기다려 주세요",
     "msgActionRegenerateSubagent": "이 대화의 전문 에이전트가 아직 작업 중이에요",
     "msgActionRegenerateFailed": "이 답변은 바꿀 수 없었어요",
+    "settingsSaveFailed": "설정을 저장할 수 없어요.",
     "documentViewerTitle": "문서 뷰어",
     "openBrowserWindow": "브라우저 에이전트 창 열기",
     "closeBrowserWindow": "브라우저 에이전트 창 닫기",

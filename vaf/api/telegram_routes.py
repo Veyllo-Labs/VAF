@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel
 
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
+from vaf.api.user_routes import require_admin
 from vaf.core.channel_secrets import channel_secret, has_channel_secret
 from vaf.core.security_events import log_security_event
 
@@ -622,8 +623,9 @@ async def relay_whitelist_remove(request: Request, body: WhitelistAddRequest):
 
 
 @router.post("/start")
-async def start_telegram_bridge():
-    """Start the Telegram bridge with saved configuration."""
+async def start_telegram_bridge(_: Dict[str, Any] = Depends(require_admin)):
+    """Start the Telegram bridge with saved configuration. Admin only: it is the one bot of
+    the whole instance, and another user's switch is their own lane, stored per scope."""
     telegram_config = Config.get("telegram_config") or {}
     if not isinstance(telegram_config, dict):
         telegram_config = {}
@@ -643,8 +645,8 @@ async def start_telegram_bridge():
 
 
 @router.post("/stop")
-async def stop_telegram_bridge():
-    """Stop the Telegram bridge."""
+async def stop_telegram_bridge(_: Dict[str, Any] = Depends(require_admin)):
+    """Stop the Telegram bridge. Admin only, like /start: stopping it stops it for everybody."""
     try:
         from vaf.api.telegram_bridge import stop_bridge
         stop_bridge()

@@ -176,6 +176,7 @@
     "msgActionRegenerateBusy": "Warte, bis die laufende Antwort fertig ist",
     "msgActionRegenerateSubagent": "Ein Spezialist dieses Chats arbeitet noch",
     "msgActionRegenerateFailed": "Diese Antwort konnte nicht ersetzt werden",
+    "settingsSaveFailed": "Einstellungen konnten nicht gespeichert werden.",
     "documentViewerTitle": "Document Viewer",
     "openBrowserWindow": "Browser-Agent-Fenster öffnen",
     "closeBrowserWindow": "Browser-Agent-Fenster schließen",

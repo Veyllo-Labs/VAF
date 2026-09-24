@@ -117,6 +117,34 @@ def test_the_qr_flow_protects_the_directory_even_when_it_ends_early(tmp_path, mo
     assert all(_mode(auth / n) == 0o600 for n in ("creds.json", "session-4917.json", "pre-key-7.json"))
 
 
+@pytest.mark.parametrize("breakage", ["occupied", "unlistable"])
+def test_a_directory_that_cannot_be_prepared_ends_the_qr_flow_with_an_answer(tmp_path, monkeypatch, breakage):
+    """The flow runs in a thread: an exception while preparing the directory left nothing in
+    the state the setup screen polls, and the screen waited for a QR code that never came.
+    It ends with an error the screen shows instead, and Node is never started."""
+    import vaf.api.whatsapp_bridge as bridge
+    import vaf.api.whatsapp_routes as routes
+    import vaf.core.whatsapp_auth as wa
+
+    auth = tmp_path / "users" / "alice" / "whatsapp"
+    if breakage == "occupied":
+        auth.parent.mkdir(parents=True)
+        auth.write_text("not a directory", encoding="utf-8")        # mkdir cannot make it
+    else:
+        def refuse(path):                                           # another account's directory
+            raise PermissionError(13, "Permission denied", str(path))
+        monkeypatch.setattr(wa, "harden_auth_dir", refuse)
+    monkeypatch.setattr(wa, "get_whatsapp_auth_dir", lambda username: auth)
+    spawned = []
+    monkeypatch.setattr(bridge, "spawn_node_bridge", lambda *a: spawned.append(a))
+    monkeypatch.setattr(routes, "_qr_state", {})
+
+    routes._run_qr_login("alice")
+
+    assert "could not be prepared" in routes._qr_state["alice"]["error"]
+    assert spawned == []
+
+
 @posix_only
 def test_every_linked_account_is_protected_at_startup_whatever_the_switch_says(tmp_path, monkeypatch):
     """The bridge only starts Node when WhatsApp is switched on; a linked account that is

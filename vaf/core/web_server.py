@@ -5679,8 +5679,23 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # same change as the read side - otherwise a Settings save keeps writing
                         # to a file nobody asks any more.
                         from vaf.core.api_keys import absorb_config_keys
-                        merged = Config.merge_preserving_nonempty_sensitive(
-                            existing, absorb_config_keys(new_config, is_admin=is_admin))
+                        try:
+                            absorbed = absorb_config_keys(new_config, is_admin=is_admin)
+                        except Exception as e:  # noqa: BLE001 - answered below, never raised
+                            # A credential the key ring refused (channel_secrets refuses to
+                            # save around it, so config.json keeps the only copy). Nothing is
+                            # saved, and the client hears so: an exception here would end
+                            # this whole socket, and the page would keep showing the change
+                            # as if it had landed.
+                            log("WebServer", f"Config save refused: {e}")
+                            await websocket.send_json({
+                                "type": "config_saved",
+                                "status": "error",
+                                "error": str(e),
+                                "requires_refresh": False,
+                            })
+                            continue
+                        merged = Config.merge_preserving_nonempty_sensitive(existing, absorbed)
                         Config.save(merged)
                         provider_changed = existing.get("provider") != merged.get("provider")
 

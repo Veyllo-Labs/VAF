@@ -366,7 +366,7 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                                     className="w-full px-4 py-3 rounded-xl bg-white border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-transparent"
                                 />
                                 <p className="text-xs text-gray-400">
-                                    Your token is stored encrypted on this machine and sent only to Discord, to sign the bot in.
+                                    Your token goes to this VAF server, which stores it encrypted and uses it only to connect the bot to Discord.
                                 </p>
                                 {tokenStored && !botToken && (
                                     <p className="text-xs text-gray-500">A token is already stored for this bot and is never shown again. Paste it (or a new one) only to set the bot up again.</p>

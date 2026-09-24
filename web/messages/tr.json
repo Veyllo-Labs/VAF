@@ -176,6 +176,7 @@
     "msgActionRegenerateBusy": "Yürüyen yanıt bitene kadar bekle",
     "msgActionRegenerateSubagent": "Bu sohbetin bir uzmanı hâlâ çalışıyor",
     "msgActionRegenerateFailed": "Bu yanıt değiştirilemedi",
+    "settingsSaveFailed": "Ayarlar kaydedilemedi.",
     "documentViewerTitle": "Belge Görüntüleyici",
     "openBrowserWindow": "Tarayıcı Ajanı penceresini aç",
     "closeBrowserWindow": "Tarayıcı Ajanı penceresini kapat",

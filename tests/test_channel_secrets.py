@@ -379,3 +379,114 @@ def test_both_save_paths_say_who_is_saving():
     ws = (repo / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
     assert 'absorb_config_keys(body, is_admin=_user.get("role") == "admin")' in routes
     assert "absorb_config_keys(new_config, is_admin=is_admin)" in ws
+
+
+def test_a_refused_settings_save_answers_on_the_socket_and_keeps_it_open(config_file, monkeypatch):
+    """The Settings page saves over the WebSocket. When the save is refused (the ring cannot
+    take the token, the test above) the exception used to end the whole socket: the page lost
+    its connection and kept showing the change as if it had been saved. It hears "error" now,
+    nothing is written, and the same socket goes on answering."""
+    import jwt
+    from starlette.testclient import TestClient
+
+    import vaf.auth.crypto as crypto
+    from vaf.core.config import get_local_admin_scope_id
+    from vaf.core.web_server import app
+
+    stored = {"bot_token": TOKEN, "verified": True, "enabled": False}
+    config_file.seed(telegram_config=dict(stored))
+
+    def boom(name, value):
+        raise RuntimeError("ring unavailable")
+
+    monkeypatch.setattr(dk, "set_data_secret", boom)
+    monkeypatch.setattr(crypto, "get_jwt_secret", lambda: "s" * 32)
+    token = jwt.encode({"sub": "1", "user_scope_id": str(get_local_admin_scope_id()),
+                        "username": "admin", "role": "admin"}, "s" * 32, algorithm="HS256")
+
+    def next_of(ws, kind, wait=20):
+        # Read on a helper thread: a handler that died without closing leaves the test
+        # client's receive waiting forever, and that has to fail here, not hang the suite.
+        import threading
+        box = {}
+
+        def pump():
+            try:
+                for _ in range(100):
+                    msg = ws.receive_json()
+                    if msg.get("type") == kind:
+                        box["msg"] = msg
+                        return
+            except Exception as e:  # noqa: BLE001 - reported by the assert below
+                box["error"] = e
+
+        reader = threading.Thread(target=pump, daemon=True)
+        reader.start()
+        reader.join(wait)
+        assert "msg" in box, f"no {kind} within {wait}s, the socket stopped answering ({box.get('error')!r})"
+        return box["msg"]
+
+    with TestClient(app, client=("127.0.0.1", 40000)).websocket_connect(f"/ws?token={token}") as ws:
+        ws.send_text(json.dumps({"type": "save_config",
+                                 "config": {"telegram_config": {"verified": True, "enabled": True}}}))
+        saved = next_of(ws, "config_saved")
+        ws.send_text(json.dumps({"type": "get_config"}))
+        shown = next_of(ws, "config_update")["config"]
+
+    assert saved["status"] == "error"
+    assert shown["telegram_config"]["enabled"] is False, "the page gets the stored settings back"
+    assert config_file.on_disk()["telegram_config"] == stored
+
+
+@pytest.mark.parametrize("action", ["start", "stop"])
+@pytest.mark.parametrize("channel", ["telegram", "discord"])
+def test_only_an_admin_starts_or_stops_the_bot_of_the_whole_installation(config_file, monkeypatch, channel, action):
+    """Measured before the fix: both routes answered any signed-in user, and the Connections
+    switch called them, so a non-admin switching their own Telegram off stopped the bot for
+    everybody. Their switch is their own lane now; the bot is an admin's to run."""
+    import importlib
+
+    from fastapi import FastAPI
+    from starlette.testclient import TestClient
+
+    routes = importlib.import_module(f"vaf.api.{channel}_routes")
+    bridge = importlib.import_module(f"vaf.api.{channel}_bridge")
+    calls = []
+    monkeypatch.setattr(bridge, "start_bridge", lambda: calls.append("start") or True)
+    monkeypatch.setattr(bridge, "stop_bridge", lambda: calls.append("stop"))
+    monkeypatch.setattr(bridge, "is_bridge_running", lambda: action == "stop")
+    config_file.seed(**{f"{channel}_config": {"verified": True, "enabled": True, "admin_user_id": "1"}})
+    cs.set_channel_secret(channel, "bot_token", TOKEN)
+
+    who = {"user": NON_ADMIN}
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def signed_in(request, call_next):
+        request.state.user = who["user"]
+        return await call_next(request)
+
+    app.include_router(routes.router)
+    client = TestClient(app)
+
+    assert client.post(f"/api/{channel}/{action}").status_code == 403
+    assert calls == [], "a non-admin reached the bot"
+    who["user"] = {"username": "admin", "role": "admin", "user_scope_id": "11111111-1111-1111-1111-111111111111"}
+    assert client.post(f"/api/{channel}/{action}").status_code == 200
+    assert calls == [action]
+
+
+def test_the_connections_panel_leaves_the_bot_to_an_admin():
+    """The page half of the rule above: a non-admin's switch and Disconnect button save only
+    their own lane and never call the admin's routes (a 403 read as "could not be
+    disconnected, its login is still stored")."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "web" / "components" / "connections"
+           / "ConnectionsPanel.tsx").read_text(encoding="utf-8")
+    toggle = src[src.index("const handleToggleConnection"):src.index("const handleDisconnect")]
+    for channel in ("discord", "telegram"):
+        block = toggle[toggle.index(f"if (appId === '{channel}') {{"):]
+        assert block.index("if (!isAdmin) return;") < block.index(f"api/{channel}/start")
+    disconnect = src[src.index("const handleDisconnect"):]
+    assert disconnect.index("!isAdmin") < disconnect.index("/credentials")

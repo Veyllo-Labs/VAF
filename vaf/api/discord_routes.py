@@ -9,10 +9,11 @@ Handles Discord bot setup, verification, and management.
 import asyncio
 import logging
 import threading
-from typing import Optional
-from fastapi import APIRouter, HTTPException, Request
+from typing import Any, Dict, Optional
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from vaf.api.user_routes import require_admin
 from vaf.core.channel_secrets import has_channel_secret
 
 logger = logging.getLogger("vaf.api.discord")
@@ -303,9 +304,10 @@ async def get_discord_status(request: Request):
 
 
 @router.post("/start")
-async def start_discord_bridge():
+async def start_discord_bridge(_: Dict[str, Any] = Depends(require_admin)):
     """
-    Start the Discord bridge with saved configuration.
+    Start the Discord bridge with saved configuration. Admin only: it is one bot for the
+    whole instance, and the dashboard and the status already show Discord to admins alone.
     """
     from vaf.core.config import Config
     from vaf.api.discord_bridge import start_bridge, is_bridge_running
@@ -376,9 +378,9 @@ async def get_discord_session_history(session_id: str, request: Request):
 
 
 @router.post("/stop")
-async def stop_discord_bridge():
+async def stop_discord_bridge(_: Dict[str, Any] = Depends(require_admin)):
     """
-    Stop the Discord bridge.
+    Stop the Discord bridge. Admin only, like /start.
     """
     from vaf.api.discord_bridge import stop_bridge, is_bridge_running
 

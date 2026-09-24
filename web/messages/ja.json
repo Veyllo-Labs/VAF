@@ -176,6 +176,7 @@
     "msgActionRegenerateBusy": "いまの回答が終わるまでお待ちください",
     "msgActionRegenerateSubagent": "このチャットの専用エージェントがまだ作業しています",
     "msgActionRegenerateFailed": "この回答は置き換えられませんでした",
+    "settingsSaveFailed": "設定を保存できませんでした。",
     "documentViewerTitle": "ドキュメントビューアー",
     "openBrowserWindow": "ブラウザーエージェントのウィンドウを開く",
     "closeBrowserWindow": "ブラウザーエージェントのウィンドウを閉じる",

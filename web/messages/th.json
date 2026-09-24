@@ -176,6 +176,7 @@
     "msgActionRegenerateBusy": "โปรดรอให้คำตอบที่กำลังทำอยู่เสร็จก่อน",
     "msgActionRegenerateSubagent": "เอเจนต์เฉพาะทางของแชทนี้ยังทำงานอยู่",
     "msgActionRegenerateFailed": "ไม่สามารถแทนที่คำตอบนี้ได้",
+    "settingsSaveFailed": "บันทึกการตั้งค่าไม่ได้",
     "documentViewerTitle": "โปรแกรมดูเอกสาร",
     "openBrowserWindow": "เปิดหน้าต่างเอเจนต์เบราว์เซอร์",
     "closeBrowserWindow": "ปิดหน้าต่างเอเจนต์เบราว์เซอร์",

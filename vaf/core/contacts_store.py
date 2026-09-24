@@ -16,6 +16,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 from vaf.core.platform import Platform
+from vaf.core.channels import CHAT_CHANNELS
 
 logger = logging.getLogger("vaf.core.contacts_store")
 
@@ -928,7 +929,7 @@ def contact_calendar_events(
 
 
 TIMELINE_KINDS = ("message", "mail", "note", "event", "created")
-_MESSAGE_CHANNELS = ("whatsapp", "telegram", "discord")
+_MESSAGE_CHANNELS = CHAT_CHANNELS
 
 
 def _timeline_sort_key(item: Dict[str, Any]) -> tuple:

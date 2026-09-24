@@ -189,7 +189,7 @@ class AgentWorkflowBuilderTool(BaseTool):
     permission_level  = "system"        # skip legacy confirmation gate
     side_effect_class = "reversible"    # files can be deleted; temp leaves nothing
     admin_only        = False           # run_temp works for all; create/delete checked internally
-    channel_restrictions = ("telegram", "whatsapp", "discord")
+    channel_restrictions = ("channel",)
 
     # ── Examples ──────────────────────────────────────────────────────────────
     input_examples = [

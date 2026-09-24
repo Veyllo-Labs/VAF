@@ -121,6 +121,14 @@ CONTAINED_ELSEWHERE = {
         "both.",
 }
 
+def _registry_names():
+    from vaf.core import channels
+    return {k: v for k, v in vars(channels).items() if k.isupper()}
+
+
+_REGISTRY_NAMES = _registry_names()
+
+
 def _module_constants(tree):
     """Module-level literal assignments, so `name = TOOL_NAME` can be resolved.
 
@@ -167,7 +175,15 @@ def _tool_classes():
                     if isinstance(body.value, ast.Name) and body.value.id in consts:
                         value = consts[body.value.id]
                     else:
-                        continue
+                        # A literal built from the channel registry (the inbox tool's channel
+                        # enum is ["all", *CHAT_CHANNELS, ...]): the registry is pure data,
+                        # so it is as readable as a literal. Anything else stays unreadable
+                        # and the guard below reports it instead of losing it.
+                        try:
+                            value = eval(compile(ast.Expression(body.value), f.name, "eval"),  # noqa: S307
+                                         {"__builtins__": {}}, _REGISTRY_NAMES)
+                        except Exception:
+                            continue
                 if body.targets[0].id == "name":
                     name = value
                 elif body.targets[0].id == "parameters":

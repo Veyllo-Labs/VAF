@@ -114,7 +114,7 @@ class MyCustomTool(BaseTool):
     # Declarative contract — set these on every tool
     permission_level  = "read"   # "read" | "write" | "dangerous" | "system"
     side_effect_class = "none"   # "none" | "reversible" | "irreversible"
-    channel_restrictions = ()    # e.g. ("telegram", "whatsapp") to block chat channels
+    channel_restrictions = ()    # ("channel",) blocks the tool on every chat channel
     category    = "general"      # bundle it appears under; yours always land in "Custom …"
 
     # Optional: 1–3 concrete examples shown to the agent (provider-agnostic)

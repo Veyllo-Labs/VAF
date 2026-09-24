@@ -190,7 +190,7 @@ runs its model call with no tools at all - see
 | `send_discord` | write | Send a Discord message, optionally with a document attachment (irreversible). |
 | `read_discord_chat` | read | Read messages from a Discord chat. |
 | `find_discord_messages` | read | Search Discord messages. |
-| `send_slack` | write | Send a Slack message (irreversible). |
+| `send_slack` | write | Placeholder: Slack is a known channel without a bridge, so the tool answers that it cannot send yet. |
 
 ## Agent rooms
 

@@ -27,9 +27,12 @@ import time
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from vaf.core.channel_message_store import OWNER_SENDER
+from vaf.core.channels import CHANNEL_LABELS, CHAT_CHANNELS
 
-CHANNELS: Tuple[str, ...] = ("whatsapp", "telegram", "discord", "mail", "room")
-MESSENGERS: Tuple[str, ...] = ("whatsapp", "telegram", "discord")
+# The messenger lanes are the chat channels of the registry; mail and the agent rooms are
+# lanes of their own that no bridge serves.
+MESSENGERS: Tuple[str, ...] = CHAT_CHANNELS
+CHANNELS: Tuple[str, ...] = MESSENGERS + ("mail", "room")
 VIEWS: Tuple[str, ...] = ("all", "waits", "unread", "agent")
 
 WAITS_UNANSWERED = "unanswered"
@@ -431,7 +434,7 @@ def expects_answer(text: str, threshold: Optional[float] = None) -> bool:
     t = waits_threshold() if threshold is None else threshold
     return reply_expectation(text) >= t
 
-_CHANNEL_NAMES = {"whatsapp": "WhatsApp", "telegram": "Telegram", "discord": "Discord", "mail": "Mail", "room": "Room"}
+_CHANNEL_NAMES = {**CHANNEL_LABELS, "mail": "Mail", "room": "Room"}
 
 
 # -- pure rules --------------------------------------------------------------------------------

@@ -31,6 +31,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from starlette.concurrency import run_in_threadpool
 
 from vaf.api.user_routes import require_admin
+from vaf.core.channels import CHAT_CHANNELS
 from vaf.core.security_events import read_security_events
 from vaf.core.service_health import inspect_containers
 from vaf.core.service_stack import SERVICES, is_docker_daemon_running
@@ -343,7 +344,7 @@ def collect_browser_engine() -> Optional[Dict[str, Any]]:
 
 # ── Channel perimeter (messenger ingress) ────────────────────────────────────
 
-_CHANNELS = ("telegram", "whatsapp", "discord")
+_CHANNELS = CHAT_CHANNELS
 
 
 def derive_channels_status(channels: List[Dict[str, Any]]) -> Dict[str, Any]:

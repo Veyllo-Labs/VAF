@@ -59,7 +59,7 @@ class SetTimerTool(BaseTool):
     permission_level = "write"
     side_effect_class = "reversible"
     # Proactive in-chat delivery is only wired for the live CLI / WebUI session.
-    channel_restrictions = ("telegram", "whatsapp", "discord")
+    channel_restrictions = ("channel",)
     description = (
         "Schedule a SHORT, one-time timer that fires proactively in THIS chat after a relative "
         "delay (seconds). Use for 'in N seconds/minutes …' style requests. When it fires you are WOKEN "

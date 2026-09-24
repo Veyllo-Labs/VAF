@@ -879,7 +879,12 @@ Key declarative rules the runtime enforces:
   run without confirmation (except a legacy by-name gate on the risky
   built-ins `move_file`, `bash`, `run_command`, `python_exec`).
 - `side_effect_class` - surfaced to the model so it knows what is reversible.
-- `admin_only`, `channel_restrictions`, `coder_only` - visibility/scoping.
+- `admin_only`, `channel_restrictions`, `coder_only` - visibility/scoping. To keep a tool
+  off every messaging channel, write `channel_restrictions = ("channel",)`: the sentinel
+  matches any call the dispatcher judges to come from a chat (by `source` or by a
+  channel session id), so it also covers a channel VAF adds later. Naming the channels
+  one by one (`("telegram", "whatsapp")`) blocks exactly those and leaves the tool open
+  on the next.
 - `category` - which bundle the tool appears under in the human-facing tool
   lists (the web tools window, the CLI table, the TUI overlay, `list_tools`).
   The in-tree vocabulary is `TOOL_CATEGORIES` in `vaf/core/tool_contract.py`,
@@ -962,7 +967,7 @@ The supported arguments:
 |---|---|
 | `tools` | Your registry, `{name: BaseTool instance}`. Positional. |
 | `user_scope_id`, `username`, `user_role` | Who is calling. Assigned into whatever the tool declares in `identity_kwargs`, overwriting anything a model put there. **Pass `username` if you serve more than one tenant.** With none, the name is resolved from the SCOPE: no scope or the owner's scope gives the configured owner (`local_admin_username`, whatever registration wrote there - never the literal `"admin"`), and any other scope gives a stable synthetic name for that tenant, so a caller whose name you did not pass never lands on the owner's name-keyed data. That synthetic name is isolated, not their account name - if a tenant must reach data stored under their real username, pass it. |
-| `source`, `session_id` | Where the call comes from. Feeds `channel_restrictions`; leave them out if you have no messaging channels. |
+| `source`, `session_id` | Where the call comes from. Feeds `channel_restrictions`: a `source` that names a chat channel (`"whatsapp"`, `"telegram"`, `"discord"`) or a session id with that channel's prefix makes the call a chat call, which a tool's `("channel",)` refuses. Leave them out if you have no messaging channels. |
 | `interactive`, `decide` | Set `interactive=True` and pass `decide(tool_name, reason) -> "allow_once" \| "allow_always" \| "cancel"` to plug your own confirmation UI into the gate. Left out, gated tools are refused rather than run. |
 | `trust_dir` | Which directory a standing grant applies to. Defaults to the process's current one. |
 | `timeout_for` | `f(tool_name) -> seconds`, for your own timeout policy. Defaults to the configured agent timeout. |

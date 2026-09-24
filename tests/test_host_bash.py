@@ -56,7 +56,7 @@ def test_is_a_dangerous_main_agent_tool():
     t = HostBashTool()
     assert t.permission_level == "dangerous"
     assert t.coder_only is False  # main agent, not the coder
-    assert set(("telegram", "whatsapp", "discord")).issubset(set(t.channel_restrictions))
+    assert "channel" in t.channel_restrictions, "blocked on every chat channel, a later one included"
 
 
 def test_blocklist_reisleine():

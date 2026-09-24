@@ -31,13 +31,14 @@ from typing import Any, Dict, Optional
 from sqlalchemy import or_
 
 from vaf.memory.models import Memory
+from vaf.core.channels import CHANNEL_LABELS
 
 ATTACHMENT_EPHEMERAL_SOURCE = "attachment_ephemeral"
 CHAT_SOURCE_PREFIX = "chat/"
 FRONT_OFFICE_SOURCE = "front_office"
 
 _NAMESPACE_KEYS = ("chat_key", "chat_channel", "chat_label")
-_CHANNEL_NAMES = {"whatsapp": "WhatsApp", "telegram": "Telegram", "discord": "Discord"}
+_CHANNEL_NAMES = CHANNEL_LABELS
 _LABEL_MAX_CHARS = 80
 
 

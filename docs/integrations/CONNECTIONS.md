@@ -446,9 +446,9 @@ For questions like “Has [Name] written to me?” in your own chat, the agent c
 When you have one or more messaging connections (e.g. Telegram, Discord), the agent can **send you proactive messages**, for example when you ask it to "send me the result via Telegram" or "tell me how full my desktop is and send that to me".
 
 - **System prompt**: The agent is informed which channels are available for the current user and whether a preferred channel (`main_messenger`) is set. This is stored in User Identity (see [USER_IDENTITY.md](../memory/USER_IDENTITY.md)).
-- **Tool availability**: Only tools for **configured** connections are exposed to the agent: `send_telegram` when Telegram is connected, `send_discord` when Discord is connected, `send_slack` for Slack (when supported), and `send_whatsapp` when WhatsApp is linked. The agent never sees a per-channel send tool for a channel you do not have. The channel-agnostic `send_to_user` is additionally pinned whenever at least one messenger is connected (it resolves the platform itself at run time, see *Channel model* below).
-- **First time**: If you have not set a preferred channel, the agent will ask once (e.g. "Should I send it via Discord, Telegram or Slack?") and store your answer in User Identity as `main_messenger` (via the `update_user_identity` tool).
-- **Sending**: When you named a platform ("send it via Telegram"), the agent uses the matching tool (`send_telegram`, `send_discord`, `send_slack`, or `send_whatsapp`). When no platform was named - and always in automations/workflows - it uses `send_to_user`, which resolves `main_messenger` at run time. For **Telegram**, the agent can send to you once your account is linked (whitelist entry or one message from you); the verified account owner is recognized without a separate manual step. For **WhatsApp**, the whitelist phone number is used. Chat IDs / endpoints are stored in `messaging_endpoints.json` under the platform data directory.
+- **Tool availability**: Only tools for **configured** connections are exposed to the agent: `send_telegram` when Telegram is connected, `send_discord` when Discord is connected, and `send_whatsapp` when WhatsApp is linked (`send_slack` exists but answers that Slack cannot send yet: Slack is a known channel without a bridge). The agent never sees a per-channel send tool for a channel you do not have. The channel-agnostic `send_to_user` is additionally pinned whenever at least one messenger is connected (it resolves the platform itself at run time, see *Channel model* below).
+- **First time**: If you have not set a preferred channel, the agent will ask once (e.g. "Should I send it via WhatsApp, Telegram or Discord?") and store your answer in User Identity as `main_messenger` (via the `update_user_identity` tool). Only a channel VAF can deliver to can be the main messenger (`MAIN_MESSENGERS` in `vaf/core/channels.py`); any other stored value reads as "not set", so the agent asks again rather than delivering somewhere the setting does not name.
+- **Sending**: When you named a platform ("send it via Telegram"), the agent uses the matching tool (`send_telegram`, `send_discord` or `send_whatsapp`). When no platform was named - and always in automations/workflows - it uses `send_to_user`, which resolves `main_messenger` at run time. For **Telegram**, the agent can send to you once your account is linked (whitelist entry or one message from you); the verified account owner is recognized without a separate manual step. For **WhatsApp**, the whitelist phone number is used. Chat IDs / endpoints are stored in `messaging_endpoints.json` under the platform data directory.
 - **Discord**: Proactive send is implemented via `send_discord` (with the same user-scope checks used by other messaging tools).
 
 ## Channel model
@@ -502,34 +502,64 @@ delivery RULE is channel-agnostic and exists exactly once:
   tree, and the shared path rule resolves symlinks and re-checks the real target
   (see [USER_ISOLATION.md](../security/USER_ISOLATION.md)).
 
-Adding a new platform means extending adapters and registries, NOT the rule. The
-prompt surfaces that teach delivery (automation workflow generator, calendar check
-prompt) stay unchanged. Start at the single source of truth (`KNOWN_CHANNELS` /
-`ROUTABLE_CHANNELS` in `vaf/core/messaging_connections.py`); the drift guard
-`tests/test_channel_registry_sync.py` fails until the copies below are consistent.
-Checklist of the real registry copies (each has drifted before):
+Adding a new platform means a row in the channel registry and the parts that genuinely
+differ per channel, NOT a change to the rule. The prompt surfaces that teach delivery
+(automation workflow generator, calendar check prompt) stay unchanged.
 
-1. Channel bridge + `<platform>_config` + availability detection in
-   `get_messaging_connections()`.
-2. A dispatch branch in `send_to_main_messenger` - this is all `send_to_user`
-   needs to support the new platform.
-3. Per-channel tools (`send_<platform>`, read/find/inbox) for interactive use, plus
-   their rows in [TOOLS_CATALOG.md](../agents/TOOLS_CATALOG.md).
-4. The `main_messenger` allowlists (user_workspace, `update_user_identity` enum,
-   persona API route, system prompt validator).
-5. The channel-to-tool map and send-tool injection tuples in `vaf/core/agent.py`,
-   the workflow engine injection tuple, `_SENT_TOOLS` in thinking mode (a missing
-   entry makes the new send tool an UNTRACKED outbound channel in background runs),
-   and `FRONT_OFFICE_ALLOWED_TOOLS` (deliberate decision, default deny).
-6. `channel_restrictions` tuples on restricted tools and the ingress policy's
-   supported-channel list - these fail OPEN for an unknown channel source and must
-   be extended consciously. The ingress decision itself lives once, in
-   `channel_ingress_policy.evaluate_ingress`, which takes two things from the bridge:
-   `explicit_match` (the owner's own paired endpoint) and `access`, the sender's own
-   state in the contact book (`contacts_store.contact_access`: `"allowed"`, `"denied"`
-   or `None` when nobody decided). The channel's own switch is read from the policy.
-   Mail adds `case_reply`, the anchor the agent minted into its own outgoing
+**The registry** is `vaf/core/channels.py`: one `Channel` row per platform with its name,
+label, whether a bridge exists (`bridge`), its send and read tools, and whether the Front
+Office can open it (`front_office`, off by default: a channel that gains a bridge without
+a contact lane must not become a Front Office channel by being routable). Everything that
+has to know "which channels are there" reads it: the chat sources the tool policy and
+host_bash's own guard recognise (`CHAT_CHANNELS`, `CHAT_SESSION_PREFIXES`), the ingress
+policy and its closed-by-default doors, the main messengers an owner can pick
+(`MAIN_MESSENGERS`, the channels with a bridge), the send-tool sets of thinking mode, the
+automation dedup, the Front Office allow-list and the workflow engine's scope injection
+(`ALL_SEND_TOOLS`), the owner back-channel (`CHAT_SEND_TOOLS`), the labels, the inbox lanes
+and read tools, and the Front Office prompt's table of which tool reaches the owner.
+`KNOWN_CHANNELS`, `ROUTABLE_CHANNELS` and `CHANNEL_SEND_TOOLS` stay importable from
+`messaging_connections` and are the registry's own objects.
+
+A row with `bridge=False` (Slack today) is known: its send tool exists and answers that it
+cannot send yet. It is not a chat source, not a place `send_to_user` delivers to and not a
+main messenger. Setting `bridge=True` turns all of that on at once, which is why the bridge
+has to exist first.
+
+**Tools that must not run from a chat** declare `channel_restrictions = ("channel",)`. The
+sentinel matches whatever the registry calls a chat channel, so a new channel is blocked
+from its first day; a tool that lists channels by name would be open on it (measured when
+the registry arrived: four of the seven restricted tools would have run on a fourth
+channel). The admin switch `channel_tools_unrestricted` lifts the policy block for every
+channel alike; host_bash's non-liftable guard reads the same chat-source answer.
+
+`tests/test_channel_registry_sync.py` refuses a hand-written channel list anywhere in
+`vaf/` (two or more channel names, or their send and read tools, in one literal), refuses a
+tool that restricts channels by name, and proves that a channel added to the registry is
+blocked by every restricted tool. The few lists that name channels on purpose carry their
+reason there (contact-book address formats, the inbox's group-id patterns, the tool-bundle
+vocabulary, per-channel check functions, the security perimeter's per-channel paired count).
+Session-id prefixes count as channel names: a chat session id starts with `<channel>_`, and
+`CHAT_SESSION_PREFIXES` is the one list of them.
+
+What a new channel still needs, because it differs per channel:
+
+1. The bridge, its `<platform>_config`, the availability detection in
+   `get_messaging_connections()` and its paired-endpoint count in the security perimeter
+   (`security_routes.collect_channels_status`, which reads each channel's own config
+   shape), then `bridge=True` in its row.
+2. A dispatch branch in `send_to_main_messenger` - this is all `send_to_user` needs.
+3. Its tools (`send_<platform>` is named in the row; read/find/inbox as the channel
+   supports them) and their rows in [TOOLS_CATALOG.md](../agents/TOOLS_CATALOG.md).
+4. Its ingress: the bridge hands `evaluate_ingress` the two things only it knows,
+   `explicit_match` (the owner's own paired endpoint) and `access` (the sender's state in
+   the contact book, `contacts_store.contact_access`: `"allowed"`, `"denied"` or `None`).
+   The channel's switch is read from the policy, whose closed door the registry already
+   provides. Mail adds `case_reply`, the anchor the agent minted into its own outgoing
    Message-ID, which is the one door that survives a closed channel.
+5. `front_office=True` only once the bridge has a contact lane
+   (`tests/test_front_office_settings.py` holds the Front Office list against the bridges).
+6. Its window in the web UI, and its entry in the web's `MAIN_MESSENGERS` picker list
+   (the test holds that list against the registry).
 
 ## Architecture
 

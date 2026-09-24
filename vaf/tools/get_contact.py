@@ -8,6 +8,7 @@ Use the returned channel IDs with read_whatsapp_chat(chat_id=...), find_whatsapp
 """
 
 from vaf.tools.base import BaseTool
+from vaf.core.channels import CHANNEL_LABELS
 
 
 class GetContactTool(BaseTool):
@@ -171,7 +172,7 @@ class GetContactTool(BaseTool):
             recent = contact_timeline(contact, username, user_scope_id, limit=5, kinds={"message", "mail"})["items"]
             if recent:
                 parts.append("Recent activity (newest first; in = they wrote, out = sent from your side):")
-                labels = {"whatsapp": "WhatsApp", "telegram": "Telegram", "discord": "Discord", "email": "Mail"}
+                labels = {**CHANNEL_LABELS, "email": "Mail"}
                 for it in recent:
                     when = datetime.fromtimestamp(float(it["ts"])).strftime("%Y-%m-%d %H:%M")
                     text = (it.get("title") or it.get("body") or "").strip().replace("\n", " ")

@@ -30,6 +30,7 @@ import pathlib
 import pkgutil
 import textwrap
 
+from vaf.core.channels import ALL_SEND_TOOLS
 from vaf.tools.base import BaseTool
 
 ENGINE = pathlib.Path(__file__).resolve().parents[1] / "vaf" / "workflows" / "engine.py"
@@ -75,6 +76,8 @@ def _legacy_distribution():
         "_identity_mode": lambda: "legacy",
         "_identity_is_declared": lambda: False,
         "_inject_declared_identity": lambda name, args: None,
+        # The branch names every channel's send tool through the channel registry.
+        "ALL_SEND_TOOLS": ALL_SEND_TOOLS,
     }
     exec(compile(body, "<legacy-branch>", "exec"), namespace)   # noqa: S102
     inject = namespace["_inject_user_scope"]

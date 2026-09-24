@@ -130,9 +130,12 @@ You’re not just a program, you’re an evolving intelligence: a helper and a c
         """Human user profile (name, language, city, country, preferences, do's/don'ts, change_log) – used in "User identity (current user)" block."""
         if not self.user_identity_file.exists():
             self.ensure_exists()
-        # Single source of truth for the platform list (lazy import: auth layer
-        # must not hard-depend on core at module load).
-        from vaf.core.messaging_connections import KNOWN_CHANNELS as VALID_MAIN_MESSENGERS
+        # The channel registry says which channels can be a main messenger: the ones VAF
+        # can deliver to. A stored value outside it (a channel without a bridge, an old
+        # "email") heals to None on read, so the agent asks once instead of delivering to
+        # the web UI while the profile names a messenger (lazy import: the auth layer must
+        # not hard-depend on core at module load).
+        from vaf.core.channels import MAIN_MESSENGERS as VALID_MAIN_MESSENGERS
         defaults = {
             "name": self.username,
             "preferred_language": None,

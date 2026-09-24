@@ -35,6 +35,8 @@ import uuid as _uuid
 from pathlib import Path
 from typing import Any
 
+from vaf.core.channels import CHAT_CHANNELS, CHAT_SESSION_PREFIXES
+
 
 def make_json_serializable(obj: Any) -> Any:
     """Recursively turn Paths and UUIDs into strings so an object can be JSON-encoded.
@@ -51,8 +53,11 @@ def make_json_serializable(obj: Any) -> Any:
     return obj
 
 
-CHANNEL_SOURCES = frozenset({"telegram", "whatsapp", "discord"})
-CHANNEL_SESSION_PREFIXES = ("telegram_", "whatsapp_", "discord_")
+# Every chat channel with a bridge, from the registry: a channel added there is a chat
+# source here at once, so the `"channel"` sentinel in `channel_restrictions` (and
+# host_bash's own non-liftable guard, which reads the same answer) blocks it from day one.
+CHANNEL_SOURCES = frozenset(CHAT_CHANNELS)
+CHANNEL_SESSION_PREFIXES = CHAT_SESSION_PREFIXES
 
 
 def is_channel_session(source: str | None, session_id: str | None) -> bool:

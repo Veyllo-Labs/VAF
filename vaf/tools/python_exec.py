@@ -35,7 +35,7 @@ class PythonExecTool(BaseTool):
     # every tenant.
     identity_kwargs = ("user_scope_id",)
     permission_level = "dangerous"
-    channel_restrictions = ["channel", "telegram", "whatsapp", "discord"]
+    channel_restrictions = ("channel",)
     side_effect_class = "irreversible"
     description = (
         "⚠️ UNSAFE: Run Python code directly on the HOST system (no sandbox). "

@@ -15,6 +15,8 @@ from datetime import datetime
 from typing import Dict, Any, Iterator, List, Optional, Tuple
 from dataclasses import dataclass, field, asdict, fields
 
+from vaf.core.channels import CHANNEL_LABELS, CHAT_CHANNELS
+
 #: One lock per session, so two background lanes appending to the SAME chat cannot
 #: lose a message. The sequence is read-modify-write against a whole file: both callers
 #: load the same transcript, each adds its own line, and the second save overwrites the
@@ -1941,9 +1943,9 @@ def _apply_channel_workspace_label(workspace_root: Path, session_id: Optional[st
     try:
         sid = str(session_id or "")
         label = None
-        for prefix, name in (("telegram_", "Telegram"), ("whatsapp_", "WhatsApp"), ("discord_", "Discord")):
-            if sid.startswith(prefix):
-                label = name
+        for channel in CHAT_CHANNELS:
+            if sid.startswith(f"{channel}_"):
+                label = CHANNEL_LABELS[channel]
                 break
         if not label:
             return

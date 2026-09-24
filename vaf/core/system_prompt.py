@@ -19,6 +19,8 @@ from datetime import datetime
 from vaf.core.main_persistence import MainPersistenceManager
 from vaf.core.platform import Platform
 from vaf.core.config import Config
+from vaf.core.channels import CHANNEL_LABELS, CHANNEL_SEND_TOOLS, CHAT_CHANNELS, MAIN_MESSENGERS
+
 from vaf.core.log_helper import append_domain_log, append_domain_log_block
 
 # Code-owned continuity addendum, appended to the persona block AFTER the soul
@@ -48,6 +50,19 @@ SOUL_CONTINUITY_ADDENDUM = (
 # what this session's registry really holds - the live tool count and only the
 # abilities whose tools are actually registered, so the prompt cannot promise
 # what the runtime would refuse.
+
+def owner_notify_lines(lang: str) -> str:
+    """The Front Office rule's lookup table: which tool reaches the owner for each value
+    `main_messenger` can hold. Built from the channel registry, so the model is taught
+    exactly the messengers a profile can name, a new one included, and never one that
+    cannot deliver (the table used to list Slack, which has no bridge)."""
+    if lang == "de":
+        row = "   - Steht dort `{ch}` → rufe `{tool}(message=\"...\")` auf\n"
+    else:
+        row = "   - If `{ch}` → call `{tool}(message=\"...\")`\n"
+    return "".join(row.format(ch=ch, tool=CHANNEL_SEND_TOOLS[ch]) for ch in MAIN_MESSENGERS)
+
+
 def build_capability_addendum(tool_names: set, tool_count: int) -> str:
     parts = [
         "\n### When asked what you can do\n"
@@ -551,14 +566,12 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
     def _format_channel(self, source: str) -> str:
         """Display name for channel in prompt (WebUI, Telegram, CLI, Discord, WhatsApp)."""
         s = (source or "").strip().lower()
-        if s == "telegram":
-            return "Telegram"
-        if s == "discord" or s.startswith("discord"):
+        if s in CHAT_CHANNELS:
+            return CHANNEL_LABELS[s]
+        if s.startswith("discord"):
             return "Discord"
         if s == "cli":
             return "CLI"
-        if s == "whatsapp":
-            return "WhatsApp"
         if s == "email":
             return "E-Mail"
         return "WebUI"
@@ -917,7 +930,7 @@ Then use the results to answer. Do NOT guess from your training data!
         
         # 2c. CHANNEL CAPABILITIES (when user has NO Web UI)
         
-        _text_only_channels = ("telegram", "discord", "cli", "whatsapp")
+        _text_only_channels = CHAT_CHANNELS + ("cli",)
         if current_source and str(current_source).strip().lower() in _text_only_channels:
             chan = self._format_channel(current_source)
             src = str(current_source).strip().lower()
@@ -995,10 +1008,7 @@ Then use the results to answer. Do NOT guess from your training data!
                 "1. Antworte ZUERST dem Kontakt direkt (z.B. \"Ich gebe es weiter\" oder \"Ich sage ihm Bescheid\").\n"
                 "2. Schaue in der **User Identity** (oben im Prompt) nach dem Feld `main_messenger`. "
                 "Nutze GENAU das dort angegebene Tool, um den Inhaber zu erreichen:\n"
-                "   - Steht dort `telegram` → rufe `send_telegram(message=\"...\")` auf\n"
-                "   - Steht dort `whatsapp` → rufe `send_whatsapp(message=\"...\")` auf\n"
-                "   - Steht dort `discord` → rufe `send_discord(message=\"...\")` auf\n"
-                "   - Steht dort `slack` → rufe `send_slack(message=\"...\")` auf\n"
+                + owner_notify_lines("de") +
                 "3. Die Nachricht an den Inhaber soll **kurz und informativ** sein - Kontaktname + Kerninhalt (z.B. \"Alice bittet dich, sie zurückzurufen\").\n"
                 "4. **Sprache der Benachrichtigung:** Schreibe die Nachricht an den Inhaber **immer in der Sprache des Inhabers** (User Identity: `preferred_language`, z.B. Deutsch). Nicht in der Sprache des Kontakts - der Inhaber (z.B. Alice) spricht Deutsch, also die Benachrichtigung auf Deutsch.\n\n"
                 "**NICHT benachrichtigen** bei normalen Konversationen (Smalltalk, Fragen die du selbst beantworten kannst).\n"
@@ -1042,10 +1052,7 @@ Then use the results to answer. Do NOT guess from your training data!
                 "1. FIRST reply to the contact directly (e.g. \"I'll pass that along\" or \"I'll let them know\").\n"
                 "2. Look up the **User Identity** (above in the prompt) for the field `main_messenger`. "
                 "Use EXACTLY the tool specified there to reach the owner:\n"
-                "   - If `telegram` → call `send_telegram(message=\"...\")`\n"
-                "   - If `whatsapp` → call `send_whatsapp(message=\"...\")`\n"
-                "   - If `discord` → call `send_discord(message=\"...\")`\n"
-                "   - If `slack` → call `send_slack(message=\"...\")`\n"
+                + owner_notify_lines("en") +
                 "3. The message to the owner should be **short and informative** - contact name + key content (e.g. \"Alice asks you to call her back\").\n"
                 "4. **Language of the notification:** Always write the message to the owner in the **owner's language** (User Identity: `preferred_language`, e.g. German). Not in the contact's language - the owner (e.g. Alice) has preferred_language German, so send the notification in German.\n\n"
                 "**Do NOT notify** for normal conversations (small talk, questions you can answer yourself).\n"
@@ -1248,7 +1255,7 @@ Then use the results to answer. Do NOT guess from your training data!
                         user_data["dos"] = ui.get("dos")
                     if ui.get("donts"):
                         user_data["donts"] = ui.get("donts")
-                    if ui.get("main_messenger") and str(ui.get("main_messenger")).strip().lower() in ("telegram", "discord", "slack", "whatsapp"):
+                    if ui.get("main_messenger") and str(ui.get("main_messenger")).strip().lower() in MAIN_MESSENGERS:
                         user_data["main_messenger"] = (ui.get("main_messenger") or "").strip().lower()
                     tz_val = (ui.get("timezone") or "").strip()
                     if tz_val:

@@ -44,6 +44,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from vaf.tools.base import BaseTool
+from vaf.core.channels import CHAT_CHANNELS
 
 logger = logging.getLogger("vaf.python_sandbox")
 
@@ -478,7 +479,7 @@ class PythonSandboxTool(BaseTool):
         with_vaf_tools: bool = bool(kwargs.get("with_vaf_tools", False))
         agent = kwargs.get("_agent") or getattr(self, "_agent", None)
         current_source = str(getattr(agent, "_current_chat_source", "") or "").strip().lower()
-        if with_vaf_tools and current_source in {"telegram", "whatsapp", "discord"}:
+        if with_vaf_tools and current_source in CHAT_CHANNELS:
             logger.warning("python_sandbox: disabling with_vaf_tools for channel source=%s", current_source)
             with_vaf_tools = False
         # User scope for workspace isolation — each user gets their own temp directory

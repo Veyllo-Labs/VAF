@@ -21,7 +21,7 @@ class BaseTool(ABC):
         # Declarative contract — set these on every tool
         permission_level  = "read"   # "read" | "write" | "dangerous" | "system"
         side_effect_class = "none"   # "none" | "reversible" | "irreversible"
-        channel_restrictions = ()    # e.g. ("telegram", "whatsapp") to block chat channels
+        channel_restrictions = ()    # ("channel",) blocks the tool on every chat channel
         admin_only = False           # True → blocked for non-admin users entirely
 
         # 1–3 concrete examples shown to the LLM (provider-agnostic, embedded in description)
@@ -109,7 +109,9 @@ class BaseTool(ABC):
     permission_level: Literal["read", "write", "dangerous", "system"] = "read"
 
     # channel_restrictions: sources where this tool is completely blocked.
-    # Common values: "telegram", "whatsapp", "discord", "channel" (any chat).
+    # Write ("channel",) to block it on every chat channel, including one added later
+    # (vaf/core/channels.py decides which sources are chat channels). A single channel's
+    # name blocks that channel alone; listing all of them by name fails open for the next.
     # The check runs before the tool executes — no confirmation, hard block.
     channel_restrictions: tuple[str, ...] = ()
 

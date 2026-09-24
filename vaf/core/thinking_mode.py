@@ -22,6 +22,7 @@ from vaf.core.identity_binding import (
     resolve_scope_identity,
 )
 from vaf.core.platform import Platform
+from vaf.core.channels import ALL_SEND_TOOLS, CHAT_CHANNELS, channel_label
 
 logger = logging.getLogger(__name__)
 
@@ -780,7 +781,7 @@ def _escalate_question_to_web(user_scope_id: Optional[str], w: Dict[str, Any], c
             lang = vocab.resolve_user_language(user_scope_id, w.get("username"))
         except Exception:
             lang = "en"
-        ch_label = {"telegram": "Telegram", "whatsapp": "WhatsApp", "discord": "Discord"}.get(channel, channel)
+        ch_label = channel_label(channel)
         text = f"{_escalation_prefix(lang, ch_label)}\n\n{question}"
         anchor = (w.get("session_id") or "").strip() or _latest_web_session_id(user_scope_id)
         return emit_message_to_web_ui(user_scope_id, text, session_id=anchor)
@@ -838,7 +839,7 @@ def _process_waiting_reply(user_scope_id: Optional[str]) -> str:
         # the Web UI (with a note that we already asked on that channel), then give the web its own
         # nudge/skip window. Otherwise (web, or already escalated) give up and clear.
         ch = (w.get("channel") or "web").strip().lower()
-        if ch in ("telegram", "whatsapp", "discord") and not w.get("escalated_to_web"):
+        if ch in CHAT_CHANNELS and not w.get("escalated_to_web"):
             esc_sid = _escalate_question_to_web(user_scope_id, w, ch)
             if esc_sid:
                 data = _load_waiting()
@@ -1407,7 +1408,7 @@ When you do send a message:
 Call thinking_done with a brief summary when finished."""
 
 
-_SENT_TOOLS = {"send_telegram", "send_whatsapp", "send_discord", "send_slack", "send_mail", "reply_mail", "forward_mail", "send_to_user"}
+_SENT_TOOLS = set(ALL_SEND_TOOLS) | {"send_mail", "reply_mail", "forward_mail", "send_to_user"}
 
 
 def _filter_thinking_send_tools(tools: dict, main_messenger: str) -> list:
@@ -1434,7 +1435,7 @@ def _latest_web_session_id(user_scope_id: Optional[str]) -> Optional[str]:
         all_sessions = sm.list(limit=10, user_scope_id=user_scope_id)
         web_sessions = [
             s for s in all_sessions
-            if (s.get("metadata") or {}).get("source") not in ("thinking", "telegram", "discord", "whatsapp")
+            if (s.get("metadata") or {}).get("source") not in ("thinking",) + CHAT_CHANNELS
         ]
         return web_sessions[0]["id"] if web_sessions else None
     except Exception:

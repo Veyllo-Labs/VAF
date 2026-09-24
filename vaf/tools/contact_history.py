@@ -19,12 +19,13 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from vaf.tools.base import BaseTool
+from vaf.core.channels import CHANNEL_LABELS, CHAT_CHANNELS
 
-_CHANNELS = ("whatsapp", "telegram", "discord", "mail", "all")
+_CHANNELS = CHAT_CHANNELS + ("mail", "all")
 # Timeline pages read at most per call (each up to 3x the limit, 60 at least): bounded
 # work for a contact with years of chat, enough to reach a mail behind a long conversation.
 _MAX_PAGES = 5
-_LABEL = {"whatsapp": "WhatsApp", "telegram": "Telegram", "discord": "Discord", "email": "Mail"}
+_LABEL = {**CHANNEL_LABELS, "email": "Mail"}
 
 
 def _when(ts: float) -> str:

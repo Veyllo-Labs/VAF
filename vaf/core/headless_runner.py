@@ -18,6 +18,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32")
 
 import requests
 from vaf.core.agent import Agent
+from vaf.core.channels import CHAT_CHANNELS, CHAT_SESSION_PREFIXES
 from vaf.core.identity_binding import (Identity, bind_identity, identity_from_metadata,
                                        reassert_identity, resolve_scope_identity)
 from vaf.core.task_queue import TaskQueue
@@ -296,7 +297,7 @@ def _apply_channel_history_window(agent, source: str) -> None:
     Keep only a small recent window for channel sessions (Telegram/WhatsApp/Discord)
     so stale long-tail chat history does not dominate tool decisions.
     """
-    if source not in {"telegram", "whatsapp", "discord", "email"}:
+    if source not in CHAT_CHANNELS + ("email",):
         return
     try:
         raw_limit = Config.get("channel_history_window_messages", CHANNEL_HISTORY_WINDOW_MESSAGES)
@@ -1004,7 +1005,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # cross-channel message and must reach the compaction branch, or a chat
                     # namespace is never written.
                     if (source == "web" and meta.get("compaction") is not True
-                            and str(task.session_id).startswith(("telegram_", "discord_", "whatsapp_"))):
+                            and str(task.session_id).startswith(CHAT_SESSION_PREFIXES)):
                         append_domain_log(
                             "headless",
                             f"[ROUTING_BLOCK] Dropping cross-channel task from web to {task.session_id}",
@@ -1129,7 +1130,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 # the same channel. Owner-only: never for contact-relay
                 # messages, and only for the scope the bridge authenticated.
                 if (
-                    getattr(task, "source", None) in ("telegram", "whatsapp", "discord")
+                    getattr(task, "source", None) in CHAT_CHANNELS
                     and not (task.metadata or {}).get("from_contact")
                     and (task.metadata or {}).get("user_scope_id")
                 ):
@@ -2021,7 +2022,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # Do not run workflow matching for contact messages (WhatsApp/Telegram/Discord).
                     # Workflows are for the account owner in Web/CLI; contact chat should be normal LLM reply only.
                     task_source = getattr(task, "source", None) or ""
-                    disable_workflows = str(task_source).lower() in ("whatsapp", "telegram", "discord", "email")
+                    disable_workflows = str(task_source).lower() in CHAT_CHANNELS + ("email",)
 
                     # Keep WebUI sub-agents inside the WebUI panel (no host terminal popups)
                     # even after restarts where global env flags may be unset.

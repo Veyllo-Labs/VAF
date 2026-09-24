@@ -23,6 +23,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Your main messenger can only be one VAF can deliver to.** Settings offered Slack, Signal
+  and Mail as the channel for proactive messages. None of them can deliver today: Signal and
+  Mail were thrown away when saved, and Slack was kept while every message meant for it
+  quietly went to the web UI instead. The choice is now WhatsApp, Telegram or Discord, the
+  channels with a working connection, and Slack joins them once it has one. If you had
+  picked Slack, the agent asks once which messenger to use.
+- **Every messaging channel VAF learns later starts locked down.** VAF keeps tools such as
+  the host shell, Python, the browser agent, timers and the tool and workflow builders away
+  from chats. Four of them were locked on WhatsApp, Telegram and Discord by name, which
+  would have left them open on the next channel added. They now lock every chat channel,
+  including ones that do not exist yet, and the list of channels lives in one place instead
+  of about forty-five.
 - **The inbox, the mail window and the messenger windows follow your theme again.** Light mode
   is the default, and six windows ignored it: the inbox, the mail client with its account
   panel, and the WhatsApp, Telegram and Discord windows. Every colour in them was written out

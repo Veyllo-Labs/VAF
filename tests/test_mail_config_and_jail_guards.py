@@ -188,9 +188,8 @@ def test_mail_tool_registry_copies_stay_in_sync():
     for tool in ("reply_mail", "forward_mail", "archive_mail", "delete_mail"):
         assert _declared(tool), f"{tool} lost its identity declaration"
 
-    thinking_src = (root / "vaf" / "core" / "thinking_mode.py").read_text(encoding="utf-8")
-    m = _re.search(r"_SENT_TOOLS = \{[^}]*\}", thinking_src)
-    assert m and "reply_mail" in m.group(0) and "forward_mail" in m.group(0), (
+    from vaf.core.thinking_mode import _SENT_TOOLS
+    assert {"reply_mail", "forward_mail"} <= _SENT_TOOLS, (
         "outbound mail tools must be stripped from thinking runs (_SENT_TOOLS)")
 
     fo_src = (root / "vaf" / "core" / "front_office_tools.py").read_text(encoding="utf-8")

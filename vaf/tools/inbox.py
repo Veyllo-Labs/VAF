@@ -13,13 +13,14 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 from vaf.tools.base import BaseTool
+from vaf.core.channels import CHANNEL_READ_TOOLS, CHAT_CHANNELS
 
 _MODE_WORDS = {
     "owner": "your own chat", "contact": "Front Office", "conversation": "reply window open",
     "readonly": "read-only", "needs_assign": "unassigned @lid", "admin": "admin", "relay": "relay",
     "mail": "", "room": "room",
 }
-_READ_TOOL = {"whatsapp": "read_whatsapp_chat", "telegram": "read_telegram_chat", "discord": "read_discord_chat"}
+_READ_TOOL = CHANNEL_READ_TOOLS
 
 # Leading hint so a weak model chains the tools instead of re-listing the inbox: it names
 # the next steps up front and forbids the re-call loop a 4B model fell into on mail_inbox.
@@ -104,7 +105,7 @@ class InboxTool(BaseTool):
         "properties": {
             "channel": {
                 "type": "string",
-                "enum": ["all", "whatsapp", "telegram", "discord", "mail", "room"],
+                "enum": ["all", *CHAT_CHANNELS, "mail", "room"],
                 "description": "One channel, or all (default).",
             },
             "view": {

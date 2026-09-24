@@ -26,6 +26,7 @@ from pathlib import Path
 from vaf.core.config import Config
 from vaf.core.backend import ServerManager
 from vaf.core.platform import Platform
+from vaf.core.channels import ALL_SEND_TOOLS, CHANNEL_SEND_TOOLS, CHAT_SEND_TOOLS
 from vaf.core.log_helper import append_domain_log, get_dated_log_path, log_timeline_event
 from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
@@ -1201,7 +1202,7 @@ def reload_all_api_backends(*, force: bool = False) -> int:
 
 
 #: The send tools that reach the OWNER from a Front Office turn (the back-channel).
-_OWNER_SEND_TOOLS = ("send_whatsapp", "send_telegram", "send_discord", "send_to_user")
+_OWNER_SEND_TOOLS = CHAT_SEND_TOOLS + ("send_to_user",)
 
 class Agent:
     """The VAF engine: one instance = one conversation over one LLM backend.
@@ -9695,7 +9696,7 @@ class Agent:
                     # reach third parties there (WhatsApp linked as the agent's own number
                     # without a registered main-user number). Either earns the send tool.
                     for ch in list(conn.get("available") or []) + list(conn.get("outbound") or []):
-                        tool_name = {"telegram": "send_telegram", "discord": "send_discord", "slack": "send_slack", "whatsapp": "send_whatsapp"}.get(ch)
+                        tool_name = CHANNEL_SEND_TOOLS.get(ch)
                         if tool_name and tool_name in self.tools:
                             tools_set.add(tool_name)
                     # Channel-agnostic delivery: pinned whenever ANY messenger is
@@ -12985,7 +12986,7 @@ class Agent:
                 ))
             except Exception:
                 pass
-        if name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp", "send_to_user"):
+        if name in ALL_SEND_TOOLS or name == "send_to_user":
             tool_args["_agent"] = self  # lets send_whatsapp detect front_office_mode
         if name in ("python_sandbox", "python_exec"):
             # Inject agent reference so with_vaf_tools=True can call back into the tool registry.

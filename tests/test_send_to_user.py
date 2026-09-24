@@ -48,8 +48,8 @@ def test_agent_dispatch_injects_user_scope():
     # username="admin" - a non-admin automation would deliver to the admin's
     # messenger (cross-user leak).
     src = Path(agent_mod.__file__).read_text(encoding="utf-8")
-    assert '"send_whatsapp", "send_to_user")' in src, (
-        "agent.py send-tool arg-injection tuple lost send_to_user"
+    assert 'if name in ALL_SEND_TOOLS or name == "send_to_user":' in src, (
+        "agent.py send-tool arg-injection lost send_to_user or the channel send tools"
     )
 
 
@@ -62,8 +62,8 @@ def test_agent_router_pins_send_to_user_when_messenger_available():
 
 def test_engine_injects_user_scope():
     src = Path(engine_mod.__file__).read_text(encoding="utf-8")
-    assert '"send_whatsapp", "send_to_user")' in src, (
-        "workflow engine scope-injection tuple lost send_to_user"
+    assert 'elif tool_name in ALL_SEND_TOOLS or tool_name == "send_to_user":' in src, (
+        "workflow engine scope-injection lost send_to_user or the channel send tools"
     )
 
 

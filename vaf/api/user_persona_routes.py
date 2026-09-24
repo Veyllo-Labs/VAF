@@ -46,7 +46,7 @@ class UserIdentityUpdate(BaseModel):
     preferences: Optional[List[str]] = None
     dos: Optional[List[str]] = None
     donts: Optional[List[str]] = None
-    main_messenger: Optional[str] = None  # "telegram" | "discord" | "slack"
+    main_messenger: Optional[str] = None  # one of vaf.core.channels.MAIN_MESSENGERS, else cleared
     timezone: Optional[str] = None  # IANA e.g. Europe/Berlin
     date_format: Optional[str] = None  # e.g. dd.mm.yyyy
     time_format: Optional[str] = None  # "24h" | "12h"
@@ -124,7 +124,7 @@ async def update_user_identity(data: UserIdentityUpdate, username: str = Depends
     # rather than as None: `exclude_none` keeps "" and drops only what was never sent.
     update_dict = data.dict(exclude_none=True)
     full_dict = data.dict()          # system fields only, see last_seen_announcement_version
-    from vaf.core.messaging_connections import KNOWN_CHANNELS as valid_main_messengers
+    from vaf.core.channels import MAIN_MESSENGERS as valid_main_messengers
     if "main_messenger" in update_dict:
         value = update_dict["main_messenger"]
         normalized = (value or "").strip().lower() or None

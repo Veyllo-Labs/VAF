@@ -24,6 +24,7 @@ from vaf.core.session import SessionManager, Session
 from vaf.cli.autosuggest import SmartAutoSuggest
 import json
 from vaf.core.config import Config
+from vaf.core.channels import CHAT_SESSION_PREFIXES
 from vaf.version import __version__
 from vaf.core.log_helper import append_domain_log, get_dated_log_path, is_debug_logging_enabled
 from pathlib import Path
@@ -5883,7 +5884,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         if (
                             not requested_session_id
                             and isinstance(connection_session_id, str)
-                            and connection_session_id.startswith(("telegram_", "discord_", "whatsapp_"))
+                            and connection_session_id.startswith(CHAT_SESSION_PREFIXES)
                         ):
                             # Defensive guard: never route WebUI chat into channel sessions implicitly.
                             session_id = None

@@ -37,7 +37,7 @@ class RenderCheckTool(BaseTool):
     # Same stance as browser_agent: the probe drives the sandbox browser and
     # can reach host services through host.docker.internal - not a surface to
     # hand to remote messenger channels.
-    channel_restrictions = ("telegram", "whatsapp", "discord")
+    channel_restrictions = ("channel",)
 
     description = (
         "Open a URL or an HTML file from the project workspace in the sandbox browser, "

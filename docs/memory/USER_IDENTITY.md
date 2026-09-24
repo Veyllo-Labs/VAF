@@ -16,7 +16,7 @@ That data is stored per user and injected into the system prompt each turn. Beca
 
 - **File**: `~/.vaf/users/<username>/user_identity.json`
 - The path is determined by the **username** of the current session (from JWT when authenticated, or in local mode from `local_admin_username` in config).
-- **Contents**: `name`, `preferred_language`, `city`, `country` (location), `preferences` (list of strings), `dos` (list), `donts` (list), `main_messenger` (optional: `"telegram"` | `"discord"` | `"slack"` | `"whatsapp"`), `timezone` (optional IANA e.g. `Europe/Berlin`), `date_format` (optional e.g. `dd.mm.yyyy`), `time_format` (optional `24h` | `12h`), `change_log` (list of `{ "at": "<ISO8601>", "action": "<summary>" }`).
+- **Contents**: `name`, `preferred_language`, `city`, `country` (location), `preferences` (list of strings), `dos` (list), `donts` (list), `main_messenger` (optional: one of the channels VAF can deliver to, `MAIN_MESSENGERS` in `vaf/core/channels.py`: today `"whatsapp"` | `"telegram"` | `"discord"`; any other stored value reads as not set), `timezone` (optional IANA e.g. `Europe/Berlin`), `date_format` (optional e.g. `dd.mm.yyyy`), `time_format` (optional `24h` | `12h`), `change_log` (list of `{ "at": "<ISO8601>", "action": "<summary>" }`).
 - **Created**: When the workspace is first used; default `name` is the username, other fields empty.
 
 Do not confuse with `identity.json`: that file holds the **agent's** display name, emoji, and theme (persona data). User identity is only about the human user.
@@ -27,7 +27,7 @@ In `vaf/core/system_prompt.py`, `build_prompt()` adds a user-identity block when
 
 - Name, preferred language, and location (city, country) when set.
 - Preferences, Do, and Don't lists.
-- Optional `main_messenger` (preferred channel for proactive messages: telegram, discord, slack, or whatsapp).
+- Optional `main_messenger` (preferred channel for proactive messages: whatsapp, telegram or discord, the channels with a bridge).
 - Optional `timezone`, `date_format`, and `time_format` (used for the **`<context>`** block datetime line and so the model can show dates/times in the user's preferred format).
 
 The datetime line inside the **`<context>`** block uses the user's `timezone` (if set) and `date_format`/`time_format` so the model sees the correct local time and format.
@@ -42,7 +42,7 @@ That block is rebuilt every turn (dynamic system prompt), so the model always se
 - **Name**: `update_user_identity`
 - **When to use**: When the user says their name, language, location, or rules (e.g. "call me Alice", "I prefer German", "I'm in Berlin" / "I'm based in Munich, Germany", "always be concise", "don't use emojis"). Also when the user says which channel to use for proactive messages (e.g. "send it via Telegram" → `main_messenger="telegram"`).
 
-Parameters (all optional): `name`, `language`, `city`, `country`, `main_messenger` (`"telegram"` | `"discord"` | `"slack"` | `"whatsapp"`), `timezone` (IANA e.g. `Europe/Berlin`), `date_format` (e.g. `dd.mm.yyyy`), `time_format` (`24h` | `12h`), `add_preference` / `remove_preference`, `add_do` / `remove_do`, `add_dont` / `remove_dont`. At least one must be provided.
+Parameters (all optional): `name`, `language`, `city`, `country`, `main_messenger` (the tool's enum is `MAIN_MESSENGERS`: `"whatsapp"` | `"telegram"` | `"discord"`), `timezone` (IANA e.g. `Europe/Berlin`), `date_format` (e.g. `dd.mm.yyyy`), `time_format` (`24h` | `12h`), `add_preference` / `remove_preference`, `add_do` / `remove_do`, `add_dont` / `remove_dont`. At least one must be provided.
 
 On each successful run, the tool appends one entry to `change_log` with the current time (same source as the system prompt clock) and a short action summary (e.g. "name", "language", "preference"). The log is trimmed to the last 50 entries.
 

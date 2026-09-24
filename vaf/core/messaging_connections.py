@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
-Resolve which messaging channels (Telegram, Discord, Slack) are available for the current user
-and their preferred channel for proactive messages (main_messenger from user_identity.json).
+Resolve which messaging channels (the ones declared in vaf/core/channels.py) are available for
+the current user and their preferred channel for proactive messages (main_messenger from
+user_identity.json).
 
-Used by the system prompt to inform the agent and by send_telegram / send_discord / send_slack tools.
+Used by the system prompt to inform the agent and by the per-channel send tools.
 
 Also persists and resolves user -> telegram_chat_id for proactive Telegram sends
 (messaging_endpoints.json under Platform.data_dir()).
@@ -18,17 +19,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from vaf.core.config import Config
 from vaf.core.platform import Platform
 
-# ── Channel registry (single source of truth) ────────────────────────────────
-# The messaging platforms VAF knows. Copies of this list exist in schema enums,
-# dispatch maps and guard tuples across the codebase; tests/test_channel_registry_sync.py
-# fails when one drifts. When adding a platform, extend HERE first, then follow
-# the checklist in docs/integrations/CONNECTIONS.md (Channel model).
-KNOWN_CHANNELS = ("telegram", "whatsapp", "discord", "slack")
-# Channels send_to_main_messenger can actually dispatch to today (Slack has no
-# bridge yet, so it is known but not routable).
-ROUTABLE_CHANNELS = ("telegram", "whatsapp", "discord")
-# Channel -> per-platform send tool (interactive, explicit-platform lane).
-CHANNEL_SEND_TOOLS = {ch: f"send_{ch}" for ch in KNOWN_CHANNELS}
+# ── Channel registry ─────────────────────────────────────────────────────────
+# Declared once in vaf/core/channels.py; these names stay importable from here for the
+# callers that always read them here. ROUTABLE_CHANNELS are the channels
+# send_to_main_messenger dispatches to: exactly the ones with a bridge.
+from vaf.core.channels import CHANNEL_SEND_TOOLS, KNOWN_CHANNELS, MAIN_MESSENGERS  # noqa: F401 (re-exported)
+from vaf.core.channels import CHAT_CHANNELS as ROUTABLE_CHANNELS  # noqa: F401 (re-exported)
 
 
 # Reply window: a number the agent wrote to may answer for this long without being a
@@ -531,7 +527,7 @@ def get_messaging_connections(
             ws = get_user_workspace(username)
             ui = ws.get_user_identity()
             val = (ui.get("main_messenger") or "").strip().lower()
-            if val in ("telegram", "discord", "slack", "whatsapp"):
+            if val in MAIN_MESSENGERS:
                 main_messenger = val
         except Exception:
             pass

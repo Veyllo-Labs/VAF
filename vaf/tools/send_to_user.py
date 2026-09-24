@@ -20,6 +20,7 @@ notification preview and reports the fallback honestly in its result string.
 import re
 
 from vaf.tools.base import BaseTool
+from vaf.core.channels import channel_label
 from vaf.tools.send_telegram import _resolve_path
 
 
@@ -108,7 +109,7 @@ class SendToUserTool(BaseTool):
 
         sent, channel = send_to_main_messenger(user_scope_id, username, out, file_path=attach)
         if sent and channel:
-            label = {"telegram": "Telegram", "whatsapp": "WhatsApp", "discord": "Discord"}.get(channel, channel)
+            label = channel_label(channel)
             if attach:
                 import os as _os
                 return f"Message and document {_os.path.basename(attach)} sent to the user via {label}." + attach_warning

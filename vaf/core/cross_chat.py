@@ -59,6 +59,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+from vaf.core.channels import CHAT_SESSION_PREFIXES
 from vaf.core.text_match import fold, fold_all
 
 # A hint quotes at most this much of the matched message.
@@ -380,7 +381,7 @@ def _contact_endpoints(user_scope_id: Optional[str], username: Optional[str]) ->
 def _is_contact_chat(session_id: str, contact_endpoints: Set[str]) -> bool:
     if not contact_endpoints:
         return False
-    for prefix in ("telegram_", "whatsapp_", "discord_"):
+    for prefix in CHAT_SESSION_PREFIXES:
         if session_id.startswith(prefix):
             endpoint = session_id[len(prefix):].split("@")[0].strip().lower()
             if not endpoint:

@@ -63,7 +63,7 @@ class AgentToolBuilderTool(BaseTool):
     permission_level = "system"
 
     side_effect_class    = "reversible"   # files can be deleted again
-    channel_restrictions = ("telegram", "whatsapp", "discord")  # no tool creation from chat
+    channel_restrictions = ("channel",)  # no tool creation from any chat channel
 
     # ── Examples (shown to the LLM in the tool description) ──────────────────
     input_examples = [

@@ -292,4 +292,8 @@ def test_the_module_stays_importable_on_the_slim_base():
 
     top = [l for l in inspect.getsource(tool_dispatch).split("\n")
            if re.match(r"^(import|from) ", l)]
-    assert all("vaf" not in l for l in top), top
+    # The one VAF module allowed here is the channel registry, which is itself stdlib only
+    # (tests/test_channel_registry_sync.py pins that), so importing it costs the slim base
+    # nothing: it is where the chat sources this module judges are declared.
+    allowed = ("from vaf.core.channels import ",)
+    assert all("vaf" not in l or l.startswith(allowed) for l in top), top

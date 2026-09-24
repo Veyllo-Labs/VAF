@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from vaf.core.identity_binding import bind_identity, resolve_scope_identity
+from vaf.core.channels import ALL_SEND_TOOLS, CHAT_CHANNELS
 from vaf.core.log_helper import append_domain_log, append_domain_log_always
 from vaf.core.subagent_ipc import get_current_session_id, set_current_session_id
 
@@ -267,9 +268,8 @@ def _resolve_username(user_scope_id: Optional[str]) -> str:
 # them already reached the user, the post-run messenger push is skipped (the Web
 # UI trace and the notification still happen) - otherwise every workflow with a
 # delivery step would message the user twice.
-_SEND_STEP_TOOLS = frozenset({
-    "send_to_user", "send_telegram", "send_whatsapp", "send_discord", "send_slack", "send_mail",
-    "reply_mail", "forward_mail",
+_SEND_STEP_TOOLS = frozenset(ALL_SEND_TOOLS) | frozenset({
+    "send_to_user", "send_mail", "reply_mail", "forward_mail",
 })
 
 
@@ -438,7 +438,7 @@ def _push_result_to_web_ui(
             all_sessions = sm.list(limit=10, user_scope_id=task.user_scope_id)
             web_sessions = [
                 s for s in all_sessions
-                if (s.get("metadata") or {}).get("source") not in ("thinking", "telegram", "discord", "whatsapp")
+                if (s.get("metadata") or {}).get("source") not in ("thinking",) + CHAT_CHANNELS
             ]
             if web_sessions:
                 sid = web_sessions[0]["id"]

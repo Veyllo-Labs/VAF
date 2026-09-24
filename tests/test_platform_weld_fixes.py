@@ -116,11 +116,16 @@ def test_email_gone_from_identity_enum_and_validators():
         assert '"whatsapp", "email")' not in src, f"{mod_name} regained the dead email value"
 
 
-def test_front_office_mapping_covers_all_known_channels():
-    # The mapping had TWO drifts: slack missing, dead email line present.
-    import vaf.core.system_prompt as sp
-    src = Path(sp.__file__).read_text(encoding="utf-8")
-    for tool in ("send_telegram", "send_whatsapp", "send_discord", "send_slack"):
-        assert src.count(f"call `{tool}(message=") >= 1, f"front-office EN mapping lost {tool}"
-    assert "If `email` → call `send_mail" not in src
-    assert "Steht dort `email`" not in src
+def test_front_office_mapping_covers_every_main_messenger_and_nothing_else():
+    # The mapping had TWO drifts when it was written out by hand: slack missing, a dead
+    # email line present. It is built from the channel registry now, one row for each value
+    # main_messenger can hold, so it can neither miss a messenger nor teach one that cannot
+    # deliver (Slack has no bridge, so it has no row).
+    from vaf.core.channels import CHANNEL_SEND_TOOLS, MAIN_MESSENGERS
+    from vaf.core.system_prompt import owner_notify_lines
+    for lang, row in (("en", "   - If `{ch}` → call `{tool}(message=\"...\")`"),
+                      ("de", "   - Steht dort `{ch}` → rufe `{tool}(message=\"...\")` auf")):
+        lines = owner_notify_lines(lang).splitlines()
+        assert lines == [row.format(ch=ch, tool=CHANNEL_SEND_TOOLS[ch]) for ch in MAIN_MESSENGERS], lang
+    rendered = owner_notify_lines("en") + owner_notify_lines("de")
+    assert "send_slack" not in rendered and "email" not in rendered

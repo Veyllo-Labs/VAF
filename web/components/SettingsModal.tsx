@@ -283,6 +283,16 @@ const FALLBACK_PROVIDER_MODELS: Record<string, ProviderModelInfo> = {
 
 // Vision-capable providers (no static model lists — models are fetched dynamically via refresh button).
 // Alphabetical by label, same as the primary provider list.
+// The channels an owner can pick as main messenger: the ones with a bridge in the channel
+// registry (vaf/core/channels.py, MAIN_MESSENGERS), in its order. The server heals any other
+// value to "not set", so offering one here would store nothing and say otherwise.
+// tests/test_channel_registry_sync.py holds this list against the registry.
+const MAIN_MESSENGERS: { id: string; label: string }[] = [
+    { id: 'whatsapp', label: 'WhatsApp' },
+    { id: 'telegram', label: 'Telegram' },
+    { id: 'discord', label: 'Discord' },
+];
+
 const VISION_PROVIDERS: { id: string; label: string }[] = [
     { id: 'anthropic',  label: 'Anthropic' },
     { id: 'google',     label: 'Google' },
@@ -1751,7 +1761,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         const parseList = (text: string) => text.split('\n').map(s => s.trim()).filter(s => s.length > 0);
 
         const rawMain = (userIdentityDraft.main_messenger || '').trim().toLowerCase();
-        const main_messenger = ['telegram', 'discord', 'slack', 'signal', 'whatsapp', 'email'].includes(rawMain) ? rawMain : null;
+        const main_messenger = MAIN_MESSENGERS.some(m => m.id === rawMain) ? rawMain : null;
         // Empty means CLEAR, and it has to travel as an empty string. The server treats
         // "absent" as "leave alone" (anything else lets a partial request wipe fields it
         // never mentioned - that is how closing the update dialog erased six of them), so
@@ -7277,12 +7287,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
                                                 >
                                                     <option value="">{tModals('userIdentity.notSet')}</option>
-                                                    <option value="telegram">Telegram</option>
-                                                    <option value="discord">Discord</option>
-                                                    <option value="slack">Slack</option>
-                                                    <option value="signal">Signal</option>
-                                                    <option value="whatsapp">WhatsApp</option>
-                                                    <option value="email">Mail</option>
+                                                    {MAIN_MESSENGERS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                                                 </select>
                                                 <p className="text-xs text-gray-400 mt-0.5">{tModals('userIdentity.mainMessengerHint')}</p>
                                             </div>

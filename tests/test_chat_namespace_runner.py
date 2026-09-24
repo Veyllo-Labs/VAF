@@ -30,7 +30,8 @@ def test_the_routing_guard_lets_a_messenger_compaction_through():
     exemption a WhatsApp or Telegram chat never compacted into its namespace."""
     guard = RUNNER.split("[ROUTING_BLOCK]", 1)[0].rsplit("if (", 1)[1]
     assert 'meta.get("compaction") is not True' in guard, "the guard must exempt the runner's own compaction task"
-    assert 'source == "web"' in guard and '("telegram_", "discord_", "whatsapp_")' in guard
+    # The messenger sessions it guards are every chat channel's, from the registry.
+    assert 'source == "web"' in guard and "startswith(CHAT_SESSION_PREFIXES)" in guard
 
 
 def test_the_gdpr_skip_is_gone_and_the_namespace_decides():

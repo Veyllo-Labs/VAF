@@ -310,7 +310,7 @@ VAF tools declare a centralized contract directly on the class. All fields have 
 | `permission_level` | `"read"` \| `"write"` \| `"dangerous"` \| `"system"` | `"read"` | Access level. `dangerous` → confirmation gate. `system` → skips the legacy confirmation gate entirely (for internal/agent tools where prompting would be disruptive). For the **main agent**, `write`/`dangerous` (except `python_sandbox`) also require a plan in working memory before running - see the plan gate in [CONTEXT_MANAGEMENT.md](../memory/CONTEXT_MANAGEMENT.md). |
 | `side_effect_class` | `"none"` \| `"reversible"` \| `"irreversible"` | `"none"` | Impact of the tool. Added to the confirmation message when `dangerous`. |
 | `admin_only` | `bool` | `False` | When `True`, the tool is **hard-blocked** for non-admin users in the shared dispatch pipeline (`vaf/core/tool_dispatch.py`), so it applies to every caller and not only to chat. The check uses the caller's role and scope; in a chat turn those are `_current_user_role` and `_current_user_scope_id`, set on the agent before each turn. This is a role-based check - distinct from `channel_restrictions` which is source-based. |
-| `channel_restrictions` | `tuple[str, ...]` | `()` | Sources where the tool is blocked. Common values: `"telegram"`, `"whatsapp"`, `"discord"`, `"channel"` (generic chat). |
+| `channel_restrictions` | `tuple[str, ...]` | `()` | Sources where the tool is blocked. Write `("channel",)` to block it on every chat channel: the sentinel matches whatever source `is_channel_session` recognises, and that answer comes from the channel registry (`vaf/core/channels.py`), so a channel added there is blocked from its first day. A single channel's name (`"telegram"`) blocks that channel alone; listing every channel by name fails open for the next one, which is why `tests/test_channel_registry_sync.py` refuses a tool that does. |
 | `category` | `str` | `"general"` | Which bundle the tool appears under in human-facing tool lists. Presentation only - no policy stage reads it. The in-tree vocabulary is `TOOL_CATEGORIES` in `vaf/core/tool_contract.py` and is pinned by `tests/test_tool_category_registry_sync.py`; at runtime the field is open, so an unknown value (a third-party tool, an MCP server) is kept and rendered as its own bundle. Read it via `tool_category(name, tool)` - never with a hand-rolled `getattr`, which is how six surfaces came to answer the same question separately. The `custom` / `custom_*` namespace is reserved: `load_custom_tool_class()` moves the declared bundle of a user-uploaded tool into it (`"github"` becomes `"custom_github"`), at that boundary and nowhere else, so no surface has to know the rule and none can forget it. |
 | `identity_kwargs` | `tuple[str, ...]` | `()` | Which parts of the CALLER's identity the dispatcher assigns into `run()` before dispatch. Valid keys: `user_scope_id`, `username`, `user_role`. Declare exactly what the tool consumes - a tool that declares nothing receives nothing, which is the safe direction. This is what makes identity work for a tool registered through `Agent.add_tool()` and not only for built-ins; before it, the dispatcher matched on hardcoded tool NAMES. Values are **assigned, never defaulted** - the arguments start out as whatever the model produced. Declaring says who is calling; confining file access to them is `vaf.tools.filesystem.user_jail` (see [USER_ISOLATION.md](../security/USER_ISOLATION.md)). |
 
@@ -407,25 +407,25 @@ class GetContactTool(BaseTool):
     channel_restrictions = ()
     admin_only = False
 
-# Writes to external service, blocked on chat channels
+# Writes to external service, blocked on every chat channel
 class SendMailTool(BaseTool):
     permission_level  = "write"
     side_effect_class = "irreversible"
-    channel_restrictions = ("telegram", "whatsapp")
+    channel_restrictions = ("channel",)
     admin_only = False
 
 # Dangerous - user must confirm; cannot be undone
 class DeleteFileTool(BaseTool):
     permission_level  = "dangerous"
     side_effect_class = "irreversible"
-    channel_restrictions = ("telegram", "whatsapp", "discord")
+    channel_restrictions = ("channel",)
     admin_only = False
 
 # Admin-only, internal - only available in admin sessions, no confirmation gate
 class CreateAgentToolTool(BaseTool):
     permission_level  = "system"    # skips confirmation gate
     side_effect_class = "reversible"
-    channel_restrictions = ("telegram", "whatsapp", "discord")
+    channel_restrictions = ("channel",)
     admin_only = True               # hard-blocked for regular users
 ```
 

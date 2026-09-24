@@ -989,7 +989,7 @@ class BrowserAgentTool(BaseTool):
     category    = "web"
     permission_level = "write"
     side_effect_class = "irreversible"
-    channel_restrictions = ("telegram", "whatsapp", "discord")
+    channel_restrictions = ("channel",)
 
     description = (
         "Controls a real Chromium browser to complete multi-step web tasks. "

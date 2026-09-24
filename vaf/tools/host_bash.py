@@ -34,7 +34,7 @@ class HostBashTool(BaseTool):
     name = "host_bash"
     category    = "code"
     permission_level = "dangerous"   # -> confirmation gate in execute_tool
-    channel_restrictions = ("channel", "telegram", "whatsapp", "discord")  # hard-blocked on remote
+    channel_restrictions = ("channel",)  # hard-blocked on every chat channel
     side_effect_class = "irreversible"
     coder_only = False               # this is the MAIN agent's tool, not the coder's
     description = (

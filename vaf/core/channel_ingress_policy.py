@@ -9,8 +9,11 @@ import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
+from vaf.core.channels import CHAT_CHANNELS, FRONT_OFFICE_MESSENGERS
 
-_SUPPORTED_CHANNELS = ("telegram", "whatsapp", "discord")
+
+# Every chat channel with a bridge has an ingress policy entry (vaf/core/channels.py).
+_SUPPORTED_CHANNELS = CHAT_CHANNELS
 # One mode is left, and it is the floor rather than a choice: who may write in is decided by
 # the channel switch (`open_to_new_senders`) and by the person's own decision in the contact
 # book. `permissive` and the per-channel `allow_contact_fallback` used to be a second way to
@@ -23,10 +26,11 @@ _LEGACY_MODES = ("permissive",)
 # can be let in there at all, and whose bridge enrols a new sender as a contact when the
 # channel's Front Office is on. Discord's lane is the local admin's alone and answers
 # direct messages only (the bot sees every guild channel it sits in); a stranger's DM is
-# admitted as a contact of the admin's book. A separate tuple on purpose: _SUPPORTED_CHANNELS
+# admitted as a contact of the admin's book. A separate list on purpose: _SUPPORTED_CHANNELS
 # is every routable channel and stays equal to ROUTABLE_CHANNELS, and a channel that gains
-# a bridge without a contact lane must not become a Front Office channel by being routable.
-# tests/test_front_office_settings.py holds this tuple against the bridges' call sites.
+# a bridge without a contact lane must not become a Front Office channel by being routable,
+# which is why the registry carries `front_office` as its own field, off by default.
+# tests/test_front_office_settings.py holds this list against the bridges' call sites.
 #
 # Mail is a Front Office channel without being a messenger: it is an INGRESS lane (the
 # mail sync hands new mail to the answering lane in vaf/mail/inbound.py) and never a
@@ -36,7 +40,7 @@ _LEGACY_MODES = ("permissive",)
 # the channel was switched on; mail sent before it is never answered, so switching on
 # never answers a backlog).
 MAIL_CHANNEL = "email"
-MESSENGER_FRONT_OFFICE_CHANNELS = ("whatsapp", "telegram", "discord")
+MESSENGER_FRONT_OFFICE_CHANNELS = FRONT_OFFICE_MESSENGERS
 FRONT_OFFICE_CHANNELS = MESSENGER_FRONT_OFFICE_CHANNELS + (MAIL_CHANNEL,)
 _POLICY_CHANNELS = _SUPPORTED_CHANNELS + (MAIL_CHANNEL,)
 MAIL_REPLY_MODES = ("draft", "send")
@@ -52,9 +56,7 @@ def _default_policy() -> Dict[str, Any]:
     return {
         "mode": "paired_only",
         "throttle_seconds": _DEFAULT_THROTTLE,
-        "telegram": {"mode": "inherit", "open_to_new_senders": False},
-        "whatsapp": {"mode": "inherit", "open_to_new_senders": False},
-        "discord": {"mode": "inherit", "open_to_new_senders": False},
+        **{ch: {"mode": "inherit", "open_to_new_senders": False} for ch in _SUPPORTED_CHANNELS},
         "email": {"mode": "inherit", "open_to_new_senders": False,
                   "reply_mode": "draft", "opened_at": 0},
     }

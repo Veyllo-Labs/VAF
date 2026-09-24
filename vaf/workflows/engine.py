@@ -18,6 +18,7 @@ from typing import Dict, Any, List, Optional, Callable
 from enum import Enum
 
 from vaf.cli.ui import UI
+from vaf.core.channels import ALL_SEND_TOOLS
 
 
 # Steps whose output is a content deliverable that can meaningfully be re-generated with a
@@ -1065,7 +1066,7 @@ class WorkflowEngine:
                             a["user_scope_id"] = self.user_scope_id
                         elif tool_name == "update_user_identity":
                             a["username"] = self.username
-                        elif tool_name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp", "send_to_user"):
+                        elif tool_name in ALL_SEND_TOOLS or tool_name == "send_to_user":
                             a["username"] = self.username
                             a["user_scope_id"] = self.user_scope_id
                         elif tool_name == "schedule_reminder":

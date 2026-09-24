@@ -9,6 +9,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
+from vaf.core.channels import CHAT_CHANNELS as _CHAT_CHANNELS
+
 # Single source of truth for legacy local-admin scope (before bootstrap sets real admin UUID)
 LEGACY_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -702,9 +704,8 @@ class Config:
         "channel_ingress_policy": {
             "mode": "paired_only",
             "throttle_seconds": 60,
-            "telegram": {"mode": "inherit", "open_to_new_senders": False},
-            "whatsapp": {"mode": "inherit", "open_to_new_senders": False},
-            "discord": {"mode": "inherit", "open_to_new_senders": False},
+            # One closed door per chat channel of the registry (vaf/core/channels.py).
+            **{ch: {"mode": "inherit", "open_to_new_senders": False} for ch in _CHAT_CHANNELS},
             # Mail: an ingress-only Front Office channel (no bridge, no send tool). reply_mode
             # draft holds every answer for the owner's approval; opened_at is stamped by the
             # switch so mail from before it is never answered.

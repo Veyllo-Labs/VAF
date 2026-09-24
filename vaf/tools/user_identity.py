@@ -9,6 +9,7 @@ when the user says e.g. "call me Alice", "I prefer German", or "I'm based in Ber
 """
 
 from vaf.tools.base import BaseTool
+from vaf.core.channels import MAIN_MESSENGERS
 
 
 class UpdateUserIdentityTool(BaseTool):
@@ -45,8 +46,8 @@ class UpdateUserIdentityTool(BaseTool):
             },
             "main_messenger": {
                 "type": "string",
-                "enum": ["telegram", "discord", "slack", "whatsapp"],
-                "description": "Preferred channel for proactive messages. Set when user says e.g. 'send it via Telegram' or 'use Mail'."
+                "enum": list(MAIN_MESSENGERS),
+                "description": "Preferred channel for proactive messages. Set when user says e.g. 'send it via Telegram'."
             },
             "name": {
                 "type": "string",
@@ -125,7 +126,7 @@ class UpdateUserIdentityTool(BaseTool):
         add_dont = kwargs.get("add_dont")
         remove_dont = (kwargs.get("remove_dont") or "").strip() or None
         main_messenger_raw = (kwargs.get("main_messenger") or "").strip().lower() or None
-        main_messenger = main_messenger_raw if main_messenger_raw in ("telegram", "discord", "slack", "whatsapp") else None
+        main_messenger = main_messenger_raw if main_messenger_raw in MAIN_MESSENGERS else None
         timezone = (kwargs.get("timezone") or "").strip() or None
         date_format = (kwargs.get("date_format") or "").strip() or None
         time_format_raw = (kwargs.get("time_format") or "").strip().lower() or None

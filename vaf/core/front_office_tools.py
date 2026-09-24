@@ -16,13 +16,11 @@ the owner back-channel; tests/test_channel_registry_sync.py pins that every plat
 tool is here and send_to_user is not.
 """
 
+from vaf.core.channels import ALL_SEND_TOOLS
+
 # Tool names that exist in agent.tools when loaded. At runtime the caller should
 # intersect with agent.tools.keys() so missing tools do not cause errors.
-FRONT_OFFICE_ALLOWED_TOOLS = frozenset({
-    "send_whatsapp",
-    "send_telegram",
-    "send_discord",
-    "send_slack",
+FRONT_OFFICE_ALLOWED_TOOLS = frozenset(ALL_SEND_TOOLS) | frozenset({
     "web_search",
     # The one read tool with no free argument: it reads the correspondence of the contact
     # the runner pinned on the agent for this turn (agent._front_office_contact), across

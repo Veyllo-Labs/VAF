@@ -246,7 +246,9 @@ def absorb_config_keys(config: dict, *, is_admin: bool) -> dict:
     cleaned = dict(config)
     for key in [k for k in cleaned if k.startswith("api_key_")]:
         value = cleaned.pop(key)
-        if isinstance(value, str) and value.strip():
+        # Removed for everybody, stored only for an admin: the save paths already filter a
+        # non-admin's body, and this is the second lock the docstring promises.
+        if is_admin and isinstance(value, str) and value.strip():
             store_api_key(key[len("api_key_"):], value.strip())
     # A messaging channel's login token rides inside its config block rather than as a
     # top-level key, so the loop above never saw it. Same rule, same two save paths.

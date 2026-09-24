@@ -101,13 +101,19 @@ Boundaries, each deliberate:
 - **A private log** under `<config dir>/processes/<session>/`: owner-only folder, 0600 file,
   never the project folder. This run's logs are removed when VAF ends the commands.
 - **At most 8 running per chat** (`MAX_PER_CHAT`).
-- **They end with VAF**: an atexit hook, and the tray's quit calls `terminate_all()` before
-  its hard exit, which runs no atexit hooks. A crash that bypasses both leaves them running;
-  the registry is in memory.
+- **They end with an orderly VAF shutdown**: an atexit hook, and the tray's quit calls
+  `terminate_all()` before its hard exit, which runs no atexit hooks. A crash that bypasses
+  both leaves them running; the registry is in memory.
 - **Not where nobody can be woken**: a messaging-channel chat has no wake delivery, and a
   sub-agent's own process ends before the command, so the tool refuses both.
-- **Stopped as a tree**: `Platform.terminate_process_tree`, the one kill used for sub-agent
-  children too - a command run through a shell is only the shell's child.
+- **Stopped as a tree and as its process group**: `Platform.terminate_process_tree`, the one
+  kill used for sub-agent children too - a command run through a shell is only the shell's
+  child, and a grandchild that detached (`( server & )`) is nobody's child any more but keeps
+  the group the command started. A process that already ended counts as stopped.
+- **The wake is not an unattended turn.** A fired timer is the person's own scheduled order,
+  so what it sends leaves at its time; a finished command orders no send, so anything the
+  agent drafts after it stays behind the outward hold like any chat turn
+  (`_unattended_turn` in `headless_runner.py`).
 - **The Stop button leaves them running**, deliberately: it stops the turn, and a command the
   agent put in the background on purpose is not part of the turn. `host_process(stop)` is
   how one ends early.

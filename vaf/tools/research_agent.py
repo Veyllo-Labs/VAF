@@ -466,10 +466,15 @@ class ResearchAgentTool(BaseTool):
 
     name = "research_agent"
     # A sub-agent step legitimately runs for minutes (the workflow engine raises its own
-    # floor on top of this).
+    # floor on top of this). Its section loop stops at research_overall_timeout_seconds, a
+    # section already running may take research_section_timeout_seconds more, and planning
+    # and the final report come on top - the same keys run() reads. The generic sub-agent
+    # budget alone (300 s) cut an in-process run long before its own 900-second limit.
     def budget_seconds(self, args):
         from vaf.core.config import Config
-        return float(Config.get("subagent_timeout_seconds", 300))
+        overall = float(Config.get("research_overall_timeout_seconds", 900) or 900)
+        section = float(Config.get("research_section_timeout_seconds", 180) or 180)
+        return max(float(Config.get("subagent_timeout_seconds", 300)), overall + section + 120)
 
     category    = "web"
     permission_level = "read"

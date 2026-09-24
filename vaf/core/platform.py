@@ -1097,13 +1097,50 @@ class Platform:
         One implementation for every caller that owns a child process tree - the sub-agent
         children and the agent's background host commands. A shell started with
         ``shell=True`` is only the parent of the real command, so stopping the parent alone
-        would leave the work running. Without psutil: ``taskkill /T /F`` on Windows, SIGTERM
-        to the pid elsewhere.
+        would leave the work running.
+
+        On POSIX a process that leads its OWN process group (both callers start their child
+        with ``start_new_session``) is stopped as that group too: a grandchild that detached
+        from the tree - ``( server & )`` in a shell, a double fork - is no longer anybody's
+        child, so the recursive child list misses it, but it keeps the group. Our own group
+        is never signalled. A process that has already exited counts as stopped. Without
+        psutil: ``taskkill /T /F`` on Windows, SIGTERM to the group or the pid elsewhere.
         """
+        import signal as _signal
+
+        group = None
+        if not Platform.is_windows():
+            try:
+                pgid = os.getpgid(pid)
+                if pgid == pid and pgid != os.getpgrp():
+                    group = pgid
+            except ProcessLookupError:
+                return
+            except Exception:
+                group = None
+
+        def _signal_group(sig) -> None:
+            if group is None:
+                return
+            try:
+                os.killpg(group, sig)
+            except (ProcessLookupError, PermissionError):
+                pass
+
         try:
             import psutil  # type: ignore
-            p = psutil.Process(pid)
-            children = p.children(recursive=True)
+        except ImportError:
+            psutil = None
+        if psutil is not None:
+            try:
+                p = psutil.Process(pid)
+            except psutil.NoSuchProcess:
+                _signal_group(_signal.SIGKILL)   # the leader is gone; its group may not be
+                return
+            try:
+                children = p.children(recursive=True)
+            except psutil.NoSuchProcess:
+                children = []
             for c in children:
                 try:
                     c.terminate()
@@ -1113,18 +1150,26 @@ class Platform:
                 p.terminate()
             except Exception:
                 pass
+            _signal_group(_signal.SIGTERM)
             _gone, alive = psutil.wait_procs([p] + children, timeout=grace)
             for a in alive:
                 try:
                     a.kill()
                 except Exception:
                     pass
-        except Exception:
-            if Platform.is_windows():
-                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            _signal_group(_signal.SIGKILL)
+            return
+        if Platform.is_windows():
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            return
+        try:
+            if group is not None:
+                os.killpg(group, _signal.SIGTERM)
             else:
-                os.kill(pid, 15)
+                os.kill(pid, _signal.SIGTERM)
+        except ProcessLookupError:
+            pass
 
     @staticmethod
     def stop_webui_subagent_process_by_task(task_id: str) -> int:

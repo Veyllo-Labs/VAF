@@ -233,3 +233,38 @@ def test_the_terminal_app_has_a_card_for_it():
     from vaf.cli.tui_app.widgets import WakeMessage
 
     assert "process" in WakeMessage.LABELS
+
+
+# ── the tree stop, from the audit ────────────────────────────────────────────
+
+def test_stopping_a_process_that_already_ended_is_not_an_error():
+    from vaf.core.platform import Platform
+
+    record = _start(f'{PY} -c "pass"')
+    assert _wait(lambda: not record.running)
+    Platform.terminate_process_tree(record.popen.pid)   # gone already: no exception
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_a_grandchild_that_left_the_tree_is_stopped_with_the_group():
+    """`( server & )` in a shell: the server is nobody's child any more, so the recursive
+    child list cannot see it - but it keeps the process group the command started.
+    MUTATION: drop the process-group signal - this goes red."""
+    import psutil
+
+    record = _start(f'( {PY} -c "import time; time.sleep(61)" & ) ; {PY} -c "import time; time.sleep(61)"')
+    group = record.popen.pid
+
+    def members():
+        out = []
+        for proc in psutil.process_iter(["pid"]):
+            try:
+                if os.getpgid(proc.info["pid"]) == group and proc.status() != psutil.STATUS_ZOMBIE:
+                    out.append(proc.info["pid"])
+            except (ProcessLookupError, psutil.Error):
+                pass
+        return out
+
+    assert _wait(lambda: len(members()) >= 2), "the detached grandchild never started"
+    processes.stop(record)
+    assert _wait(lambda: members() == []), f"left running in the group: {members()}"

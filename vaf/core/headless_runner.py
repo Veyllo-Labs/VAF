@@ -1518,7 +1518,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # the scheduled time, not wait for a click they are not there to give
                     # (vaf/core/outbound_hold.py).
                     from vaf.core.task_queue import wake_kind as _wake_kind
-                    agent._unattended_turn = bool(_wake_kind(_meta) or _meta.get("compaction"))
+                    # Only a timer: a finished background command orders no send.
+                    agent._unattended_turn = bool(_wake_kind(_meta) == "timer" or _meta.get("compaction"))
                     if _meta.get("from_contact"):
                         agent._front_office_mode = True
                         agent._front_office_chat = _front_office_chat_ref(_meta, _meta.get("username"))

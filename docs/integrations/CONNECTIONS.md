@@ -177,7 +177,7 @@ never sent back to the browser, and **Disconnect** removes it together with the 
 - **Whitelist**: Only whitelisted Telegram users can use the bot; each entry maps one Telegram user to one VAF user (user_scope_id, username).
 - **Message history**: The per-chat conversation is the source of truth; `read_telegram_chat` reads it directly (always complete), and `find_telegram_messages` / `inbox` query a searchable index re-synced from it on use.
 - **Edits**: Editing a Telegram message updates the stored history (matched by the originating message id). Limitations: rapidly-sent messages that were debounced into one turn only track the last id of the burst, and the Telegram Bot API does not deliver message deletions, so deletes are not reflected.
-- **Local storage**: The whitelist is stored in your local VAF config; the bot token in the encrypted key ring on this machine (`vaf/core/channel_secrets.py`). The token never comes back to the browser, and **Disconnect** removes both.
+- **Local storage**: The whitelist is stored in your local VAF config; the bot token in the encrypted key ring on this machine (`vaf/core/channel_secrets.py`). The token never comes back to the browser. **Disconnect** by the admin removes the connection for the whole installation, whitelist and token included. Disconnect by any other account only switches that account's own lane off (its `connection_enabled_by_scope` entry); the shared token, the whitelist and the pairings stay.
 
 ### Setup
 

@@ -132,49 +132,73 @@ def test_the_switch_is_admin_write_only():
     assert Config.filter_for_non_admin({"tool_confirmation_bypass_admins": True}) == {}
 
 
-def _python_exec_fallback(monkeypatch, *, scope, allowed_scope):
-    """Drive the python_sandbox -> python_exec fallback of the chat lane, with a trust
-    store that says "allow" for ONE scope only, and report what python_exec received."""
+def _python_exec_fallback(monkeypatch, *, scope, allowed_scope, account_tools=None):
+    """Drive the python_sandbox -> python_exec fallback through the REAL chat stages: the
+    sandbox refuses, the fallback dispatches python_exec through execute_tool, and the
+    trust store says "allow" for ONE scope only. Reports what python_exec received."""
     from types import SimpleNamespace
 
+    from conftest import bind_chat_stages
+    from vaf.core import tool_dispatch
     from vaf.core.agent import Agent
 
     monkeypatch.setattr("vaf.core.trust.get_tool_policy",
                         lambda name, user_scope_id=None:
                         "allow" if user_scope_id == allowed_scope else "ask")
     monkeypatch.setattr("vaf.core.trust.is_trusted_dir", lambda p, user_scope_id=None: False)
+    if account_tools is not None:
+        monkeypatch.setattr(tool_dispatch, "_account_allowlist_resolver",
+                            lambda s: set(account_tools))
     seen = {}
+
+    class _Sandbox:
+        name = "python_sandbox"
+        permission_level = "write"
+        self_supervised = True
+        parameters = {"type": "object", "properties": {"code": {"type": "string"}}}
+
+        def run(self, **kwargs):
+            return "Security Error: blocked by the sandbox"
 
     class _PythonExec:
         name = "python_exec"
+        permission_level = "dangerous"
         identity_kwargs = ("user_scope_id",)
+        parameters = {"type": "object", "properties": {"code": {"type": "string"},
+                                                        "timeout": {"type": "integer"}}}
 
         def run(self, **kwargs):
             seen.update(kwargs)
             return "ran"
 
-    fake = SimpleNamespace(
-        tools={"python_exec": _PythonExec()}, _event_sink=None, _noninteractive=True,
+    fake = bind_chat_stages(SimpleNamespace(
+        tools={"python_sandbox": _Sandbox(), "python_exec": _PythonExec()},
+        _event_sink=None, _noninteractive=True, _current_turn_thinking_mode=False,
+        _current_chat_source="web", current_session_id="web_probe",
         _current_user_scope_id=scope, _current_user_role="user", _current_username="tenant",
-        _front_office_mode=False, _is_channel_turn=lambda: False,
-        _dispatch_session_id=lambda: "web_probe", _announce_held_send=lambda r: None,
-        _record_tool_used=lambda n: None, _ask_user_about_gate=None,
-        _push_gate_to_websocket=lambda e: None,
-    )
-    out = Agent._chat_post_dispatch(fake, "python_sandbox", {"code": "print(1)"},
-                                    "Security Error: blocked by the sandbox")
+        _run_kind="chat", _ww_training=False, _active_tools=set(), _turn_ran_progress_tool=False,
+        _session_workspace=None, history=[], main_persistence=None, _front_office_mode=False,
+        _record_tool_used=lambda n: None,
+        _plan_gate_decision=lambda n, t, tool_args=None: None,
+        _working_memory_note_gate=lambda tool_args: None,
+        _proactive_reply_gate_decision=lambda n, t, a: None,
+        _ask_first_gate_decision=lambda n, t: None,
+        _room_mode_gate_decision=lambda n, t: None,
+        get_live_session_subagents=lambda: [], _extract_subagent_goal=lambda a: "",
+        model_display_name="probe",
+    ))
+    out = Agent.execute_tool(fake, "python_sandbox", {"code": "print(1)"})
     return out, seen
 
 
 def test_the_python_exec_fallback_runs_as_the_tenant_whose_grant_it_is(monkeypatch):
-    """The fallback used to be a second, hand-rolled gate that ran python_exec with no
-    identity, so the tool read the OWNER's trust bucket for a tenant. It now takes the
-    shared gate and the shared identity assignment.
+    """The fallback is a call of its own through the shared path: the tenant's own grant
+    opens it, and python_exec receives the tenant's scope.
 
-    MUTATION: drop user_scope_id from the fallback's gate call or its identity
-    assignment - one of these two tests goes red."""
+    MUTATION: run python_exec directly instead of through execute_tool - the allowlist
+    test below goes red."""
     out, seen = _python_exec_fallback(monkeypatch, scope=SCOPE_B, allowed_scope=SCOPE_B)
-    assert out == "ran"
+    assert "ran" in out and "UNSANDBOXED" in out
     assert seen.get("user_scope_id") == SCOPE_B
 
 
@@ -182,6 +206,14 @@ def test_the_owners_grant_does_not_open_the_fallback_for_a_tenant(monkeypatch):
     out, seen = _python_exec_fallback(monkeypatch, scope=SCOPE_B, allowed_scope=None)
     assert seen == {}, "python_exec ran for a tenant on the owner's grant"
     assert "requires confirmation" in out
+
+
+def test_an_account_without_python_exec_gets_no_fallback(monkeypatch):
+    """The account allowlist is a stage of the shared path the old fallback skipped."""
+    out, seen = _python_exec_fallback(monkeypatch, scope=SCOPE_B, allowed_scope=SCOPE_B,
+                                      account_tools={"python_sandbox"})
+    assert seen == {}, "the fallback ran a tool this account does not have"
+    assert "not enabled for your account" in out
 
 
 def _grant_gate(monkeypatch, *, scope, role="user", granted=None, events=None):

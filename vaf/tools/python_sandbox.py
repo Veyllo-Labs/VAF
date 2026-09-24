@@ -110,7 +110,7 @@ class PythonSandboxTool(BaseTool):
             },
             "timeout": {
                 "type": "integer",
-                "description": "Timeout in seconds (default: 30)",
+                "description": "Timeout in seconds (default: 30, max 600)",
                 "default": 30
             },
             "packages": {
@@ -150,9 +150,21 @@ class PythonSandboxTool(BaseTool):
     # so with_vaf_tools=True can call real tools.
     _agent: Optional[Any] = None
     
+    # The sandbox supervises itself (self_supervised), so no dispatcher bound stands behind
+    # the model's timeout: it is clamped here, like host_bash's, for both execution paths.
+    MAX_TIMEOUT_SECONDS = 600
+
     def __init__(self):
         super().__init__()
         self._ephemeral_sandbox = None
+
+    @classmethod
+    def _run_timeout(cls, kwargs) -> int:
+        try:
+            requested = int(kwargs.get("timeout") or 30)
+        except (TypeError, ValueError):
+            requested = 30
+        return min(max(1, requested), cls.MAX_TIMEOUT_SECONDS)
     
     def _get_subprocess_kwargs(self) -> dict:
         """Get platform-specific subprocess kwargs."""
@@ -478,7 +490,7 @@ class PythonSandboxTool(BaseTool):
     def run(self, **kwargs) -> str:
         """Execute Python code in Docker sandbox (per-user isolated workspace)."""
         code = str(kwargs.get("code", "")).strip()
-        timeout = int(kwargs.get("timeout", 30))
+        timeout = self._run_timeout(kwargs)
         packages = kwargs.get("packages", [])
         with_vaf_tools: bool = bool(kwargs.get("with_vaf_tools", False))
         agent = kwargs.get("_agent") or getattr(self, "_agent", None)

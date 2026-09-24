@@ -182,9 +182,10 @@ def test_the_short_path_is_byte_identical(real_agent):
 
 
 def test_all_three_tool_end_emitters_carry_the_field():
-    """The dispatcher is not the only emitter: the python_exec fallback and the
-    parallel wrapper build their own tool_end. A field added to one of three is
-    a consumer that works for most tools and silently not for two."""
+    """The dispatcher is not the only emitter: the parallel wrapper builds its own
+    tool_end. A field added to one of them is a consumer that works for most tools and
+    silently not for the other. (The python_exec fallback used to be a third emitter; it
+    dispatches through execute_tool now, so the dispatcher's event covers it.)"""
     import inspect
 
     from vaf.core import agent as agent_mod
@@ -193,6 +194,6 @@ def test_all_three_tool_end_emitters_carry_the_field():
     sources = inspect.getsource(td) + inspect.getsource(agent_mod)
     starts = sources.count('"type": "tool_end"')
     carried = sources.count('"result": event_result(')
-    assert starts >= 3, "an emitter disappeared - re-check this guard"
+    assert starts >= 2, "an emitter disappeared - re-check this guard"
     assert carried == starts, (
         f"{starts} tool_end emitters but only {carried} carry the result")

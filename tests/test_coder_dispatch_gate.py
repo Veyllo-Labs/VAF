@@ -186,3 +186,19 @@ def test_the_dispatch_loop_uses_both_helpers():
     src = inspect.getsource(mod.CodingAgentTool.run)
     assert "_coder_dispatch_refusal(" in src
     assert "_as_the_caller(" in src
+
+
+def test_a_refusal_answers_the_call_and_nothing_else_runs():
+    """A refused call is answered with the refusal and the loop moves on: the file handling
+    further down judges results by wording and would report a refused write as written.
+    And the two web tools the loop handles inline ask the same questions as the rest."""
+    import inspect
+
+    import vaf.tools.coder as mod
+
+    src = inspect.getsource(mod.CodingAgentTool.run)
+    sites = src.split("_refusal = _coder_dispatch_refusal(")[1:]
+    assert len(sites) == 3, "web_fetch, web_deep_search and the local tools each ask"
+    for site in sites:
+        block = site[:1100]
+        assert "history.append(" in block and "\n                        continue\n" in block, block[:500]

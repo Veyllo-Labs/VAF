@@ -320,9 +320,12 @@ delete of a system or home root, and a command whose executable is built by a su
 (there the approved text is not the text that would run). It tokenizes quote-aware and
 descends into substitutions rather than matching substrings, so `rm -rf /tmp/scratch` is
 ordinary work while `rm  -rf  /` is not. The verdict carries its categories, which the
-confirmation dialog shows. The real safety is still the person's approval plus the
-two-layer local-only gate. The controls are pinned in `tests/test_host_bash.py` and
-`tests/test_command_policy.py`.
+confirmation dialog shows. For the main agent's own call, the real safety is still the
+person's approval plus the two-layer local-only gate. The unattended lanes (the coder and
+workflow steps, point 2) have no approval: there it is the account allowlist, the policy
+block and, for workflow steps, the application's authorizer that decide. The controls are
+pinned in `tests/test_host_bash.py`, `tests/test_command_policy.py` and
+`tests/test_coder_dispatch_gate.py`.
 
 > **Note on `channel_tools_unrestricted`:** this admin setting (default ON) lets channel sessions
 > use the same tools as the main agent and lifts `channel_restrictions` for tools that rely on it

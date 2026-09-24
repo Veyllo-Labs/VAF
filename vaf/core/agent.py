@@ -13207,11 +13207,13 @@ class Agent:
             except Exception:
                 pass
 
-        # If python_sandbox blocked the request, offer the unsandboxed run through the SAME
-        # confirmation gate every other call takes: the web dialog or the terminal prompt,
-        # the person's standing and chat grants, the hands-off switch. This used to be a
-        # second, hand-rolled gate that prompted only the terminal and ran the tool without
-        # the caller's identity, so python_exec read the owner's trust bucket for a tenant.
+        # If python_sandbox blocked the request, offer the unsandboxed run - as a call of its
+        # own through the whole shared path, exactly as if the model had made it: the policy,
+        # the account allowlist, the application's authorizer, the confirmation gate (web
+        # dialog or terminal prompt, the person's standing and chat grants, the hands-off
+        # switch), identity, the bounded run, the events and the audit line. It used to be a
+        # hand-rolled gate beside that path, and then a gate plus a direct run(); both
+        # skipped the allowlist and the authorizer.
         if (
             name == "python_sandbox"
             and not is_channel_session
@@ -13219,44 +13221,14 @@ class Agent:
             and result.startswith("Security Error:")
             and "python_exec" in self.tools
         ):
+            # A sub-agent cannot put a question to a person reliably, so the fallback is not
+            # offered there at all.
+            if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "") == "1":
+                return result + "\n\n[INFO] python_exec is available but needs a person's confirmation, which a sub-agent cannot ask for."
             code = (args or {}).get("code", "")
-            _scope = getattr(self, "_current_user_scope_id", None)
-            _role = getattr(self, "_current_user_role", None)
-            # A sub-agent cannot put a question to a person reliably, so it is refused there
-            # the way every non-interactive lane refuses a gated tool.
-            _is_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "") == "1"
-            refusal = _resolve_confirmation_gate(
-                "python_exec",
-                reason="python_sandbox blocked this code; python_exec would run it UNSANDBOXED on the host.",
-                args={"code": code}, trust_dir=Path.cwd(),
-                interactive=not self._noninteractive and not _is_subagent,
-                decide=self._ask_user_about_gate, emit=emit,
-                on_gate_required=self._push_gate_to_websocket,
-                user_scope_id=_scope, user_role=_role,
-                session_id=self._dispatch_session_id(),
-            )
-            if refusal is not None:
-                return result + "\n\n" + refusal
-            python_exec = self.tools["python_exec"]
-            python_exec_args = _assign_declared_identity(
-                python_exec, {"code": code, "timeout": 30}, user_scope_id=_scope,
-                username=getattr(self, "_current_username", None), user_role=_role,
-            )
-            emit({"type": "tool_start", "tool": "python_exec",
-                  "args": make_json_serializable({"timeout": 30})})
-            _pe_t0 = time.monotonic()
-            try:
-                unsafe_result = python_exec.run(**python_exec_args)
-            except Exception as e:
-                unsafe_result = f"Tool Error: {e}"
-            emit({
-                "type": "tool_end", "tool": "python_exec",
-                "duration_ms": int((time.monotonic() - _pe_t0) * 1000),
-                "ok": not str(unsafe_result).startswith("Tool Error:"),
-                "result": event_result(unsafe_result),
-            })
-            self._record_tool_used("python_exec")
-            result = unsafe_result
+            unsafe_result = self.execute_tool("python_exec", {"code": code, "timeout": 30})
+            return (f"python_sandbox blocked this code ({result.strip()[:300]}), so it went to "
+                    f"python_exec, which runs it UNSANDBOXED on the host:\n{unsafe_result}")
         return result
 
     def _chat_after_dispatch_bookkeeping(self, name, result):

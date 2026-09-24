@@ -546,9 +546,13 @@ What an embedded agent can and cannot do on the host - the short version of
   continues. The coder sub-agent's shell needs bubblewrap or Docker and
   refuses otherwise.
 - **Host execution is opt-in.** `python_exec` (unsandboxed Python on the
-  host) additionally requires a persisted `set_tool_policy("python_exec",
-  "allow")` - a one-off interactive confirmation is not enough. File tools
-  write to the host as the gate allows.
+  host) checks for itself, on top of the gate, that the person allowed it
+  beyond a single call: a persisted `set_tool_policy("python_exec",
+  "allow")`, or their "for this chat" grant for the chat the call runs in
+  (`vaf.core.trust.grant_tool_for_chat`, in memory, keyed on the person and
+  the session). A one-call confirmation is not enough: the tool cannot tell
+  which call it was given for. File tools write to the host as the gate
+  allows.
 - **Network posture.** `import vaf` and `Agent(config=...)` open no ports and
   start no services. An API provider means outbound HTTPS only. Local mode
   either starts the one llama server on `127.0.0.1:8080` or loads the model

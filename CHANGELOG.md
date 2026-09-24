@@ -18,10 +18,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and anything longer than a few minutes was given up on. Now the agent can start such a
   command in the background, keep working, look at its output, type into it (a server
   console) or stop it, and when the command ends the chat continues with the result on
-  its own. A background command belongs to the chat and the person that started it,
-  its output is kept private, at most eight run per chat, and they end when VAF ends.
-  They are not available over Telegram, WhatsApp or Discord, where nobody could be told
-  when they end.
+  its own - in VAF's own app and terminal app; an application that embeds VAF with a loop
+  of its own has to read VAF's task queue to be told. A background command belongs to the
+  chat and the person that started it, its output is kept private, at most eight run per
+  chat, and they are stopped when VAF is shut down normally (a crash can leave them
+  running). They are not available over Telegram, WhatsApp or Discord, where nobody could
+  be told when they end.
 - **Every account can pair its own Telegram with a code.** On an installation shared by
   several people, only the person who set the bot up could pair a Telegram account, because
   pairing needed the bot token. Now the Telegram card offers **Pair my Telegram** to anyone
@@ -56,8 +58,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   a messenger connection, including its whitelist and its bot token, as long as they left
   out the on/off switch. That could make them the bot's owner. Their on/off switch also
   stopped or started the bot for everybody. Only an admin can change a messenger connection
-  or start and stop its bot now; everyone else's switch, and their Disconnect button, turns
-  it on or off for themselves only, as intended.
+  or start and stop its bot now. On Telegram, everyone else's switch and their Disconnect
+  button turn it on or off for themselves only; Discord stays the admin's own connection,
+  which other accounts do not see at all.
 - **Another account can no longer take over your Telegram chat.** Any signed-in account
   could send your Telegram id to the pairing step and become the owner of your chat with the
   bot: its agent answered you, and it could read the conversation. Setting the bot up is now

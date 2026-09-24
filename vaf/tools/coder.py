@@ -9398,6 +9398,16 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 result = "✅ Task completed. Continue with remaining work."
                 
                 elif fn_name == "web_fetch":
+                    # Handled inline rather than through local_tools, so the dispatch questions
+                    # are asked here too: an account without web access has none in the coder.
+                    _refusal = _coder_dispatch_refusal(
+                        fn_name, None, coder_allowed=_coder_allowed,
+                        caller_allowed=caller_allowed, scope=caller_scope, role=caller_role,
+                        session_id=caller_session,
+                    )
+                    if _refusal is not None:
+                        history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _refusal})
+                        continue
                     url = fn_args.get("url", "")
                     selector = fn_args.get("selector", "")
                     tui.set_action(f"🌐 Fetching: {url[:30]}...")
@@ -9432,6 +9442,14 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         _log_to_file(f"[DEBUG-X] web_fetch ERROR: {str(e)[:100]}")
                 
                 elif fn_name == "web_deep_search":
+                    _refusal = _coder_dispatch_refusal(
+                        fn_name, None, coder_allowed=_coder_allowed,
+                        caller_allowed=caller_allowed, scope=caller_scope, role=caller_role,
+                        session_id=caller_session,
+                    )
+                    if _refusal is not None:
+                        history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _refusal})
+                        continue
                     query = fn_args.get("query", "")
                     max_results = min(fn_args.get("max_results", 5), 10)  # Max 10 results
                     tui.set_action(f"🔍 Deep search: {query[:40]}...")
@@ -9543,10 +9561,13 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         session_id=caller_session,
                     )
                     if _refusal is not None:
-                        class _RefusedTool:
-                            def run(self, _msg=_refusal, **_kw):
-                                return _msg
-                        tool = _RefusedTool()
+                        # Answered here and nothing else runs: the file handling further down
+                        # judges a result by its wording, and a refused write_file must never
+                        # reach the branch that reports a file as written.
+                        tui.append_stream(f"{fn_name} refused")
+                        _log_to_file(f"[DISPATCH] {fn_name} refused: {_refusal[:160]}")
+                        history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _refusal})
+                        continue
                     
                     # Fix relative paths and show in stream
                     if fn_name == "edit_file":

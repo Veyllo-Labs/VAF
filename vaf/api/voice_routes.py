@@ -23,7 +23,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 
 from vaf.core.config import Config
-from vaf.api.config_routes import get_current_user_or_local_admin
+from vaf.api.user_routes import require_admin
 
 logger = logging.getLogger(__name__)
 
@@ -70,12 +70,6 @@ def _lock_for(kind: str, api_key: str) -> asyncio.Lock:
     if entry is None or entry[0] is not loop:
         entry = _locks[key] = (loop, asyncio.Lock())
     return entry[1]
-
-
-def _require_admin(request: Request) -> None:
-    user = get_current_user_or_local_admin(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
 
 
 def _elevenlabs_key() -> str:
@@ -151,7 +145,7 @@ async def _elevenlabs_get(path: str, api_key: str, params: Dict[str, Any] | None
 @router.get("/elevenlabs/models")
 async def elevenlabs_models(request: Request) -> Dict[str, Any]:
     """TTS-capable ElevenLabs models for the Settings picker."""
-    _require_admin(request)
+    require_admin(request)
     api_key = _elevenlabs_key()
     cached = _serve_cached("models", api_key)
     if cached is not None:
@@ -186,7 +180,7 @@ async def elevenlabs_models(request: Request) -> Dict[str, Any]:
 @router.get("/elevenlabs/voices")
 async def elevenlabs_voices(request: Request) -> Dict[str, Any]:
     """The account's voice catalog (premade + cloned) for the Settings picker."""
-    _require_admin(request)
+    require_admin(request)
     api_key = _elevenlabs_key()
     cached = _serve_cached("voices", api_key)
     if cached is not None:

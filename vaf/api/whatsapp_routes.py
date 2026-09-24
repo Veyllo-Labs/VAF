@@ -18,7 +18,8 @@ from pydantic import BaseModel
 
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 from vaf.core.security_events import log_security_event
-from vaf.core.messaging_connections import whatsapp_inbound_to_agent, whatsapp_session_id
+from vaf.api.user_routes import caller_is_admin
+from vaf.core.messaging_connections import channel_enabled_for_scope, whatsapp_inbound_to_agent, whatsapp_session_id
 
 logger = logging.getLogger("vaf.api.whatsapp")
 
@@ -113,7 +114,7 @@ def _visible_whitelist(request: Request, whatsapp_config: dict, user_scope_id) -
     """The registered main-user numbers this caller may see: every entry for the admin,
     the caller's own scope for everyone else. Entries without a number are dropped."""
     raw = [e for e in (whatsapp_config.get("whitelist") or []) if isinstance(e, dict) and e.get("phone_number")]
-    if _is_whatsapp_admin(request):
+    if caller_is_admin(request):
         return raw
     return [e for e in raw if str(e.get("user_scope_id")) == str(user_scope_id)]
 
@@ -137,22 +138,6 @@ def _learns_from_chat(request: Request, chat_id: str) -> bool:
         if chat_id == wl_id or cid_norm == wl_id or cid_norm == (_normalize_chat_id(wl_id) or wl_id):
             return True
     return False
-
-
-def _is_whatsapp_admin(request: Request) -> bool:
-    """True if current user is admin (can see all WhatsApp whitelist/sessions)."""
-    from vaf.api.config_routes import get_current_user_or_local_admin
-    user = get_current_user_or_local_admin(request)
-    scope = user.get("user_scope_id")
-    return scope is not None and str(scope) == str(get_local_admin_scope_id())
-
-
-def _whatsapp_enabled_for_request(request: Request, whatsapp_config: Dict[str, Any], user_scope_id: Optional[str]) -> bool:
-    """Return effective WhatsApp enabled flag for current user (admin=global, non-admin=scope toggle)."""
-    from vaf.core.messaging_connections import whatsapp_enabled_for_scope
-    if _is_whatsapp_admin(request):
-        return bool((whatsapp_config or {}).get("enabled", False))
-    return whatsapp_enabled_for_scope(user_scope_id)
 
 
 def _reply_window_hours() -> float:
@@ -219,7 +204,7 @@ async def get_whatsapp_dashboard(request: Request):
     linked = current_linked or any_whitelist_linked
 
     activity_raw = list(whatsapp_config.get("chat_activity") or [])[-100:]
-    if _is_whatsapp_admin(request):
+    if caller_is_admin(request):
         activity = activity_raw
     else:
         my_phones = set()
@@ -658,7 +643,7 @@ async def get_whatsapp_dashboard(request: Request):
     stats_4h = [{"bucket_ts": ts, "count": c} for ts, c in sorted(buckets.items())]
 
     running = is_bridge_running()
-    enabled_effective = _whatsapp_enabled_for_request(request, whatsapp_config, user_scope_id)
+    enabled_effective = channel_enabled_for_scope("whatsapp", user_scope_id)
     connected = get_connection_status(username, wait_timeout=5.0) if (running and enabled_effective) else False
 
     try:
@@ -749,7 +734,7 @@ async def get_whatsapp_status(request: Request):
     user_scope_id = user_info.get("user_scope_id")
     whitelist = _visible_whitelist(request, whatsapp_config, user_scope_id)
 
-    enabled_effective = _whatsapp_enabled_for_request(request, whatsapp_config, user_scope_id)
+    enabled_effective = channel_enabled_for_scope("whatsapp", user_scope_id)
     linked = whatsapp_auth_exists(username)
     running = is_bridge_running()
     from vaf.core.whatsapp_auth import get_linked_phone
@@ -845,7 +830,7 @@ async def get_whatsapp_session_history(session_id: str, request: Request):
     if not session_id.startswith("whatsapp_"):
         raise HTTPException(status_code=400, detail="Invalid session id")
     current_user = get_current_vaf_user(request)
-    if not _is_whatsapp_admin(request):
+    if not caller_is_admin(request):
         # Session IDs are scoped by vaf_username: whatsapp_<username>_<digits>
         prefix = f"whatsapp_{(current_user.get('username') or '').strip()}_"
         if not session_id.startswith(prefix):
@@ -1202,7 +1187,7 @@ async def remove_whitelist_entry(request: Request, body: WhitelistAddRequest):
     if not isinstance(wc, dict):
         wc = {}
     whitelist = list(wc.get("whitelist") or [])
-    if not _is_whatsapp_admin(request):
+    if not caller_is_admin(request):
         # Non-admin: only allow removing an entry that belongs to this user
         entry = next((e for e in whitelist if isinstance(e, dict) and str(e.get("phone_number", "")).strip() == phone), None)
         if entry and str(entry.get("user_scope_id")) != str(user_scope_id):
@@ -1225,7 +1210,7 @@ async def add_whitelist_entry(request: Request, body: WhitelistAddRequest):
     phone = (body.phone_number or "").strip()
     if not phone:
         raise HTTPException(status_code=400, detail="phone_number required")
-    is_admin = _is_whatsapp_admin(request)
+    is_admin = caller_is_admin(request)
     if is_admin:
         vaf_username = (body.vaf_username or user_info["username"]).strip()
         user_scope_id = body.user_scope_id or user_info["user_scope_id"]
@@ -1342,12 +1327,12 @@ async def get_whatsapp_config(request: Request):
         whatsapp_config = {}
     user_scope_id = user_info.get("user_scope_id")
     whitelist = list(whatsapp_config.get("whitelist") or [])
-    if _is_whatsapp_admin(request):
+    if caller_is_admin(request):
         visible_whitelist = whitelist
     else:
         visible_whitelist = [e for e in whitelist if isinstance(e, dict) and str(e.get("user_scope_id")) == str(user_scope_id)]
     return {
-        "enabled": _whatsapp_enabled_for_request(request, whatsapp_config, user_scope_id),
+        "enabled": channel_enabled_for_scope("whatsapp", user_scope_id),
         "whitelist": visible_whitelist,
     }
 

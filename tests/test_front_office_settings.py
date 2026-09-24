@@ -262,8 +262,13 @@ def test_the_state_carries_the_doors_the_other_door_and_the_callers_own_book(con
 
     tenant = asyncio.run(routes.get_front_office(_req("bob", TENANT, "user")))
     assert tenant["reachable_contacts"] == 1, "the tenant's own book, never the admin's"
-    assert tenant["channels_connected"] == {"whatsapp": False, "telegram": True, "discord": False, "email": False}, "a tenant reads their own sliders"
+    # The tenant's Telegram slider is on, but Telegram is one bot for the whole install and it
+    # is off: nobody's lane is on then (messaging_connections.channel_enabled_for_scope).
+    assert tenant["channels_connected"] == {"whatsapp": False, "telegram": False, "discord": False, "email": False}
     assert tenant["admin"] is False
+    config["telegram_config"] = {**(config.get("telegram_config") or {}), "enabled": True}
+    tenant = asyncio.run(routes.get_front_office(_req("bob", TENANT, "user")))
+    assert tenant["channels_connected"] == {"whatsapp": False, "telegram": True, "discord": False, "email": False}, "a tenant reads their own sliders"
 
 
 def test_the_switch_writes_the_policy_and_records_one_event_per_changed_channel(config, monkeypatch):

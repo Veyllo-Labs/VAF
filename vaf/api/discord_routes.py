@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from vaf.api.user_routes import require_admin
+from vaf.api.user_routes import caller_is_admin, require_admin
 from vaf.core.channel_secrets import has_channel_secret
 
 logger = logging.getLogger("vaf.api.discord")
@@ -32,14 +32,6 @@ _verification_state = {
 }
 
 
-def _is_discord_admin(user: dict) -> bool:
-    """Return True if current request user is local admin or role=admin."""
-    from vaf.core.config import get_local_admin_scope_id
-    role = (user or {}).get("role")
-    scope = (user or {}).get("user_scope_id")
-    return (str(role or "").lower() == "admin") or (scope is not None and str(scope) == str(get_local_admin_scope_id()))
-
-
 class StartVerificationRequest(BaseModel):
     bot_token: str
     verification_code: str
@@ -54,9 +46,13 @@ class DiscordConfig(BaseModel):
 
 
 @router.post("/start-verification")
-async def start_verification(request: StartVerificationRequest):
+async def start_verification(request: StartVerificationRequest, _: Dict[str, Any] = Depends(require_admin)):
     """
     Start the Discord bot and wait for verification code from user.
+
+    Admin only: the account that answers the code becomes the bot's admin, and the state is
+    one per process, so any signed-in account could start a verification on a token of
+    their own, read another's result or reset it.
     """
     global _verification_state
     
@@ -170,7 +166,7 @@ async def start_verification(request: StartVerificationRequest):
 
 
 @router.get("/verification-status")
-async def get_verification_status():
+async def get_verification_status(_: Dict[str, Any] = Depends(require_admin)):
     """
     Check the current verification status.
     """
@@ -193,9 +189,7 @@ async def get_discord_dashboard(request: Request):
     from vaf.core.config import Config
     from vaf.api.discord_bridge import is_bridge_running
 
-    from vaf.api.config_routes import get_current_user_or_local_admin
-    user = get_current_user_or_local_admin(request)
-    if not _is_discord_admin(user):
+    if not caller_is_admin(request):
         # Discord is single-tenant admin integration. Non-admin users must not see admin metadata/activity.
         return {
             "configured": False,
@@ -287,10 +281,7 @@ async def get_discord_status(request: Request):
     """Get the current Discord bridge status — scoped per user."""
     from vaf.core.config import Config
     from vaf.api.discord_bridge import is_bridge_running
-    from vaf.api.config_routes import get_current_user_or_local_admin
-
-    user = get_current_user_or_local_admin(request)
-    if not _is_discord_admin(user):
+    if not caller_is_admin(request):
         # Discord is single-tenant (admin-only). Non-admin never has Discord.
         return {"configured": False, "enabled": False, "running": False, "admin_username": None}
 
@@ -337,9 +328,7 @@ async def get_discord_session_history(session_id: str, request: Request):
     if not session_id.startswith("discord_"):
         raise HTTPException(status_code=400, detail="Invalid session id")
     try:
-        from vaf.api.config_routes import get_current_user_or_local_admin
-        user = get_current_user_or_local_admin(request)
-        if not _is_discord_admin(user):
+        if not caller_is_admin(request):
             raise HTTPException(status_code=403, detail="Access denied")
         from vaf.core.config import Config
         from vaf.core.session import SessionManager

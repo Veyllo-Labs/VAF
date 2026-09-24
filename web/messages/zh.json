@@ -864,7 +864,15 @@
     },
     "connectionsPanel": {
       "searchPlaceholder": "搜索（例如 GitHub、邮件、日历）…",
-      "noResults": "没有匹配的连接。"
+      "noResults": "没有匹配的连接。",
+      "telegramNotPaired": "你的 Telegram 账户尚未与此机器人配对。",
+      "telegramAdminSetsUp": "此安装的 Telegram 机器人由管理员设置。",
+      "telegramPair": "配对我的 Telegram",
+      "telegramPairIntro": "在 Telegram 中打开链接，或把这条消息发送给机器人。",
+      "telegramPairIntroBot": "在 Telegram 中打开链接，或把这条消息发送给 {bot}。",
+      "telegramPairOpen": "在 Telegram 中打开",
+      "telegramPairWaiting": "正在等待你发给机器人的消息。代码在 {minutes} 分钟内有效。",
+      "telegramPairFailed": "无法开始配对。"
     },
     "frontOffice": {
       "title": "入站沟通",

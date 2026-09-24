@@ -864,7 +864,15 @@
     },
     "connectionsPanel": {
       "searchPlaceholder": "Suchen (z. B. GitHub, E-Mail, Kalender)…",
-      "noResults": "Keine Verbindung passt zur Suche."
+      "noResults": "Keine Verbindung passt zur Suche.",
+      "telegramNotPaired": "Dein Telegram-Konto ist noch nicht mit diesem Bot verbunden.",
+      "telegramAdminSetsUp": "Den Telegram-Bot richtet ein Admin für diese Installation ein.",
+      "telegramPair": "Mein Telegram verbinden",
+      "telegramPairIntro": "Öffne den Link in Telegram oder schick diese Nachricht an den Bot:",
+      "telegramPairIntroBot": "Öffne den Link in Telegram oder schick diese Nachricht an {bot}:",
+      "telegramPairOpen": "In Telegram öffnen",
+      "telegramPairWaiting": "Wartet auf deine Nachricht an den Bot. Der Code gilt {minutes} Minuten.",
+      "telegramPairFailed": "Das Verbinden konnte nicht gestartet werden."
     },
     "frontOffice": {
       "title": "Inbound-Kommunikation",

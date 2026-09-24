@@ -1285,11 +1285,17 @@ live in your backend, so you register a directory once per process:
 from vaf import set_account_directory_resolver
 
 def accounts():
-    return [{"username": u.name, "user_scope_id": u.scope, "active": u.enabled}
+    return [{"username": u.name, "user_scope_id": u.scope, "active": u.enabled,
+             "role": "admin" if u.is_admin else "user"}
             for u in users.all()]
 
 set_account_directory_resolver(accounts)
 ```
+
+`role` is optional. It is how a lane that has only a scope learns whether the account
+behind it is an admin (`vaf.core.config.is_admin_account`): a messenger bot routing a
+paired sender, for one, lets an admin account ride the bot's own switch. Without it every
+account but the owner's is read as an ordinary user, which is the restrictive answer.
 
 A LOOKUP, not a guard, so the polarity differs from the allowlist: a raising
 resolver is read as an empty directory rather than a refusal, because the only thing

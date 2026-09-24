@@ -322,7 +322,8 @@ def _patch(body, user):
     from vaf.api.config_routes import patch_config
 
     class _Req:
-        state = type("S", (), {})()
+        # Signed in as `user`: the route asks the request who is saving (user_routes.caller_is_admin).
+        state = type("S", (), {"user": user})()
 
     return asyncio.run(patch_config(body, _Req(), user))
 
@@ -377,7 +378,8 @@ def test_both_save_paths_say_who_is_saving():
     repo = Path(__file__).resolve().parent.parent
     routes = (repo / "vaf" / "api" / "config_routes.py").read_text(encoding="utf-8")
     ws = (repo / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
-    assert 'absorb_config_keys(body, is_admin=_user.get("role") == "admin")' in routes
+    assert "is_admin = caller_is_admin(request)" in routes
+    assert "absorb_config_keys(body, is_admin=is_admin)" in routes
     assert "absorb_config_keys(new_config, is_admin=is_admin)" in ws
 
 
@@ -487,6 +489,8 @@ def test_the_connections_panel_leaves_the_bot_to_an_admin():
     toggle = src[src.index("const handleToggleConnection"):src.index("const handleDisconnect")]
     for channel in ("discord", "telegram"):
         block = toggle[toggle.index(f"if (appId === '{channel}') {{"):]
-        assert block.index("if (!isAdmin) return;") < block.index(f"api/{channel}/start")
+        guard = block.index("if (!isAdmin)")
+        assert guard < block.index(f"api/{channel}/start")
+        assert "return;" in block[guard:block.index(f"api/{channel}/start")]
     disconnect = src[src.index("const handleDisconnect"):]
     assert disconnect.index("!isAdmin") < disconnect.index("/credentials")

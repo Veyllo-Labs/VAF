@@ -45,6 +45,13 @@ class ReadDiscordChatTool(BaseTool):
         chat_id = (kwargs.get("chat_id") or "").strip()
         limit = min(max(int(kwargs.get("limit") or 50), 1), 200)
 
+        # The Discord lane is the local admin's (messaging_connections.get_discord_user_id).
+        # A session file is read by id with no owner on it, so an explicit chat_id from any
+        # other account would have read the admin's Discord conversation.
+        from vaf.core.messaging_connections import is_local_admin_lane
+        if not is_local_admin_lane(user_scope_id):
+            return "Discord is not connected for this account; it belongs to the machine's admin."
+
         if not chat_id:
             # Default to the user's own Discord DM.
             try:

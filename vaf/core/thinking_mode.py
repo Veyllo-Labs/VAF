@@ -2804,7 +2804,7 @@ def _run_thinking_for_user(
         try:
             from vaf.core.messaging_connections import (
                 get_messaging_connections,
-                get_telegram_chat_id,
+                telegram_chat_id_of,
                 get_whatsapp_chat_jid,
                 whatsapp_session_id,
             )
@@ -2814,7 +2814,7 @@ def _run_thinking_for_user(
 
             chat_session_id = None
             if main_messenger == "telegram":
-                tg_id = get_telegram_chat_id(user_scope_id, uname)
+                tg_id = telegram_chat_id_of(user_scope_id, uname)
                 if tg_id:
                     chat_session_id = f"telegram_{tg_id}"
             elif main_messenger == "whatsapp":

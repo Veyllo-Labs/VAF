@@ -120,6 +120,7 @@ For security, only verified admins can control the bot:
 2. Send this code as a **Direct Message (DM)** to your bot on Discord
 3. Once verified, your Discord user becomes the authorized admin
 4. The bot answers the verified admin's direct messages as the full agent. With Inbound switched on for Discord (Settings → Connections → Inbound), other people's direct messages are answered in Front Office mode and their senders are added to the admin's contact book, where they can be switched off; guild channels are never answered
+5. The lane is the machine's local admin's: the verification and the start/stop routes answer admins only, the Connections card is shown to admins only, and no other account's agent can send to or read this Discord (`messaging_connections.get_discord_user_id`)
 
 ### Dashboard
 
@@ -188,7 +189,7 @@ never sent back to the browser, and **Disconnect** removes it together with the 
    - Verify: send the 6-digit code to your bot in a Telegram DM
    - **Whitelist**: Add your own Telegram (username or account). Enter only your own number or username.
 4. Turn the connection **on**; the bridge runs in the same process as the Web server and starts automatically on VAF restart when enabled.
-   The bot is one per installation, so only an admin starts or stops it (`POST /api/telegram/start` and `/stop`, and the same pair for Discord, refuse anybody else). Another user's switch, and their Disconnect button, turns only their own lane on or off (`connection_enabled_by_scope`); the bot keeps running for everybody else.
+   The bot is one per installation, so only an admin sets it up and starts or stops it: the wizard's routes (`start-verification`, `verification-status`, `whitelist-add`) and `POST /api/telegram/start` and `/stop`, and the same routes for Discord, refuse anybody else. The card shows another user "An admin sets up the Telegram bot for this installation." instead of a Connect button while there is no bot, and whether their own account is paired once there is (`GET /api/telegram/status` carries `paired`). An account that is not paired gets **Pair my Telegram**: a one-time code for the running bot, sent as `/start <code>` or through the t.me link the card shows, which pairs the sender with that account and turns its switch on (see [TELEGRAM_INTEGRATION.md](TELEGRAM_INTEGRATION.md#user-whitelist)). Another user's switch, and their Disconnect button, changes only their own entry in `connection_enabled_by_scope`, and the bot answers them only while it is on; the bot keeps running for everybody else. The card reads "Connected" only while the bot runs (`bridge_running`), the account is paired on it, and the switch is on as the page shows it, a change not saved yet included.
 
 ### Message handling
 

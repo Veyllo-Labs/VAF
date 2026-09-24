@@ -864,7 +864,15 @@
     },
     "connectionsPanel": {
       "searchPlaceholder": "ค้นหา (เช่น GitHub อีเมล ปฏิทิน)…",
-      "noResults": "ไม่มีการเชื่อมต่อที่ตรงกับที่ค้นหา"
+      "noResults": "ไม่มีการเชื่อมต่อที่ตรงกับที่ค้นหา",
+      "telegramNotPaired": "ยังไม่ได้จับคู่บัญชี Telegram ของคุณกับบอตนี้",
+      "telegramAdminSetsUp": "ผู้ดูแลระบบเป็นผู้ตั้งค่าบอต Telegram ของการติดตั้งนี้",
+      "telegramPair": "จับคู่ Telegram ของฉัน",
+      "telegramPairIntro": "เปิดลิงก์ใน Telegram หรือส่งข้อความนี้ถึงบอต",
+      "telegramPairIntroBot": "เปิดลิงก์ใน Telegram หรือส่งข้อความนี้ถึง {bot}",
+      "telegramPairOpen": "เปิดใน Telegram",
+      "telegramPairWaiting": "กำลังรอข้อความของคุณถึงบอต รหัสใช้ได้ {minutes} นาที",
+      "telegramPairFailed": "เริ่มการจับคู่ไม่ได้"
     },
     "frontOffice": {
       "title": "การสื่อสารอินบาวด์",

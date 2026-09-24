@@ -101,8 +101,8 @@ class SendTelegramTool(BaseTool):
         chat_id = get_telegram_chat_id(user_scope_id, username)
         if not chat_id:
             return (
-                "No Telegram contact found for this user. "
-                "The user must have their Telegram account added in Settings → Connections → Telegram (whitelist). "
+                "No Telegram contact found for this user, or their Telegram is switched off. "
+                "The user must have their Telegram account paired in Settings → Connections → Telegram, with the switch on. "
                 "Once they are in the whitelist, you can send them proactive messages."
             )
 

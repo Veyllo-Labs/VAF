@@ -59,7 +59,7 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(wi, "notify_inbox_changed", lambda scope: None)
     store._reset_announce_state()   # cancels the timers an earlier test left behind; the dicts stay the module's own
     # WhatsApp: the bridge answers nothing; the rows must come from the store alone.
-    monkeypatch.setattr(routes, "_is_whatsapp_admin", lambda req: False)
+    monkeypatch.setattr(routes, "caller_is_admin", lambda req: False)
     monkeypatch.setattr(wa, "get_whatsapp_chats", lambda *a, **k: [])
     monkeypatch.setattr(wa, "is_bridge_running", lambda: False)
     monkeypatch.setattr(wa, "get_connection_status", lambda *a, **k: False)
@@ -68,7 +68,7 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(wa, "_append_chat_activity", lambda *a, **k: None)
     # Telegram: no getMe round trip, the caller is not the admin.
     monkeypatch.setattr(tr, "_get_bot_username", lambda: None)
-    monkeypatch.setattr(tr, "_is_telegram_admin", lambda req: False)
+    monkeypatch.setattr(tr, "caller_is_admin", lambda req: False)
     import vaf.api.discord_bridge as dc
     monkeypatch.setattr(dc, "is_bridge_running", lambda: False)
     return config

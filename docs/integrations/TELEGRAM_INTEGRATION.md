@@ -107,6 +107,15 @@ Each whitelist entry maps a Telegram user to a VAF user scope:
 | `user_scope_id` | VAF user scope UUID |
 | `vaf_username` | VAF username for display |
 
+An entry is added in one of two ways, both through the one writer (`vaf/core/channel_pairing.py`, `pair_telegram_account`):
+
+- **Pairing by code (every account).** Settings → Connections → Telegram → **Pair my Telegram** asks `POST /api/telegram/pair` for a one-time code (ten minutes, one per account, spent by its first use). The account opens the returned `t.me/<bot>?start=<code>` link or sends `/start <code>` to the bot in a private chat; the running bot links the Telegram account that sent it to the account that asked, turns that account's Telegram switch on, and answers "Paired". `GET /api/telegram/pair` tells the card when it happened. A code never moves a Telegram account that another VAF account has paired: the bot says so, and only an admin can move it. The bot answers `/start` with a code only when the code is live; anything else goes on as before.
+- **The setup wizard (admins).** The wizard's verification and `POST /api/telegram/whitelist-add` answer admins only, like the rest of the bot's setup; it links the verified Telegram account to the admin's own VAF account and may move one another account had.
+
+A relay contact (`relay_whitelist`) belongs to the account that added it, and another account cannot take it over by adding the same id (409).
+
+Each account's Telegram switch is enforced: the bot answers a paired account (its own pairing, its relay contacts and its contacts) only while that account's lane is on, and VAF sends to it there only then. Nothing is on while the bot is off; the local admin and every admin account ride the bot's switch; every other account needs its own switch on as well (`messaging_connections.channel_enabled_for_scope`; [USER_ISOLATION.md](../security/USER_ISOLATION.md#telegram) has the rule).
+
 In addition, any Telegram user whose ID is stored in a VAF user's **Contacts** and set to **allowed** under **Let the agent reply** can write to that user's assistant (handled in the user's context, like a front office); while Inbound is on for Telegram, so can anybody the owner has not decided about, but only while exactly one account is paired on the bot (whitelist and relay entries together): the bot is shared by every account on the install, so with several owners such a sender cannot be attributed to one of them and gets no reply. A contact set to **blocked** cannot write in either way. The bridge checks the config whitelist first, then the relay whitelist, then the contact's own state.
 
 ### Proactive send (send_telegram)

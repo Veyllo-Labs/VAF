@@ -11,6 +11,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+
+- **Every account can pair its own Telegram with a code.** On an installation shared by
+  several people, only the person who set the bot up could pair a Telegram account, because
+  pairing needed the bot token. Now the Telegram card offers **Pair my Telegram** to anyone
+  who is not paired yet: it shows a one-time code and a Telegram link, you send the code to
+  the bot, and the bot pairs that Telegram account with yours and switches your Telegram on.
+  A code works once, for ten minutes, and never takes over a Telegram account another person
+  has paired.
+
 ### Changed
 
 - **The inbox rail is one list of channels, and the views unfold under the one you open.**
@@ -30,6 +40,26 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   stopped or started the bot for everybody. Only an admin can change a messenger connection
   or start and stop its bot now; everyone else's switch, and their Disconnect button, turns
   it on or off for themselves only, as intended.
+- **Another account can no longer take over your Telegram chat.** Any signed-in account
+  could send your Telegram id to the pairing step and become the owner of your chat with the
+  bot: its agent answered you, and it could read the conversation. Setting the bot up is now
+  for admins only, everyone else pairs their own Telegram with a code (see Added), one
+  account can no longer take over another's relay contact, and the Telegram card tells an
+  account whether its own Telegram is paired instead of pointing it at a setup it cannot do.
+- **Turning Telegram off for your account now turns it off.** The switch on the Telegram
+  card was saved and shown, but the bot kept answering you and VAF kept writing to you
+  there. Now the bot answers you, your relay contacts and your contacts only while your
+  switch is on, and nothing reaches you there while it is off. Admins' Telegram follows the
+  bot's own switch, as before.
+- **Another account's agent can no longer message or read your Discord.** The Discord bot
+  belongs to the machine's admin, but another account's agent could send its messages to the
+  admin's Discord and read the admin's Discord conversation. Discord is now reached and read
+  from the admin's own account only, and the Discord card is shown to admins only.
+- **A second admin account counts as an admin in the Telegram and WhatsApp settings too.**
+  Those windows showed a second admin only their own entries and a Telegram switch that
+  nothing could turn on, while the rest of VAF treated them as an admin. And a second
+  admin's WhatsApp switch was the main admin's: turning it off turned the main admin's
+  WhatsApp off, and the second admin's own never started. It is their own switch now.
 - **Your Telegram and Discord bot tokens are no longer stored in plaintext or shown to the
   browser.** They sat in `config.json` in plain text, and the settings page received them
   with the rest of the connection settings - the setup wizard even filled the token in again.

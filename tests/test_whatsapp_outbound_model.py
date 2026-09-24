@@ -82,7 +82,7 @@ def test_users_to_run_are_the_linked_enabled_accounts_not_the_whitelist(isolated
     Path(Config.APP_DIR / "users" / "bob").mkdir(parents=True)          # account without a link
     scopes = {"alice": "scope-alice", "carol": "scope-carol"}
     monkeypatch.setattr("vaf.core.config.scope_id_for_username", lambda name: scopes.get(name))
-    monkeypatch.setattr(wa, "whatsapp_enabled_for_scope", lambda scope: scope != "scope-carol")
+    monkeypatch.setattr(wa, "channel_enabled_for_scope", lambda channel, scope: scope != "scope-carol")
     isolated["whatsapp_config"]["whitelist"] = [{"phone_number": "+491700000099", "vaf_username": "bob"}]
 
     users = wa._get_users_to_run()
@@ -645,7 +645,7 @@ def test_whitelist_add_refuses_the_agents_own_number(isolated, monkeypatch):
     from vaf.api import whatsapp_routes as routes
     _creds("alice", "491700000001")
     request = SimpleNamespace(state=SimpleNamespace(user={"user_scope_id": SCOPE, "username": "alice"}))
-    monkeypatch.setattr(routes, "_is_whatsapp_admin", lambda req: False)
+    monkeypatch.setattr(routes, "caller_is_admin", lambda req: False)
     body = routes.WhitelistAddRequest(phone_number="+491700000001")
     with pytest.raises(HTTPException) as exc:
         asyncio.run(routes.add_whitelist_entry(request, body))
@@ -665,7 +665,7 @@ def test_dashboard_marks_a_number_the_contact_book_already_knows(isolated, monke
     from vaf.core import contacts_store as cs
     _creds("alice", "491700000001")
     cs.create_contact("Dana New", "alice", user_scope_id=SCOPE, whatsapp_phone="+491700000042")
-    monkeypatch.setattr(routes, "_is_whatsapp_admin", lambda req: False)
+    monkeypatch.setattr(routes, "caller_is_admin", lambda req: False)
     monkeypatch.setattr(wa, "get_whatsapp_chats", lambda *a, **k: [
         {"jid": "491700000042@s.whatsapp.net", "phone": "+491700000042", "name": "Dana", "last_ts": 10},
         {"jid": "491700000077@s.whatsapp.net", "phone": "+491700000077", "name": "Stranger", "last_ts": 9},

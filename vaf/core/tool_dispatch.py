@@ -687,7 +687,11 @@ _account_directory_resolver = None
 def set_account_directory_resolver(resolver) -> None:
     """Register the application's answer to "which accounts exist here, by name?".
 
-    ``resolver() -> iterable of {"username": str, "user_scope_id": str, "active": bool}``
+    ``resolver() -> iterable of {"username": str, "user_scope_id": str, "active": bool,
+    "role": str}`` - ``role`` optional; it is how a lane that has only a scope (a bridge
+    routing a paired sender) learns whether the account behind it is an admin
+    (``config.is_admin_account``). Without it every account but the owner's is read as an
+    ordinary user, which is the restrictive answer.
 
     A LOOKUP, not a guard, so its polarity differs from the allowlist resolver's: a
     raising resolver is read as an EMPTY directory rather than a refusal, because the
@@ -712,7 +716,7 @@ def get_account_directory_resolver():
 def resolve_account_directory() -> list:
     """Internal: every account the registered resolver names, normalized.
 
-    ``[{"username", "user_scope_id", "active"}]``, empty when nothing is registered or
+    ``[{"username", "user_scope_id", "active", "role"}]``, empty when nothing is registered or
     the resolver raised. Rows without a name or a scope are dropped: a row that cannot
     be addressed cannot be invited, and one that cannot be scoped cannot be admitted.
     """
@@ -733,7 +737,8 @@ def resolve_account_directory() -> list:
         if not name or not scope:
             continue
         out.append({"username": name, "user_scope_id": scope,
-                    "active": bool(row.get("active", True))})
+                    "active": bool(row.get("active", True)),
+                    "role": str(row.get("role") or "").strip()})
     return out
 
 

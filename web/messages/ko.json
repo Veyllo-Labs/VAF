@@ -864,7 +864,15 @@
     },
     "connectionsPanel": {
       "searchPlaceholder": "검색(예: GitHub, 메일, 캘린더)…",
-      "noResults": "검색어와 일치하는 연결이 없어요"
+      "noResults": "검색어와 일치하는 연결이 없어요",
+      "telegramNotPaired": "Telegram 계정이 아직 이 봇과 연결되지 않았어요",
+      "telegramAdminSetsUp": "이 설치의 Telegram 봇은 관리자가 설정해요",
+      "telegramPair": "내 Telegram 연결하기",
+      "telegramPairIntro": "Telegram에서 링크를 열거나 봇에게 이 메시지를 보내세요",
+      "telegramPairIntroBot": "Telegram에서 링크를 열거나 {bot}에게 이 메시지를 보내세요",
+      "telegramPairOpen": "Telegram에서 열기",
+      "telegramPairWaiting": "봇에게 보낼 메시지를 기다리고 있어요. 코드는 {minutes}분 동안 유효해요",
+      "telegramPairFailed": "연결을 시작할 수 없어요"
     },
     "frontOffice": {
       "title": "인바운드 커뮤니케이션",

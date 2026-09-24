@@ -53,13 +53,11 @@ def get_brain(
     if not session_id:
         return dict(_EMPTY)
 
-    from vaf.core.config import get_local_admin_scope_id
+    from vaf.core.config import is_admin_identity
     from vaf.core.session import get_manager, session_access_allowed
 
     scope = user.get("user_scope_id")
-    is_admin = (str(user.get("role") or "user").lower() == "admin") or (
-        scope is not None and str(scope) == str(get_local_admin_scope_id())
-    )
+    is_admin = is_admin_identity(user.get("role"), scope)
     allowed, _loaded = session_access_allowed(
         get_manager(), session_id, user_scope_id=scope, is_admin=is_admin
     )

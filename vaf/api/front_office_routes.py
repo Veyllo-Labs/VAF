@@ -44,7 +44,7 @@ from pydantic import BaseModel
 from vaf.api.config_routes import get_current_user_or_local_admin
 from vaf.api.user_routes import require_admin
 from vaf.core.channel_ingress_policy import FRONT_OFFICE_CHANNELS, front_office_state, set_front_office
-from vaf.core.config import Config, get_local_admin_scope_id
+from vaf.core.config import Config, is_admin_identity, is_local_admin_lane
 from vaf.core.front_office_profile import (
     BRIEFING_MAX_CHARS,
     load_front_office_profile,
@@ -88,8 +88,8 @@ def _caller(request: Request) -> Dict[str, Any]:
     state (the caller's own contact book, profile, knowledge and channel toggles)."""
     user = get_current_user_or_local_admin(request)
     scope = str(user.get("user_scope_id") or "").strip() or None
-    is_admin = scope is None or scope == str(get_local_admin_scope_id() or "").strip()
-    return {"username": user.get("username") or "admin", "user_scope_id": scope, "is_admin": is_admin}
+    return {"username": user.get("username") or "admin", "user_scope_id": scope,
+            "is_admin": is_local_admin_lane(scope), "role": user.get("role")}
 
 
 def _scope_uuid(caller: Dict[str, Any]) -> Optional[UUID]:
@@ -100,12 +100,9 @@ def _scope_uuid(caller: Dict[str, Any]) -> Optional[UUID]:
 
 
 def _channel_connected(channel: str, caller: Dict[str, Any]) -> bool:
-    """Whether the caller's side of the channel is switched on: the local admin owns the
-    global `<channel>_config.enabled`, everybody else has a slider under
-    `connection_enabled_by_scope`, the rule of whatsapp_routes and telegram_routes."""
-    if channel == "whatsapp":
-        from vaf.core.messaging_connections import whatsapp_enabled_for_scope
-        return whatsapp_enabled_for_scope(caller["user_scope_id"])
+    """Whether the caller's side of the channel is switched on: for a messenger, the one
+    lane rule (`messaging_connections.channel_enabled_for_scope`), with the caller's own
+    admin answer so no directory lookup runs inside the request."""
     if channel == "email":
         # Mail is connected when the caller has a mail account the engine can sync.
         try:
@@ -113,13 +110,9 @@ def _channel_connected(channel: str, caller: Dict[str, Any]) -> bool:
             return bool(list_mail_accounts(caller["username"], user_scope_id=caller["user_scope_id"]))
         except Exception:
             return False
-    cfg = Config.get(f"{channel}_config") or {}
-    cfg = cfg if isinstance(cfg, dict) else {}
-    if caller["is_admin"]:
-        return bool(cfg.get("enabled"))
-    by_scope = Config.get("connection_enabled_by_scope") or {}
-    toggles = by_scope.get(caller["user_scope_id"], {}) if isinstance(by_scope, dict) else {}
-    return bool(isinstance(toggles, dict) and toggles.get(channel, False))
+    from vaf.core.messaging_connections import channel_enabled_for_scope
+    return channel_enabled_for_scope(channel, caller["user_scope_id"],
+                                     admin=is_admin_identity(caller.get("role"), caller["user_scope_id"]))
 
 
 # ── knowledge: the Front Office lane, listed and written ─────────────────────────────────

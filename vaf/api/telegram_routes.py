@@ -12,14 +12,15 @@ import json
 import logging
 import threading
 from pathlib import Path
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel
 
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
-from vaf.api.user_routes import require_admin
+from vaf.api.user_routes import caller_is_admin, require_admin
 from vaf.core.channel_secrets import channel_secret, has_channel_secret
+from vaf.core.messaging_connections import channel_enabled_for_scope
 from vaf.core.security_events import log_security_event
 
 logger = logging.getLogger("vaf.api.telegram")
@@ -63,10 +64,14 @@ class WhitelistAddRequest(BaseModel):
 
 
 @router.post("/start-verification")
-async def start_verification(request: StartVerificationRequest):
+async def start_verification(request: StartVerificationRequest, _: Dict[str, Any] = Depends(require_admin)):
     """
     Start the Telegram bot and wait for verification code from user (DM to bot).
     On success, verification state contains telegram_user_id and telegram_username.
+
+    Admin only, like the rest of the bot's setup: it runs a bot on whatever token it is
+    given, and its state is one per process, so any signed-in account could start a
+    verification, read another's result, or reset it.
     """
     global _verification_state
 
@@ -161,7 +166,7 @@ async def start_verification(request: StartVerificationRequest):
 
 
 @router.get("/verification-status")
-async def get_verification_status():
+async def get_verification_status(_: Dict[str, Any] = Depends(require_admin)):
     """Return current verification state (verified, telegram_user_id, telegram_username, error)."""
     return {
         "verified": _verification_state.get("verified", False),
@@ -177,42 +182,81 @@ async def whitelist_add(
     body: WhitelistAddRequest,
     request: Request,
     current_user: Dict[str, str] = Depends(get_current_vaf_user),
+    _: Dict[str, Any] = Depends(require_admin),
 ):
     """
     Add one whitelist entry linking a Telegram user to the current VAF user.
     user_scope_id and username come from request (auth or local_admin).
+
+    Admin only. The Telegram id comes from the request body and an entry with the same id
+    is replaced whoever it belonged to, so any signed-in account could send the admin's id
+    and become the owner of the admin's Telegram chat: their agent answered it and their
+    window read it. The id is proven by the setup wizard's verification, which is an
+    admin's step as well.
     """
+    from vaf.core.channel_pairing import pair_telegram_account
+    # An admin may move a Telegram account that another account had paired: they could
+    # edit the list anyway, and the wizard's verification proved who holds it.
+    pair_telegram_account(body.telegram_user_id, body.telegram_username,
+                          user_scope_id=current_user["user_scope_id"], username=current_user["username"],
+                          may_take_over=True)
     telegram_config = Config.get("telegram_config") or {}
-    if not isinstance(telegram_config, dict):
-        telegram_config = {}
-    whitelist: List[Dict[str, Any]] = list(telegram_config.get("whitelist") or [])
-
-    # Avoid duplicate telegram_user_id
-    telegram_user_id = body.telegram_user_id.strip()
-    previous = next((e for e in whitelist if isinstance(e, dict) and str(e.get("telegram_user_id")) == telegram_user_id), None)
-    whitelist = [e for e in whitelist if str(e.get("telegram_user_id")) != telegram_user_id]
-
-    entry = {
-        "telegram_user_id": telegram_user_id,
-        "telegram_username": (body.telegram_username or "").strip() or None,
-        "user_scope_id": current_user["user_scope_id"],
-        "vaf_username": current_user["username"],
-    }
-    whitelist.append(entry)
-
-    config = Config.load()
-    if "telegram_config" not in config or not isinstance(config["telegram_config"], dict):
-        config["telegram_config"] = {}
-    config["telegram_config"]["whitelist"] = whitelist
-    Config.save(config)
-    # A whitelisted Telegram user talks to the agent as the owner, with the full tool set.
-    # The same pairing sent again (same id for the same account) changes nothing and
-    # records nothing; a re-pairing to another account is a change.
-    if _pairing_changed(previous, entry):
-        log_security_event("channel_paired", channel="telegram", username=str(current_user.get("username") or ""),
-                           path=telegram_user_id, detail=f"owner {telegram_user_id}")
-
+    whitelist = list(telegram_config.get("whitelist") or []) if isinstance(telegram_config, dict) else []
     return {"status": "ok", "whitelist_count": len(whitelist)}
+
+
+def _pairing_caller(request: Request) -> Dict[str, str]:
+    """The account a pairing is for. Strict where `get_current_vaf_user` is lenient: a
+    signed-in account without a scope would otherwise be read as the local admin, and a
+    pairing is exactly what must never land on somebody else's account."""
+    state_user = getattr(request.state, "user", None)
+    if isinstance(state_user, dict) and not str(state_user.get("user_scope_id") or "").strip():
+        raise HTTPException(status_code=400, detail="This account has no scope to pair a Telegram account with.")
+    return get_current_vaf_user(request)
+
+
+@router.post("/pair")
+async def start_pairing(request: Request):
+    """A one-time code that pairs the caller's OWN Telegram account with the running bot.
+
+    Any signed-in account may ask; the code is theirs alone. They send it to the bot as
+    `/start <code>` (the returned t.me link fills it in), and the bot links the Telegram
+    account that sent it to the account that asked (vaf/core/channel_pairing.py). The
+    setup wizard's route is an admin's, because it needs the bot token and runs a bot of
+    its own; this one needs neither."""
+    from vaf.api.telegram_bridge import is_bridge_running
+    from vaf.core.channel_pairing import PAIRING_TTL_SECONDS, issue_pairing_code
+
+    caller = _pairing_caller(request)
+    telegram_config = Config.get("telegram_config") or {}
+    if not isinstance(telegram_config, dict) or not telegram_config.get("verified") or not has_channel_secret("telegram"):
+        raise HTTPException(status_code=409, detail="Telegram is not set up on this installation.")
+    if not is_bridge_running():
+        raise HTTPException(status_code=409, detail="The Telegram bot is not running. An admin switches it on in Settings, Connections.")
+    code = issue_pairing_code("telegram", caller["user_scope_id"], caller["username"])
+    bot_username = await asyncio.to_thread(_get_bot_username)
+    return {
+        "code": code,
+        "command": f"/start {code}",
+        "bot_username": bot_username,
+        "link": f"https://t.me/{bot_username}?start={code}" if bot_username else None,
+        "expires_in": PAIRING_TTL_SECONDS,
+    }
+
+
+@router.get("/pair")
+async def pairing_status(request: Request):
+    """Whether the caller's own Telegram account is paired, and whether a code is out."""
+    from vaf.core.channel_pairing import pairing_pending
+
+    caller = _pairing_caller(request)
+    scope = str(caller["user_scope_id"]).strip()
+    telegram_config = Config.get("telegram_config") or {}
+    whitelist = list(telegram_config.get("whitelist") or []) if isinstance(telegram_config, dict) else []
+    return {
+        "paired": any(isinstance(e, dict) and str(e.get("user_scope_id") or "").strip() == scope for e in whitelist),
+        "pending": pairing_pending("telegram", scope),
+    }
 
 
 @router.get("/status")
@@ -231,15 +275,13 @@ async def get_telegram_status(request: Request):
         pass
     current_user = get_current_vaf_user(request)
     scope_str = str(current_user.get("user_scope_id") or "").strip()
-    is_admin = _is_telegram_admin(request)
+    is_admin = caller_is_admin(request)
 
+    # The caller's lane, by the one rule the bridge answers by (an admin rides the bot).
+    enabled = channel_enabled_for_scope("telegram", scope_str or None, admin=is_admin)
     if is_admin:
-        enabled = bool(telegram_config.get("enabled"))
         visible_whitelist = list(whitelist)
     else:
-        by_scope = Config.get("connection_enabled_by_scope") or {}
-        toggles = by_scope.get(scope_str, {}) if isinstance(by_scope, dict) else {}
-        enabled = bool((toggles or {}).get("telegram", False))
         visible_whitelist = [
             e
             for e in list(whitelist) + list(relay_whitelist)
@@ -251,7 +293,15 @@ async def get_telegram_status(request: Request):
         "configured": configured,
         "enabled": enabled,
         "running": bool(running and enabled and configured),
+        # The shared bot on its own, apart from this caller's switch: the Connections card
+        # shows "Connected" from it and the switch as it stands on the page, which may be
+        # a change not saved yet (`running` reads the saved one).
+        "bridge_running": bool(running),
         "whitelist_count": len(visible_whitelist),
+        # Whether the caller's OWN Telegram account is paired (an owner entry of theirs, not
+        # a relay contact they added): what the card tells them.
+        "paired": any(isinstance(e, dict) and str(e.get("user_scope_id") or "").strip() == scope_str
+                      for e in whitelist),
     }
 
 
@@ -284,15 +334,6 @@ def _get_bot_username() -> Optional[str]:
     return None
 
 
-def _is_telegram_admin(request: Request) -> bool:
-    """True if current user is admin (can see all Telegram sessions/whitelist)."""
-    from vaf.api.config_routes import get_current_user_or_local_admin
-    from vaf.core.config import get_local_admin_scope_id
-    user = get_current_user_or_local_admin(request)
-    scope = user.get("user_scope_id")
-    return scope is not None and str(scope) == str(get_local_admin_scope_id())
-
-
 @router.get("/dashboard")
 async def get_telegram_dashboard(request: Request):
     """
@@ -311,7 +352,7 @@ async def get_telegram_dashboard(request: Request):
     relay_whitelist = list(telegram_config.get("relay_whitelist") or [])
     current_user = get_current_vaf_user(request)
     user_scope_id = current_user.get("user_scope_id")
-    is_admin = _is_telegram_admin(request)
+    is_admin = caller_is_admin(request)
 
     if is_admin:
         admin_whitelist = admin_whitelist_raw
@@ -472,6 +513,12 @@ async def relay_whitelist_add(request: Request, body: RelayWhitelistAddRequest):
         telegram_config = {}
     previous = next((e for e in (telegram_config.get("relay_whitelist") or [])
                      if isinstance(e, dict) and str(e.get("telegram_user_id")) == telegram_user_id), None)
+    # One relay entry per Telegram id, and it belongs to the account that added it. The list
+    # below drops the old entry whoever owned it, so without this another account could take
+    # a contact over by adding the same id. An admin may move it, as they may edit the list.
+    if (previous is not None and not caller_is_admin(request)
+            and str(previous.get("user_scope_id") or "").strip() != str(current_user["user_scope_id"]).strip()):
+        raise HTTPException(status_code=409, detail="This Telegram account is already a relay contact of another account.")
     relay_whitelist = [e for e in (telegram_config.get("relay_whitelist") or []) if str(e.get("telegram_user_id")) != telegram_user_id]
     entry = {
         "telegram_user_id": telegram_user_id,
@@ -529,7 +576,7 @@ async def get_telegram_session_history(session_id: str, request: Request):
         raise HTTPException(status_code=400, detail="Invalid session id")
     current_user = get_current_vaf_user(request)
     user_scope_id = str(current_user.get("user_scope_id") or "").strip()
-    is_admin = _is_telegram_admin(request)
+    is_admin = caller_is_admin(request)
     chat_id = session_id[len("telegram_") :]
     # A relay contact is answered by nobody and never compacts: the pane shows no
     # Memory Learning counter for that chat (the counter would count turns that never learn).
@@ -592,7 +639,7 @@ async def relay_whitelist_remove(request: Request, body: WhitelistAddRequest):
     """Remove a contact from the relay whitelist."""
     current_user = get_current_vaf_user(request)
     user_scope_id = str(current_user.get("user_scope_id") or "").strip()
-    is_admin = _is_telegram_admin(request)
+    is_admin = caller_is_admin(request)
     telegram_user_id = (body.telegram_user_id or "").strip()
     if not telegram_user_id:
         raise HTTPException(status_code=400, detail="telegram_user_id required")

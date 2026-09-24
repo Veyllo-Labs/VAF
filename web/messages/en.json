@@ -864,7 +864,15 @@
     },
     "connectionsPanel": {
       "searchPlaceholder": "Search (e.g. GitHub, Email, Calendar)…",
-      "noResults": "No connection matches your search."
+      "noResults": "No connection matches your search.",
+      "telegramNotPaired": "Your Telegram account is not paired with this bot yet.",
+      "telegramAdminSetsUp": "An admin sets up the Telegram bot for this installation.",
+      "telegramPair": "Pair my Telegram",
+      "telegramPairIntro": "Open the link in Telegram, or send this message to the bot:",
+      "telegramPairIntroBot": "Open the link in Telegram, or send this message to {bot}:",
+      "telegramPairOpen": "Open in Telegram",
+      "telegramPairWaiting": "Waiting for your message to the bot. The code works for {minutes} minutes.",
+      "telegramPairFailed": "The pairing could not be started."
     },
     "frontOffice": {
       "title": "Inbound communication",

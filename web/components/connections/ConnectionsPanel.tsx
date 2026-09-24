@@ -448,14 +448,29 @@ export const CATEGORIES = [
 /** Use relative /api/ so Next.js rewrites to backend. */
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
+/** A shared bot (Discord, Telegram) reads "Connected" only while it runs, this user has a
+ *  pairing on it, and their switch is on as the page shows it. The status routes answer from
+ *  the SAVED switch, so a switch just turned off and not saved yet must not read Connected. */
+function sharedBotBadge(bot: { running: boolean; configured: boolean } | undefined, enabled: boolean): 'connected' | 'disconnected' {
+    return bot && bot.running && bot.configured && enabled ? 'connected' : 'disconnected';
+}
+
 export default function ConnectionsPanel({ config, onConfigChange, currentUser, refreshTrigger = 0, onOpenDiscordWizard, onOpenDiscordDashboard, onOpenTelegramWizard, onOpenWhatsAppWizard, onOpenWhatsAppDashboard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenCloudDashboard, onOpenCloudWizard, onOpenContactsDashboard, onOpenFrontOfficeDashboard, onOpenCalendarWizard, onOpenCalendarDashboard, onOpenGitHubWizard, onOpenGitHubDashboard }: ConnectionsPanelProps) {
     const t = useTranslations('settings.connectionsPanel');
     const tf = useTranslations('settings.frontOffice');
+    const tCommon = useTranslations('common');
     /** The Front Office state (GET /api/front-office) for the card's status line; the switch lives in the window. */
     const [frontOffice, setFrontOffice] = useState<{ enabled: boolean; channels: Record<string, boolean>; reachable_contacts: number }>({ enabled: false, channels: {}, reachable_contacts: 0 });
     const [connectionSearchQuery, setConnectionSearchQuery] = useState('');
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'linked' | 'disconnected' | 'checking'>>({});
     const [whatsappInfo, setWhatsappInfo] = useState<{ linked_phone: string | null; owner_number: string | null }>({ linked_phone: null, owner_number: null });
+    /** The shared Discord and Telegram bots as their status routes last reported them, apart from
+     *  this user's switch; the badge combines the two (`sharedBotBadge`). */
+    const [sharedBots, setSharedBots] = useState<Record<string, { running: boolean; configured: boolean; paired: boolean }>>({});
+    /** An account pairing its OWN Telegram with the running bot: the one-time code while it is out
+     *  (POST/GET api/telegram/pair; vaf/core/channel_pairing.py). */
+    const [telegramPairing, setTelegramPairing] = useState<{ code: string; command: string; link: string | null; botUsername: string | null; expiresIn: number } | null>(null);
+    const [telegramPairError, setTelegramPairError] = useState<string | null>(null);
     /** Cloud accounts from API (source of truth; config can be stale after OAuth) */
     const [cloudAccountsFromApi, setCloudAccountsFromApi] = useState<any[]>([]);
     /** Email accounts from API (source of truth; config only has legacy email_config, not email_config_by_user) */
@@ -537,7 +552,9 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             try {
                 const res = await fetch(api('api/discord/status'), { credentials: 'include' });
                 const status = await res.json();
-                setConnectionStatus(prev => ({ ...prev, discord: status.running ? 'connected' : 'disconnected' }));
+                const bot = { running: !!status.running, configured: true, paired: true };
+                setSharedBots(prev => ({ ...prev, discord: bot }));
+                setConnectionStatus(prev => ({ ...prev, discord: sharedBotBadge(bot, config.discord_config?.enabled === true) }));
             } catch {
                 setConnectionStatus(prev => ({ ...prev, discord: 'disconnected' }));
             }
@@ -549,7 +566,13 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             try {
                 const res = await fetch(api('api/telegram/status'), { credentials: 'include' });
                 const status = await res.json();
-                setConnectionStatus(prev => ({ ...prev, telegram: status.running ? 'connected' : 'disconnected' }));
+                const bot = {
+                    running: !!(status.bridge_running ?? status.running),
+                    configured: !!status.configured,
+                    paired: !!status.paired,
+                };
+                setSharedBots(prev => ({ ...prev, telegram: bot }));
+                setConnectionStatus(prev => ({ ...prev, telegram: sharedBotBadge(bot, config.telegram_config?.enabled === true) }));
             } catch {
                 setConnectionStatus(prev => ({ ...prev, telegram: 'disconnected' }));
             }
@@ -577,6 +600,45 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         await fetchFrontOffice();
     };
 
+    const startTelegramPairing = async () => {
+        setTelegramPairError(null);
+        try {
+            const res = await fetch(api('api/telegram/pair'), { method: 'POST', credentials: 'include' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setTelegramPairError(data?.detail || t('telegramPairFailed'));
+                return;
+            }
+            setTelegramPairing({ code: data.code, command: data.command, link: data.link ?? null, botUsername: data.bot_username ?? null, expiresIn: Number(data.expires_in) || 600 });
+        } catch {
+            setTelegramPairError(t('telegramPairFailed'));
+        }
+    };
+
+    // While a code is out, ask every few seconds whether the bot has paired it; the code
+    // runs out on the server, and the wait stops with it.
+    useEffect(() => {
+        if (!telegramPairing) return;
+        const started = Date.now();
+        const timer = setInterval(async () => {
+            if (Date.now() - started > telegramPairing.expiresIn * 1000) {
+                setTelegramPairing(null);
+                return;
+            }
+            try {
+                const res = await fetch(api('api/telegram/pair'), { credentials: 'include' });
+                const data = await res.json();
+                if (data?.paired) {
+                    setTelegramPairing(null);
+                    // The pairing turned this account's switch on on the server; show it so.
+                    onConfigChange('telegram_config', { ...(config.telegram_config || {}), enabled: true });
+                    await checkConnectionStatus();
+                }
+            } catch { /* keep waiting */ }
+        }, 3000);
+        return () => clearInterval(timer);
+    }, [telegramPairing]);
+
     const fetchFrontOffice = async () => {
         try {
             const res = await fetch(api('api/front-office'), { credentials: 'include' });
@@ -596,7 +658,10 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         if (appId === 'discord') {
             const currentConfig = config.discord_config || {};
             onConfigChange('discord_config', { ...currentConfig, enabled });
-            if (!isAdmin) return;
+            if (!isAdmin) {
+                setConnectionStatus(prev => ({ ...prev, discord: sharedBotBadge(sharedBots.discord, enabled) }));
+                return;
+            }
             try {
                 if (enabled) {
                     await fetch(api('api/discord/start'), { method: 'POST', credentials: 'include' });
@@ -611,7 +676,10 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         if (appId === 'telegram') {
             const currentConfig = config.telegram_config || {};
             onConfigChange('telegram_config', { ...currentConfig, enabled });
-            if (!isAdmin) return;
+            if (!isAdmin) {
+                setConnectionStatus(prev => ({ ...prev, telegram: sharedBotBadge(sharedBots.telegram, enabled) }));
+                return;
+            }
             try {
                 if (enabled) {
                     await fetch(api('api/telegram/start'), { method: 'POST', credentials: 'include' });
@@ -772,8 +840,10 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
 
     const getAppsByCategory = (category: string) => {
         return CONNECTION_APPS.filter(app => app.category === category)
-            // The Front Office switch writes an instance-wide policy key: admin only.
-            .filter(app => app.id !== 'front_office' || currentUser?.role === 'admin');
+            // The Front Office switch writes an instance-wide policy key: admin only. Discord
+            // is the local admin's lane (messaging_connections.get_discord_user_id): another
+            // account has nothing on it to connect, switch or see.
+            .filter(app => (app.id !== 'front_office' && app.id !== 'discord') || isAdmin);
     };
 
     /** Filter apps by search query (name, id, description, category label). */
@@ -935,7 +1005,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                 }
                                 if (app.id === 'telegram') {
                                     if (onOpenTelegramDashboard && configured) onOpenTelegramDashboard();
-                                    else onOpenTelegramWizard();
+                                    else if (isAdmin) onOpenTelegramWizard();   // setting the bot up is an admin's
                                 }
                                 if (app.id === 'whatsapp') (onOpenWhatsAppDashboard && configured ? onOpenWhatsAppDashboard() : onOpenWhatsAppWizard?.());
                                 if (app.id === 'email') onOpenEmailDashboard?.();
@@ -1015,12 +1085,15 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                         Admin: @{config[app.configKey].admin_username}
                                                     </p>
                                                 )}
-                                                {configured && app.id === 'telegram' && (
+                                                {configured && app.id === 'telegram' && sharedBots.telegram && (
                                                     <p className="text-xs text-gray-600 mt-1">
-                                                        {(config[app.configKey]?.whitelist?.length ?? 0) > 0
+                                                        {sharedBots.telegram.paired
                                                             ? 'You can message from Telegram; VAF can reach you there.'
-                                                            : 'Add your Telegram in Settings to message and be reached.'}
+                                                            : t('telegramNotPaired')}
                                                     </p>
+                                                )}
+                                                {!configured && app.id === 'telegram' && !isAdmin && (
+                                                    <p className="text-xs text-gray-600 mt-1">{t('telegramAdminSetsUp')}</p>
                                                 )}
                                                 {configured && app.id === 'whatsapp' && (
                                                     <p className="text-xs text-gray-600 mt-1">
@@ -1160,10 +1233,10 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                             }
                                                         }
                                                     }}
-                                                    disabled={app.comingSoon || !app.available}
+                                                    disabled={app.comingSoon || !app.available || (app.id === 'telegram' && !isAdmin)}
                                                     className={cn(
                                                         "flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors",
-                                                        app.comingSoon || !app.available
+                                                        app.comingSoon || !app.available || (app.id === 'telegram' && !isAdmin)
                                                             ? "bg-gray-100 text-gray-400 cursor-not-allowed"
                                                             : "bg-gray-900 hover:bg-gray-800 text-white dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                                     )}
@@ -1174,6 +1247,49 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                             )}
                                         </div>
                                     </div>
+                                    {app.id === 'telegram' && configured && sharedBots.telegram && !sharedBots.telegram.paired && (
+                                        <div className="mt-3 pl-[52px] space-y-2">
+                                            {!telegramPairing ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={startTelegramPairing}
+                                                    className="px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-900 hover:bg-gray-800 text-white dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] transition-colors"
+                                                >
+                                                    {t('telegramPair')}
+                                                </button>
+                                            ) : (
+                                                <div className="p-3 rounded-lg border border-gray-200 bg-gray-50 space-y-2">
+                                                    <p className="text-sm text-gray-700">
+                                                        {telegramPairing.botUsername
+                                                            ? t('telegramPairIntroBot', { bot: `@${telegramPairing.botUsername}` })
+                                                            : t('telegramPairIntro')}
+                                                    </p>
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        <code className="font-mono text-sm text-gray-900 bg-white border border-gray-200 rounded px-2 py-1 select-all">{telegramPairing.command}</code>
+                                                        {telegramPairing.link && (
+                                                            <a
+                                                                href={telegramPairing.link}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                className="px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-900 hover:bg-gray-800 text-white dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] transition-colors"
+                                                            >
+                                                                {t('telegramPairOpen')}
+                                                            </a>
+                                                        )}
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setTelegramPairing(null)}
+                                                            className="px-3 py-1.5 rounded-lg text-sm text-gray-600 hover:bg-gray-100 transition-colors"
+                                                        >
+                                                            {tCommon('cancel')}
+                                                        </button>
+                                                    </div>
+                                                    <p className="text-xs text-gray-500">{t('telegramPairWaiting', { minutes: Math.round(telegramPairing.expiresIn / 60) })}</p>
+                                                </div>
+                                            )}
+                                            {telegramPairError && <p className="text-xs text-red-600">{telegramPairError}</p>}
+                                        </div>
+                                    )}
                                 </div>
                             );
                         })}

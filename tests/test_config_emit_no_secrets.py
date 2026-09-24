@@ -46,7 +46,8 @@ def _patch(body: dict, role: str = "admin"):
     from vaf.api.config_routes import patch_config
 
     user = {"role": role, "user_scope_id": "ab12cd34-0000-0000-0000-000000000000", "username": "Alice"}
-    return asyncio.run(patch_config(body, SimpleNamespace(), user))
+    # Signed in as `user`: the route asks the request who is saving (user_routes.caller_is_admin).
+    return asyncio.run(patch_config(body, SimpleNamespace(state=SimpleNamespace(user=user)), user))
 
 
 def test_the_admin_config_view_carries_no_api_key_values(_config):

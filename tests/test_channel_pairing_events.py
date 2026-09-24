@@ -49,7 +49,7 @@ def _recorder(monkeypatch, module):
 
 def test_whatsapp_owner_numbers_and_lid_bindings_are_recorded_once_per_change(config, monkeypatch):
     from vaf.api import whatsapp_routes as routes
-    monkeypatch.setattr(routes, "_is_whatsapp_admin", lambda request: True)
+    monkeypatch.setattr(routes, "caller_is_admin", lambda request: True)
     monkeypatch.setattr("vaf.core.whatsapp_auth.get_linked_phone", lambda username: None)
     events = _recorder(monkeypatch, routes)
 
@@ -78,8 +78,11 @@ def test_whatsapp_owner_numbers_and_lid_bindings_are_recorded_once_per_change(co
 
 def test_telegram_whitelist_and_relay_entries_are_recorded_once_per_change(config, monkeypatch):
     from vaf.api import telegram_routes as routes
-    monkeypatch.setattr(routes, "_is_telegram_admin", lambda request: True)
+    monkeypatch.setattr(routes, "caller_is_admin", lambda request: True)
     events = _recorder(monkeypatch, routes)
+    # An owner pairing is written, and recorded, by the one writer (vaf/core/channel_pairing.py).
+    import vaf.core.security_events as security_events
+    monkeypatch.setattr(security_events, "log_security_event", lambda kind, **f: events.append((kind, f)))
     me = {"user_scope_id": SCOPE, "username": "alice"}
     bob = {"user_scope_id": "22222222-3333-4444-5555-666666666666", "username": "bob"}
 

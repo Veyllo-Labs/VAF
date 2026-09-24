@@ -189,6 +189,39 @@ def _relay_whitelist_lookup(telegram_user_id: str) -> Optional[Dict[str, Any]]:
 def _resolve_telegram_user(telegram_user_id: str, sender: Any = None) -> Tuple[Optional[Dict[str, Any]], bool]:
     """Resolve telegram_user_id to (whitelist/relay/contact entry, is_relay). Returns (None, False) if not allowed.
 
+    A sender is answered only while the Telegram lane of the account they belong to is
+    switched on (`messaging_connections.channel_enabled_for_scope`): the account's own
+    pairing, its relay contacts and its contacts alike. The switch was shown and stored per
+    account while the bot answered every paired account regardless. A sender refused here is
+    treated like any other unauthorized one: nothing answers, the message is kept.
+    """
+    entry, is_relay = _resolve_telegram_sender(telegram_user_id, sender)
+    if entry is not None:
+        from vaf.core.messaging_connections import channel_enabled_for_scope
+        if not channel_enabled_for_scope("telegram", entry.get("user_scope_id")):
+            return (None, False)
+    return (entry, is_relay)
+
+
+def _pair_with_code(telegram_user_id: str, telegram_username: Optional[str], code: str) -> Optional[str]:
+    """Pair the sender with the account that holds this code; the bot's answer, or None when
+    the code is not a live one (the caller then treats the message like any other)."""
+    from vaf.core.channel_pairing import pair_telegram_account, redeem_pairing_code
+    who = redeem_pairing_code("telegram", code)
+    if who is None:
+        return None
+    scope, username = who
+    result = pair_telegram_account(telegram_user_id, telegram_username, user_scope_id=scope,
+                                   username=username, may_take_over=False, switch_on=True)
+    if result == "taken":
+        return ("This Telegram account is already paired with another VAF account. "
+                "An admin can move it in Settings, Connections, Telegram.")
+    return f"Paired: this Telegram account now belongs to the VAF account {username}. Write here to reach your agent."
+
+
+def _resolve_telegram_sender(telegram_user_id: str, sender: Any = None) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """The entry a sender resolves to, before the owning account's switch is asked.
+
     `sender` is the Telegram user object when the caller has one: the name an open Front
     Office gives the contact record it creates for a new sender."""
     policy = Config.get("channel_ingress_policy")
@@ -1229,6 +1262,15 @@ def _run_bot():
             if user:
                 telegram_user_id = str(user.id)
                 chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
+                # `/start <code>`: an account pairing its own Telegram (vaf/core/channel_pairing.py).
+                # Only a live code gets an answer; anything else goes on as before.
+                private = bool(update.effective_chat and getattr(update.effective_chat, "type", "") == "private")
+                if private and context.args:
+                    answer = await asyncio.to_thread(_pair_with_code, telegram_user_id,
+                                                     getattr(user, "username", None), str(context.args[0]))
+                    if answer:
+                        await update.message.reply_text(answer)
+                        return
                 entry, _ = _resolve_telegram_user(telegram_user_id, user)
                 if not entry:
                     _drop_unauthorized_telegram(telegram_user_id, chat_id, "command_start", update=update)

@@ -181,7 +181,7 @@ def resolve_confirmation_bypass(user_scope_id: Optional[str]) -> bool:
 def list_accounts() -> list:
     """The account directory resolver the harness registers (`set_account_directory_resolver`).
 
-    Every account in the auth store as ``{"username", "user_scope_id", "active"}``,
+    Every account in the auth store as ``{"username", "user_scope_id", "active", "role"}``,
     names as stored. Never raises: an unreachable store is an empty directory, which
     for the one thing built on it - finding somebody to invite - is the safe answer.
     Runs the async store from a sync caller the way the other resolvers here do; when
@@ -196,9 +196,10 @@ def list_accounts() -> list:
         from vaf.auth.models import LocalUser
         async with get_auth_db() as db:
             rows = (await db.execute(select(LocalUser.username, LocalUser.user_scope_id,
-                                            LocalUser.is_active))).all()
-        return [{"username": str(name), "user_scope_id": str(scope), "active": bool(active)}
-                for name, scope, active in rows if name and scope]
+                                            LocalUser.is_active, LocalUser.role))).all()
+        return [{"username": str(name), "user_scope_id": str(scope), "active": bool(active),
+                 "role": str(role or "")}
+                for name, scope, active, role in rows if name and scope]
 
     try:
         try:

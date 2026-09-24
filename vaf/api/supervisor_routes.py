@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional, Set
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 
+from vaf.core.config import is_admin_identity
+
 router = APIRouter(prefix="/api/supervisor", tags=["supervisor"])
 
 
@@ -38,18 +40,6 @@ def _caller(request: Request) -> Dict[str, Any]:
         return user
     from vaf.core.config import get_local_admin_scope_id
     return {"username": "admin", "role": "admin", "user_scope_id": str(get_local_admin_scope_id())}
-
-
-def _is_admin(user: Dict[str, Any]) -> bool:
-    """Role-aware admin check, mirroring _ws_session_owner_ok (web_server.py)."""
-    if str(user.get("role") or "").lower() == "admin":
-        return True
-    try:
-        from vaf.core.config import get_local_admin_scope_id
-        scope = user.get("user_scope_id")
-        return scope is not None and str(scope) == str(get_local_admin_scope_id())
-    except Exception:
-        return False
 
 
 def _owned_session_ids(user_scope_id: Optional[str]) -> Set[str]:
@@ -105,7 +95,7 @@ async def supervisor_status(request: Request, session: Optional[str] = Query(Non
         (the web tool bubble polls generically).
     """
     user = _caller(request)
-    admin = _is_admin(user)
+    admin = is_admin_identity(user.get("role"), user.get("user_scope_id"))
     try:
         from vaf.core.subagent_ipc import get_ipc
         from vaf.core.config import Config
@@ -157,7 +147,7 @@ def supervisor_cancel(body: CancelBody, request: Request):
     if not task_id:
         return {"ok": False, "error": "task_id required"}
     user = _caller(request)
-    if not _is_admin(user):
+    if not is_admin_identity(user.get("role"), user.get("user_scope_id")):
         try:
             from vaf.core.subagent_ipc import get_ipc as _get_ipc
             target = next((t for t in _get_ipc().get_active_tasks() if t.task_id == task_id), None)

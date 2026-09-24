@@ -48,8 +48,9 @@ class ReadTelegramChatTool(BaseTool):
         if not chat_id:
             # Default to the user's own Telegram chat.
             try:
-                from vaf.core.messaging_connections import get_telegram_chat_id
-                chat_id = str(get_telegram_chat_id(user_scope_id, username) or "").strip()
+                # Their chat whether or not Telegram is switched on: reading is not reaching them.
+                from vaf.core.messaging_connections import telegram_chat_id_of
+                chat_id = str(telegram_chat_id_of(user_scope_id, username) or "").strip()
             except Exception:
                 chat_id = ""
         if not chat_id:

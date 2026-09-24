@@ -16,7 +16,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from vaf.core.config import Config
+from vaf.core.config import Config, is_admin_account, is_local_admin_lane  # noqa: F401 (is_local_admin_lane re-exported)
 from vaf.core.platform import Platform
 from vaf.core.channel_secrets import channel_secret, has_channel_secret
 
@@ -307,8 +307,22 @@ def get_telegram_chat_id(
     user_scope_id: Optional[Any],
     username: Optional[str],
 ) -> Optional[str]:
+    """Where VAF may reach this user on Telegram: their chat, while their Telegram lane is on
+    (`channel_enabled_for_scope`). The delivery lanes ask here - `send_telegram`,
+    `send_to_user` - so an account that switched Telegram off is not written to there, where
+    the bot would not answer its reply. `telegram_chat_id_of` is the same chat without the
+    switch, for the readers ("which chat is theirs")."""
+    if not channel_enabled_for_scope("telegram", user_scope_id):
+        return None
+    return telegram_chat_id_of(user_scope_id, username)
+
+
+def telegram_chat_id_of(
+    user_scope_id: Optional[Any],
+    username: Optional[str],
+) -> Optional[str]:
     """
-    Return telegram_chat_id for this user. Used by send_telegram tool.
+    Return telegram_chat_id for this user, switched on or not.
     Lookup: 1) persisted endpoints (from past Telegram message), 2) Telegram whitelist
     (loose match: case-insensitive username, normalized scope). The verified account owner
     (who linked their Telegram with the bot) does not need to be manually re-added to the
@@ -435,30 +449,58 @@ def get_discord_user_id(
     username: Optional[str],
 ) -> Optional[str]:
     """
-    Return Discord user ID for proactive DM sends.
-    Currently single-admin: uses discord_config.admin_user_id when Discord is configured.
+    The Discord user id this identity is reached on, or None. The Discord lane is the local
+    admin's: the bot answers the one Discord account that verified it, and that account is
+    the machine owner's. Every other identity gets None, and every Discord lane asks here:
+    `send_to_user` with Discord as main messenger, `send_discord`, `read_discord_chat`'s
+    default chat and the availability list. It used to return the admin's id for anybody,
+    so another account's agent sent its messages to the admin's Discord and read the
+    admin's Discord conversation.
     """
-    discord_config = Config.get("discord_config") or {}
-    if not isinstance(discord_config, dict):
+    if not channel_enabled_for_scope("discord", user_scope_id):
         return None
-    if not discord_config.get("enabled") or not discord_config.get("verified"):
+    discord_config = Config.get("discord_config") or {}
+    if not isinstance(discord_config, dict) or not discord_config.get("verified"):
         return None
     return (discord_config.get("admin_user_id") or "").strip() or None
 
 
-def whatsapp_enabled_for_scope(user_scope_id: Optional[Any]) -> bool:
-    """Effective WhatsApp on/off switch for one user: the local admin owns the global
-    `whatsapp_config.enabled`; everybody else has a slider stored under
-    `connection_enabled_by_scope[<scope>]["whatsapp"]`. One rule for the bridge (which
-    users get a Node process), the availability check below and the API routes."""
-    from vaf.core.config import get_local_admin_scope_id
-    whatsapp_config = Config.get("whatsapp_config") or {}
-    scope_str = str(user_scope_id).strip() if user_scope_id is not None else ""
-    if not scope_str or scope_str == str(get_local_admin_scope_id() or "").strip():
-        return bool(isinstance(whatsapp_config, dict) and whatsapp_config.get("enabled", False))
+def channel_enabled_for_scope(channel: str, user_scope_id: Optional[Any], *,
+                              admin: Optional[bool] = None) -> bool:
+    """Whether one account's lane on a messenger is switched on: the one rule every place
+    that acts on the switch asks (the bridges, the delivery lanes, the availability check
+    below, the API routes and the Front Office). What the switch is depends on whose lane
+    the channel is (`channels.Channel.accounts`):
+
+    - the local admin (`config.is_local_admin_lane`) owns the global `<channel>_config.enabled`;
+    - "each" (WhatsApp): everybody else has a switch of their own under
+      `connection_enabled_by_scope[<scope>][<channel>]`, off until they turn it on;
+    - "shared" (Telegram): nobody's lane is on while the BOT is off; an admin account rides
+      the bot, and every other account needs its own switch on as well. It used to be the
+      switch shown and stored while the bot answered every paired account regardless, and
+      a check by scope alone would have cut a second admin off, whose saves write the bot's
+      switch and never one of their own;
+    - "owner" (Discord): nobody but the local admin has a lane.
+
+    `admin` is the caller's admin answer when the caller already has it (a request, whose
+    role was authenticated); without it the account directory is asked
+    (`config.is_admin_account`), and only when nothing cheaper decided.
+    """
+    from vaf.core.channels import CHANNEL_ACCOUNTS
+    name = str(channel or "").strip().lower()
+    block = Config.get(f"{name}_config") or {}
+    bot_on = bool(isinstance(block, dict) and block.get("enabled", False))
+    if is_local_admin_lane(user_scope_id):
+        return bot_on
+    kind = CHANNEL_ACCOUNTS.get(name, "each")
+    if kind == "owner":
+        return False
     by_scope = Config.get("connection_enabled_by_scope") or {}
-    toggles = by_scope.get(scope_str, {}) if isinstance(by_scope, dict) else {}
-    return bool(isinstance(toggles, dict) and toggles.get("whatsapp", False))
+    toggles = by_scope.get(str(user_scope_id).strip(), {}) if isinstance(by_scope, dict) else {}
+    own = bool(isinstance(toggles, dict) and toggles.get(name, False))
+    if kind == "each":
+        return own
+    return bot_on and (own or (admin if admin is not None else is_admin_account(user_scope_id)))
 
 
 def get_messaging_connections(
@@ -489,10 +531,11 @@ def get_messaging_connections(
     outbound: List[str] = []
     main_messenger: Optional[str] = None
 
-    # Telegram: enabled + verified + user has a whitelist entry
+    # Telegram: this account's lane is on (the bot too) + verified + a whitelist entry
     telegram_config = Config.get("telegram_config") or {}
     if isinstance(telegram_config, dict):
-        if telegram_config.get("enabled") and telegram_config.get("verified") and has_channel_secret("telegram"):
+        if (telegram_config.get("verified") and has_channel_secret("telegram")
+                and channel_enabled_for_scope("telegram", user_scope_id)):
             whitelist = telegram_config.get("whitelist") or []
             scope_str = str(user_scope_id) if user_scope_id is not None else None
             vaf_username = (username or "").strip() or "admin"
@@ -506,16 +549,14 @@ def get_messaging_connections(
                     available.append("telegram")
                     break
 
-    # Discord: enabled + verified (single admin per instance for now)
-    discord_config = Config.get("discord_config") or {}
-    if isinstance(discord_config, dict):
-        if discord_config.get("enabled") and discord_config.get("verified"):
-            available.append("discord")
+    # Discord: only where it can deliver, which is the local admin's lane
+    if get_discord_user_id(user_scope_id, username):
+        available.append("discord")
 
     # WhatsApp: switched on + the user linked an account (the agent's number) -> outbound;
     # additionally a registered main-user number (whitelist entry) -> the owner is reachable.
     whatsapp_config = Config.get("whatsapp_config") or {}
-    if isinstance(whatsapp_config, dict) and whatsapp_enabled_for_scope(user_scope_id):
+    if isinstance(whatsapp_config, dict) and channel_enabled_for_scope("whatsapp", user_scope_id):
         try:
             from vaf.core.whatsapp_auth import whatsapp_auth_exists
             vaf_username = (username or "").strip() or "admin"

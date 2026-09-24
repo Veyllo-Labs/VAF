@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vaf.auth.models import LocalUser, UserRole
 from vaf.auth.database import get_auth_db
 from vaf.auth.crypto import hash_password
-from vaf.core.config import get_local_admin_scope_id
+from vaf.core.config import get_local_admin_scope_id, is_admin_identity
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +49,28 @@ def _current_user(request: Request) -> Dict[str, Any]:
     }
 
 
-def require_admin(request: Request) -> Dict[str, Any]:
-    """Dependency: require admin role. Used for user management endpoints."""
+def caller_is_admin(request: Request) -> bool:
+    """Whether the caller has admin rights: `config.is_admin_identity` over the role and the
+    scope the request was authenticated with (the tokenless desktop is the local admin).
+
+    The one answer every route gives. The routes used to carry checks of their own (the
+    Telegram, WhatsApp and Discord routes, the supervisor, the voice catalog) and they
+    disagreed: a second admin account was an admin for Discord and for the config save, an
+    ordinary user for Telegram and WhatsApp (their checks knew only the local admin's
+    scope), and `require_admin` knew only the role. Read from the request as it was
+    authenticated, never from `config_routes.get_current_user_or_local_admin`, which fills a
+    missing scope with the local admin's and would make a scope-less account an admin here."""
     user = _current_user(request)
-    role = (user.get("role") or "user").lower()
-    if role != "admin":
+    return is_admin_identity(user.get("role"), user.get("user_scope_id"))
+
+
+def require_admin(request: Request) -> Dict[str, Any]:
+    """Dependency: the caller must have admin rights (`caller_is_admin`)."""
+    user = _current_user(request)
+    if not is_admin_identity(user.get("role"), user.get("user_scope_id")):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role required for user management",
+            detail="Only an admin can do this.",
         )
     return user
 

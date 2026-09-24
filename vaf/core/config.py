@@ -7,7 +7,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from vaf.core.channels import CHAT_CHANNELS as _CHAT_CHANNELS
 
@@ -1241,6 +1241,53 @@ class Config:
         return body_filtered, ({scope_str: toggles} if toggles else {})
 
     @classmethod
+    def split_connection_toggles(cls, existing: dict, body: dict, user_scope_id: Optional[str], *,
+                                 is_admin: bool) -> dict:
+        """The one step both save paths (PATCH /api/config, the WebSocket `save_config`) run
+        before merging a body: it takes out what is the saving account's OWN switch, writes it
+        into `existing["connection_enabled_by_scope"]`, and returns the body to merge.
+
+        - A non-admin: `extract_connection_toggles_for_scope` and `filter_for_non_admin` (the
+          connection blocks leave the body in every case, their on/off stays).
+        - An admin who is not the local admin: on a channel where every account has its own
+          connection (`Channel.accounts == "each"`, WhatsApp) the global `enabled` is the local
+          admin's own switch, so a second admin's `enabled` becomes their switch and the
+          stored global value is kept. It used to replace the global one: measured, a second
+          admin turning their WhatsApp off turned the local admin's off, and their own never
+          started. On a shared bot (Telegram) the global `enabled` IS the admin's switch: the
+          bot, which they control and ride.
+        - The local admin: unchanged.
+
+        The two paths used to carry the non-admin half by hand, one copy each.
+        """
+        from vaf.core.channels import CHANNEL_ACCOUNTS
+        scope_str = str(user_scope_id).strip() if user_scope_id else ""
+        body = dict(body)
+        scope_toggles: dict = {}
+        if not is_admin:
+            body_filtered, scope_toggles = cls.extract_connection_toggles_for_scope(body, scope_str or None)
+            body = cls.filter_for_non_admin(body_filtered)
+        elif not is_local_admin_lane(scope_str or None):
+            own = {}
+            for channel, kind in CHANNEL_ACCOUNTS.items():
+                key = f"{channel}_config"
+                block = body.get(key)
+                if kind != "each" or not isinstance(block, dict) or "enabled" not in block:
+                    continue
+                own[channel] = bool(block["enabled"])
+                stored = existing.get(key) if isinstance(existing, dict) else None
+                body[key] = {**block, "enabled": bool(stored.get("enabled", False)) if isinstance(stored, dict) else False}
+            scope_toggles = {scope_str: own} if own else {}
+        if scope_toggles:
+            by_scope = existing.get("connection_enabled_by_scope") or {}
+            if not isinstance(by_scope, dict):
+                by_scope = {}
+            for scope_id, toggles in scope_toggles.items():
+                by_scope[scope_id] = {**(by_scope.get(scope_id) or {}), **toggles}
+            existing["connection_enabled_by_scope"] = by_scope
+        return body
+
+    @classmethod
     def config_for_user(cls, config: dict, user_scope_id: Optional[str], role: str) -> dict:
         """
         Return a copy of config safe to send to a given user. Admins get the full config.
@@ -1270,7 +1317,20 @@ class Config:
             # (hand-pasted, or written by an older release) must not reach the browser
             # before the next read moves it.
             from vaf.core.channel_secrets import redact_channel_secrets
-            return redact_channel_secrets(out)
+            out = redact_channel_secrets(out)
+            # A second admin's switch on a channel where every account has its own connection
+            # is theirs, not the global one (the local admin's); `split_connection_toggles` is
+            # the write side of the same rule.
+            if not is_local_admin_lane(user_scope_id):
+                from vaf.core.channels import CHANNEL_ACCOUNTS
+                by_scope = config.get("connection_enabled_by_scope") or {}
+                own = by_scope.get(str(user_scope_id).strip(), {}) if isinstance(by_scope, dict) else {}
+                own = own if isinstance(own, dict) else {}
+                for channel, kind in CHANNEL_ACCOUNTS.items():
+                    block = out.get(f"{channel}_config")
+                    if kind == "each" and isinstance(block, dict):
+                        out[f"{channel}_config"] = {**block, "enabled": bool(own.get(channel, False))}
+            return out
         out = dict(config)
         scope_str = str(user_scope_id).strip() if user_scope_id else None
 
@@ -1678,6 +1738,45 @@ def is_admin_identity(role: Optional[str], user_scope_id: Optional[str]) -> bool
     if user_scope_id is None:
         return False
     return str(user_scope_id).strip() == str(get_local_admin_scope_id())
+
+
+def is_admin_account(user_scope_id: Optional[str]) -> bool:
+    """Whether the ACCOUNT behind a scope has admin rights, for a lane that has only the
+    scope: a bridge routing a paired sender, a pairing written by a bot. The machine owner's
+    scope is an admin without a lookup; any other scope is looked up in the account directory
+    the application registered (`set_account_directory_resolver`, its optional `role`), and
+    the answer is `is_admin_identity` over that role. An account the directory does not know,
+    an inactive one, or no directory at all is not an admin: the restrictive answer.
+
+    A lookup, not free: the harness's directory is a database query. Callers ask it last,
+    after the cheap answers (the owner's scope, an explicit switch)."""
+    scope = str(user_scope_id or "").strip()
+    if not scope:
+        return False
+    if scope == str(get_local_admin_scope_id() or "").strip():
+        return True
+    try:
+        from vaf.core.tool_dispatch import resolve_account_directory
+        for row in resolve_account_directory():
+            if row["user_scope_id"] == scope:
+                return bool(row.get("active", True)) and is_admin_identity(row.get("role"), scope)
+    except Exception:
+        return False
+    return False
+
+
+def is_local_admin_lane(user_scope_id: Optional[Any]) -> bool:
+    """Whether this scope's messenger lane is the local admin's: the configured local-admin
+    scope, or no scope at all. A missing scope is the owner's here, as it has always been
+    for the WhatsApp switch, because it is what the Discord bridge enqueues its turns with
+    (`{"user_scope_id": None, "username": "admin"}`, identity_binding) and what the
+    tokenless desktop resolves to; the username cannot decide it, since the bridge's
+    literal "admin" is not the owner's name on an install whose owner registered as
+    somebody else. Deliberately not `is_admin_identity`: a second admin has admin RIGHTS,
+    but the WhatsApp number behind the global switch and the Discord account the bot
+    answers are the local admin's own (`channels.Channel.accounts`)."""
+    scope_str = str(user_scope_id).strip() if user_scope_id is not None else ""
+    return not scope_str or scope_str == str(get_local_admin_scope_id() or "").strip()
 
 
 def get_local_admin_username() -> str:

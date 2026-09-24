@@ -34,7 +34,7 @@ from vaf.core.config import Config
 from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
 from vaf.core.messaging_connections import front_office_open
 from vaf.core.messaging_connections import (
-    save_whatsapp_chat_jid, whatsapp_enabled_for_scope, whatsapp_session_id,
+    channel_enabled_for_scope, save_whatsapp_chat_jid, whatsapp_session_id,
 )
 from vaf.core.platform import Platform
 from vaf.core.task_queue import TaskQueue
@@ -603,7 +603,7 @@ def _get_users_to_run() -> List[Tuple[str, str, Path]]:
         if not scope:
             logger.warning("WhatsApp: linked credentials for unknown account %r ignored", username)
             continue
-        if not whatsapp_enabled_for_scope(scope):
+        if not channel_enabled_for_scope("whatsapp", scope):
             continue
         result.append((str(scope), username, get_whatsapp_auth_dir(username)))
     return result

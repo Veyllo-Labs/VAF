@@ -14,7 +14,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from vaf.api.user_routes import require_admin
+from vaf.api.user_routes import caller_is_admin, require_admin
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 
 logger = logging.getLogger(__name__)
@@ -433,16 +433,10 @@ async def patch_config(
         _SERVER_LOCKED = {"local_network_enabled", "local_network_tls_enabled", "server_mode"}
         body = {k: v for k, v in body.items() if k not in _SERVER_LOCKED}
 
-    if _user.get("role") != "admin":
-        body_filtered, scope_toggles = Config.extract_connection_toggles_for_scope(body, _user.get("user_scope_id"))
-        body = Config.filter_for_non_admin(body_filtered)
-        if scope_toggles:
-            by_scope = current.get("connection_enabled_by_scope") or {}
-            if not isinstance(by_scope, dict):
-                by_scope = {}
-            for scope_id, toggles in scope_toggles.items():
-                by_scope[scope_id] = {**(by_scope.get(scope_id) or {}), **toggles}
-            current["connection_enabled_by_scope"] = by_scope
+    # The shared rule (`is_admin_identity` over the request as authenticated), the one the
+    # WebSocket save uses too; this path used to know only the role.
+    is_admin = caller_is_admin(request)
+    body = Config.split_connection_toggles(current, body, _user.get("user_scope_id"), is_admin=is_admin)
     # API keys leave the payload here and go into the encrypted store. Without this the
     # read side would migrate a key on first read while this path kept writing raw into a
     # file nobody asks any more - the user changes their key, the UI says saved, and the
@@ -450,14 +444,14 @@ async def patch_config(
     # which used to hang off the key appearing in the config dict.
     from vaf.core.api_keys import absorb_config_keys
     merged = Config.merge_preserving_nonempty_sensitive(
-        current, absorb_config_keys(body, is_admin=_user.get("role") == "admin"))
+        current, absorb_config_keys(body, is_admin=is_admin))
     Config.save(merged)
     _note_discord_admin_change(current, merged, _user)
     # Through the same funnel as GET, never raw: `merged` carries everything the file
     # holds - estate API keys, the KEK, other users' connection configs - and this
     # response goes to whoever sent the PATCH, admin or not. Returning it unfiltered was
     # a second copy of the leak the GET route had, one save away from every reader.
-    return Config.config_for_user(merged, _user.get("user_scope_id"), _user.get("role", "user"))
+    return Config.config_for_user(merged, _user.get("user_scope_id"), "admin" if is_admin else "user")
 
 
 @router.get("/config/api-keys")

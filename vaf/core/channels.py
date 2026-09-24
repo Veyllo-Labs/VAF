@@ -59,15 +59,27 @@ class Channel:
     and never travel to a browser: vaf/core/channel_secrets.py keeps them in the encrypted
     key ring. A channel whose login is not a field (WhatsApp keeps a session directory)
     declares none."""
+    accounts: str = "each"
+    """Whose lane the channel is, which decides what `<name>_config.enabled` means and who
+    has a switch of their own (messaging_connections.channel_enabled_for_scope):
+    "each" - every account links its own connection (WhatsApp: a number and a process per
+    account); the global `enabled` is the local admin's own switch, everybody else has one
+    under `connection_enabled_by_scope`.
+    "shared" - one bot serves every account and accounts pair on it (Telegram); the global
+    `enabled` is the BOT's switch, which admins control and ride, and every other account
+    has its own switch on top of it.
+    "owner" - one bot that serves the local admin alone (Discord); nobody else has a lane."""
 
 
 CHANNELS: Tuple[Channel, ...] = (
     Channel("whatsapp", "WhatsApp", bridge=True, send_tool="send_whatsapp",
             read_tool="read_whatsapp_chat", front_office=True),
     Channel("telegram", "Telegram", bridge=True, send_tool="send_telegram",
-            read_tool="read_telegram_chat", front_office=True, secrets=("bot_token",)),
+            read_tool="read_telegram_chat", front_office=True, secrets=("bot_token",),
+            accounts="shared"),
     Channel("discord", "Discord", bridge=True, send_tool="send_discord",
-            read_tool="read_discord_chat", front_office=True, secrets=("bot_token",)),
+            read_tool="read_discord_chat", front_office=True, secrets=("bot_token",),
+            accounts="owner"),
     # Known, not built: `send_slack` exists and answers that it cannot send yet.
     Channel("slack", "Slack", bridge=False, send_tool="send_slack"),
 )
@@ -98,6 +110,8 @@ CHANNEL_READ_TOOLS: Dict[str, str] = {c.name: c.read_tool for c in CHANNELS if c
 CHANNEL_LABELS: Dict[str, str] = {c.name: c.label for c in CHANNELS}
 # channel -> its credential fields, for the channels that have any.
 CHANNEL_SECRETS: Dict[str, Tuple[str, ...]] = {c.name: c.secrets for c in CHANNELS if c.secrets}
+# channel -> whose lane it is ("each", "shared" or "owner"; see Channel.accounts).
+CHANNEL_ACCOUNTS: Dict[str, str] = {c.name: c.accounts for c in CHANNELS}
 
 
 def channel_label(name: Optional[str], default: Optional[str] = None) -> str:

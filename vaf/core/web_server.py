@@ -23,7 +23,7 @@ from vaf.core.web_interface import get_web_interface
 from vaf.core.session import SessionManager, Session
 from vaf.cli.autosuggest import SmartAutoSuggest
 import json
-from vaf.core.config import Config
+from vaf.core.config import Config, is_admin_identity
 from vaf.core.channels import CHAT_SESSION_PREFIXES
 from vaf.core.channel_secrets import has_channel_secret
 from vaf.version import __version__
@@ -829,17 +829,13 @@ def _ws_session_owner_ok(websocket, session_id, *, loaded=None, allow_missing=Fa
 
     Returns (allowed: bool, loaded_session_or_None). This resolves WHO is asking from the
     connection; the rule itself is `SessionManager.may_access`, so the HTTP endpoints that
-    name a session id answer identically. Admin is detected role-aware (connection role ==
-    'admin' OR connection scope == the local-admin scope) so the desktop owner is never
-    locked out even when its scope is None. `allow_missing=True` passes a not-yet-created
+    name a session id answer identically. Admin is `config.is_admin_identity` over the
+    connection's role and scope, the rule every other gate asks. `allow_missing=True` passes a not-yet-created
     id, for the chat's first-message-into-a-new-session flow.
     """
-    from vaf.core.config import get_local_admin_scope_id
     user_scope_id = manager.get_connection_user(websocket)
     role = manager.get_connection_user_role(websocket)
-    is_admin = (str(role or "").lower() == "admin") or (
-        user_scope_id is not None and str(user_scope_id) == str(get_local_admin_scope_id())
-    )
+    is_admin = is_admin_identity(role, user_scope_id)
     if loaded is not None:
         if is_admin:
             return (True, loaded)
@@ -1362,7 +1358,6 @@ async def _broadcast_tools_update(manager) -> None:
     if not manager:
         return
     try:
-        from vaf.core.config import get_local_admin_scope_id
         from vaf.core.custom_tools_registry import (
             get_all_custom_tool_names,
             get_visible_tool_names_for_user,
@@ -1372,7 +1367,6 @@ async def _broadcast_tools_update(manager) -> None:
         from vaf.core.tool_contract import tool_category
 
         agent          = manager.agent_instance
-        local_admin    = get_local_admin_scope_id()
         all_custom     = set(get_all_custom_tool_names())
 
         # Iterate over all currently connected websockets
@@ -1380,10 +1374,7 @@ async def _broadcast_tools_update(manager) -> None:
             try:
                 _scope = manager.get_connection_user(ws)
                 _role  = manager.get_connection_user_role(ws)
-                _is_admin = (
-                    _role == "admin"
-                    or (_scope is not None and str(_scope) == str(local_admin))
-                )
+                _is_admin = is_admin_identity(_role, _scope)
                 _filter_scope = None if _is_admin else _scope
                 visible_custom = set(get_visible_tool_names_for_user(_filter_scope))
 
@@ -1436,18 +1427,13 @@ async def _broadcast_skills_update(manager) -> None:
     if not manager:
         return
     try:
-        from vaf.core.config import get_local_admin_scope_id
         from vaf.skills.templates import list_skills
 
-        local_admin = get_local_admin_scope_id()
         for ws in list(manager.active_connections):
             try:
                 _scope = manager.get_connection_user(ws)
                 _role  = manager.get_connection_user_role(ws)
-                _is_admin = (
-                    _role == "admin"
-                    or (_scope is not None and str(_scope) == str(local_admin))
-                )
+                _is_admin = is_admin_identity(_role, _scope)
                 _filter_scope = None if _is_admin else _scope
                 # Admins manage all and also see invalid skills (so they can fix them).
                 skills = list_skills(user_scope_id=_filter_scope, include_invalid=_is_admin)
@@ -2659,14 +2645,11 @@ def _resolve_session_workspace(session_id: str, request: Request, create: bool =
         return _resolve_room_workspace(session_id, request, create=create)
     try:
         from vaf.api.config_routes import get_current_user_or_local_admin
-        from vaf.core.config import get_local_admin_scope_id
         _user = get_current_user_or_local_admin(request) or {}
         user_scope_id = _user.get("user_scope_id")
         role = str(_user.get("role") or "").lower()
         session_scope = (getattr(sess, "metadata", None) or {}).get("user_scope_id")
-        is_admin = role == "admin" or (
-            user_scope_id is not None and str(user_scope_id) == str(get_local_admin_scope_id())
-        )
+        is_admin = is_admin_identity(role, user_scope_id)
         is_owner = session_scope is not None and str(session_scope) == str(user_scope_id)
         if not (is_owner or is_admin):
             raise HTTPException(status_code=403, detail="Session does not belong to this user")
@@ -3459,14 +3442,11 @@ async def describe_image(request: Request):
     if sess is not None:
         try:
             from vaf.api.config_routes import get_current_user_or_local_admin
-            from vaf.core.config import get_local_admin_scope_id
             _uinfo = get_current_user_or_local_admin(request) or {}
             _uscope = _uinfo.get("user_scope_id")
             _urole = str(_uinfo.get("role") or "").lower()
             _sscope = (getattr(sess, "metadata", None) or {}).get("user_scope_id")
-            _admin = _urole == "admin" or (
-                _uscope is not None and str(_uscope) == str(get_local_admin_scope_id())
-            )
+            _admin = is_admin_identity(_urole, _uscope)
             _owner = _sscope is not None and str(_sscope) == str(_uscope)
             if not (_owner or _admin):
                 raise HTTPException(status_code=403, detail="Session does not belong to this user")
@@ -5307,12 +5287,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "get_config":
                     # Send config to frontend; non-admins get scoped view (only their own connections)
-                    from vaf.core.config import get_local_admin_scope_id
+                    from vaf.core.config import is_admin_identity
                     user_scope_id = manager.get_connection_user(websocket) if manager else None
                     stored_role = manager.get_connection_user_role(websocket) if manager else None
-                    # Admin if stored role says "admin" OR scope matches local admin scope
-                    local_admin_scope = get_local_admin_scope_id()
-                    is_admin = stored_role == "admin" or (user_scope_id is not None and str(user_scope_id) == str(local_admin_scope))
+                    is_admin = is_admin_identity(stored_role, user_scope_id)
                     role = "admin" if is_admin else "user"
                     full_cfg = Config.load()
                     cfg = Config.config_for_user(full_cfg, str(user_scope_id) if user_scope_id else None, role)
@@ -5658,22 +5636,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "save_config":
                     new_config = cmd.get("config")
                     if new_config:
-                        from vaf.core.config import get_local_admin_scope_id
+                        from vaf.core.config import is_admin_identity
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
                         stored_role = manager.get_connection_user_role(websocket) if manager else None
-                        local_admin_scope = get_local_admin_scope_id()
-                        is_admin = stored_role == "admin" or (user_scope_id is not None and str(user_scope_id) == str(local_admin_scope))
+                        is_admin = is_admin_identity(stored_role, user_scope_id)
                         existing = Config.load()
-                        if not is_admin:
-                            new_filtered, scope_toggles = Config.extract_connection_toggles_for_scope(new_config, str(user_scope_id) if user_scope_id else None)
-                            new_config = Config.filter_for_non_admin(new_filtered)
-                            if scope_toggles:
-                                by_scope = existing.get("connection_enabled_by_scope") or {}
-                                if not isinstance(by_scope, dict):
-                                    by_scope = {}
-                                for scope_id, toggles in scope_toggles.items():
-                                    by_scope[scope_id] = {**(by_scope.get(scope_id) or {}), **toggles}
-                                existing["connection_enabled_by_scope"] = by_scope
+                        new_config = Config.split_connection_toggles(
+                            existing, new_config, str(user_scope_id) if user_scope_id else None, is_admin=is_admin)
                         # Keys leave the payload for the encrypted store; see
                         # api_keys.absorb_config_keys for why the write side had to move in the
                         # same change as the read side - otherwise a Settings save keeps writing
@@ -6600,7 +6569,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # Return list of available tools, filtered by the requesting
                     # user's role and custom-tool visibility permissions.
                     try:
-                        from vaf.core.config import get_local_admin_scope_id
                         from vaf.core.custom_tools_registry import (
                             get_all_custom_tool_names,
                             get_visible_tool_names_for_user,
@@ -6609,14 +6577,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                         _gt_scope = manager.get_connection_user(websocket) if manager else None
                         _gt_role  = manager.get_connection_user_role(websocket) if manager else None
-                        _gt_local_admin = get_local_admin_scope_id()
-                        _gt_is_admin = (
-                            _gt_role == "admin"
-                            or (
-                                _gt_scope is not None
-                                and str(_gt_scope) == str(_gt_local_admin)
-                            )
-                        )
+                        _gt_is_admin = is_admin_identity(_gt_role, _gt_scope)
 
                         def _gt_account_allows(_name: str) -> bool:
                             """The account allowlist, as a LISTING question.
@@ -6702,16 +6663,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # Upload or write a new custom tool from the WebUI editor.
                     # Payload: { name: str, code: str, shared_with: list[str] }
                     try:
-                        from vaf.core.config import get_local_admin_scope_id
                         from vaf.core import custom_tools_registry as _ctr
 
                         _ct_scope = manager.get_connection_user(websocket) if manager else None
                         _ct_role  = manager.get_connection_user_role(websocket) if manager else None
-                        _ct_local_admin = get_local_admin_scope_id()
-                        _ct_is_admin = (
-                            _ct_role == "admin"
-                            or (_ct_scope is not None and str(_ct_scope) == str(_ct_local_admin))
-                        )
+                        _ct_is_admin = is_admin_identity(_ct_role, _ct_scope)
                         if not _ct_is_admin:
                             await websocket.send_json({
                                 "type": "custom_tool_error",
@@ -6764,15 +6720,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # Edit the source code of an existing custom tool.
                     # Payload: { name: str, code: str }
                     try:
-                        from vaf.core.config import get_local_admin_scope_id
                         from vaf.core import custom_tools_registry as _ctr
 
                         _ut_scope = manager.get_connection_user(websocket) if manager else None
                         _ut_role  = manager.get_connection_user_role(websocket) if manager else None
-                        _ut_is_admin = (
-                            _ut_role == "admin"
-                            or (_ut_scope is not None and str(_ut_scope) == str(get_local_admin_scope_id()))
-                        )
+                        _ut_is_admin = is_admin_identity(_ut_role, _ut_scope)
                         if not _ut_is_admin:
                             await websocket.send_json({
                                 "type": "custom_tool_error",
@@ -6806,15 +6758,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # Remove a custom tool permanently.
                     # Payload: { name: str }
                     try:
-                        from vaf.core.config import get_local_admin_scope_id
                         from vaf.core import custom_tools_registry as _ctr
 
                         _dt_scope = manager.get_connection_user(websocket) if manager else None
                         _dt_role  = manager.get_connection_user_role(websocket) if manager else None
-                        _dt_is_admin = (
-                            _dt_role == "admin"
-                            or (_dt_scope is not None and str(_dt_scope) == str(get_local_admin_scope_id()))
-                        )
+                        _dt_is_admin = is_admin_identity(_dt_role, _dt_scope)
                         if not _dt_is_admin:
                             await websocket.send_json({
                                 "type": "custom_tool_error",
@@ -6853,15 +6801,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # Add or edit an MCP server in mcp_servers.json, then hot-reload.
                     # Payload: { name, command, transport?, url?, enabled?, permission_level? }
                     try:
-                        from vaf.core.config import get_local_admin_scope_id
                         from vaf.core.mcp_registry import load_mcp_manifest, save_mcp_manifest
 
                         _ms_scope = manager.get_connection_user(websocket) if manager else None
                         _ms_role  = manager.get_connection_user_role(websocket) if manager else None
-                        _ms_admin = (
-                            _ms_role == "admin"
-                            or (_ms_scope is not None and str(_ms_scope) == str(get_local_admin_scope_id()))
-                        )
+                        _ms_admin = is_admin_identity(_ms_role, _ms_scope)
                         if not _ms_admin:
                             await websocket.send_json({"type": "mcp_server_error", "error": "Admin permission required to manage MCP servers."})
                         else:
@@ -6905,15 +6849,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "delete_mcp_server":
                     # Remove an MCP server from mcp_servers.json, then hot-reload. Payload: { name }
                     try:
-                        from vaf.core.config import get_local_admin_scope_id
                         from vaf.core.mcp_registry import load_mcp_manifest, save_mcp_manifest
 
                         _md_scope = manager.get_connection_user(websocket) if manager else None
                         _md_role  = manager.get_connection_user_role(websocket) if manager else None
-                        _md_admin = (
-                            _md_role == "admin"
-                            or (_md_scope is not None and str(_md_scope) == str(get_local_admin_scope_id()))
-                        )
+                        _md_admin = is_admin_identity(_md_role, _md_scope)
                         if not _md_admin:
                             await websocket.send_json({"type": "mcp_server_error", "error": "Admin permission required to manage MCP servers."})
                         else:
@@ -6937,15 +6877,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # Probe a server config (without saving) so the admin can validate it in the
                     # editor. Payload: { command, transport?, url? }. Reply: mcp_server_test_result.
                     try:
-                        from vaf.core.config import get_local_admin_scope_id, Config as _CfgMcp
+                        from vaf.core.config import Config as _CfgMcp
                         from vaf.core.mcp_registry import probe_mcp_server
 
                         _tm_scope = manager.get_connection_user(websocket) if manager else None
                         _tm_role  = manager.get_connection_user_role(websocket) if manager else None
-                        _tm_admin = (
-                            _tm_role == "admin"
-                            or (_tm_scope is not None and str(_tm_scope) == str(get_local_admin_scope_id()))
-                        )
+                        _tm_admin = is_admin_identity(_tm_role, _tm_scope)
                         if not _tm_admin:
                             await websocket.send_json({"type": "mcp_server_test_result", "connected": False, "tool_count": 0, "tools": [], "error": "Admin permission required."})
                         else:
@@ -6969,15 +6906,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     #   shared_with: []    → admin only
                     #   shared_with: ["<scope_id>", ...] → specific users
                     try:
-                        from vaf.core.config import get_local_admin_scope_id
                         from vaf.core import custom_tools_registry as _ctr
 
                         _pp_scope = manager.get_connection_user(websocket) if manager else None
                         _pp_role  = manager.get_connection_user_role(websocket) if manager else None
-                        _pp_is_admin = (
-                            _pp_role == "admin"
-                            or (_pp_scope is not None and str(_pp_scope) == str(get_local_admin_scope_id()))
-                        )
+                        _pp_is_admin = is_admin_identity(_pp_role, _pp_scope)
                         if not _pp_is_admin:
                             await websocket.send_json({
                                 "type": "custom_tool_error",
@@ -7007,15 +6940,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # Payload: { name: str }
                     # Admin-only — non-admins must not be able to exfiltrate source.
                     try:
-                        from vaf.core.config import get_local_admin_scope_id
                         from vaf.core import custom_tools_registry as _ctr
 
                         _gs_scope = manager.get_connection_user(websocket) if manager else None
                         _gs_role  = manager.get_connection_user_role(websocket) if manager else None
-                        _gs_is_admin = (
-                            _gs_role == "admin"
-                            or (_gs_scope is not None and str(_gs_scope) == str(get_local_admin_scope_id()))
-                        )
+                        _gs_is_admin = is_admin_identity(_gs_role, _gs_scope)
                         if not _gs_is_admin:
                             await websocket.send_json({
                                 "type": "custom_tool_error",
@@ -7040,14 +6969,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # Return non-admin users for the share picker in CustomToolEditor.
                     # Admin-only: non-admins have no reason to query the user list.
                     try:
-                        from vaf.core.config import get_local_admin_scope_id
 
                         _gu_scope = manager.get_connection_user(websocket) if manager else None
                         _gu_role  = manager.get_connection_user_role(websocket) if manager else None
-                        _gu_is_admin = (
-                            _gu_role == "admin"
-                            or (_gu_scope is not None and str(_gu_scope) == str(get_local_admin_scope_id()))
-                        )
+                        _gu_is_admin = is_admin_identity(_gu_role, _gu_scope)
                         if not _gu_is_admin:
                             await websocket.send_json({
                                 "type": "custom_tool_error",
@@ -7138,14 +7063,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     })
 
                 elif type == "create_workflow":
-                    from vaf.core.config import get_local_admin_scope_id
                     _wf_scope       = manager.get_connection_user(websocket)
                     _wf_role        = manager.get_connection_user_role(websocket)
-                    _wf_local_admin = get_local_admin_scope_id()
-                    _wf_is_admin    = (
-                        _wf_role == "admin"
-                        or (_wf_scope is not None and str(_wf_scope) == str(_wf_local_admin))
-                    )
+                    _wf_is_admin = is_admin_identity(_wf_role, _wf_scope)
                     if not _wf_is_admin:
                         await websocket.send_json({
                             "type": "workflow_error",
@@ -7203,14 +7123,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "workflow_error", "error": str(e)})
 
                 elif type == "update_workflow":
-                    from vaf.core.config import get_local_admin_scope_id
                     _wf_scope       = manager.get_connection_user(websocket)
                     _wf_role        = manager.get_connection_user_role(websocket)
-                    _wf_local_admin = get_local_admin_scope_id()
-                    _wf_is_admin    = (
-                        _wf_role == "admin"
-                        or (_wf_scope is not None and str(_wf_scope) == str(_wf_local_admin))
-                    )
+                    _wf_is_admin = is_admin_identity(_wf_role, _wf_scope)
                     if not _wf_is_admin:
                         await websocket.send_json({
                             "type": "workflow_error",
@@ -7263,14 +7178,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "workflow_error", "error": str(e)})
 
                 elif type == "delete_workflow":
-                    from vaf.core.config import get_local_admin_scope_id
                     _wf_scope       = manager.get_connection_user(websocket)
                     _wf_role        = manager.get_connection_user_role(websocket)
-                    _wf_local_admin = get_local_admin_scope_id()
-                    _wf_is_admin    = (
-                        _wf_role == "admin"
-                        or (_wf_scope is not None and str(_wf_scope) == str(_wf_local_admin))
-                    )
+                    _wf_is_admin = is_admin_identity(_wf_role, _wf_scope)
                     if not _wf_is_admin:
                         await websocket.send_json({
                             "type": "workflow_error",
@@ -7304,14 +7214,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 # ─────────────────────────────────────────────────────────────
                 elif type == "get_skills":
                     try:
-                        from vaf.core.config import get_local_admin_scope_id
                         from vaf.skills.templates import list_skills as _list_skills
                         _sk_scope = manager.get_connection_user(websocket) if manager else None
                         _sk_role  = manager.get_connection_user_role(websocket) if manager else None
-                        _sk_is_admin = (
-                            _sk_role == "admin"
-                            or (_sk_scope is not None and str(_sk_scope) == str(get_local_admin_scope_id()))
-                        )
+                        _sk_is_admin = is_admin_identity(_sk_role, _sk_scope)
                         _filter_scope = None if _sk_is_admin else _sk_scope
                         # Admins also see invalid skills so they can fix them in the editor.
                         _skills = _list_skills(user_scope_id=_filter_scope, include_invalid=_sk_is_admin)
@@ -7330,14 +7236,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "get_skill_source":
                     # Return the raw SKILL.md text for the editor (admin-only).
                     try:
-                        from vaf.core.config import get_local_admin_scope_id
                         from vaf.core import skills_registry as _skr
                         _ss_scope = manager.get_connection_user(websocket) if manager else None
                         _ss_role  = manager.get_connection_user_role(websocket) if manager else None
-                        _ss_is_admin = (
-                            _ss_role == "admin"
-                            or (_ss_scope is not None and str(_ss_scope) == str(get_local_admin_scope_id()))
-                        )
+                        _ss_is_admin = is_admin_identity(_ss_role, _ss_scope)
                         if not _ss_is_admin:
                             await websocket.send_json({"type": "skill_error", "error": "Admin permission required to view skill source."})
                         else:
@@ -7348,13 +7250,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         await websocket.send_json({"type": "skill_error", "error": str(e)})
 
                 elif type in ("create_skill", "update_skill"):
-                    from vaf.core.config import get_local_admin_scope_id
                     _sk_scope = manager.get_connection_user(websocket)
                     _sk_role  = manager.get_connection_user_role(websocket)
-                    _sk_is_admin = (
-                        _sk_role == "admin"
-                        or (_sk_scope is not None and str(_sk_scope) == str(get_local_admin_scope_id()))
-                    )
+                    _sk_is_admin = is_admin_identity(_sk_role, _sk_scope)
                     if not _sk_is_admin:
                         await websocket.send_json({"type": "skill_error", "error": "Admin permission required to manage skills."})
                     else:
@@ -7460,13 +7358,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "skill_error", "error": str(e)})
 
                 elif type == "delete_skill":
-                    from vaf.core.config import get_local_admin_scope_id
                     _sk_scope = manager.get_connection_user(websocket)
                     _sk_role  = manager.get_connection_user_role(websocket)
-                    _sk_is_admin = (
-                        _sk_role == "admin"
-                        or (_sk_scope is not None and str(_sk_scope) == str(get_local_admin_scope_id()))
-                    )
+                    _sk_is_admin = is_admin_identity(_sk_role, _sk_scope)
                     if not _sk_is_admin:
                         await websocket.send_json({"type": "skill_error", "error": "Admin permission required to delete skills."})
                     else:
@@ -7484,14 +7378,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "update_skill_permissions":
                     # Change which users can see a skill (mirror update_custom_tool_permissions).
                     try:
-                        from vaf.core.config import get_local_admin_scope_id
                         from vaf.core import skills_registry as _skr
                         _sk_scope = manager.get_connection_user(websocket) if manager else None
                         _sk_role  = manager.get_connection_user_role(websocket) if manager else None
-                        _sk_is_admin = (
-                            _sk_role == "admin"
-                            or (_sk_scope is not None and str(_sk_scope) == str(get_local_admin_scope_id()))
-                        )
+                        _sk_is_admin = is_admin_identity(_sk_role, _sk_scope)
                         if not _sk_is_admin:
                             await websocket.send_json({"type": "skill_error", "error": "Admin permission required to change skill permissions."})
                         else:
@@ -7506,13 +7396,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "upload_skill":
                     # Import an uploaded skill .zip (folder bundle). Payload:
                     #   { data: base64(zip), shared_with?: list[str] }
-                    from vaf.core.config import get_local_admin_scope_id
                     _sk_scope = manager.get_connection_user(websocket)
                     _sk_role  = manager.get_connection_user_role(websocket)
-                    _sk_is_admin = (
-                        _sk_role == "admin"
-                        or (_sk_scope is not None and str(_sk_scope) == str(get_local_admin_scope_id()))
-                    )
+                    _sk_is_admin = is_admin_identity(_sk_role, _sk_scope)
                     if not _sk_is_admin:
                         await websocket.send_json({"type": "skill_error", "error": "Admin permission required to upload skills."})
                     else:
@@ -7674,9 +7560,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
                         stored_role = manager.get_connection_user_role(websocket) if manager else None
                         local_admin_scope = get_local_admin_scope_id()
-                        is_admin = (stored_role == "admin") or (
-                            user_scope_id is not None and str(user_scope_id) == str(local_admin_scope)
-                        )
+                        is_admin = is_admin_identity(stored_role, user_scope_id)
                         if is_admin:
                             # Admin: load root + all user dirs, then filter to root + admin-visible scopes.
                             # Some admin JWTs can have a different scope than local_admin_scope.

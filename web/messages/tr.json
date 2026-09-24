@@ -864,7 +864,15 @@
     },
     "connectionsPanel": {
       "searchPlaceholder": "Ara (örn. GitHub, E-posta, Takvim)…",
-      "noResults": "Aramana uyan bağlantı yok."
+      "noResults": "Aramana uyan bağlantı yok.",
+      "telegramNotPaired": "Telegram hesabın henüz bu botla eşleştirilmedi.",
+      "telegramAdminSetsUp": "Bu kurulumun Telegram botunu bir yönetici kurar.",
+      "telegramPair": "Telegram'ımı eşleştir",
+      "telegramPairIntro": "Bağlantıyı Telegram'da aç ya da bu mesajı bota gönder:",
+      "telegramPairIntroBot": "Bağlantıyı Telegram'da aç ya da bu mesajı {bot} botuna gönder:",
+      "telegramPairOpen": "Telegram'da aç",
+      "telegramPairWaiting": "Bota göndereceğin mesaj bekleniyor. Kod {minutes} dakika geçerli.",
+      "telegramPairFailed": "Eşleştirme başlatılamadı."
     },
     "frontOffice": {
       "title": "Inbound iletişim",

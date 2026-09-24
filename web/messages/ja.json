@@ -864,7 +864,15 @@
     },
     "connectionsPanel": {
       "searchPlaceholder": "検索（例: GitHub、メール、カレンダー）…",
-      "noResults": "該当する連携はありません"
+      "noResults": "該当する連携はありません",
+      "telegramNotPaired": "Telegramアカウントはまだこのボットとペアリングされていません。",
+      "telegramAdminSetsUp": "このインストールのTelegramボットは管理者が設定します。",
+      "telegramPair": "Telegramとペアリング",
+      "telegramPairIntro": "Telegramでリンクを開くか、ボットにこのメッセージを送信してください。",
+      "telegramPairIntroBot": "Telegramでリンクを開くか、{bot}にこのメッセージを送信してください。",
+      "telegramPairOpen": "Telegramで開く",
+      "telegramPairWaiting": "ボットへのメッセージを待っています。コードの有効期間は{minutes}分です。",
+      "telegramPairFailed": "ペアリングを開始できませんでした。"
     },
     "frontOffice": {
       "title": "インバウンドコミュニケーション",

@@ -52,8 +52,10 @@ class _FakeAsyncClient:
 def _patch(monkeypatch, *, role="admin", api_key="el-key", responses=None):
     vr._cache.clear()
     vr._locks.clear()  # locks are per event loop; TestClient gives each request a fresh one
+    import vaf.api.user_routes as ur
+    # The caller as authenticated; the real require_admin decides from it.
     monkeypatch.setattr(
-        vr, "get_current_user_or_local_admin",
+        ur, "_current_user",
         lambda request: {"username": "u", "role": role, "user_scope_id": "s"},
     )
     monkeypatch.setattr(

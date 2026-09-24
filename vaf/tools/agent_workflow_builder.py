@@ -1064,13 +1064,8 @@ class AgentWorkflowBuilderTool(BaseTool):
         if agent is None:
             return False
         try:
-            from vaf.core.config import get_local_admin_scope_id
-            _role  = getattr(agent, "_current_user_role",     None)
-            _scope = getattr(agent, "_current_user_scope_id", None)
-            _local = get_local_admin_scope_id()
-            return (
-                _role == "admin"
-                or (_scope is not None and str(_scope) == str(_local))
-            )
+            from vaf.core.config import is_admin_identity
+            return is_admin_identity(getattr(agent, "_current_user_role", None),
+                                     getattr(agent, "_current_user_scope_id", None))
         except Exception:
             return False

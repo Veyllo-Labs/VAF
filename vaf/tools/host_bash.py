@@ -1,24 +1,31 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Host shell for the MAIN agent (not the coder).
+"""Host shell: one command, run directly on the host.
 
-The coder runs bash inside a kernel-jailed workspace (vaf/tools/workspace_exec.py) and
-cannot touch VAF or the host. Some tasks, though, genuinely need the real host - e.g.
-"check my running docker container", inspect host services, run a host CLI. Those belong
-to the main agent, and this tool provides them under two hard controls:
+It runs outside every sandbox and outside the per-user file jail, on purpose - some tasks
+genuinely need the real host ("check my running docker container", a host CLI, a local
+build). WHO may use it is an account permission (the account allowlist in user management;
+the standard preset includes it). HOW each use is controlled:
 
-  1. permission_level = "dangerous"  -> the framework's confirmation gate fires: the user
-     approves each run in the Web UI (tool + command + reason shown) before it executes.
-  2. Remote channels (Telegram/WhatsApp/Discord) are blocked in TWO layers, because there is
-     no safe way to show the confirmation there:
-       a. channel_restrictions        -> the policy-layer block (evaluate_tool_policy).
-       b. a non-liftable guard in run() -> even when the admin sets channel_tools_unrestricted
-          (which lifts 2a for the convenience tools), host_bash still refuses on a channel,
-          using the authoritative is_channel_session that execute_tool injects. Local app only.
+  1. permission_level = "dangerous" -> the framework's confirmation gate. In the chat the
+     person sees tool, command and reason, and answers: only this time, for this chat,
+     always, or cancel (vaf/core/tool_dispatch.resolve_confirmation_gate).
+  2. The coding agent and workflow steps run it WITHOUT asking (vaf/tools/coder.py,
+     vaf/workflows/engine.py). Deliberate: both run unattended, a dialog would stall them,
+     and a coder that needs a host build or a host CLI must not stop for it. What still
+     applies there: the account allowlist, the policy block, and (for workflow steps) an
+     application's authorizer.
+  3. The main agent's DIRECT call from a messaging channel (Telegram/WhatsApp/Discord) is
+     refused in TWO layers, because the person cannot be shown the confirmation there:
+       a. channel_restrictions -> the policy-layer block (evaluate_tool_policy).
+       b. a non-liftable guard in run(), fed by the `_is_channel_session` the chat lane
+          hands over (vaf/core/agent.py). It holds even when the admin sets
+          channel_tools_unrestricted, which lifts 3a for the convenience tools. Only the
+          chat lane hands it over: the guard protects the turn where somebody would have
+          been asked, not the unattended lanes in 2.
 
-It runs UNSANDBOXED on the host on purpose (that is the point). A cheap blocklist stops the
-few catastrophic patterns; the real safety is the per-command human approval + local-only gate.
+A cheap blocklist stops the few catastrophic patterns (command_policy, host profile).
 """
 from __future__ import annotations
 
@@ -36,13 +43,14 @@ class HostBashTool(BaseTool):
     permission_level = "dangerous"   # -> confirmation gate in execute_tool
     channel_restrictions = ("channel",)  # hard-blocked on every chat channel
     side_effect_class = "irreversible"
-    coder_only = False               # this is the MAIN agent's tool, not the coder's
+    coder_only = False               # offered to the main agent; the coder may call it too
     description = (
         "Run a shell command directly on the HOST (no sandbox). For host/system tasks that "
         "need real host access - e.g. inspecting a running docker container, host services, "
-        "or a host CLI. Requires the user's explicit confirmation each time and is available "
-        "only in the local app (never over Telegram/WhatsApp/Discord). Prefer safer tools "
-        "when host access is not actually required."
+        "or a host CLI. Asks the user before it runs, unless the user already allowed it for "
+        "this chat or always, and is available only in the local app (never over "
+        "Telegram/WhatsApp/Discord). Prefer safer tools when host access is not actually "
+        "required."
     )
     parameters = {
         "type": "object",
@@ -62,8 +70,8 @@ class HostBashTool(BaseTool):
         # policy-layer block, but it is lifted when the admin sets channel_tools_unrestricted
         # (default ON on a fresh install). host_bash on a remote channel is categorically not
         # allowed: there is no way to show the confirmation there, so a Telegram message could
-        # otherwise run host commands unconfirmed. execute_tool injects the authoritative
-        # is_channel_session it already computed; refuse unconditionally when it is a channel.
+        # otherwise run host commands unconfirmed. The chat lane injects the authoritative
+        # _is_channel_session it already computed; refuse unconditionally when it is a channel.
         if kwargs.get("_is_channel_session"):
             return (
                 "[BLOCKED] host_bash is not available over remote messaging channels "

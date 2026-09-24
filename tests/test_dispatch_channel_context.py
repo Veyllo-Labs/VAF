@@ -101,7 +101,7 @@ def _dispatch(tool_name, context):
     stub = _stub(cls)
     model_args = _required(getattr(cls, "parameters", None))
     fake = bind_chat_stages(SimpleNamespace(
-        tools={tool_name: stub}, _event_sink=None, _allow_once_tools={tool_name},
+        tools={tool_name: stub}, _event_sink=None,
         _noninteractive=True, _current_turn_thinking_mode=False,
         _current_chat_source=source, current_session_id=session_id,
         _current_user_scope_id=SCOPE, _current_user_role="admin",
@@ -172,7 +172,7 @@ def test_a_model_cannot_ask_for_the_bridge_back_on_a_channel():
     cls = _tool_class("python_sandbox")
     stub = _stub(cls)
     fake = bind_chat_stages(SimpleNamespace(
-        tools={"python_sandbox": stub}, _event_sink=None, _allow_once_tools={"python_sandbox"},
+        tools={"python_sandbox": stub}, _event_sink=None,
         _noninteractive=True, _current_turn_thinking_mode=False,
         _current_chat_source=source, current_session_id=session_id,
         _current_user_scope_id=SCOPE, _current_user_role="admin",

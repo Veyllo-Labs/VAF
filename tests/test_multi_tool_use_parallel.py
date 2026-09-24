@@ -50,7 +50,7 @@ def _agent(tools, events=None):
     return bind_chat_stages(SimpleNamespace(
         tools={t.name: t for t in tools},
         _event_sink=(events.append if events is not None else None),
-        _allow_once_tools={t.name for t in tools}, _noninteractive=True,
+        _noninteractive=True,
         _current_turn_thinking_mode=False, _current_chat_source="web",
         current_session_id=None, _current_user_scope_id=SCOPE,
         _current_user_role="admin", _current_username="tenant", _run_kind="chat",

@@ -41,18 +41,52 @@ HIDDEN_CHARS = frozenset({
     0x00AD,                                          # soft hyphen
 })
 
+# A secret VALUE as it appears in the preview. The preview is JSON text, so a quote the
+# command carried arrives escaped (\"...\"); the old bare-word pattern stopped at that
+# backslash and "redacted" nothing but the backslash, while the dialog claimed a secret
+# had been hidden. Never a value that is already the placeholder (two rules must not
+# count one secret twice), and never a $VARIABLE, which names a secret without being one.
+_VALUE = r"""(?!\[redacted\])(?!\$)(?:\\"(?:[^"\\]|\\[^"])*\\"|'[^']*'|[^\s"'\\&;]+)"""
+
+# Names that carry a secret, in an assignment (DB_PASSWORD=..., ?token=...) or as a JSON
+# key ("password": "..."). "pass" also catches FTP_PASS and passwd.
+_SECRET_NAME = r"[A-Za-z0-9_]*?(?:pass|secret|token|api_?key|access_?key|private_?key)[A-Za-z0-9_]*"
+
+# Shared with the access-log filter (vaf/core/log_helper.py), which masks the same
+# assignments in request lines: group 1 is kept, the value after it is the secret.
+SECRET_ASSIGNMENT = re.compile(r"((?:^|[^A-Za-z0-9_])" + _SECRET_NAME + r"=)" + _VALUE,
+                               re.IGNORECASE)
+
 _SECRET_PATTERNS = (
     # (regex, group to keep) - the keep group preserves the surrounding syntax
     # so the reader still sees WHAT was passed, only not its value.
-    (re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]{8,}", re.IGNORECASE), r"\1"),
-    (re.compile(r"(//)[^/\s:@]+:[^/\s:@]+(@)"), r"\1"),
-    (re.compile(r"((?:--|-)(?:password|token|api[-_]?key|secret|passwd)[=\s]+)"
-                r"[^\s\"']+", re.IGNORECASE), r"\1"),
+    # A JSON field whose name says it is a secret: a tool argument like {"password": ...}.
+    (re.compile(r'("' + _SECRET_NAME + r'"\s*:\s*")(?!\[redacted\])(?:[^"\\]|\\.)+(?=")',
+                re.IGNORECASE), r"\1"),
+    (re.compile(r"(Bearer\s+)(?!\$)[A-Za-z0-9._~+/=\-]{8,}", re.IGNORECASE), r"\1"),
+    (re.compile(r"(Authorization:\s*Basic\s+)[A-Za-z0-9+/=]+", re.IGNORECASE), r"\1"),
+    (re.compile(r"((?:X-Api-Key|X-Auth-Token|X-Access-Token|Api-Key|Private-Token)\s*:\s*)"
+                + _VALUE, re.IGNORECASE), r"\1"),
+    # URL userinfo: the user stays readable, the password goes, the @ and host stay. The
+    # value runs to the LAST @ of the segment - a password may contain one.
+    (re.compile(r'(//[^/\s:@"\\]+:)(?!\[redacted\])[^/\s"\\]*(?=@)'), r"\1"),
+    # --password x / --password=x / --token ... on any command line.
+    (re.compile(r"((?:^|[\s\"'])--?(?:password|passwd|pass|token|api[-_]?key|secret|"
+                r"client[-_]secret|access[-_]token)(?:=|\s+))" + _VALUE, re.IGNORECASE), r"\1"),
+    # curl/wget style user:password (-u, --user, --proxy-user), attached or quoted.
+    (re.compile(r"((?:^|[\s\"'])(?:-u|--user|--proxy-user)(?:=|\s*)(?:\\\"|')?[^\s:\"'\\,]+:)"
+                r"(?!\[redacted\])(?!\$)[^\s\"'\\]+"), r"\1"),
+    # lftp -u user,password
+    (re.compile(r"((?:^|[\s\"'])-u\s+(?:\\\"|')?[^\s:\"'\\,]+,)(?!\[redacted\])(?!\$)[^\s\"'\\]+"),
+     r"\1"),
+    (re.compile(r"(\bsshpass\s+-p\s*)" + _VALUE), r"\1"),
+    # mysql -psecret: the password is glued to the flag (a bare -p prompts instead).
+    (re.compile(r"(\b(?:mysql|mysqldump|mysqladmin|mariadb)\b[^\n\"]*?\s-p)(?!\[redacted\])"
+                r"(?!\$)(?=[^\s-])[^\s\"'\\]+"), r"\1"),
     (re.compile(r"\b(sk-|rk-|pk_live_|ghp_|gho_|ghu_|ghs_|ghr_|xox[baprs]-)"
                 r"[A-Za-z0-9_\-]{8,}"), r"\1"),
     (re.compile(r"\b(AKIA)[0-9A-Z]{12,}"), r"\1"),
-    (re.compile(r"((?:api_key|apikey|access_token|token|password)=)[^&\"'\s]+",
-                re.IGNORECASE), r"\1"),
+    (SECRET_ASSIGNMENT, r"\1"),
 )
 
 REDACTED = "[redacted]"

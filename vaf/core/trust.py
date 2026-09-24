@@ -5,8 +5,9 @@
 Trust & Capability Gating
 
 Minimal "trusted folders" + user decisions for risky actions:
-- once
-- always
+- once    this one call, nothing is remembered
+- chat    this tool, for the rest of ONE chat of ONE user, in memory only
+- always  this tool and the current directory subtree, persisted per user
 - cancel
 
 PER USER. The store used to be one machine-global file, so a single "always"
@@ -26,13 +27,15 @@ Design goals:
 from __future__ import annotations
 
 import json
+import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
 from vaf.core.platform import Platform
 
-Decision = Literal["allow_once", "allow_always", "cancel"]
+Decision = Literal["allow_once", "allow_chat", "allow_always", "cancel"]
 
 
 RISKY_TOOLS = {
@@ -162,6 +165,73 @@ def set_tool_policy(tool_name: str, policy: Literal["allow", "deny", "ask"],
 def get_tool_policy(tool_name: str, user_scope_id: Optional[str] = None) -> str:
     state = load_trust_state(user_scope_id)
     return state.tool_policies.get(tool_name, "ask")
+
+
+# ── Chat grants ("allow for this chat") ──────────────────────────────────────
+#
+# The middle answer between one call and a persistent "always". It replaced an
+# in-memory "allow once" set that lived on the one Agent object a web or tray
+# process serves every session and every account from, and was never cleared:
+# one click armed the tool for the rest of the process, for every chat and
+# every tenant, and nothing announced it. A grant is therefore KEYED on the
+# person and the chat, and a call with no chat can hold none.
+#
+# In memory only, deliberately: it answers "may this tool keep running in the
+# conversation I am looking at", and a restart ends that conversation's grants
+# the same way closing a terminal ends a shell.
+#
+# A spawned sub-agent is another process, so it inherits the grants of the ONE
+# chat it serves as data: tool names in CHAT_GRANTS_ENV, bound to the identity
+# the spawn already hands over (VAF_USER_SCOPE_ID, VAF_SESSION_ID). They count
+# only for that same person and chat.
+
+CHAT_GRANTS_ENV = "VAF_CHAT_TOOL_GRANTS"
+
+_chat_grants: dict[tuple[str, str], set[str]] = {}
+_chat_grants_lock = threading.Lock()
+
+
+def _chat_key(user_scope_id: Optional[str], session_id: Optional[str]) -> Optional[tuple[str, str]]:
+    session = str(session_id or "").strip()
+    if not session:
+        return None
+    return (_scope_key(user_scope_id), session)
+
+
+def grant_tool_for_chat(tool_name: str, user_scope_id: Optional[str],
+                        session_id: Optional[str]) -> bool:
+    """Allow ``tool_name`` for the rest of this chat. False when there is no chat to key on."""
+    key = _chat_key(user_scope_id, session_id)
+    if key is None:
+        return False
+    with _chat_grants_lock:
+        _chat_grants.setdefault(key, set()).add(tool_name)
+    return True
+
+
+def _inherited_chat_grants(key: tuple[str, str]) -> frozenset[str]:
+    raw = os.environ.get(CHAT_GRANTS_ENV, "")
+    if not raw:
+        return frozenset()
+    own = _chat_key(os.environ.get("VAF_USER_SCOPE_ID"), os.environ.get("VAF_SESSION_ID"))
+    if own != key:
+        return frozenset()
+    return frozenset(t.strip() for t in raw.split(",") if t.strip())
+
+
+def chat_grants(user_scope_id: Optional[str], session_id: Optional[str]) -> frozenset[str]:
+    """The tools this person allowed for this chat, including the ones a child inherited."""
+    key = _chat_key(user_scope_id, session_id)
+    if key is None:
+        return frozenset()
+    with _chat_grants_lock:
+        own = frozenset(_chat_grants.get(key, ()))
+    return own | _inherited_chat_grants(key)
+
+
+def has_chat_grant(tool_name: str, user_scope_id: Optional[str],
+                   session_id: Optional[str]) -> bool:
+    return tool_name in chat_grants(user_scope_id, session_id)
 
 
 def should_gate_tool(tool_name: str) -> bool:

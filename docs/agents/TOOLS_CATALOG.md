@@ -86,15 +86,16 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `coding_agent` | write | Autonomous code-generation sub-agent. |
 | `create_agent_tool` | system | Create/update a Python tool the agent can use immediately. |
 | `python_sandbox` | write | Run Python in a Docker-isolated sandbox; `export_files` copies produced artifacts (images, PDFs) into the chat workspace after the run. |
-| `python_exec` | dangerous | Run Python on the host (no sandbox) - confirmed. |
+| `python_exec` | dangerous | Run Python on the host (no sandbox) - confirmed; runs only with the person's stored "always" or their grant for this chat (the tool re-checks it itself, because a workflow step runs without the gate). |
 | `run_tests` | read | *(coder-only)* Run the project's tests in the isolated sandbox and return the real pass/fail. |
-| `host_bash` | dangerous | *(main agent)* Run a shell command on the HOST for host/docker tasks. Requires the user's confirmation each time; hard-blocked on remote channels (Telegram/WhatsApp/Discord), local app only. |
+| `host_bash` | dangerous | Run a shell command on the HOST for host/docker tasks. An account permission, outside the file jail. In the chat the person answers once / for this chat / always; the coder and workflow steps run it without asking. The main agent's direct call is hard-blocked on remote channels (Telegram/WhatsApp/Discord). |
 
 > **Two different shells.** The coder's `bash` (`coder_only`) runs inside a kernel jail
 > (bubblewrap): full access to its project workspace, but VAF's source, `~/.vaf`, secrets and
 > the host docker socket are structurally out of reach, and network is unshared. Host/docker
-> work is the *main agent's* `host_bash`, which runs unsandboxed on the host under an explicit
-> per-command confirmation gate and is never exposed over remote channels.
+> work is `host_bash`, which runs unsandboxed on the host: asked in the chat, unattended in
+> the coder and in workflow steps, and never called directly by the main agent from a remote
+> channel.
 > See `docs/security/SANDBOXING.md` § "Shell execution surfaces" for the confinement details.
 
 ## Workflows & skills

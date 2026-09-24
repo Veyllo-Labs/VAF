@@ -85,7 +85,7 @@ def _gate(monkeypatch, *, role=None, scope=None, bypass=False, events=None,
                                     bypass if k == "tool_confirmation_bypass_admins" else d))
     return resolve_confirmation_gate(
         "host_bash", reason="runs a shell", args={"command": "ls"},
-        trust_dir=Path("/tmp/p"), allow_once=set(), interactive=False,
+        trust_dir=Path("/tmp/p"), interactive=False,
         emit=(events.append if events is not None else None),
         user_scope_id=scope, user_role=role)
 
@@ -121,7 +121,7 @@ def test_an_explicit_ask_still_wins_over_the_bypass(monkeypatch):
                                     True if k == "tool_confirmation_bypass_admins" else d))
     out = resolve_confirmation_gate(
         "host_bash", reason="authorizer asked", args={}, trust_dir=Path("/tmp/p"),
-        allow_once=set(), interactive=False, ignore_standing_grants=True,
+        interactive=False, ignore_standing_grants=True,
         user_scope_id=None, user_role="admin")
     assert out is not None, "ask() was overruled by the bypass switch"
 
@@ -132,24 +132,56 @@ def test_the_switch_is_admin_write_only():
     assert Config.filter_for_non_admin({"tool_confirmation_bypass_admins": True}) == {}
 
 
-def test_the_python_exec_gate_reads_with_the_scope_it_wrote_with():
-    """The hand-rolled python_exec gate in agent.py writes its "always" answer
-    scoped (mark_trusted_dir/set_tool_policy with _gate_scope) and used to READ
-    the store unscoped two lines later. An unscoped read lands in the default
-    scope: the owner's one "always" opened unsandboxed execution for every
-    tenant, and a tenant's own "always" was never found at all.
+def _python_exec_fallback(monkeypatch, *, scope, allowed_scope):
+    """Drive the python_sandbox -> python_exec fallback of the chat lane, with a trust
+    store that says "allow" for ONE scope only, and report what python_exec received."""
+    from types import SimpleNamespace
 
-    MUTATION: drop either _gate_scope argument from the execution check - this
-    test must go red.
-    """
-    source = (Path(__file__).parent.parent / "vaf" / "core" / "agent.py").read_text(
-        encoding="utf-8")
-    assert 'get_tool_policy("python_exec", _gate_scope) == "allow"' in source, (
-        "the execution check reads the tool policy without the caller's scope")
-    assert 'is_trusted_dir(cwd, _gate_scope)' in source, (
-        "the execution check reads the trusted-dir store without the caller's scope")
-    assert 'get_tool_policy("python_exec") == "allow"' not in source, (
-        "an unscoped policy read is back in agent.py")
+    from vaf.core.agent import Agent
+
+    monkeypatch.setattr("vaf.core.trust.get_tool_policy",
+                        lambda name, user_scope_id=None:
+                        "allow" if user_scope_id == allowed_scope else "ask")
+    monkeypatch.setattr("vaf.core.trust.is_trusted_dir", lambda p, user_scope_id=None: False)
+    seen = {}
+
+    class _PythonExec:
+        name = "python_exec"
+        identity_kwargs = ("user_scope_id",)
+
+        def run(self, **kwargs):
+            seen.update(kwargs)
+            return "ran"
+
+    fake = SimpleNamespace(
+        tools={"python_exec": _PythonExec()}, _event_sink=None, _noninteractive=True,
+        _current_user_scope_id=scope, _current_user_role="user", _current_username="tenant",
+        _front_office_mode=False, _is_channel_turn=lambda: False,
+        _dispatch_session_id=lambda: "web_probe", _announce_held_send=lambda r: None,
+        _record_tool_used=lambda n: None, _ask_user_about_gate=None,
+        _push_gate_to_websocket=lambda e: None,
+    )
+    out = Agent._chat_post_dispatch(fake, "python_sandbox", {"code": "print(1)"},
+                                    "Security Error: blocked by the sandbox")
+    return out, seen
+
+
+def test_the_python_exec_fallback_runs_as_the_tenant_whose_grant_it_is(monkeypatch):
+    """The fallback used to be a second, hand-rolled gate that ran python_exec with no
+    identity, so the tool read the OWNER's trust bucket for a tenant. It now takes the
+    shared gate and the shared identity assignment.
+
+    MUTATION: drop user_scope_id from the fallback's gate call or its identity
+    assignment - one of these two tests goes red."""
+    out, seen = _python_exec_fallback(monkeypatch, scope=SCOPE_B, allowed_scope=SCOPE_B)
+    assert out == "ran"
+    assert seen.get("user_scope_id") == SCOPE_B
+
+
+def test_the_owners_grant_does_not_open_the_fallback_for_a_tenant(monkeypatch):
+    out, seen = _python_exec_fallback(monkeypatch, scope=SCOPE_B, allowed_scope=None)
+    assert seen == {}, "python_exec ran for a tenant on the owner's grant"
+    assert "requires confirmation" in out
 
 
 def _grant_gate(monkeypatch, *, scope, role="user", granted=None, events=None):
@@ -162,7 +194,7 @@ def _grant_gate(monkeypatch, *, scope, role="user", granted=None, events=None):
     monkeypatch.setattr(tool_dispatch, "_confirmation_bypass_resolver", granted)
     return resolve_confirmation_gate(
         "host_bash", reason="runs a shell", args={"command": "ls"},
-        trust_dir=Path("/tmp/p"), allow_once=set(), interactive=False,
+        trust_dir=Path("/tmp/p"), interactive=False,
         emit=(events.append if events is not None else None),
         user_scope_id=scope, user_role=role)
 

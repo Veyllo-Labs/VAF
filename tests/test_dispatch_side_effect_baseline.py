@@ -45,8 +45,9 @@ THE OTHER THREE:
 - The trust store is written on exactly one path: accepting a gate with "always"
   (`mark_trusted_dir` + `set_tool_policy`). That write outlives the process and is
   machine-global, so moving the gate is the single riskiest step of the split.
-- `_allow_once_tools` grows only on the "once" answer, and `_active_tools` only through the
-  search_tools post-hook - which parses one tool per line, name before the colon, and
+- The person's chat grants grow only on the "for this chat" answer - never on "once",
+  which used to fill a set on the agent that one web process serves every chat and
+  account from - and `_active_tools` only through the search_tools post-hook - which parses one tool per line, name before the colon, and
   silently yields nothing for any other shape.
 
 Measured, never typed. Five measurement bugs were caught and fixed while building these
@@ -72,70 +73,77 @@ SIDE_EFFECT_BASELINE = {
     "dup_guard": {
         "env_session_id_written": False,
         "recorded_tool_use": ['coding_agent'],
-        "allow_once_added": [],
+        "chat_grants_added": [],
         "active_tools_added": [],
         "trust_writes": [],
     },
     "gate_allow_always": {
         "env_session_id_written": False,
         "recorded_tool_use": ['probe'],
-        "allow_once_added": [],
+        "chat_grants_added": [],
         "active_tools_added": [],
         "trust_writes": ['mark_trusted_dir', 'set_tool_policy'],
+    },
+    "gate_allow_chat": {
+        "env_session_id_written": False,
+        "recorded_tool_use": ['probe'],
+        "chat_grants_added": ['probe'],
+        "active_tools_added": [],
+        "trust_writes": [],
     },
     "gate_allow_once": {
         "env_session_id_written": False,
         "recorded_tool_use": ['probe'],
-        "allow_once_added": ['probe'],
+        "chat_grants_added": [],
         "active_tools_added": [],
         "trust_writes": [],
     },
     "gate_refused": {
         "env_session_id_written": False,
         "recorded_tool_use": [],
-        "allow_once_added": [],
+        "chat_grants_added": [],
         "active_tools_added": [],
         "trust_writes": [],
     },
     "invalid_args": {
         "env_session_id_written": False,
         "recorded_tool_use": ['probe'],
-        "allow_once_added": [],
+        "chat_grants_added": [],
         "active_tools_added": [],
         "trust_writes": [],
     },
     "ok": {
         "env_session_id_written": False,
         "recorded_tool_use": ['probe'],
-        "allow_once_added": [],
+        "chat_grants_added": [],
         "active_tools_added": [],
         "trust_writes": [],
     },
     "plan_gate": {
         "env_session_id_written": False,
         "recorded_tool_use": [],
-        "allow_once_added": [],
+        "chat_grants_added": [],
         "active_tools_added": [],
         "trust_writes": [],
     },
     "policy_admin_only": {
         "env_session_id_written": False,
         "recorded_tool_use": [],
-        "allow_once_added": [],
+        "chat_grants_added": [],
         "active_tools_added": [],
         "trust_writes": [],
     },
     "search_tools": {
         "env_session_id_written": False,
         "recorded_tool_use": ['search_tools'],
-        "allow_once_added": [],
+        "chat_grants_added": [],
         "active_tools_added": ['read_file', 'write_file'],
         "trust_writes": [],
     },
     "unknown_tool": {
         "env_session_id_written": False,
         "recorded_tool_use": ['nope'],
-        "allow_once_added": [],
+        "chat_grants_added": [],
         "active_tools_added": [],
         "trust_writes": [],
     },
@@ -168,11 +176,11 @@ def _tool(name, fn=None, **attrs):
 
 def _probe(tools, call, pre_approved=True, **over):
     """Run one dispatch and report only what it changed around itself."""
+    from vaf.core import trust as _trust
+
     recorded, trust_writes = [], []
-    pre_allowed = {t.name for t in tools} if pre_approved else set()
     base = dict(
-        tools={t.name: t for t in tools}, _event_sink=None,
-        _allow_once_tools=set(pre_allowed), _noninteractive=True,
+        tools={t.name: t for t in tools}, _event_sink=None, _noninteractive=True,
         _current_turn_thinking_mode=False, _current_chat_source="web",
         current_session_id="probe-session", _current_user_scope_id=SCOPE,
         _current_user_role="admin", _current_username="tenant", _run_kind="chat",
@@ -192,8 +200,10 @@ def _probe(tools, call, pre_approved=True, **over):
 
     env_before = os.environ.get("VAF_SESSION_ID", "<unset>")
     policy = "always" if pre_approved else "ask"
+    grants = {}   # the process-wide chat grants, empty for this one dispatch
     try:
-        with patch("vaf.core.trust.get_tool_policy", return_value=policy), \
+        with patch.object(_trust, "_chat_grants", grants), \
+             patch("vaf.core.trust.get_tool_policy", return_value=policy), \
              patch("vaf.core.trust.is_trusted_dir", return_value=pre_approved), \
              patch("vaf.core.trust.set_tool_policy",
                    lambda *a: trust_writes.append("set_tool_policy")), \
@@ -210,17 +220,24 @@ def _probe(tools, call, pre_approved=True, **over):
     return {
         "env_session_id_written": env_after != env_before,
         "recorded_tool_use": list(recorded),
-        "allow_once_added": sorted(fake._allow_once_tools - pre_allowed),
+        "chat_grants_added": sorted({t for held in grants.values() for t in held}),
         "active_tools_added": sorted(fake._active_tools),
         "trust_writes": sorted(set(trust_writes)),
     }
 
 
 def _gate(answer):
-    """The interactive gate, answered. The only path that writes the persistent store."""
+    """The interactive gate, answered. The only path that writes the persistent store.
+
+    The dispatch runs INSIDE a session (the context the chat worker sets) while the agent
+    attribute stays empty, so the answer comes from the terminal prompt and a chat grant
+    still has a chat to key on."""
+    from vaf.core.subagent_ipc import session_context
+
     dangerous = _tool("probe", permission_level="dangerous")
     with patch("vaf.cli.ui.UI.prompt", return_value=answer), \
-         patch("vaf.cli.ui.UI.event", lambda *a, **k: None):
+         patch("vaf.cli.ui.UI.event", lambda *a, **k: None), \
+         session_context("probe-session"):
         return _probe([dangerous], ("probe", {}), pre_approved=False,
                       _noninteractive=False, current_session_id=None)
 
@@ -243,6 +260,7 @@ SCENARIOS = {
                lambda **kw: "- write_file: writes a file\n- read_file: reads a file"),
          _tool("write_file"), _tool("read_file")], ("search_tools", {})),
     "gate_allow_always": lambda: _gate("a"),
+    "gate_allow_chat": lambda: _gate("t"),
     "gate_allow_once": lambda: _gate("o"),
 }
 
@@ -279,3 +297,13 @@ def test_only_one_path_writes_the_persistent_trust_store():
         "answering 'once' must stay in memory - persisting it would silently widen a "
         "single approval into a standing one"
     )
+    assert SIDE_EFFECT_BASELINE["gate_allow_chat"]["trust_writes"] == [], (
+        "a chat grant lives in memory for one chat - persisting it would make it 'always'"
+    )
+
+
+def test_only_the_chat_answer_leaves_a_grant_behind():
+    """'Once' used to leave the tool armed for the rest of the process. Now only the
+    explicit 'for this chat' answer leaves anything, and only for that chat."""
+    holders = sorted(n for n, v in SIDE_EFFECT_BASELINE.items() if v["chat_grants_added"])
+    assert holders == ["gate_allow_chat"], holders

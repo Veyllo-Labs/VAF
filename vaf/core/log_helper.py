@@ -11,12 +11,12 @@ import hashlib
 import json
 import logging
 import os
-import re
 from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from vaf.core.arg_preview import SECRET_ASSIGNMENT as _SECRET_QS_RE
 from vaf.core.platform import Platform
 
 # ── Access-log secret redaction ───────────────────────────────────────────────
@@ -27,7 +27,9 @@ from vaf.core.platform import Platform
 # until it expires. Mask it at the logging boundary (the URL still works; only
 # the log is redacted). Also covers access_token / api_key / password if they
 # ever appear in a logged URL.
-_SECRET_QS_RE = re.compile(r'((?:token|access_token|api_key|apikey|password)=)[^&"\s]+', re.IGNORECASE)
+# The rule (_SECRET_QS_RE, imported above) is the same assignment rule the approval preview
+# redacts with (vaf/core/arg_preview.py), so the two lists of secret names cannot drift
+# apart: group 1 is kept, the value is masked.
 
 
 def _redact_secrets(value: Any) -> Any:

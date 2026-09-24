@@ -27,6 +27,15 @@ from vaf.core.trust import get_tool_policy
 logger = logging.getLogger("vaf.python_exec")
 
 
+def _granted_for_this_chat(user_scope_id) -> bool:
+    try:
+        from vaf.core.subagent_ipc import get_current_session_id
+        from vaf.core.trust import has_chat_grant
+        return has_chat_grant("python_exec", user_scope_id, get_current_session_id())
+    except Exception:
+        return False
+
+
 class PythonExecTool(BaseTool):
     name = "python_exec"
     category    = "code"
@@ -67,9 +76,13 @@ class PythonExecTool(BaseTool):
         if not code:
             return "[ERROR] python_exec: missing code"
         
-        # Check if this tool is explicitly allowed
-        policy = get_tool_policy("python_exec", kwargs.get("user_scope_id"))
-        if policy not in ("allow", "once"):
+        # Its own check, on top of the gate, because some lanes run tools without one (a
+        # workflow step): a stored "always" for this person, or their grant for the chat
+        # this call belongs to. A one-call approval cannot reach this far - the tool has no
+        # way to tell which call it was given for.
+        scope = kwargs.get("user_scope_id")
+        policy = get_tool_policy("python_exec", scope)
+        if policy != "allow" and not _granted_for_this_chat(scope):
             logger.warning("python_exec called without explicit trust policy")
             return (
                 "[SECURITY] python_exec runs code UNSANDBOXED on your host system.\n"

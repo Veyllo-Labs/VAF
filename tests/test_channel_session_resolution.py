@@ -59,7 +59,7 @@ class _Spy(BaseTool):
 def _dispatch(tool_name, *, attr_sid, contextvar_sid, source="", args=None):
     spy = _Spy(tool_name)
     fake = bind_chat_stages(SimpleNamespace(
-        tools={tool_name: spy}, _event_sink=None, _allow_once_tools={tool_name},
+        tools={tool_name: spy}, _event_sink=None,
         _noninteractive=True, _current_turn_thinking_mode=False,
         _current_chat_source=source, current_session_id=attr_sid,
         _current_user_scope_id=SCOPE, _current_user_role="admin",
@@ -146,7 +146,7 @@ def _blocked(*, attr_sid, contextvar_sid, source=""):
     tool = _Spy("send_mail")
     tool.channel_restrictions = ("channel", "telegram")
     fake = bind_chat_stages(SimpleNamespace(
-        tools={"send_mail": tool}, _event_sink=None, _allow_once_tools={"send_mail"},
+        tools={"send_mail": tool}, _event_sink=None,
         _noninteractive=True, _current_turn_thinking_mode=False,
         _current_chat_source=source, current_session_id=attr_sid,
         _current_user_scope_id=SCOPE, _current_user_role="user",

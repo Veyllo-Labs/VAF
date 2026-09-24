@@ -98,6 +98,33 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   two things a window can get wrong here, a dark surface or a pale text colour that only one
   theme can render, are now caught by a test instead of by somebody opening the window.
 
+### Security
+
+- **"Allow once" means once, and there is a new "For this chat".** Answering "Allow once" to
+  a tool confirmation used to leave that tool allowed for the rest of the server process: in
+  every chat, for every account on the machine, and without any trace. Now "Only this time"
+  runs that one call and nothing else, and the dialog has a fourth answer, **For this chat**,
+  which keeps the tool allowed for you in that chat only, until VAF restarts. The terminal
+  prompt and the terminal app offer the same four answers, and the dialog is now translated.
+- **The coding agent runs only the tools it was given.** It would run any tool whose name
+  the model came up with, including administrator-only ones, and a continued coding run
+  started without knowing whose account it worked for. It now refuses tools outside its own
+  list, keeps the administrator-only rules, and always runs as the account that started it.
+  It still uses the host shell without asking, for accounts that are allowed to use it, so a
+  local build does not stop for a question.
+- **Unsandboxed Python after a blocked sandbox run asks in the app and runs as you.** The
+  offer to run the code with `python_exec` asked only in a terminal and then ran with the
+  owner's settings, even for another account. It now uses the same dialog as every other
+  tool, and "For this chat" works for it too.
+- **Passwords stay hidden in the confirmation dialog.** Passwords passed as `curl -u`,
+  `--user`, `lftp -u`, `sshpass -p`, `mysql -p`, a Basic or API-key header, an assignment such
+  as `FTP_PASS=...` or a quoted `--password="..."` were shown in full; the quoted form even
+  showed the password while claiming it was hidden. The web dialog also never showed the note
+  that something had been hidden. All of these are fixed.
+- **Web pages are no longer fetched without a certificate check.** When a site's certificate
+  could not be verified, page fetching quietly tried again without checking it and kept the
+  result. It now reports the certificate error instead.
+
 ## [0.1.0a29] - 2026-09-20
 
 ### Added

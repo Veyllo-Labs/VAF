@@ -354,7 +354,20 @@
     "subAgentLibrarianDesc": "Dosyalarında yolunu bulur: arar, sıralar, düzenler ve neyin nerede olduğunu söyler.",
     "subAgentBrowserName": "Tarayıcı",
     "subAgentBrowserDesc": "Gerçek bir tarayıcıyı sürer: sayfalarda gezinir, formları doldurur ve girişleri geçer.",
-    "subAgentContextChipTitle": "{agent} penceresi açık - bir sonraki mesajın onunla ilgili sayılır ve ajan işi {agent} ajanına devredebileceğini bilir"
+    "subAgentContextChipTitle": "{agent} penceresi açık - bir sonraki mesajın onunla ilgili sayılır ve ajan işi {agent} ajanına devredebileceğini bilir",
+    "gateTitle": "Güvenlik onayı",
+    "gateSubtitle": "Ajan, onayını gerektiren bir araç çalıştırmak istiyor",
+    "gateTool": "Araç",
+    "gateArguments": "Argümanlar",
+    "gateHiddenChars": "{count, plural, other {# görünmez karakter görünür yapıldı}}",
+    "gateSecretsRedacted": "{count, plural, other {# gizli değer maskelendi}}",
+    "gateTruncated": "argümanlar kısaltıldı",
+    "gateCommandIs": "Bu komut: {categories}",
+    "gateAllowOnce": "Yalnızca bu sefer",
+    "gateAllowChat": "Bu sohbet için",
+    "gateAllowAlways": "Her zaman izin ver",
+    "gateAllowChatHint": "Bu aracı bu sohbetin geri kalanında senin için serbest bırakır. Diğer sohbetler sormaya devam eder. VAF yeniden başlayınca sona erer.",
+    "gateAllowAlwaysHint": "Bu aracı senin için her yerde serbest bırakır ve onay isteyen her araç için geçerli klasöre güvenir."
   },
   "nav": {
     "settings": "Ayarlar",

@@ -230,8 +230,8 @@ Use this only when you need host filesystem/network access and trust the code so
 ## Shell execution surfaces
 
 Beyond the Python sandbox there are three shell-execution surfaces, each with a distinct
-confinement model. The guiding rule: **the coder is jailed; the host is the main agent's job,
-under human confirmation.**
+confinement model. The guiding rule: **the coder's own shell is jailed; the host is reached
+only through `host_bash`, which an account has or does not have.**
 
 ### Coder `bash` - kernel-jailed workspace shell (`vaf/tools/workspace_exec.py`)
 
@@ -268,27 +268,43 @@ pass/fail, instead of guessing. It copies the project (tar-pipe) into a fresh
 under an in-container `timeout -s KILL`, returns the summary, and removes the run directory in a
 `finally`. It is `read`-level (no host side effects).
 
-### `host_bash` - main-agent host shell (`vaf/tools/host_bash.py`)
+### `host_bash` - host shell (`vaf/tools/host_bash.py`)
 
 Some tasks genuinely need the real host - "check my running docker container", inspect host
-services, run a host CLI. Those belong to the **main agent**, not the coder, and `host_bash`
-runs **unsandboxed on the host on purpose**. Its safety is two hard controls, not a sandbox:
+services, run a host CLI, a local build. `host_bash` runs **unsandboxed on the host and
+outside the per-user file jail, on purpose**. Who may use it is an **account permission**
+(the account allowlist in user management; the standard preset includes it, so a new
+account has it unless the admin takes it away). How each use is controlled:
 
-1. **`permission_level = "dangerous"`** → the framework's confirmation gate fires: the user
-   approves each run before it executes, and sees the command, not just the tool name -
-   in the Web UI, the TUI modal and the terminal prompt alike. The rendered arguments are
-   hardened (`vaf/core/arg_preview.py`): hidden and direction-changing characters become
+1. **`permission_level = "dangerous"`** → the framework's confirmation gate fires, and the
+   person sees the command, not just the tool name - in the Web UI, the TUI modal and the
+   terminal prompt alike. They answer **only this time** (this one call, nothing is
+   remembered), **for this chat** (the tool keeps running unasked for this person in this
+   chat, in memory until the next restart; every such run is announced as a
+   `gate_bypassed` event with `why="chat_grant"`), **always** (persisted per person: the
+   tool everywhere plus trust for the current folder) or **cancel**. The rendered arguments
+   are hardened (`vaf/core/arg_preview.py`): hidden and direction-changing characters become
    visible markers, credential material is redacted, and a truncation says so, so the
    approved text cannot differ from the executed one.
-2. **Remote channels are blocked in two layers.** There is no safe way to show the confirmation
-   on Telegram/WhatsApp/Discord, so:
+2. **The coding agent and workflow steps run it without asking** (`vaf/tools/coder.py`,
+   `vaf/workflows/engine.py` with `gate_enabled=False`). Deliberate: both run unattended, a
+   dialog would stall them, and a coder that needs a local build or a host CLI must not stop
+   for it. What still applies there: the account allowlist (so an account without
+   `host_bash` does not get it through the coder either), the policy block (`admin_only`;
+   `channel_restrictions` while the admin keeps `channel_tools_unrestricted` off), and for
+   workflow steps an application's authorizer. The coder enforces its own tool allow-list
+   at dispatch as well, so a tool it was never given does not run because the model named it.
+3. **The main agent's direct call is blocked on remote channels, in two layers.** There is no
+   safe way to show the confirmation on Telegram/WhatsApp/Discord, so:
    - **`channel_restrictions`** is the policy-layer block (`evaluate_tool_policy`), and
    - a **non-liftable guard** inside `run()` refuses on a channel *even when the admin enables
      `channel_tools_unrestricted`* (default ON on a fresh install), which otherwise lifts the
      policy block for the convenience tools. The guard uses the authoritative `is_channel_session`
-     that `execute_tool` injects (set unconditionally so the LLM cannot spoof it).
+     that the chat lane injects (set unconditionally so the LLM cannot spoof it). Only the chat
+     lane injects it, deliberately: it protects the turn where somebody would have been asked,
+     not the unattended lanes in 2 - a coder started from a Telegram message may still build.
 
-   **Local Web UI / CLI only.**
+   **The main agent: local Web UI / CLI only.**
 
 An offline classifier (`vaf/core/command_policy.py`, shared with `bash` but run with the
 strict `host` profile) refuses the catastrophic set even after confirmation: code fetched
@@ -297,7 +313,7 @@ delete of a system or home root, and a command whose executable is built by a su
 (there the approved text is not the text that would run). It tokenizes quote-aware and
 descends into substitutions rather than matching substrings, so `rm -rf /tmp/scratch` is
 ordinary work while `rm  -rf  /` is not. The verdict carries its categories, which the
-confirmation dialog shows. The real safety is still the per-command human approval plus the
+confirmation dialog shows. The real safety is still the person's approval plus the
 two-layer local-only gate. The controls are pinned in `tests/test_host_bash.py` and
 `tests/test_command_policy.py`.
 

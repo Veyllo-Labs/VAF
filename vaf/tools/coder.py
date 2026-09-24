@@ -2832,22 +2832,53 @@ def _caller_allowed_tools(scope, role):
     return resolve_account_allowlist(scope)
 
 
-def _assign_caller_identity(tool, fn_args: dict, scope, role) -> dict:
-    """Give an inner tool the caller's identity - by ASSIGNMENT, never setdefault.
+def _as_the_caller(tool, fn_args: dict, *, scope, role) -> dict:
+    """An inner call's arguments, as the CALLER and not as the process.
 
-    `fn_args` is what the MODEL wrote. A prompt-injected `user_role: "admin"` must be
-    overwritten, not honoured - the same rule the main dispatcher enforces and CI pins
-    (tool_dispatch assigns, and a guard exists precisely for this). Only keys the tool
-    DECLARES are touched: `bash` declares none, deliberately (see its class comment), and
-    handing identity to a tool that never asked would widen this change past what was
-    measured.
+    The framework's one assignment rule, the same the chat funnel applies: every key the
+    inner tool declares, overwriting anything the model wrote into those keys. This used to
+    be a narrower copy that knew scope and role only, so a declared ``username`` never
+    arrived and the GitHub and skill tools resolved the owner's account.
     """
-    declared = getattr(tool, "identity_kwargs", ()) or ()
-    if "user_scope_id" in declared:
-        fn_args["user_scope_id"] = scope
-    if "user_role" in declared:
-        fn_args["user_role"] = role
-    return fn_args
+    from vaf.core.tool_dispatch import assign_declared_identity
+    return assign_declared_identity(tool, fn_args, user_scope_id=scope, username=None,
+                                    user_role=role)
+
+
+def _coder_dispatch_refusal(fn_name: str, tool, *, coder_allowed, caller_allowed,
+                            scope, role, session_id) -> Optional[str]:
+    """Why the coder must NOT run this call, or None when it may.
+
+    The coder dispatches its inner tools itself rather than through ``ToolCaller`` (the
+    reason is in docs/agents/CODER_ARCHITECTURE.md, "Dispatch-side enforcement"), so the
+    questions that are HARD refusals in the funnel are asked here - with the framework's own
+    policy function, not a second copy of its logic. Before this, the coder asked only the
+    account allowlist: its own allowlist shaped the schema and was never enforced, so any
+    discovered tool ran when the model named it, the admin-only ones included.
+
+      1. The coder allowlist, ENFORCED at dispatch - not only used to shape the schema.
+      2. The account allowlist (``caller_allowed``, None = unrestricted).
+      3. The declarative policy: ``admin_only`` and ``channel_restrictions``.
+
+    There is no confirmation gate in this lane. Deliberate: the coder runs unattended and
+    uses its tools at full strength, host_bash included, for an account that may use them;
+    the account allowlist is that decision, exactly as for a workflow step.
+    """
+    if fn_name not in coder_allowed:
+        return (f"Security Error: '{fn_name}' is not a coding-agent tool. "
+                f"Use the tools you were given.")
+    if caller_allowed is not None and fn_name not in caller_allowed:
+        return f"Security Error: The tool '{fn_name}' is not enabled for your account."
+    from vaf.core.tool_contract import evaluate_tool_policy
+    from vaf.core.tool_dispatch import is_channel_session, policy_admin_flag
+    decision = evaluate_tool_policy(
+        tool_name=fn_name, tool=tool, current_source="",
+        is_channel_session=is_channel_session("", session_id),
+        is_admin=policy_admin_flag(role, scope),
+    )
+    if decision.blocked:
+        return f"Security Error: {decision.reason}"
+    return None
 
 
 class CodingAgentTool(BaseTool):
@@ -3287,6 +3318,11 @@ Thumbs.db
         # the dispatch loop thousands of lines below needs the answer as locals.
         caller_scope, caller_role = _caller_identity(kwargs)
         caller_allowed = _caller_allowed_tools(caller_scope, caller_role)
+        # The chat this run works for: in the parent the dispatcher's context, in the
+        # spawned child VAF_SESSION_ID. The policy asks whether it is a messaging channel,
+        # and python_exec's own check reads the person's grants for it.
+        from vaf.core.subagent_ipc import get_current_session_id
+        caller_session = get_current_session_id()
         # WHICH tools a coding agent works with at all, independent of who is asking.
         # Resolved once per run so a config edit mid-run cannot change the schema
         # between two loops of the same conversation.
@@ -3408,6 +3444,13 @@ Thumbs.db
                 # allowlist, and it cannot ask the resolver mid-run without re-deciding
                 # what the funnel already decided.
                 _sub_env["VAF_ALLOWED_TOOLS"] = ",".join(sorted(caller_allowed))
+            # The person's grants for THIS chat, as tool names. python_exec checks them
+            # itself (it runs only with a standing or a chat grant), and in the child it
+            # can only find them here. A snapshot - a later grant reaches the next run.
+            from vaf.core.trust import CHAT_GRANTS_ENV, chat_grants
+            _grants = chat_grants(caller_scope, caller_session)
+            if _grants:
+                _sub_env[CHAT_GRANTS_ENV] = ",".join(sorted(_grants))
 
             spawned = spawn_subagent(
                 "coding_agent", task,
@@ -9485,13 +9528,15 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 
                 elif fn_name in self.local_tools:
                     tool = self.local_tools[fn_name]
-                    if caller_allowed is not None and fn_name not in caller_allowed:
-                        # Backstop only - the schema filter above keeps blocked tools out of
-                        # the model's sight, so this fires only on a hallucinated name.
+                    _refusal = _coder_dispatch_refusal(
+                        fn_name, tool, coder_allowed=_coder_allowed,
+                        caller_allowed=caller_allowed, scope=caller_scope, role=caller_role,
+                        session_id=caller_session,
+                    )
+                    if _refusal is not None:
                         class _RefusedTool:
-                            def run(self, **_kw):
-                                return (f"Security Error: The tool '{fn_name}' is not "
-                                        f"enabled for your account.")
+                            def run(self, _msg=_refusal, **_kw):
+                                return _msg
                         tool = _RefusedTool()
                     
                     # Fix relative paths and show in stream
@@ -9805,10 +9850,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         except Exception:
                             pass
 
-                        # As the CALLER, not as the process: assigns scope/role to every
-                        # inner tool that declares them (seven of eight do), overwriting
-                        # anything the model wrote into those keys.
-                        _assign_caller_identity(tool, fn_args, caller_scope, caller_role)
+                        _as_the_caller(tool, fn_args, scope=caller_scope, role=caller_role)
                         result = tool.run(**fn_args)
 
                         try:

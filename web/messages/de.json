@@ -354,7 +354,20 @@
     "subAgentLibrarianDesc": "Kennt sich in deinen Dateien aus: sucht, sortiert, räumt auf und sagt dir, was wo liegt.",
     "subAgentBrowserName": "Browser",
     "subAgentBrowserDesc": "Steuert einen echten Browser: klickt durch Seiten, füllt Formulare aus und kommt an Logins vorbei.",
-    "subAgentContextChipTitle": "Du hast das {agent}-Fenster offen - deine nächste Nachricht wird darauf bezogen, und der Agent weiß, dass er die Arbeit an {agent} abgeben kann"
+    "subAgentContextChipTitle": "Du hast das {agent}-Fenster offen - deine nächste Nachricht wird darauf bezogen, und der Agent weiß, dass er die Arbeit an {agent} abgeben kann",
+    "gateTitle": "Sicherheitsabfrage",
+    "gateSubtitle": "Der Agent möchte ein Werkzeug ausführen, das deine Freigabe braucht",
+    "gateTool": "Werkzeug",
+    "gateArguments": "Argumente",
+    "gateHiddenChars": "{count, plural, one {# verstecktes Zeichen sichtbar gemacht} other {# versteckte Zeichen sichtbar gemacht}}",
+    "gateSecretsRedacted": "{count, plural, one {# Geheimnis ausgeblendet} other {# Geheimnisse ausgeblendet}}",
+    "gateTruncated": "Argumente gekürzt",
+    "gateCommandIs": "Dieser Befehl: {categories}",
+    "gateAllowOnce": "Nur dieses Mal",
+    "gateAllowChat": "Für diesen Chat",
+    "gateAllowAlways": "Immer erlauben",
+    "gateAllowChatHint": "Erlaubt dir dieses Werkzeug für den Rest dieses Chats. In anderen Chats wird weiter gefragt. Gilt bis zum nächsten Neustart von VAF.",
+    "gateAllowAlwaysHint": "Erlaubt dir dieses Werkzeug überall und vertraut dem aktuellen Ordner bei jedem Werkzeug, das nach einer Bestätigung fragt."
   },
   "nav": {
     "settings": "Einstellungen",

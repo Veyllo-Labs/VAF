@@ -38,13 +38,18 @@ def _esc(text) -> str:
 class GateScreen(ModalScreen[str]):
     """The confirmation gate as a modal - warning-colored, keyboard-first.
 
-    Dismisses with "once" / "always" / "cancel"; the bridge maps those onto the
-    engine's allow_once/allow_always/cancel contract and answers the waiting
-    gate through web_interface.resolve_gate.
+    Dismisses with "once" / "chat" / "always" / "cancel"; the bridge maps those
+    onto the engine's allow_once/allow_chat/allow_always/cancel contract and
+    answers the waiting gate through web_interface.resolve_gate.
+
+    "always" is labelled for what it does: it allows the tool for this user
+    everywhere AND trusts the current folder for every gated tool, not only
+    this tool in this folder.
     """
 
     BINDINGS = [
         Binding("y", "answer('once')", "allow once"),
+        Binding("t", "answer('chat')", "this chat"),
         Binding("a", "answer('always')", "always"),
         Binding("escape", "answer('cancel')", "cancel"),
     ]
@@ -68,7 +73,8 @@ class GateScreen(ModalScreen[str]):
                 yield Static(f"[$vaf-muted]({_esc(self._notes)})[/]", classes="modal-body")
             yield Static(
                 "[$text][bold]y[/bold][/] [$vaf-muted]allow once[/]   "
-                "[$text][bold]a[/bold][/] [$vaf-muted]always in this directory[/]   "
+                "[$text][bold]t[/bold][/] [$vaf-muted]for this chat[/]   "
+                "[$text][bold]a[/bold][/] [$vaf-muted]always (tool + this folder)[/]   "
                 "[$text][bold]esc[/bold][/] [$vaf-muted]cancel[/]", classes="modal-keys")
 
     def action_answer(self, result: str) -> None:

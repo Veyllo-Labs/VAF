@@ -299,19 +299,29 @@ def _bypass_reason(user_role: str | None, user_scope_id: str | None) -> str | No
 
 
 def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
-                              trust_dir, allow_once: set, interactive: bool,
+                              trust_dir, interactive: bool,
                               decide=None, emit=None, on_gate_required=None,
                               ignore_standing_grants: bool = False,
                               user_scope_id: str | None = None,
-                              user_role: str | None = None) -> str | None:
+                              user_role: str | None = None,
+                              session_id: str | None = None) -> str | None:
     """Decide whether a confirmation-gated tool may run.
 
     Returns ``None`` when it may proceed, or the string to hand back to the model. Never
     raises and never returns a partial state: the caller either dispatches or returns this.
 
     Standing grants are checked first and silently - a tool whose policy is "allow", or any
-    tool under a trusted directory, or one already allowed once this turn, produces no event
-    at all. Only an actual gate is worth telling anyone about.
+    tool under a trusted directory, produces no event at all. Only an actual gate is worth
+    telling anyone about. A chat grant ("allow for this chat") is the exception and is
+    announced as ``gate_bypassed`` with ``why="chat_grant"``: it is the answer that used to
+    leak across chats and tenants unobserved, so its every use is on record.
+
+    The four answers, and what each one leaves behind:
+    ``allow_once`` runs THIS call and remembers nothing; ``allow_chat`` runs it and keeps the
+    tool allowed for this person in this chat (``session_id``), in memory only;
+    ``allow_always`` persists the tool policy and trusts ``trust_dir`` for this person;
+    anything else cancels. Without a ``session_id`` there is no chat to remember, so
+    ``allow_chat`` degrades to ``allow_once`` - it never widens.
 
     The one thing callers genuinely differ on is HOW a decision is obtained, so that is a
     callback rather than a branch here. Keeping it out means this module does not depend on
@@ -344,7 +354,8 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
     first standing grant would silence it forever, which is precisely the situation an
     application overrides the default for.
     """
-    from vaf.core.trust import get_tool_policy, is_trusted_dir, mark_trusted_dir, set_tool_policy
+    from vaf.core.trust import (get_tool_policy, grant_tool_for_chat, has_chat_grant,
+                                is_trusted_dir, mark_trusted_dir, set_tool_policy)
 
     if not ignore_standing_grants:
         # Hands-off for the machine owner, when the owner asked for it. Not a
@@ -357,8 +368,12 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
                               "why": _bypass_why})
             return None
         if (get_tool_policy(tool_name, user_scope_id) == "allow"
-                or is_trusted_dir(trust_dir, user_scope_id)
-                or tool_name in allow_once):
+                or is_trusted_dir(trust_dir, user_scope_id)):
+            return None
+        if has_chat_grant(tool_name, user_scope_id, session_id):
+            emit_event(emit, {"type": "gate_bypassed", "tool": tool_name,
+                              "cwd": str(trust_dir), "reason": reason,
+                              "why": "chat_grant"})
             return None
 
     # The dialog is a security control only while what it renders equals what
@@ -414,14 +429,18 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
         choice = decide(tool_name, reason, preview=dict(_pv)) if _wants_preview \
             else decide(tool_name, reason)
     if choice == "allow_once":
-        # In memory, for this agent only. Persisting a single approval would silently widen
-        # it into a standing one.
-        allow_once.add(tool_name)
+        # This call and nothing else: remembering it anywhere would silently widen a single
+        # approval into a standing one.
         emit_event(emit, {"type": "gate_decision", "tool": tool_name, "decision": "allow_once"})
+        return None
+    if choice == "allow_chat":
+        _granted = grant_tool_for_chat(tool_name, user_scope_id, session_id)
+        emit_event(emit, {"type": "gate_decision", "tool": tool_name,
+                          "decision": "allow_chat" if _granted else "allow_once"})
         return None
     if choice == "allow_always":
         # Both at once, as documented: the directory subtree AND the tool. Outlives the
-        # process and is machine-global - the only persistent write on any dispatch path.
+        # process, per user - the only persistent write on any dispatch path.
         mark_trusted_dir(trust_dir, user_scope_id)
         set_tool_policy(tool_name, "allow", user_scope_id)
         emit_event(emit, {"type": "gate_decision", "tool": tool_name, "decision": "allow_always"})
@@ -966,7 +985,6 @@ class ToolCaller:
         interactive: bool = False,
         gate_enabled: bool = True,
         trust_dir=None,
-        allow_once: set | None = None,
         decide=None,
         on_gate_required=None,
         # RUNTIME CONTROL
@@ -996,7 +1014,6 @@ class ToolCaller:
         # Hard policy blocks are NOT affected - those are not a gate.
         self.gate_enabled = gate_enabled
         self.trust_dir = trust_dir
-        self.allow_once = allow_once if allow_once is not None else set()
         self.decide = decide
         self.on_gate_required = on_gate_required
         self.timeout_for = timeout_for
@@ -1075,7 +1092,7 @@ class ToolCaller:
                 ignore_standing_grants=forced_ask,
                 trust_dir=self.trust_dir if self.trust_dir is not None else Path.cwd(),
                 user_scope_id=self.user_scope_id, user_role=self.user_role,
-                allow_once=self.allow_once, interactive=self.interactive,
+                session_id=self.session_id, interactive=self.interactive,
                 decide=self.decide, emit=self.on_event,
                 on_gate_required=self.on_gate_required,
             )

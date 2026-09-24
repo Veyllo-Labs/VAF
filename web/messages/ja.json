@@ -354,7 +354,20 @@
     "subAgentLibrarianDesc": "ファイルの中身を把握しています。検索し、並べ替え、片付けて、どこに何があるかを教えます。",
     "subAgentBrowserName": "ブラウザーエージェント",
     "subAgentBrowserDesc": "実際のブラウザーを操作します。ページをたどり、フォームに入力し、ログインも通過します。",
-    "subAgentContextChipTitle": "{agent}のウィンドウを開いています。次のメッセージはそれについての話として扱われ、エージェントも作業を{agent}に渡せることを把握しています。"
+    "subAgentContextChipTitle": "{agent}のウィンドウを開いています。次のメッセージはそれについての話として扱われ、エージェントも作業を{agent}に渡せることを把握しています。",
+    "gateTitle": "セキュリティの確認",
+    "gateSubtitle": "エージェントが、承認の必要なツールを実行しようとしています",
+    "gateTool": "ツール",
+    "gateArguments": "引数",
+    "gateHiddenChars": "{count, plural, other {隠れた文字を#文字表示しました}}",
+    "gateSecretsRedacted": "{count, plural, other {秘密情報を#件伏せました}}",
+    "gateTruncated": "引数を省略しました",
+    "gateCommandIs": "このコマンド：{categories}",
+    "gateAllowOnce": "今回のみ",
+    "gateAllowChat": "このチャットで許可",
+    "gateAllowAlways": "常に許可",
+    "gateAllowChatHint": "このチャットの間、このツールを許可します。ほかのチャットでは引き続き確認します。VAFを再起動すると解除されます。",
+    "gateAllowAlwaysHint": "このツールをどこでも許可し、確認が必要なすべてのツールについて現在のフォルダーを信頼します。"
   },
   "nav": {
     "settings": "設定",

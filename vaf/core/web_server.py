@@ -5826,9 +5826,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         })
 
                 elif type == "gate_response":
-                    # User clicked Allow Once / Allow Always / Cancel in the trust gate dialog.
-                    decision = cmd.get("decision")  # "allow_once" | "allow_always" | "cancel"
-                    if decision in ("allow_once", "allow_always", "cancel"):
+                    # The person answered the confirmation dialog. The accepted answers are
+                    # the trust module's Decision type, not a second list kept here.
+                    from typing import get_args as _get_args
+                    from vaf.core.trust import Decision as _GateDecision
+                    decision = cmd.get("decision")
+                    if decision in _get_args(_GateDecision):
                         _gate_session = manager.get_session_for_connection(websocket)
                         from vaf.core.web_interface import get_web_interface as _gwi
                         _gwi().resolve_gate(_gate_session or "", decision)

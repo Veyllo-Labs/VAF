@@ -354,7 +354,20 @@
     "subAgentLibrarianDesc": "熟悉你的文件：搜索、整理、归置，并告诉你什么东西在哪儿。",
     "subAgentBrowserName": "浏览器智能体",
     "subAgentBrowserDesc": "操作真实浏览器：点开网页、填写表单、搞定登录。",
-    "subAgentContextChipTitle": "你开着{agent}窗口，下一条消息默认就是在说它，智能体也知道可以把活儿交给{agent}"
+    "subAgentContextChipTitle": "你开着{agent}窗口，下一条消息默认就是在说它，智能体也知道可以把活儿交给{agent}",
+    "gateTitle": "安全确认",
+    "gateSubtitle": "智能体要运行一个需要你批准的工具",
+    "gateTool": "工具",
+    "gateArguments": "参数",
+    "gateHiddenChars": "{count, plural, other {已显示 # 个隐藏字符}}",
+    "gateSecretsRedacted": "{count, plural, other {已隐藏 # 处机密信息}}",
+    "gateTruncated": "参数已截断",
+    "gateCommandIs": "这条命令：{categories}",
+    "gateAllowOnce": "仅此一次",
+    "gateAllowChat": "仅限这个对话",
+    "gateAllowAlways": "始终允许",
+    "gateAllowChatHint": "在这个对话接下来的部分为你允许这个工具。其他对话仍会询问。VAF 重启后失效。",
+    "gateAllowAlwaysHint": "在所有位置为你允许这个工具，并在当前文件夹中信任每个需要确认的工具。"
   },
   "nav": {
     "settings": "设置",

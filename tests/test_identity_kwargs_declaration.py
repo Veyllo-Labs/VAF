@@ -244,7 +244,7 @@ class _SpyTool(BaseTool):
 def _dispatch(tool, model_args, *, scope="deadbeef-0000-0000-0000-000000000000",
               role="user", username="tenant"):
     fake = bind_chat_stages(SimpleNamespace(
-        tools={tool.name: tool}, _event_sink=None, _allow_once_tools={tool.name},
+        tools={tool.name: tool}, _event_sink=None,
         _noninteractive=True, _current_turn_thinking_mode=False, _current_chat_source="web",
         current_session_id=None, _current_user_scope_id=scope, _current_user_role=role,
         _current_username=username, _record_tool_used=lambda name: None,

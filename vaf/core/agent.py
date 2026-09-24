@@ -1532,8 +1532,6 @@ class Agent:
         self._recent_tools = {}
         self._recent_tool_keep_turns = 2
 
-        # Trust gating state (session-only)
-        self._allow_once_tools = set()
         # Optional application-supplied authorizer; see set_tool_authorizer().
         self._tool_authorizer = None
         self._orchestrator_heavy_calls_this_turn = 0  # Reset each turn; used when orchestrator + small n_ctx
@@ -7938,7 +7936,16 @@ class Agent:
                                 )
                                 
                                 UI.event("Workflow", "↻ Continuing work on remaining tasks...", style="info")
-                                continuation_result = coding_tool.run(task=continue_task, project_path=project_path_hint)
+                                # The caller's identity, by the same assignment every dispatch
+                                # uses: a bare run() here gave the coder no scope, and with no
+                                # scope the account allowlist reads as unrestricted.
+                                _continue_args = _assign_declared_identity(
+                                    coding_tool, {"task": continue_task, "project_path": project_path_hint},
+                                    user_scope_id=getattr(self, "_current_user_scope_id", None),
+                                    username=getattr(self, "_current_username", None),
+                                    user_role=getattr(self, "_current_user_role", None),
+                                )
+                                continuation_result = coding_tool.run(**_continue_args)
                                 
                                 # Check if NOW everything is complete
                                 if "ALL TASKS COMPLETED" in continuation_result or "Tasks: 5/5" in continuation_result:
@@ -12805,7 +12812,6 @@ class Agent:
             interactive=not self._noninteractive,
             gate_enabled=not _ww,
             trust_dir=Path.cwd(),
-            allow_once=self._allow_once_tools,
             decide=self._ask_user_about_gate,
             on_gate_required=self._push_gate_to_websocket,
             stop_check=_session_stop_check(sid),
@@ -12894,8 +12900,9 @@ class Agent:
                     UI.event("Security", f"({_notes})", style="warning")
         except Exception:
             pass
-        _raw = UI.prompt("Allow? [o]nce / [a]lways / [c]ancel: ").strip().lower()
+        _raw = UI.prompt("Allow? [o]nce / [t]his chat / [a]lways / [c]ancel: ").strip().lower()
         return {"o": "allow_once", "once": "allow_once",
+                "t": "allow_chat", "chat": "allow_chat",
                 "a": "allow_always", "always": "allow_always"}.get(_raw, "cancel")
 
     def _push_gate_to_websocket(self, evt):
@@ -13007,6 +13014,9 @@ class Agent:
             # Authoritative channel flag for host_bash's own non-liftable guard. Set
             # unconditionally so an LLM-supplied value cannot spoof it. host_bash refuses
             # on channels even when channel_tools_unrestricted lifts the policy block.
+            # Only THIS lane hands it over, deliberately: the guard protects the chat
+            # turn, where the person would be asked; the coder and workflow steps run
+            # host commands unattended by decision, and the account permission decides.
             tool_args["_is_channel_session"] = is_channel_session
         if name == "create_agent_tool":
             # Inject agent reference so the tool can call reload_custom_tools()
@@ -13170,9 +13180,6 @@ class Agent:
         result, and both run before it is truncated."""
         from pathlib import Path
 
-        from vaf.cli.ui import UI
-        from vaf.core.trust import get_tool_policy, is_trusted_dir, mark_trusted_dir, set_tool_policy
-
         emit = _with_subagent_debug_mirror(self._event_sink)
         is_channel_session = self._is_channel_turn()
         # The agent's question to the person, recorded on the contact's chat: in Front Office
@@ -13200,73 +13207,56 @@ class Agent:
             except Exception:
                 pass
 
-        # If python_sandbox blocked the request, offer a gated fallback to python_exec
-        # (once/always/cancel) so the user can explicitly override sandbox restrictions.
+        # If python_sandbox blocked the request, offer the unsandboxed run through the SAME
+        # confirmation gate every other call takes: the web dialog or the terminal prompt,
+        # the person's standing and chat grants, the hands-off switch. This used to be a
+        # second, hand-rolled gate that prompted only the terminal and ran the tool without
+        # the caller's identity, so python_exec read the owner's trust bucket for a tenant.
         if (
             name == "python_sandbox"
             and not is_channel_session
             and isinstance(result, str)
             and result.startswith("Security Error:")
+            and "python_exec" in self.tools
         ):
-            if "python_exec" in self.tools:
-                cwd = Path.cwd()
-                # Same scope as the funnel's gate: this second, hand-rolled
-                # gate writes the SAME store, so reading it machine-globally
-                # would leak one tenant's "always" to everyone.
-                _gate_scope = getattr(self, "_current_user_scope_id", None)
-                policy = get_tool_policy("python_exec", _gate_scope)
-                trusted = is_trusted_dir(cwd, _gate_scope)
-                allowed_once = "python_exec" in self._allow_once_tools
-                # The hands-off switch, decided by the SAME helper as the funnel's
-                # gate - a second reading of "who may skip the question" here would
-                # be the two-enforcement-points drift this file already fought once.
-                # Announced, never silent.
-                from vaf.core.tool_dispatch import _bypass_reason
-                _bypass_why = _bypass_reason(getattr(self, "_current_user_role", None), _gate_scope)
-                if _bypass_why is not None:
-                    emit({"type": "gate_bypassed", "tool": "python_exec",
-                          "cwd": str(cwd), "reason": "python_sandbox blocked; unsandboxed run",
-                          "why": _bypass_why})
-
-                if _bypass_why is None and policy != "allow" and not trusted and not allowed_once:
-                    # Check if running as sub-agent (cannot handle interactive prompts reliably for security)
-                    is_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "") == "1"
-                    
-                    if not self._noninteractive and not is_subagent:
-                        UI.event("Security", "python_sandbox blocked this code. You can run it UNSANDBOXED via python_exec.", style="warning")
-                        choice = UI.prompt("Run via python_exec? [o]nce / [a]lways / [c]ancel: ").strip().lower()
-                        if choice in ("o", "once"):
-                            self._allow_once_tools.add("python_exec")
-                        elif choice in ("a", "always"):
-                            mark_trusted_dir(cwd, _gate_scope)
-                            set_tool_policy("python_exec", "allow", _gate_scope)
-                        else:
-                            return result + "\n\n[CANCELLED] Not running unsandboxed."
-                    else:
-                        return result + "\n\n[INFO] python_exec is available but requires interactive confirmation (not available in sub-agent mode)."
-                
-                # Execute unsandboxed python if allowed. Read with the SAME scope the
-                # answer was written under: an unscoped read lands in the default
-                # scope, so the owner's one "always" would open execution for every
-                # tenant while a tenant's own "always" would never be found at all.
-                if _bypass_why is not None or get_tool_policy("python_exec", _gate_scope) == "allow" or is_trusted_dir(cwd, _gate_scope) or ("python_exec" in self._allow_once_tools):
-                    code = (args or {}).get("code", "")
-                    # Convert args to JSON-serializable format (OS-independent)
-                    python_exec_args = make_json_serializable({"timeout": 30})
-                    emit({"type": "tool_start", "tool": "python_exec", "args": python_exec_args})
-                    _pe_t0 = time.monotonic()
-                    try:
-                        unsafe_result = self.tools["python_exec"].run(code=code, timeout=30)
-                    except Exception as e:
-                        unsafe_result = f"Tool Error: {e}"
-                    emit({
-                        "type": "tool_end", "tool": "python_exec",
-                        "duration_ms": int((time.monotonic() - _pe_t0) * 1000),
-                        "ok": not str(unsafe_result).startswith("Tool Error:"),
-                        "result": event_result(unsafe_result),
-                    })
-                    self._record_tool_used("python_exec")
-                    result = unsafe_result
+            code = (args or {}).get("code", "")
+            _scope = getattr(self, "_current_user_scope_id", None)
+            _role = getattr(self, "_current_user_role", None)
+            # A sub-agent cannot put a question to a person reliably, so it is refused there
+            # the way every non-interactive lane refuses a gated tool.
+            _is_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "") == "1"
+            refusal = _resolve_confirmation_gate(
+                "python_exec",
+                reason="python_sandbox blocked this code; python_exec would run it UNSANDBOXED on the host.",
+                args={"code": code}, trust_dir=Path.cwd(),
+                interactive=not self._noninteractive and not _is_subagent,
+                decide=self._ask_user_about_gate, emit=emit,
+                on_gate_required=self._push_gate_to_websocket,
+                user_scope_id=_scope, user_role=_role,
+                session_id=self._dispatch_session_id(),
+            )
+            if refusal is not None:
+                return result + "\n\n" + refusal
+            python_exec = self.tools["python_exec"]
+            python_exec_args = _assign_declared_identity(
+                python_exec, {"code": code, "timeout": 30}, user_scope_id=_scope,
+                username=getattr(self, "_current_username", None), user_role=_role,
+            )
+            emit({"type": "tool_start", "tool": "python_exec",
+                  "args": make_json_serializable({"timeout": 30})})
+            _pe_t0 = time.monotonic()
+            try:
+                unsafe_result = python_exec.run(**python_exec_args)
+            except Exception as e:
+                unsafe_result = f"Tool Error: {e}"
+            emit({
+                "type": "tool_end", "tool": "python_exec",
+                "duration_ms": int((time.monotonic() - _pe_t0) * 1000),
+                "ok": not str(unsafe_result).startswith("Tool Error:"),
+                "result": event_result(unsafe_result),
+            })
+            self._record_tool_used("python_exec")
+            result = unsafe_result
         return result
 
     def _chat_after_dispatch_bookkeeping(self, name, result):

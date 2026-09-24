@@ -7,8 +7,13 @@ This is a WHITELIST, and it exists so the coder is handed the tools it can
 actually build with, and nothing else. Read it as the answer to "what is a
 coding agent allowed to reach for": files, code, the project's git history,
 shell, tests, and looking things up. Everything that acts on the user's behalf
-in the outside world stays out, with one named exception: `browser_agent`, kept
-for interactively verifying built pages (see its entry below).
+in the outside world stays out, with named exceptions: `browser_agent`, kept
+for interactively verifying built pages, and `host_bash` / `python_exec`, which
+reach the host (see their entries below).
+
+The list is ENFORCED, not only shown: the coder's dispatch refuses a name outside
+it (`_coder_dispatch_refusal` in vaf/tools/coder.py), because hiding a tool from
+the schema does not stop a model from naming it.
 
 WHY A WHITELIST AND NOT A BLACKLIST. The coder used to discover its tools by
 walking `vaf/tools/` and instantiating every `BaseTool` subclass it found,
@@ -65,6 +70,9 @@ _FILES = {
 # ── Running and checking what was written ─────────────────────────────────────
 _EXECUTE = {
     "bash",             # workspace shell
+    # The host: a local build, a host CLI, a deploy. Run without asking, like every
+    # coder tool - whether an account has them at all is the account allowlist.
+    # python_exec still checks the person's standing or chat grant on its own.
     "host_bash",
     "python_sandbox",
     "python_exec",

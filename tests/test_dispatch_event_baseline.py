@@ -149,7 +149,7 @@ def _tool(name, fn=None, **attrs):
 def _fake(tools, events, **over):
     base = dict(
         tools={t.name: t for t in tools}, _event_sink=events.append,
-        _allow_once_tools={t.name for t in tools}, _noninteractive=True,
+        _noninteractive=True,
         _current_turn_thinking_mode=False, _current_chat_source="web",
         current_session_id=None, _current_user_scope_id=SCOPE, _current_user_role="admin",
         _current_username="tenant", _run_kind="chat", _ww_training=False,
@@ -241,7 +241,7 @@ SCENARIOS = {
         _plan_gate_decision=lambda n, t, tool_args=None: "[PLAN REQUIRED] do a plan"),
     "gate_refused_noninteractive": lambda: _run(
         [_tool("probe", permission_level="dangerous")], ("probe", {}),
-        pre_approved=False, _allow_once_tools=set(), _noninteractive=True),
+        pre_approved=False, _noninteractive=True),
     "invalid_args": lambda: _run([_tool("probe", parameters=_STRICT)], ("probe", {})),
     "truncation": lambda: _run([_tool("probe", lambda **kw: "y" * 5000)], ("probe", {})),
     "dup_guard_alone": lambda: _run(

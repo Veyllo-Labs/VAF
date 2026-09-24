@@ -172,14 +172,16 @@ def test_allow_writes_nothing_durable():
 
 
 def test_allow_is_only_for_this_call():
-    caller_allow_once = set()
+    from vaf.core import trust
+
     tool = _Probe(permission_level="dangerous")
     with patch("vaf.core.trust.get_tool_policy", return_value="ask"), \
-         patch("vaf.core.trust.is_trusted_dir", return_value=False):
+         patch("vaf.core.trust.is_trusted_dir", return_value=False), \
+         patch.object(trust, "_chat_grants", {}) as grants:
         c = ToolCaller({"probe": tool}, authorize=lambda req: req.allow(),
-                       allow_once=caller_allow_once, trust_dir=Path("/tmp/p"))
+                       session_id="web_chat-1", trust_dir=Path("/tmp/p"))
         c.execute("probe", {})
-    assert caller_allow_once == set(), "allow() leaked into the per-turn grant set"
+    assert grants == {}, "allow() leaked into the chat grants"
 
 
 def test_allow_cannot_reach_an_admin_only_tool():
@@ -395,7 +397,7 @@ def _agent_with(authorize, tool):
     from conftest import bind_chat_stages
 
     agent = bind_chat_stages(SimpleNamespace(
-        tools={tool.name: tool}, _event_sink=None, _allow_once_tools=set(),
+        tools={tool.name: tool}, _event_sink=None,
         _noninteractive=True, _current_turn_thinking_mode=False,
         _current_chat_source="web", current_session_id=None,
         _current_user_scope_id=SCOPE, _current_user_role="user",

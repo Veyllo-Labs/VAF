@@ -147,7 +147,7 @@ def test_a_gated_tool_without_a_human_is_refused_with_the_marker(tmp_path):
 
 def test_the_gate_honours_the_decide_callback(tmp_path):
     """decide(tool_name, reason) -> 'cancel' refuses with the pinned prefix;
-    'allow_once' lets exactly this tool run (in memory only - 'allow_always' is
+    'allow_once' lets exactly this call run and remembers nothing ('allow_always' is
     the one persistent write and is deliberately not exercised here)."""
     tool = DangerousTool()
     cancelled = vaf.ToolCaller(

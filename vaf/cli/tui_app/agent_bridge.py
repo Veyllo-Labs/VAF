@@ -552,7 +552,8 @@ class AgentBridge:
             pass
 
     # ── the gate responder ──────────────────────────────────────────────────────────
-    DECISIONS = {"once": "allow_once", "always": "allow_always", "cancel": "cancel"}
+    DECISIONS = {"once": "allow_once", "chat": "allow_chat", "always": "allow_always",
+                 "cancel": "cancel"}
 
     def answer_gate(self, word: str) -> None:
         """Resolve the waiting gate through the same contract the web UI uses.

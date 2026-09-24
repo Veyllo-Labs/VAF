@@ -111,7 +111,7 @@ def test_the_agents_own_entry_point_reaches_the_funnel_once(log_dir):
 
     tool = _Probe()
     fake = bind_chat_stages(SimpleNamespace(
-        tools={"probe": tool}, _event_sink=None, _allow_once_tools={"probe"},
+        tools={"probe": tool}, _event_sink=None,
         _noninteractive=True, _current_turn_thinking_mode=False, _current_chat_source="web",
         current_session_id=SESSION, _current_user_scope_id=SCOPE, _current_user_role="admin",
         _current_username="tenant", _run_kind="chat", _ww_training=False,

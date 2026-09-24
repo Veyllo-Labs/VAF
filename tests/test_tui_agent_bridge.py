@@ -411,8 +411,14 @@ def test_gate_answer_resolves_through_the_web_contract_with_retry(quiet_run_modu
 
 def test_gate_words_map_to_the_engine_decisions(quiet_run_module):
     assert AgentBridge.DECISIONS == {"once": "allow_once",
+                                     "chat": "allow_chat",
                                      "always": "allow_always",
                                      "cancel": "cancel"}
+    # Every word the bridge can send is an answer the engine accepts.
+    from typing import get_args
+
+    from vaf.core.trust import Decision
+    assert set(AgentBridge.DECISIONS.values()) <= set(get_args(Decision))
     assert AgentBridge.DECISIONS.get("garbage", "cancel") == "cancel"
 
 

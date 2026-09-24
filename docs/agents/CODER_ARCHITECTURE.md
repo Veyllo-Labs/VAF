@@ -210,7 +210,7 @@ Inside the loop, `current_tools` is generated dynamically based on state:
     *   **Goal:** Force the agent to plan.
 *   **IF `task_mgr.has_plan() == True`:**
     *   **Allowed:** `write_file`, `edit_file`, `read_file`, `list_files`, `web_search`, `python_sandbox`, `run_tests`, `render_check`, `browser_agent`, `git_log`, `project_history`, `project_rollback`, `task_done`, plus plug-and-play runtime tools. `render_check` and `browser_agent` are the two halves of the visual verify loop: one look (errors, console, rendered text) versus driving the page (click, fill forms, walk a flow) - `render_check`'s own description defers anything interactive to `browser_agent`, which is why the task branch carries its own `browser_agent` schema entry instead of relying on the main-context plug-and-play copy. `edit_file` (surgical search/replace) is preferred over `write_file` for changing an existing file; `git_log`/`project_history`/`project_rollback` run against the real project repo (not the `run_tests` sandbox), so a task step can find a known-good version and restore it.
-    *   **Planning/main context only:** `bash` (kernel-jailed workspace shell; see 5.x), `git_init`, `git_add_commit`, `git_status`, `web_fetch`.
+    *   **Planning/main context only:** `bash` (kernel-jailed workspace shell; see 5.x), `git_init`, `git_add_commit`, `git_status`, `web_fetch`, and the plug-and-play tools the allow-list below admits - among them `host_bash` and `python_exec`, which reach the host (see "Dispatch-side enforcement").
     *   **Hidden:** `set_todos` (to prevent re-planning loops).
 
 #### The coder tool allow-list (whitelist)
@@ -248,6 +248,35 @@ regardless, so a typo in an override costs optional tools instead of producing a
 that cannot call `set_todos` or write a file. Pinned by
 `tests/test_coder_tool_allowlist.py`, including the ordering above and a guard that every
 tool the coder advertises is one the list actually permits.
+
+#### Dispatch-side enforcement
+
+The schema filter decides what the model SEES; what the coder RUNS is decided again at
+dispatch, by `_coder_dispatch_refusal()` in `vaf/tools/coder.py`, for every call into
+`self.local_tools`. Before, the coder asked only the account allowlist there: its own
+allow-list was never enforced, so a discovered tool ran whenever the model named it (the
+admin-only `create_agent_tool` among them), and `host_bash`/`python_exec` ran with no
+confirmation from any lane, including a messaging channel. Now, in order:
+
+1. the coder allow-list (a name outside it is refused, not only hidden);
+2. the account allowlist;
+3. the framework's declarative policy (`evaluate_tool_policy`: `admin_only`,
+   `channel_restrictions`).
+
+There is **no confirmation gate** in this lane. Deliberate: the coder runs unattended and
+uses its tools at full strength, `host_bash` included and also for a chat that started on a
+messaging channel, for an account that may use them - the account allowlist is that
+decision, exactly as for a workflow step. `python_exec` keeps its own check (a standing or a
+chat grant for the person); the chat's grants cross into the child as tool names
+(`VAF_CHAT_TOOL_GRANTS`), bound to the identity the spawn already carries. Every inner call
+gets the caller's identity through the framework's one assignment rule
+(`assign_declared_identity`, via `_as_the_caller()`), which also delivers a declared
+`username` the old copy never passed. Pinned by `tests/test_coder_dispatch_gate.py`.
+
+Why the coder still calls `tool.run()` itself instead of going through `ToolCaller`: the
+funnel's bounded run would cut a legitimate 300-second build at the generic 120-second
+budget. A per-tool timeout declaration on `BaseTool` answers that; the conversion follows
+it (`ToolCaller(gate_enabled=False)`, like the workflow lane) and deletes the stages above.
 
 ### E. LLM Interaction & Safety Nets
 *   **Call:** `self.llm.chat_completion(...)`.
@@ -376,7 +405,7 @@ outcome, and only a run that truly changed nothing keeps the failure message.
 *   **Purpose:** The coder needs a real shell for its project (run scripts, `npm`/`pip install`, run the app), but must never be able to touch VAF's own source or itself and break the running system.
 *   **Registration:** `BashTool(base_dir)` is bound to the coder's workspace at registration (like the git tools), so the shell defaults to the project and confinement is scoped to exactly that directory. With no workspace bound it **refuses** rather than fall back to the process cwd.
 *   **Confinement (kernel, not string-filtering):** `run_in_workspace` runs the command inside a **bubblewrap** jail on Linux - the workspace is bind-mounted read-write (edits persist); the system (`/usr`, `/bin`, `/etc`, ...) is read-only; the VAF repo, `~/.vaf`, secrets and the docker socket are **not mounted** (they do not exist for the command); env is `--clearenv`'d (tray API keys never leak) and the network is `--unshare-net`'d (host loopback services like the memory DB are unreachable). Without bubblewrap it falls back to a container with only the workspace mounted and `--network none`; with neither it **refuses** (never a raw host shell).
-*   **Docker is refused:** the host docker socket is host-root-equivalent and cannot be safely policed by inspecting the command string, so `bash` refuses any `docker` invocation up front. Host/docker tasks are the *main agent's* `host_bash` (below), under explicit confirmation.
+*   **Docker is refused:** the host docker socket is host-root-equivalent and cannot be safely policed by inspecting the command string, so `bash` refuses any `docker` invocation up front. Host/docker tasks go through `host_bash`, which the coder may call itself (see "Dispatch-side enforcement").
 *   **Command classifier:** `vaf/core/command_policy.py` runs with the `jailed` profile - it refuses only what would reach the machine or the jail root (fork bomb, block-device write, recursive delete of a protected root). A network fetch piped into a shell is NOT refused here, because `--unshare-net` means it fetches nothing, and `rm -rf node_modules` is ordinary work in a disposable workspace. Defense in depth; the real safety is the jail.
 
 ### `run_tests` (`vaf.tools.sandbox_test_runner`)

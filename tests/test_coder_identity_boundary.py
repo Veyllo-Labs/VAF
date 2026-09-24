@@ -21,7 +21,7 @@ NAMED exception rather than a forgotten one.
 """
 import pytest
 
-from vaf.tools.coder import CodingAgentTool, _assign_caller_identity, _caller_identity
+from vaf.tools.coder import CodingAgentTool, _as_the_caller, _caller_identity
 
 SCOPE = "ab12cd34-0000-4000-8000-000000000001"
 
@@ -95,6 +95,14 @@ def test_the_spawn_env_carries_the_identity():
 
 
 # ── the assignment in the child: the security half ─────────────────────────────────
+#
+# The coder assigns through the framework's one rule (assign_declared_identity), the same
+# the chat funnel uses; it used to keep a narrower copy that knew scope and role only.
+
+def _assign_caller_identity(tool, fn_args, scope, role):
+    """The coder's own helper."""
+    return _as_the_caller(tool, fn_args, scope=scope, role=role)
+
 
 class _Declared:
     identity_kwargs = ("user_scope_id", "user_role")

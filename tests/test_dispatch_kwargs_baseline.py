@@ -310,7 +310,6 @@ def _fake_agent(tools, *, thinking=False):
     return bind_chat_stages(SimpleNamespace(
         tools=tools,
         _event_sink=None,
-        _allow_once_tools=set(tools),
         _noninteractive=True,
         _current_turn_thinking_mode=thinking,
         _current_chat_source="web",

@@ -525,6 +525,12 @@ Two semantics worth knowing before you grant anything:
   working directory at tool-call time.
 - The interactive "always allow" choice does both at once: it trusts the
   current working directory *and* sets the tool's policy to allow.
+- The interactive "for this chat" choice (`allow_chat`) persists nothing: it
+  keeps the tool allowed for that person in that chat (the `ToolCaller`'s
+  `session_id`), in process memory, and every run it lets through is announced
+  as a `gate_bypassed` event with `why="chat_grant"`. Without a `session_id`
+  there is no chat to remember and it counts as "once". "Once" (`allow_once`)
+  runs the one call and remembers nothing.
 
 ---
 
@@ -967,8 +973,8 @@ The supported arguments:
 |---|---|
 | `tools` | Your registry, `{name: BaseTool instance}`. Positional. |
 | `user_scope_id`, `username`, `user_role` | Who is calling. Assigned into whatever the tool declares in `identity_kwargs`, overwriting anything a model put there. **Pass `username` if you serve more than one tenant.** With none, the name is resolved from the SCOPE: no scope or the owner's scope gives the configured owner (`local_admin_username`, whatever registration wrote there - never the literal `"admin"`), and any other scope gives a stable synthetic name for that tenant, so a caller whose name you did not pass never lands on the owner's name-keyed data. That synthetic name is isolated, not their account name - if a tenant must reach data stored under their real username, pass it. |
-| `source`, `session_id` | Where the call comes from. Feeds `channel_restrictions`: a `source` that names a chat channel (`"whatsapp"`, `"telegram"`, `"discord"`) or a session id with that channel's prefix makes the call a chat call, which a tool's `("channel",)` refuses. Leave them out if you have no messaging channels. |
-| `interactive`, `decide` | Set `interactive=True` and pass `decide(tool_name, reason) -> "allow_once" \| "allow_always" \| "cancel"` to plug your own confirmation UI into the gate. Left out, gated tools are refused rather than run. |
+| `source`, `session_id` | Where the call comes from. Feeds `channel_restrictions`: a `source` that names a chat channel (`"whatsapp"`, `"telegram"`, `"discord"`) or a session id with that channel's prefix makes the call a chat call, which a tool's `("channel",)` refuses. `session_id` is also the chat a "for this chat" grant is kept for. Leave them out if you have no messaging channels and no chats. |
+| `interactive`, `decide` | Set `interactive=True` and pass `decide(tool_name, reason) -> "allow_once" \| "allow_chat" \| "allow_always" \| "cancel"` to plug your own confirmation UI into the gate. `allow_chat` remembers the tool for this person in this chat (`session_id`), in memory only. Left out, gated tools are refused rather than run. |
 | `trust_dir` | Which directory a standing grant applies to. Defaults to the process's current one. |
 | `timeout_for` | `f(tool_name) -> seconds`, for your own timeout policy. Defaults to the configured agent timeout. |
 | `stop_check` | `f() -> bool`, polled during the run so you can cancel from outside. |
@@ -1171,10 +1177,15 @@ Four limits worth knowing before you rely on it:
   are not put to your authorizer - not because of the process boundary (embedded,
   the coder runs inline in yours) but because its own loop calls `tool.run()`
   directly instead of going through the dispatcher. A callable also cannot cross
-  into the terminal-spawned coder. The account allowlist is the exception, and
-  the reason it is one: the coder DOES enforce it, because its answer is data -
-  resolved once from your registered resolver and carried into the child as
-  `VAF_ALLOWED_TOOLS` (next section) - while a callback is not.
+  into the terminal-spawned coder. What the coder DOES enforce is everything whose
+  answer is data: its own tool allow-list, the account allowlist (resolved once from
+  your registered resolver and carried into the child as `VAF_ALLOWED_TOOLS`, next
+  section) and the declarative policy (`admin_only`, `channel_restrictions`). It asks
+  no confirmation, deliberately, like a workflow step: whether an account has a
+  `dangerous` tool at all is the allowlist's answer. The remaining gap is the
+  callback, and it closes when the coder's loop moves onto `ToolCaller`; that move
+  waits for a per-tool timeout declaration, because the funnel's generic 120-second
+  budget would cut a legitimate long build.
 - **The workflow engine consults it for non-spawn steps - with three limits of its
   own.** A workflow step now runs through the full pipeline: your authorizer, the
   account allowlist and the hard policy blocks all apply. Still outside: `ask()` -

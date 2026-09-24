@@ -137,7 +137,6 @@ def test_execute_tool_uses_contract_for_noninteractive_gating():
     fake_agent = bind_chat_stages(SimpleNamespace(
         tools={"dangerous_dummy": DangerousDummyTool()},
         _event_sink=None,
-        _allow_once_tools=set(),
         _noninteractive=True,
         _current_turn_thinking_mode=False,
         _current_chat_source="web",

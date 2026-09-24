@@ -139,7 +139,7 @@ class WebInterfaceManager:
         return event, decision_box
 
     def resolve_gate(self, session_id: str, decision: str) -> bool:
-        """Signal a waiting gate with the user's decision ("allow_once"|"allow_always"|"cancel").
+        """Signal a waiting gate with the user's decision (one of ``vaf.core.trust.Decision``).
         Returns True if a pending gate was found and signalled."""
         pending = self._pending_gates.pop(session_id, None)
         if pending:

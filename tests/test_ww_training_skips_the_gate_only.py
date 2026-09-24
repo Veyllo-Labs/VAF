@@ -50,7 +50,7 @@ def _agent(tool, *, training, gates_would_block=False):
         return "[PLAN REQUIRED] make a plan first" if gates_would_block else None
 
     return bind_chat_stages(SimpleNamespace(
-        tools={tool.name: tool}, _event_sink=None, _allow_once_tools=set(),
+        tools={tool.name: tool}, _event_sink=None,
         _noninteractive=True, _current_turn_thinking_mode=False,
         _current_chat_source="web", current_session_id=None,
         _current_user_scope_id=SCOPE, _current_user_role="user",

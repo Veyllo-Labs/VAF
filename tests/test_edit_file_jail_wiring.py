@@ -46,7 +46,6 @@ def _dispatch(model_args: dict, *, scope=TENANT, role="user"):
     fake_agent = bind_chat_stages(SimpleNamespace(
         tools={"edit_file": spy},
         _event_sink=None,
-        _allow_once_tools={"edit_file"},
         _noninteractive=True,
         _current_turn_thinking_mode=False,
         _current_chat_source="web",

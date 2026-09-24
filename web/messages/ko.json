@@ -354,7 +354,20 @@
     "subAgentLibrarianDesc": "파일을 잘 알고 있어요. 찾고, 정렬하고, 정리하고, 무엇이 어디에 있는지 알려줘요.",
     "subAgentBrowserName": "브라우저 에이전트",
     "subAgentBrowserDesc": "실제 브라우저를 다뤄요. 페이지를 눌러 가며 이동하고, 양식을 채우고, 로그인도 통과해요.",
-    "subAgentContextChipTitle": "{agent} 창을 열어 두었어요. 다음 메시지는 그 창에 대한 이야기로 읽히고, 에이전트도 작업을 {agent}에게 넘길 수 있다는 걸 알고 있어요."
+    "subAgentContextChipTitle": "{agent} 창을 열어 두었어요. 다음 메시지는 그 창에 대한 이야기로 읽히고, 에이전트도 작업을 {agent}에게 넘길 수 있다는 걸 알고 있어요.",
+    "gateTitle": "보안 확인",
+    "gateSubtitle": "에이전트가 승인이 필요한 도구를 실행하려고 해요",
+    "gateTool": "도구",
+    "gateArguments": "인수",
+    "gateHiddenChars": "{count, plural, other {숨겨진 문자 #개를 표시했어요}}",
+    "gateSecretsRedacted": "{count, plural, other {비밀 정보 #개를 가렸어요}}",
+    "gateTruncated": "인수를 줄였어요",
+    "gateCommandIs": "이 명령: {categories}",
+    "gateAllowOnce": "이번만",
+    "gateAllowChat": "이 대화에서만",
+    "gateAllowAlways": "항상 허용",
+    "gateAllowChatHint": "이 대화에서는 이 도구를 계속 허용해요. 다른 대화에서는 계속 물어봐요. VAF를 다시 시작하면 해제돼요.",
+    "gateAllowAlwaysHint": "이 도구를 어디서나 허용하고, 확인이 필요한 모든 도구에 대해 현재 폴더를 신뢰해요."
   },
   "nav": {
     "settings": "설정",

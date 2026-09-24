@@ -354,7 +354,20 @@
     "subAgentLibrarianDesc": "Finds its way around your files: searches, sorts, tidies and reports what is where.",
     "subAgentBrowserName": "Browser",
     "subAgentBrowserDesc": "Drives a real browser: clicks through pages, fills forms and gets past logins.",
-    "subAgentContextChipTitle": "You have the {agent} window open - your next message is read as being about it, and the agent knows it can hand the work to {agent}"
+    "subAgentContextChipTitle": "You have the {agent} window open - your next message is read as being about it, and the agent knows it can hand the work to {agent}",
+    "gateTitle": "Security confirmation",
+    "gateSubtitle": "The agent wants to run a tool that needs your approval",
+    "gateTool": "Tool",
+    "gateArguments": "Arguments",
+    "gateHiddenChars": "{count, plural, one {# hidden character made visible} other {# hidden characters made visible}}",
+    "gateSecretsRedacted": "{count, plural, one {# secret hidden} other {# secrets hidden}}",
+    "gateTruncated": "arguments shortened",
+    "gateCommandIs": "This command: {categories}",
+    "gateAllowOnce": "Only this time",
+    "gateAllowChat": "For this chat",
+    "gateAllowAlways": "Always allow",
+    "gateAllowChatHint": "Allows this tool for you for the rest of this chat. Other chats still ask. Ends when VAF restarts.",
+    "gateAllowAlwaysHint": "Allows this tool for you everywhere, and trusts the current folder for every tool that asks for confirmation."
   },
   "nav": {
     "settings": "Settings",

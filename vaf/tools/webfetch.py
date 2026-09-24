@@ -11,7 +11,6 @@ import os
 import json
 import time
 import hashlib
-import urllib3
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse
 from pathlib import Path
@@ -105,7 +104,7 @@ class WebFetchTool(BaseTool):
             if elapsed < MIN_DELAY: time.sleep(MIN_DELAY - elapsed)
         DOMAIN_LAST_FETCH[domain] = time.time()
 
-        # 3. Fetch (with Cache & SSL Fallback)
+        # 3. Fetch (with Cache)
         full_text = ""
         content_type = "text/html"
         cached_data = self._get_cached_data(url, cache_ttl) if use_cache else None
@@ -120,11 +119,14 @@ class WebFetchTool(BaseTool):
                 # Full, consistent browser header set (not just UA + Accept) — a thin
                 # header set is itself a bot tell. Honours a caller-supplied user_agent.
                 headers = browser_headers(user_agent=kwargs.get("user_agent"))
+                # No retry without certificate verification: that fallback turned every
+                # TLS failure into a silent downgrade whose answer was then cached as if it
+                # were the real page - exactly what an interception looks like.
                 try:
                     res = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-                except requests.exceptions.SSLError:
-                    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-                    res = requests.get(url, headers=headers, timeout=timeout, verify=False)
+                except requests.exceptions.SSLError as e:
+                    return (f"Error fetching {url}: the site's TLS certificate could not be "
+                            f"verified, so the page was not loaded ({e}).")
                 
                 if res.status_code != 200: return f"Error: Site returned status {res.status_code}"
                 full_text = res.text

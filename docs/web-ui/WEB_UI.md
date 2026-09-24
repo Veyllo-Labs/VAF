@@ -446,6 +446,26 @@ Strings live in the top-level `inbox` block and `nav.inbox`; design and rules in
   while claiming running work settles itself (open steps to `timeout`, presence down),
   so a lost terminal event can never pin the stop button forever.
 
+### 4a. The Confirmation Dialog
+
+A tool whose contract is `dangerous` (`host_bash`, `python_exec`, ...) stops at a dialog
+before it runs (`gate_required` over the WebSocket; `web/app/page.tsx`). It names the tool,
+shows the arguments as they will execute - hidden characters made visible, secrets hidden,
+a cut marked, with a note saying which of these happened - the command's classifier
+categories, and the reason. Four answers, sent back as `gate_response`:
+
+- **Only this time** (`allow_once`): this call runs, nothing is remembered; the next call asks again.
+- **For this chat** (`allow_chat`): the tool keeps running without asking for this person in
+  this chat until VAF restarts. Other chats, and other accounts, are still asked. A coding
+  agent started from this chat inherits it (it matters there for `python_exec`, which checks
+  it itself; the coder runs `host_bash` without asking anyway).
+- **Always allow** (`allow_always`): stored for this person - the tool everywhere, plus trust
+  for the current folder for every gated tool. The button's tooltip says so.
+- **Cancel**.
+
+The server accepts exactly the answers the trust module defines (`vaf.core.trust.Decision`).
+All strings come from `main.gate*` in `web/messages/*.json`.
+
 ### 5. Message Features
 
 **Thinking Details**:

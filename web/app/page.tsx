@@ -5297,7 +5297,16 @@ function VAFDashboardContent() {
                     setPendingSpeakerConfirms(prev => prev.filter(p => p.confirmId !== data.confirmId));
                 }
                 else if (data.type === 'gate_required') {
-                    setGateRequest({ tool: data.tool, cwd: data.cwd || '', reason: data.reason || '', args_preview: data.args_preview || '' });
+                    // Field by field on purpose, and ALL of them: a field left out here is
+                    // silently dropped, which is how the redaction notes never reached the dialog.
+                    setGateRequest({
+                        tool: data.tool, cwd: data.cwd || '', reason: data.reason || '',
+                        args_preview: data.args_preview || '',
+                        args_preview_truncated: !!data.args_preview_truncated,
+                        args_preview_neutralized: Number(data.args_preview_neutralized) || 0,
+                        args_preview_redacted: Number(data.args_preview_redacted) || 0,
+                        command_categories: Array.isArray(data.command_categories) ? data.command_categories : undefined,
+                    });
                 }
                 else if (data.type === 'gate_decision') {
                     setGateRequest(null);
@@ -13051,34 +13060,34 @@ function VAFDashboardContent() {
                                 </svg>
                             </div>
                             <div>
-                                <p className="font-semibold text-gray-900 text-sm">Security Confirmation</p>
-                                <p className="text-xs text-amber-700">Agent wants to run a risky tool</p>
+                                <p className="font-semibold text-gray-900 text-sm">{tMain('gateTitle')}</p>
+                                <p className="text-xs text-amber-700">{tMain('gateSubtitle')}</p>
                             </div>
                         </div>
                         {/* Body */}
                         <div className="p-5 space-y-3">
                             <div className="flex items-center gap-2">
-                                <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Tool</span>
+                                <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">{tMain('gateTool')}</span>
                                 <code className="text-sm font-mono bg-gray-100 px-2 py-0.5 rounded text-gray-900">{gateRequest.tool}</code>
                             </div>
                             {gateRequest.args_preview && (
                                 <div>
-                                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Arguments</p>
+                                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">{tMain('gateArguments')}</p>
                                     <pre className="text-xs font-mono bg-gray-50 border border-gray-200 rounded-lg p-3 whitespace-pre-wrap break-all max-h-32 overflow-y-auto text-gray-800">{gateRequest.args_preview}</pre>
                                     {/* What the preview had to change, so the dialog cannot
                                         quietly differ from what will execute. */}
                                     {(gateRequest.args_preview_neutralized || gateRequest.args_preview_redacted || gateRequest.args_preview_truncated) ? (
                                         <p className="text-[11px] text-amber-600 mt-1">
                                             {[
-                                                gateRequest.args_preview_neutralized ? `${gateRequest.args_preview_neutralized} hidden character(s) made visible` : null,
-                                                gateRequest.args_preview_redacted ? `${gateRequest.args_preview_redacted} secret(s) redacted` : null,
-                                                gateRequest.args_preview_truncated ? 'arguments truncated' : null,
+                                                gateRequest.args_preview_neutralized ? tMain('gateHiddenChars', { count: gateRequest.args_preview_neutralized }) : null,
+                                                gateRequest.args_preview_redacted ? tMain('gateSecretsRedacted', { count: gateRequest.args_preview_redacted }) : null,
+                                                gateRequest.args_preview_truncated ? tMain('gateTruncated') : null,
                                             ].filter(Boolean).join(' - ')}
                                         </p>
                                     ) : null}
                                     {gateRequest.command_categories?.length ? (
                                         <p className="text-[11px] text-gray-500 mt-1">
-                                            This command: {gateRequest.command_categories.join(', ').replace(/_/g, ' ')}
+                                            {tMain('gateCommandIs', { categories: gateRequest.command_categories.join(', ').replace(/_/g, ' ') })}
                                         </p>
                                     ) : null}
                                 </div>
@@ -13088,24 +13097,32 @@ function VAFDashboardContent() {
                             )}
                         </div>
                         {/* Actions */}
-                        <div className="flex items-center gap-2 p-5 pt-0">
+                        <div className="grid grid-cols-2 gap-2 p-5 pt-0">
                             <button
                                 onClick={() => { ws?.send(JSON.stringify({ type: 'gate_response', decision: 'cancel' })); setGateRequest(null); }}
-                                className="flex-1 px-4 py-2 rounded-lg border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-100 transition-colors"
+                                className="px-4 py-2 rounded-lg border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-100 transition-colors"
                             >
-                                Cancel
+                                {tCommon('cancel')}
                             </button>
                             <button
                                 onClick={() => { ws?.send(JSON.stringify({ type: 'gate_response', decision: 'allow_once' })); setGateRequest(null); }}
-                                className="flex-1 px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium transition-colors"
+                                className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium transition-colors"
                             >
-                                Allow Once
+                                {tMain('gateAllowOnce')}
+                            </button>
+                            <button
+                                onClick={() => { ws?.send(JSON.stringify({ type: 'gate_response', decision: 'allow_chat' })); setGateRequest(null); }}
+                                title={tMain('gateAllowChatHint')}
+                                className="px-4 py-2 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 text-sm font-medium transition-colors"
+                            >
+                                {tMain('gateAllowChat')}
                             </button>
                             <button
                                 onClick={() => { ws?.send(JSON.stringify({ type: 'gate_response', decision: 'allow_always' })); setGateRequest(null); }}
-                                className="flex-1 px-4 py-2 rounded-lg bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
+                                title={tMain('gateAllowAlwaysHint')}
+                                className="px-4 py-2 rounded-lg bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                             >
-                                Always Allow
+                                {tMain('gateAllowAlways')}
                             </button>
                         </div>
                     </div>

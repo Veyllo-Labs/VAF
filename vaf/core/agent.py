@@ -3824,7 +3824,8 @@ class Agent:
                         #  - no update_user_identity (propose profile changes via save_thinking_suggestion),
                         #  - no set_timer / direct user-facing scheduled actions (propose via ask_user; the
                         #    main agent carries it out after the user confirms),
-                        #  - no write_file (a propose-only background run must not create files).
+                        #  - no write_file, no download_file (a propose-only background run must not
+                        #    create files).
                         # Registration gates key on the per-instance run kind (see __init__):
                         # env vars race across threads - a chat agent constructed during a
                         # thinking window would otherwise gain thinking tools and silently
@@ -3835,7 +3836,7 @@ class Agent:
                             if instance.name in ("git_add_commit", "git_status", "git_log", "memory_save",
                                                  "memory_update",
                                                  "update_user_identity", "set_timer", "schedule_reminder",
-                                                 "write_file"):
+                                                 "write_file", "download_file"):
                                 continue
                         # thinking_done: ONLY in thinking mode — the main agent must never call this
                         if instance.name == "thinking_done":

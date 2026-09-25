@@ -27,7 +27,8 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | Tool | Perm | What it does |
 |------|------|--------------|
 | `web_search` | read | Search the web; auto-fetches page content for extraction. |
-| `webfetch` | read | Fetch a URL and convert it to readable Markdown. |
+| `webfetch` | read | Fetch a URL and convert it to readable Markdown. `prompt` reads the page for a question in a model call of its own (`search.answer_from_page`, the reader `web_search` uses per result page) and returns only the answer, so a long page stays out of the conversation. |
+| `download_file` | write | Save a file from a URL as-is: relative `save_to` = the chat's workspace, a folder keeps the file's name. At most 500 MB, never a partial file. `file_access = "write"`: nothing lands outside the caller's own tree. Its own tool so that reading a page stays a read; not offered to a thinking run, which must not create files. |
 | `research_agent` | read | Deep multi-section research sub-agent (10+ sources). |
 | `browser_agent` | write | Drive a real Chromium browser for multi-step web tasks. |
 | `render_check` | write | Open a URL or workspace HTML file in the sandbox browser once and report page errors, console output, failed requests, rendered text and a screenshot. |

@@ -130,6 +130,8 @@ NEWLY_IDENTIFIED = {
     # user_role joined with its file_access declaration: a step's image_path is looked at
     # under the workflow owner's read jail, the same one read_file has.
     "analyze_image": ('user_role', 'user_scope_id'),
+    # Added with the tool itself: a step's download lands in the workflow owner's own files.
+    "download_file": ('user_role', 'user_scope_id'),
     "browser_agent": ('user_scope_id',),
     "create_automation": ('user_role', 'user_scope_id'),
     "create_skill": ('user_scope_id', 'username'),

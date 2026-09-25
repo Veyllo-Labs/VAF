@@ -20,6 +20,62 @@ from vaf.tools.base import BaseTool
 from vaf.tools._browser_headers import browser_headers
 
 
+def answer_from_page(tool, question: str, page_title: str, page_content: str, page_url: str, *,
+                     brief: bool = True, max_tokens: int = 600, timeout: int = 30):
+    """Answer `question` from ONE page, in a model call of its own: the page's text goes to that
+    call and only the answer comes back, so a long page never enters the conversation.
+
+    Shared by web_search (a brief answer per result page, `brief`) and webfetch's `prompt` (the
+    extraction the model asked for, as long as it needs to be). `tool` is the calling BaseTool;
+    its `query_llm` decides the backend. Returns the answer, or None when no answer came - the
+    caller decides what to show instead. A worker that was stopped or timed out spends no call.
+    """
+    from vaf.core.bounded_run import cancel_requested
+    if cancel_requested():
+        return ""
+    lang_instruction = ("Antworte auf Deutsch." if any(
+        w in str(question or "").lower() for w in ["wie", "was", "wann", "wo", "wer", "warum"])
+        else "Answer in English.")
+    length_rule = ("- Be precise and factual (2-3 sentences max)" if brief else
+                   "- Answer as completely as the request asks, and no further; keep the page's own "
+                   "wording for names, numbers, versions and dates")
+    prompt = f"""User Question: "{question}"
+
+Page Title: {page_title}
+Page URL: {page_url}
+
+Page Content:
+{page_content}
+
+{lang_instruction}
+
+CRITICAL INSTRUCTIONS:
+- Extract SPECIFIC data: numbers, temperatures, dates, facts, names
+- Example for weather: "Temperature: 5°C, Conditions: Partly cloudy, Humidity: 78%"
+- Example for news: "Headline: [title], Key point: [summary]"
+- DON'T say "page has no information" - extract what IS available!
+- If truly no relevant data, say: "No specific data in snippet - visit source for details"
+{length_rule}
+- Use ONLY information from this page (not your training data)
+
+Answer:"""
+    try:
+        answer = tool.query_llm(
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that answers questions based on web page content. Always use information from the provided page, not your training data."},
+                {"role": "user", "content": prompt},
+            ],
+            # Small by default so a reasoning model finishes fast inside web_search's per-page
+            # budget; query_llm falls back to reasoning_content if cut off.
+            max_tokens=max_tokens,
+            temperature=0.2,
+            timeout=timeout,
+        )
+    except Exception:
+        return None
+    return answer or None
+
+
 def _search_google(query: str, max_results: int) -> tuple[list, str | None]:
     """Try to get search results from Google (https://www.google.com/search?q=...).
     Returns (list of dicts with keys title, href, body; reason).
@@ -625,57 +681,11 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
 
             def answer_question_with_page(user_question: str, page_title: str, page_content: str, page_url: str) -> str:
                 """Use separate LLM context to answer user question based on single page."""
-                # Checkpoint before each summarize LLM call: an abandoned
-                # (stopped/timed-out) worker must not keep burning the local
-                # llama-server on summaries whose result is already discarded.
-                from vaf.core.bounded_run import cancel_requested as _cancelled
-                if _cancelled():
-                    return ""
-                try:
-                    # Detect language from user question
-                    lang = "German" if any(word in user_question.lower() for word in ["wie", "was", "wann", "wo", "wer", "warum"]) else "English"
-                    lang_instruction = "Antworte auf Deutsch." if lang == "German" else "Answer in English."
-                    
-                    prompt = f"""User Question: "{user_question}"
+                answer = answer_from_page(self, user_question, page_title, page_content, page_url)
+                if answer is None:
+                    UI.event("Debug", f"LLM answer failed for '{page_title[:30]}'", style="dim")
+                return answer
 
-Page Title: {page_title}
-Page URL: {page_url}
-
-Page Content:
-{page_content}
-
-{lang_instruction}
-
-CRITICAL INSTRUCTIONS:
-- Extract SPECIFIC data: numbers, temperatures, dates, facts, names
-- Example for weather: "Temperature: 5°C, Conditions: Partly cloudy, Humidity: 78%"
-- Example for news: "Headline: [title], Key point: [summary]"
-- DON'T say "page has no information" - extract what IS available!
-- If truly no relevant data, say: "No specific data in snippet - visit source for details"
-- Be precise and factual (2-3 sentences max)
-- Use ONLY information from this page (not your training data)
-
-Answer:"""
-
-                    answer = self.query_llm(
-                        messages=[
-                            {"role": "system", "content": "You are a helpful assistant that answers questions based on web page content. Always use information from the provided page, not your training data."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        max_tokens=600,  # small so a reasoning model finishes fast inside the per-page budget; query_llm falls back to reasoning_content if cut off
-                        temperature=0.2,
-                        timeout=30,
-                    )
-                    
-                    if answer:
-                        return answer
-                    else:
-                        UI.event("Debug", f"LLM returned empty answer for '{page_title[:30]}'", style="dim")
-                        return None
-                except Exception as e:
-                    UI.event("Debug", f"LLM answer failed for '{page_title[:30]}': {str(e)[:50]}", style="dim")
-                    return None
-            
             def synthesize_final_answer(user_question: str, all_answers: list) -> str:
                 """Create ONE final synthesized answer from multiple source answers."""
                 # An abandoned worker's synthesis result is already discarded -

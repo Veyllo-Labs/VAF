@@ -46,6 +46,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   runs on your computer, and the value goes only to that command: never to the AI model,
   never into the chat, and it is removed from what the command prints. Before, a password
   typed into the chat went along with every later message.
+- **The agent can read a web page for one question, and download files.** Asked something
+  specific about a page, the agent now has the page read for that question and gets back only
+  the answer, instead of pulling the whole page into the conversation where the part that
+  mattered was often cut off. It can also download a file from the web - an archive, a PDF, an
+  image - straight into the chat's files, without a shell command.
 
 ### Changed
 

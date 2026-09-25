@@ -30,10 +30,13 @@ class WebFetchTool(BaseTool):
     side_effect_class = "none"
     description = (
         "Retrieves content from a URL and converts it to readable Markdown. "
-        "IMPORTANT: For long pages, tracking sites (DHL, UPS), or when searching for specific info, "
-        "ALWAYS provide 'search_terms' (e.g., ['Status', 'Delivery', 'August']). "
-        "This extracts relevant sections with context and moves them to the top, "
-        "preventing the important info from being cut off by system truncation."
+        "To learn something specific from a page, pass `prompt` (e.g. 'Which versions are listed "
+        "and when were they released?'): the page is read in a separate step and only the answer "
+        "comes back, so a long page does not fill the conversation. To save a file from the web, "
+        "use download_file. "
+        "For long pages, tracking sites (DHL, UPS), or when searching for specific info without a "
+        "prompt, provide 'search_terms' (e.g., ['Status', 'Delivery', 'August']): matching sections "
+        "move to the top, so the important info is not cut off by system truncation."
     )
     
     parameters = {
@@ -50,10 +53,23 @@ class WebFetchTool(BaseTool):
                 "type": "array", 
                 "items": {"type": "string"},
                 "description": "Terms to search for. Matching sections will be moved to the top."
-            }
+            },
+            "prompt": {
+                "type": "string",
+                "description": "What to find out from the page. Returns the answer instead of the page.",
+            },
         },
         "required": ["url"]
     }
+
+    def budget_seconds(self, args):
+        # An extraction is the fetch plus a separate model call over the page.
+        if not args.get("prompt"):
+            return None
+        try:
+            return int(args.get("timeout") or 30) + 90
+        except (TypeError, ValueError):
+            return 120
 
     def _get_cache_path(self, url: str) -> Path:
         cache_dir = Config.APP_DIR / "tmp" / "webfetch_cache"
@@ -96,6 +112,7 @@ class WebFetchTool(BaseTool):
                 url = "https://" + url
                 parsed = urlparse(url)
         except Exception as e: return f"Error: Invalid URL: {e}"
+
 
         # 2. Rate Limiting
         domain = parsed.netloc
@@ -209,9 +226,32 @@ class WebFetchTool(BaseTool):
             res_lines = [f"# {title}" if title else "", f"Source: {url}", search_header]
             if iframes: res_lines.append(f"[INFO] Page has {len(iframes)} iframes.")
             if is_js_heavy and len(markdown) < 1000: res_lines.append("[NOTE] Site uses heavy JS.")
+            prompt = str(kwargs.get("prompt") or "").strip()
+            if prompt:
+                answered = self._answer(prompt, title, markdown, url)
+                if answered:
+                    return answered
+                res_lines.append("[NOTE] The page could not be read for your prompt; here it is.")
             res_lines.append("\n" + markdown[:max_length])
             if len(markdown) > max_length: res_lines.append("\n... (truncated)")
             
             return "\n".join([l for l in res_lines if l]).replace("\n\n\n", "\n\n")
 
         except Exception as e: return f"Error parsing content: {e}"
+
+    def _answer(self, prompt: str, title: str, markdown: str, url: str) -> Optional[str]:
+        """The page read for `prompt` in a separate model call (search.answer_from_page, the
+        reader web_search uses per result page); only the answer returns. None when no answer
+        came, and the caller shows the page instead."""
+        from vaf.tools.search import answer_from_page
+        budget = 40_000 if str(Config.get("provider", "local") or "local") != "local" else max(
+            6_000, int(int(Config.get("n_ctx", 8192) or 8192) * 3 * 0.5))
+        page = markdown[:budget]
+        answer = answer_from_page(self, prompt, title, page, url, brief=False, max_tokens=1500,
+                                  timeout=90)
+        if not answer or not str(answer).strip():
+            return None
+        more = "" if len(markdown) <= budget else (
+            f"\n(Read the first {budget} of {len(markdown)} characters of the page.)")
+        return (f"# {title}\nSource: {url}\n\nFrom the page, for \"{prompt}\":\n"
+                f"{str(answer).strip()}{more}")

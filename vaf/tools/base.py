@@ -92,6 +92,15 @@ class BaseTool(ABC):
         """The wall-clock budget for one call with these arguments, or None for the default."""
         return self.timeout_seconds
 
+    # Set to True when the tool checks on its own whether it may run (python_exec: a workflow
+    # step reaches it with no confirmation gate) and must hear that the PERSON confirmed THIS
+    # call. The funnel then ASSIGNS `_call_confirmed` - True only when its gate asked and was
+    # answered yes (once, for this chat, or always) or an application's authorizer allow()ed
+    # the call, False on every other path - overwriting whatever the model wrote into it. Without
+    # it "only this time" was offered by the dialog and then refused by the tool, which could
+    # not tell that it had been given.
+    accepts_call_confirmation: bool = False
+
     # Set to True when a call of this tool hands the next move to the person, so the chat
     # turn ENDS after it: the agent loop answers every other call of the round, makes no
     # further model call, and the turn's answer is turn_closing(). A question with options is

@@ -879,6 +879,16 @@ other than what the model is told. The person's reply is simply your next
 `run()`; nothing is held open for it. VAF's own `ask_user` is built on it. A
 loop of your own around `ToolCaller` reads the declaration itself.
 
+**A tool that checks for itself whether it may run.** Some tools cannot rely on
+the confirmation gate, because a lane without one (a workflow step) reaches them
+too, so they re-check a standing grant on their own. Such a tool declares
+`accepts_call_confirmation = True` and receives `_call_confirmed`: True when the
+funnel's gate asked a person about THIS call and they said yes (once, for this
+chat, always), or your authorizer `allow()`ed it; False otherwise. The funnel
+ASSIGNS the value, so a model that writes `_call_confirmed: true` into its
+arguments is overwritten. VAF's `python_exec` uses it, so "only this time" runs
+the code instead of being refused by the tool's own check.
+
 **Background host commands** (`host_bash(background=true)`, then `host_process`)
 report their end as a wake turn queued on VAF's `TaskQueue`, the lane a fired
 timer uses. VAF's own runners (the web server, the terminal apps) consume that
@@ -1218,19 +1228,16 @@ Four limits worth knowing before you rely on it:
 - **A raising callback is a refusal.** This is the opposite of the event sink,
   which swallows failures on purpose: a broken observer must not fail a run it
   only watches, while a broken guard must not quietly become no guard.
-- **The coder does not consult it.** Tool calls made *inside* the coder sub-agent
-  are not put to your authorizer - not because of the process boundary (embedded,
-  the coder runs inline in yours) but because its own loop calls `tool.run()`
-  directly instead of going through the dispatcher. A callable also cannot cross
-  into the terminal-spawned coder. What the coder DOES enforce is everything whose
-  answer is data: its own tool allow-list, the account allowlist (resolved once from
-  your registered resolver and carried into the child as `VAF_ALLOWED_TOOLS`, next
-  section) and the declarative policy (`admin_only`, `channel_restrictions`). It asks
-  no confirmation, deliberately, like a workflow step: whether an account has a
-  `dangerous` tool at all is the allowlist's answer. The remaining gap is the
-  callback, and it closes when the coder's loop moves onto `ToolCaller`. The per-tool
-  budget that move needed (the funnel's generic 120 seconds would have cut a long build)
-  is declared on the tools now, so nothing technical stands in the way.
+- **The coder consults it when it runs in your process.** Its inner tool calls go
+  through a `ToolCaller` of their own (`_coder_funnel`), and the chat lane hands your
+  authorizer on for the call (`vaf.core.tool_dispatch.authorizer_scope`), so an
+  inline coder puts every inner call to it. A callable cannot cross into a
+  terminal-spawned coder: there only what is data applies - its own tool allow-list,
+  the account allowlist (resolved once from your registered resolver and carried into
+  the child as `VAF_ALLOWED_TOOLS`, next section) and the declarative policy
+  (`admin_only`, `channel_restrictions`). It asks no confirmation, deliberately, like a
+  workflow step: whether an account has a `dangerous` tool at all is the allowlist's
+  answer, so an `ask()` degrades to no opinion there and only `deny()` binds.
 - **The workflow engine consults it for non-spawn steps - with three limits of its
   own.** A workflow step now runs through the full pipeline: your authorizer, the
   account allowlist and the hard policy blocks all apply. Still outside: `ask()` -

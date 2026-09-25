@@ -252,16 +252,21 @@ tool the coder advertises is one the list actually permits.
 #### Dispatch-side enforcement
 
 The schema filter decides what the model SEES; what the coder RUNS is decided again at
-dispatch, by `_coder_dispatch_refusal()` in `vaf/tools/coder.py`, for every call into
-`self.local_tools`. Before, the coder asked only the account allowlist there: its own
-allow-list was never enforced, so a discovered tool ran whenever the model named it (the
-admin-only `create_agent_tool` among them), and `host_bash`/`python_exec` ran with no
-confirmation from any lane, including a messaging channel. Now, in order:
+dispatch. Before, the coder asked only the account allowlist there: its own allow-list was
+never enforced, so a discovered tool ran whenever the model named it (the admin-only
+`create_agent_tool` among them), and `host_bash`/`python_exec` ran with no confirmation from
+any lane, including a messaging channel. Now:
 
-1. the coder allow-list (a name outside it is refused, not only hidden);
-2. the account allowlist;
-3. the framework's declarative policy (`evaluate_tool_policy`: `admin_only`,
-   `channel_restrictions`).
+1. `_coder_dispatch_refusal()` asks the questions only this lane has, by the name the MODEL
+   used (an alias such as `web_search` is authorised as itself): the coder allow-list (a name
+   outside it is refused, not only hidden) and the account allowlist, whose ANSWER travels
+   into the coder's process as data;
+2. every local tool then RUNS through the framework's `ToolCaller` (`_coder_funnel()`), the
+   pipeline every other lane shares: the declarative policy (`admin_only`,
+   `channel_restrictions`), the account allowlist again where a resolver is registered, the
+   identity assignment, the input repair, the audit line, and a bounded run on each tool's own
+   declared budget. The two calls the loop answers inline (`web_fetch`, `web_deep_search`: no
+   tool object runs) get the policy from `_coder_dispatch_refusal` instead.
 
 There is **no confirmation gate** in this lane. Deliberate: the coder runs unattended and
 uses its tools at full strength, `host_bash` included and also for a chat that started on a
@@ -269,16 +274,19 @@ messaging channel, for an account that may use them - the account allowlist is t
 decision, exactly as for a workflow step. `python_exec` keeps its own check (a standing or a
 chat grant for the person); the chat's grants cross into the child as tool names
 (`VAF_CHAT_TOOL_GRANTS`), bound to the identity the spawn already carries. Every inner call
-gets the caller's identity through the framework's one assignment rule
-(`assign_declared_identity`, via `_as_the_caller()`), which also delivers a declared
-`username` the old copy never passed. Pinned by `tests/test_coder_dispatch_gate.py`.
+gets the caller's identity through the funnel's one assignment rule
+(`assign_declared_identity`), which also delivers a declared `username` the coder's old copy
+never passed; the coder's own helper for it (`_as_the_caller`) is gone with the conversion.
+Pinned by `tests/test_coder_dispatch_gate.py` and `tests/test_coder_identity_boundary.py`.
 
-Why the coder still calls `tool.run()` itself instead of going through `ToolCaller`: the
-funnel's bounded run would have cut a legitimate long build at the generic 120-second
-budget. That reason is gone - every tool now declares its own budget
-(`BaseTool.budget_seconds`, see [TOOL_SUPERVISION.md](TOOL_SUPERVISION.md)) - so the
-conversion to `ToolCaller(gate_enabled=False)`, like the workflow lane, can delete the
-stages above; until it lands they are the coder's own.
+The funnel's bounded run was the reason the coder used to call `tool.run()` itself: it would
+have cut a long build at the generic 120 seconds. The coder's shell, test runner and host
+Python now declare their own budgets (`BaseTool.budget_seconds`, see
+[TOOL_SUPERVISION.md](TOOL_SUPERVISION.md)), so the funnel waits as long as each of them may
+run. What the coder's funnel deliberately leaves out: the confirmation gate (unattended, see
+above), the result cap (the coder handles its own output) and an embedder's authorizer (a
+callable cannot cross into the coder's process - NAMED BOUNDARY, the account allowlist's
+answer crosses instead).
 
 ### E. LLM Interaction & Safety Nets
 *   **Call:** `self.llm.chat_completion(...)`.

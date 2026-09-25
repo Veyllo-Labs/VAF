@@ -39,7 +39,10 @@ without a declaration, or with one that fails or answers nonsense - zero, negati
 A filesystem agent is not forced to wait the full research budget: the librarian declares
 `librarian_timeout_seconds`, the sub-agents `subagent_timeout_seconds`, the browser
 `browser_timeout_seconds`, and `host_bash` the command's own timeout (up to 600 s) plus a margin -
-it used to be abandoned at the generic 120 s while it accepted a 300-second command. These were
+it used to be abandoned at the generic 120 s while it accepted a 300-second command. The coder's
+inner tools declare theirs too, since the coder runs them through the funnel: `bash` its command's
+timeout (up to 300 s) plus 30, `run_tests` its test timeout (180 s) plus 180 for copying the
+project in and out, `python_exec` its own timeout plus 15. These were
 tool NAMES in `bounded_run.py` before, which a tool registered by an embedder could never join.
 A small set of tools manage their own lifecycle and are deliberately **not** wrapped - each
 declares `self_supervised = True` on its class: `browser_agent` (its own in-loop stop

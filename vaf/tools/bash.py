@@ -75,6 +75,15 @@ IMPORTANT: Long-running commands timeout after 120 seconds."""
         "required": ["command"]
     }
     
+    def budget_seconds(self, args):
+        # The command's own timeout (default 120, at most 300) plus the jail's start-up: the
+        # dispatcher must not stop waiting before the command itself is allowed to end.
+        try:
+            own = int((args or {}).get("timeout") or 120)
+        except (TypeError, ValueError):
+            own = 120
+        return min(max(10, own), 300) + 30
+
     def __init__(self, base_dir: str = None):
         # base_dir = the coder's project workspace. Bound at registration (like the git
         # tools) so bash defaults to the project, not the tray process cwd, and so the

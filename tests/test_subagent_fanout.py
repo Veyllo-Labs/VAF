@@ -198,3 +198,28 @@ def test_the_drain_holds_open_fanouts():
     from vaf.core.agent import Agent
     src = inspect.getsource(Agent._check_subagent_results)
     assert "return ipc.hold_open_fanouts(results)" in src
+
+
+def test_the_dispatch_carries_the_authorizer_into_the_tool(agent, monkeypatch):
+    """The same seam hands the application's authorizer to a tool that runs tools of its own
+    in this process (the inline coder). MUTATION: drop authorizer_scope in execute_tool - red."""
+    from vaf.core.tool_dispatch import current_authorizer
+    seen = []
+
+    def app_rule(req):
+        return None
+
+    class Inner(BaseTool):
+        name = "probe_tool"
+        description = "stub"
+        parameters = {"type": "object", "properties": {}}
+
+        def run(self, **kw):
+            seen.append(current_authorizer())
+            return "ok"
+
+    agent.tools["probe_tool"] = Inner()
+    agent.set_tool_authorizer(app_rule)
+    agent.execute_tool("probe_tool", {})
+    assert seen == [app_rule]
+    assert current_authorizer() is None

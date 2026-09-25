@@ -2832,33 +2832,39 @@ def _caller_allowed_tools(scope, role):
     return resolve_account_allowlist(scope)
 
 
-def _as_the_caller(tool, fn_args: dict, *, scope, role) -> dict:
-    """An inner call's arguments, as the CALLER and not as the process.
+def _coder_funnel(tools, *, scope, role, session_id):
+    """The pipeline the coder runs its inner tools through: the framework's ToolCaller, the
+    one every other lane uses, configured for this lane by ARGUMENTS.
 
-    The framework's one assignment rule, the same the chat funnel applies: every key the
-    inner tool declares, overwriting anything the model wrote into those keys. This used to
-    be a narrower copy that knew scope and role only, so a declared ``username`` never
-    arrived and the GitHub and skill tools resolved the owner's account.
+    What it answers for the coder: the declarative policy (`admin_only`,
+    `channel_restrictions`), the account allowlist, the identity assignment (every declared
+    key, overwriting what the model wrote - the rule the coder used to keep a copy of), the
+    input repair, the audit line, and a bounded run on each tool's own declared budget
+    (`BaseTool.budget_seconds`: a build in `bash`, a test run, a host command wait as long as
+    they say they may), and the application's authorizer when the coder runs inline in the
+    application's process (the chat lane hands it on for the call, `authorizer_scope`; a
+    coder in a process of its own receives none, because a callable cannot cross - the
+    account allowlist's ANSWER does, as data). Deliberately NOT: a confirmation gate (the
+    coder runs unattended; the account allowlist is that decision, exactly as for a workflow
+    step) and a result cap (the coder handles its own output).
     """
-    from vaf.core.tool_dispatch import assign_declared_identity
-    return assign_declared_identity(tool, fn_args, user_scope_id=scope, username=None,
-                                    user_role=role)
+    from vaf.core.tool_dispatch import ToolCaller, current_authorizer
+    return ToolCaller(tools, user_scope_id=scope, user_role=role, session_id=session_id,
+                      gate_enabled=False, max_result_chars=None, authorize=current_authorizer())
 
 
 def _coder_dispatch_refusal(fn_name: str, tool, *, coder_allowed, caller_allowed,
                             scope, role, session_id) -> Optional[str]:
-    """Why the coder must NOT run this call, or None when it may.
-
-    The coder dispatches its inner tools itself rather than through ``ToolCaller`` (the
-    reason is in docs/agents/CODER_ARCHITECTURE.md, "Dispatch-side enforcement"), so the
-    questions that are HARD refusals in the funnel are asked here - with the framework's own
-    policy function, not a second copy of its logic. Before this, the coder asked only the
-    account allowlist: its own allowlist shaped the schema and was never enforced, so any
-    discovered tool ran when the model named it, the admin-only ones included.
+    """Why the coder must NOT run this call, or None when it may: the questions only this
+    lane asks, by the name the MODEL used (an alias such as web_search is authorised as
+    itself, the name the account's picker offers).
 
       1. The coder allowlist, ENFORCED at dispatch - not only used to shape the schema.
-      2. The account allowlist (``caller_allowed``, None = unrestricted).
-      3. The declarative policy: ``admin_only`` and ``channel_restrictions``.
+      2. The account allowlist (``caller_allowed``, None = unrestricted), as data: in the
+         coder's own process no resolver may be registered, so the parent's answer travels.
+      3. The declarative policy (``admin_only``, ``channel_restrictions``) - ONLY for the two
+         calls the loop answers inline (web_fetch, web_deep_search: no tool object runs). A
+         local tool's policy is the funnel's (`_coder_funnel`), asked once, when it runs.
 
     There is no confirmation gate in this lane. Deliberate: the coder runs unattended and
     uses its tools at full strength, host_bash included, for an account that may use them;
@@ -2869,6 +2875,8 @@ def _coder_dispatch_refusal(fn_name: str, tool, *, coder_allowed, caller_allowed
                 f"Use the tools you were given.")
     if caller_allowed is not None and fn_name not in caller_allowed:
         return f"Security Error: The tool '{fn_name}' is not enabled for your account."
+    if tool is not None:
+        return None     # the funnel asks the policy when the tool runs
     from vaf.core.tool_contract import evaluate_tool_policy
     from vaf.core.tool_dispatch import is_channel_session, policy_admin_flag
     decision = evaluate_tool_policy(
@@ -9884,8 +9892,13 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         except Exception:
                             pass
 
-                        _as_the_caller(tool, fn_args, scope=caller_scope, role=caller_role)
-                        result = tool.run(**fn_args)
+                        # THE FUNNEL, like every other lane (see _coder_funnel). A refusal or
+                        # a failure comes back as a "Security Error:" / "Tool Error:" result,
+                        # which is_error_result below reads as the error it is.
+                        result = _coder_funnel(
+                            self.local_tools, scope=caller_scope, role=caller_role,
+                            session_id=caller_session,
+                        ).execute(fn_name, fn_args)
 
                         try:
                             if lg:
@@ -9907,6 +9920,10 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         is_error_result = (
                             result_str.startswith("❌") or
                             result_str.startswith("Error:") or
+                            result_str.startswith("Tool Error:") or      # the funnel: raised / invalid input
+                            result_str.startswith("Security Error:") or  # the funnel: policy / allowlist
+                            result_str.startswith("[VAF_TOOL_TIMEOUT]") or  # the funnel: past its budget
+                            result_str.startswith("[VAF_TOOL_STOPPED]") or
                             result_str.startswith("EDIT FAILED") or   # edit_file: search not found / not unique -> nothing written
                             "permission denied" in result_str.lower() or
                             "locked" in result_str.lower() or

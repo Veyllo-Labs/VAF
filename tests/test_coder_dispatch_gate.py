@@ -11,7 +11,9 @@ reads as an unrestricted account.
 
 WHAT HOLDS NOW, each pinned below:
 - a name outside the coder allowlist is refused at dispatch, not only kept out of sight;
-- the declarative policy (admin_only, channel restrictions) is applied;
+- the declarative policy (admin_only, channel restrictions) is applied - by the framework's
+  ToolCaller, the pipeline every lane shares, which the coder now runs its inner tools
+  through (`_coder_funnel`), rather than by a copy of its questions;
 - the account allowlist still decides whether an account has a tool at all.
 
 WHAT IS DELIBERATELY NOT ASKED: a confirmation. The coder runs unattended and uses its
@@ -25,7 +27,7 @@ import ast
 import pytest
 
 from vaf.core import trust
-from vaf.tools.coder import _as_the_caller, _coder_dispatch_refusal
+from vaf.tools.coder import _coder_dispatch_refusal, _coder_funnel
 
 SCOPE = "ab12cd34-0000-4000-8000-000000000001"
 OTHER_SCOPE = "ab12cd34-0000-4000-8000-000000000002"
@@ -55,6 +57,12 @@ def _refusal(name, tool, *, allowed=None, caller_allowed=None, scope=SCOPE, role
     )
 
 
+def _run(name, tool, args, *, scope=SCOPE, role="user", session_id=CHAT):
+    """What the coder's loop does with a local tool that passed _refusal: the funnel."""
+    return _coder_funnel({name: tool}, scope=scope, role=role, session_id=session_id).execute(
+        name, dict(args))
+
+
 # ── the coder allowlist is a boundary, not a hint ──────────────────────────────────
 
 def test_a_tool_outside_the_coder_allowlist_is_refused_at_dispatch():
@@ -69,11 +77,14 @@ def test_a_tool_outside_the_coder_allowlist_is_refused_at_dispatch():
 
 
 def test_an_admin_only_tool_is_refused_for_a_tenant_even_when_allowlisted():
-    """The policy stage on its own: allowlisted, and still not for a non-admin."""
+    """The policy stage on its own: allowlisted (the coder's own questions pass), and still
+    not for a non-admin - answered by the funnel the call runs through. MUTATION: run the
+    local tool with a bare tool.run() again - red."""
     from vaf.tools.agent_tool_builder import AgentToolBuilderTool
 
-    out = _refusal("create_agent_tool", AgentToolBuilderTool(), role="user")
-    assert out is not None and out.startswith("Security Error:")
+    assert _refusal("create_agent_tool", AgentToolBuilderTool(), role="user") is None
+    out = _run("create_agent_tool", AgentToolBuilderTool(), {"name": "x"}, role="user")
+    assert out.startswith("Security Error:")
     assert "not a coding-agent tool" not in out
 
 
@@ -94,10 +105,9 @@ def test_also_for_a_chat_that_started_on_a_messaging_channel():
     """The channel guard protects the chat turn, where somebody would have been asked.
     The coder is not handed the flag, so a coder started from Telegram can still build."""
     assert _refusal("host_bash", _host_bash(), session_id=CHANNEL_CHAT) is None
-    tool = _host_bash()
-    args = _as_the_caller(tool, {"command": "echo coder-ok"}, scope=SCOPE, role="user")
-    assert "_is_channel_session" not in args
-    assert "coder-ok" in tool.run(**args)
+    # Handed the channel flag, host_bash would refuse; it runs, so it was not handed it.
+    assert "coder-ok" in _run("host_bash", _host_bash(), {"command": "echo coder-ok"},
+                              session_id=CHANNEL_CHAT)
 
 
 def test_an_admin_who_keeps_channel_restrictions_on_is_still_obeyed(monkeypatch):
@@ -106,8 +116,8 @@ def test_an_admin_who_keeps_channel_restrictions_on_is_still_obeyed(monkeypatch)
     monkeypatch.setattr("vaf.core.config.Config.get",
                         classmethod(lambda cls, k, d=None:
                                     False if k == "channel_tools_unrestricted" else d))
-    out = _refusal("host_bash", _host_bash(), session_id=CHANNEL_CHAT)
-    assert out is not None and out.startswith("Security Error:")
+    out = _run("host_bash", _host_bash(), {"command": "echo never"}, session_id=CHANNEL_CHAT)
+    assert out.startswith("Security Error:") and "never" not in out
 
 
 def test_the_coders_own_jailed_shell_is_unaffected():
@@ -121,11 +131,18 @@ def test_the_coders_own_jailed_shell_is_unaffected():
 def test_a_declared_username_now_arrives_and_is_never_the_model_s():
     """The coder's old copy assigned scope and role only; the framework rule also hands
     over a declared username - resolved from the scope, overwriting what the model wrote."""
+    seen = {}
+
     class _NameOnly:
         identity_kwargs = ("username",)
+        self_supervised = True
 
-    args = _as_the_caller(_NameOnly(), {"username": "admin"}, scope=OTHER_SCOPE, role="user")
-    assert args["username"] and args["username"] != "admin"
+        def run(self, **kw):
+            seen.update(kw)
+            return "ok"
+
+    assert _run("probe", _NameOnly(), {"username": "admin"}, scope=OTHER_SCOPE) == "ok"
+    assert seen["username"] and seen["username"] != "admin"
 
 
 # ── python_exec keeps its own check ────────────────────────────────────────────────
@@ -185,7 +202,7 @@ def test_the_dispatch_loop_uses_both_helpers():
 
     src = inspect.getsource(mod.CodingAgentTool.run)
     assert "_coder_dispatch_refusal(" in src
-    assert "_as_the_caller(" in src
+    assert "_coder_funnel(" in src and "tool.run(**fn_args)" not in src
 
 
 def test_a_refusal_answers_the_call_and_nothing_else_runs():
@@ -226,3 +243,72 @@ def test_an_advertised_alias_is_authorised_by_its_own_name():
     assert all(c.lstrip().startswith("_requested_fn_name,") for c in calls), \
         "a dispatch check asks with the resolved alias instead of the requested name"
     assert "_requested_fn_name = fn_name" in src.split('if fn_name == "web_search":')[0]
+
+
+def test_the_inner_tools_wait_as_long_as_they_say_they_may():
+    """The funnel runs each inner tool on its own declared budget; a build in the jailed shell
+    (up to 300 s), a test run (180 s plus copying the project) and host Python must not be
+    abandoned at the generic 120 s. MUTATION: drop BashTool.budget_seconds - red."""
+    from vaf.core.bounded_run import tool_budget_seconds
+    from vaf.tools.bash import BashTool
+    from vaf.tools.python_exec import PythonExecTool
+    from vaf.tools.sandbox_test_runner import RunTestsTool
+
+    assert tool_budget_seconds(BashTool(), {"command": "make", "timeout": 300}) > 300
+    assert tool_budget_seconds(RunTestsTool(), {}) > 180 + 120
+    assert tool_budget_seconds(PythonExecTool(), {"code": "x", "timeout": 200}) > 200
+
+
+# ── "only this time" reaches the tool (the funnel's confirmation, N13) ──────────────
+
+def test_only_this_time_now_runs_python_exec(tmp_path):
+    """The dialog offered "only this time" and python_exec's own check refused it, because
+    the tool could not tell it had been given for THIS call. The funnel now assigns
+    `_call_confirmed` to a tool that declares accepts_call_confirmation. MUTATION: drop the
+    assignment in ToolCaller._dispatch - red."""
+    from vaf.core.subagent_ipc import session_context
+    from vaf.core.tool_dispatch import ToolCaller
+    from vaf.tools.python_exec import PythonExecTool
+
+    asked = []
+
+    def decide(name, reason):
+        asked.append(name)
+        return "allow_once"
+
+    caller = ToolCaller({"python_exec": PythonExecTool()}, user_scope_id=SCOPE, user_role="user",
+                        session_id=CHAT, interactive=True, decide=decide, trust_dir=tmp_path)
+    with session_context(CHAT):
+        out = caller.execute("python_exec", {"code": "print(6*7)"})
+    assert asked == ["python_exec"] and "42" in out, out
+    assert not trust.has_chat_grant("python_exec", SCOPE, CHAT), "once remembers nothing"
+
+
+def test_the_model_cannot_claim_the_confirmation():
+    """Assigned, never defaulted: without a gate (a workflow step, the coder) the value is
+    False whatever the model wrote into it."""
+    from vaf.core.subagent_ipc import session_context
+    from vaf.core.tool_dispatch import ToolCaller
+    from vaf.tools.python_exec import PythonExecTool
+
+    unattended = ToolCaller({"python_exec": PythonExecTool()}, user_scope_id=SCOPE,
+                            user_role="user", session_id=CHAT, gate_enabled=False)
+    with session_context(CHAT):
+        out = unattended.execute("python_exec", {"code": "print(6*7)", "_call_confirmed": True})
+    assert out.startswith("[SECURITY]"), out
+
+
+def test_an_inline_coder_puts_its_inner_calls_to_the_application(tmp_path):
+    """The chat lane hands the embedder's authorizer on for the call; the coder's funnel,
+    built inside, consults it. Outside the scope (a coder in a process of its own) there is
+    none. MUTATION: build _coder_funnel without current_authorizer() - red."""
+    from vaf.core.tool_dispatch import authorizer_scope
+
+    def deny_all(req):
+        req.deny("not in this app")
+
+    with authorizer_scope(deny_all):
+        inside = _run("host_bash", _host_bash(), {"command": "echo inner"})
+    outside = _run("host_bash", _host_bash(), {"command": "echo inner"})
+    assert inside.startswith("Security Error:") and "not in this app" in inside
+    assert "inner" in outside

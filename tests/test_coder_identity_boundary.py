@@ -21,7 +21,7 @@ NAMED exception rather than a forgotten one.
 """
 import pytest
 
-from vaf.tools.coder import CodingAgentTool, _as_the_caller, _caller_identity
+from vaf.tools.coder import CodingAgentTool, _caller_identity, _coder_funnel
 
 SCOPE = "ab12cd34-0000-4000-8000-000000000001"
 
@@ -96,12 +96,27 @@ def test_the_spawn_env_carries_the_identity():
 
 # ── the assignment in the child: the security half ─────────────────────────────────
 #
-# The coder assigns through the framework's one rule (assign_declared_identity), the same
-# the chat funnel uses; it used to keep a narrower copy that knew scope and role only.
+# The coder runs its inner tools through the framework's ToolCaller (_coder_funnel), which
+# assigns identity by the one rule the chat funnel uses; it used to keep a narrower copy that
+# knew scope and role only, and then a helper of its own around the same rule.
 
 def _assign_caller_identity(tool, fn_args, scope, role):
-    """The coder's own helper."""
-    return _as_the_caller(tool, fn_args, scope=scope, role=role)
+    """What an inner tool with `tool`'s declaration receives when the coder runs it: through
+    the coder's funnel (`_coder_funnel`), recorded by a stand-in that declares the same keys."""
+    seen = {}
+
+    class _Recorder:
+        identity_kwargs = tuple(getattr(tool, "identity_kwargs", ()) or ())
+        self_supervised = True
+
+        def run(self, **kw):
+            seen.update(kw)
+            return "ok"
+
+    out = _coder_funnel({"probe": _Recorder()}, scope=scope, role=role,
+                        session_id=None).execute("probe", dict(fn_args))
+    assert out == "ok", out
+    return seen
 
 
 class _Declared:

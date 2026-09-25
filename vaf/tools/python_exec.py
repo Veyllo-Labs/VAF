@@ -43,6 +43,8 @@ class PythonExecTool(BaseTool):
     # read: without the declaration it would read the local-admin bucket for
     # every tenant.
     identity_kwargs = ("user_scope_id",)
+    # "Only this time" reaches the tool's own check (BaseTool.accepts_call_confirmation).
+    accepts_call_confirmation = True
     permission_level = "dangerous"
     channel_restrictions = ("channel",)
     side_effect_class = "irreversible"
@@ -69,6 +71,13 @@ class PythonExecTool(BaseTool):
         "code": ["task", "script"],
     }
 
+    def budget_seconds(self, args):
+        # The code's own timeout (default 30) plus a margin to collect its output.
+        try:
+            return int((args or {}).get("timeout") or 30) + 15
+        except (TypeError, ValueError):
+            return 45
+
     def run(self, **kwargs) -> str:
         code = str(kwargs.get("code") or "").strip()
         timeout = int(kwargs.get("timeout") or 30)
@@ -77,12 +86,12 @@ class PythonExecTool(BaseTool):
             return "[ERROR] python_exec: missing code"
         
         # Its own check, on top of the gate, because some lanes run tools without one (a
-        # workflow step): a stored "always" for this person, or their grant for the chat
-        # this call belongs to. A one-call approval cannot reach this far - the tool has no
-        # way to tell which call it was given for.
+        # workflow step): a stored "always" for this person, their grant for the chat this
+        # call belongs to, or their "only this time" for THIS call - which the funnel hands
+        # over as `_call_confirmed` (accepts_call_confirmation), assigned, never the model's.
         scope = kwargs.get("user_scope_id")
         policy = get_tool_policy("python_exec", scope)
-        if policy != "allow" and not _granted_for_this_chat(scope):
+        if policy != "allow" and not kwargs.get("_call_confirmed") and not _granted_for_this_chat(scope):
             logger.warning("python_exec called without explicit trust policy")
             return (
                 "[SECURITY] python_exec runs code UNSANDBOXED on your host system.\n"

@@ -318,6 +318,15 @@ class RunTestsTool(BaseTool):
         "required": [],
     }
 
+    def budget_seconds(self, args):
+        # The test command's own timeout (default 180) plus copying the project into the
+        # sandbox and back out (bounded at 120 + 20 + 15 s by run_project_tests itself).
+        try:
+            own = int((args or {}).get("timeout") or 180)
+        except (TypeError, ValueError):
+            own = 180
+        return own + 180
+
     def __init__(self, base_dir: str = "."):
         # base_dir defaults so the main agent's tool loader can instantiate the class (obj()) without
         # crashing; it is then excluded via coder_only. The coder passes the real project dir.

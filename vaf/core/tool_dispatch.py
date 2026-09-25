@@ -648,6 +648,31 @@ class ToolRequest:
         return self._reason
 
 
+# The application's authorizer for the call now being dispatched, for a tool that runs tools
+# of its own IN THIS PROCESS (the coder, when it runs inline). The chat lane sets it around
+# its dispatch (Agent.execute_tool); a context variable, because the bounded run copies the
+# caller's context into the thread that runs the tool. A tool in a process of its own cannot
+# receive a callable - there only the answers that are data reach it.
+import contextvars as _contextvars
+from contextlib import contextmanager as _contextmanager
+
+_authorizer_ctx = _contextvars.ContextVar("vaf_tool_authorizer", default=None)
+
+
+@_contextmanager
+def authorizer_scope(authorize):
+    """The authorizer every tool dispatched inside consults for its own inner calls."""
+    token = _authorizer_ctx.set(authorize if callable(authorize) else None)
+    try:
+        yield
+    finally:
+        _authorizer_ctx.reset(token)
+
+
+def current_authorizer():
+    return _authorizer_ctx.get()
+
+
 def consult_authorizer(authorize, request: "ToolRequest") -> "ToolRequest":
     """Run an embedder's authorizer over one request. FAIL-CLOSED on any exception.
 
@@ -1112,6 +1137,9 @@ class ToolCaller:
 
         forced_ask = verdict.decision == "ask"
         needs_gate = (decision.requires_confirmation or forced_ask) and verdict.decision != "allow"
+        # Whether THIS call was confirmed - by a person at the gate, or by the application's
+        # allow(). Handed to a tool that declared it wants to know (accepts_call_confirmation).
+        confirmed = verdict.decision == "allow"
         if needs_gate and self.gate_enabled:
             refusal = resolve_confirmation_gate(
                 name, reason=(verdict.reason if forced_ask else decision.reason), args=args,
@@ -1124,12 +1152,13 @@ class ToolCaller:
             )
             if refusal is not None:
                 return refusal
+            confirmed = True
 
         emit_event(self.on_event, {"type": "tool_start", "tool": name,
                                    "args": self._preview(name, args)})
         started = time.monotonic()
         try:
-            result = self._dispatch(name, tool, args)
+            result = self._dispatch(name, tool, args, confirmed=confirmed)
         except Exception as exc:                                  # noqa: BLE001
             result = f"Tool Error: {exc}"
 
@@ -1203,10 +1232,10 @@ class ToolCaller:
         loop wrote its line before dispatching too.
 
         Here rather than in one lane, so every lane gets it: the workflow engine, the
-        librarian, the training runner, and any tool an embedder registered through
-        ``add_tool``. Known gap, named rather than papered over: the coder calls
-        ``tool.run`` directly and never builds a ToolCaller, so its calls are still absent.
-        Putting that lane on the funnel is a policy and gate change, not a logging one.
+        librarian, the training runner, the coder's inner tools (``_coder_funnel`` in
+        vaf/tools/coder.py) and any tool an embedder registered through ``add_tool``. The two
+        calls the coder answers inline (web_fetch, web_deep_search) run no tool object and so
+        leave no line here.
 
         The preview is the SANITIZED one, the same the event stream gets: a heavy field
         arrives as length, digest and a bounded excerpt instead of the whole body. This
@@ -1235,7 +1264,7 @@ class ToolCaller:
         except Exception:
             return serializable
 
-    def _dispatch(self, name, tool, args):
+    def _dispatch(self, name, tool, args, confirmed: bool = False):
         if tool is None:
             # The prefix is contract; the correction after it is what turns the refusal
             # into a retry the model can get right (see unknown_tool_hint).
@@ -1249,6 +1278,10 @@ class ToolCaller:
             tool, tool_args, user_scope_id=self.user_scope_id,
             username=self.username, user_role=self.user_role,
         )
+        if getattr(tool, "accepts_call_confirmation", False):
+            # ASSIGNED like an identity key, never defaulted: the model's own
+            # `_call_confirmed: true` must not be what a tool trusts.
+            tool_args["_call_confirmed"] = bool(confirmed)
         if callable(self.hooks.before_dispatch):
             refusal = self.hooks.before_dispatch(name, tool_args)
             if refusal is not None and errors:

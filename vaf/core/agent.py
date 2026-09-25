@@ -12808,8 +12808,12 @@ class Agent:
         )
         # The fan-out a sub-agent spawned by this call belongs to (None for any other call,
         # so nothing leaks from one call into the next).
+        # And the application's authorizer, for a tool that runs tools of its own in this
+        # process (the coder, inline): its inner calls are put to it too.
         from vaf.core.subagent_ipc import fanout_scope
-        with fanout_scope(self._fanout_for(name)):
+        from vaf.core.tool_dispatch import authorizer_scope
+        with fanout_scope(self._fanout_for(name)), \
+                authorizer_scope(getattr(self, "_tool_authorizer", None)):
             return caller.execute(name, args)
 
     FANOUT_TOOLS = _FANOUT_TOOLS

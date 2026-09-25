@@ -121,6 +121,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **"Only this time" works for running Python on your computer.** Allowing the agent to run
+  Python code on your computer once was offered by the dialog and then refused by the tool
+  itself, so only "for this chat" or "always" worked. Now "only this time" runs that one piece
+  of code and remembers nothing.
 - **The agent sees mail from other Gmail users again.** With a Gmail address (or one at
   web.de, GMX and other free-mail providers), VAF treated the provider's whole domain as
   yours, so every mail from another Gmail user looked like somebody pretending to be you.

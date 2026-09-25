@@ -267,14 +267,19 @@ it MOVEs to the trash folder and never expunges.
 
 **A folder is named by the part it plays, and a missing folder says so.** The name a mailbox
 gives a special folder depends on the provider and its language: a German Gmail keeps its sent
-mail in `[Google Mail]/Gesendet`, Exchange in `Sent Items`. `MailStore.folder_filter` resolves
-what a caller calls a folder, for the search, the thread list and the message list alike: a
-real name first, then a role (`inbox`, `sent`, `drafts`, `trash`, `spam`, `archive`) or any
-provider's well-known name for a special folder (`SPECIAL_USE_FALLBACK`, the table the sync
-classifies folders with, now kept in `vaf/mail/store.py`), then a name in another case. A
-folder that means nothing in the mailbox makes `find_mail` and the mail lane of `inbox` answer
-`Tool Error: this mailbox has no folder '...'. Its folders: ...` (`tool_bridge.unknown_folder`)
-instead of "no match". Live incident: the agent searched `[Gmail]/Sent Mail` in a German Gmail,
+mail in `[Google Mail]/Gesendet`, Exchange in `Sent Items`. `MailStore.folder_matches` resolves
+what a caller calls a folder, for the search, the thread list and the message list alike, and
+it does so PER ACCOUNT (only the selected one when the call names an account): the account's
+own folder of that name first, then a role (`inbox`, `sent`, `drafts`, `trash`, `spam`,
+`archive`) or any provider's well-known name for a special folder (`SPECIAL_USE_FALLBACK`, the
+table the sync classifies folders with, now kept in `vaf/mail/store.py`; `[Gmail]/All Mail` is
+`\All` there, the whole mailbox again, not an archive), then a name in another case. Per
+account, because one account's folder literally named `Sent` must not stop the word from
+meaning another account's `Gesendet`. A folder that means nothing in the mailbox makes
+`find_mail` and the mail lane of `inbox` answer `Tool Error: this mailbox has no folder '...'.
+Its folders: ...` (`tool_bridge.unknown_folder`) instead of "no match"; `find_mail` also counts
+the folders of an account only the legacy store holds, because its search read those rows too.
+Live incident: the agent searched `[Gmail]/Sent Mail` in a German Gmail,
 got "No emails matching", and told the person a mail sent the evening before had not gone out.
 Guard: `tests/test_mail_folder_roles.py`.
 

@@ -257,6 +257,7 @@ def test_folder_discovery_special_use_and_localized_fallback(store):
     fake = FakeImap()
     fake.folders["Gesendete Objekte"] = {"uidvalidity": 5, "messages": {}}
     fake.folders["Papierkorb"] = {"uidvalidity": 6, "messages": {}}
+    fake.folders["[Gmail]/All Mail"] = {"uidvalidity": 7, "messages": {}}
     eng = _engine(store, fake)
     folders = {f["name"]: f for f in eng.discover_folders()}
     assert folders["INBOX"]["special_use"] == "\\Inbox"
@@ -264,6 +265,9 @@ def test_folder_discovery_special_use_and_localized_fallback(store):
     assert folders["Papierkorb"]["special_use"] == "\\Trash"
     assert folders["INBOX"]["tier"] == "eager"
     assert folders["Gesendete Objekte"]["tier"] == "headers"
+    # All Mail is every message again, not an archive: \All, and never synced eagerly.
+    assert folders["[Gmail]/All Mail"]["special_use"] == "\\All"
+    assert folders["[Gmail]/All Mail"]["tier"] == "lazy"
 
 
 def test_failed_fetch_batch_does_not_advance_watermark(store, monkeypatch):

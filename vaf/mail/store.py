@@ -46,7 +46,10 @@ SPECIAL_USE_FALLBACK = {
     "\\Trash": ("Trash", "Deleted", "Deleted Items", "Papierkorb", "Gelöschte Elemente",
                 "Geloeschte Elemente", "[Gmail]/Trash"),
     "\\Junk": ("Junk", "Spam", "Junk-E-Mail", "[Gmail]/Spam"),
-    "\\Archive": ("Archive", "Archiv", "[Gmail]/All Mail"),
+    "\\Archive": ("Archive", "Archiv"),
+    # Gmail's All Mail holds every message, archived or not: RFC 6154 \All, which the sync
+    # keeps lazy because it duplicates the whole mailbox.
+    "\\All": ("[Gmail]/All Mail",),
 }
 
 # The part a folder plays, by the word a caller may use for it instead of its name. The name
@@ -1259,7 +1262,7 @@ class MailStore:
             where.append("a.account_id=?")
             args.append(account_id)
         if folder:
-            clause, values = self._folder_clause("f", folder)
+            clause, values = self._folder_clause("f", folder, account_id)
             where.append(clause)
             args.extend(values)
         if category:
@@ -1294,7 +1297,7 @@ class MailStore:
             where.append("a.account_id=?")
             args.append(account_id)
         if folder:
-            clause, values = self._folder_clause("f2", folder)
+            clause, values = self._folder_clause("f2", folder, account_id)
             where.append("t.id IN (SELECT DISTINCT m2.thread_id FROM messages m2 "
                          f"JOIN folders f2 ON f2.id=m2.folder_id WHERE {clause})")
             args.extend(values)
@@ -1361,7 +1364,7 @@ class MailStore:
             where.append("a.account_id=?")
             args.append(account_id)
         if folder:
-            clause, values = self._folder_clause("f", folder)
+            clause, values = self._folder_clause("f", folder, account_id)
             where.append(clause)
             args.extend(values)
         args.append(max(1, min(int(limit), 200)))
@@ -1682,54 +1685,80 @@ class MailStore:
             (account_pk, special_use)).fetchone()
         return dict(row) if row else None
 
-    def folder_filter(self, folder: Optional[str]) -> Optional[Tuple[str, str]]:
-        """What `folder` means in this store: ("name", a folder's real name) or
-        ("special_use", the part a folder plays), or None when it means no folder here.
+    def folder_matches(self, folder: Optional[str],
+                       account_id: Optional[str] = None) -> List[Tuple[int, str, str]]:
+        """What `folder` means in each account of this store, or only in `account_id`: one
+        (account pk, column, value) per account where it names a folder, the column being
+        "name" or "special_use". Empty when it names no folder.
 
-        A real folder name wins, so the names the mail window sends keep meaning exactly
-        themselves. Next, a role word (`FOLDER_ROLES`: "sent") or any provider's well-known
-        name for a special folder (`SPECIAL_USE_FALLBACK`: "[Gmail]/Sent Mail", "Gesendet")
-        means the folder that plays that part, in every account, whatever each mailbox calls
-        it. Last, a name that differs only in case. Live incident: an agent checking
-        whether a mail had gone out searched "[Gmail]/Sent Mail" in a German Gmail, whose sent
-        mail sits in "[Google Mail]/Gesendet"; the filter matched no folder, the search
-        answered "no emails matching", and the agent told the person that a mail sent the
-        evening before had not gone out."""
+        Resolved PER ACCOUNT, in this order: the account's own folder of that name, so the
+        names the mail window sends keep meaning exactly themselves; then a role word
+        (`FOLDER_ROLES`: "sent") or any provider's well-known name for a special folder
+        (`SPECIAL_USE_FALLBACK`: "[Gmail]/Sent Mail", "Gesendet"), meaning the folder that
+        plays that part whatever this mailbox calls it; last, a name that differs only in case.
+        Per account because the order is only right inside one mailbox: one account's folder
+        literally named "Sent" must not stop the word from meaning another account's
+        "[Google Mail]/Gesendet". Live incident: an agent checking whether a mail had gone
+        out searched "[Gmail]/Sent Mail" in a German Gmail, whose sent mail sits in
+        "[Google Mail]/Gesendet"; the filter matched no folder, the search answered "no emails
+        matching", and the agent told the person that a mail sent the evening before had not
+        gone out."""
         wanted = str(folder or "").strip()
         if not wanted:
-            return None
-        rows = self._conn().execute("SELECT DISTINCT name, special_use FROM folders").fetchall()
-        names = [str(r["name"]) for r in rows]
-        if wanted in names:
-            return ("name", wanted)
+            return []
+        sql = "SELECT f.account_id AS apk, f.name, f.special_use FROM folders f"
+        args: List[Any] = []
+        if account_id:
+            sql += " JOIN accounts a ON a.id=f.account_id WHERE a.account_id=?"
+            args.append(account_id)
+        per_account: Dict[int, List[Tuple[str, str]]] = {}
+        for r in self._conn().execute(sql, args).fetchall():
+            per_account.setdefault(int(r["apk"]), []).append(
+                (str(r["name"]), str(r["special_use"] or "")))
         low = wanted.lower()
         flag = FOLDER_ROLES.get(low) or next(
             (su for su, known in SPECIAL_USE_FALLBACK.items()
              if low in (k.lower() for k in known)), None)
-        if flag and any((r["special_use"] or "") == flag for r in rows):
-            return ("special_use", flag)
-        folded = next((n for n in names if n.lower() == low), None)
-        if folded is not None:
-            return ("name", folded)
-        return None
+        found: List[Tuple[int, str, str]] = []
+        for apk, folders in sorted(per_account.items()):
+            names = [name for name, _ in folders]
+            if wanted in names:
+                found.append((apk, "name", wanted))
+            elif flag and any(su == flag for _, su in folders):
+                found.append((apk, "special_use", flag))
+            else:
+                folded = next((name for name in names if name.lower() == low), None)
+                if folded is not None:
+                    found.append((apk, "name", folded))
+        return found
 
-    def _folder_clause(self, alias: str, folder: str) -> Tuple[str, List[Any]]:
+    def _folder_clause(self, alias: str, folder: str,
+                       account_id: Optional[str] = None) -> Tuple[str, List[Any]]:
         """The WHERE condition for `folder` on the folders table aliased `alias`, through
-        `folder_filter`. A folder that means nothing here matches nothing, as the plain name
-        test always did."""
-        found = self.folder_filter(folder)
-        if found is None:
+        `folder_matches`: each account's own meaning of it. A folder that means nothing here
+        matches nothing, as the plain name test always did."""
+        found = self.folder_matches(folder, account_id)
+        if not found:
             return "0", []
-        column, value = found     # column is one of two fixed words, never caller text
-        return f"{alias}.{column}=?", [value]
+        parts: List[str] = []
+        values: List[Any] = []
+        for apk, column, value in found:   # column is one of two fixed words, never caller text
+            parts.append(f"({alias}.account_id=? AND {alias}.{column}=?)")
+            values += [apk, value]
+        return "(" + " OR ".join(parts) + ")", values
 
-    def folder_listing(self) -> List[Tuple[str, str]]:
-        """Every folder of this store once, as (name, role word or ""), the special ones
-        first: what an answer offers when the folder a caller named is not here."""
+    def folder_listing(self, account_id: Optional[str] = None) -> List[Tuple[str, str]]:
+        """Every folder of this store (or of `account_id`) once, as (name, role word or ""),
+        the special ones first: what an answer offers when the folder a caller named is not
+        here."""
         roles = {flag: word for word, flag in FOLDER_ROLES.items() if word != "junk"}
-        rows = self._conn().execute(
-            "SELECT name, MAX(COALESCE(special_use, '')) AS su FROM folders "
-            "GROUP BY name ORDER BY name").fetchall()
+        sql = ("SELECT f.name, MAX(COALESCE(f.special_use, '')) AS su FROM folders f "
+               "JOIN accounts a ON a.id=f.account_id ")
+        args: List[Any] = []
+        if account_id:
+            sql += "WHERE a.account_id=? "
+            args.append(account_id)
+        rows = self._conn().execute(sql + "GROUP BY f.name ORDER BY f.name", args).fetchall()
         listed = [(str(r["name"]), roles.get(str(r["su"] or ""), "")) for r in rows]
         return sorted(listed, key=lambda nr: (nr[1] == "", nr[0]))
 

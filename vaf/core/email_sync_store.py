@@ -14,7 +14,7 @@ import os
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 from vaf.core.platform import Platform
@@ -701,5 +701,25 @@ def list_categories(username: Optional[str] = None, user_scope_id: Optional[str]
             if c not in standard:
                 result.append(c)
         return result
+    finally:
+        conn.close()
+
+
+def list_folders(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> List[Tuple[str, str]]:
+    """Every (account_id, folder) this user's legacy store holds messages for, sorted.
+
+    The legacy lane stores whatever folder a caller once asked it to fetch, so this is the
+    only place that says which folders a legacy-only account has: a folder check that looked
+    at the engine store alone would call such a folder missing."""
+    init_store(username, user_scope_id)
+    user = _user_for_query(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        cur = conn.execute(
+            "SELECT DISTINCT account_id, folder FROM email_messages WHERE username = ? "
+            "ORDER BY account_id, folder",
+            (user,),
+        )
+        return [(str(r["account_id"] or ""), str(r["folder"] or "")) for r in cur.fetchall()]
     finally:
         conn.close()

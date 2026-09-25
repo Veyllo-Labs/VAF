@@ -173,7 +173,7 @@ class InboxTool(BaseTool):
             # A folder the mailbox does not have would list nothing, which reads as an empty
             # folder; the folders it does have are the useful answer.
             from vaf.mail.tool_bridge import unknown_folder
-            missing = unknown_folder(folder, user_scope_id)
+            missing = unknown_folder(folder, user_scope_id, account_id=account_id or None)
             if missing:
                 return missing
         result = list_conversations(username, user_scope_id, channels=channels, view=view,

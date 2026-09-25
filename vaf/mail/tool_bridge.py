@@ -92,15 +92,22 @@ def get_body_text(account_id: str, message_id: str, username: Optional[str],
     return None
 
 
-def unknown_folder(folder: Optional[str], user_scope_id: Optional[str]) -> str:
+def unknown_folder(folder: Optional[str], user_scope_id: Optional[str], *,
+                   account_id: Optional[str] = None,
+                   legacy_username: Optional[str] = None) -> str:
     """The answer for a folder this mailbox does not have, naming the ones it has, or "" when
-    the folder means one here (`MailStore.folder_filter`) or there is no mailbox to ask.
+    the folder means one here (`MailStore.folder_matches`) or there is no mailbox to ask.
 
     A search of a folder that does not exist finds nothing, and "no emails matching" then
     reads as the mailbox's word about the MAIL rather than about the folder: that is how a
     sent mail was reported as never sent. It opens with the prefix the funnel uses for a
     call's own bad arguments, so the result reads as a failure and the call is simply made
-    again with a folder from the list."""
+    again with a folder from the list.
+
+    `account_id` narrows the question to one account, as the caller's listing was narrowed.
+    `legacy_username` is given by a caller whose search also read the legacy store
+    (`search_messages_merged`): the folders of an account the engine does not sync are
+    known there only, and such a folder is not missing just because the engine lacks it."""
     wanted = str(folder or "").strip()
     if not wanted:
         return ""
@@ -110,9 +117,18 @@ def unknown_folder(folder: Optional[str], user_scope_id: Optional[str]) -> str:
         if not MailStore.exists(scope):
             return ""
         store = MailStore(scope)
-        if store.folder_filter(wanted) is not None:
+        if store.folder_matches(wanted, account_id):
             return ""
-        listing = store.folder_listing()
+        listing = store.folder_listing(account_id)
+        if legacy_username is not None:
+            from vaf.core.email_sync_store import list_folders as legacy_folders
+            v2_accounts = _v2_account_ids(store)
+            legacy = sorted({name for acct, name in legacy_folders(legacy_username, user_scope_id)
+                             if acct not in v2_accounts and (not account_id or acct == account_id)})
+            if any(name == wanted or name.lower() == wanted.lower() for name in legacy):
+                return ""
+            known = {name for name, _role in listing}
+            listing += [(name, "") for name in legacy if name not in known]
     except Exception as e:  # pragma: no cover - availability fallback
         logger.warning("folder check failed, answering as before: %s", e)
         return ""

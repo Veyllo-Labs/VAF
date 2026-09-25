@@ -99,9 +99,10 @@ class FindMailTool(BaseTool):
         if not matches:
             if v2:
                 # "No match" in a folder this mailbox does not have is no answer about the
-                # mail at all: say so, with the folders it has.
+                # mail at all: say so, with the folders it has. The search read the legacy
+                # rows too, so their folders count as the mailbox's.
                 from vaf.mail.tool_bridge import unknown_folder
-                missing = unknown_folder(folder, user_scope_id)
+                missing = unknown_folder(folder, user_scope_id, legacy_username=store_username)
                 if missing:
                     return missing
             return f"No emails matching '{query}' in {folder}. Sync in Settings → Connections → Email if needed."

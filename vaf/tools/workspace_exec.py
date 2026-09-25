@@ -22,6 +22,16 @@ not real security, so we confine with the KERNEL instead:
 The one residual privilege is the docker socket (docker can bind-mount host paths):
 _docker_mount_escapes rejects a docker command that -v/--mount/--volume-s a host path
 outside the workspace.
+
+NAMED BOUNDARY - no network, not even for a build's dependency repository. A Maven, Gradle or
+npm build that must download dependencies fails in here, and that is deliberate: the jail's
+`--unshare-net` is what keeps the host-loopback services (the memory DB, the VAF API) out of
+reach, and bubblewrap has only all or nothing. "Only Maven Central and the Paper repository"
+would need a user-space network stack (pasta or slirp4netns) in front of a filtering proxy,
+which is infrastructure of its own. Measured, it is not needed today: such a build runs through
+host_bash, which the coder uses without asking (an account permission, outside this jail). The
+gap it leaves is an account WITHOUT host_bash, whose coder cannot build against a dependency
+repository; no such request has been measured, and that is when the filtered profile is earned.
 """
 from __future__ import annotations
 

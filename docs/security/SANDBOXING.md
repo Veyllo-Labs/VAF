@@ -251,6 +251,12 @@ command is confined by the **kernel**:
   and `--network none`. Same confinement, minus host access.
 - **No sandbox at all:** the tool **refuses**. A raw, unconfined host shell is never run, and
   `bash` also refuses if no project workspace is bound (it would otherwise root the jail at `$HOME`).
+- **No network, also not for a dependency repository** (named boundary, in the module docstring
+  of `vaf/tools/workspace_exec.py`). A Maven, Gradle or npm build that downloads dependencies
+  runs through `host_bash`, which the coder uses without asking where the account has it. An
+  allowlisted network for the jail (only Maven Central, only the Paper repository) would need a
+  user-space network stack behind a filtering proxy; it is earned by the first measured request
+  from an account without `host_bash`.
 
 **Docker is refused in the coder shell.** The host docker socket is host-root-equivalent
 (a container can `--privileged` / `-v /:/host` / `--pid=host` its way to the whole host

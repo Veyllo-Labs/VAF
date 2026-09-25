@@ -1115,7 +1115,14 @@ class Platform:
         group = None
         if not Platform.is_windows():
             if pgid is not None:
-                group = int(pgid)
+                try:
+                    group = int(pgid)
+                except (TypeError, ValueError):
+                    group = None
+                # The rule terminate_process_group keeps: killpg(0) is our own group, and
+                # killpg(1) is kill(-1), every process this user may signal.
+                if group is not None and group <= 1:
+                    group = None
             else:
                 try:
                     candidate = os.getpgid(pid)

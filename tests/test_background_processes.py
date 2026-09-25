@@ -329,6 +329,27 @@ def test_a_group_stop_never_touches_our_own_group_or_nothing():
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+@pytest.mark.parametrize("pgid", [0, 1, -5, "junk"])
+def test_a_tree_stop_never_signals_a_group_below_two(monkeypatch, pgid):
+    """killpg(0) is our own group and killpg(1) every process we may signal (kill(-1)); the
+    group stop refuses both, and so does the tree stop now. The signals are recorded, never
+    sent. MUTATION: drop the `<= 1` check and group 1 reaches os.killpg."""
+    import subprocess
+
+    from vaf.core.platform import Platform
+    sent = []
+    monkeypatch.setattr(os, "killpg", lambda group, sig: sent.append(group), raising=False)
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        Platform.terminate_process_tree(child.pid, grace=1.0, pgid=pgid)
+        assert all(g > 1 for g in sent), sent
+        assert child.wait(timeout=10) is not None, "the process itself is still stopped"
+    finally:
+        if child.poll() is None:
+            child.kill()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
 def test_the_tree_stop_reaches_the_group_when_the_leader_is_already_gone():
     """The race between "still running" and the signal: the shell exits in between. The
     tree stop finds no process and must still stop the recorded group.

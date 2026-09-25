@@ -302,8 +302,14 @@ marks the op `edited`. Every recipient, the Bcc, the Message-ID and every attach
 for byte as built, so what the person approves is still what leaves. Only a `held` op can be
 revised, and not one whose last attempt may have gone out (`ambiguous`). A draft a newer one
 replaced is a discard with `replaced_by` on the op (`MailStore.discard_op`), so every reader of
-the op state keeps its meaning. `list_chat_drafts` lists every send one chat asked for, in
-every state, for the cards in that conversation.
+the op state keeps its meaning. An empty subject is stored as "(No subject)", the header the
+message carries. `list_chat_drafts` lists, for the cards in one conversation, every draft that
+chat still has held plus the newest decided ones (the history is bounded, the open drafts are
+not), in the card's words (`chat_draft`): a released op the outbox has not delivered yet
+(`pending`, `sending`) is `sending`, only `done` is `sent`, and a parked `failed` op is
+`ambiguous` when it may have gone out (the ledger's stamp, or `reclaim_stale_ops`'
+`INTERRUPTED_SEND`). A confirmed failure is sent again from the card: the op goes back to
+`held` and through `release_held_draft` like any draft.
 
 The agent stamps `username` + `user_scope_id` into tool kwargs at dispatch
 (`agent.py`) and the workflow engine does the same (`workflows/engine.py`); tools

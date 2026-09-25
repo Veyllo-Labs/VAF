@@ -13152,13 +13152,17 @@ class Agent:
 
     def _note_decided_drafts(self) -> None:
         """What became of the drafts earlier turns of this chat stopped at, as one `[Context:`
-        note right after the new input (`outbound_hold.decision_notes`).
+        note right before the new input (`outbound_hold.decision_notes`).
 
-        After the input and before the turn's snapshot, so the note is part of the context a
-        retry falls back to, and the runner persists it with the turn (it keeps `[Context:`
-        system messages) - a chat reloaded later does not hear the same news twice. The input
-        itself is read too: a wake turn's text already reports the draft it was woken for.
-        Only a history that ever held a draft pays for the lookup. Never raises."""
+        BEFORE the input, so the person's message stays the last one: `_append_turn_block`
+        places the turn block ahead of a trailing user message and only then, and a note after
+        the input would push the block behind the request. It sits before the turn's snapshot,
+        so a retry falls back to a context that has it. The runner stores it with the turn
+        (`_turn_decision_note`, written ahead of the user message, since the turn's own context
+        persistence starts after it), so a chat reloaded later does not hear the same news
+        twice. The input itself is read too: a wake turn's text already reports the draft it
+        was woken for. Only a history that ever held a draft pays for the lookup. Never raises."""
+        self._turn_decision_note = None
         try:
             from vaf.core import outbound_hold
             texts = [str(m.get("content") or "") for m in (self.history or [])
@@ -13169,7 +13173,13 @@ class Agent:
                 texts, username=getattr(self, "_current_username", None),
                 user_scope_id=getattr(self, "_current_user_scope_id", None))
             if note:
-                self.history.append({"role": "system", "content": note})
+                entry = {"role": "system", "content": note}
+                if self.history and isinstance(self.history[-1], dict) \
+                        and self.history[-1].get("role") == "user":
+                    self.history.insert(len(self.history) - 1, entry)
+                else:
+                    self.history.append(entry)
+                self._turn_decision_note = note
         except Exception as _dn_exc:
             append_domain_log("backend", f"[OUTBOUND_HOLD] decision note skipped: {_dn_exc}")
 

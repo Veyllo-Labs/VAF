@@ -2080,6 +2080,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             )
                         except Exception:
                             pass
+                    # The draft note is per turn and the agent serves every chat: a turn that
+                    # ends before chat_step writes it (an early workflow exit) must not leave
+                    # the previous chat's note behind for this chat's session file.
+                    agent._turn_decision_note = None
                     try:
                         if _manage_webui_env:
                             os.environ["VAF_WEBUI_ACTIVE"] = "1"
@@ -2550,6 +2554,14 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 _msg_kind = ("voice_delegation"
                                              if (task.metadata or {}).get("origin_channel") == "voice_call"
                                              else None)
+                                # What became of the chat's drafts (vaf/core/outbound_hold.py): the
+                                # agent put that note right BEFORE this input, so the turn-context
+                                # persistence below, which starts after the user message, cannot
+                                # see it. Stored here in the same place, it survives a reload and
+                                # the agent is not told the same news again.
+                                _draft_note = getattr(agent, "_turn_decision_note", None)
+                                if _draft_note:
+                                    session.add_message(role="system", content=str(_draft_note))
                                 session.add_message(role="user", content=_user_input.strip(),
                                                     metadata=(_user_meta or None), kind=_msg_kind)
                                 # Increment persistent user_turn_count in runtime_state

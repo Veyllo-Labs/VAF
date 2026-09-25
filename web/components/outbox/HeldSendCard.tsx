@@ -201,9 +201,16 @@ function WaitingDraft({ row, apiBase, onChanged }: CardProps) {
     };
 
     // Leaving the text is saving it. Moving between the subject and the text is not leaving.
+    // Leaving it EMPTY is not an edit anybody can send: the saved words come back, and the
+    // note says why, rather than a blank card whose Send can only refuse.
     const onEditBlur = (e: React.FocusEvent) => {
         const to = e.relatedTarget as Node | null;
         if (to && editRef.current?.contains(to)) return;
+        if (!current.current.body.trim()) {
+            revert();
+            setNote(t('emptyText'));
+            return;
+        }
         setEditing(null);
         void save();
     };
@@ -243,7 +250,10 @@ function WaitingDraft({ row, apiBase, onChanged }: CardProps) {
     };
 
     const named = !!(row.recipient_name || '').trim() && row.recipient_name !== row.recipient;
-    const text = editing ? body : (row.preview || '');
+    // The person's own words until the store holds them: after leaving the field the save is
+    // still on the wire (or failed), and showing the agent's old text meanwhile would say the
+    // edit was lost while Send would still send it.
+    const text = (editing || body !== saved.current.body) ? body : (row.preview || '');
     const foldable = !editing && (text.split('\n').length > FOLD_LINES || text.length > FOLD_CHARS);
     const Icon = row.channel === 'mail' ? Mail : MessageCircle;
     const dirty = body !== saved.current.body || (isMail && subject !== saved.current.subject);

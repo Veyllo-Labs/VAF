@@ -368,16 +368,18 @@ motion gets the rim standing still.
 **Send** delivers it and wakes the chat, so the agent carries on where its turn stopped (a
 wake row "Draft sent" with the person's name, then the agent's answer). **Discard** ends it:
 nothing more happens. Either way the card stays in the conversation as one line, the record of
-what became of the draft (`Gesendet: WhatsApp an Anna Berg · 14:32`, `Verworfen: ...`), and
-opens to the words it held. When the agent writes a new draft to the same person in the same
+what became of the draft (`Gesendet: WhatsApp an Anna Berg · 14:32`, `Verworfen: ...`, and
+`Wird gesendet: ...` for a mail the outbox has taken but not delivered yet), and opens to the
+words it held. Leaving the text field empty brings the saved words back with a note, and until
+an edit is saved the card shows the edit, not the agent's version. When the agent writes a new draft to the same person in the same
 chat while an older one still waits, the new one replaces it (`Durch eine neuere Fassung
 ersetzt`), so one message never has two cards. The agent learns what happened to a draft at
 its next turn in that chat. A failed send keeps the draft and says why, because a mail server
 or a bridge that is down must not consume a message; a send that was interrupted after the
 hand-off shows no Send button and cannot be edited, only discarded.
 
-The cards show the drafts of THAT conversation only (`GET /api/outbox?session_id=&settled=true`,
-every state): switching chats while the agent is still writing is the ordinary case, and a
+The cards show the drafts of THAT conversation only (`GET /api/outbox?session_id=&settled=true`:
+every draft still open, plus the newest decided ones): switching chats while the agent is still writing is the ordinary case, and a
 message being prepared in one chat must never turn up in another. The chat that holds the
 draft carries the sidebar's red dot, the same one a background reply uses, until the person
 goes back to it. A draft whose turn is not on screen (its tool result has not arrived yet, or

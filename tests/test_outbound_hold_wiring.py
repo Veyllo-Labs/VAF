@@ -553,3 +553,34 @@ def test_the_card_carries_no_colour_of_its_own():
     for token in ("bg-amber", "border-amber", "dark:bg-amber", "dark:border-amber"):
         assert token not in card, token
     assert "dark:bg-[#1f1f1f]" in card and "dark:border-[#2e2e2e]" in card
+
+
+def test_the_runner_keeps_the_draft_note_with_its_turn_and_its_chat():
+    """MUTATION: drop the reset before the turn, or store the note after the user message.
+
+    The note sits BEFORE the input in the agent's history, where the turn-context persistence
+    (which starts after the user message) cannot see it, so the runner stores it there itself.
+    And the agent serves every chat: a turn that ends before chat_step writes the note must
+    not leave the previous chat's note behind for this chat's file.
+    """
+    runner = (ROOT / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
+    call = runner.index("response = agent.chat_step(")
+    assert "agent._turn_decision_note = None" in runner[call - 600:call]
+    store_at = runner.index('_draft_note = getattr(agent, "_turn_decision_note", None)')
+    user_at = runner.index('session.add_message(role="user", content=_user_input.strip(),')
+    assert store_at < user_at and user_at - store_at < 400
+    assert 'session.add_message(role="system", content=str(_draft_note))' in runner[store_at:user_at]
+
+
+def test_the_card_never_hides_an_edit_and_never_keeps_a_blank():
+    """MUTATION: show the agent's text as soon as the field closes, or keep an empty edit.
+
+    Between leaving the field and the save landing (or after a failed save) the card shows the
+    person's words, because those are what Send sends. A field left empty brings the saved
+    words back with the reason. The wake row strips its prefix only when it is there.
+    """
+    assert "const text = (editing || body !== saved.current.body) ? body : (row.preview || '');" in CARD
+    blur = CARD.split("const onEditBlur", 1)[1].split("const revert", 1)[0]
+    assert "if (!current.current.body.trim()) {" in blur
+    assert blur.index("revert();") < blur.index("setNote(t('emptyText'));")
+    assert "(_draftLine.startsWith(DRAFT_WAKE_PREFIX) ? _draftLine.slice(DRAFT_WAKE_PREFIX.length) : _draftLine).trim()" in PAGE

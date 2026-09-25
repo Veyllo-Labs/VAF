@@ -177,11 +177,14 @@ history, `chat_step` appends the fixed `TURN_ENDS_AT_DRAFT` sentence and returns
 further model call, every tool call answered. The turn is not held open for the click: one
 chat worker serves every chat by default, so a turn waiting on a person would stall every
 other chat and channel for as long as they read. Send wakes the chat instead (a queued wake
-turn, `kind="draft"`), Discard ends it. At the start of the chat's next turn, right after the
+turn, `kind="draft"`), Discard ends it. At the start of the chat's next turn, right BEFORE the
 input, `_note_decided_drafts` adds one `[Context:` note for every draft the history created
 and nothing since has reported (`outbound_hold.decision_notes`), so the agent learns about a
-discard, a replacement or a send from the terminal once; the runner persists the note with
-the turn. NAMED BOUNDARY: this is the only tool result that ends a turn, so it is keyed on the
+discard, a replacement or a send from the terminal once. Before, not after: the person's
+message stays the last one, which is what `_append_turn_block` needs to place the turn block
+ahead of it. The runner stores the note ahead of the user message itself
+(`_turn_decision_note`, cleared before every turn because one agent serves every chat), since
+the turn's own context persistence starts after the user message. NAMED BOUNDARY: this is the only tool result that ends a turn, so it is keyed on the
 hold's own marker rather than offered as a general "end the turn" result.
 
 The rule, the measurements and the named boundaries are in

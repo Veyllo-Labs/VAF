@@ -119,12 +119,76 @@ def test_a_chat_sees_every_mail_it_asked_for_in_the_cards_words(svc):
     rows = {r["op_id"]: r for r in svc.list_chat_drafts("chat-a")}
     assert set(rows) == {waiting, sent, dropped, replaced}, "only this chat's, in every state"
     assert rows[waiting]["state"] == "held"
-    assert rows[sent]["state"] == "sent"
+    # Released, not yet delivered: on its way, not "sent". MUTATION: map pending to sent.
+    assert rows[sent]["state"] == "sending"
     assert rows[dropped]["state"] == "discarded"
     assert (rows[replaced]["state"], rows[replaced]["replaced_by"]) == ("replaced", "mail:99")
     assert rows[waiting]["bcc"] == "bcc@example.com" and rows[waiting]["attachments"] == ["offer.pdf"]
     # A replaced draft is still a discard for everybody who reads the op state.
     assert svc.store.get_op(replaced)["state"] == "discarded"
     assert svc.list_chat_drafts("") == []
-    assert svc.get_chat_draft(sent)["state"] == "sent"
+    svc.store.mark_op(sent, "done")
+    assert svc.get_chat_draft(sent)["state"] == "sent", "only a delivered mail is sent"
     assert svc.get_chat_draft(123456) is None
+
+
+def test_an_empty_subject_is_what_leaves_on_both_sides(svc):
+    """MUTATION: store "" in the payload while the header says "(No subject)"."""
+    op_id = _hold(svc)["op_id"]
+    assert svc.revise_draft(op_id, subject="   ")
+    assert _parsed(svc, op_id)["Subject"] == "(No subject)"
+    assert svc.store.get_op(op_id)["payload"]["subject"] == "(No subject)"
+
+
+def test_a_send_a_dead_worker_left_behind_may_have_gone_out(svc):
+    """MUTATION: show every parked failure as `failed`. `reclaim_stale_ops` parks a send that
+    was handed to the transport and never answered; the card must not offer it as a plain
+    failure to send again."""
+    from vaf.mail.store import INTERRUPTED_SEND
+    interrupted = _hold(svc)["op_id"]
+    svc.approve_draft(interrupted)
+    svc.store.mark_op(interrupted, "failed", error=INTERRUPTED_SEND)
+    assert svc.get_chat_draft(interrupted)["state"] == "ambiguous"
+    refused = _hold(svc)["op_id"]
+    svc.approve_draft(refused)
+    svc.store.mark_op(refused, "failed", error="550 mailbox unavailable")
+    row = svc.get_chat_draft(refused)
+    assert (row["state"], row["error"]) == ("failed", "550 mailbox unavailable")
+
+
+def test_a_long_chat_keeps_every_waiting_mail(svc):
+    """MUTATION: `ORDER BY id DESC LIMIT ?` over every state. The oldest open draft of a long
+    chat must stay listed; only the decided history is bounded."""
+    oldest = _hold(svc)["op_id"]
+    for _ in range(5):
+        svc.discard_draft(_hold(svc)["op_id"])
+    ids = [r["op_id"] for r in svc.list_chat_drafts("chat-a", limit=2)]
+    assert oldest in ids and len(ids) == 3, ids
+
+
+def test_a_parked_failed_mail_is_sent_again_from_the_card(svc, monkeypatch):
+    """The card shows a mail the outbox run could not deliver with its reason and a Send
+    button; that button must work. MUTATION: drop the return to `held` in send_draft and the
+    release refuses the op as "not waiting"."""
+    import vaf.core.outbound_hold as oh
+    import vaf.mail.service as svc_mod
+    op_id = _hold(svc)["op_id"]
+    svc.approve_draft(op_id)
+    svc.store.mark_op(op_id, "failed", error="550 mailbox unavailable")
+    seen = []
+
+    def _release(scope, username, oid, service=None):
+        seen.append(service.store.get_op(oid)["state"])
+        return {"ok": True, "state": "done", "error": ""}
+    monkeypatch.setattr(svc_mod, "release_held_draft", _release)
+    monkeypatch.setattr(oh, "_mail_service", lambda scope: svc)
+    monkeypatch.setattr(oh, "_close_quietly", lambda s: None)
+    out = oh.send_draft("mail", op_id, username="alice", user_scope_id=_SCOPE, wake=False)
+    assert out["ok"] is True and seen == ["held"]
+    # One that may have arrived is not handed back.
+    from vaf.mail.store import INTERRUPTED_SEND
+    risky = _hold(svc)["op_id"]
+    svc.approve_draft(risky)
+    svc.store.mark_op(risky, "failed", error=INTERRUPTED_SEND)
+    oh.send_draft("mail", risky, username="alice", user_scope_id=_SCOPE, wake=False)
+    assert seen[-1] == "failed"

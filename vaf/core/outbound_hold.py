@@ -92,6 +92,14 @@ _SENDABLE: Tuple[str, ...] = ("held", "failed")
 # may not have arrived, so it is theirs to look at and drop, but never to repeat with one
 # click. A messenger send carries no idempotency key, so nobody can make that call for them.
 _ACTIONABLE: Tuple[str, ...] = _SENDABLE + ("ambiguous",)
+# What a chat still has open: the person's to decide, or on its way right now (`sending`: a
+# parked call being re-dispatched, a released mail the outbox has not delivered yet).
+_OPEN: Tuple[str, ...] = _ACTIONABLE + ("sending",)
+# How long a draft on its way counts as "a send in flight" for the wake: the lease after which
+# a parked call stuck in `sending` becomes `ambiguous` (`reclaim_stranded_held_sends`). A mail
+# the outbox has not managed to deliver for longer than that must not hold back every later
+# wake of its chat.
+_IN_FLIGHT_SECONDS = 300.0
 
 # The one chat source with a place to decide. See the module docstring for why this is a
 # positive test and not an exclusion list.
@@ -514,10 +522,13 @@ def pending(username: str, user_scope_id: Optional[str] = None, *,
 
 def chat_drafts(username: str, user_scope_id: Optional[str], session_id: str, *,
                 limit: int = 50) -> List[Dict[str, Any]]:
-    """Every draft ONE chat produced, in every state, newest first, in `pending`'s row shape.
+    """The drafts ONE chat produced, newest first, in `pending`'s row shape: EVERY one that
+    still waits or is on its way, plus the newest `limit` decided ones.
 
     What the card in the conversation reads. A draft stays on screen after the decision, as
-    the record of what became of it (sent, discarded, replaced), in the turn that wrote it;
+    the record of what became of it (sent, discarded, replaced), in the turn that wrote it,
+    and that record is bounded; what still waits is not, or a long chat's oldest open draft
+    would wait where nothing lists it (and `wake_after_send` would not see it waiting).
     `pending` answers only what still waits, which is what the terminal and the inbox want.
     A chat with no id has no drafts."""
     sid = str(session_id or "").strip()
@@ -529,6 +540,9 @@ def chat_drafts(username: str, user_scope_id: Optional[str], session_id: str, *,
         store.reclaim_stranded_held_sends(username, user_scope_id)
         rows.extend(_call_row(r) for r in store.held_sends(
             username, user_scope_id, state="", limit=limit, session_id=sid))
+        for state in _OPEN:
+            rows.extend(_call_row(r) for r in store.held_sends(
+                username, user_scope_id, state=state, limit=None, session_id=sid))
     except Exception:
         pass
     try:
@@ -542,8 +556,14 @@ def chat_drafts(username: str, user_scope_id: Optional[str], session_id: str, *,
             rows.extend(_mail_row(d) for d in drafts)
     except Exception:
         pass
-    rows.sort(key=lambda r: r.get("created_ts") or 0.0, reverse=True)
-    return _with_names(rows[: max(1, int(limit))], username, user_scope_id)
+    unique: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        unique.setdefault(str(r.get("ref") or ""), r)
+    ordered = sorted(unique.values(), key=lambda r: r.get("created_ts") or 0.0, reverse=True)
+    open_rows = [r for r in ordered if r.get("state") in _OPEN]
+    decided = [r for r in ordered if r.get("state") not in _OPEN][: max(1, int(limit))]
+    kept = {id(r) for r in open_rows + decided}
+    return _with_names([r for r in ordered if id(r) in kept], username, user_scope_id)
 
 
 def resolve_tool(tool_name: str) -> Optional[Any]:
@@ -713,6 +733,13 @@ def send_draft(kind: str, entry_id: int, *, username: str, user_scope_id: Option
             return {"ok": False, "state": "", "error": "no mail account"}
         try:
             from vaf.mail.service import release_held_draft
+            # A released mail the outbox run could not deliver is parked `failed`, and the card
+            # shows it with its reason and a Send button. That button is the person asking
+            # again, so the op goes back to `held` first - only for a confirmed failure
+            # (`chat_draft` says `failed`); one that may have arrived stays refused.
+            op = svc.store.get_op(int(entry_id))
+            if op and op.get("state") == "failed" and svc.chat_draft(op).get("state") == "failed":
+                svc.store.mark_op(int(entry_id), "held", expect_state="failed")
             out = dict(release_held_draft(str(user_scope_id or ""), str(username or ""),
                                           int(entry_id), service=svc))
         finally:
@@ -867,9 +894,10 @@ def decision_line(row: Dict[str, Any]) -> str:
     "" while it still waits."""
     ref, state = str(row.get("ref") or ""), str(row.get("state") or "")
     what = f"{_channel_word(str(row.get('channel') or ''))} to {_addressee(row)}"
-    if state == "sent":
+    if state in ("sent", "sending"):
         edited = " after changing its text" if row.get("edited") else ""
-        return f"Draft {ref} was SENT by the user{edited} ({what})."
+        underway = " It is on its way: the outbox delivers it shortly." if state == "sending" else ""
+        return f"Draft {ref} was SENT by the user{edited} ({what}).{underway}"
     if state == "discarded":
         return f"Draft {ref} was DISCARDED by the user ({what}). Nothing was sent."
     if state == "replaced":
@@ -940,14 +968,26 @@ def wake_after_send(kind: str, entry_id: int, *, username: str,
 
     Only once NOTHING in that chat still waits to be sent: two drafts from one turn wake the
     chat once, after the second decision, and whatever the person decided about the first is
-    reported by the decision note of that same turn. A draft that belongs to no chat wakes
-    nothing. The turn is a person's (they just clicked), so it is attended: a message the agent
-    sends in it is held again."""
+    reported by the decision note of that same turn. Another draft of the chat that is being
+    sent at this very moment counts as waiting too, so two Send clicks racing each other wake
+    the chat once, from whichever answers last; "this very moment" is `_IN_FLIGHT_SECONDS`,
+    so a mail the outbox cannot deliver does not hold back the chat for good. A draft that
+    belongs to no chat wakes nothing. The draft itself counts as sent once it left the
+    person's hands (`sending` included: a released mail the outbox delivers shortly). The turn
+    is a person's (they just clicked), so it is attended: a message the agent sends in it is
+    held again."""
+    import time as _time
     row = _chat_row(kind, int(entry_id), username, user_scope_id)
     sid = str((row or {}).get("session_id") or "").strip()
-    if not row or not sid or row.get("state") != "sent":
+    if not row or not sid or row.get("state") not in ("sent", "sending"):
         return False
-    if any(r.get("state") in _SENDABLE for r in chat_drafts(username, user_scope_id, sid)):
+    now = _time.time()
+
+    def _in_flight(r: Dict[str, Any]) -> bool:
+        return r.get("state") == "sending" and now - float(r.get("decided_ts") or 0.0) < _IN_FLIGHT_SECONDS
+
+    others = [r for r in chat_drafts(username, user_scope_id, sid) if r.get("ref") != row.get("ref")]
+    if any(r.get("state") in _SENDABLE or _in_flight(r) for r in others):
         return False
     _with_names([row], username, user_scope_id)
     from vaf.core.task_queue import enqueue_wake_turn

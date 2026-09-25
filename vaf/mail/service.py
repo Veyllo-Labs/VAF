@@ -721,6 +721,10 @@ class MailService:
         if self.draft_state(op)[0] == "ambiguous":
             return False
         payload = op.get("payload") or {}
+        # An empty subject goes out as "(No subject)" (`compose` writes that header), so the
+        # payload the card and an API sender read says the same thing as the bytes.
+        if subject is not None and not str(subject).strip():
+            subject = "(No subject)"
         new_subject = str(payload.get("subject") or "") if subject is None else str(subject)
         new_body = str(payload.get("body") or "") if body is None else str(body)
         import base64 as _b64
@@ -734,18 +738,29 @@ class MailService:
         """One send a chat asked for, in the words the chat card uses, whatever its state.
 
         `held`, `failed` and `ambiguous` are `draft_state`'s own answer for a draft that still
-        waits. A released op (`pending`, `sending`, `done`) is `sent`: it left the person's
-        hands, which is what `release_held_draft` answers ok for too. A discard is `replaced`
-        when a newer draft took its place, else `discarded`; a cancelled send is a discard."""
+        waits. A released op that has not been delivered yet (`pending` for the outbox run,
+        `sending` in the transport) is `sending`: it left the person's hands, which is what
+        `release_held_draft` answers ok for, but "sent" would claim a delivery nobody has seen.
+        Only `done` is `sent`. A parked `failed` op keeps the ledger's word for it
+        (`draft_state`), and one parked by `reclaim_stale_ops` is `ambiguous`: it was handed to
+        the transport and nobody heard back. A discard is `replaced` when a newer draft took its
+        place, else `discarded`; a cancelled send is a discard."""
+        from vaf.mail.store import INTERRUPTED_SEND
         p = op.get("payload") or {}
         raw_state = str(op.get("state") or "")
         error = ""
         if raw_state == "held":
             state, error = self.draft_state(op)
-        elif raw_state in ("pending", "sending", "done"):
+        elif raw_state in ("pending", "sending"):
+            state = "sending"
+        elif raw_state == "done":
             state = "sent"
         elif raw_state == "failed":
-            state, error = "failed", str(p.get("last_error") or "")
+            state, error = self.draft_state(op)
+            if state == "held":
+                state = "failed"
+            if str(p.get("last_error") or "") == INTERRUPTED_SEND:
+                state = "ambiguous"
         elif raw_state == "discarded" and p.get("replaced_by"):
             state = "replaced"
         else:
@@ -763,7 +778,8 @@ class MailService:
         }
 
     def list_chat_drafts(self, chat_session_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
-        """Every mail one chat asked for, newest first, in `chat_draft`'s shape."""
+        """The mail one chat asked for, newest first, in `chat_draft`'s shape: every draft
+        still waiting, plus the newest `limit` of the rest (`MailStore.chat_send_ops`)."""
         return [self.chat_draft(op) for op in self.store.chat_send_ops(chat_session_id, limit=limit)]
 
     def get_chat_draft(self, op_id: int) -> Optional[Dict[str, Any]]:

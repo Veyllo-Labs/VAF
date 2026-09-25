@@ -453,12 +453,14 @@ def park_held_send(username: str, channel: str, tool: str, args_json: str, *,
 
 
 def held_sends(username: str, user_scope_id: Optional[str] = None, *,
-               state: str = "held", limit: int = 50,
+               state: str = "held", limit: Optional[int] = 50,
                session_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """The parked calls of this identity, newest first. A missing store answers [].
 
     `state=""` lists every state; `session_id` narrows the list to the calls one chat asked
-    for, in the query, so a chat's drafts are never cut off by another chat's newer ones."""
+    for, in the query, so a chat's drafts are never cut off by another chat's newer ones.
+    `limit=None` lists all of them (SQLite's LIMIT -1), which is what a listing of the calls
+    that still WAIT needs: those must never fall off the end of a long history."""
     if not store_exists(username, user_scope_id):
         return []
     init_store(username, user_scope_id)
@@ -474,7 +476,7 @@ def held_sends(username: str, user_scope_id: Optional[str] = None, *,
         cur = conn.execute(
             f"SELECT * FROM held_sends WHERE {' AND '.join(clauses)} "
             "ORDER BY created_ts DESC, id DESC LIMIT ?",
-            (*params, max(1, int(limit))),
+            (*params, -1 if limit is None else max(1, int(limit))),
         )
         return [dict(row) for row in cur.fetchall()]
     finally:

@@ -9583,8 +9583,9 @@ function VAFDashboardContent() {
                                                         // Show only the user's note (timer) or the one-line outcome (process),
                                                         // not the internal "Act on it…" / "Continue with…" framing.
                                                         const _noteMatch = (_isProcessWake || _isDraftWake) ? null : _wakeContent.match(/your note:\s*"([\s\S]*?)"/);
+                                                        const _draftLine = _wakeContent.split('\n')[0];
                                                         const _wakeText = _isDraftWake
-                                                            ? _wakeContent.split('\n')[0].slice(DRAFT_WAKE_PREFIX.length).trim()
+                                                            ? (_draftLine.startsWith(DRAFT_WAKE_PREFIX) ? _draftLine.slice(DRAFT_WAKE_PREFIX.length) : _draftLine).trim()
                                                             : _isProcessWake
                                                             ? _wakeContent.split('\n')[0].replace(/^⚙\s*/, '').trim()
                                                             : (_noteMatch ? _noteMatch[1] : _wakeContent.replace(/^⏰\s*/, '')).trim();

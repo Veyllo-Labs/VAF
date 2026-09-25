@@ -674,3 +674,63 @@ def test_the_recipient_is_named_from_the_contact_book(scratch, monkeypatch):
         raise RuntimeError("contacts locked")
     monkeypatch.setattr(contacts_store, "get_contact_name_by_phone", _boom)
     assert outbound_hold.recipient_name("whatsapp", "+49170", USER, SCOPE) == ""
+
+
+def test_a_send_in_flight_holds_back_the_wake_but_not_for_good(scratch, monkeypatch):
+    """MUTATION: count only the sendable states as waiting (two racing Send clicks wake the
+    chat twice), or count every `sending` row whatever its age (a mail the outbox cannot
+    deliver would hold back every later wake of its chat)."""
+    import vaf.core.task_queue as tq
+    woken = []
+    monkeypatch.setattr(tq, "enqueue_wake_turn", lambda **kw: woken.append(kw))
+    racing = outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+1", "message": "a"},
+                                               username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    mine = outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+2", "message": "b"},
+                                             username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    assert store.settle_held_send(racing, USER, "sending", SCOPE), "the other click claimed it"
+    outbound_hold.send_draft("call", mine, username=USER, user_scope_id=SCOPE,
+                             tools={"send_whatsapp": _FakeTool()})
+    assert woken == [], "the other send is still on the wire; it wakes the chat when it answers"
+
+    # A released MAIL the outbox has not delivered is `sending` too, and nothing parks it the way
+    # a stuck call is parked: past the in-flight window it must stop holding the chat back,
+    # or one undeliverable mail silences every later wake of its chat.
+    from datetime import datetime, timedelta, timezone
+
+    class _Svc:
+        age = 0
+
+        def __init__(self, scope):
+            self.store = type("S", (), {"close": lambda self: None})()
+
+        def list_chat_drafts(self, sid, limit=50):
+            at = (datetime.now(timezone.utc) - timedelta(seconds=_Svc.age)).isoformat()
+            return [{"op_id": 9, "to": "uwe@example.com", "state": "sending", "decided_at": at,
+                     "created_at": at, "chat_session_id": "chat-a", "subject": "s", "body": "b"}]
+    import vaf.mail.service as svc_mod
+    monkeypatch.setattr(svc_mod, "MailService", _Svc)
+    store.settle_held_send(racing, USER, "discarded", SCOPE, expect="sending")
+    third = outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+3", "message": "c"},
+                                              username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    outbound_hold.send_draft("call", third, username=USER, user_scope_id=SCOPE,
+                             tools={"send_whatsapp": _FakeTool()}, wake=False)
+    _Svc.age = 5
+    assert outbound_hold.wake_after_send("call", third, username=USER, user_scope_id=SCOPE) is False
+    _Svc.age = outbound_hold._IN_FLIGHT_SECONDS + 60
+    assert outbound_hold.wake_after_send("call", third, username=USER, user_scope_id=SCOPE) is True
+
+
+def test_a_long_chat_keeps_its_oldest_waiting_draft(scratch):
+    """MUTATION: cut the chat listing at `limit` whatever the state. The history of decided
+    drafts is bounded; a draft that still waits is never cut off, or it would wait where
+    nothing lists it."""
+    oldest = outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+1", "message": "alt"},
+                                               username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    for i in range(6):
+        later = outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": f"+2{i}", "message": "x"},
+                                                  username=USER, user_scope_id=SCOPE, session_id="chat-a")
+        outbound_hold.discard_draft("call", later, username=USER, user_scope_id=SCOPE)
+    rows = outbound_hold.chat_drafts(USER, SCOPE, "chat-a", limit=3)
+    refs = [r["ref"] for r in rows]
+    assert f"call:{oldest}" in refs, refs
+    assert sum(1 for r in rows if r["state"] == "discarded") == 3, "the decided history is bounded"

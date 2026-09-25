@@ -112,12 +112,30 @@ def test_the_next_turn_hears_what_became_of_the_draft(agent):
     kind, entry_id = outbound_hold.parse_ref(ref)
     assert outbound_hold.discard_draft(kind, entry_id, username=USER, user_scope_id=SCOPE)
 
-    agent.api_backend.chat_completion = _Model("Alles klar.")
+    seen = []
+
+    class _Seeing(_Model):
+        def __call__(self, messages=None, **kw):
+            if kw.get("tools"):
+                seen.append(list(messages or []))
+            return super().__call__(messages=messages, **kw)
+
+    agent.api_backend.chat_completion = _Seeing("Alles klar.")
     agent.chat_step(user_input="Lass es doch", stream_callback=lambda t: None)
     user_at = max(i for i, m in enumerate(agent.history) if m.get("role") == "user")
-    note = agent.history[user_at + 1]
+    note = agent.history[user_at - 1]
     assert note["role"] == "system" and note["content"].startswith("[Context:")
     assert f"Draft {ref} was DISCARDED by the user" in note["content"]
+    assert agent._turn_decision_note == note["content"], "the runner stores exactly this"
+    # BEFORE the input, in what the model receives too, so the person's words are not followed
+    # by the engine's note: the turn block goes in front of a trailing user message, and a
+    # note after the input would push the block behind the request. MUTATION: append the note
+    # after the input. (A first-time user also gets the onboarding hint after the input; that
+    # is older and not this note's business.)
+    sent = seen[0]
+    user_i = max(i for i, m in enumerate(sent) if m.get("role") == "user" and "Lass es doch" in str(m.get("content")))
+    note_i = max(i for i, m in enumerate(sent) if f"Draft {ref} was DISCARDED" in str(m.get("content")))
+    assert note_i == user_i - 1, (note_i, user_i)
 
     agent.api_backend.chat_completion = _Model("Gern.")
     agent.chat_step(user_input="Danke", stream_callback=lambda t: None)

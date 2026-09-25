@@ -177,6 +177,13 @@ def normalize_subject(subject: str) -> str:
     return re.sub(r"\s+", " ", s).strip().lower()
 
 
+#: The reason a send left in `sending` by a dead worker is parked with (`reclaim_stale_ops`). It
+#: was handed to the transport and nobody heard back, so it may have been delivered: readers
+#: that turn an op into words for a person (`MailService.chat_draft`) say "may have gone out"
+#: for it, never "failed".
+INTERRUPTED_SEND = "interrupted mid-send; not auto-retried"
+
+
 class MailStore:
     """One instance per (user scope). Connections are per-call; SQLite WAL keeps
     concurrent reader/writer behavior sane across the API worker threads."""
@@ -1523,16 +1530,21 @@ class MailStore:
         return cur.rowcount == 1
 
     def chat_send_ops(self, chat_session_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
-        """Every send one chat asked for, in any state, newest first, payload decoded.
+        """The sends one chat asked for, newest first, payload decoded: EVERY one still held,
+        plus the newest `limit` of the rest.
 
         The chat card shows a draft after the decision too (sent, discarded, replaced), as the
-        record of what happened to it; `held_ops` lists only what still waits."""
+        record of what happened to it, and that history is bounded. What still waits is not:
+        a long chat's oldest open draft must stay reachable, or it waits where nothing lists
+        it. `held_ops` lists only what still waits."""
         sid = str(chat_session_id or "").strip()
         if not sid:
             return []
         rows = self._conn().execute(
             "SELECT * FROM ops WHERE kind='send' AND json_extract(payload, '$.chat_session_id')=? "
-            "ORDER BY id DESC LIMIT ?", (sid, max(1, int(limit)))).fetchall()
+            "AND (state='held' OR id IN (SELECT id FROM ops WHERE kind='send' "
+            "AND json_extract(payload, '$.chat_session_id')=? ORDER BY id DESC LIMIT ?)) "
+            "ORDER BY id DESC", (sid, sid, max(1, int(limit)))).fetchall()
         out = []
         for r in rows:
             d = dict(r)
@@ -1622,7 +1634,7 @@ class MailStore:
                 conn.execute(
                     "UPDATE ops SET state='failed', updated_at=?, "
                     "payload=json_set(payload, '$.last_error', ?) WHERE id=?",
-                    (_now(), "interrupted mid-send; not auto-retried", int(r["id"])))
+                    (_now(), INTERRUPTED_SEND, int(r["id"])))
             else:
                 conn.execute("UPDATE ops SET state='pending', updated_at=? WHERE id=?",
                              (_now(), int(r["id"])))

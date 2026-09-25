@@ -545,7 +545,8 @@ class AgentWorkflowBuilderTool(BaseTool):
         # workflow primitives, not this agent's registry - and otherwise inline, as before.
         from vaf.workflows import background as _bg
         _missing_bg = _bg.missing_tools(s.tool for s in steps)
-        if _bg.enabled() and session_id and not _missing_bg and len(steps) == len(normalised):
+        if (_bg.enabled(authorizer=getattr(agent, "_tool_authorizer", None))
+                and session_id and not _missing_bg and len(steps) == len(normalised)):
             _plan = [dict(d, validate=True) if getattr(s, "validate", False) else dict(d)
                      for s, d in zip(steps, normalised)]
             try:

@@ -10203,7 +10203,9 @@ function VAFDashboardContent() {
                                                                                 person's next message. The reply that follows the turn
                                                                                 marks which one was picked. */}
                                                                             {turnAsks.length > 0 && (() => {
-                                                                                const replyMsg = messages.slice(answerTrueIndex + 1).find(m => m.role === 'user');
+                                                                                // A person's reply, not a wake turn (a timer, a finished command, a
+                                                                                // sent draft carry a kind): those do not answer the question.
+                                                                                const replyMsg = messages.slice(answerTrueIndex + 1).find(m => m.role === 'user' && !m.kind);
                                                                                 return (
                                                                                     <AskChoices asks={turnAsks} reply={replyMsg ? String(replyMsg.content ?? '') : null}
                                                                                         canPick={!isGenerating && !loading}

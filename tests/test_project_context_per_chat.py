@@ -130,3 +130,23 @@ def test_the_next_chat_does_not_inherit_the_last_ones(agent, tmp_path):
     prompt = agent.history[0]["content"]
     assert "BRAVO RULES" in prompt and "ALPHA RULES" not in prompt
     assert json.dumps(model.prompts[-1]).count("PROJECT CONTEXT") == 1
+
+
+def test_a_link_out_of_the_ceiling_is_not_read(tmp_path):
+    """A VAF.md that is a link to someone else's file would be read for the person who made
+    it. MUTATION: drop the resolved-path check in find_project_context_file - red."""
+    import os
+    secret = tmp_path / "owner" / "notes.md"
+    secret.parent.mkdir()
+    secret.write_text("OWNER ONLY")
+    mine = tmp_path / "tenant" / "proj"
+    mine.mkdir(parents=True)
+    try:
+        os.symlink(secret, mine / "VAF.md")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+    assert find_project_context_file(mine, stop_at=tmp_path / "tenant") is None
+    (mine / "own.md").write_text("mine")
+    (mine / "VAF.md").unlink()
+    os.symlink(mine / "own.md", mine / "VAF.md")
+    assert find_project_context_file(mine, stop_at=tmp_path / "tenant") == mine / "VAF.md"

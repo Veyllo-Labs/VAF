@@ -67,9 +67,16 @@ export default function SecretsSection() {
     const remove = async (row: Row) => {
         setNote(null);
         try {
-            await fetch(`${apiBase}/api/secrets/${encodeURIComponent(row.name)}`,
+            const res = await fetch(`${apiBase}/api/secrets/${encodeURIComponent(row.name)}`,
                 { method: 'DELETE', credentials: 'include' });
-        } catch { /* the reload shows what is still there */ }
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                setNote({ ok: false, text: String(data.detail || t('failed')) });
+            }
+        } catch {
+            setNote({ ok: false, text: t('failed') });
+        }
+        // Either way the list shows what is really stored.
         void load();
     };
 

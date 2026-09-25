@@ -94,6 +94,8 @@ def test_the_jailed_shell_says_it_has_no_network():
     ("[ERROR] Failed to execute goal: Could not transfer artifact org.papermc:paper-api", True),
     ("npm ERR! getaddrinfo EAI_AGAIN registry.npmjs.org", True),
     ("AssertionError: expected 3, got 4", False),
+    # An artifact that does not exist says this too; the host would not fix it.
+    ("[ERROR] Failed to execute goal on project x: Could not resolve dependencies for project", False),
 ])
 def test_a_download_that_failed_for_want_of_a_network_is_named(monkeypatch, tmp_path, output, hinted):
     import vaf.tools.workspace_exec as we

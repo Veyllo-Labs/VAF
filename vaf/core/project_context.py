@@ -55,6 +55,12 @@ def find_project_context_file(start_dir: Path, filenames: tuple[str, ...] = DEFA
         for name in filenames:
             candidate = cur / name
             if candidate.exists() and candidate.is_file():
+                # A link that leads out of the ceiling is not this tree's file: a person
+                # could otherwise point VAF.md at someone else's and have it read for them.
+                if ceiling is not None:
+                    real = candidate.resolve()
+                    if real != ceiling and ceiling not in real.parents:
+                        continue
                 return candidate
 
         if cur.parent == cur or cur == ceiling:

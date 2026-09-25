@@ -196,3 +196,10 @@ def test_the_chat_turn_builds_its_set_task_first():
     src = inspect.getsource(Agent.chat_step)
     assert "selected_tools = _task_tools_first(tools_set, _task_tools)" in src
     assert '"set_timer", "ask_user"):' in src
+
+
+def test_a_wake_turn_does_not_answer_the_question():
+    """A timer, a finished command or a sent draft arrive as user-role rows with a kind; they
+    must leave the buttons open for the person. MUTATION: drop `&& !m.kind` - red."""
+    page = (Path(__file__).resolve().parents[1] / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert "find(m => m.role === 'user' && !m.kind)" in page

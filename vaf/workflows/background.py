@@ -19,6 +19,9 @@ WHEN a workflow goes to the background, all of these hold:
 - this process is not itself a sub-agent or workflow child (the env markers), which would
   otherwise nest terminals;
 - there is a chat to come back to (a session id);
+- the calling agent has no application authorizer (`set_tool_authorizer`). It is a callable,
+  and a callable cannot cross into the child, so a run it has to see stays inline, where the
+  engine is handed it;
 - every tool the plan names exists in the child. The child has no agent registry: it builds
   the workflow primitives (`tool_overlay.PRIMITIVE_NAMES`), which cover every built-in
   template. A plan that names anything else (a custom tool, an MCP tool, a mail or calendar
@@ -43,9 +46,13 @@ ALREADY_RUNNING = ("Workflow '{name}' is ALREADY RUNNING for this chat - not sta
                    "will arrive when it finishes.")
 
 
-def enabled(config_get: Optional[Callable[[str, Any], Any]] = None) -> bool:
+def enabled(config_get: Optional[Callable[[str, Any], Any]] = None, *,
+            authorizer: Optional[Callable[..., Any]] = None) -> bool:
     """May a workflow started here run in a process of its own at all? `config_get` is the
-    caller's own reader (an agent's merged config), else the global config."""
+    caller's own reader (an agent's merged config), else the global config. `authorizer` is the
+    calling agent's application authorizer: with one, no - the child could not consult it."""
+    if authorizer is not None:
+        return False
     for key in _CHILD_MARKERS:
         if os.environ.get(key, "").strip().lower() in ("1", "true", "yes"):
             return False

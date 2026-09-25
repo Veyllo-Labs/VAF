@@ -26,12 +26,14 @@ except ImportError:
 
 
 # What a download failing for want of a network prints, across the usual tools (curl, pip,
-# npm, Maven, Gradle, git, apt). Matched only on a FAILED command's output.
+# npm, Maven, Gradle, git, apt). Matched only on a FAILED command's output, and only on
+# explicit network errors: Maven's "Could not resolve dependencies" also means an artifact
+# that does not exist, and sending that to host_bash would not fix it.
 _NO_NETWORK_RE = re.compile(
     r"Could not resolve host|Temporary failure in name resolution|Name or service not known|"
     r"Network is unreachable|getaddrinfo (?:ENOTFOUND|EAI_AGAIN)|EAI_AGAIN|ENETUNREACH|"
     r"Failed to establish a new connection|Could not transfer artifact|UnknownHostException|"
-    r"Could not resolve dependencies|unable to access 'http",
+    r"unable to access 'http",
     re.IGNORECASE,
 )
 

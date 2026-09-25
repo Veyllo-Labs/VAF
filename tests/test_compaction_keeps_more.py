@@ -119,3 +119,28 @@ def test_the_compression_hands_the_budget_to_the_summary():
     from vaf.core.agent import Agent
     src = inspect.getsource(Agent)
     assert "messages_for_llm, budget_tokens=cm.summary_budget_tokens())" in src
+
+
+def test_an_input_already_over_the_limit_leaves_a_result_that_fits(monkeypatch):
+    """It shrank, and it was still over the limit: the kept extras give way (tool results
+    first, then the summary) until it fits. MUTATION: only fall back when the result GREW -
+    red."""
+    cm = ContextManager(45000)
+    monkeypatch.setattr(cm, "_archive_history", lambda h: None)
+    cm.state.narrative_summary = "S" * 20000
+    history = _history(14, 2000, cm.recent_memory_size + 10)
+    history[-1]["content"] = "x" * 200_000          # the recent part alone is over the limit
+    assert cm.estimate_tokens(history) > cm.max_tokens
+    out = cm.compress(history)
+    assert not any(m.get("role") == "tool" for m in out), "the kept tool results gave way"
+    assert not any("CONVERSATION SUMMARY" in str(m.get("content")) for m in out[1:])
+    assert out[-1]["content"] == "x" * 200_000, "the recent messages are always kept"
+
+
+def test_under_the_limit_nothing_is_dropped(monkeypatch):
+    cm = ContextManager(45000)
+    monkeypatch.setattr(cm, "_archive_history", lambda h: None)
+    cm.state.narrative_summary = "What happened so far."
+    out = cm.compress(_history(14, 2000, cm.recent_memory_size + 10))
+    assert sum(1 for m in out if m.get("role") == "tool") == 10
+    assert "What happened so far." in out[1]["content"]

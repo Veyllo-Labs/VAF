@@ -1247,7 +1247,11 @@ Four limits worth knowing before you rely on it:
   IPC wait, not a tool run - the sub-agent's inner tools remain constrained by
   `VAF_ALLOWED_TOOLS`); and the workflow CLI subprocess, which no callable can
   reach across a process boundary (the account allowlist still holds there, because
-  its answer comes from the resolver that process registers itself).
+  its answer comes from the resolver that process registers itself). That is why a
+  workflow your agent starts while it HAS an authorizer never moves into such a
+  subprocess: `execute_workflow`, `run_temp` and the `@workflow` lane run it inline
+  then (`vaf/workflows/background.py`, `enabled(..., authorizer=)`), where every
+  step is put to you.
 
 ---
 

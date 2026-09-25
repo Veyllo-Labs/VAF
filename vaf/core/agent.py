@@ -7722,7 +7722,7 @@ class Agent:
             # there. This lane keeps only its own answer, the [WORKFLOW_ASYNC] line the web
             # draws as a workflow card.
             from vaf.workflows import background as _wf_bg
-            if _wf_bg.enabled(self.config.get):
+            if _wf_bg.enabled(self.config.get, authorizer=getattr(self, "_tool_authorizer", None)):
                 from vaf.core.subagent_ipc import get_current_session_id
                 from vaf.core.subagent_spawn import SpawnRefused
                 _lang = getattr(getattr(self, "prompt_manager", None), "user_language", None)

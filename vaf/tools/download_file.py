@@ -108,7 +108,10 @@ class DownloadFileTool(BaseTool):
                               allow_redirects=True) as res:
                 if res.status_code != 200:
                     return f"Error: the site answered {res.status_code}; nothing was saved."
-                declared = int(res.headers.get("Content-Length") or 0)
+                try:
+                    declared = int(res.headers.get("Content-Length") or 0)
+                except (TypeError, ValueError):
+                    declared = 0    # malformed: the streaming cap below still holds
                 if declared > MAX_DOWNLOAD_BYTES:
                     return (f"Error: the file is {declared} bytes, more than the "
                             f"{MAX_DOWNLOAD_BYTES} a download may be; nothing was saved.")

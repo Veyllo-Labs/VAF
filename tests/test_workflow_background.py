@@ -93,6 +93,57 @@ def test_the_switch_and_a_child_decide(monkeypatch):
     assert bg.enabled(lambda k, d: True) is False, "a workflow child starts nothing of its own"
 
 
+def test_an_application_authorizer_keeps_the_run_inline(monkeypatch):
+    """An embedder's authorizer is a callable, and a callable cannot cross into the child: a
+    run it has to see stays where the engine is handed it. MUTATION: drop the authorizer check
+    in enabled() - red."""
+    for key in bg._CHILD_MARKERS:
+        monkeypatch.delenv(key, raising=False)
+    assert bg.enabled(lambda k, d: True, authorizer=lambda req: None) is False
+    assert bg.enabled(lambda k, d: True, authorizer=None) is True
+
+
+def test_run_temp_with_an_authorizer_runs_in_the_chat(rig, monkeypatch):
+    """The lane hands its agent's authorizer to the decision. MUTATION: call enabled()
+    without it in agent_workflow_builder - the run leaves for the child, unseen - red."""
+    from vaf.tools.agent_workflow_builder import AgentWorkflowBuilderTool
+    monkeypatch.setattr(bg, "enabled", lambda config_get=None, authorizer=None: authorizer is None)
+    agent = SimpleNamespace(current_session_id="green123456", tools={},
+                            _current_user_scope_id="s", _current_username="alice",
+                            _tool_authorizer=lambda req: None)
+    tool = AgentWorkflowBuilderTool()
+    tool._agent = agent
+    monkeypatch.setattr(tool, "_collect_tools", lambda: {"web_search": object(), "write_file": object()})
+    import vaf.workflows.engine as engine_mod
+    seen = []
+    monkeypatch.setattr(engine_mod.WorkflowEngine, "execute",
+                        lambda self, steps, **k: seen.append(self._authorize) or SimpleNamespace(
+                            success=True, paused=False, error=None, final_output="ok",
+                            outputs={}, steps=steps))
+    out = tool.run(action="run_temp", name="Suche", _agent=agent, steps=[
+        {"tool": "web_search", "input": "x"}, {"tool": "write_file", "input": "y"}])
+    assert not out.startswith("[SUBAGENT_ASYNC:") and rig[1]["calls"] == []
+    assert seen == [agent._tool_authorizer]
+
+
+def test_execute_workflow_with_an_authorizer_runs_in_the_chat(rig, monkeypatch):
+    import vaf.workflows.engine as engine_mod
+    import vaf.workflows.templates as templates_mod
+    from vaf.tools.workflow_executor import ExecuteWorkflowTool
+    template = {"name": "Deep Research", "variables": {"topic": "t"}, "defaults": {},
+                "steps": [{"tool": "web_search", "input": "{topic}"}, {"tool": "write_file", "input": "x"}]}
+    monkeypatch.setattr(templates_mod, "get_template", lambda wid: template if wid == "deep_research" else None)
+    ran = []
+    monkeypatch.setattr(engine_mod.WorkflowEngine, "execute", lambda *a, **k: ran.append(1) or SimpleNamespace(
+        success=True, paused=False, error=None, final_output="ok", outputs={}, steps=[]))
+    monkeypatch.setattr(bg, "enabled", lambda config_get=None, authorizer=None: authorizer is None)
+    agent = SimpleNamespace(current_session_id="green123456", tools={},
+                            prompt_manager=SimpleNamespace(user_language="de"),
+                            _tool_authorizer=lambda req: None)
+    out = ExecuteWorkflowTool().run(workflow_id="deep_research", variables={"topic": "Solar"}, _agent=agent)
+    assert not out.startswith("[SUBAGENT_ASYNC:") and ran == [1], out
+
+
 def test_only_the_childs_tools_go_to_the_background():
     """The child has the workflow primitives, not the agent's registry: a plan naming a mail,
     calendar, custom or MCP tool runs inline. MUTATION: return [] always - red."""
@@ -186,7 +237,7 @@ def test_execute_workflow_goes_to_the_background(rig, monkeypatch):
                 "steps": [{"tool": "web_search", "input": "{topic}"}, {"tool": "document_agent", "input": "x"}]}
     monkeypatch.setattr(templates_mod, "get_template", lambda wid: template if wid == "deep_research" else None)
     monkeypatch.setattr(engine_mod.WorkflowEngine, "execute", lambda *a, **k: ran.append(1))
-    monkeypatch.setattr(bg, "enabled", lambda config_get=None: True)
+    monkeypatch.setattr(bg, "enabled", lambda config_get=None, authorizer=None: authorizer is None)
     agent = SimpleNamespace(current_session_id="green123456", tools={},
                             prompt_manager=SimpleNamespace(user_language="de"))
     out = ExecuteWorkflowTool().run(workflow_id="deep_research", variables={"topic": "Solar"}, _agent=agent)
@@ -199,7 +250,7 @@ def test_run_temp_goes_to_the_background_with_its_checks(rig, monkeypatch):
     the chat would have switched on for its content steps. MUTATION: send the raw steps - the
     child would run a document step unchecked."""
     from vaf.tools.agent_workflow_builder import AgentWorkflowBuilderTool
-    monkeypatch.setattr(bg, "enabled", lambda config_get=None: True)
+    monkeypatch.setattr(bg, "enabled", lambda config_get=None, authorizer=None: authorizer is None)
     agent = SimpleNamespace(current_session_id="green123456", tools={"web_search": object()},
                             _current_user_scope_id="s", _current_username="alice",
                             _resolve_user_intent=lambda: "Bericht",
@@ -220,7 +271,7 @@ def test_run_temp_goes_to_the_background_with_its_checks(rig, monkeypatch):
 
 def test_a_plan_the_child_cannot_run_stays_in_the_chat(rig, monkeypatch):
     from vaf.tools.agent_workflow_builder import AgentWorkflowBuilderTool
-    monkeypatch.setattr(bg, "enabled", lambda config_get=None: True)
+    monkeypatch.setattr(bg, "enabled", lambda config_get=None, authorizer=None: authorizer is None)
     agent = SimpleNamespace(current_session_id="green123456", tools={},
                             _current_user_scope_id="s", _current_username="alice")
     tool = AgentWorkflowBuilderTool()
@@ -286,7 +337,8 @@ def test_the_router_lane_lost_its_copy_of_the_spawn():
     """MUTATION: build `workflow run` by hand in agent.py again - red."""
     agent = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
     region = agent.split("def _try_workflow", 1)[1].split("\n    def ", 1)[0]
-    assert "_wf_bg.spawn_saved(" in region and "_wf_bg.enabled(self.config.get)" in region
+    assert "_wf_bg.spawn_saved(" in region
+    assert '_wf_bg.enabled(self.config.get, authorizer=getattr(self, "_tool_authorizer", None))' in region
     assert "open_new_terminal" not in region and "workflow run" not in region
 
 

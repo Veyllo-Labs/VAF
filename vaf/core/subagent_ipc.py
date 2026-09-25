@@ -633,8 +633,14 @@ class SubAgentIPC:
             return results
         try:
             now = datetime.now().timestamp()
-            open_groups = {t.fanout_id for t in self.get_active_tasks() if t.fanout_id in groups}
-            for t in self.get_pending_tasks():
+            # Both queues in ONE read under the mutation guard: a member moving from pending
+            # to active between two separate reads would be in neither, and its fan-out would
+            # be delivered without it.
+            with self._mutation_guard():
+                active = self.get_active_tasks()
+                pending = self.get_pending_tasks()
+            open_groups = {t.fanout_id for t in active if t.fanout_id in groups}
+            for t in pending:
                 if t.fanout_id not in groups:
                     continue
                 try:

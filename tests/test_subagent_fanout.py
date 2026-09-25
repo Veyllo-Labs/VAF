@@ -223,3 +223,36 @@ def test_the_dispatch_carries_the_authorizer_into_the_tool(agent, monkeypatch):
     agent.execute_tool("probe_tool", {})
     assert seen == [app_rule]
     assert current_authorizer() is None
+
+
+def test_the_fanout_check_reads_both_queues_in_one_guarded_read(ipc, monkeypatch):
+    """A member moving from pending to active between two separate reads would be in
+    neither. MUTATION: read the two queues outside the mutation guard - red."""
+    from contextlib import contextmanager
+    a = _task(ipc, fanout="r3:librarian_agent")
+    b = _task(ipc, fanout="r3:librarian_agent")
+    ipc.mark_task_running(a)
+    ipc.mark_task_running(b)                          # the sibling is still at work
+    ipc.complete_task(a, "done")
+    inside = []
+    real_guard = ipc._mutation_guard
+
+    @contextmanager
+    def watched(*args, **kw):
+        with real_guard(*args, **kw):
+            inside.append(True)
+            yield
+            inside.pop()
+
+    def reading(real):
+        def _read(*args, **kw):
+            assert inside, "a queue read outside the guard"
+            return real(*args, **kw)
+        return _read
+
+    monkeypatch.setattr(ipc, "_mutation_guard", watched)
+    monkeypatch.setattr(ipc, "get_active_tasks", reading(ipc.get_active_tasks))
+    monkeypatch.setattr(ipc, "get_pending_tasks", reading(ipc.get_pending_tasks))
+    # Read under the guard, the sibling is seen and the result waits. A read outside it
+    # raises here, and the check fails open - delivering the member alone.
+    assert ipc.hold_open_fanouts(ipc.get_pending_results()) == []

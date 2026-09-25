@@ -303,7 +303,8 @@ class ExecuteWorkflowTool(BaseTool):
             # registry - and otherwise inline, as before, below.
             from vaf.workflows import background as _bg
             _missing_bg = _bg.missing_tools(s.tool for s in steps)
-            if _bg.enabled() and session_id and not _missing_bg:
+            if (_bg.enabled(authorizer=getattr(_agent, "_tool_authorizer", None))
+                    and session_id and not _missing_bg):
                 _lang = getattr(getattr(_agent, "prompt_manager", None), "user_language", None)
                 _started = _bg.start_saved(workflow_id, variables, name=template.get("name", workflow_id),
                                            session_id=session_id,

@@ -167,6 +167,9 @@ these must hold, otherwise the workflow runs inline as before:
 - `sub_agents_in_separate_terminals` is on (the default) and this process is not itself a
   sub-agent or workflow child;
 - there is a chat session to come back to;
+- the agent that starts it has no application authorizer (`set_tool_authorizer`): a callable
+  cannot cross into the child, so a run the application must see stays inline, where the
+  engine is handed it;
 - every tool the plan names exists in the child. The child has the workflow primitives
   (`tool_overlay.PRIMITIVE_NAMES`, which cover every built-in template), not the agent's live
   registry: a plan that names a mail, calendar, custom or MCP tool runs inline. NAMED

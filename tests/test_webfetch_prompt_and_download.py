@@ -150,3 +150,10 @@ def test_a_thinking_run_is_not_offered_the_download(monkeypatch, tmp_path):
     assert "download_file" in Agent(register_signals=False, run_kind="chat", config_overrides=cfg).tools
     thinking = Agent(register_signals=False, run_kind="thinking", config_overrides=cfg).tools
     assert "download_file" not in thinking and "webfetch" in thinking
+
+
+def test_a_malformed_length_header_does_not_fail_the_download(web):
+    served, ws = web
+    served["https://example.org/odd.bin"] = _Res(b"z" * 64, headers={"Content-Length": "sixty-four"})
+    out = DownloadFileTool().run(url="https://example.org/odd.bin", save_to="odd.bin")
+    assert out.startswith("Saved 64 bytes") and (ws / "odd.bin").read_bytes() == b"z" * 64

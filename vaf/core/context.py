@@ -787,36 +787,47 @@ class ContextManager:
         summary_parts = [part for part in (context_summary, resume_block) if part]
         combined_summary = "\n\n".join(summary_parts)
 
-        # 6. Construct new history
-        new_history = [system_prompt]
+        # 6. Construct new history: system, summary, the kept tool results (the budget's count,
+        # newest), the recent messages.
+        summary_part = [{"role": "system", "content": combined_summary}] if combined_summary else []
+        tools_part = critical_tools[-keep_count:]
 
-        if combined_summary:
-            new_history.append({
-                "role": "system",
-                "content": combined_summary
-            })
+        def _assemble():
+            return [system_prompt] + summary_part + tools_part + recent_messages
 
-        # Add critical tool results (the budget's count, newest)
-        new_history.extend(critical_tools[-keep_count:])
-
-        new_history.extend(recent_messages)
-
+        new_history = _assemble()
         new_tokens = self.estimate_tokens(new_history)
 
-        # Safety net for the real failure mode: the summary backfired so the result is BOTH larger than
-        # the input AND still over the limit (observed: 30725 -> 43754 tokens over a 32768 limit, which
-        # immediately tripped CRITICAL OVERFLOW). Only then drop the summary + critical-tool block and
-        # keep just the system turn + recent messages (always smaller; the full history is archived for
-        # /restore). A small context that merely grows a little (e.g. 88 -> 150, far under the limit)
-        # KEEPS the resume block — it never overflows, and /restore + NEXT_ACTION depend on that block.
-        if new_tokens >= current_tokens and new_tokens > self.max_tokens:
-            new_history = [system_prompt] + recent_messages
+        # The result must fit the limit whenever it can, not only when it grew. Observed: a
+        # summary that backfired (30725 -> 43754 tokens over a 32768 limit) tripped CRITICAL
+        # OVERFLOW at once; and an input already over the limit could shrink and still leave
+        # the next request over it. So the retained extras give way while it does not fit -
+        # the kept tool results oldest first, then the summary - down to the system turn and
+        # the recent messages, which are always kept (the full history is archived for
+        # /restore). Under the limit nothing is dropped: a small context that merely grows a
+        # little (88 -> 150) keeps the resume block, which /restore and NEXT_ACTION depend on.
+        dropped_tools = 0
+        while new_tokens > self.max_tokens and tools_part:
+            tools_part = tools_part[1:]
+            dropped_tools += 1
+            new_history = _assemble()
             new_tokens = self.estimate_tokens(new_history)
-            UI.event("Context", f"Summary would have grown context — dropped it; kept system + {len(recent_messages)} recent msgs ({current_tokens} → {new_tokens} tokens)", style="warning")
+        dropped_summary = False
+        if new_tokens > self.max_tokens and summary_part:
+            summary_part = []
+            dropped_summary = True
+            new_history = _assemble()
+            new_tokens = self.estimate_tokens(new_history)
+
+        if dropped_tools or dropped_summary:
+            UI.event("Context", f"Over the limit - dropped {dropped_tools} kept tool result(s)"
+                     f"{' and the summary' if dropped_summary else ''}; kept system + "
+                     f"{len(recent_messages)} recent msgs ({current_tokens} → {new_tokens} tokens)",
+                     style="warning")
         else:
             UI.event("Context", f"Compressed: {len(history)} → {len(new_history)} msgs, {current_tokens} → {new_tokens} tokens", style="success")
-            if critical_tools:
-                UI.event("Context", f"Preserved {len(critical_tools[-keep_count:])} critical tool results", style="dim")
+            if tools_part:
+                UI.event("Context", f"Preserved {len(tools_part)} critical tool results", style="dim")
         UI.event("Context", f"Full history archived. Use /restore to recover.", style="dim")
 
         return new_history

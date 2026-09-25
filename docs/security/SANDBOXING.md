@@ -256,7 +256,10 @@ command is confined by the **kernel**:
   runs through `host_bash`, which the coder uses without asking where the account has it. An
   allowlisted network for the jail (only Maven Central, only the Paper repository) would need a
   user-space network stack behind a filtering proxy; it is earned by the first measured request
-  from an account without `host_bash`.
+  from an account without `host_bash`. So that the coder does not find this out by failing:
+  `bash` describes itself as offline and sends downloads to `host_bash`, and a failed command
+  whose output shows a missing network (an unresolved host, a failed artifact transfer) says so
+  in its result.
 
 **Docker is refused in the coder shell.** The host docker socket is host-root-equivalent
 (a container can `--privileged` / `-v /:/host` / `--pid=host` its way to the whole host

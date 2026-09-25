@@ -8,6 +8,7 @@ Works on Windows, macOS, and Linux
 """
 import subprocess
 import os
+import re
 import sys
 import logging
 from typing import Dict, Any
@@ -22,6 +23,17 @@ try:
     from vaf.core.platform import Platform
 except ImportError:
     Platform = None
+
+
+# What a download failing for want of a network prints, across the usual tools (curl, pip,
+# npm, Maven, Gradle, git, apt). Matched only on a FAILED command's output.
+_NO_NETWORK_RE = re.compile(
+    r"Could not resolve host|Temporary failure in name resolution|Name or service not known|"
+    r"Network is unreachable|getaddrinfo (?:ENOTFOUND|EAI_AGAIN)|EAI_AGAIN|ENETUNREACH|"
+    r"Failed to establish a new connection|Could not transfer artifact|UnknownHostException|"
+    r"Could not resolve dependencies|unable to access 'http",
+    re.IGNORECASE,
+)
 
 
 class BashTool(BaseTool):
@@ -42,23 +54,27 @@ class BashTool(BaseTool):
     # user manager's picker via GET /api/users/tool-universe. What remains true: a tenant
     # who is ALLOWED bash has an unjailed shell, by design, so granting it is the decision.
     # Frozen in tests/test_coder_identity_boundary.py so a silent change shows up.
-    description = """Execute a shell command in the project directory.
-    
-Use this tool to:
-- Run build commands (npm, cargo, pip, etc.)
-- Execute tests
+    # The description says what the jail really is. It used to offer "npm install" as an
+    # example while the jail has no network at all (workspace_exec: --unshare-net), so every
+    # dependency download failed here first and the run found host_bash only after the error.
+    description = """Execute a shell command in the project directory, inside a sandbox.
+
+The project directory is writable; the rest of the system is read-only, and there is NO
+network. Use it for everything that works offline:
+- Build and test with what is already there (compile, python -m pytest, a local script)
 - Git operations
 - File system operations (ls, cat, mkdir, etc.)
-- Install dependencies
-- Run scripts
+
+Anything that downloads - npm install, pip install, a Maven or Gradle build that fetches
+dependencies, curl, git clone - fails here. Run it with host_bash instead when you have it:
+same command, on the host, with network.
 
 Examples:
 - bash(command="ls -la") - List files
-- bash(command="npm install") - Install npm packages
 - bash(command="python -m pytest") - Run tests
 - bash(command="git status") - Check git status
 
-IMPORTANT: Long-running commands timeout after 120 seconds."""
+`timeout` (default 120, at most 300 seconds) is how long the command may run."""
     
     parameters = {
         "type": "object",
@@ -70,6 +86,10 @@ IMPORTANT: Long-running commands timeout after 120 seconds."""
             "cwd": {
                 "type": "string",
                 "description": "Working directory (optional)"
+            },
+            "timeout": {
+                "type": "integer",
+                "description": "Seconds the command may run (default 120, at most 300)."
             }
         },
         "required": ["command"]
@@ -139,4 +159,9 @@ IMPORTANT: Long-running commands timeout after 120 seconds."""
                 err = err[:4000] + "\n... (stderr truncated)"
             parts.append(f"\nStderr:\n{err}")
         parts.append("\nSuccess (exit code: 0)" if rc == 0 else f"\nFailed (exit code: {rc})")
+        if rc != 0 and _NO_NETWORK_RE.search(f"{out}\n{err}"):
+            # The failure is the missing network, not the command: say so, so the next step
+            # is the host and not a round of guessing at the build.
+            parts.append("\nThis sandbox has no network. Run the same command with host_bash "
+                         "if you have it: it runs on the host, with network.")
         return "\n".join(parts)

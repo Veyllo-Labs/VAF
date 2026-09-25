@@ -9581,6 +9581,14 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _refusal})
                         continue
                     
+                    # An image the coder looks at is one of ITS files: a relative path means its
+                    # project, like every other file tool here - not the chat's workspace, which
+                    # is what analyze_image resolves a relative path against elsewhere.
+                    if fn_name == "analyze_image":
+                        _ipath = str(fn_args.get("image_path") or "").strip()
+                        if _ipath and not os.path.isabs(os.path.expanduser(_ipath)):
+                            fn_args["image_path"] = os.path.join(base_dir, _ipath)
+
                     # Fix relative paths and show in stream
                     if fn_name == "edit_file":
                         # edit_file shares write_file's pre-dispatch guards: plan-first, the

@@ -9638,6 +9638,18 @@ class Agent:
                 for name in ("update_intent", "update_working_memory", "memory_search", "memory_save", "memory_update", "update_user_identity", "set_timer", "ask_user"):
                     if name in self.tools:
                         tools_set.add(name)
+                # analyze_image rides along whenever something can see: the agent looks at a
+                # screenshot or a rendered page in the middle of a task, when the router has
+                # picked tools for the task (measured in a long build session: 162 of 168 file
+                # reads were images). No setting: where no vision backend exists it stays off,
+                # because offering it would only earn a refusal.
+                if "analyze_image" in self.tools:
+                    try:
+                        from vaf.core.vision_infer import vision_available
+                        if vision_available():
+                            tools_set.add("analyze_image")
+                    except Exception:
+                        pass
                 
                 # Messaging tools: only add those for which the user has the connection
                 try:

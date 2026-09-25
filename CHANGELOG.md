@@ -60,6 +60,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **The agent can always look at an image when it needs to.** Whenever an AI model that can
+  see is set up, the agent has the image tool at hand on every message - to check a
+  screenshot or a rendered page in the middle of a task - without a setting. The coding
+  helper finds its own screenshots in its project, and the page check names its screenshot
+  so every helper can open it.
+- **The coding helper no longer tries downloads where it cannot make them.** Its protected
+  shell has no internet, and now says so: installs and builds that download go straight to
+  the host command, and a download that failed for want of a network is named as such.
 - **Long conversations keep more when they are compressed.** When a long chat is shortened
   to fit, the part that is removed is now summarized in proportion to the space available:
   your requests and standing instructions in your own words, the decisions, the files and

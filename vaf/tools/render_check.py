@@ -163,9 +163,10 @@ class RenderCheckTool(BaseTool):
         return "\n".join(lines)
 
     def _save_screenshot(self, b64: str) -> str:
-        """Into the chat session's workspace, where a relative analyze_image path
-        finds it by its bare name. No session (coder child, automation) means no file - the text
-        report stands on its own there, by design."""
+        """Into the chat session's workspace; the report names it by its absolute path, which
+        analyze_image takes in every lane (a coder child knows its chat through VAF_SESSION_ID).
+        No session at all (an automation) means no file - the text report stands on its own
+        there, by design."""
         if not b64:
             return ""
         try:
@@ -180,7 +181,9 @@ class RenderCheckTool(BaseTool):
             path = os.path.join(str(ws), "render_check.jpg")
             with open(path, "wb") as f:
                 f.write(base64.b64decode(b64))
-            return ("Screenshot: render_check.jpg (chat workspace; view it with "
-                    "analyze_image image_path='render_check.jpg' if layout matters)")
+            # The absolute path, so it names the same file in every lane: the coder resolves
+            # a relative path against its own project, the chat against its workspace.
+            return (f"Screenshot: {path} (view it with analyze_image "
+                    f"image_path='{path}' if layout matters)")
         except Exception:
             return ""

@@ -160,7 +160,9 @@ def test_the_dispatch_carries_the_group_into_the_spawn(agent, monkeypatch):
     assert ipc_mod.current_fanout() is None, "nothing leaks into the next call"
 
 
-def test_a_member_is_not_validated_alone(agent, monkeypatch):
+def test_a_member_is_not_validated_alone(agent, ipc, monkeypatch):
+    # `ipc`: the result delivery consumes from the queue; this test's own, never the process's
+    # (a queue file an earlier test encrypted under its own key is unreadable here).
     seen = {}
 
     def fake_validate(user_intent, desc, result, agent_type):

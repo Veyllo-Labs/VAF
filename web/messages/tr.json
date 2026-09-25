@@ -370,7 +370,8 @@
     "gateAllowAlwaysHint": "Bu aracı senin için her yerde serbest bırakır ve onay isteyen her araç için geçerli klasöre güvenir.",
     "wakeTimer": "Zamanlayıcı",
     "wakeProcess": "Arka plan komutu",
-    "wakeDraft": "Taslak gönderildi"
+    "wakeDraft": "Taslak gönderildi",
+    "askPickHint": "Bir cevap seç ya da kendin yaz"
   },
   "nav": {
     "settings": "Ayarlar",

@@ -869,6 +869,16 @@ governs its own lifetime - its own deadline, its own reaction to Stop - declares
 itself. Both used to be lists of VAF's own tool names, which a tool of yours
 could never join.
 
+**A call that hands the next move to the person.** A tool that declares
+`ends_turn = True` ends the chat turn it ran in: the full agent answers every
+other call of the round, makes no further model call, and streams
+`turn_closing(args, result)` as the turn's answer (by default the result, but
+never an error - the model has to see that and go on). Override `turn_closing`
+when only some results end the turn or when the person should read something
+other than what the model is told. The person's reply is simply your next
+`run()`; nothing is held open for it. VAF's own `ask_user` is built on it. A
+loop of your own around `ToolCaller` reads the declaration itself.
+
 **Background host commands** (`host_bash(background=true)`, then `host_process`)
 report their end as a wake turn queued on VAF's `TaskQueue`, the lane a fired
 timer uses. VAF's own runners (the web server, the terminal apps) consume that

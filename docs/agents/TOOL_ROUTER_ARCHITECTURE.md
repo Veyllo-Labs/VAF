@@ -148,7 +148,9 @@ The declaration travels the WHOLE path, not just the funnel - exempting only the
 
 **Always available:** `search_tools` (and `list_tools`) are injected into every restricted tool set: the discovery-only fallback (router found no tools), CORE_TOOLS (tight context), and the emergency fallback list, so the model always has a discovery path.
 
-**Tool cap (`router_max_tools`):** After the router selects tools (and core/discovery tools are added), the list is capped at `router_max_tools` (default: **12**). `list_tools` and `search_tools` are **always kept** and do not count against the cap. This prevents context pollution when many tools are registered.
+**Tool cap (`router_max_tools`):** After the router selects tools (and core/discovery tools are added), the list is capped at `router_max_tools` (default: **12**). `list_tools` and `search_tools` are **always kept**; they count against the cap, so ten places remain for the rest. This prevents context pollution when many tools are registered.
+
+**What the cap cuts first (`_task_tools_first`):** the tools the router and the recent turns chose for THIS task come first, and the riders that are added on every turn come after them: `update_intent`, `update_working_memory`, `memory_search`, `memory_save`, `memory_update`, `update_user_identity`, `set_timer`, `ask_user` and the send tool of every connected messenger. Each group is sorted, so the cut is reproducible. One sorted list put the riders in the way of the task: with three messengers connected the riders alone filled the cap, and a research turn lost `web_search` because "w" sorts last (measured with the defaults). `ask_user` rides along because a question with options comes up in the middle of a task, when the router has picked tools for the task and never for asking.
 
 ```json
 // ~/.vaf/config.json

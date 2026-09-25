@@ -2154,6 +2154,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     _is_system_log_only = response_text.startswith("[SYSTEM_LOG_ONLY]")
                     from vaf.core.outbound_hold import TURN_ENDS_AT_DRAFT as _DRAFT_END
                     _turn_ends_at_draft = response_text.strip() == _DRAFT_END
+                    # A call ended the turn (a question to the person, a draft): the answer is
+                    # what the tool declared, not a text the person asked to have written.
+                    _turn_closed = bool(getattr(agent, "_turn_closed_by_tool", False))
                     if response_text.startswith("[ASYNC_ACK]"):
                         clean_ack = response_text.replace("[ASYNC_ACK]", "").strip()
                         final_text = clean_ack or response_text
@@ -2256,7 +2259,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     _is_async = response_text.startswith("[ASYNC_ACK]")
                     _is_sys   = response_text.startswith("[SYSTEM_LOG_ONLY]")
                     _hallucination_detected = (
-                        not _is_async and not _is_sys
+                        not _is_async and not _is_sys and not _turn_closed
                         and any(p in _final_lower for p in _agent_name_phrases)
                         and any(p in _final_lower for p in _running_indicator_phrases)
                         and not any(p in _final_lower for p in _wait_phrases)
@@ -2321,10 +2324,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # ── End hallucination guard ───────────────────────────────────────
 
                     # When user asked for a text (e.g. "Schreib mir einen Text"), open it in Document Editor
-                    # Not for a turn that stopped at a draft: its text is the fixed turn-end
-                    # sentence, and the message it wrote is in the card, not in an editor.
+                    # Not for a turn a call ended: a draft's text is the fixed turn-end sentence
+                    # (the message it wrote is in the card), a question is no text to edit.
                     if (not response_text.startswith("[ASYNC_ACK]") and not response_text.startswith("[SYSTEM_LOG_ONLY]")
-                            and not _turn_ends_at_draft):
+                            and not _turn_ends_at_draft and not _turn_closed):
                         try:
                             _maybe_open_draft_in_editor(
                                 task.session_id or "",

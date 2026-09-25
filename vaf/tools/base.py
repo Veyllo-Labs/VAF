@@ -92,6 +92,26 @@ class BaseTool(ABC):
         """The wall-clock budget for one call with these arguments, or None for the default."""
         return self.timeout_seconds
 
+    # Set to True when a call of this tool hands the next move to the person, so the chat
+    # turn ENDS after it: the agent loop answers every other call of the round, makes no
+    # further model call, and the turn's answer is turn_closing(). A question with options is
+    # the case: a model that went on would answer its own question. The person's reply is
+    # simply the chat's next turn - nothing is held open for it, because one chat worker
+    # serves every chat and a person may answer in an hour. Honoured by the full agent loop
+    # (chat_step); a loop of your own around ToolCaller reads it itself.
+    ends_turn: bool = False
+
+    def turn_closing(self, args: Dict[str, Any], result: Any) -> Optional[str]:
+        """What the person reads as the turn's answer when this call ended it, or None when
+        this call does not end the turn. Default: with ends_turn set, the result itself - but
+        never an error, after which the model has to go on and say what went wrong. Override
+        when the person should read something other than what the model is told."""
+        if not self.ends_turn or not isinstance(result, str) or not result.strip():
+            return None
+        from vaf.core.context import tool_result_is_error
+        return None if tool_result_is_error(
+            result, content_carrying=bool(self.result_is_deliverable)) else result
+
     # JSON Schema for parameters (optional but recommended).
     # Validated at dispatch: common weak-model shape mistakes are repaired before
     # run() is called; `content` / `code` fields are passed through verbatim.

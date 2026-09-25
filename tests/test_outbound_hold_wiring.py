@@ -79,8 +79,8 @@ def test_the_signal_fires_for_a_held_result_and_for_nothing_else(monkeypatch):
 
     MUTATION: invert the marker test in `_announce_held_send` (`if str(result).startswith(...)`
     -> `if not ...`) and every literal the source guard greps stays in place while the card
-    never appears. The method needs nothing of an Agent but the session id, so a stand-in
-    object is the whole harness.
+    never appears. The method needs nothing of an Agent but the session id and the turn-end
+    slot it fills, so a stand-in object is the whole harness.
     """
     from types import SimpleNamespace
 
@@ -95,9 +95,11 @@ def test_the_signal_fires_for_a_held_result_and_for_nothing_else(monkeypatch):
     )
     monkeypatch.setattr(wi, "get_web_interface", lambda: fake)
     agent = SimpleNamespace(current_session_id="green123456")
+    agent._close_turn = Agent._close_turn.__get__(agent)
 
     Agent._announce_held_send(agent, f"{HELD_PREFIX} A WhatsApp message to +49...")
     assert pushes == [("green123456", {"type": "outbound_held"})]
+    assert agent._turn_closing[1] is False, "the draft ends the turn with its hidden sentence"
     assert unread == ["green123456"], "the chat list's red dot for a person who moved on"
 
     pushes.clear(), unread.clear()
@@ -519,7 +521,7 @@ def test_the_wire_literals_match_on_both_sides():
     import re
     assert re.match(r"^NOT SENT YET\. Draft (mail|call):(\d+)", result)
     # The page hides exactly the closing sentence and draws the wake row by the prefix.
-    assert "const cleanAnswer = isBot ? (isDraftTurnEnd(answer) ? '' : stripToolCallsJSON(answer)) : answer;" in PAGE
+    assert "const cleanAnswer = isBot ? (isDraftTurnEnd(answer) ? '' : withoutOptions(stripToolCallsJSON(answer), turnAsks)) : answer;" in PAGE
     assert "msg.kind === 'draft' || _wakeContent.startsWith(DRAFT_WAKE_PREFIX)" in PAGE
     assert "return String(content ?? '').trim() === DRAFT_TURN_END;" in REFS
 
@@ -536,7 +538,7 @@ def test_the_runner_shows_a_draft_turn_as_the_card():
     branch = runner.split("elif _turn_ends_at_draft:", 1)[1][:900]
     assert "final_text = response_text" in branch and "emit_agent_message(" in branch
     assert "or _turn_ends_at_draft) else str(final_text)" in runner, "nothing to speak"
-    assert "and not _turn_ends_at_draft):" in runner, "no document editor for the sentence"
+    assert "and not _turn_ends_at_draft and not _turn_closed):" in runner, "no document editor for the sentence"
     assert "_assistant_response = response_text" in runner.split("if _turn_ends_at_draft:", 2)[-1][:400]
 
 def test_the_card_carries_no_colour_of_its_own():

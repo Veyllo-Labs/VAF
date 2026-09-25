@@ -184,8 +184,20 @@ discard, a replacement or a send from the terminal once. Before, not after: the 
 message stays the last one, which is what `_append_turn_block` needs to place the turn block
 ahead of it. The runner stores the note ahead of the user message itself
 (`_turn_decision_note`, cleared before every turn because one agent serves every chat), since
-the turn's own context persistence starts after the user message. NAMED BOUNDARY: this is the only tool result that ends a turn, so it is keyed on the
-hold's own marker rather than offered as a general "end the turn" result.
+the turn's own context persistence starts after the user message.
+
+**A question ends the turn the same way, and so can any tool.** The turn end is a declaration
+on the tool: `BaseTool.ends_turn = True`, with `turn_closing(args, result)` saying what the
+person reads (default: the result, unless it is an error, after which the model has to go on).
+`_chat_post_dispatch` asks it after every call (`_close_turn_if_declared`, keyed on the
+declaration, never on a name) and the draft sets the same slot from its marker, because the hold
+is the funnel's decision and not the tool's (`_close_turn`). Once the round's results are all
+in, `chat_step` ends the turn with the closing. A visible closing is STREAMED like any answer,
+so the web chat, the terminal apps and the channels all show it without a branch of their own;
+the draft's fixed sentence is not streamed, its card is the answer. Visible wins over the
+draft's sentence, and two visible closings of one round are both kept. The first tool that
+declares it is `ask_user` in a chat: the question with its `options` as a numbered list is the
+answer, and the person's reply, typed or picked, is the chat's next turn.
 
 The rule, the measurements and the named boundaries are in
 [`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py); the card and the verbs are in

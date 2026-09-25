@@ -53,6 +53,8 @@ def _agent(front_office=True, chat={"channel": "whatsapp", "chat_id": "+49170000
     # Bound from the real class, not stubbed: the post-dispatch hook now also tells the browser
     # about a parked send, and a no-op here would be the test agreeing with itself.
     fake._announce_held_send = Agent._announce_held_send.__get__(fake)
+    fake._close_turn = Agent._close_turn.__get__(fake)
+    fake._close_turn_if_declared = Agent._close_turn_if_declared.__get__(fake)
     return fake
 
 

@@ -153,6 +153,19 @@ _THINKING_NODE_REQUIRED_TOOLS = {
 }
 
 
+def _task_tools_first(tools, task_tools) -> list:
+    """The per-turn tool set in cap order: the tools chosen for this task, then the ones that
+    ride along on every turn (memory, working memory, timer, messengers, ask_user), each group
+    sorted so the cut is reproducible.
+
+    One sorted list put the riders in the way of the task: with three messengers connected the
+    riders alone filled the cap of 12, and a research turn lost `web_search` to
+    `update_working_memory` because "w" sorts last (measured with the default cap and the
+    default riders)."""
+    task = set(task_tools or ()) & set(tools or ())
+    return sorted(task) + sorted(set(tools or ()) - task)
+
+
 def _apply_tool_cap(selected, router_max: int, pinned) -> list:
     """Cap the per-turn tool set, never at the expense of a pinned tool.
 
@@ -3834,8 +3847,12 @@ class Agent:
                         # chain-of-thought never leaks; status is tracked). Available in thinking mode AND in
                         # a scheduled automation — a background automation that hits a genuine blocker hands
                         # off via this same channel (it then carries a handoff bundle; see ask_user routing).
+                        # And in a chat, where it asks the person in front of it and ENDS the turn (with
+                        # options to pick). Only an agent that says it is a chat: the construction sites
+                        # that leave the kind unset (a browser agent's inner loop, embedders) have nobody
+                        # to show the question to.
                         if instance.name == "ask_user":
-                            if not (_rk_thinking or _rk_automation):
+                            if not (_rk_thinking or _rk_automation or self._run_kind == "chat"):
                                 continue
                             self.tools[instance.name] = instance
                             continue
@@ -8979,6 +8996,10 @@ class Agent:
         from vaf.cli.ui import UI
         # Turn-local flag: avoids cross-thread leakage from process-wide env vars.
         self._current_turn_thinking_mode = bool(thinking_mode)
+        # True once a call of this turn ended it (_close_turn): the return value is then the
+        # closing a tool declared, not text the model wrote, and a runner must not treat it as
+        # a written answer (open it as a document, check it for an unfinished sub-agent).
+        self._turn_closed_by_tool = False
         # Forced-resolution node (thinking-mode decision tree): when the caller forces a tool call, also
         # block the gather tools immediately so "required" can ONLY be satisfied by a decisive/progress
         # tool (ask_user / delete_* / thinking_done) — the model cannot escape into search/prose.
@@ -9498,6 +9519,9 @@ class Agent:
 
             # Decay AFTER merge so tools stay for the full N turns
             self._decay_recent_tools()
+            # What the router (and the recent turns) chose for THIS task, before anything rides
+            # along: the cap below cuts the riders first (_task_tools_first).
+            _task_tools = list(selected_tools or [])
 
             # list_tools and search_tools are ALWAYS included when we have a restricted set
             # so the model can discover other tools on-demand (provider-agnostic Tool Search).
@@ -9515,7 +9539,9 @@ class Agent:
                 # memory_update rides with memory_save on purpose: the save's duplicate
                 # notice tells the model to call it, so it must be callable in the SAME
                 # restricted set without another router round trip.
-                for name in ("update_intent", "update_working_memory", "memory_search", "memory_save", "memory_update", "update_user_identity", "set_timer"):
+                # ask_user rides along too: a question with options is decided in the middle of
+                # a task, when the router has picked tools for the task, never for asking.
+                for name in ("update_intent", "update_working_memory", "memory_search", "memory_save", "memory_update", "update_user_identity", "set_timer", "ask_user"):
                     if name in self.tools:
                         tools_set.add(name)
                 
@@ -9541,8 +9567,9 @@ class Agent:
                     pass
                 
                 # Convert back to list. SORTED, not list(set): the cap below truncates whatever
-                # does not fit, and hash order made which tool got cut depend on the run.
-                selected_tools = sorted(tools_set)
+                # does not fit, and hash order made which tool got cut depend on the run. The
+                # task's own tools go first, then the riders.
+                selected_tools = _task_tools_first(tools_set, _task_tools)
 
             # Cap the number of tools to keep the context window clean.
             # Discovery tools are pinned and don't count against the cap; in a thinking run the
@@ -11179,7 +11206,8 @@ class Agent:
                 _post_tc_messages: list = []
                 # Filled by `_announce_held_send` when a call of THIS round parks a draft.
                 self._held_this_round = []
-                self._turn_stops_for_draft = False
+                # Set by `_close_turn` when a call of THIS round ends the turn.
+                self._turn_closing = None
 
                 for tc in tool_calls_detected:
                     function_name = tc['function']['name']
@@ -11753,23 +11781,29 @@ class Agent:
                 for _ptm in _post_tc_messages:
                     self.history.append(_ptm)
 
-                # A draft the person has to decide on ENDS the turn here, with every call of
-                # the round answered (so the history stays a valid tool sequence). No further
-                # model call: the card is the answer, and the person's word decides what comes
-                # next - Send wakes this chat again, Discard is the end of it
-                # (vaf/core/outbound_hold.py, "THE TURN ENDS AT THE DRAFT"). NAMED BOUNDARY:
-                # this is the only tool result that ends a turn, so it is keyed on the hold's
-                # own marker rather than offered as a general "end the turn" result; a second
-                # such tool is the moment it becomes a declaration on the tool.
-                if getattr(self, "_turn_stops_for_draft", False):
-                    self._turn_stops_for_draft = False
-                    from vaf.core.outbound_hold import TURN_ENDS_AT_DRAFT
-                    UI.event("System", "Draft parked for the user: the turn ends here", style="info")
-                    append_domain_log(
-                        "backend",
-                        f"[OUTBOUND_HOLD] turn ends at draft {','.join(self._held_this_round or [])}")
-                    self.history.append({"role": "assistant", "content": TURN_ENDS_AT_DRAFT})
-                    return TURN_ENDS_AT_DRAFT
+                # A call that hands the next move to the person ENDS the turn here, with
+                # every call of the round answered (so the history stays a valid tool
+                # sequence). No further model call: what the person reads is the closing, and
+                # their word is the chat's next turn. Two producers (`_close_turn`): a tool
+                # that declares `ends_turn` (BaseTool.turn_closing - ask_user's question), and
+                # a draft the person has to decide on (`_announce_held_send`; Send wakes this
+                # chat again, Discard is the end of it - vaf/core/outbound_hold.py, "THE TURN
+                # ENDS AT THE DRAFT"). A visible closing is streamed like any answer, so every
+                # lane shows it; the draft's fixed sentence is not, the card is its answer.
+                _closing = getattr(self, "_turn_closing", None)
+                if _closing:
+                    self._turn_closing = None
+                    _closing_text, _closing_visible = _closing
+                    if self._held_this_round:
+                        append_domain_log(
+                            "backend",
+                            f"[OUTBOUND_HOLD] turn ends at draft {','.join(self._held_this_round)}")
+                    UI.event("System", "Waiting for the user: the turn ends here", style="info")
+                    if _closing_visible and stream_callback:
+                        stream_callback("\n\n" + _closing_text)
+                    self.history.append({"role": "assistant", "content": _closing_text})
+                    self._turn_closed_by_tool = True
+                    return _closing_text
 
                 # ═══════════════════════════════════════════════════════════════
                 # LOOP PROTECTION: Turn limit check
@@ -13009,6 +13043,39 @@ class Agent:
         except Exception as _dn_exc:
             append_domain_log("backend", f"[OUTBOUND_HOLD] decision note skipped: {_dn_exc}")
 
+    def _close_turn(self, text: str, *, visible: bool) -> None:
+        """End this turn once the round's results are all in, with `text` as its answer.
+
+        A visible closing is what the person reads (a question); an invisible one is a fixed
+        sentence a surface shows as nothing (the draft, whose card is the answer). Visible
+        wins over invisible and two visible ones are both kept, in call order, so a round that
+        parked a draft AND asked a question still shows the question. Never raises."""
+        text = str(text or "").strip()
+        if not text:
+            return
+        current = getattr(self, "_turn_closing", None)
+        if not current:
+            self._turn_closing = (text, bool(visible))
+        elif visible and current[1]:
+            self._turn_closing = (current[0] + "\n\n" + text, True)
+        elif visible:
+            self._turn_closing = (text, True)
+
+    def _close_turn_if_declared(self, name, args, result) -> None:
+        """The tool's own declaration (BaseTool.ends_turn / turn_closing), asked after every
+        call of the chat lane. Keyed on the declaration, never on a tool name, so a tool of an
+        embedder ends the turn the same way. Never raises."""
+        tool = (getattr(self, "tools", None) or {}).get(name)
+        if tool is None or not getattr(tool, "ends_turn", False):
+            return
+        try:
+            closing = tool.turn_closing(args if isinstance(args, dict) else {}, result)
+        except Exception as _tc_exc:
+            append_domain_log("backend", f"[TURN_END] {name}.turn_closing failed: {_tc_exc}")
+            return
+        if closing:
+            self._close_turn(closing, visible=True)
+
     def _announce_held_send(self, result) -> None:
         """A draft was parked: note it for this round, retire the drafts it replaces, and tell
         this session's browser, so the card appears without a refresh.
@@ -13030,7 +13097,7 @@ class Agent:
             held = []
         held.extend(r for r in refs if r not in held)
         self._held_this_round = held
-        self._turn_stops_for_draft = True
+        self._close_turn(outbound_hold.TURN_ENDS_AT_DRAFT, visible=False)
         sid = getattr(self, "current_session_id", None)
         # Before the browser is told, so the listing it fetches already shows the older
         # draft as replaced rather than as a second card waiting next to the new one.
@@ -13095,6 +13162,7 @@ class Agent:
         if getattr(self, "_front_office_mode", False) and name in _OWNER_SEND_TOOLS:
             self._record_owner_question(name, args, result)
         self._announce_held_send(result)
+        self._close_turn_if_declared(name, args, result)
         # search_tools post-hook: expand _active_tools with discovered tool names so the
         # model can call them in the very next turn without a router round-trip.
         # The parser is SHARED with the tool module (and its format tests), so the

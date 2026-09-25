@@ -370,7 +370,8 @@
     "gateAllowAlwaysHint": "Erlaubt dir dieses Werkzeug überall und vertraut dem aktuellen Ordner bei jedem Werkzeug, das nach einer Bestätigung fragt.",
     "wakeTimer": "Timer",
     "wakeProcess": "Hintergrundbefehl",
-    "wakeDraft": "Entwurf gesendet"
+    "wakeDraft": "Entwurf gesendet",
+    "askPickHint": "Antwort auswählen oder eine eigene schreiben"
   },
   "nav": {
     "settings": "Einstellungen",

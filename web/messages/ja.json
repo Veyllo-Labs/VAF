@@ -370,7 +370,8 @@
     "gateAllowAlwaysHint": "このツールをどこでも許可し、確認が必要なすべてのツールについて現在のフォルダーを信頼します。",
     "wakeTimer": "タイマー",
     "wakeProcess": "バックグラウンドコマンド",
-    "wakeDraft": "送信した下書き"
+    "wakeDraft": "送信した下書き",
+    "askPickHint": "答えを選ぶか、自分で入力できます"
   },
   "nav": {
     "settings": "設定",

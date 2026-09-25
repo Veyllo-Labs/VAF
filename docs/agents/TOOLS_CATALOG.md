@@ -78,6 +78,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `update_intent` | system | Update the primary session goal/task. |
 | `add_task` | system | Add one pending task (prefer `update_working_memory`). |
 | `update_user_identity` | write | Update who the current user is and their preferences. |
+| `ask_user` | system | Ask the user ONE question, optionally with `options` to pick. In a chat it ends the turn (`ends_turn`): the question is the answer, the options become buttons in the web chat and a numbered list elsewhere, and the reply is the next message. In a thinking run or a scheduled automation it is delivered and tracked as a request instead ([Thinking-Mode.md](Thinking-Mode.md)). Offered on every chat turn. |
 
 ## Code & execution
 

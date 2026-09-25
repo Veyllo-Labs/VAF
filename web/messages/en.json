@@ -370,7 +370,8 @@
     "gateAllowAlwaysHint": "Allows this tool for you everywhere, and trusts the current folder for every tool that asks for confirmation.",
     "wakeTimer": "Timer",
     "wakeProcess": "Background command",
-    "wakeDraft": "Draft sent"
+    "wakeDraft": "Draft sent",
+    "askPickHint": "Pick an answer or type your own"
   },
   "nav": {
     "settings": "Settings",

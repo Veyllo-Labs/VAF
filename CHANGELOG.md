@@ -32,9 +32,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the bot, and the bot pairs that Telegram account with yours and switches your Telegram on.
   A code works once, for ten minutes, and never takes over a Telegram account another person
   has paired.
+- **The agent can ask you a question with answers to pick.** When the agent needs your
+  decision in the middle of a task - which variant, which file, go on or stop - it asks with
+  the possible answers as buttons under its question, stops there and waits. A click answers,
+  or you type your own answer; the picked button stays marked. In the terminal apps and on
+  Telegram, WhatsApp and Discord the answers come as a numbered list, and a number or your
+  own words answer them. Before, the agent asked in plain text, if at all, and sometimes went
+  on and answered its own question.
 
 ### Changed
 
+- **A turn's tools no longer lose their place to the ones that are always offered.** With
+  several messengers connected, the tools the agent is offered on every turn filled its tool
+  list, and a research question could arrive without the web search. The tools chosen for
+  the question now come first.
 - **The agent can look at any image in your files, not only in the chat's workspace.** A
   screenshot or picture saved elsewhere in your files could be read with `read_file` but
   not looked at, so the agent guessed from its file name or bytes. `analyze_image` now takes

@@ -91,7 +91,7 @@ def test_a_round_that_parks_a_draft_ends_the_turn(agent):
     assert last == {"role": "assistant", "content": outbound_hold.TURN_ENDS_AT_DRAFT}
     rows = outbound_hold.chat_drafts(USER, SCOPE, SESSION)
     assert [(r["state"], r["recipient"], r["preview"]) for r in rows] == [("held", "+491700000000", "Hallo Anna")]
-    assert agent._turn_stops_for_draft is False, "the flag is spent with the turn"
+    assert agent._turn_closing is None, "the closing is spent with the turn"
 
 
 def test_a_round_without_a_draft_goes_on(agent):

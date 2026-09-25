@@ -35,6 +35,8 @@ import InboxWindow from '@/components/inbox/InboxWindow';
 import { TurnDrafts, UnplacedDrafts, isWaitingDraft, type HeldSendRow } from '@/components/outbox/HeldSendCard';
 import { useChatDrafts } from '@/components/outbox/useChatDrafts';
 import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX } from '@/components/outbox/draftRefs';
+import AskChoices from '@/components/chat/AskChoices';
+import { asksOf, withoutOptions } from '@/components/chat/askChoices';
 import type { SettingsChatJump } from '@/components/SettingsModal';
 import CreateAutomationPopup, { type CreateAutomationPayload, type EditAutomationTask } from '@/components/CreateAutomationPopup';
 import NotificationsModal, { type NotificationItem } from '@/components/NotificationsModal';
@@ -9754,10 +9756,14 @@ function VAFDashboardContent() {
                                                     const displayAnswer = !isBot && attachmentStripped ? attachmentStripped.text : answer;
                                                     const displayFiles = !isBot && (msg.files?.length ? msg.files : (attachmentStripped?.fileNames.length ? attachmentStripped.fileNames.map(name => ({ name, mimeType: '' })) : undefined));
 
+                                                    // A question the agent asked ended its turn (vaf/tools/ask_user.py): the
+                                                    // answer ends in the options as a numbered list, which the buttons under
+                                                    // the answer replace here (AskChoices).
+                                                    const turnAsks = isBot && turnTl ? asksOf(turnTl.actions.filter(a => a.kind === 'tool').map(a => a.msg)) : [];
                                                     // Filter out tool_calls JSON from bot answers. A turn that stopped at a
                                                     // draft ends with one fixed sentence (vaf/core/outbound_hold.py); it
                                                     // shows as nothing, because the draft's card is that turn's answer.
-                                                    const cleanAnswer = isBot ? (isDraftTurnEnd(answer) ? '' : stripToolCallsJSON(answer)) : answer;
+                                                    const cleanAnswer = isBot ? (isDraftTurnEnd(answer) ? '' : withoutOptions(stripToolCallsJSON(answer), turnAsks)) : answer;
                                                     // Add top margin if following a system step
                                                     const prevWasSystem = i > 0 && visibleMessages[i - 1].role === 'system';
                                                     // Only show the speech bubble when there is visible content (avoid empty bubbles)
@@ -10193,6 +10199,17 @@ function VAFDashboardContent() {
                                                                                 lined up with its tool windows (HeldSendCard.tsx). */}
                                                                             <TurnDrafts rows={draftsOfTools(turnTl!.actions.filter(a => a.kind === 'tool').map(a => a.msg))}
                                                                                 apiBase={getApiBase()} onChanged={chatDrafts.reload} formatTime={draftTime} />
+                                                                            {/* The options of a question this turn asked: a click is the
+                                                                                person's next message. The reply that follows the turn
+                                                                                marks which one was picked. */}
+                                                                            {turnAsks.length > 0 && (() => {
+                                                                                const replyMsg = messages.slice(answerTrueIndex + 1).find(m => m.role === 'user');
+                                                                                return (
+                                                                                    <AskChoices asks={turnAsks} reply={replyMsg ? String(replyMsg.content ?? '') : null}
+                                                                                        canPick={!isGenerating && !loading}
+                                                                                        onPick={opt => { void sendMessage(undefined, opt); }} />
+                                                                                );
+                                                                            })()}
                                                                         </TurnActionsTimeline>
                                                                     </div>
                                                                 ) : (

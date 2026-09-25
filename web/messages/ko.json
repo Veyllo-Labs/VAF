@@ -370,7 +370,8 @@
     "gateAllowAlwaysHint": "이 도구를 어디서나 허용하고, 확인이 필요한 모든 도구에 대해 현재 폴더를 신뢰해요.",
     "wakeTimer": "타이머",
     "wakeProcess": "백그라운드 명령",
-    "wakeDraft": "보낸 초안"
+    "wakeDraft": "보낸 초안",
+    "askPickHint": "답을 고르거나 직접 입력할 수 있어요"
   },
   "nav": {
     "settings": "설정",

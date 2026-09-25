@@ -370,7 +370,8 @@
     "gateAllowAlwaysHint": "在所有位置为你允许这个工具，并在当前文件夹中信任每个需要确认的工具。",
     "wakeTimer": "定时器",
     "wakeProcess": "后台命令",
-    "wakeDraft": "草稿已发送"
+    "wakeDraft": "草稿已发送",
+    "askPickHint": "选择一个回答，或自己输入"
   },
   "nav": {
     "settings": "设置",

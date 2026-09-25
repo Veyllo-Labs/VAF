@@ -5312,27 +5312,58 @@ class Agent:
             session_id=getattr(self, "current_session_id", None),
         )
         
-        # Optional: Load Project Context (VAF.md)
-        # Limit to 25% of total context or max 12k chars (whichever is smaller)
-        # 1 token ~ 3 chars -> 25% of n_ctx tokens * 3 = max chars
-        n_ctx = self.config.get("n_ctx", 8192)
-        max_context_chars = int(min(12_000, (n_ctx * 0.25) * 3))
-        
-        try:
-            from pathlib import Path
-            from vaf.core.project_context import load_project_context
-            # Use current working directory for context search
-            cwd = os.getcwd()
-            project_ctx = load_project_context(Path(cwd), max_chars=max_context_chars)
-            
-            if project_ctx:
-                 system_prompt += f"\n\n## PROJECT CONTEXT (VAF.md)\nLoaded from: {project_ctx.path}\n{project_ctx.content}\n"
-        except Exception:
-            pass
+        # Optional: Load Project Context (VAF.md), for the chat's own project folder.
+        _project_block = self._project_context_block()
+        if _project_block:
+            system_prompt += "\n\n" + _project_block
 
         self.history = [
             {"role": "system", "content": system_prompt}
         ]
+
+    def _project_context_block(self) -> str:
+        """The chat's VAF.md as a system-prompt section, or "" when there is none.
+
+        WHERE it is looked for depends on the lane. A runner lane (web, messaging channels; the
+        runner sets `_current_chat_source`) serves every chat and every person from one process,
+        so its working directory is nobody's project: the runner hands over THIS chat's project
+        folder per turn (`_chat_project_dir`, the active project, else the chat's workspace), and
+        the search stops at the person's own projects root, never above it - a VAF.md there
+        belongs to the owner or to everyone. A terminal lane (the CLI, the TUI, an embedder) was
+        started in the person's own directory, so that is where it looks, as it always did.
+
+        The runner lane used to read the server's working directory too: whatever VAF.md sat
+        where `vaf start` was run went into every chat of every person, and a chat's own
+        project never counted.
+
+        Limit: 25% of the context or 12k chars, whichever is smaller (1 token ~ 3 chars).
+        Never raises.
+        """
+        try:
+            from pathlib import Path
+            from vaf.core.project_context import load_project_context
+            stop_at = None
+            if getattr(self, "_current_chat_source", None):
+                start = str(getattr(self, "_chat_project_dir", "") or "").strip()
+                if not start or not os.path.isdir(start):
+                    return ""
+                from vaf.core.platform import Platform
+                root = (Path(Platform.documents_dir()) / "VAF_Projects").resolve()
+                resolved = Path(start).resolve()
+                if resolved != root and root in resolved.parents:
+                    stop_at = root / resolved.relative_to(root).parts[0]
+                elif resolved == root:
+                    return ""
+            else:
+                start = os.getcwd()
+            n_ctx = self.config.get("n_ctx", 8192)
+            max_context_chars = int(min(12_000, (n_ctx * 0.25) * 3))
+            ctx = load_project_context(Path(start), max_chars=max_context_chars, stop_at=stop_at)
+        except Exception:
+            return ""
+        if not ctx:
+            return ""
+        return f"## PROJECT CONTEXT (VAF.md)\nLoaded from: {ctx.path}\n{ctx.content}\n"
 
     def _bind_session_persistence(self, session_id: str) -> None:
         """Re-point the persistence store to this session's isolated dir so plan/tasks/notes/team/
@@ -5369,6 +5400,10 @@ class Agent:
         if not force and hasattr(self, 'current_session_id') and self.current_session_id == session_id \
                 and not changed_underneath:
             return
+
+        # The project folder belongs to the chat being left: the runner sets the new chat's
+        # before its turn, and until then no VAF.md is anybody's (_project_context_block).
+        self._chat_project_dir = ""
 
         # Load new session data
         from vaf.core.session import SessionManager
@@ -9312,11 +9347,13 @@ class Agent:
                 if context_glue not in new_prompt:
                     new_prompt += f"\n\n{context_glue}"
             
-            # 2. Preserve Project Context (always keep at the bottom of system prompt)
-            current_content = self.history[0]["content"]
-            if "## PROJECT CONTEXT" in current_content and "## PROJECT CONTEXT" not in new_prompt:
-                project_context_part = current_content.split("## PROJECT CONTEXT", 1)[1]
-                new_prompt = new_prompt.strip() + f"\n\n## PROJECT CONTEXT{project_context_part}"
+            # 2. Project Context (VAF.md) at the bottom of the system prompt, for THIS turn's
+            # chat. Resolved again rather than carried over: one agent serves every chat, and
+            # the section the prompt held came from whichever chat built it last.
+            if "## PROJECT CONTEXT" not in new_prompt:
+                _project_block = self._project_context_block()
+                if _project_block:
+                    new_prompt = new_prompt.strip() + "\n\n" + _project_block
             
             # 3. Final Apply
             self.history[0]["content"] = new_prompt

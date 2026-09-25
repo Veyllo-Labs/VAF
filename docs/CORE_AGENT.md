@@ -53,7 +53,13 @@ agent.shutdown()       # idempotent cleanup; safe to call manually
 - `init_chat()` rebuilds the system prompt from the current tools/config,
   loads `VAF.md` project context from the cwd (capped), and resets
   `agent.history` to just the system message. Call it once before the first
-  `chat_step`, and again only when you want a fresh conversation.
+  `chat_step`, and again only when you want a fresh conversation. The
+  `VAF.md` section is resolved again on every turn (`_project_context_block`):
+  from the cwd upward when no chat source is set (a terminal, an embedder), and
+  in VAF's runner (web, messaging channels; it sets `_current_chat_source`)
+  from the chat's own project folder the runner hands over per turn
+  (`_chat_project_dir`), never climbing above the person's own
+  `VAF_Projects/<uid8>` - the server's working directory is nobody's project.
 - `load_model()` is NOT lazy-called by `chat_step`: in local mode you (or the
   facade, which does this for you) must call it before chatting, else the
   turn aborts with "Agent not initialized". Caveat: it reuses ANY healthy

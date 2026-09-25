@@ -708,6 +708,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
         _lifecycle(f"Agent init attempt {_agent_attempt}")
         try:
             agent = Agent(verbose=False, register_signals=False, run_kind="chat")
+            # A runner lane from its first prompt on: this process serves every chat, so its
+            # working directory is nobody's project and its VAF.md nobody's to read
+            # (Agent._project_context_block). Every task sets its own source below.
+            agent._current_chat_source = "web"
             _lifecycle("Agent() constructor OK, calling init_chat()")
             agent.init_chat()
             _lifecycle("init_chat() OK")
@@ -1941,6 +1945,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # [SESSION WORKSPACE] = stable workspace root set on first file creation (session.project_path).
                     # [ACTIVE PROJECT]    = most recently created/edited project (runtime_state["last_project_path"]).
                     # Old sessions without session.project_path fall back to [PROJECT CONTEXT] for compatibility.
+                    # This turn's project folder for the chat's VAF.md (Agent._project_context_block).
+                    # Reset first: one agent serves every chat, and a folder left from the last
+                    # task would hand that chat's VAF.md to this one.
+                    agent._chat_project_dir = ""
                     try:
                         session_for_proj = session_mgr.load(task.session_id)
                         _workspace = getattr(session_for_proj, "project_path", "") or ""
@@ -1975,6 +1983,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 if (_last_proj and _last_proj != _workspace and os.path.isdir(_last_proj))
                                 else _workspace
                             )
+                            agent._chat_project_dir = _edit_path
                             proj_note = (
                                 f"[SESSION WORKSPACE] All files for this chat are stored in: {_workspace}\n"
                                 f"[ACTIVE PROJECT] Most recently created/edited: {_edit_path}\n"
@@ -1987,6 +1996,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             )
                             effective_input = proj_note + effective_input
                         elif _last_proj and os.path.isdir(_last_proj):
+                            agent._chat_project_dir = _last_proj
                             # Fallback for sessions predating session.project_path support
                             proj_note = (
                                 f"[PROJECT CONTEXT] The most recently created project is at: {_last_proj}\n"

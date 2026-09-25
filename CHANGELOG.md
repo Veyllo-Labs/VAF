@@ -49,6 +49,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **A chat reads the VAF.md of its own project.** Instructions for a project in a `VAF.md`
+  file now reach the chat that works on that project, in the web app and on the messaging
+  channels. Before, the web app read the `VAF.md` of the folder VAF was started from, for
+  every chat of every person, and a project's own file never counted. In the terminal it
+  stays the file of the folder you start `vaf` in.
 - **A turn's tools no longer lose their place to the ones that are always offered.** With
   several messengers connected, the tools the agent is offered on every turn filled its tool
   list, and a research question could arrive without the web search. The tools chosen for

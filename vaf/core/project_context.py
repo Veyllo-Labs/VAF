@@ -34,31 +34,41 @@ class ProjectContext:
     truncated: bool = False
 
 
-def find_project_context_file(start_dir: Path, filenames: tuple[str, ...] = DEFAULT_CONTEXT_FILENAMES) -> Optional[Path]:
+def find_project_context_file(start_dir: Path, filenames: tuple[str, ...] = DEFAULT_CONTEXT_FILENAMES,
+                              *, stop_at: Optional[Path] = None) -> Optional[Path]:
     """
     Search upwards from start_dir for a VAF context file.
     Returns the first match found, preferring nearest parent.
+
+    `stop_at` is the highest folder searched: a chat's project inside a person's own tree
+    must not pick up a VAF.md above it, which belongs to someone else (the owner's home, the
+    shared projects root). Without it the walk goes to the filesystem root, which is right
+    for a terminal started in the person's own directory.
     """
     cur = start_dir.resolve()
+    ceiling = stop_at.resolve() if stop_at is not None else None
+    if ceiling is not None and cur != ceiling and ceiling not in cur.parents:
+        return None
 
-    # Walk upwards until filesystem root
+    # Walk upwards until the ceiling or the filesystem root
     while True:
         for name in filenames:
             candidate = cur / name
             if candidate.exists() and candidate.is_file():
                 return candidate
 
-        if cur.parent == cur:
+        if cur.parent == cur or cur == ceiling:
             return None
         cur = cur.parent
 
 
-def load_project_context(start_dir: Path, max_chars: int = 12_000) -> Optional[ProjectContext]:
+def load_project_context(start_dir: Path, max_chars: int = 12_000,
+                         *, stop_at: Optional[Path] = None) -> Optional[ProjectContext]:
     """
-    Load context from VAF.md if present (searching upwards).
+    Load context from VAF.md if present (searching upwards, never above `stop_at`).
     Content is truncated to max_chars to avoid context overflow.
     """
-    path = find_project_context_file(start_dir)
+    path = find_project_context_file(start_dir, stop_at=stop_at)
     if not path:
         return None
 

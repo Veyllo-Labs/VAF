@@ -290,9 +290,18 @@ def stop(record: BackgroundProcess) -> str:
     except Exception as e:
         return f"{record.id} could not be stopped: {e}"
     try:
-        record.popen.wait(timeout=5)
+        code = record.popen.wait(timeout=5)
     except Exception:
-        pass
+        code = None
+    if code is not None:
+        # Recorded here as well as by the watcher: both wake from the same wait, and on Windows
+        # (no wait lock there) the caller could read "still running" before the watcher's
+        # thread got to write it down. The watcher writes the same code again and, since the
+        # agent stopped it, wakes nobody.
+        with _lock:
+            if record.exit_code is None:
+                record.exit_code = code
+                record.finished_at = time.time()
     return f"stopped {record.id}"
 
 

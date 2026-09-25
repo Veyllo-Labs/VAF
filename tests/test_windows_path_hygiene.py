@@ -136,6 +136,17 @@ build failed with "differs from already included file name only in casing" and
 every Linux build, local ones included, was green. The same holds for two tracked
 paths that differ only in case: a checkout on those systems keeps one of them.
 This guard reads the tracked names, so it fails HERE, on any OS.
+
+## 7. A POSIX-only signal is never read on the Windows path.
+
+`signal.SIGKILL` (like SIGHUP or SIGUSR1) does not exist on Windows. The tree stop
+(`Platform.terminate_process_tree`) passed `_signal.SIGKILL` to a helper that ignores
+it when there is no process group, which is always the case on Windows - but the
+ARGUMENT was evaluated first, so the stop raised AttributeError after the tree was
+already dead. Every caller then reported a failed stop: the Windows test leg found
+`processes.stop` answering "could not be stopped" and `terminate_all` counting 0 of
+2. On Linux the name exists, so no local run could fail. Here the Windows side of
+the seam is simulated: `is_windows()` true and no SIGKILL in the signal module.
 """
 import ast
 import ntpath
@@ -718,3 +729,25 @@ def test_no_two_tracked_names_differ_only_in_case():
         "these names are one file or one module on Windows and macOS; rename one of each "
         "group:\n  " + "\n  ".join(" / ".join(g) for g in collisions)
     )
+
+
+
+# ---------------------------------------------------------------------------
+# 7. POSIX-only signals on the Windows path
+# ---------------------------------------------------------------------------
+
+def test_the_tree_stop_runs_under_windows_semantics(monkeypatch):
+    """MUTATION: pass `_signal.SIGKILL` to the group helper again and this raises."""
+    pytest.importorskip("psutil")    # the psutil lane is the one Windows takes in practice
+    import signal
+
+    from vaf.core.platform import Platform
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        monkeypatch.setattr(Platform, "is_windows", staticmethod(lambda: True))
+        monkeypatch.delattr(signal, "SIGKILL", raising=False)
+        Platform.terminate_process_tree(child.pid, grace=2.0)
+        assert child.wait(timeout=10) is not None, "the tree was stopped"
+    finally:
+        if child.poll() is None:
+            child.kill()

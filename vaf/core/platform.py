@@ -1130,11 +1130,15 @@ class Platform:
             except Exception:
                 group = None
 
-        def _signal_group(sig) -> None:
+        def _signal_group(name: str) -> None:
+            """Signal the group by the signal's NAME. There is no group on Windows, and the
+            name is looked up only past that point: `signal.SIGKILL` does not exist there,
+            and reading it as an argument raised after the tree was already stopped, so
+            every caller reported a failed stop (the Windows CI leg found it)."""
             if group is None:
                 return
             try:
-                os.killpg(group, sig)
+                os.killpg(group, getattr(_signal, name))
             except (ProcessLookupError, PermissionError):
                 pass
 
@@ -1162,14 +1166,14 @@ class Platform:
                 p.terminate()
             except Exception:
                 pass
-            _signal_group(_signal.SIGTERM)
+            _signal_group("SIGTERM")
             _gone, alive = psutil.wait_procs([p] + children, timeout=grace)
             for a in alive:
                 try:
                     a.kill()
                 except Exception:
                     pass
-            _signal_group(_signal.SIGKILL)
+            _signal_group("SIGKILL")
             return
         if Platform.is_windows():
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],

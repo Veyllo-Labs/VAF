@@ -76,9 +76,19 @@ def test_a_natural_exit_wakes_the_chat_it_came_from_as_its_person(_isolated):
     assert "exit 0" in wake["input_text"] and "build ok" in wake["input_text"]
 
 
+def test_a_stopped_process_is_not_running_when_stop_returns(monkeypatch):
+    """The stop records the exit itself: the watcher wakes from the same wait, and on Windows
+    the caller could read "still running" before the watcher's thread wrote it down.
+    MUTATION: drop the recording in `stop` and, with the watcher held back, this goes red."""
+    monkeypatch.setattr(processes, "_watch", lambda record: None)
+    record = _start(f'{PY} -c "import time; time.sleep(30)"')
+    assert processes.stop(record) == f"stopped {record.id}"
+    assert not record.running and record.exit_code is not None
+
+
 def test_a_process_the_agent_stopped_wakes_nobody(_isolated):
     record = _start(f'{PY} -c "import time; time.sleep(30)"')
-    assert "stopped" in processes.stop(record)
+    assert processes.stop(record) == f"stopped {record.id}"   # "could not be stopped" is no stop
     assert not record.running
     time.sleep(0.3)
     assert _isolated == [], "a stop the agent asked for came back as a wake turn"

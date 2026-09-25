@@ -131,6 +131,11 @@ def test_the_owners_own_copy_is_not_a_forgery():
     assert own_copy["flags"] == []
     colleague = _verdict(_raw(2, from_addr="it@firma.example", authserv=""), org)
     assert "own_domain_spoof" in colleague["flags"]
+    # The owner's own address WITH a header the trusted id does not match arrived from
+    # somewhere: that is what a relayed forgery looks like, so it keeps the flag. MUTATION:
+    # drop `and not headers` from the own-copy exemption - red.
+    relayed = _verdict(_raw(3, from_addr="bob@firma.example", authserv="mx.elsewhere.example"), org)
+    assert relayed["state"] == "unknown" and "own_domain_spoof" in relayed["flags"]
 
 
 # ── Gmail needs no learning ────────────────────────────────────────────────────────

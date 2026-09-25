@@ -583,10 +583,11 @@ independent answers, never mixed:
    from the provider table) is never an own domain: it belongs to every customer of
    that provider, and treating it as the owner's flagged every other Gmail user as a
    forgery and hid their mail from the agent. For such an owner the address carries
-   the claim. The owner's own address with no trusted header at all is not flagged
-   either: that is the owner's own copy (the Sent folder, a draft), because a provider
-   stamps only mail it received, and a forgery that arrived carries the provider's
-   failing header.
+   the claim. The owner's own address with no Authentication-Results header at all is
+   not flagged either: that is the owner's own copy (the Sent folder, a draft), because a
+   provider stamps only mail it received. One that carries a header keeps the flag, the
+   provider's failing one or one the trusted id does not match, because an unmatched
+   header is what a message relayed from elsewhere brings.
 
 What an IMAP client cannot do, stated so nobody looks for it: it cannot re-run SPF
 (that needs the connecting IP and MAIL FROM at SMTP time, and the `Received`

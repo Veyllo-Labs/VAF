@@ -396,7 +396,8 @@ def verdict(parsed: ParsedMessage, *, trusted_authserv_id: str, auth_profile: st
     of own_domains or below one, or the From address is one of own_addresses, and the
     state is not verified; the address half is what remains for an owner whose domain
     is a provider's, like gmail.com, which is nobody's own domain; the owner's own
-    address with no trusted header at all is the owner's own copy, not a forgery),
+    address with no Authentication-Results header at all is the owner's own copy, not a
+    forgery, while one with an untrusted header keeps the flag),
     no_message_id,
     dmarc_fail, multiple_from (two or more addr-specs in From, which RFC 7489 6.6.1
     treats as suspect)."""
@@ -446,10 +447,13 @@ def _verdict(parsed: ParsedMessage, *, trusted_authserv_id: str, auth_profile: s
     from_address = address_of(from_header)
     is_own_address = bool(from_address) and from_address in own_addrs
     claims_own = is_own_address or bool(from_domain and any(aligned(d, from_domain) for d in own if d))
-    # Without a trusted header the owner's own address is the owner's own copy (the Sent
-    # folder, a draft): a provider stamps only mail it received, so there was nothing to
-    # fail. A forgery of that address that ARRIVED carries the provider's header and fails.
-    if claims_own and state != "verified" and not (state == "unknown" and is_own_address):
+    # Without ANY Authentication-Results header the owner's own address is the owner's own
+    # copy (the Sent folder, a draft): a provider stamps only mail it received, so there was
+    # nothing to fail. A forgery of that address that ARRIVED carries a header: the
+    # provider's, which fails, or one the trusted id does not match - an unmatched header is
+    # exactly what a message relayed from elsewhere brings, so it keeps the flag.
+    own_copy = state == "unknown" and is_own_address and not headers
+    if claims_own and state != "verified" and not own_copy:
         flags.append("own_domain_spoof")
     if not str(getattr(parsed, "message_id", "") or "").strip():
         flags.append("no_message_id")

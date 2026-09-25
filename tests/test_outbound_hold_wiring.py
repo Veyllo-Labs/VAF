@@ -568,8 +568,13 @@ def test_the_runner_keeps_the_draft_note_with_its_turn_and_its_chat():
     assert "agent._turn_decision_note = None" in runner[call - 600:call]
     store_at = runner.index('_draft_note = getattr(agent, "_turn_decision_note", None)')
     user_at = runner.index('session.add_message(role="user", content=_user_input.strip(),')
-    assert store_at < user_at and user_at - store_at < 400
+    assert store_at < user_at
     assert 'session.add_message(role="system", content=str(_draft_note))' in runner[store_at:user_at]
+    # Stored whether or not the input repeats the last stored user message: a repeated input
+    # is not stored again, the note is new either way. MUTATION: move the note back inside
+    # the `last_user_msg != ...` branch - red.
+    dedupe_at = runner.index("if last_user_msg != _user_input.strip():")
+    assert store_at < dedupe_at, "the note is stored before the repeated-input branch, not inside it"
 
 
 def test_the_card_never_hides_an_edit_and_never_keeps_a_blank():

@@ -2523,6 +2523,17 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     last_user_msg = _msg_content(msg)
                                     break
 
+                            # What became of the chat's drafts (vaf/core/outbound_hold.py): the
+                            # agent put that note right BEFORE this input, so the turn-context
+                            # persistence below, which starts after the user message, cannot see
+                            # it. Stored here, ahead of the user message, it survives a reload and
+                            # the agent is not told the same news again - also when this input
+                            # repeats the last stored one and is therefore not stored again: the
+                            # note is new either way.
+                            _draft_note = getattr(agent, "_turn_decision_note", None)
+                            if _draft_note:
+                                session.add_message(role="system", content=str(_draft_note))
+
                             if last_user_msg != _user_input.strip():
                                 _img_meta = None
                                 if _task_images:
@@ -2554,14 +2565,6 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 _msg_kind = ("voice_delegation"
                                              if (task.metadata or {}).get("origin_channel") == "voice_call"
                                              else None)
-                                # What became of the chat's drafts (vaf/core/outbound_hold.py): the
-                                # agent put that note right BEFORE this input, so the turn-context
-                                # persistence below, which starts after the user message, cannot
-                                # see it. Stored here in the same place, it survives a reload and
-                                # the agent is not told the same news again.
-                                _draft_note = getattr(agent, "_turn_decision_note", None)
-                                if _draft_note:
-                                    session.add_message(role="system", content=str(_draft_note))
                                 session.add_message(role="user", content=_user_input.strip(),
                                                     metadata=(_user_meta or None), kind=_msg_kind)
                                 # Increment persistent user_turn_count in runtime_state

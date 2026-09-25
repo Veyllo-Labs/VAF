@@ -172,3 +172,33 @@ def test_the_file_read_is_the_file_checked(tmp_path, monkeypatch):
     assert load_project_context(mine, stop_at=tmp_path / "tenant").content == "MINE"
     monkeypatch.setattr(builtins, "open", swapped)
     assert load_project_context(mine, stop_at=tmp_path / "tenant") is None
+
+
+def test_the_open_file_is_located_by_its_descriptor(tmp_path, monkeypatch):
+    """The double race: the path resolves inside the tree and statting it finds the very file
+    that was opened - because a directory was swapped for a link between the two steps. Only
+    asking the descriptor where the open file lives sees through it. MUTATION: fall back to
+    the path check where the kernel can answer (make _fd_path return None) - red."""
+    import os
+    import sys
+    import builtins
+    import vaf.core.project_context as pc
+    if not (os.path.islink("/proc/self/fd/0") or sys.platform == "darwin"):
+        pytest.skip("the kernel cannot name an open file's location here")
+    foreign = tmp_path / "owner" / "notes.md"
+    foreign.parent.mkdir()
+    foreign.write_text("OWNER ONLY")
+    mine = _project(tmp_path / "tenant" / "proj", "MINE")
+    real_open, real_stat = builtins.open, os.stat
+
+    def swapped(file, *a, **kw):
+        return real_open(foreign if str(file).endswith("VAF.md") else file, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", swapped)
+    # The raced path answers: resolving lands inside the tree, and the stat there is the
+    # foreign file's - exactly what the swapped directory would show.
+    real_realpath = os.path.realpath
+    monkeypatch.setattr(pc.os.path, "realpath", lambda p, *a, **kw: str(mine / "VAF.md")
+                        if str(p).endswith("VAF.md") else real_realpath(p, *a, **kw))
+    monkeypatch.setattr(pc.os, "stat", lambda p, *a, **kw: real_stat(foreign) if str(p).endswith("VAF.md") else real_stat(p, *a, **kw))
+    assert pc.load_project_context(mine, stop_at=tmp_path / "tenant") is None

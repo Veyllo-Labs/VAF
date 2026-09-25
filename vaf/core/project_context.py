@@ -69,13 +69,46 @@ def find_project_context_file(start_dir: Path, filenames: tuple[str, ...] = DEFA
         cur = cur.parent
 
 
-def _opened_within(fd: int, path: Path, ceiling: Path) -> bool:
-    """Is the file open on `fd` the one that `path` resolves to INSIDE `ceiling`? The resolved
-    location must lie within the ceiling, and the open file must be that very file (same
-    device and inode), so a link swapped after the open cannot pass for it."""
+def _fd_path(fd: int) -> Optional[str]:
+    """Where the OPEN file lives, as the kernel knows it - anchored to the descriptor, not to a
+    path that can change underneath: /proc/self/fd on Linux, F_GETPATH on macOS. None where
+    neither exists."""
+    proc = f"/proc/self/fd/{fd}"
+    if os.path.islink(proc):
+        try:
+            return os.readlink(proc)
+        except OSError:
+            return None
     try:
-        real = Path(os.path.realpath(path))
-        if real != ceiling and ceiling not in real.parents:
+        import fcntl
+        if hasattr(fcntl, "F_GETPATH"):
+            raw = fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(1024))
+            return os.fsdecode(raw.split(b"\0", 1)[0])
+    except (ImportError, OSError):
+        pass
+    return None
+
+
+def _inside(location: str, ceiling: Path) -> bool:
+    where = Path(location)
+    return where == ceiling or ceiling in where.parents
+
+
+def _opened_within(fd: int, path: Path, ceiling: Path) -> bool:
+    """Does the file open on `fd` lie INSIDE `ceiling`?
+
+    Asked of the descriptor itself (`_fd_path`): resolving or statting the path again would
+    follow whatever it points at by then, and a directory swapped for a link between two such
+    steps could make a foreign file pass. NAMED BOUNDARY: where the kernel cannot name an open
+    file's location (neither /proc nor F_GETPATH), the path is resolved and the open file must
+    be the very file found there (same device and inode) - a check a double race could still
+    slip past, on platforms VAF does not run a multi-user server on."""
+    located = _fd_path(fd)
+    if located is not None:
+        return _inside(located, ceiling)
+    try:
+        real = os.path.realpath(path)
+        if not _inside(real, ceiling):
             return False
         opened, there = os.fstat(fd), os.stat(real)
     except OSError:

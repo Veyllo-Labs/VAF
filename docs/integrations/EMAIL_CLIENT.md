@@ -265,6 +265,19 @@ the earlier tools had and read the engine store internally. The destructive verb
 are deliberately NOT on the front-office allow-list. `delete_mail` is trash-only:
 it MOVEs to the trash folder and never expunges.
 
+**A folder is named by the part it plays, and a missing folder says so.** The name a mailbox
+gives a special folder depends on the provider and its language: a German Gmail keeps its sent
+mail in `[Google Mail]/Gesendet`, Exchange in `Sent Items`. `MailStore.folder_filter` resolves
+what a caller calls a folder, for the search, the thread list and the message list alike: a
+real name first, then a role (`inbox`, `sent`, `drafts`, `trash`, `spam`, `archive`) or any
+provider's well-known name for a special folder (`SPECIAL_USE_FALLBACK`, the table the sync
+classifies folders with, now kept in `vaf/mail/store.py`), then a name in another case. A
+folder that means nothing in the mailbox makes `find_mail` and the mail lane of `inbox` answer
+`Tool Error: this mailbox has no folder '...'. Its folders: ...` (`tool_bridge.unknown_folder`)
+instead of "no match". Live incident: the agent searched `[Gmail]/Sent Mail` in a German Gmail,
+got "No emails matching", and told the person a mail sent the evening before had not gone out.
+Guard: `tests/test_mail_folder_roles.py`.
+
 **A send the person ordered in the web chat waits for them.** `send_mail`, `reply_mail` and
 `forward_mail` took the person's word as the decision and delivered in the same turn: in a live
 incident a mail left to a real external address the moment the person asked for one to be
@@ -278,6 +291,11 @@ the draft came from, `outbound_hold.wake_after_send`); the decision itself is
 `outward_send_hold`. Every other lane is untouched: automations, workflow steps, channel
 turns, the Front Office answer and a timer the person scheduled all send as before, because
 nobody is there to click.
+
+The agent can ASK what became of a draft: the `list_drafts` TOOL (`vaf/tools/list_drafts.py`,
+not the `MailService.list_drafts` method below) reads the same ledger as the card, this chat's
+drafts or one by its ref (`mail:12`), sent, discarded, replaced or still waiting. It is the
+outbox's own word; the Sent folder confirms a mail later, once the sync has it.
 
 What the person sees is the whole mail: `list_drafts` (and the unified row `pending` builds
 from it) carries every recipient (`to`, `cc`, `bcc`) and the attachment names from the op's

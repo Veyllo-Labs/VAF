@@ -125,7 +125,7 @@ class InboxTool(BaseTool):
             "include_done": {"type": "boolean", "description": "Include conversations the user answered last, or marked done through the API (default false)."},
             "include_bulk": {"type": "boolean", "description": "Mail only. Include promotions, social, newsletters, notifications and junk mail (default false: primary mail only)."},
             "account_id": {"type": "string", "description": "Mail only. Email of one connected account."},
-            "folder": {"type": "string", "description": "Mail only. IMAP folder name (default: every folder)."},
+            "folder": {"type": "string", "description": "Mail only. A folder name, or the part a folder plays whatever the mailbox calls it: inbox, sent, drafts, trash, spam, archive (default: every folder)."},
         },
         "required": [],
     }
@@ -169,6 +169,13 @@ class InboxTool(BaseTool):
         # the cut to max_chats), or a narrowed listing could lose a matching thread to the limit.
         account_id = (kwargs.get("account_id") or "").strip()
         folder = (kwargs.get("folder") or "").strip()
+        if folder and "mail" in channels and user_scope_id:
+            # A folder the mailbox does not have would list nothing, which reads as an empty
+            # folder; the folders it does have are the useful answer.
+            from vaf.mail.tool_bridge import unknown_folder
+            missing = unknown_folder(folder, user_scope_id)
+            if missing:
+                return missing
         result = list_conversations(username, user_scope_id, channels=channels, view=view,
                                     include_groups=include_groups, include_done=include_done,
                                     include_bulk=include_bulk, query=query, limit=max_chats,

@@ -2,8 +2,8 @@
 
 The tools the **main agent** loads by default, grouped by area. Generated from the live
 tool registry (`Agent.tools`, populated by `_load_tools()` in
-[vaf/core/agent.py](../../vaf/core/agent.py)); 119 tools, counted from a freshly
-constructed agent rather than from this list's own history. The **Coder sub-agent**
+[vaf/core/agent.py](../../vaf/core/agent.py)); 128 tools, counted from a freshly
+constructed chat agent rather than from this list's own history. The **Coder sub-agent**
 additionally loads `coder_only` file/shell tools (e.g. `bash`, `move_file`,
 `codesearch`) that are not in this list. Some tools only do anything once their
 integration is connected (GitHub, email, calendar, WhatsApp, …).
@@ -39,6 +39,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | Tool | Perm | What it does |
 |------|------|--------------|
 | `read_file` | read | Read a file (text, PDF, Word, Excel, PowerPoint, …). Budgets its own result (deliverable exemption): large text returns a first window plus a heading index with line numbers, continued via `start_line`/`end_line`; PDFs via `first_page`/`last_page`. |
+| `edit_file` | write | Change only specific parts of an existing file by exact search/replace, instead of rewriting it. |
 | `write_file` | write | Write a single file (create/overwrite); binary files via `content_base64` (e.g. sandbox-rendered images). Relative paths land in the chat workspace; non-admin users are jailed to their own `VAF_Projects/<uid8>`. |
 | `find_files` | read | Find files by glob pattern, recursively. |
 | `list_files` | read | List files in a directory. |
@@ -154,7 +155,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | Tool | Perm | What it does |
 |------|------|--------------|
 | `read_mail` | read | Read the full body of one email. |
-| `find_mail` | read | Search the mailbox by subject/sender. |
+| `find_mail` | read | Search the mailbox by subject/sender. `folder` takes a folder's name or the part it plays (`inbox`, `sent`, `drafts`, `trash`, `spam`, `archive`), whatever the mailbox calls it; a folder the mailbox does not have is answered with the folders it has, never with "no match". |
 | `send_mail` | write | Send an email (irreversible). Ordered in the web chat, it is parked as a draft for the person (`outward_send_hold`). |
 | `reply_mail` | write | Reply (quoted, correctly threaded) to an email (irreversible). Parked as a draft when ordered in the web chat. |
 | `forward_mail` | write | Forward an email to new recipients (irreversible). Parked as a draft when ordered in the web chat. |
@@ -182,6 +183,7 @@ runs its model call with no tools at all - see
 | Tool | Perm | What it does |
 |------|------|--------------|
 | `inbox` | read | Every conversation across WhatsApp, Telegram, Discord, mail and rooms, newest first, with unread and who waits for an answer; `channel` and `view` narrow it. The rows the inbox window shows. |
+| `list_drafts` | read | What became of the messages the agent prepared as drafts (mail and messenger): sent, discarded, replaced or still waiting, with the time. Without arguments this chat's drafts; `draft` (`mail:12`, `call:7`, or the bare number) looks up one from any chat. The outbox's own record, and the only one a messenger send leaves. |
 | `contact_history` | read | Front Office only: what the contact being answered wrote to the owner before, and what went to them, across WhatsApp, Telegram, Discord and mail (the contact book's timeline for that one person, pinned by the runner, no argument names anyone); `channel` and `query` narrow it. See [FRONT_OFFICE.md](FRONT_OFFICE.md#tool-restriction). |
 | `send_to_user` | write | Channel-agnostic delivery: resolves the user's `main_messenger` at run time and sends text plus optional file via the canonical router; Web UI notification fallback (irreversible). |
 | `send_whatsapp` | write | Send WhatsApp text / voice / document (irreversible). With `to_phone` (a third party) and ordered in the web chat, it is parked for the person; without it the message goes to the account owner and is sent. |
@@ -244,6 +246,7 @@ closed.
 | `git_add_commit` | write | Stage files and commit (irreversible). |
 | `git_status` | read | Show working-tree status. |
 | `git_log` | read | Show commit history. |
+| `set_git_coauthor` | write | Turn the `Co-authored-by: VAF Agent` trailer on or off for the commits VAF creates itself. |
 
 ## Other
 

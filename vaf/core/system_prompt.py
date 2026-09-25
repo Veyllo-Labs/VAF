@@ -917,8 +917,14 @@ Then use the results to answer. Do NOT guess from your training data!
                 voice_note = ""
                 if last_interaction.get("voice") and src == "telegram":
                     voice_note = " (voice message)"
-                session_parts.append(f"last_interaction: {display_name} {rel} via {chan}{voice_note}")
-                if preview:
+                # The record is per person. When it was THIS chat, its message is in the
+                # history already, and calling it a previous chat is false: an agent woken
+                # after a sent draft took its own request for another chat's (live incident).
+                _same_chat = bool(session_id) and \
+                    str(last_interaction.get("session_id") or "") == str(session_id)
+                _where = " in this chat" if _same_chat else ""
+                session_parts.append(f"last_interaction: {display_name} {rel} via {chan}{voice_note}{_where}")
+                if preview and not _same_chat:
                     session_parts.append(f"prior_topic: \"{preview}\" (previous chat - current message may be unrelated)")
             if current_source:
                 chan = self._format_channel(current_source)

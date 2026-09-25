@@ -89,9 +89,10 @@ def test_the_read_jail_decides(ws, tmp_path, monkeypatch):
 
 
 def test_the_tool_declares_the_read_boundary():
-    """What installs the jail around run() on every lane (dispatcher, coder, workflows)."""
+    """What installs the jail around run() on every lane (dispatcher, coder, workflows). The
+    chat (`session_id`) is declared too: it names the images attached to the conversation."""
     assert AnalyzeImageTool.file_access == "read"
-    assert set(AnalyzeImageTool.identity_kwargs) == {"user_role", "user_scope_id"}
+    assert set(AnalyzeImageTool.identity_kwargs) == {"user_role", "user_scope_id", "session_id"}
 
 
 def test_missing_file_reported(ws):

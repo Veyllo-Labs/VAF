@@ -8473,6 +8473,9 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                      tui.append_stream(msg)
                      _log_to_file(msg)
                 
+                # Per call: a recovery below that reads nothing must not leave the PREVIOUS
+                # call's arguments in place.
+                fn_args = {}
                 json_error = None
                 try:
                     parsed = json.loads(fn_args_str)
@@ -8612,6 +8615,22 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             tui.append_stream(f"[INFO] Regex extracted {main_arg} for {fn_name}")
                     else:
                         fn_args = {}
+
+                # Arguments that are not a JSON object, and that the recovery above could not
+                # read either, are answered with the funnel's refusal and never run: `{}`
+                # would run the tool without what the model meant (tool_dispatch.
+                # decode_arguments). Answered here, before the `continue`, like the doom loop.
+                if not fn_args:
+                    from vaf.core.tool_dispatch import decode_arguments
+                    _args_refusal = decode_arguments(fn_name, fn_args_str)[1]
+                    if _args_refusal:
+                        _history_at_dispatch.append({
+                            "role": "tool",
+                            "tool_call_id": tc['id'],
+                            "name": fn_name,
+                            "content": _args_refusal,
+                        })
+                        continue
 
                 # Reset consecutive_task_done counter if a different tool is called
                 if fn_name != "task_done" and hasattr(loop, 'consecutive_task_done'):

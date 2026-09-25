@@ -563,6 +563,13 @@ class TaskQueue:
 # agent's turn had stopped at (vaf/core/outbound_hold.py), and the agent carries on.
 WAKE_KINDS = ("timer", "process", "draft")
 
+# The wake kinds whose text is VAF's own report of something that happened: how a background
+# command ended (vaf/core/processes.py `wake_text`) and what became of a draft
+# (outbound_hold.wake_text). The result-grounding judge counts that text as evidence
+# (`Agent._turn_reports`). A timer's text is what the agent wrote for itself earlier, so it
+# reports nothing.
+WAKE_REPORT_KINDS = ("process", "draft")
+
 
 def enqueue_wake_turn(*, kind: str, session_id: str, text: str, source: str = "web",
                       user_scope_id: Any = None, username: Optional[str] = None,

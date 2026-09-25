@@ -77,7 +77,9 @@ new one, and two cards for one message is one card too many.
 The agent learns what became of a draft it wrote from its own history. Every draft its history
 created and no later message reports is looked up at the start of the chat's next turn and
 written in as one `[Context:` note (`decision_notes`), so a discard, a replacement and a send
-made from the terminal (whose process has no queue to wake anything in) all reach it once.
+made from the terminal (whose process has no queue to wake anything in) all reach it once. It
+can also ASK: the `list_drafts` tool reads this ledger (`chat_drafts`, `draft_rows`,
+`status_line`) and answers in the words `decision_notes` recognises.
 """
 from __future__ import annotations
 
@@ -135,7 +137,11 @@ DRAFT_WAKE_PREFIX = "✉ Draft sent:"
 
 # Where the history says a draft was created, and where it says what became of it. The second
 # shape is written by this module only (`decision_notes`, the wake text), so a draft is
-# reported to the agent once.
+# reported to the agent once. NAMED BOUNDARY: a draft parked before results named their ref
+# ("... waiting as a draft ... (draft 348)") is not matched, so no note reports it. Measured
+# when the lookup was added: 2 such drafts, both in 1 of 31 stored chats. The agent reads
+# their fate with `list_drafts` (a bare number looks in both lanes) instead of a second
+# parser for a format nothing writes any more.
 _CREATED_RE = re.compile(r"NOT SENT YET\. Draft (mail|call):(\d+)")
 _DECIDED_RE = re.compile(r"Draft (mail|call):(\d+) was (?:SENT|DISCARDED|REPLACED)")
 
@@ -904,6 +910,42 @@ def decision_line(row: Dict[str, Any]) -> str:
         return (f"Draft {ref} was REPLACED by your newer draft {row.get('replaced_by') or ''} "
                 f"before anybody sent it ({what}).").replace("  ", " ")
     return ""
+
+
+def status_line(row: Dict[str, Any]) -> str:
+    """Where one draft stands, whatever its state: what became of it (`decision_line`, so a
+    lookup reports a decision in the words `decision_notes` recognises and the next turn does
+    not hear it twice), or why it is still the person's to decide."""
+    line = decision_line(row)
+    if line:
+        return line
+    ref, state = str(row.get("ref") or ""), str(row.get("state") or "")
+    what = f"{_channel_word(str(row.get('channel') or ''))} to {_addressee(row)}"
+    if state == "failed":
+        reason = str(row.get("error") or "").strip() or "no reason given"
+        return (f"Draft {ref} was NOT sent: its last attempt failed ({reason}). It waits for the "
+                f"user to send it again, edit or discard it ({what}).")
+    if state == "ambiguous":
+        return (f"Draft {ref} MAY already have been sent: its send was interrupted, and only the "
+                f"user can tell whether it arrived ({what}).")
+    return f"Draft {ref} WAITS for the user to send, edit or discard it ({what})."
+
+
+def draft_rows(ref: str, *, username: Optional[str],
+               user_scope_id: Optional[str]) -> List[Dict[str, Any]]:
+    """The draft `ref` names, whatever became of it: `mail:12` or `call:7`, or a bare number,
+    which both lanes number independently and so may name one draft in each. Only the caller's
+    own drafts are found, because each lane is read with the caller's identity."""
+    text = str(ref or "").strip().lower().replace(" ", "")
+    parsed = parse_ref(text)
+    wanted = [parsed] if parsed else (
+        [(kind, int(text)) for kind in DRAFT_KINDS] if text.isdigit() else [])
+    if not wanted:
+        return []
+    from vaf.core.config import resolve_caller_username
+    who = resolve_caller_username(username, user_scope_id, allow_lookup=True)
+    rows = [r for r in (_chat_row(kind, num, who, user_scope_id) for kind, num in wanted) if r]
+    return _with_names(rows, who, user_scope_id)
 
 
 def decision_notes(texts: Iterable[str], *, username: Optional[str],

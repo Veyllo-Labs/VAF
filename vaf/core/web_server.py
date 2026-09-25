@@ -6232,6 +6232,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 user_scope_id=user_scope_id,
                                 source="web",
                                 preview=(content or "")[:80],
+                                session_id=str(session_id),
                             )
                         except Exception:
                             pass

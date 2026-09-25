@@ -129,6 +129,25 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **After you send a draft, the agent can confirm it went out.** When you pressed Send on
+  a draft in the chat, the agent was told the message was sent, said so, and was then
+  made to take it back ("I cannot confirm this"), because the check on its answers only
+  counted tool results. What VAF itself reports now counts. The agent can also look up
+  what became of its drafts (sent, discarded, replaced or still waiting), so it no longer
+  reports a mail you sent the day before as still waiting.
+- **The agent finds your sent mail whatever your mailbox calls the folder.** It looked for
+  "[Gmail]/Sent Mail" in a German Gmail, where the folder is called "Gesendet", found
+  nothing, and concluded the mail was never sent. Folders can now be asked for by what
+  they are (sent, drafts, trash, spam, archive), and a folder that does not exist is
+  answered with the folders that do, instead of "no mail found".
+- **A tool call with broken arguments is no longer run without them.** When the model
+  sent a call with malformed arguments, the tool ran with none and could report success
+  for work it never did: a plan the agent meant to save was silently lost, and its next
+  answer went back to an earlier task. Such a call is now refused and the model sends it
+  again.
+- **The agent no longer mistakes its own chat for another one.** Your previous message in
+  the same chat reached the agent labelled "previous chat", which made it treat its own
+  request as someone else's.
 - **"Only this time" works for running Python on your computer.** Allowing the agent to run
   Python code on your computer once was offered by the dialog and then refused by the tool
   itself, so only "for this chat" or "always" worked. Now "only this time" runs that one piece

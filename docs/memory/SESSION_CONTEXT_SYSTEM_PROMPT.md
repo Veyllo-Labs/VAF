@@ -21,8 +21,9 @@ After each user message is fully processed (after `chat_step` returns), the head
 - **When:** current timestamp.
 - **Where:** `source` - `"web"`, `"telegram"`, `"whatsapp"`, `"cli"`, or `"discord"`.
 - **About what:** a short preview of the user message (single line, max 80 characters, whitespace normalized).
+- **In which chat:** the session id (`""` in a record written before chats were recorded).
 
-That record is written to a JSON file in the platform data directory (see [Storage](#storage)). The **next** turn will read this as "last interaction"; the current turn does not see itself in "last interaction".
+That record is written to a JSON file in the platform data directory (see [Storage](#storage)). It has a second writer: the web server records a web message the moment it arrives (`vaf/core/web_server.py`, for thinking mode's idle detection), so the record a web turn reads can be that very turn's own message. The record is per PERSON, not per chat, which is why the chat is on it (next section).
 
 ### 2. Setting the current channel
 
@@ -44,6 +45,7 @@ If either is set, it adds `last_interaction` and `current_channel` lines inside 
 - The user’s display name from user identity (or "the user" if none).
 - Relative time from the last interaction timestamp. Steps: under 1 h → minutes; 1–24 h → hours; 1 day → "yesterday"; 2–29 days → days; 30+ days → months (≈30 days each); 365+ days → years. Language follows the prompt language (e.g. "5 min ago" / "vor 5 Min.", "2 months ago" / "vor 2 Monaten").
 - Channel display names: "WebUI", "Telegram", "CLI", "Discord".
+- The preview, as `prior_topic: "..." (previous chat - current message may be unrelated)`, ONLY when the record is from a DIFFERENT chat. When it is this chat, the line says `in this chat` and the preview is left out: the history holds the message already, and calling it a previous chat is false. Live incident: an agent woken after the person sent its draft read its own request from that chat as "previous chat" and took the draft for somebody else's. Guard: `tests/test_draft_verification.py`.
 
 No session-context block is added if both `current_source` and `last_interaction` are missing (e.g. first message ever, or CLI without this feature).
 
@@ -86,11 +88,11 @@ If the user asks to keep attachment knowledge for future chats, the agent should
 
 | Responsibility | File | Notes |
 |----------------|------|--------|
-| Store read/write | `vaf/core/last_interaction.py` | `update_last_interaction()`, `get_last_interaction()`, JSON under data dir |
+| Store read/write | `vaf/core/last_interaction.py` | `update_last_interaction(..., session_id=)`, `get_last_interaction()`, JSON under data dir |
 | Prompt block text | `vaf/core/system_prompt.py` | `build_prompt(..., current_source=..., last_interaction=...)`, section "2b. LAST INTERACTION & CURRENT CHANNEL" |
 | Channel capabilities | `vaf/core/system_prompt.py` | Section "2c. CHANNEL CAPABILITIES" – added when `current_source` is telegram/whatsapp/discord/cli |
 | Passing data into prompt | `vaf/core/agent.py` | Both `build_prompt` calls pass `current_source` and `last_interaction` |
-| Set channel and write store | `vaf/core/headless_runner.py` | Before `chat_step`: set `_current_chat_source` from the task's `source`; after `chat_step`: call `update_last_interaction()`. This is the ONLY setter: a channel task (Discord, Telegram, WhatsApp) carries its source on the queued task, so no channel bridge sets the field itself. |
+| Set channel and write store | `vaf/core/headless_runner.py` | Before `chat_step`: set `_current_chat_source` from the task's `source`; after `chat_step`: call `update_last_interaction()` with the task's chat. The web server writes the record too, on a web message's arrival. The runner is the ONLY setter of the channel: a channel task (Discord, Telegram, WhatsApp) carries its source on the queued task, so no channel bridge sets the field itself. |
 
 ## User isolation
 

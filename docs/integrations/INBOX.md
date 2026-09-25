@@ -180,7 +180,9 @@ inbox as well.
 (1-200, default 30; the user's number is passed as is), `query`, `include_groups`,
 `include_done`, `include_bulk` (promotions, social, newsletters, notifications and junk
 mail are hidden unless asked), and for the mail lane `account_id` and `folder` (they narrow
-the lane at the source, before the counts and the cut to `max_chats`). The output leads with the
+the lane at the source, before the counts and the cut to `max_chats`; `folder` takes a name
+or the part a folder plays, `sent` included, and a folder the mailbox does not have is
+answered with the folders it has, see [EMAIL_CLIENT.md](EMAIL_CLIENT.md#agent-tools-contract)). The output leads with the
 next-step hint (read one conversation with the per-channel read tools or `read_mail`,
 search mail with `find_mail`, never call `inbox` again for the same request), then the
 counts and one line per conversation, then the "IDs by index" block `read_mail` needs; mail

@@ -85,7 +85,7 @@ _ALLOWED_TRANSLITERATIONS = {
         "purpose: it is matched against a sender's DISPLAY NAME, which mail clients and "
         "directories routinely store ASCII-only, and that list is checked with plain "
         "containment against an address, not with the folding matcher.",
-    "vaf/mail/sync.py":
+    "vaf/mail/store.py":
         "SPECIAL_USE_FALLBACK lists folder names as MAIL SERVERS actually send them, not "
         "as we would write them. 'Entwuerfe' and 'Geloeschte Elemente' are spellings that "
         "arrive on the wire from real IMAP servers, so they are observed data rather than "

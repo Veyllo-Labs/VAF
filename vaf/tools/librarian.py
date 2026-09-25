@@ -2752,11 +2752,7 @@ home: {self.home}
                 # Execute tools
                 for tc in tool_calls:
                     fn_name = tc['function']['name']
-                    try:
-                        fn_args = json.loads(tc['function']['arguments'])
-                    except:
-                        fn_args = {}
-                    
+
                     # Show tool action with icon
                     tool_icons = {
                         "list_files": "Listing",
@@ -2772,7 +2768,9 @@ home: {self.home}
                     icon = tool_icons.get(fn_name, "Calling")
                     UI.event("Librarian", f"{icon}: {fn_name}", style="bold green")
                     
-                    result = caller.execute(fn_name, fn_args)
+                    # The model's text as it arrived: the funnel refuses one that is not a
+                    # JSON object instead of running the tool without its arguments.
+                    result = caller.execute(fn_name, tc['function']['arguments'])
                     
                     history.append({
                         "role": "tool",

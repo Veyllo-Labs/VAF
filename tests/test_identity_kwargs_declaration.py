@@ -152,7 +152,11 @@ IDENTITY_BASELINE = {
 # ADMIN's messenger. A declaration injects unconditionally, which would change that.
 CONDITIONAL_BY_DESIGN = {"ask_user"}
 
-VALID_KEYS = {"user_scope_id", "username", "user_role"}
+# The PERSON keys the frozen baseline above measured. `session_id` (which chat) joined the
+# declaration later: it used to be handed to two tools by NAME, and the kwargs baseline in
+# tests/test_dispatch_kwargs_baseline.py pins that those two still receive it.
+PERSON_KEYS = {"user_scope_id", "username", "user_role"}
+VALID_KEYS = PERSON_KEYS | {"session_id"}
 
 
 def _all_tool_classes():
@@ -180,7 +184,7 @@ TOOLS = _all_tool_classes()
 def test_every_tool_declares_exactly_what_it_used_to_be_given(tool_name):
     cls = TOOLS.get(tool_name)
     assert cls is not None, f"{tool_name} no longer resolves to a tool class"
-    declared = sorted(getattr(cls, "identity_kwargs", ()) or ())
+    declared = sorted(set(getattr(cls, "identity_kwargs", ()) or ()) & PERSON_KEYS)
     expected = sorted(IDENTITY_BASELINE[tool_name])
     assert declared == expected, (
         f"{tool_name} received {expected} before the migration but declares {declared}. "
@@ -304,6 +308,30 @@ def test_a_third_party_tool_never_receives_the_agent_back_door():
         "a tool the dispatcher has never heard of received the live agent object - that is "
         "an identity back door, and EMBEDDING.md promises it does not exist"
     )
+
+
+def test_the_chat_is_declared_like_the_person_and_never_by_name():
+    """`session_id` was handed to learn_attached_knowledge and analyze_image by tool NAME,
+    so a tool an embedder registers could never learn which chat called it (the drafts a
+    chat wrote are the first such question: list_drafts). It is a declared key now, assigned
+    from the funnel's own session, and a model-supplied one is overwritten.
+
+    MUTATION: drop "session_id" from assign_declared_identity's table and the spy receives
+    None; put the name branch back and the source assertion goes red."""
+    class _ChatSpy(_SpyTool):
+        name = "third_party_chat_spy"
+        identity_kwargs = ("user_scope_id", "session_id")
+
+    from vaf.core.tool_dispatch import ToolCaller
+    spy = _ChatSpy()
+    with patch("vaf.core.trust.get_tool_policy", return_value="always"):
+        ToolCaller({spy.name: spy}, user_scope_id="deadbeef-0000-0000-0000-000000000000",
+                   session_id="green123456").execute(spy.name, {"session_id": "red654321"})
+    assert spy.seen.get("session_id") == "green123456"
+
+    import inspect
+    src = inspect.getsource(agent_mod.Agent._chat_session_plumbing)
+    assert not re.findall(r'tool_args\["session_id"\]\s*=', src)
 
 
 def test_a_tool_that_declares_nothing_receives_nothing():

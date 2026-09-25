@@ -26,7 +26,7 @@ import logging
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from vaf.mail.parser import parse_message
-from vaf.mail.store import MailStore
+from vaf.mail.store import SPECIAL_USE_FALLBACK, MailStore
 
 logger = logging.getLogger("vaf.mail.sync")
 
@@ -34,17 +34,6 @@ INITIAL_WINDOW = 500        # newest messages fetched on the very first sync of 
 NEW_FETCH_BATCH = 100       # RFC 4549 example 7: batch UID ranges so the UI stays responsive
 FLAG_WINDOW = 1000          # uids per flag-resync FETCH window
 
-# RFC 6154 special-use -> well-known localized names fallback (Office365 and
-# T-Online advertise no SPECIAL-USE; German providers use localized folders).
-SPECIAL_USE_FALLBACK = {
-    "\\Sent": ("Sent", "Sent Items", "Sent Messages", "Gesendet", "Gesendete Elemente",
-               "Gesendete Objekte", "[Gmail]/Sent Mail"),
-    "\\Drafts": ("Drafts", "Entwürfe", "Entwuerfe", "[Gmail]/Drafts"),
-    "\\Trash": ("Trash", "Deleted", "Deleted Items", "Papierkorb", "Gelöschte Elemente",
-                "Geloeschte Elemente", "[Gmail]/Trash"),
-    "\\Junk": ("Junk", "Spam", "Junk-E-Mail", "[Gmail]/Spam"),
-    "\\Archive": ("Archive", "Archiv", "[Gmail]/All Mail"),
-}
 
 # Gmail's inbox tabs are NOT labels and are NOT exposed through X-GM-LABELS: they
 # are saved searches over hidden system categories, so a message in Promotions

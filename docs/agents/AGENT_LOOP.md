@@ -137,6 +137,16 @@ once nothing above it matched:
 Whatever is recovered is dispatched, and `strip_tool_call_markup` removes the raw markup from
 what is displayed and persisted.
 
+**Arguments that are not a JSON object are not dispatched.** Whatever lane a call came
+through, its arguments are decoded by `decode_arguments` (`vaf/core/tool_dispatch.py`), and
+text that is not an object is answered with `Tool Error: the arguments of this '<tool>' call
+are not valid JSON (...), so nothing was run`, in the call's own tool message. The loop used
+to fall back to `{}` and run the tool anyway: `update_working_memory`, whose parameters are
+all optional, answered "Working Memory updated." for a call whose string value the model had
+not quoted, the plan it carried was lost, and the next turn worked from the stale one (2 of
+560 stored calls). The prefix is not "error", so the "do not retry" nudge stays off: this is
+the one failure a retry fixes. The know-how re-feed skips it too, because the tool never ran.
+
 **The batch is taken whole.** DeepSeek emits several `<invoke>` blocks inside one
 `<｜｜DSML｜｜tool_calls>` wrapper; recovering only the first left the rest to be erased by
 `strip_tool_call_markup`, so one of four files was read and nothing said the other three were
@@ -198,6 +208,21 @@ the draft's fixed sentence is not streamed, its card is the answer. Visible wins
 draft's sentence, and two visible closings of one round are both kept. The first tool that
 declares it is `ask_user` in a chat: the question with its `options` as a numbered list is the
 answer, and the person's reply, typed or picked, is the chat's next turn.
+
+**What VAF reported is evidence, and the agent can look a draft up.** The result-grounding
+judge weighs a reply against the turn's tool results, and a wake turn's text is none: in a live
+incident the woken agent answered that the mail was out, the judge called that unsupported,
+and the correction told the person the send could not be confirmed. `_turn_reports` now puts
+what VAF itself told the agent this turn in front of the judge, labelled `VAF report`: the
+decision note, and the input of a wake turn whose kind is a report
+(`task_queue.WAKE_REPORT_KINDS`: `draft`, `process`; a timer's text is the agent's own). The
+runner says which wake a turn is and hands over the wake's own text (`agent._turn_wake`, from
+the queue and cleared after the turn), never the typed text, which anybody can write; the text
+as VAF wrote it, because the turn's input opens with the chat's workspace note and would push
+the report past the judge's per-entry cut. And the agent can ASK: `list_drafts` reads
+the same ledger as the card (`outbound_hold.chat_drafts`, `draft_rows`, `status_line`),
+this chat's drafts or one by its ref, in the words `decision_notes` recognises, so a draft it
+looked up is not reported to it a second time. Guard: `tests/test_draft_verification.py`.
 
 The rule, the measurements and the named boundaries are in
 [`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py); the card and the verbs are in

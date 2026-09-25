@@ -144,6 +144,8 @@ KWARGS_BASELINE = {
     "list_automations":          ("chat", ["user_role", "user_scope_id"]),
     "list_calendar_events":      ("chat", ["user_scope_id", "username"]),
     "list_contacts":             ("chat", ["user_scope_id", "username"]),
+    # Measured when it was added: which chat asked is declared (identity_kwargs), not plumbed.
+    "list_drafts":               ("chat", ["session_id", "user_scope_id", "username"]),
     "list_email_accounts":       ("chat", ["user_scope_id", "username"]),
     "list_files":                ("chat", ["user_role", "user_scope_id"]),
     "list_skills":               ("chat", ["user_scope_id", "username"]),

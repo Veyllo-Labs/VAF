@@ -95,12 +95,19 @@ def policy_admin_flag(role: str | None, scope_id: str | None) -> bool:
         return False
 
 
-IDENTITY_KEYS = ("user_scope_id", "username", "user_role")
+IDENTITY_KEYS = ("user_scope_id", "username", "user_role", "session_id")
 
 
 def assign_declared_identity(tool: Any, args: dict, *, user_scope_id: str | None,
-                             username: str | None, user_role: str | None) -> dict:
+                             username: str | None, user_role: str | None,
+                             session_id: str | None = None) -> dict:
     """Give a tool exactly the identity keys it declares, and nothing else.
+
+    ``session_id`` is WHICH CHAT the call belongs to, for a tool whose answer depends on the
+    conversation rather than only on the person (the drafts a chat wrote, the images attached
+    to it). It was handed out by name, like the identity once was, so a tool an embedder
+    registers could never learn its chat. A lane with no chat passes None, and a tool that
+    declared the key is told exactly that.
 
     A tool states its needs through ``BaseTool.identity_kwargs``. That declaration replaced
     roughly forty hardcoded name lists, which had two costs: they drifted apart (a tool added
@@ -138,6 +145,7 @@ def assign_declared_identity(tool: Any, args: dict, *, user_scope_id: str | None
         "user_scope_id": user_scope_id,
         "username": resolve_caller_username(username, user_scope_id),
         "user_role": user_role,
+        "session_id": session_id,
     }
     for key in (getattr(tool, "identity_kwargs", ()) or ()):
         if key in available:
@@ -179,6 +187,45 @@ def repair_arguments(tool: Any, args: dict, *, tool_name: str,
     except Exception:
         errors = []
     return args, errors
+
+
+def decode_arguments(name: str, raw: Any) -> tuple[dict, str | None]:
+    """A model's tool-call arguments as a dict, or the refusal that answers the call instead.
+
+    The arguments arrive as the JSON text the model wrote. When that text is not a JSON object,
+    the call carries no arguments anybody asked for, and running it anyway is the one wrong
+    answer. Every lane used to fall back to ``{}`` and dispatch, so a tool whose parameters are
+    all optional ran as a no-op and reported success. Measured live: 2 of 560 stored calls were
+    ``update_working_memory`` with a string value the model had not quoted; both answered
+    "Working Memory updated." while the plan they carried was dropped, and the next turn acted
+    on the stale plan. The refusal names the parse error so the model can send the call again,
+    and it opens with the error prefix every surface reads as a failure.
+
+    Missing or empty arguments are an empty object, not an error: that is how a tool without
+    parameters is called. A dict passes through, for a lane that decoded already.
+    """
+    if raw is None:
+        return {}, None
+    if isinstance(raw, dict):
+        return raw, None
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return {}, None
+        try:
+            value = json.loads(text)
+        except ValueError as exc:
+            return {}, (f"Tool Error: the arguments of this '{name}' call are not valid JSON "
+                        f"({exc}), so nothing was run. Call it again with a JSON object whose "
+                        "string values are all in double quotes.")
+        if value is None:
+            return {}, None
+        if isinstance(value, dict):
+            return value, None
+        raw = value
+    return {}, (f"Tool Error: the arguments of this '{name}' call are a JSON "
+                f"{type(raw).__name__}, not an object, so nothing was run. Call it again with "
+                "an object of named parameters.")
 
 
 def emit_event(sink, evt: dict) -> None:
@@ -1082,8 +1129,12 @@ class ToolCaller:
 
     # ── the pipeline ─────────────────────────────────────────────────────────
 
-    def execute(self, name: str, args: dict | None = None) -> str:
+    def execute(self, name: str, args: dict | str | None = None) -> str:
         """Dispatch one tool call. Always returns a string; never raises for tool failures.
+
+        ``args`` may be the JSON text the model sent, as it arrived: text that is not a JSON
+        object is refused (`decode_arguments`) and nothing runs, where a loop's own
+        ``json.loads`` with a ``{}`` fallback would run the tool without its arguments.
 
         The ORDER below is contract, not convenience, and three parts of it were only
         discovered by measuring (tests/test_dispatch_event_baseline.py):
@@ -1104,7 +1155,14 @@ class ToolCaller:
 
         tool = self.tools.get(name)
 
+        malformed = None
+        if isinstance(args, str):
+            args, malformed = decode_arguments(name, args)
         self._audit_log(name, args)
+        if malformed:
+            # Like a schema error, about THIS call and nothing else; unlike one, there are no
+            # arguments to put to the gate or the authorizer, so it answers before them.
+            return malformed
 
         decision = self._policy(name, tool)
         if decision.blocked:
@@ -1276,7 +1334,7 @@ class ToolCaller:
                                              model_name=self.model_name)
         assign_declared_identity(
             tool, tool_args, user_scope_id=self.user_scope_id,
-            username=self.username, user_role=self.user_role,
+            username=self.username, user_role=self.user_role, session_id=self.session_id,
         )
         if getattr(tool, "accepts_call_confirmation", False):
             # ASSIGNED like an identity key, never defaulted: the model's own

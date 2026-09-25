@@ -92,6 +92,40 @@ def get_body_text(account_id: str, message_id: str, username: Optional[str],
     return None
 
 
+def unknown_folder(folder: Optional[str], user_scope_id: Optional[str]) -> str:
+    """The answer for a folder this mailbox does not have, naming the ones it has, or "" when
+    the folder means one here (`MailStore.folder_filter`) or there is no mailbox to ask.
+
+    A search of a folder that does not exist finds nothing, and "no emails matching" then
+    reads as the mailbox's word about the MAIL rather than about the folder: that is how a
+    sent mail was reported as never sent. It opens with the prefix the funnel uses for a
+    call's own bad arguments, so the result reads as a failure and the call is simply made
+    again with a folder from the list."""
+    wanted = str(folder or "").strip()
+    if not wanted:
+        return ""
+    try:
+        from vaf.mail.store import FOLDER_ROLES, MailStore
+        scope = _scope(user_scope_id)
+        if not MailStore.exists(scope):
+            return ""
+        store = MailStore(scope)
+        if store.folder_filter(wanted) is not None:
+            return ""
+        listing = store.folder_listing()
+    except Exception as e:  # pragma: no cover - availability fallback
+        logger.warning("folder check failed, answering as before: %s", e)
+        return ""
+    if not listing:
+        return ""
+    shown = ", ".join(f"{name} ({role})" if role else name for name, role in listing[:25])
+    if len(listing) > 25:
+        shown += f" and {len(listing) - 25} more"
+    roles = ", ".join(word for word in FOLDER_ROLES if word != "junk")
+    return (f"Tool Error: this mailbox has no folder '{wanted}'. Its folders: {shown}. Pass "
+            f"one of these names, or the part a folder plays: {roles}.")
+
+
 def _v2_account_ids(store) -> set:
     return {a.get("account_id") for a in store.list_accounts()}
 

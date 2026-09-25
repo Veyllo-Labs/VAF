@@ -166,20 +166,22 @@ class BaseTool(ABC):
     # identity_kwargs: which parts of the CALLER's identity the dispatcher passes
     # into run(). Declare what the tool actually consumes; execute_tool assigns
     # exactly these keys before dispatch:
-    #   "user_scope_id" — the caller's scope UUID (None = local admin / no scope)
-    #   "username"      — the caller's account name
-    #   "user_role"     — the caller's DB role, e.g. "admin"
+    #   "user_scope_id" - the caller's scope UUID (None = local admin / no scope)
+    #   "username"      - the caller's account name
+    #   "user_role"     - the caller's DB role, e.g. "admin"
+    #   "session_id"    - the chat the call belongs to (None in a lane with no chat), for a
+    #                     tool whose answer depends on the conversation, not only the person
     #
     # This is the only SUPPORTED way for a tool to learn who is calling it, and it
     # works the same for a tool you register yourself via Agent.add_tool() as for a
-    # built-in one — the dispatcher reads this declaration, not a list of names it
+    # built-in one - the dispatcher reads this declaration, not a list of names it
     # knows. A tool that touches per-user data and does NOT declare gets nothing,
     # which is the safe direction.
     #
     # It is not the only way that EXISTS, and pretending otherwise would be a lie in
     # the one place an embedder looks. A handful of built-ins are handed the live
-    # agent object as an `_agent` kwarg — chat-lane plumbing for things that need the
-    # running session, e.g. the timer tools reading the current source — and anything
+    # agent object as an `_agent` kwarg - chat-lane plumbing for things that need the
+    # running agent itself, e.g. the timer tools reading the current source - and anything
     # holding that object can read `_current_user_scope_id` and friends straight off
     # it, declaration or not. That back door is deliberately NOT part of this
     # contract: the dispatcher hands `_agent` to a fixed set of built-in names, there

@@ -128,8 +128,13 @@ NEWLY_IDENTIFIED = {
     # now writes into the workflow owner's tree instead of wherever the name pointed.
     "document_writer": ('user_role', 'user_scope_id'),
     # user_role joined with its file_access declaration: a step's image_path is looked at
-    # under the workflow owner's read jail, the same one read_file has.
-    "analyze_image": ('user_role', 'user_scope_id'),
+    # under the workflow owner's read jail, the same one read_file has. session_id joined
+    # when the chat became a declared key instead of a name branch: a workflow step has no
+    # chat, so it is assigned None, and a model-supplied one cannot point at another chat.
+    "analyze_image": ('session_id', 'user_role', 'user_scope_id'),
+    # Added with the tool itself. The drafts a chat wrote; in a workflow step there is no
+    # chat (session_id None), so it lists what still waits for the workflow owner.
+    "list_drafts": ('session_id', 'user_scope_id', 'username'),
     # Added with the tool itself: a step's download lands in the workflow owner's own files.
     "download_file": ('user_role', 'user_scope_id'),
     "browser_agent": ('user_scope_id',),
@@ -160,7 +165,8 @@ NEWLY_IDENTIFIED = {
     # A background command belongs to one person's chat, in a workflow step as anywhere.
     "host_bash": ('user_role', 'user_scope_id', 'username'),
     "host_process": ('user_scope_id',),
-    "learn_attached_knowledge": ('user_scope_id',),
+    # session_id: the chat is a declared key now (None in a step, which has no chat).
+    "learn_attached_knowledge": ('session_id', 'user_scope_id'),
     "learn_document": ('user_role', 'user_scope_id'),
     # Added 2026-08-21 with the tool itself (memory_save's update sibling): a workflow
     # step updates the WORKFLOW OWNER's memory, never an unscoped row.

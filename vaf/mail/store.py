@@ -35,6 +35,29 @@ SCHEMA_VERSION = 2
 RAW_CACHE_MAX_BYTES = 256 * 1024
 SNIPPET_CHARS = 240
 
+# RFC 6154 special-use -> well-known localized names fallback (Office365 and
+# T-Online advertise no SPECIAL-USE; German providers use localized folders).
+# The sync reads it to decide what a folder IS; the store reads it to understand
+# what a caller CALLS one.
+SPECIAL_USE_FALLBACK = {
+    "\\Sent": ("Sent", "Sent Items", "Sent Messages", "Gesendet", "Gesendete Elemente",
+               "Gesendete Objekte", "[Gmail]/Sent Mail"),
+    "\\Drafts": ("Drafts", "Entwürfe", "Entwuerfe", "[Gmail]/Drafts"),
+    "\\Trash": ("Trash", "Deleted", "Deleted Items", "Papierkorb", "Gelöschte Elemente",
+                "Geloeschte Elemente", "[Gmail]/Trash"),
+    "\\Junk": ("Junk", "Spam", "Junk-E-Mail", "[Gmail]/Spam"),
+    "\\Archive": ("Archive", "Archiv", "[Gmail]/All Mail"),
+}
+
+# The part a folder plays, by the word a caller may use for it instead of its name. The name
+# a mailbox gives a special folder depends on the provider AND its language: a German Gmail
+# calls its sent mail "[Google Mail]/Gesendet", Exchange "Sent Items". The sync records which
+# folder plays which part (`folders.special_use`), so a caller asks for the part.
+FOLDER_ROLES = {
+    "inbox": "\\Inbox", "sent": "\\Sent", "drafts": "\\Drafts", "trash": "\\Trash",
+    "spam": "\\Junk", "junk": "\\Junk", "archive": "\\Archive",
+}
+
 # Schema version 2 (verification and cases, EMAIL_CLIENT.md "Verification and cases"):
 # the per-message verdicts (who wrote it, is the From address who it claims to be), the
 # cases a conversation belongs to, the ids of every mail VAF sent. Created for a fresh
@@ -1236,8 +1259,9 @@ class MailStore:
             where.append("a.account_id=?")
             args.append(account_id)
         if folder:
-            where.append("f.name=?")
-            args.append(folder)
+            clause, values = self._folder_clause("f", folder)
+            where.append(clause)
+            args.extend(values)
         if category:
             if category == "primary":
                 # non-Gmail ingest stores '' - both mean primary (review finding)
@@ -1270,9 +1294,10 @@ class MailStore:
             where.append("a.account_id=?")
             args.append(account_id)
         if folder:
+            clause, values = self._folder_clause("f2", folder)
             where.append("t.id IN (SELECT DISTINCT m2.thread_id FROM messages m2 "
-                         "JOIN folders f2 ON f2.id=m2.folder_id WHERE f2.name=?)")
-            args.append(folder)
+                         f"JOIN folders f2 ON f2.id=m2.folder_id WHERE {clause})")
+            args.extend(values)
         args.extend([max(1, min(int(limit), 200)), max(0, int(offset))])
         rows = self._conn().execute(
             f"SELECT t.id AS thread_id, t.message_count, t.last_date_ts, a.account_id AS acct, "
@@ -1336,8 +1361,9 @@ class MailStore:
             where.append("a.account_id=?")
             args.append(account_id)
         if folder:
-            where.append("f.name=?")
-            args.append(folder)
+            clause, values = self._folder_clause("f", folder)
+            where.append(clause)
+            args.extend(values)
         args.append(max(1, min(int(limit), 200)))
         rows = self._conn().execute(
             f"SELECT m.*, a.account_id AS acct, f.name AS folder_name, bm25(messages_fts) AS rank "
@@ -1655,6 +1681,57 @@ class MailStore:
             "SELECT * FROM folders WHERE account_id=? AND special_use=?",
             (account_pk, special_use)).fetchone()
         return dict(row) if row else None
+
+    def folder_filter(self, folder: Optional[str]) -> Optional[Tuple[str, str]]:
+        """What `folder` means in this store: ("name", a folder's real name) or
+        ("special_use", the part a folder plays), or None when it means no folder here.
+
+        A real folder name wins, so the names the mail window sends keep meaning exactly
+        themselves. Next, a role word (`FOLDER_ROLES`: "sent") or any provider's well-known
+        name for a special folder (`SPECIAL_USE_FALLBACK`: "[Gmail]/Sent Mail", "Gesendet")
+        means the folder that plays that part, in every account, whatever each mailbox calls
+        it. Last, a name that differs only in case. Live incident: an agent checking
+        whether a mail had gone out searched "[Gmail]/Sent Mail" in a German Gmail, whose sent
+        mail sits in "[Google Mail]/Gesendet"; the filter matched no folder, the search
+        answered "no emails matching", and the agent told the person that a mail sent the
+        evening before had not gone out."""
+        wanted = str(folder or "").strip()
+        if not wanted:
+            return None
+        rows = self._conn().execute("SELECT DISTINCT name, special_use FROM folders").fetchall()
+        names = [str(r["name"]) for r in rows]
+        if wanted in names:
+            return ("name", wanted)
+        low = wanted.lower()
+        flag = FOLDER_ROLES.get(low) or next(
+            (su for su, known in SPECIAL_USE_FALLBACK.items()
+             if low in (k.lower() for k in known)), None)
+        if flag and any((r["special_use"] or "") == flag for r in rows):
+            return ("special_use", flag)
+        folded = next((n for n in names if n.lower() == low), None)
+        if folded is not None:
+            return ("name", folded)
+        return None
+
+    def _folder_clause(self, alias: str, folder: str) -> Tuple[str, List[Any]]:
+        """The WHERE condition for `folder` on the folders table aliased `alias`, through
+        `folder_filter`. A folder that means nothing here matches nothing, as the plain name
+        test always did."""
+        found = self.folder_filter(folder)
+        if found is None:
+            return "0", []
+        column, value = found     # column is one of two fixed words, never caller text
+        return f"{alias}.{column}=?", [value]
+
+    def folder_listing(self) -> List[Tuple[str, str]]:
+        """Every folder of this store once, as (name, role word or ""), the special ones
+        first: what an answer offers when the folder a caller named is not here."""
+        roles = {flag: word for word, flag in FOLDER_ROLES.items() if word != "junk"}
+        rows = self._conn().execute(
+            "SELECT name, MAX(COALESCE(special_use, '')) AS su FROM folders "
+            "GROUP BY name ORDER BY name").fetchall()
+        listed = [(str(r["name"]), roles.get(str(r["su"] or ""), "")) for r in rows]
+        return sorted(listed, key=lambda nr: (nr[1] == "", nr[0]))
 
     # ── retention (decision E5) ────────────────────────────────────────────
 

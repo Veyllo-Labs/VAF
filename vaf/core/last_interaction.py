@@ -44,6 +44,7 @@ def update_last_interaction(
     source: str = "web",
     preview: str = "",
     voice: bool = False,
+    session_id: Optional[str] = None,
 ) -> None:
     """
     Record the last user interaction for the given user (or default).
@@ -57,6 +58,10 @@ def update_last_interaction(
         source: Channel: "web", "telegram", or "cli".
         preview: Short preview of the user message (will be sanitized and truncated to PREVIEW_MAX_CHARS).
         voice: True if the message was a voice message (e.g. Telegram Sprachnachricht).
+        session_id: The chat the interaction happened in. The prompt names the preview as an
+            earlier conversation only when it was a DIFFERENT chat: the record is per person,
+            so without the chat it labelled a chat's own previous message "previous chat",
+            and an agent woken in that chat took its own request for somebody else's.
     """
     try:
         path = _store_path()
@@ -81,6 +86,7 @@ def update_last_interaction(
             "source": str(source).strip().lower() or "web",
             "preview": _sanitize_preview(preview),
             "voice": bool(voice),
+            "session_id": str(session_id or "").strip(),
         }
         path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     except Exception:
@@ -94,7 +100,8 @@ def get_last_interaction(
     Return the last recorded interaction for the given user, or None.
 
     Returns:
-        Dict with "ts" (float), "source" (str), "preview" (str), "voice" (bool), or None if missing.
+        Dict with "ts" (float), "source" (str), "preview" (str), "voice" (bool) and
+        "session_id" (str, "" for a record written before chats were recorded), or None.
     """
     try:
         path = _store_path()
@@ -116,6 +123,7 @@ def get_last_interaction(
             "source": str(entry.get("source", "web")),
             "preview": str(entry.get("preview", "")),
             "voice": bool(entry.get("voice", False)),
+            "session_id": str(entry.get("session_id") or ""),
         }
     except Exception:
         return None

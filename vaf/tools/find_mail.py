@@ -49,7 +49,11 @@ class FindMailTool(BaseTool):
             },
             "folder": {
                 "type": "string",
-                "description": "Folder to search (default: INBOX).",
+                "description": (
+                    "Folder to search (default: INBOX): a folder name, or the part a folder "
+                    "plays, which works whatever the mailbox calls it: inbox, sent, drafts, "
+                    "trash, spam, archive. Mail the user sent is in 'sent'."
+                ),
             },
             "limit": {
                 "type": "integer",
@@ -93,6 +97,13 @@ class FindMailTool(BaseTool):
         if blocked_count and not matches:
             return f"No safe emails matching '{query}' in {folder}. Hidden {blocked_count} suspicious message(s) by phishing filter."
         if not matches:
+            if v2:
+                # "No match" in a folder this mailbox does not have is no answer about the
+                # mail at all: say so, with the folders it has.
+                from vaf.mail.tool_bridge import unknown_folder
+                missing = unknown_folder(folder, user_scope_id)
+                if missing:
+                    return missing
             return f"No emails matching '{query}' in {folder}. Sync in Settings → Connections → Email if needed."
         lines = []
         for i, m in enumerate(matches, 1):

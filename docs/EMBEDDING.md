@@ -768,7 +768,8 @@ Hard limits you must respect (they are architecture, not fine print):
       parameters = {"type": "object", "properties": {"path": {"type": "string"}}}
 
       # Ask for exactly what you consume. Valid keys: "user_scope_id",
-      # "username", "user_role". Declaring nothing means receiving nothing.
+      # "username", "user_role", and "session_id" (which chat the call belongs
+      # to; None where there is no chat). Declaring nothing means receiving nothing.
       identity_kwargs = ("user_scope_id", "user_role")
 
       # Declare the MODE your tool needs, and the per-user file boundary is installed
@@ -804,7 +805,8 @@ Hard limits you must respect (they are architecture, not fine print):
   them are also handed the live agent object as an `_agent` kwarg, and anything holding
   that object can read the caller's scope, name and role straight off it - the timer
   tools do exactly that. This is chat-lane plumbing for tools that need the running
-  session, **not** a second supported way to learn who is calling: the dispatcher hands
+  agent itself, **not** a second supported way to learn who is calling (the CHAT is a
+  declared key, `session_id`, like the person): the dispatcher hands
   `_agent` to a fixed set of built-in NAMES, there is no declaration for it, and a tool
   you register never receives it. Do not reach for it; it may disappear without a
   major version. `identity_kwargs` is the surface that is kept.
@@ -1002,9 +1004,17 @@ carries its own 800-character copy of the result for observers, while
 `max_result_chars` below governs what the caller gets back - setting the latter
 to `None` does not put an unbounded blob on your event sink.
 
+`args` may be the arguments as your model sent them, JSON text included. Text that
+is not a JSON object (a string value left unquoted, a bare list) is refused with
+`Tool Error: the arguments of this '<tool>' call are not valid JSON (...), so nothing
+was run` and the tool never runs, where the usual `json.loads` with a `{}` fallback
+would run it without the arguments the model meant - VAF's own loops did exactly
+that until a tool whose parameters were all optional reported success for a call it
+had never received. Handing the text over is how your loop gets that refusal for free.
+
 It never raises for a tool failure and never blocks on a human. Everything comes
 back as a string: `Security Error: ...` for a policy block, `Tool Error: ...`
-for a schema failure or an exception inside the tool, `Error: Unknown tool
+for malformed arguments, a schema failure or an exception inside the tool, `Error: Unknown tool
 '<name>'` for a name no registered tool carries, and the
 `vaf.markers.TOOL_CONFIRMATION_REQUIRED` marker when a gated tool had nobody to
 ask. A hard block emits **no events at all**, so an observer never sees a
@@ -1028,7 +1038,7 @@ The supported arguments:
 |---|---|
 | `tools` | Your registry, `{name: BaseTool instance}`. Positional. |
 | `user_scope_id`, `username`, `user_role` | Who is calling. Assigned into whatever the tool declares in `identity_kwargs`, overwriting anything a model put there. **Pass `username` if you serve more than one tenant.** With none, the name is resolved from the SCOPE: no scope or the owner's scope gives the configured owner (`local_admin_username`, whatever registration wrote there - never the literal `"admin"`), and any other scope gives a stable synthetic name for that tenant, so a caller whose name you did not pass never lands on the owner's name-keyed data. That synthetic name is isolated, not their account name - if a tenant must reach data stored under their real username, pass it. |
-| `source`, `session_id` | Where the call comes from. Feeds `channel_restrictions`: a `source` that names a chat channel (`"whatsapp"`, `"telegram"`, `"discord"`) or a session id with that channel's prefix makes the call a chat call, which a tool's `("channel",)` refuses. `session_id` is also the chat a "for this chat" grant is kept for. Leave them out if you have no messaging channels and no chats. |
+| `source`, `session_id` | Where the call comes from. Feeds `channel_restrictions`: a `source` that names a chat channel (`"whatsapp"`, `"telegram"`, `"discord"`) or a session id with that channel's prefix makes the call a chat call, which a tool's `("channel",)` refuses. `session_id` is also the chat a "for this chat" grant is kept for, and what a tool that declares `session_id` in `identity_kwargs` receives. Leave them out if you have no messaging channels and no chats. |
 | `interactive`, `decide` | Set `interactive=True` and pass `decide(tool_name, reason) -> "allow_once" \| "allow_chat" \| "allow_always" \| "cancel"` to plug your own confirmation UI into the gate. `allow_chat` remembers the tool for this person in this chat (`session_id`), in memory only. Left out, gated tools are refused rather than run. |
 | `trust_dir` | Which directory a standing grant applies to. Defaults to the process's current one. |
 | `timeout_for` | `f(tool_name) -> seconds`, for your own timeout policy; it replaces the tool's own budget. Accept a `default` keyword instead (`f(tool_name, default=None)`) to ADJUST it: you receive the tool's own budget for this call and return yours. Left out, the tool's declared budget applies (`timeout_seconds` / `budget_seconds`), else `tool_timeout_seconds`. |

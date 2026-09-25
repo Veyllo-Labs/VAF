@@ -2073,6 +2073,12 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     )
                     _prev_turn_is_human = getattr(agent, "_turn_is_human", None)
                     agent._turn_is_human = _turn_is_human
+                    # Which wake this turn is, from the queue and never from the text, with the
+                    # text as VAF wrote it: the input the agent reads carries this turn's
+                    # workspace note in front of it. The result-grounding judge counts a report
+                    # kind's text as evidence (Agent._turn_reports). Cleared in the finally
+                    # below, like the flag above.
+                    agent._turn_wake = (_wake, str(input_text or "")) if _wake else None
                     # Timer wake-turn: a timer task has no preceding user message, so without a boundary
                     # the agent's reply overwrites the previous assistant bubble (same slot + timestamp).
                     # Emit the trigger as a "wake" system-activity message (kind="timer") -> the Web UI
@@ -2115,6 +2121,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         if tq.should_stop(task.session_id):
                             raise _StopGenerationRequested("Stop requested by user")
                     finally:
+                        agent._turn_wake = None
                         if _prev_turn_is_human is None:
                             try:
                                 del agent._turn_is_human
@@ -2155,6 +2162,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             source=getattr(task, "source", "web"),
                             preview=(task.input_text or "")[:80],
                             voice=bool(meta.get("voice_lang")),
+                            session_id=getattr(task, "session_id", None),
                         )
                     except Exception:
                         pass

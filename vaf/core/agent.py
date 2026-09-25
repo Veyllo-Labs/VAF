@@ -35,6 +35,7 @@ from vaf.core.tool_dispatch import (
     ToolCallHooks as _ToolCallHooks,
     ToolCaller as _ToolCaller,
     assign_declared_identity as _assign_declared_identity,
+    decode_arguments as _decode_arguments,
     event_result,
     is_channel_session as _is_channel_session,
     make_json_serializable,
@@ -444,6 +445,10 @@ _RG_OUTCOME_CHARS = 300
 _RG_LOOKUP_CHARS = 120
 _RG_MIN_CHARS = 60
 _RG_EVIDENCE_BUDGET = 4000
+
+# The name a VAF report carries in the judge's evidence (`Agent._turn_reports`). It names no
+# tool, so the evidence builder keeps it in the outcome tier with everything it cannot resolve.
+REPORT_LABEL = "VAF report"
 
 
 def _cut_for_judge(text: str, limit: int) -> str:
@@ -8197,6 +8202,15 @@ class Agent:
                 forced_tools.add("find_mail")
             if "list_email_accounts" in self.tools:
                 forced_tools.add("list_email_accounts")
+        # Whether a prepared message went out is the draft ledger's answer, not a mailbox
+        # search: a messenger send has no Sent folder at all. The draft wake turn says "Draft",
+        # so the agent it wakes can look up the rest of the chat's drafts too.
+        if any(kw in u_lower for kw in [
+            "draft", "entwurf", "entwürf", "gesendet", "abgeschickt", "verschickt",
+            "rausgegangen", "went out",
+        ]):
+            if "list_drafts" in self.tools:
+                forced_tools.add("list_drafts")
         if any(kw in u_lower for kw in ["schreib", "send", "antwort", "reply", "compose"]):
             if "send_mail" in self.tools:
                 forced_tools.add("send_mail")
@@ -10838,7 +10852,9 @@ class Agent:
                 # here used to spend a validation call and then send back a correction that
                 # told the model its reply was still visible when it had just been erased.
                 if _rg_on and self._guard_keeps_answer(full_content):
-                    _turn_res = self._turn_tool_results()
+                    # What VAF reported to the agent this turn comes first: it arrived with
+                    # the input, before any tool ran.
+                    _turn_res = self._turn_reports() + self._turn_tool_results()
                     _ungrounded, _claim = self._detect_ungrounded_result_claim(
                         full_content, _turn_res
                     )
@@ -11456,10 +11472,10 @@ class Agent:
                         self.history.append({"role": "assistant", "content": summary})
                         return summary
 
-                    raw_args = tc['function']['arguments']
-                    try:
-                        arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                    except: arguments = {}
+                    # A call whose arguments are not a JSON object is answered with the refusal
+                    # below and never run: `{}` would run it without what the model meant.
+                    arguments, _malformed_args = _decode_arguments(
+                        function_name, tc['function']['arguments'])
 
                     # The tool_use audit line is NOT written here any more: the funnel writes
                     # it for every lane (ToolCaller._audit_log). Only the timeline event,
@@ -11526,8 +11542,10 @@ class Agent:
                         # console.status spinner deadlocks on exit when stdout was swapped under
                         # it — which left execute_tool never returning (no tool_end → the chat
                         # tool-bubble hung "running").
-                        if function_name in ("coding_agent", "research_agent",
-                                             "create_agent_workflow", "execute_workflow"):
+                        if _malformed_args:
+                            result = _malformed_args
+                        elif function_name in ("coding_agent", "research_agent",
+                                               "create_agent_workflow", "execute_workflow"):
                             # Log agent-to-agent communication
                             if function_name == "coding_agent":
                                 # Check if this is a follow-up call (after answering questions)
@@ -11693,9 +11711,12 @@ class Agent:
                         # live (sandbox tracebacks, filesystem jail denials) that the
                         # original prefix set missed - the retry ran uninformed.
                         # Deliberately NOT matched: "blocked"/"[security]" guard messages,
-                        # which already carry their own instructions.
+                        # which already carry their own instructions, and a call whose
+                        # arguments were not JSON: the tool never ran, so there is nothing
+                        # about the tool to re-feed or re-learn.
                         if _rs.startswith(("error", "failed", "tool error", "security error",
                                            "exception", "❌", "[error]", "access denied")) \
+                                and not _malformed_args \
                                 and function_name not in _ww_reactive_injected:
                             from vaf.whare_wananga.delivery import tool_knowhow, known_pitfall_hit
                             # allow_unverified: the call ALREADY failed, so a tagged hint from a
@@ -12974,16 +12995,15 @@ class Agent:
         if name == "learn_document":
             tool_args["_agent"] = self
         if name == "learn_attached_knowledge":
-            tool_args["session_id"] = getattr(self, "current_session_id", None)
             tool_args["_agent"] = self
         if name == "analyze_image":
             # The vision tool re-inspects the image attached to THIS session on demand.
             # Pass the LIVE agent: on the upload turn the image lives in agent.history but
             # is not persisted to disk until the turn ends, so a disk-only read would miss
-            # it (the primary "look closer on turn 1" case). session_id is the disk fallback
-            # (covers images that aged out of history via compaction but remain on disk).
+            # it (the primary "look closer on turn 1" case). The chat itself is declared
+            # (identity_kwargs "session_id"), the disk fallback for images that aged out of
+            # history via compaction but remain on disk.
             tool_args["_agent"] = self
-            tool_args["session_id"] = getattr(self, "current_session_id", None)
         if name == "document_writer":
             # Same session race as write_file: the tool resolves the chat
             # workspace itself - it must key on THIS session, never the
@@ -13766,6 +13786,35 @@ class Agent:
         out.reverse()
         return out
 
+    def _turn_reports(self) -> list:
+        """What VAF itself told the agent this turn about something that happened, as
+        (`REPORT_LABEL`, text) pairs for the result-grounding judge.
+
+        The judge weighs a reply against the turn's tool results, and a fact VAF reports is no
+        tool result: the note on what became of the chat's drafts (`_turn_decision_note`) and
+        the text of a wake turn whose kind is a report (`task_queue.WAKE_REPORT_KINDS`: a sent
+        draft, a finished background command). Live incident: the person sent a draft, the
+        wake turn said so, the agent answered that the mail was out, and the judge, which saw
+        nothing but a search of a folder that did not exist, called the answer unsupported; the
+        correction that followed told the person the send could not be confirmed. The wake is
+        known from the queue, never from the text, which anybody can type: the runner sets
+        `_turn_wake` to (kind, the text as VAF wrote it). The text, not the turn's input, which
+        opens with the chat's workspace note and would push the report past the judge's
+        per-entry cut. Never raises."""
+        out = []
+        try:
+            note = getattr(self, "_turn_decision_note", None)
+            if note:
+                out.append((REPORT_LABEL, str(note)))
+            from vaf.core.task_queue import WAKE_REPORT_KINDS
+            wake = getattr(self, "_turn_wake", None)
+            if isinstance(wake, tuple) and len(wake) == 2 and wake[0] in WAKE_REPORT_KINDS \
+                    and str(wake[1] or "").strip():
+                out.append((REPORT_LABEL, str(wake[1])))
+        except Exception:
+            return []
+        return out
+
     def _detect_ungrounded_result_claim(self, response_text: str, turn_results: list):
         """
         Result grounding (anti-confabulation): does the reply assert a concrete tool OUTCOME, a
@@ -13842,6 +13891,13 @@ class Agent:
         _results_block, _shown, _omitted, _omitted_outcomes = _grounding_evidence(
             turn_results, (getattr(self, "tools", None) or {}).get
         )
+        _report_note = ""
+        if any(name == REPORT_LABEL for name, _ in turn_results or ()):
+            _report_note = (
+                f"An entry named '{REPORT_LABEL}' is what VAF itself told the assistant this turn "
+                "about something that happened (for example that the user sent a draft). It "
+                "supports a reply that repeats it, the same as a tool result.\n\n"
+            )
         _omission_note = ""
         if _omitted:
             # Worded from what was actually dropped. The reassurance is only given when it is
@@ -13861,6 +13917,7 @@ class Agent:
             "including claiming a result for a tool that was never run this turn?\n\n"
             f"ASSISTANT REPLY:\n{_cut_for_judge(text, 1800)}\n\n"
             f"ACTUAL TOOL RESULTS THIS TURN:\n{_results_block}\n\n"
+            f"{_report_note}"
             f"{_omission_note}"
             "An entry ending in '... [cut]' was shortened. If the listed results do not let you "
             "decide, answer </grounded>.\n"

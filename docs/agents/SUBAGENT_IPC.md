@@ -519,6 +519,16 @@ extra argv like `--project-path`, or `payload=` for a machine-readable spec that
 must stay off the OS command line). Five tools used to carry this block copy-pasted;
 the sixth consumer (the learn agent) is what proved the primitive's shape.
 
+Two arguments cover the whole-workflow lane (`vaf/workflows/background.py`): `command` replaces
+the child's CLI verb (a workflow runs as `workflow run <id>`, with its own lifecycle and the
+same IPC contract), and `exclusive=True` does the register-then-verify claim INSIDE the spawn:
+after the task is registered, `claim_task_slot` decides, and a loser's task is cancelled and
+`SpawnRefused` raised, which the caller must answer with "already running", never with an
+inline run. A terminal launch that raises counts as a failed spawn (task cancelled). The test
+suite stubs `Platform.open_new_terminal` for every test (`tests/conftest.py`,
+`_no_child_processes`), so no test ever starts a real child; a test about spawning patches it
+itself.
+
 ### The learn agent (batched document learning)
 
 `learn_agent` is the sixth dispatcher branch (`vaf/cli/cmd/subagent.py`): it reads a
@@ -685,9 +695,10 @@ barrier-synced concurrent calls both passed it and both executed), every launche
 also calls `claim_task_slot` AFTER registering: winner = the smallest
 (created_at, task_id) among all live tasks of the type, a total order every racer
 computes identically, so exactly one proceeds and losers deregister themselves and
-report a duplicate. `execute_workflow` registers ITSELF (`create_task` +
-`mark_task_running`, deregistered via `cancel_task` on every exit path) for the
-duration of its synchronous run so the guard can see it, and runs a 5s HEARTBEAT
+report a duplicate. When it runs inline (see WORKFLOW_SELECTION.md, "Where a workflow
+runs"; the background lane registers through `spawn_subagent`), `execute_workflow` registers
+ITSELF (`create_task` + `mark_task_running`, deregistered via `cancel_task` on every exit
+path) for the duration of its synchronous run so the guard can see it, and runs a 5s HEARTBEAT
 thread while executing - without one, `check_zombies` (fired ~1s by the runner
 drain, 90s timeout) reaped the registration mid-run, silently reopening the guard
 for exactly the multi-minute runs it protects and enqueueing a spurious CRASH
@@ -891,7 +902,7 @@ An infinite-loop guard aborts the workflow if the number of step-jumps exceeds `
 
 ## Full Workflow in Separate Terminal (NEW!)
 
-When `sub_agents_in_separate_terminals` is enabled, **entire workflows run in a separate terminal** - not just individual sub-agents. This prevents context overflow because large intermediate results (like HTML reports) **never touch the main agent's context**.
+When `sub_agents_in_separate_terminals` is enabled, **entire workflows run in a separate terminal** - not just individual sub-agents. Every lane that starts one (`execute_workflow`, `run_temp`, the `@workflow_id` prefix) goes through the one launcher, `vaf/workflows/background.py`; the conditions and the temporary-plan payload are in [WORKFLOW_SELECTION.md](WORKFLOW_SELECTION.md#where-a-workflow-runs-in-the-background-when-it-can). This prevents context overflow because large intermediate results (like HTML reports) **never touch the main agent's context**.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐

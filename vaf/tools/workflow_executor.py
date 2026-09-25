@@ -296,6 +296,26 @@ class ExecuteWorkflowTool(BaseTool):
                     f"Please provide them using the 'variables' parameter."
                 )
 
+            # ── In the background, when it can be ─────────────────────────────
+            # The whole run in a process of its own (vaf/workflows/background.py): this turn
+            # ends at once and the chat hears the result when the run ends. Only when every
+            # step's tool exists there - the child has the primitives, not this agent's
+            # registry - and otherwise inline, as before, below.
+            from vaf.workflows import background as _bg
+            _missing_bg = _bg.missing_tools(s.tool for s in steps)
+            if _bg.enabled() and session_id and not _missing_bg:
+                _lang = getattr(getattr(_agent, "prompt_manager", None), "user_language", None)
+                _started = _bg.start_saved(workflow_id, variables, name=template.get("name", workflow_id),
+                                           session_id=session_id,
+                                           task=f"execute_workflow: {template.get('name', workflow_id)}",
+                                           language=_lang)
+                if _started is not None:
+                    _wf_log(wf_run_id, "BACKGROUND", result=_started[:120])
+                    return _started
+                _wf_log(wf_run_id, "BACKGROUND_SPAWN_FAILED")
+            elif _missing_bg:
+                _wf_log(wf_run_id, "INLINE_TOOLS", missing=",".join(_missing_bg))
+
             # ── IPC self-registration ─────────────────────────────────────────
             # The guard above reads the IPC task registry, so THIS run must be
             # visible in it - the original guard could catch a workflow started

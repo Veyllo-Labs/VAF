@@ -689,7 +689,9 @@ What to expect:
   streams back to the web server; those paths need that infrastructure (a
   display plus `vaf` on PATH, or the running web server). On a headless host the
   spawn simply fails and falls back to inline, so leave
-  `sub_agents_in_separate_terminals` at its default.
+  `sub_agents_in_separate_terminals` at its default. Workflows
+  (`execute_workflow`, `run_temp`) follow the same rule: a process of their own
+  where that infrastructure exists, inline where it does not.
 - **The coder needs a sandbox.** The coding agent's shell needs bubblewrap or
   Docker; its test runner and `python_sandbox` need Docker specifically (see
   [Security posture](#security-posture)). Without them, those steps return an

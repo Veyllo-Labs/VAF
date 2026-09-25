@@ -537,6 +537,32 @@ class AgentWorkflowBuilderTool(BaseTool):
                 or getattr(agent, "_session_id", None)
             )
 
+        # ── In the background, when it can be ─────────────────────────────────
+        # The same plan in a process of its own (vaf/workflows/background.py): this turn ends
+        # at once and the chat hears the result when the run ends. The child gets the steps
+        # exactly as normalised here, validation flags included, and runs the same checks and
+        # the same cleanup. Only when every step's tool exists there - the child has the
+        # workflow primitives, not this agent's registry - and otherwise inline, as before.
+        from vaf.workflows import background as _bg
+        _missing_bg = _bg.missing_tools(s.tool for s in steps)
+        if _bg.enabled() and session_id and not _missing_bg and len(steps) == len(normalised):
+            _plan = [dict(d, validate=True) if getattr(s, "validate", False) else dict(d)
+                     for s, d in zip(steps, normalised)]
+            try:
+                _intent = agent._resolve_user_intent() if agent is not None and hasattr(agent, "_resolve_user_intent") else ""
+            except Exception:
+                _intent = ""
+            _started = _bg.start_temp(
+                name, _plan, variables, session_id=str(session_id), description=desc,
+                keep_files=kwargs.get("keep_files") or [], user_intent=_intent or "",
+                language=getattr(getattr(agent, "prompt_manager", None), "user_language", None))
+            if _started is not None:
+                self.log(f"[RUN_TEMP] background: {_started[:120]}")
+                return _started
+            self.log("[RUN_TEMP] background spawn failed, running inline")
+        elif _missing_bg:
+            self.log(f"[RUN_TEMP] inline: the background child has no {', '.join(_missing_bg)}")
+
         workflow_id = f"tmp-{uuid.uuid4().hex[:8]}"
 
         def _push(payload: dict) -> None:
@@ -744,56 +770,12 @@ class AgentWorkflowBuilderTool(BaseTool):
             )
 
         # ── Intermediate file cleanup for run_temp ────────────────────────────
-        # After a temp workflow completes, remove the throwaway scripts/scratch it created
-        # in the shared project path, but KEEP the deliverable. A final step such as
-        # document_agent writes the actual document and returns descriptive text (not a bare
-        # path), so we must not key "keep" off result.final_output being a file — that would
-        # wipe the very report the user asked for. Instead: delete only known script/scratch
-        # extensions; preserve every document/data/image file.
-        _proj_path = (result.outputs or {}).get("workflow_project_path", "")
-        if _proj_path and os.path.isdir(_proj_path):
-            _keep_files = set()
-            # Preserve explicitly requested files
-            for _kf in (kwargs.get("keep_files") or []):
-                _kf = str(_kf).strip()
-                if _kf:
-                    _keep_files.add(os.path.realpath(_kf))
-            # If the last step's output happens to be a file path (e.g. write_file), keep it too
-            _last_step_output = str(result.final_output or "")
-            if _last_step_output and os.path.isfile(_last_step_output):
-                _keep_files.add(os.path.realpath(_last_step_output))
-
-            # Only these are treated as disposable intermediates; anything else (.docx, .pdf,
-            # .txt, .md, .html, .csv, .json, images, …) is a potential deliverable and is kept.
-            _INTERMEDIATE_EXTS = {
-                ".py", ".pyc", ".pyo", ".pyw", ".pyd",
-                ".js", ".mjs", ".cjs", ".ts",
-                ".sh", ".bash", ".zsh", ".bat", ".cmd", ".ps1",
-                ".tmp", ".temp", ".lock",
-            }
-            _deleted = 0
-            for _root, _dirs, _files in os.walk(_proj_path, topdown=False):
-                for _fn in _files:
-                    _fp = os.path.realpath(os.path.join(_root, _fn))
-                    if _fp in _keep_files:
-                        continue
-                    if os.path.splitext(_fn)[1].lower() in _INTERMEDIATE_EXTS:
-                        try:
-                            os.unlink(_fp)
-                            _deleted += 1
-                        except Exception:
-                            pass
-                for _dn in _dirs:
-                    _dp = os.path.join(_root, _dn)
-                    try:
-                        os.rmdir(_dp)  # only removes if it ended up empty
-                    except Exception:
-                        pass
-            # Remove the project dir only if it is now empty (pure script-only run)
-            try:
-                os.rmdir(_proj_path)
-            except Exception:
-                pass
+        # Throwaway scripts/scratch out, every potential deliverable kept: one implementation,
+        # shared with a temporary workflow that runs in a process of its own.
+        from vaf.workflows.engine import remove_temp_intermediates
+        remove_temp_intermediates((result.outputs or {}).get("workflow_project_path", ""),
+                                  keep_files=kwargs.get("keep_files") or [],
+                                  final_output=result.final_output)
 
         if result.success:
             # Per-step summary so a weird FINAL step can never hide the real

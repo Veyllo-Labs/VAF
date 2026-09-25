@@ -35,6 +35,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **A workflow runs in the background, and the chat carries on when it is done.** A
+  workflow the agent started used to hold up its whole answer - and, with one chat worker,
+  every other chat - for as long as it ran. Now it runs as a process of its own: the agent
+  says it has started, you can keep writing, and when it finishes the result comes back into
+  the chat and the agent continues from there. The same checks and the same cleanup run as
+  before. A workflow that needs a tool only the chat has (mail, calendar, your own tools)
+  still runs in the chat, as before, and so does every workflow when "Sub-Agents: Separate
+  Terminals" is switched off.
+
 - **Sender verification is on by default.** VAF reads what your mail provider found out
   about each sender (SPF, DKIM and DMARC) and shows it as a shield next to the mail. Until
   now this stayed off until somebody found a button in the account settings. Gmail and

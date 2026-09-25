@@ -153,6 +153,35 @@ It can then make an informed decision:
 
 Both `execute_workflow` and `list_workflows` are available to the main agent. The agent can also **adjust the pre-extracted variables** before calling `execute_workflow` - the hint is a starting point, not a constraint.
 
+### Where a workflow runs: in the background when it can
+
+A workflow used to run INSIDE the chat turn that started it, for as long as it took, and one
+chat worker serves every chat by default, so the whole app waited with it. Now every lane that
+starts a workflow - `execute_workflow`, `run_temp` and the `@workflow_id` prefix - starts it as a
+process of its own through ONE launcher, `vaf/workflows/background.py`, and the turn ends at
+once: the tool result is the sub-agent async marker, the agent tells the person the run has
+started, and the result arrives in the chat when the run ends (the child reports through the
+sub-agent IPC, and the runner's drain delivers it once and lets the agent carry on). All of
+these must hold, otherwise the workflow runs inline as before:
+
+- `sub_agents_in_separate_terminals` is on (the default) and this process is not itself a
+  sub-agent or workflow child;
+- there is a chat session to come back to;
+- every tool the plan names exists in the child. The child has the workflow primitives
+  (`tool_overlay.PRIMITIVE_NAMES`, which cover every built-in template), not the agent's live
+  registry: a plan that names a mail, calendar, custom or MCP tool runs inline. NAMED
+  BOUNDARY: giving the child the full registry means constructing an Agent there, and none of
+  the built-in templates needs it.
+
+A temporary plan reaches the child as the IPC payload (`vaf workflow run temp --plan-from-task`,
+never on the argv), exactly as the chat normalised it: repaired steps, the validation flags the
+chat turned on for its content steps, the variables, `keep_files` and the user intent. The
+child runs the same per-step validation (`vaf/workflows/step_validation.py`, the one validator,
+asking the model through `complete()` there) and the same cleanup of throwaway files
+(`engine.remove_temp_intermediates`), and reports the same "THE WORK IS DONE" summary with every
+step's result. A second launch of the same workflow in the same chat while one runs is refused
+(register-then-verify, `spawn_subagent(exclusive=True)`), never run inline next to it.
+
 A weak model can confuse the two: `execute_workflow`'s `workflow_id` must be a **saved template id** (from `list_workflows`), never the name of a tool - in particular never `"create_agent_workflow"` itself, which is the *other* tool (builds/runs a workflow, does not look one up by id). Both tools' descriptions now say this explicitly, and `execute_workflow` detects a live tool-name collision and redirects to the right tool instead of just repeating the template list (`vaf/tools/workflow_executor.py`).
 
 The redirect is an ECHO-BACK when possible: a model that merged the two hints usually delivers a complete, correct run_temp payload inside `variables` (live incident: `execute_workflow(workflow_id="create_agent_workflow", variables={action: "run_temp", steps: [...]})` with perfectly good steps - after a prose-only redirect the model gave up on workflows and did every step manually). When `variables` carries `steps`, the error message hands back the exact `create_agent_workflow(...)` call to copy, with the model's own arguments verbatim (action defaulted to `run_temp`, oversized payloads fall back to the generic advice). Weak models copy reliably; they rephrase poorly. The redirect stays a MESSAGE - it never auto-forwards the call (dispatch gates and the "agent decides" principle stay intact).
@@ -200,7 +229,7 @@ create_agent_workflow(
 - No file is written to disk. Nothing is saved after execution.
 - Ideal for complex one-off tasks: the agent designs a multi-step plan, executes it, and returns the result.
 - Available to the agent in **any session** (not admin-only).
-- The `WorkflowEngine` runs synchronously using the agent's **full live tool registry** - all tools currently loaded, including custom ones. Non-spawn steps run through the shared dispatch pipeline: the same `admin_only` block, account tool allowlist and embedder authorizer as chat (confirmation gate excepted - see [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md)).
+- It runs in the background when it can (see "Where a workflow runs" above); otherwise the `WorkflowEngine` runs inline in the turn, using the agent's **full live tool registry** - all tools currently loaded, including custom ones. Non-spawn steps run through the shared dispatch pipeline: the same `admin_only` block, account tool allowlist and embedder authorizer as chat (confirmation gate excepted - see [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md)).
 - Each step's `output` is available as `{variable}` in subsequent steps.
 - **Weak-model step repair (`_repair_raw_step`):** the canonical step shape is `input` + `tool`,
   but a weak model reliably mangles the FIELD NAMES while getting the plan right - live incident:

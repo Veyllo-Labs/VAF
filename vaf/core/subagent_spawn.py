@@ -40,6 +40,13 @@ from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence
 
 
+class SpawnRefused(Exception):
+    """`exclusive=True` and another live run of the same agent type already holds this chat's
+    slot (`claim_task_slot` lost). Nothing was started and the IPC task is cancelled. Not a
+    failed spawn - the caller must NOT fall back to running the work itself, or the duplicate
+    the guard exists to stop runs anyway."""
+
+
 @dataclass(frozen=True)
 class SpawnedSubagent:
     """A successfully spawned, IPC-tracked child."""
@@ -78,6 +85,8 @@ def spawn_subagent(
     title: Optional[str] = None,
     marker_note: Optional[str] = None,
     session_id: Optional[str] = None,
+    command: Optional[Sequence[str]] = None,
+    exclusive: bool = False,
 ) -> Optional[SpawnedSubagent]:
     """Create the IPC task, build the child command and open the terminal.
 
@@ -95,6 +104,14 @@ def spawn_subagent(
         title: terminal window title; default "VAF <Agent Type> [<task_id>]".
         marker_note: text after the marker; default names the task's first 80 chars.
         session_id: session for the IPC record; default = the calling context's.
+        command: the child's CLI verb after `vaf.main`; default `subagent run <agent_type>`
+            (the dispatcher). A whole workflow runs as `workflow run <id>` instead
+            (vaf/cli/cmd/workflow.py), which has its own lifecycle and the same IPC contract.
+        exclusive: register-then-verify against a concurrent twin (`claim_task_slot`): after
+            the task is registered, exactly one of several racing launches of this agent type
+            in this chat wins; a loser's task is cancelled and SpawnRefused is raised. The
+            pre-check a caller does with `has_live_task` is check-then-act and misses a twin
+            launched in the same instant.
 
     Returns SpawnedSubagent on success. Returns None when the terminal could not
     be opened - the IPC task is already cancelled then, and the caller decides
@@ -107,6 +124,17 @@ def spawn_subagent(
 
     ipc = get_ipc()
     task_id = ipc.create_task(agent_type, task_description=task, session_id=session_id)
+    if exclusive:
+        try:
+            won = ipc.claim_task_slot(task_id, agent_type, session_id or get_current_session_id())
+        except Exception:
+            won = True     # a registry that cannot answer blocks nothing (the old lanes' rule)
+        if not won:
+            try:
+                ipc.cancel_task(task_id)
+            except Exception:
+                pass
+            raise SpawnRefused(agent_type)
     if payload is not None:
         ipc.store_task_payload(task_id, payload)
 
@@ -134,7 +162,8 @@ def spawn_subagent(
     if extra_env:
         sub_env.update({str(k): str(v) for k, v in extra_env.items() if v is not None})
 
-    cmd_parts = [sys.executable, "-m", "vaf.main", "subagent", "run", agent_type]
+    head = [str(c) for c in command] if command else ["subagent", "run", agent_type]
+    cmd_parts = [sys.executable, "-m", "vaf.main", *head]
     if include_task_arg:
         cmd_parts += ["--task", task]
     cmd_parts += [str(a) for a in args]
@@ -144,7 +173,13 @@ def spawn_subagent(
     cmd = _escape_cmd(cmd_parts, Platform.is_windows())
     term_title = title or f"VAF {display} [{task_id}]"
 
-    if Platform.open_new_terminal(cmd, title=term_title, extra_env=sub_env):
+    try:
+        opened = Platform.open_new_terminal(cmd, title=term_title, extra_env=sub_env)
+    except Exception:
+        # A spawn that raised is a spawn that failed: fall through to the cancel below, or the
+        # task would sit pending with nobody to run it.
+        opened = False
+    if opened:
         ipc.mark_task_running(task_id)
         UI.event("Sub-Agent", f"{display} started in new terminal [Task: {task_id}]",
                  style="bold cyan")

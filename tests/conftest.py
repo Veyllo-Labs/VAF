@@ -248,6 +248,31 @@ def _no_container_wipe():
         bi.verified_profile_wipe = previous
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _no_child_processes():
+    """No test may start a real sub-agent or workflow PROCESS.
+
+    Sibling of `_browser_pool_off`: about what the suite STARTS. Every lane that runs work in a
+    process of its own opens it through `Platform.open_new_terminal` (vaf/core/subagent_spawn.py),
+    and `sub_agents_in_separate_terminals` is on by default, so a test that reaches one of
+    those lanes with a chat session would launch `python -m vaf.main ...` for real - against
+    the developer's machine, outside every tmp_path. Since workflows run in the background too
+    (vaf/workflows/background.py), `execute_workflow` and `run_temp` are such lanes. The stub
+    answers False, a spawn that did not happen: every lane then cancels its IPC task and runs
+    the work inline, which is what those tests assert. A test that is about spawning patches
+    `open_new_terminal` itself, per test, and records the command instead.
+    """
+    from vaf.core.platform import Platform
+
+    previous = Platform.__dict__["open_new_terminal"]
+    Platform._real_open_new_terminal = previous
+    Platform.open_new_terminal = staticmethod(lambda *a, **k: False)
+    try:
+        yield
+    finally:
+        Platform.open_new_terminal = previous
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _browser_pool_off():
     """No test may start a browser CONTAINER, so the pool is switched off for the

@@ -210,6 +210,61 @@ def _identity_is_declared() -> bool:
     return _identity_mode() not in ROLLBACK_MODES
 
 
+#: What a temporary workflow's cleanup treats as a disposable intermediate. Anything else
+#: (.docx, .pdf, .txt, .md, .html, .csv, .json, images, ...) is a potential deliverable and kept.
+_INTERMEDIATE_EXTS = frozenset({
+    ".py", ".pyc", ".pyo", ".pyw", ".pyd",
+    ".js", ".mjs", ".cjs", ".ts",
+    ".sh", ".bash", ".zsh", ".bat", ".cmd", ".ps1",
+    ".tmp", ".temp", ".lock",
+})
+
+
+def remove_temp_intermediates(project_path: str, *, keep_files=(), final_output=None) -> int:
+    """After a temporary workflow: remove the throwaway scripts and scratch it created in its
+    shared project path, KEEP the deliverable, and return how many files went.
+
+    Keyed on known script/scratch extensions, never on "the final output is a file": a final
+    step such as document_agent writes the actual document and returns descriptive text (not
+    a bare path), so keying "keep" off final_output would wipe the very report the person
+    asked for. `keep_files` are kept whatever their extension, and so is the final output
+    when it IS a file path (write_file). Emptied directories go, the project directory only
+    when nothing is left in it (a pure script-only run). Never raises."""
+    import os
+    if not project_path or not os.path.isdir(project_path):
+        return 0
+    keep = set()
+    for path in keep_files or ():
+        path = str(path).strip()
+        if path:
+            keep.add(os.path.realpath(path))
+    last = str(final_output or "")
+    if last and os.path.isfile(last):
+        keep.add(os.path.realpath(last))
+    deleted = 0
+    for root, dirs, files in os.walk(project_path, topdown=False):
+        for fn in files:
+            fp = os.path.realpath(os.path.join(root, fn))
+            if fp in keep:
+                continue
+            if os.path.splitext(fn)[1].lower() in _INTERMEDIATE_EXTS:
+                try:
+                    os.unlink(fp)
+                    deleted += 1
+                except Exception:
+                    pass
+        for dn in dirs:
+            try:
+                os.rmdir(os.path.join(root, dn))  # only removes if it ended up empty
+            except Exception:
+                pass
+    try:
+        os.rmdir(project_path)
+    except Exception:
+        pass
+    return deleted
+
+
 def identity_for_engine(user_scope_id: Optional[str] = None, username: Optional[str] = None,
                         *, user_role: Optional[str] = None,
                         session_id: Optional[str] = None) -> Dict[str, Any]:

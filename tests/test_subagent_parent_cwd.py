@@ -38,6 +38,9 @@ def _spawn_captured(monkeypatch, extra_env):
         return _FakeProc()
 
     monkeypatch.setattr(real_subprocess, "Popen", fake_popen)
+    # The REAL spawn, which the suite otherwise stubs (conftest `_no_child_processes`):
+    # this test is about what it hands the child, and Popen is faked right above.
+    monkeypatch.setattr(Platform, "open_new_terminal", Platform._real_open_new_terminal)
     # Piped lane: env travels as a REAL env dict, so the stamp is observable
     # without opening a terminal window.
     Platform.open_new_terminal("echo x", extra_env=extra_env)

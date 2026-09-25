@@ -45,12 +45,21 @@ def run_workflow(
     variables: str = typer.Option("{}", "--variables", "-v", help="JSON string of variables"),
     task_id: Optional[str] = typer.Option(None, "--task-id", help="Task ID for IPC tracking"),
     no_auto_close: bool = typer.Option(False, "--no-auto-close", help="Don't auto-close terminal"),
+    plan_from_task: bool = typer.Option(
+        False, "--plan-from-task",
+        help="Run the temporary plan stored as this task's IPC payload (run_temp in the "
+             "background) instead of a saved template; WORKFLOW_ID is then only a label"),
 ):
     """
     Run a complete workflow in a separate terminal.
 
     The entire workflow executes here with its own context.
     Only the final summary is reported back to the main agent via IPC.
+
+    A saved template by its id, or with --plan-from-task the temporary plan a chat started in
+    the background (vaf/workflows/background.py): the same normalised steps the chat would have
+    run, with the same per-step validation (vaf/workflows/step_validation.py) and the same
+    cleanup of throwaway files afterwards.
     """
     # Work where the caller works (see Platform.adopt_parent_cwd): a workflow
     # step that runs the coder must see the same project the main agent saw.
@@ -149,12 +158,26 @@ def run_workflow(
                 ipc.fail_task(task_id, error_msg)
             finish_terminal(success=False, no_auto_close=no_auto_close)
 
-        # Load workflow template
-        from vaf.workflows.templates import get_template
-        template = get_template(workflow_id)
+        # Load workflow template - or the temporary plan the chat handed over
+        plan = None
+        if plan_from_task:
+            from vaf.workflows.background import plan_from_payload
+            plan = plan_from_payload(ipc.get_task_payload(task_id) if (ipc and task_id) else None)
+            template = ({"name": plan["name"], "description": plan.get("description", ""),
+                         "steps": plan["steps"], "variables": {}, "defaults": {}}
+                        if plan else None)
+            if plan:
+                vars_dict = dict(plan.get("variables") or {})
+                # The id the web panel and the logs know this run by. The argv label is fixed
+                # ("temp"), so two temporary runs in one chat would otherwise share one panel.
+                workflow_id = f"temp-{task_id or os.getpid()}"
+        else:
+            from vaf.workflows.templates import get_template
+            template = get_template(workflow_id)
 
         if not template:
-            error_msg = f"Workflow not found: {workflow_id}"
+            error_msg = ("No workflow plan was handed to this task" if plan_from_task
+                         else f"Workflow not found: {workflow_id}")
             UI.error(error_msg)
             if debug_logger:
                 debug_logger.event("workflow_not_found", workflow_id=workflow_id)
@@ -284,10 +307,17 @@ def run_workflow(
             **identity_for_engine(session_id=session_id),
         )
         engine._workflow_defaults = template.get("defaults", {})
-        engine._workflow_name = workflow_id
-        engine._template_id = workflow_id
+        engine._workflow_name = template["name"] if plan else workflow_id
+        # A temporary plan has no saved template (the chat lane's own rule for run_temp).
+        engine._template_id = "" if plan else workflow_id
         engine._session_id = session_id
         engine._ui_workflow_id = workflow_id
+        if plan and any(getattr(s, "validate", False) for s in steps):
+            # The checks the chat lane turned on for this plan's content steps run here too,
+            # with a model asked through complete() - this process has no agent.
+            from vaf.workflows.step_validation import validator_for_runner
+            engine._validate_step = validator_for_runner()
+            engine._workflow_user_intent = plan.get("user_intent", "")
 
         # Execute the workflow
         result = engine.execute(steps, variables=vars_dict)
@@ -330,7 +360,22 @@ def run_workflow(
                     output_path = path_match.group(1).strip()
 
             # Create SHORT summary (not full content!)
-            if output_path:
+            if plan:
+                # A temporary plan: its throwaway files go (the deliverable stays), and the
+                # agent gets what the chat lane gives it - every step's result head next to
+                # the final output, and the order not to redo the work.
+                from vaf.workflows.engine import remove_temp_intermediates, summarize_run_steps
+                remove_temp_intermediates((result.outputs or {}).get("workflow_project_path", ""),
+                                          keep_files=plan.get("keep_files") or [],
+                                          final_output=result.final_output)
+                _steps_summary = summarize_run_steps(steps)
+                final_summary = (
+                    f"Temporary workflow '{template['name']}' completed.\n"
+                    "THE WORK IS DONE. Do NOT redo any step, do NOT re-run searches, do NOT "
+                    "rebuild files. Present the results below to the user, including any file "
+                    f"path shown.\n\n{final_output[:1500]}{'...' if len(final_output) > 1500 else ''}"
+                    + (f"\n\nStep results:\n{_steps_summary}" if _steps_summary else ""))
+            elif output_path:
                 final_summary = f"Workflow '{template['name']}' completed successfully.\nOutput saved to: {output_path}"
             elif "written successfully" in final_output.lower() or "saved" in final_output.lower():
                 final_summary = f"Workflow '{template['name']}' completed successfully.\n{final_output[:200]}"

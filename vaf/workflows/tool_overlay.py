@@ -42,6 +42,11 @@ _PRIMITIVES = [
 ]
 
 
+#: The names a runner with no agent registry has, without constructing a single tool: what a
+#: workflow in a process of its own can call (vaf/workflows/background.py decides by it).
+PRIMITIVE_NAMES = frozenset(name for _module, _cls, name in _PRIMITIVES)
+
+
 def workflow_primitives() -> Dict[str, object]:
     """Instantiate the workflow primitive tools. Import failures are skipped
     (optional integrations may be absent); never raises."""

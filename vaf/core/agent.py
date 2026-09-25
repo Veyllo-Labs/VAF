@@ -4480,67 +4480,16 @@ class Agent:
     def _validate_step_output(
         self, goal: str, result: str, tool: str, user_intent: str = ""
     ) -> Tuple[bool, Optional[str]]:
-        """
-        Per-workflow-step validation: does this step's OUTPUT fulfil the step's GOAL?
-
-        Unlike _validate_subagent_result_with_llm, this has NO lenient "report saved → accept"
-        fast-path — that one would wave through an empty/wrong document just because the tool
-        reported success. Here the actual content is judged against the goal. Returns
-        (fulfilled, retry_hint). Any failure to decide → (True, None) so a flaky validator can
-        never break a workflow.
-        """
-        result = (result or "").strip()
-        goal = (goal or "").strip()
-        if not result or not goal:
-            return True, None
-
-        # Coding output with an explicit completion signal is trusted (the local model tends to
-        # false-negative on perfectly valid code), mirroring the sub-agent validator.
-        if tool == "coding_agent" and "[vaf_coding_agent_status: complete]" in result.lower():
-            return True, None
-
+        """Per-workflow-step validation with THIS agent's backend. The judgement itself is
+        `vaf.workflows.step_validation.validate_step_output`, one implementation for every
+        runner (a workflow in a process of its own has no agent); only the way the model is
+        asked is this agent's. No backend to validate with: accept."""
         if not (getattr(self, "use_server", False) or getattr(self, "api_backend", None) or getattr(self, "llm", None)):
-            return True, None  # no backend to validate with → accept
-
-        prompt = (
-            "You are a strict validator for ONE step of a multi-step workflow.\n"
-            "Judge ONLY whether the STEP OUTPUT actually fulfils the STEP GOAL — by its CONTENT, "
-            "not by whether a tool merely reported success.\n\n"
-            f"STEP GOAL: {goal[:600]}\n"
-            f"OVERALL USER INTENT: {(user_intent or '')[:400]}\n"
-            f"STEP OUTPUT: {result[:1200]}\n\n"
-            "Reply with EXACTLY one of:\n"
-            "- </true> if the output fulfils the goal\n"
-            "- </false> if it does NOT (empty, wrong content, missing the requested data, off-topic)\n\n"
-            "If </false>, add on the next line: RETRY: [one concrete instruction to fix it]"
-        )
-        stricter_prompt = (
-            "Reply with EXACTLY </true> or </false>. Nothing else.\n"
-            f"GOAL: {goal[:300]}\n"
-            f"OUTPUT: {result[:500]}\n"
-            "Does the output fulfil the goal? </true> or </false>"
-        )
-
-        for attempt in range(3):
-            try:
-                content = self._run_validation_llm(
-                    [{"role": "user", "content": stricter_prompt if attempt > 0 else prompt}],
-                    max_tokens=150,
-                )
-            except Exception:
-                return True, None  # backend error → never block the workflow
-            resp = (content or "").strip().lower()
-            if "</true>" in resp:
-                return True, None
-            if "</false>" in resp:
-                retry_hint = None
-                for line in (content or "").splitlines():
-                    if "retry:" in line.lower():
-                        retry_hint = line.split(":", 1)[-1].strip()
-                        break
-                return False, (retry_hint or f"The output did not fulfil the goal: {goal[:200]}")
-        # No decisive answer after retries → accept (don't burn workflow retries on indecision).
-        return True, None
+            return True, None
+        from vaf.workflows.step_validation import validate_step_output
+        return validate_step_output(
+            goal, result, tool, user_intent,
+            ask=lambda messages, max_tokens: self._run_validation_llm(messages, max_tokens=max_tokens))
 
     def _validate_subagent_result_with_llm(
         self, user_intent: str, task_description: str, result: str, agent_type: str
@@ -7658,155 +7607,32 @@ class Agent:
             except Exception as e:
                 pass
 
-            if self.config.get("sub_agents_in_separate_terminals", False):
-                # Don't spawn if already in a workflow/subagent terminal
-                in_workflow_terminal = os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes")
-                in_subagent_terminal = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip() in ("1", "true", "yes")
+            # One launcher for every lane that runs a workflow in its own process
+            # (vaf/workflows/background.py): the gate, the command, the child env, the
+            # register-then-verify duplicate guard and the cancel on a failed spawn all live
+            # there. This lane keeps only its own answer, the [WORKFLOW_ASYNC] line the web
+            # draws as a workflow card.
+            from vaf.workflows import background as _wf_bg
+            if _wf_bg.enabled(self.config.get):
+                from vaf.core.subagent_ipc import get_current_session_id
+                from vaf.core.subagent_spawn import SpawnRefused
+                _lang = getattr(getattr(self, "prompt_manager", None), "user_language", None)
+                try:
+                    _spawned = _wf_bg.spawn_saved(
+                        workflow_id, result.variables, name=template["name"],
+                        session_id=get_current_session_id(), task=route_input, language=_lang)
+                except SpawnRefused:
+                    return _wf_bg.ALREADY_RUNNING.format(name=workflow_id)
+                if _spawned is not None:
+                    UI.event("Workflow", msg_running_separate.format(task_id=_spawned.task_id[:8]), style="cyan")
+                    UI.info(msg_runs_independently)
+                    return msg_async_return.format(task_id=_spawned.task_id, workflow_id=workflow_id,
+                                                   name=template["name"])
+                # The process could not be started (its IPC task is cancelled already): run
+                # inline below, the same fallback every sub-agent spawn has. Known residual
+                # (accepted): the inline run executes UNREGISTERED, as this lane's inline path
+                # always has, so for its duration the duplicate guard cannot see it.
 
-                if not in_workflow_terminal and not in_subagent_terminal:
-                    try:
-                        # DEBUG: Log each step
-                        def _debug_log(msg):
-                            try:
-                                import datetime
-                                path = get_dated_log_path("workflow_debug", "log")
-                                with open(path, "a", encoding="utf-8") as f:
-                                    f.write(f"{datetime.datetime.now().isoformat()} {msg}\n")
-                            except Exception:
-                                pass
-
-                        _debug_log("STEP 1: Creating IPC task...")
-                        # Create IPC task
-                        from vaf.core.subagent_ipc import get_ipc, get_current_session_id
-                        ipc = get_ipc()
-                        # Re-delegation guard (same rule as the sub-agent tools):
-                        # after an empty-response snapshot reset the model forgets
-                        # it already delegated and starts the SAME workflow again
-                        # (live incident: duplicate research run, double GPU load).
-                        # Session-scoped IPC is the truth (Rule 4.4). has_live_task
-                        # (the shared predicate, also used by execute_workflow's
-                        # guard) counts young PENDING tasks too: between the
-                        # create_task below and the spawned terminal's own
-                        # mark_task_running lie terminal spawn + Python import -
-                        # an active-only check was blind for that whole window.
-                        try:
-                            _dup = ipc.has_live_task(
-                                f"workflow:{workflow_id}", get_current_session_id()
-                            )
-                        except Exception:
-                            _dup = False
-                        if _dup:
-                            _debug_log(f"BLOCKED duplicate workflow launch: {workflow_id}")
-                            return (
-                                f"Workflow '{workflow_id}' is ALREADY RUNNING for this chat "
-                                "- not starting a duplicate. Tell the user the workflow is "
-                                "still in progress; the result will arrive when it finishes."
-                            )
-                        task_id = ipc.create_task(
-                            agent_type=f"workflow:{workflow_id}",
-                            task_description=route_input,
-                            session_id=get_current_session_id()
-                        )
-                        _debug_log(f"STEP 2: IPC task created: {task_id}")
-                        # Register-then-verify (same as execute_workflow's lane):
-                        # the guard above is check-then-act; a concurrent launch
-                        # in the check-to-register window slips past it. After
-                        # registering, exactly one racer wins the deterministic
-                        # (created_at, task_id) order; losers withdraw.
-                        try:
-                            _claimed = ipc.claim_task_slot(
-                                task_id, f"workflow:{workflow_id}", get_current_session_id()
-                            )
-                        except Exception:
-                            _claimed = True
-                        if not _claimed:
-                            _debug_log(f"CLAIM LOST - duplicate workflow launch: {workflow_id}")
-                            try:
-                                ipc.cancel_task(task_id)
-                            except Exception:
-                                pass
-                            return (
-                                f"Workflow '{workflow_id}' is ALREADY RUNNING for this chat "
-                                "- not starting a duplicate. Tell the user the workflow is "
-                                "still in progress; the result will arrive when it finishes."
-                            )
-
-                        # Build command to run workflow in separate terminal
-                        import json as json_module
-                        import shlex
-
-                        # Serialize variables to JSON
-                        variables_json = json_module.dumps(result.variables)
-                        _debug_log(f"STEP 3: Variables JSON: {variables_json[:200]}")
-
-                        from vaf.core.platform import Platform
-
-                        # Session/task context goes into the CHILD env only (not the parent's
-                        # global env), so concurrent workers don't clobber each other's session.
-                        session_id = get_current_session_id()
-                        _sub_env = {"VAF_TASK_ID": task_id, "VAF_AGENT_TYPE": f"workflow:{workflow_id}"}
-                        if session_id:
-                            _sub_env["VAF_SESSION_ID"] = session_id
-                        _debug_log(f"STEP 4: Child env prepared, session_id={session_id}")
-
-                        # Pass Language Hint to workflow terminal
-                        if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language:
-                            _sub_env["VAF_USER_LANGUAGE"] = self.prompt_manager.user_language
-
-                        # Build command with proper escaping for the platform.
-                        # Use sys.executable so the correct venv Python is used regardless
-                        # of whether 'vaf' is on PATH (it lives in venv/bin which is not
-                        # always on the system PATH when VAF starts as a service).
-                        _py = shlex.quote(sys.executable)
-                        if Platform.is_windows():
-                            # Windows CMD: escape double quotes with backslash (for subprocess shell=True)
-                            # Also escape backslashes that precede quotes
-                            escaped_json = variables_json.replace('\\', '\\\\').replace('"', '\\"')
-                            cmd = f'{sys.executable} -m vaf.main workflow run "{workflow_id}" --variables "{escaped_json}" --task-id {task_id}'
-                        else:
-                            # Unix: use shlex.quote for proper escaping
-                            cmd = f'{_py} -m vaf.main workflow run "{workflow_id}" --variables {shlex.quote(variables_json)} --task-id {task_id}'
-                        _debug_log(f"STEP 5: Command built: {cmd[:300]}")
-
-                        _debug_log("STEP 6: Calling Platform.open_new_terminal...")
-                        result_ok = Platform.open_new_terminal(cmd, title=f"VAF Workflow: {workflow_id}", extra_env=_sub_env)
-                        _debug_log(f"STEP 7: open_new_terminal returned: {result_ok}")
-                    except Exception as e:
-                        _debug_log(f"ERROR: {type(e).__name__}: {e}")
-                        # The task was registered but no runner will ever pick it
-                        # up - remove it, or it reads as a live run (blocking the
-                        # duplicate guard) until the stale-task reaper fires.
-                        try:
-                            ipc.cancel_task(task_id)
-                        except Exception:
-                            pass
-                        raise
-
-                    if result_ok:
-                        UI.event("Workflow", msg_running_separate.format(task_id=task_id[:8]), style="cyan")
-                        UI.info(msg_runs_independently)
-
-                        # Return async marker
-                        return msg_async_return.format(task_id=task_id, workflow_id=workflow_id, name=template['name'])
-
-                    # Spawn reported failure (no terminal opened): the old code
-                    # returned the async marker anyway - the user was told a
-                    # workflow was running that never existed. Deregister and
-                    # fall through to the inline execution below instead (the
-                    # same fallback the sub-agent spawns use, see cancel_task).
-                    # Known residual (accepted): the inline run below executes
-                    # UNREGISTERED - like this lane's normal inline path always
-                    # has - so for its duration the duplicate guard and the
-                    # workspace-delete rail cannot see it. Registering inline
-                    # runs here would need the same heartbeat+deregistration
-                    # lifecycle execute_workflow now has; do that if inline
-                    # duplicates ever show up in practice.
-                    _debug_log("STEP 7b: spawn failed - falling back to inline execution")
-                    try:
-                        ipc.cancel_task(task_id)
-                    except Exception:
-                        pass
-            
             # Execute workflow inline (without defaults parameter).
             # Pass check_stop so user can abort via Stop button (checked between each step).
             session_id_for_stop = getattr(self, "current_session_id", None) or getattr(self, "_session_id", None)

@@ -214,6 +214,16 @@ def test_the_web_cuts_the_list_only_where_the_tool_put_it():
     assert _without_options(loose, [ask]) == loose
 
 
+def test_a_later_mention_in_a_sentence_does_not_hide_the_list():
+    """The same question and option again, later, inside a sentence: the newest match is not
+    whole lines, and the list before it still goes. MUTATION: take only `lastIndexOf` again
+    and the answer keeps its list."""
+    one = {"question": "Passt das?", "options": ["Ja"]}
+    tail = "\n\nIch frage nochmal: Passt das?\n\n1. Jawohl, schreib es."
+    answer = chat_closing(one["question"], one["options"]) + tail
+    assert _without_options(answer, [one]) == "Passt das?" + tail
+
+
 # ── ask_user rides along on every chat turn, and no rider pushes out the task's tools ──
 
 def test_the_riders_never_push_out_what_the_task_needs():

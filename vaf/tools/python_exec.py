@@ -92,13 +92,17 @@ class PythonExecTool(BaseTool):
 
         logger.warning(f"⚠️ Executing Python code on HOST (unsandboxed): {code[:50]}...")
 
+        # The person's stored credentials the code names, as environment variables
+        # (vaf/core/user_secrets.py); the code carries the name, never the value.
+        from vaf.core import user_secrets
+        secret_env = user_secrets.env_for(code, user_scope_id=scope)
         try:
             import platform
             run_kwargs = {
                 "capture_output": True,
                 "text": True,
                 "timeout": timeout,
-                "env": {**os.environ, "PYTHONIOENCODING": "utf-8"},
+                "env": {**os.environ, "PYTHONIOENCODING": "utf-8", **secret_env},
             }
             if platform.system() == "Windows":
                 run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -108,8 +112,8 @@ class PythonExecTool(BaseTool):
         except Exception as e:
             return f"[ERROR] python_exec: {e}"
 
-        out = (proc.stdout or "").strip()
-        err = (proc.stderr or "").strip()
+        out = user_secrets.scrub((proc.stdout or "").strip(), secret_env)
+        err = user_secrets.scrub((proc.stderr or "").strip(), secret_env)
 
         # Add warning to output
         warning = "⚠️ [HOST EXECUTION - No Sandbox]\n\n"

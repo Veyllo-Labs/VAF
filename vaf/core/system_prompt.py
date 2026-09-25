@@ -1462,12 +1462,25 @@ Then use the results to answer. Do NOT guess from your training data!
                 "colours, positions, small text, locating an object), call `analyze_image(prompt=…)`."
             )
 
+        # The person's stored credentials, by NAME only (vaf/core/user_secrets.py), when a tool
+        # that can hand them to a command is loaded. Without the names the model asks for the
+        # password in the chat, which is exactly where it must not go.
+        _secrets_note = ""
+        if self.agent and ("host_bash" in tool_names or "python_exec" in tool_names):
+            try:
+                from vaf.core.user_secrets import prompt_note
+                _secrets_note = prompt_note(
+                    user_scope_id=getattr(self.agent, "_current_user_scope_id", None),
+                    username=getattr(self.agent, "_current_username", None))
+            except Exception:
+                _secrets_note = ""
+
         # Short summary for prompt (full docs are in tool definitions)
         return f"""
 ## Available Tools
 You have access to {len(tool_names)} tools: {', '.join(sorted(tool_names))}
 
-Use tools proactively to accomplish tasks. Don't ask for permission - just use them when appropriate.{_vision_note}
+Use tools proactively to accomplish tasks. Don't ask for permission - just use them when appropriate.{_vision_note}{_secrets_note}
 
 ### ⚡ Multiple Tool Calls in ONE Response
 **You CAN and SHOULD call multiple tools in a SINGLE response when the user asks for multiple simple things!**

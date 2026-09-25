@@ -2387,6 +2387,19 @@
     "discarded": "Atıldı",
     "replaced": "Daha yeni bir sürümle değiştirildi"
   },
+  "secrets": {
+    "title": "Komutlar için erişim bilgileri",
+    "intro": "Ajanının bu bilgisayarda çalıştırdığı komutlarda kullanabileceği parolalar ve token'lar, örneğin bir FTP girişi. Ajan yalnızca adı görür ve onu değişken olarak yazar; değer komuta gider, yapay zekâ modeline ya da sohbete asla gitmez.",
+    "empty": "Henüz bir şey kaydedilmedi.",
+    "name": "Ad",
+    "namePlaceholder": "ör. FTP_PAROLASI",
+    "value": "Değer",
+    "valuePlaceholder": "Parola veya token",
+    "save": "Kaydet",
+    "saved": "Kaydedildi. Ajanın bunu {env} olarak kullanır.",
+    "failed": "Bu işe yaramadı.",
+    "delete": "Sil"
+  },
   "inbox": {
     "title": "Gelen kutusu",
     "subtitle": "{waits} yanıt bekliyor · {unread} okunmamış",

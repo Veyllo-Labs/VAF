@@ -2387,6 +2387,19 @@
     "discarded": "Discarded",
     "replaced": "Replaced by a newer version"
   },
+  "secrets": {
+    "title": "Credentials for commands",
+    "intro": "Passwords and tokens your agent may use in the commands it runs on this computer, such as an FTP login. The agent only sees the name and writes it as a variable; the value goes to the command and never to the AI model or into the chat.",
+    "empty": "Nothing stored yet.",
+    "name": "Name",
+    "namePlaceholder": "e.g. FTP_PASSWORD",
+    "value": "Value",
+    "valuePlaceholder": "Password or token",
+    "save": "Save",
+    "saved": "Saved. Your agent uses it as {env}.",
+    "failed": "That did not work.",
+    "delete": "Delete"
+  },
   "inbox": {
     "title": "Inbox",
     "subtitle": "{waits} waiting for an answer · {unread} unread",

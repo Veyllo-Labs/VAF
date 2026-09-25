@@ -1077,6 +1077,16 @@ except ImportError as e:
 except Exception as e:
     log("WebServer", f"Failed to mount outbox routes: {e}")
 
+# Mount the credential routes (the caller's own secrets for their agent's commands; names only)
+try:
+    from vaf.api.secrets_routes import router as secrets_router
+    app.include_router(secrets_router)
+    log("WebServer", "Secrets routes mounted at /api/secrets")
+except ImportError as e:
+    log("WebServer", f"Secrets routes not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount secrets routes: {e}")
+
 # Mount Auth routes (Local Network Authentication)
 try:
     from vaf.api.auth_routes import router as auth_router

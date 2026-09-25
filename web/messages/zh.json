@@ -2387,6 +2387,19 @@
     "discarded": "已丢弃",
     "replaced": "已被新版本取代"
   },
+  "secrets": {
+    "title": "命令使用的凭据",
+    "intro": "你的智能体在这台电脑上运行命令时可以使用的密码和令牌，例如 FTP 登录信息。智能体只能看到名称，并以变量的形式写入；值只会传给命令，绝不会发送给 AI 模型或出现在聊天中。",
+    "empty": "还没有保存任何内容。",
+    "name": "名称",
+    "namePlaceholder": "例如 FTP_PASSWORD",
+    "value": "值",
+    "valuePlaceholder": "密码或令牌",
+    "save": "保存",
+    "saved": "已保存。你的智能体会以 {env} 使用它。",
+    "failed": "操作未成功。",
+    "delete": "删除"
+  },
   "inbox": {
     "title": "收件箱",
     "subtitle": "{waits} 个等待回复 · {unread} 条未读",

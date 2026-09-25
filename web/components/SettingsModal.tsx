@@ -30,6 +30,7 @@ import type { WorkflowSaveData } from './settings/WorkflowCreator';
 import SkillsEditor from './settings/SkillsEditor';
 import UpdateRepairModal from './settings/UpdateRepairModal';
 import LanguagePicker from './settings/LanguagePicker';
+import SecretsSection from './settings/SecretsSection';
 import { PickerSelect } from '@/components/ui/PickerDialog';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { groupToolsIntoBundles, bundleColor, bundleLabel, bundleIconKey } from '@/lib/toolBundles';
@@ -4608,6 +4609,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 onOpenGitHubDashboard={() => setShowGitHubDashboard(true)}
                             />
                         )}
+                        {/* The person's own credentials for their agent's commands: per person,
+                            like the connections above it, so not admin-only. */}
+                        {activeTab === 'connections' && <SecretsSection />}
 
                         {activeTab === 'local_network' && currentUser?.role === 'admin' && (
                             <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">

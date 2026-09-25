@@ -2387,6 +2387,19 @@
     "discarded": "Verworfen",
     "replaced": "Durch eine neuere Fassung ersetzt"
   },
+  "secrets": {
+    "title": "Zugangsdaten für Befehle",
+    "intro": "Passwörter und Tokens, die dein Agent in Befehlen auf diesem Computer verwenden darf, etwa ein FTP-Login. Der Agent sieht nur den Namen und schreibt ihn als Variable; der Wert geht an den Befehl, nie an das KI-Modell und nie in den Chat.",
+    "empty": "Noch nichts gespeichert.",
+    "name": "Name",
+    "namePlaceholder": "z. B. FTP_PASSWORT",
+    "value": "Wert",
+    "valuePlaceholder": "Passwort oder Token",
+    "save": "Speichern",
+    "saved": "Gespeichert. Dein Agent verwendet es als {env}.",
+    "failed": "Das hat nicht geklappt.",
+    "delete": "Löschen"
+  },
   "inbox": {
     "title": "Posteingang",
     "subtitle": "{waits} warten auf Antwort · {unread} ungelesen",

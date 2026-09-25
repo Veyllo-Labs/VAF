@@ -40,6 +40,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   own words answer them. Before, the agent asked in plain text, if at all, and sometimes went
   on and answered its own question.
 
+- **Passwords for your agent's commands stay out of the chat.** Store an FTP login, an API
+  token or a database password once under a name in Settings, Connections, "Credentials for
+  commands" (or with `vaf secrets set NAME`). The agent uses it by name in the commands it
+  runs on your computer, and the value goes only to that command: never to the AI model,
+  never into the chat, and it is removed from what the command prints. Before, a password
+  typed into the chat went along with every later message.
+
 ### Changed
 
 - **A turn's tools no longer lose their place to the ones that are always offered.** With

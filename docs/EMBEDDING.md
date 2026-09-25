@@ -888,6 +888,14 @@ with `host_process(action="list")`, or drain the queue yourself
 (`vaf.core.task_queue.TaskQueue().get(...)`, `wake_kind(task.metadata)` says
 what woke you).
 
+**Credentials for those commands** come from the person's own store, never
+from the model: `host_bash` and `python_exec` hand a command exactly the
+`$VAF_SECRET_<NAME>` variables it names and scrub their values out of the output
+(`vaf/core/user_secrets.py`). An embedder fills the store for its end user with
+`user_secrets.set_secret(name, value, user_scope_id=...)`. NAMED BOUNDARY: it is
+engine-internal like the channel credentials and not on the facade, because
+VAF's own host tools are its only measured consumers.
+
 `self.log(message)` is the supported way for a tool to write a diagnostic
 line. It appends to `tools_<date>.log` in the VAF log directory, filling in
 your tool's name and the current session id, and it inherits everything the

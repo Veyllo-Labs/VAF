@@ -166,7 +166,7 @@ reason to skip the backup - losing the keys is the unrecoverable direction.
 | Browser sessions (live site cookies, auth tokens) | `~/.vaf/browser_sessions/<scope>/` | AES-256-GCM; the agent lane stages a decrypted 0600 temp beside the store for the duration of a run (browser_use reads and auto-saves the path itself) and folds it back encrypted - the construction the audit named |
 | Memory rows and chunk text | Postgres | AES-256-GCM (unchanged) |
 | Mail bodies | `mail.db` | AES-256-GCM (unchanged) |
-| Credentials (mail, cloud, API keys) | `<data_dir>/*.enc` | Envelope (unchanged) |
+| Credentials (mail, cloud, API keys, a person's credentials for commands in `user_secrets.enc`) | `<data_dir>/*.enc` | Envelope (unchanged) |
 | User profile cache | `~/.vaf/user_profile_cache/` | AES-256-GCM (unchanged) |
 
 File format: `VAFENC1:` ‖ 12-byte nonce ‖ ciphertext. A file WITHOUT that prefix

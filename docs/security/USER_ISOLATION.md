@@ -496,6 +496,21 @@ Three properties are worth knowing rather than rediscovering:
   connected before this change carries none; that account stays a name-keyed lookup, which
   is what it was, and the legacy probe finds it.
 
+### A person's credentials for commands are theirs alone
+
+The credentials a person stores for their agent's commands (`vaf/core/user_secrets.py`:
+Settings, Connections, "Credentials for commands"; `vaf secrets`; `/api/secrets`) are
+addressed by the same shared key builder, namespace `secret`: a scope wins over a name, the
+machine owner is the unscoped form. The owner's prefix `secret:` starts every scoped key too,
+so a listing takes only the keys with no further segment; a tenant never sees the owner's
+names and the owner never sees a tenant's. A direct consumer with no identity (the coder, a
+workflow step, an automation) is the machine owner, which is the jail's rule for the same
+lanes. `host_bash` (foreground and background) and `python_exec` hand a command exactly the
+`VAF_SECRET_<NAME>` variables its text names, never the whole store, and scrub those values
+out of what it prints before the model reads it; a background command's owner-only log keeps
+the raw output and is scrubbed when read back. No route, command or prompt returns a value.
+Guarded by `tests/test_user_secrets.py`.
+
 Cloud DOWNLOADS follow the same rule. Both download actions wrote to
 `Platform.downloads_dir()` - process global, so every tenant's download landed in the
 owner's home, in one of the four roots `GET /api/file` serves. A tenant now receives a

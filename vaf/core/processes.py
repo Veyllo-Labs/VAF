@@ -71,6 +71,9 @@ class BackgroundProcess:
     # shell - can still be stopped. After the leader has exited only the GROUP is ever
     # signalled, never the pid, which may belong to an unrelated process by then.
     pgid: Optional[int] = None
+    # The stored credentials the command was handed (vaf/core/user_secrets.py), kept in memory
+    # only, to scrub them from what is read back into the conversation.
+    secret_env: Dict[str, str] = field(default_factory=dict, repr=False)
 
     @property
     def running(self) -> bool:
@@ -113,7 +116,8 @@ def _open_private(path: Path):
 
 def start(command: str, *, session_id: str, user_scope_id: Any = None,
           username: Optional[str] = None, role: Optional[str] = None,
-          source: str = "web", cwd: Optional[str] = None) -> BackgroundProcess:
+          source: str = "web", cwd: Optional[str] = None,
+          secret_env: Optional[Dict[str, str]] = None) -> BackgroundProcess:
     """Start ``command`` detached and return its record. Raises ProcessRefused."""
     global _atexit_registered
     command = str(command or "").strip()
@@ -141,7 +145,8 @@ def start(command: str, *, session_id: str, user_scope_id: Any = None,
     kwargs: Dict[str, Any] = {
         "shell": True, "stdin": subprocess.PIPE, "stdout": log_file,
         "stderr": subprocess.STDOUT, "cwd": cwd or None,
-        "env": {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"},
+        "env": {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1",
+                **(secret_env or {})},
     }
     if os.name == "nt":
         kwargs["creationflags"] = (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -162,7 +167,7 @@ def start(command: str, *, session_id: str, user_scope_id: Any = None,
     record = BackgroundProcess(
         id=proc_id, command=command, session_id=session_id, user_scope_id=user_scope_id,
         username=username, role=role, source=source or "web", log_path=log_path, popen=popen,
-        pgid=None if os.name == "nt" else popen.pid,
+        pgid=None if os.name == "nt" else popen.pid, secret_env=dict(secret_env or {}),
     )
     with _lock:
         _registry[proc_id] = record
@@ -244,7 +249,8 @@ def read_tail(record: BackgroundProcess, *, max_chars: int = 4000) -> str:
             data = fh.read()
     except OSError:
         return ""
-    text = data.decode("utf-8", errors="replace")
+    from vaf.core.user_secrets import scrub
+    text = scrub(data.decode("utf-8", errors="replace"), record.secret_env)
     if size > max_chars:
         cut = text.find("\n")
         text = f"... ({size - len(data)} earlier bytes not shown)\n" + (

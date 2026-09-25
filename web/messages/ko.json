@@ -2387,6 +2387,19 @@
     "discarded": "버림",
     "replaced": "새 버전으로 바뀜"
   },
+  "secrets": {
+    "title": "명령어용 접속 정보",
+    "intro": "에이전트가 이 컴퓨터에서 실행하는 명령어에 쓸 수 있는 비밀번호와 토큰이에요. 예를 들어 FTP 로그인 정보가 있어요. 에이전트는 이름만 보고 변수로 적으며, 값은 명령어에만 전달되고 AI 모델이나 채팅에는 절대 가지 않아요.",
+    "empty": "아직 저장된 항목이 없어요.",
+    "name": "이름",
+    "namePlaceholder": "예: FTP_PASSWORD",
+    "value": "값",
+    "valuePlaceholder": "비밀번호 또는 토큰",
+    "save": "저장",
+    "saved": "저장했어요. 에이전트는 {env}(으)로 사용해요.",
+    "failed": "처리하지 못했어요.",
+    "delete": "삭제"
+  },
   "inbox": {
     "title": "받은 편지함",
     "subtitle": "{waits}개 답장 대기 중 · {unread}개 읽지 않음",

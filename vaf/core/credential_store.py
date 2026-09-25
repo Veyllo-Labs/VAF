@@ -64,6 +64,9 @@ _KEY_PROFILES = {
     "email":     (True,              None,             None),
     "github":    (False,             "default",        "user"),
     "cloud":     (True,              None,             None),
+    # A person's own credentials for commands (vaf/core/user_secrets.py). No legacy data, so
+    # the plainest shape: `secret:<scope>:<name>`, the local admin as `secret:<name>`.
+    "secret":    (False,             None,             None),
 }
 
 

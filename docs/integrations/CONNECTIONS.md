@@ -40,6 +40,19 @@ VAF has a calendar of its own (the calendar window in the sidebar footer; design
 | Dropbox | Coming Soon | Sync and access Dropbox files |
 | Nextcloud | Coming Soon | Connect to self-hosted Nextcloud via WebDAV |
 
+### Credentials for commands
+
+Passwords and tokens the agent may use in the commands it runs on this computer - an FTP
+login, an API token, a database password - are stored under a NAME in **Settings →
+Connections → Credentials for commands**, or with `vaf secrets set NAME` (the value is read
+without echo). The agent sees only the names and writes `$VAF_SECRET_<NAME>` into a
+`host_bash` command or `os.environ["VAF_SECRET_<NAME>"]` into `python_exec` code; the tool
+hands the command exactly the variables it names and removes their values from the output
+before the model reads it. A value is never shown again, only replaced or deleted. Per
+person, in `user_secrets.enc` (envelope-encrypted). A credential typed into the chat is in the
+chat for good: it travels with every later turn, so it belongs here instead. Rules and
+boundaries: `vaf/core/user_secrets.py`; isolation: [USER_ISOLATION.md](../security/USER_ISOLATION.md).
+
 ### Developer
 
 | Platform | Status | Description |

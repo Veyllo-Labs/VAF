@@ -111,12 +111,19 @@ class HostBashTool(BaseTool):
         if not is_safe:
             return f"[BLOCKED] {warning}"
 
+        # The person's stored credentials this command names, as environment variables: the
+        # command text, the dialog and the session carry `$VAF_SECRET_<NAME>`, never the value
+        # (vaf/core/user_secrets.py).
+        from vaf.core import user_secrets
+        secret_env = user_secrets.env_for(command, user_scope_id=kwargs.get("user_scope_id"),
+                                          username=kwargs.get("username"))
+
         if kwargs.get("background"):
-            return self._start_background(command, kwargs)
+            return self._start_background(command, kwargs, secret_env)
 
         run_kwargs = {
             "capture_output": True, "text": True, "timeout": timeout, "shell": True,
-            "env": {**os.environ, "PYTHONIOENCODING": "utf-8"},
+            "env": {**os.environ, "PYTHONIOENCODING": "utf-8", **secret_env},
         }
         if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
             run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -130,8 +137,8 @@ class HostBashTool(BaseTool):
         parts = ["[HOST EXECUTION]", f"$ {command}"]
         if warning:
             parts.insert(0, warning)
-        out = (proc.stdout or "").strip()
-        err = (proc.stderr or "").strip()
+        out = user_secrets.scrub((proc.stdout or "").strip(), secret_env)
+        err = user_secrets.scrub((proc.stderr or "").strip(), secret_env)
         # Start AND end of each stream: a build prints its error last.
         from vaf.core.tool_dispatch import clip_middle
         if out:
@@ -142,7 +149,7 @@ class HostBashTool(BaseTool):
         return "\n".join(parts)
 
     @staticmethod
-    def _start_background(command: str, kwargs: dict) -> str:
+    def _start_background(command: str, kwargs: dict, secret_env=None) -> str:
         """Start the command detached (vaf/core/processes.py) and return its id at once."""
         from vaf.core import processes
         from vaf.core.subagent_ipc import get_current_session_id
@@ -163,6 +170,7 @@ class HostBashTool(BaseTool):
             record = processes.start(
                 command, session_id=session_id, user_scope_id=kwargs.get("user_scope_id"),
                 username=kwargs.get("username"), role=kwargs.get("user_role"),
+                secret_env=secret_env,
             )
         except processes.ProcessRefused as e:
             return f"[BLOCKED] {e}"

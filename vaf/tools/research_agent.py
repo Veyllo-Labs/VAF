@@ -491,7 +491,9 @@ class ResearchAgentTool(BaseTool):
         "USE ONLY FOR: Deep research (10+ sources), multi-perspective analysis, detailed reports. "
         "DON'T USE FOR: Simple lookups (weather, news, facts) - use web_search instead! "
         "For multiple simple questions, just call web_search multiple times. "
-        "Example: ✅ 'Research AI market trends' ❌ 'Weather + News' (use web_search twice!)"
+        "Example: ✅ 'Research AI market trends' ❌ 'Weather + News' (use web_search twice!) "
+        "Several independent topics: call it up to 4 times in ONE response; they run side by side "
+        "and their results arrive together."
     )
 
     parameters = {

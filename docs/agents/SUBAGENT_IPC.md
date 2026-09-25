@@ -103,6 +103,24 @@ no bubble (workflow steps). See [Workflow UI Components](../web-ui/WORKFLOW_UI_C
 
 ---
 
+### Several at once (a fan-out of reviewers)
+
+The model may start up to `Agent.MAX_FANOUT` (4) `librarian_agent` or `research_agent` runs in
+ONE round - reviewers of the same work with different focus, or independent topics. They are
+one group: `Agent.execute_tool` wraps the dispatch in `fanout_scope("<round>:<agent type>")`,
+`create_task` records it as the task's `fanout_id` (a context variable, so every spawn path
+carries it and it crosses into the bounded-run worker thread), and `_check_subagent_results`
+passes the results through `hold_open_fanouts`: a member's result waits while a sibling is
+ACTIVE, or PENDING and younger than `FANOUT_PENDING_GRACE_S`, and the group is delivered in one
+drain pass, as one answer. A crashed member is reaped by `check_zombies` into a failed result, so
+it never holds the others. A member is not validated alone against the whole request (it covers
+one part by design); the model reads the group together.
+
+What stays exclusive: the coder and the document agent (they write into the chat's workspace,
+and two would write over each other), any sub-agent of an EARLIER round (the anti-re-delegation
+guard as before), and everything in local mode (Rule 4.6: one llama server, so no fan-out).
+Guarded by `tests/test_subagent_fanout.py`.
+
 ## Workflow Diagram
 
 ### Step 1: Task Creation
@@ -303,7 +321,8 @@ sub-agent genuinely runs for the session (heartbeat-verified via
 `Agent.get_live_session_subagents()`, the shared liveness helper), the system prompt gets a
 `<subagent_active>` block (keep replies light; do not start heavy work; do not re-delegate;
 hands off the session workspace; the result arrives automatically), a hard guard refuses a
-duplicate same-type spawn, the workflow router is suppressed pre-LLM, and the web UI keeps typing and
+duplicate same-type spawn (a fan-out started in one round is not a duplicate, see "Several at
+once" below), the workflow router is suppressed pre-LLM, and the web UI keeps typing and
 sending unlocked (no banner - the SubAgent window already shows the work). A Stop press while a reply streams stops ONLY the
 generation - killing the sub-agent requires pressing Stop again when nothing is streaming
 (explicit `scope: "all"`). Completed results are delivered exclusively by the headless

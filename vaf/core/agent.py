@@ -153,6 +153,13 @@ _THINKING_NODE_REQUIRED_TOOLS = {
 }
 
 
+# Sub-agents that may be started several at once in one round (a fan-out, see
+# Agent._fanout_for): they read and report. The coder and the document agent write into the
+# chat's workspace, and two of them at once would write over each other.
+_FANOUT_TOOLS = ("librarian_agent", "research_agent")
+_MAX_FANOUT = 4
+
+
 def _task_tools_first(tools, task_tools) -> list:
     """The per-turn tool set in cap order: the tools chosen for this task, then the ones that
     ride along on every turn (memory, working memory, timer, messengers, ask_user), each group
@@ -2972,6 +2979,7 @@ class Agent:
                     "agent_type": getattr(t, "agent_type", "sub-agent") or "sub-agent",
                     "task_description": getattr(t, "task_description", "") or "",
                     "running_seconds": int(max(0, running)),
+                    "fanout_id": getattr(t, "fanout_id", None),
                 })
             return live
         except Exception:
@@ -4278,7 +4286,8 @@ class Agent:
             # consumes via consume_result() directly, unaffected by this filter.
             from vaf.core.subagent_ipc import is_engine_owned
             results = [t for t in results if not is_engine_owned(getattr(t, "task_id", None))]
-            return results
+            # A fan-out's results wait for the last member and then arrive as one answer.
+            return ipc.hold_open_fanouts(results)
         except Exception:
             return []
 
@@ -4705,6 +4714,12 @@ class Agent:
                             user_intent = delegation["intent"]
                 except Exception:
                     pass
+                # A fan-out member (several reviewers of one round) covers ONE part of the
+                # request by design; judged alone against the whole request it would read as
+                # "not fulfilled" and force a retry. The model reads the group together and is
+                # the judge there, so the member is not validated on its own.
+                if getattr(task, "fanout_id", None):
+                    user_intent = ""
 
                 fulfilled, retry_instruction = self._validate_subagent_result_with_llm(
                     user_intent, task.task_description, task.result, task.agent_type
@@ -11246,6 +11261,11 @@ class Agent:
                 self._held_this_round = []
                 # Set by `_close_turn` when a call of THIS round ends the turn.
                 self._turn_closing = None
+                # The round's fan-out (`_fanout_for`): sub-agents of one kind started in it
+                # are one group, whose results arrive together.
+                import uuid as _uuid
+                self._subagent_round = _uuid.uuid4().hex[:8]
+                self._round_spawns = {}
 
                 for tc in tool_calls_detected:
                     function_name = tc['function']['name']
@@ -12745,7 +12765,28 @@ class Agent:
                 after_emit=self._chat_after_dispatch_bookkeeping,
             ),
         )
-        return caller.execute(name, args)
+        # The fan-out a sub-agent spawned by this call belongs to (None for any other call,
+        # so nothing leaks from one call into the next).
+        from vaf.core.subagent_ipc import fanout_scope
+        with fanout_scope(self._fanout_for(name)):
+            return caller.execute(name, args)
+
+    FANOUT_TOOLS = _FANOUT_TOOLS
+    MAX_FANOUT = _MAX_FANOUT
+
+    def _fanout_for(self, name) -> Optional[str]:
+        """The fan-out id a spawn of `name` in this round gets, or None.
+
+        Only in API mode (Rule 4.6: local mode is ONE llama server, and a fan-out would be N
+        inferences at once) and only inside a chat round, which is what a group is."""
+        if name not in _FANOUT_TOOLS:
+            return None
+        rnd = getattr(self, "_subagent_round", None)
+        if not rnd:
+            return None
+        if getattr(self, "provider", "local") == "local" or getattr(self, "api_backend", None) is None:
+            return None
+        return f"{rnd}:{name}"
 
     # ── the chat turn's own stages, handed to the pipeline as hooks ──────────────
 
@@ -12969,11 +13010,23 @@ class Agent:
         _subagent_dup_msg = None
         if name in SUBAGENT_TOOLS:
             try:
+                # A deliberate fan-out is not a duplicate: siblings started in THIS round
+                # (the same fan-out id) are its own group, up to MAX_FANOUT of them. One of
+                # an earlier round still blocks, as before.
+                _fanout = self._fanout_for(name)
                 _live_same = [
                     t for t in self.get_live_session_subagents()
                     if t.get("agent_type") == name
+                    and not (_fanout and t.get("fanout_id") == _fanout)
                 ]
-                if _live_same:
+                _spawned = (getattr(self, "_round_spawns", None) or {}).get(name, 0)
+                if not _live_same and _fanout and _spawned >= _MAX_FANOUT:
+                    _subagent_dup_msg = (
+                        f"Not started: {_MAX_FANOUT} {name} runs were already started in this "
+                        f"step, the most that run at once. Their results arrive together; give "
+                        f"this task to one of them next time, or ask after they are in."
+                    )
+                elif _live_same:
                     _t0 = _live_same[0]
                     _subagent_dup_msg = (
                         f"⚠️ A {name} is ALREADY RUNNING on: "
@@ -13000,6 +13053,8 @@ class Agent:
                 self.main_persistence.write_subagent_delegation_intent(intent, goal, name)
         if _subagent_dup_msg is not None:
             return _subagent_dup_msg
+        if name in SUBAGENT_TOOLS and isinstance(getattr(self, "_round_spawns", None), dict):
+            self._round_spawns[name] = self._round_spawns.get(name, 0) + 1
 
         # An outward send the PERSON ordered in the web UI waits for that person. This is the
         # seam for it because it is the last point before dispatch that sees the final

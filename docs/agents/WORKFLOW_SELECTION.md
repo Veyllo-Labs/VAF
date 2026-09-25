@@ -182,6 +182,16 @@ asking the model through `complete()` there) and the same cleanup of throwaway f
 step's result. A second launch of the same workflow in the same chat while one runs is refused
 (register-then-verify, `spawn_subagent(exclusive=True)`), never run inline next to it.
 
+NAMED BOUNDARY: a workflow's steps run one after another; there are no parallel steps. The
+engine isolates a sub-agent step through process-wide environment variables (`VAF_AGENT_TYPE`,
+`VAF_TASK_ID`, `VAF_IN_SUBAGENT_TERMINAL`, set and restored per step), and in a background run
+such a step runs inside the workflow's own process. Two at once would need the step's identity
+as data rather than environment, and an ownership mark the chat's result drain can see across
+processes (`mark_engine_owned` is in-process only). What parallel steps were wanted for -
+several reviewers of the same work, read together - is the chat lane's fan-out: up to four
+`librarian_agent` or `research_agent` runs started in one round, delivered as one answer
+([SUBAGENT_IPC.md](SUBAGENT_IPC.md), "Several at once").
+
 A weak model can confuse the two: `execute_workflow`'s `workflow_id` must be a **saved template id** (from `list_workflows`), never the name of a tool - in particular never `"create_agent_workflow"` itself, which is the *other* tool (builds/runs a workflow, does not look one up by id). Both tools' descriptions now say this explicitly, and `execute_workflow` detects a live tool-name collision and redirects to the right tool instead of just repeating the template list (`vaf/tools/workflow_executor.py`).
 
 The redirect is an ECHO-BACK when possible: a model that merged the two hints usually delivers a complete, correct run_temp payload inside `variables` (live incident: `execute_workflow(workflow_id="create_agent_workflow", variables={action: "run_temp", steps: [...]})` with perfectly good steps - after a prose-only redirect the model gave up on workflows and did every step manually). When `variables` carries `steps`, the error message hands back the exact `create_agent_workflow(...)` call to copy, with the model's own arguments verbatim (action defaulted to `run_temp`, oversized payloads fall back to the generic advice). Weak models copy reliably; they rephrase poorly. The redirect stays a MESSAGE - it never auto-forwards the call (dispatch gates and the "agent decides" principle stay intact).

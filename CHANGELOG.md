@@ -51,6 +51,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the answer, instead of pulling the whole page into the conversation where the part that
   mattered was often cut off. It can also download a file from the web - an archive, a PDF, an
   image - straight into the chat's files, without a shell command.
+- **Several reviewers at once.** The agent can now start up to four file or research
+  helpers in one go - reviewers of the same work with a different focus each, or separate
+  topics - and gets their results together, as one answer, once the last one is done. Before,
+  a second helper of the same kind was refused while the first ran. Not in local mode, where
+  one model serves everything, and never for the coding helper, which writes into the chat's
+  files.
 
 ### Changed
 

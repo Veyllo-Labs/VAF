@@ -107,7 +107,10 @@ class LibrarianTool(BaseTool):
     - **System Info:** "How many drives", "Hardware info"
     
     Use this agent for ANY file system, cloud storage, or storage query. Do not say "I can't access files" - delegate to this agent! Do not use this agent to search or analyze the VAF installation folder; that path is not allowed.
-    This agent CANNOT delete files or folders - never delegate deletion tasks to it."""
+    This agent CANNOT delete files or folders - never delegate deletion tasks to it.
+    **Several at once:** to have the same files looked at from several angles (reviewers: e.g.
+    correctness, security, readability), call it up to 4 times in ONE response, each `task`
+    with its own focus. They run side by side and their results arrive together."""
     
     parameters = {
         "type": "object",

@@ -110,6 +110,34 @@ def _push_result_ready(task_id: str, session_id: Optional[str]) -> None:
 _engine_owned: Dict[str, float] = {}
 _engine_owned_lock = threading.Lock()
 
+# The fan-out a spawn belongs to: several sub-agents of one kind started in ONE round of a
+# chat turn - reviewers of the same material with different focus - whose results are
+# delivered together, once all of them are in (`hold_open_fanouts`). The chat lane sets it
+# around the dispatch (Agent.execute_tool, `fanout_scope`), and `create_task` records it, so
+# every spawn path carries it without a parameter of its own. A context variable, because the
+# bounded run copies the caller's context into the thread that runs the tool.
+_fanout_ctx: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "vaf_subagent_fanout", default=None)
+
+
+@contextmanager
+def fanout_scope(fanout_id: Optional[str]):
+    """The fan-out every task created inside belongs to (None: none)."""
+    token = _fanout_ctx.set(fanout_id or None)
+    try:
+        yield
+    finally:
+        _fanout_ctx.reset(token)
+
+
+def current_fanout() -> Optional[str]:
+    return _fanout_ctx.get()
+
+
+#: A member still PENDING after this long (created, child never came up) no longer holds its
+#: fan-out back: the others are delivered rather than waiting on a spawn that did not happen.
+FANOUT_PENDING_GRACE_S = 600
+
 
 def mark_engine_owned(task_id: str) -> None:
     """Claim/refresh a task_id as owned by an in-process engine await loop."""
@@ -168,6 +196,8 @@ class SubAgentTask:
     # a different answer from "0 of 0" and the only one a renderer can act on.
     progress_done: Optional[int] = None
     progress_total: Optional[int] = None
+    # The fan-out this task belongs to (`fanout_scope`): its result waits for its siblings'.
+    fanout_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -446,6 +476,7 @@ class SubAgentIPC:
             created_at=datetime.now().isoformat(),
             session_id=effective_session_id,
             room_id=get_current_room_id(),
+            fanout_id=current_fanout(),
         )
 
         # Add to pending tasks
@@ -586,6 +617,35 @@ class SubAgentIPC:
         if not current:
             return []
         return self.get_active_tasks(session_id=current)
+
+    def hold_open_fanouts(self, results: List[SubAgentTask]) -> List[SubAgentTask]:
+        """`results` without the ones whose fan-out still has a member at work.
+
+        A fan-out's results are delivered together, as one answer, once the last member is
+        in - the way a reviewer round is read. A member counts while it is ACTIVE (the caller
+        reaps dead ones with check_zombies first, and a reaped member is a failed result, so a
+        crashed reviewer never holds the others) or PENDING and younger than
+        FANOUT_PENDING_GRACE_S. A result outside any fan-out is never held. Fails open: a
+        broken read delivers rather than holds.
+        """
+        groups = {t.fanout_id for t in results if getattr(t, "fanout_id", None)}
+        if not groups:
+            return results
+        try:
+            now = datetime.now().timestamp()
+            open_groups = {t.fanout_id for t in self.get_active_tasks() if t.fanout_id in groups}
+            for t in self.get_pending_tasks():
+                if t.fanout_id not in groups:
+                    continue
+                try:
+                    age = now - datetime.fromisoformat(t.created_at).timestamp()
+                except Exception:
+                    age = 0.0
+                if age <= FANOUT_PENDING_GRACE_S:
+                    open_groups.add(t.fanout_id)
+        except Exception:
+            return results
+        return [t for t in results if not (t.fanout_id and t.fanout_id in open_groups)]
 
     def get_pending_tasks(self, session_id: str = None) -> List[SubAgentTask]:
         """

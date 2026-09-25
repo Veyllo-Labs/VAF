@@ -29,7 +29,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `web_search` | read | Search the web; auto-fetches page content for extraction. |
 | `webfetch` | read | Fetch a URL and convert it to readable Markdown. `prompt` reads the page for a question in a model call of its own (`search.answer_from_page`, the reader `web_search` uses per result page) and returns only the answer, so a long page stays out of the conversation. |
 | `download_file` | write | Save a file from a URL as-is: relative `save_to` = the chat's workspace, a folder keeps the file's name. At most 500 MB, never a partial file. `file_access = "write"`: nothing lands outside the caller's own tree. Its own tool so that reading a page stays a read; not offered to a thinking run, which must not create files. |
-| `research_agent` | read | Deep multi-section research sub-agent (10+ sources). |
+| `research_agent` | read | Deep multi-section research sub-agent (10+ sources). Up to 4 in one round run side by side and arrive together (API mode; [SUBAGENT_IPC.md](SUBAGENT_IPC.md)). |
 | `browser_agent` | write | Drive a real Chromium browser for multi-step web tasks. |
 | `render_check` | write | Open a URL or workspace HTML file in the sandbox browser once and report page errors, console output, failed requests, rendered text and a screenshot. |
 | `repair_report` | read | Regenerate empty/too-short sections of an HTML report. |
@@ -43,7 +43,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `find_files` | read | Find files by glob pattern, recursively. |
 | `list_files` | read | List files in a directory. |
 | `tree` | read | ASCII tree of a directory structure. |
-| `librarian_agent` | write | Sub-agent for file system / storage / retrieval; no delete capability - deletion tasks are refused with an explicit capability statement. |
+| `librarian_agent` | write | Sub-agent for file system / storage / retrieval; no delete capability - deletion tasks are refused with an explicit capability statement. Up to 4 in one round (reviewers with different focus) run side by side and arrive together (API mode; [SUBAGENT_IPC.md](SUBAGENT_IPC.md)). |
 
 ## Documents (create, edit, view)
 

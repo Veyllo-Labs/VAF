@@ -43,14 +43,21 @@ export function optionsBlock(options: string[]): string {
     return options.map((o, i) => `${i + 1}. ${o}`).join('\n');
 }
 
-/** The answer without the numbered lists the buttons replace. Only an exact list is cut, so
- *  a turn whose text is not the one the tool built keeps every word. */
+/** The answer without the numbered lists the buttons replace. A list is cut only where the
+ *  tool put it (ask_user.chat_closing): whole lines, right after its own question and a blank
+ *  line. A turn whose text is not the one the tool built keeps every word, and so does a
+ *  sentence that happens to contain an option's words: a bare search for the list text cut
+ *  "1. Ja" out of the middle of "Schritt 1. Ja, das passt." */
 export function withoutOptions(answer: string, asks: AskQuestion[]): string {
     let out = answer;
     for (const q of asks) {
+        const lead = `${q.question}\n\n`;
         const block = optionsBlock(q.options);
-        const at = out.lastIndexOf(block);
-        if (at >= 0) out = out.slice(0, at) + out.slice(at + block.length);
+        const at = out.lastIndexOf(lead + block);
+        const end = at + lead.length + block.length;
+        const wholeLines = at >= 0 && (at === 0 || out[at - 1] === '\n')
+            && (end === out.length || out[end] === '\n');
+        if (wholeLines) out = out.slice(0, at + lead.length) + out.slice(end);
     }
     return out === answer ? answer : out.replace(/\n{3,}/g, '\n\n').trim();
 }

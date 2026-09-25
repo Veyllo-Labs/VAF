@@ -172,6 +172,48 @@ def test_the_web_chat_reads_the_same_contract():
     assert "`${i + 1}. ${o}`" in src and ".join('\\n')" in src
 
 
+_TS = Path(__file__).resolve().parents[1] / "web" / "node_modules" / "typescript"
+
+
+def _without_options(answer, asks):
+    """The web chat's REAL `withoutOptions`, transpiled with the app's own TypeScript and run
+    in node: the cut is the web's code, so a copy of it here would test the copy."""
+    import json
+    import shutil
+    import subprocess
+    if shutil.which("node") is None or not _TS.is_dir():
+        pytest.skip("node or web/node_modules/typescript is not installed")
+    script = (
+        "const ts = require(process.argv[1]);"
+        "const fs = require('fs');"
+        "const src = fs.readFileSync(process.argv[2], 'utf8');"
+        "const js = ts.transpileModule(src, {compilerOptions: {module: ts.ModuleKind.CommonJS,"
+        " target: ts.ScriptTarget.ES2019}}).outputText;"
+        "const m = {exports: {}}; new Function('module', 'exports', js)(m, m.exports);"
+        "const [answer, asks] = JSON.parse(process.argv[3]);"
+        "process.stdout.write(JSON.stringify(m.exports.withoutOptions(answer, asks)));"
+    )
+    out = subprocess.run(["node", "-e", script, str(_TS), str(WEB), json.dumps([answer, asks])],
+                         capture_output=True, text=True, check=True).stdout
+    return json.loads(out)
+
+
+def test_the_web_cuts_the_list_only_where_the_tool_put_it():
+    """MUTATION: search for the bare list again (`out.lastIndexOf(block)`) and the sentence
+    case loses "1. Ja" out of its middle."""
+    ask = {"question": QUESTION, "options": OPTIONS}
+    assert _without_options(chat_closing(QUESTION, OPTIONS), [ask]) == QUESTION
+    two = {"question": "Und die Farbe?", "options": ["Rot", "Blau"]}
+    both = chat_closing(QUESTION, OPTIONS) + "\n\n" + chat_closing(two["question"], two["options"])
+    assert _without_options(both, [ask, two]) == QUESTION + "\n\nUnd die Farbe?"
+    # The option's words inside a sentence, and a list without its question: every word stays.
+    one = {"question": "Passt das?", "options": ["Ja"]}
+    sentence = "Schritt 1. Ja, das passt."
+    assert _without_options(sentence, [one]) == sentence
+    loose = "Hier die Wahl:\n\n" + options_block(OPTIONS)
+    assert _without_options(loose, [ask]) == loose
+
+
 # ── ask_user rides along on every chat turn, and no rider pushes out the task's tools ──
 
 def test_the_riders_never_push_out_what_the_task_needs():

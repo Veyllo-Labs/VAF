@@ -46,7 +46,10 @@ from vaf.tools.base import BaseTool
 IDENTITY_BASELINE = {
     "add_automation_note": ["user_scope_id"],
     "add_automation_todo": ["user_scope_id"],
-    "analyze_image": ["user_scope_id"],
+    # Gained user_role with its file_access declaration: an image the agent made or saved
+    # is looked at under the same read jail read_file has, and the role is what
+    # recognises a SECOND admin.
+    "analyze_image": ["user_role", "user_scope_id"],
     "archive_mail": ["user_scope_id", "username"],
     "ask_user": ["user_scope_id", "username"],
     "browser_agent": ["user_scope_id"],

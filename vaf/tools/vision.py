@@ -1,16 +1,25 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""analyze_image — on-demand vision inspection of an image attached to the chat.
+"""analyze_image - on-demand vision inspection of an image: one attached to the chat, or an
+image file the caller may read.
 
 The main reasoning model is text-only: when a user attaches an image it is described
 once and that description is injected as VISUAL CONTEXT. When the model needs more than
-the description covers — exact colours, positions, small text, locating a specific
-object — it calls this tool with a targeted prompt. The tool re-reads the raw image
+the description covers - exact colours, positions, small text, locating a specific
+object - it calls this tool with a targeted prompt. The tool re-reads the raw image
 (persisted in the session) and runs a fresh, focused vision pass, returning text.
+
+It is also how the agent looks at an image it made ITSELF: a screenshot a command took, a
+chart it exported, a render it produced. Those used to be reachable only inside the chat's
+workspace, by a hand-built check; a screenshot saved anywhere else in the person's own files
+could not be looked at at all, and `read_file` handed the model the raw bytes. The file is
+now held to the same per-user READ boundary `read_file` uses (`file_access = "read"`,
+installed around run() by BaseTool), so what the person may read, the agent may look at.
 """
 from __future__ import annotations
 
+import os
 from typing import Dict, List, Optional
 
 from vaf.tools.base import BaseTool
@@ -19,15 +28,16 @@ from vaf.tools.base import BaseTool
 class AnalyzeImageTool(BaseTool):
     name = "analyze_image"
     category    = "documents"
-    identity_kwargs = ("user_scope_id",)
+    identity_kwargs = ("user_role", "user_scope_id")
+    file_access = "read"
     description = (
         "Take a closer, targeted look at an image: one the user attached to this chat, OR an "
-        "image file in this chat's workspace (e.g. a chart you just produced via python_sandbox "
-        "export_files - pass its path in `image_path` to quality-check it). "
+        "image FILE you can read - a screenshot you took, a chart you exported, a render you "
+        "produced (pass its path in `image_path`; a relative path means this chat's workspace). "
         "Use it whenever you need detail the VISUAL CONTEXT description doesn't already cover: "
         "exact colours, exact positions/layout, reading small or partial text, counting items, "
         "or finding a specific object ('is there a red ball?', 'what does the small status line say?'). "
-        "You do NOT see images directly — this tool is how you look. Pass a precise question in `prompt`."
+        "You do NOT see images directly: this tool is how you look. Pass a precise question in `prompt`."
     )
     permission_level = "read"
     side_effect_class = "none"
@@ -51,16 +61,17 @@ class AnalyzeImageTool(BaseTool):
             "image": {
                 "type": "string",
                 "description": (
-                    "Optional: which ATTACHED image to look at — a filename substring (e.g. 'screenshot') "
+                    "Optional: which ATTACHED image to look at: a filename substring (e.g. 'screenshot') "
                     "or a 0-based index. Defaults to the most recently attached image."
                 ),
             },
             "image_path": {
                 "type": "string",
                 "description": (
-                    "Optional: an image FILE in this chat's workspace to inspect (e.g. "
-                    "'chart.png' or the exported path from python_sandbox). Only files "
-                    "inside the chat workspace are allowed."
+                    "Optional: an image FILE to inspect - an absolute path in your files "
+                    "(a screenshot, a render), or a path relative to this chat's workspace "
+                    "(e.g. 'chart.png' or the exported path from python_sandbox). The same "
+                    "files read_file may read."
                 ),
             },
         },
@@ -80,14 +91,14 @@ class AnalyzeImageTool(BaseTool):
             except Exception:
                 session_id = ""
 
-        # Workspace-file lane: inspect an image the AGENT produced (e.g. a chart
-        # exported via python_sandbox export_files). Jailed to THIS chat's
-        # workspace, keyed on the dispatcher-injected session id - an arbitrary
-        # host path would let a remote user exfiltrate foreign files through the
-        # vision model's description. Fail-closed.
+        # File lane: inspect an image file (a chart exported via python_sandbox, a
+        # screenshot). Held to the caller's READ jail, the one read_file obeys - an
+        # arbitrary host path would let a remote user exfiltrate foreign files through
+        # the vision model's description. A relative path means THIS chat's workspace,
+        # keyed on the dispatcher-injected session id. Fail-closed.
         image_path = str(kwargs.get("image_path") or "").strip()
         if image_path:
-            target = self._image_from_workspace(image_path, session_id)
+            target = self._image_from_path(image_path, session_id)
             if isinstance(target, str):
                 return target
             from vaf.core.config import Config
@@ -109,7 +120,7 @@ class AnalyzeImageTool(BaseTool):
         if not images and session_id:
             images = self._collect_session_images(session_id)
         if not images and not session_id:
-            return "Error: no active session — analyze_image needs a chat session with an attached image."
+            return "Error: no active session: analyze_image needs a chat session with an attached image."
         if not images:
             return (
                 "No image is attached to this conversation. Ask the user to attach one, "
@@ -134,39 +145,37 @@ class AnalyzeImageTool(BaseTool):
         return f"[analyze_image · `{name}`]\n{result}"
 
     @classmethod
-    def _image_from_workspace(cls, image_path: str, session_id: str):
-        """Resolve `image_path` to a vision-ingestible dict, jailed to the chat workspace.
+    def _image_from_path(cls, image_path: str, session_id: str):
+        """Resolve `image_path` to a vision-ingestible dict, held to the caller's read boundary.
 
-        Returns the image dict on success or an ERROR STRING for the model.
-        Relative paths resolve against the workspace root. Anything outside the
-        workspace, missing, or not an image file is refused (fail-closed)."""
+        Returns the image dict on success or an ERROR STRING for the model. A relative path
+        resolves against this chat's workspace; an absolute one is taken as given. Either way
+        `is_safe_path` decides, which is the per-user READ jail BaseTool installed around
+        run() (plus the protected program and system locations) - the one `read_file` obeys.
+        Missing, not a file, or not an image: refused (fail-closed)."""
         from pathlib import Path
 
-        if not session_id:
-            return "Error: analyze_image with image_path needs an active chat session."
-        try:
-            from vaf.core.session import get_session_workspace_dir
-            ws = get_session_workspace_dir(session_id, create=False)
-        except Exception:
-            ws = None
-        if not ws:
-            return (
-                "Error: this chat has no workspace folder yet - create the file first "
-                "(e.g. python_sandbox export_files or write_file with a relative path)."
-            )
-        ws_r = Path(ws).resolve()
-        p = Path(image_path)
+        from vaf.tools.filesystem import is_safe_path
+
+        p = Path(os.path.expanduser(str(image_path)))
         if not p.is_absolute():
-            p = ws_r / image_path
-        try:
-            p = p.resolve()
-        except Exception:
-            return f"Error: invalid image_path '{image_path}'."
-        if not (p == ws_r or p.is_relative_to(ws_r)):
-            return (
-                "Access denied: analyze_image can only inspect files inside this chat's "
-                f"workspace ({ws_r}). Use a relative path to a file there."
-            )
+            ws = None
+            if session_id:
+                try:
+                    from vaf.core.session import get_session_workspace_dir
+                    ws = get_session_workspace_dir(session_id, create=False)
+                except Exception:
+                    ws = None
+            if not ws:
+                return (
+                    "Error: a relative image_path means this chat's workspace, and this chat "
+                    "has none yet. Pass the image's absolute path."
+                )
+            p = Path(ws) / image_path
+        safe, resolved = is_safe_path(str(p))
+        if not safe:
+            return resolved
+        p = Path(resolved)
         if not p.is_file():
             return f"Error: image file not found: {p}"
         if p.suffix.lower() not in cls._IMAGE_SUFFIXES:

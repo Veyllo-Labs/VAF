@@ -127,7 +127,9 @@ NEWLY_IDENTIFIED = {
     # be made without the identity that resolves it. In workflows this means the step
     # now writes into the workflow owner's tree instead of wherever the name pointed.
     "document_writer": ('user_role', 'user_scope_id'),
-    "analyze_image": ('user_scope_id',),
+    # user_role joined with its file_access declaration: a step's image_path is looked at
+    # under the workflow owner's read jail, the same one read_file has.
+    "analyze_image": ('user_role', 'user_scope_id'),
     "browser_agent": ('user_scope_id',),
     "create_automation": ('user_role', 'user_scope_id'),
     "create_skill": ('user_scope_id', 'username'),

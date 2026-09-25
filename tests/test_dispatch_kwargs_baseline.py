@@ -64,7 +64,9 @@ KWARGS_BASELINE = {
     "add_automation_todo":       ("chat", ["user_scope_id"]),
     "add_memory":                ("chat", []),
     "add_task":                  ("chat", []),
-    "analyze_image":             ("chat", ["_agent", "session_id", "user_scope_id"]),
+    # +user_role with the file_access declaration: image_path is looked at under the
+    # read jail read_file has, which the role resolves for a second admin.
+    "analyze_image":             ("chat", ["_agent", "session_id", "user_role", "user_scope_id"]),
     "archive_mail":              ("chat", ["user_scope_id", "username"]),
     "contact_history":           ("chat", ["_agent", "user_scope_id", "username"]),
     "ask_user":                  ("chat", ["_agent"]),

@@ -788,6 +788,22 @@ For semantic analysis across many files, consider librarian_agent instead."""
             from pathlib import Path
             file_path = Path(res)
             ext = file_path.suffix.lower()
+
+            # An image is not text: its bytes read as noise and fill the context. The model
+            # looks at images through analyze_image, which takes this very path under the
+            # same read boundary - so say that instead, with the size when it can be read.
+            from vaf.tools.vision import AnalyzeImageTool
+            if ext in AnalyzeImageTool._IMAGE_SUFFIXES:
+                size = ""
+                try:
+                    from PIL import Image
+                    with Image.open(res) as _im:
+                        size = f", {_im.width}x{_im.height} px"
+                except Exception:
+                    pass
+                return (f"{file_path.name} is an image ({ext[1:].upper()}{size}). You do not see "
+                        f"images directly: call analyze_image(image_path=\"{res}\", "
+                        "prompt=\"<what you need to know>\") to look at it.")
             
             # ═══════════════════════════════════════════════════════════
             # PDF Files

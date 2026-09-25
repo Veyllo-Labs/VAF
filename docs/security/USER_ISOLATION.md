@@ -379,6 +379,11 @@ The `librarian_agent` reads the local filesystem to answer "find / list / summar
   Uploaded attachments need no special case - they land inside the caller's own root
   (`get_session_attachments_dir`) - and cloud-synced files need none either, because
   `cloud_storage` is a separate tool that never hands out an absolute `cloud_sync` path.
+  `analyze_image` sits under the same `read` jail (`file_access = "read"`): its
+  `image_path` hands a file to the vision model, which is a read by another name, so it may
+  name exactly the files `read_file` may and no others. It used to be held to the chat
+  workspace alone, which was safe and too narrow: a screenshot in the caller's own tree could
+  be read but not looked at. Guarded by `tests/test_analyze_image_path.py`.
 
 ### The coder acts as its caller
 

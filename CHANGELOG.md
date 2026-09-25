@@ -35,6 +35,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **The agent can look at any image in your files, not only in the chat's workspace.** A
+  screenshot or picture saved elsewhere in your files could be read with `read_file` but
+  not looked at, so the agent guessed from its file name or bytes. `analyze_image` now takes
+  the same files `read_file` may read, for the same person - nothing outside them - and
+  `read_file` on an image tells the agent to look at it with `analyze_image` instead of
+  returning unreadable bytes.
 - **A workflow runs in the background, and the chat carries on when it is done.** A
   workflow the agent started used to hold up its whole answer - and, with one chat worker,
   every other chat - for as long as it ran. Now it runs as a process of its own: the agent

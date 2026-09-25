@@ -163,8 +163,8 @@ class RenderCheckTool(BaseTool):
         return "\n".join(lines)
 
     def _save_screenshot(self, b64: str) -> str:
-        """Into the chat session's workspace, where analyze_image's jail allows
-        it. No session (coder child, automation) means no file - the text
+        """Into the chat session's workspace, where a relative analyze_image path
+        finds it by its bare name. No session (coder child, automation) means no file - the text
         report stands on its own there, by design."""
         if not b64:
             return ""

@@ -2633,15 +2633,16 @@
         "own_loop": "Deine eigene Mail",
         "null_return_path": "Ohne Absenderpfad (automatisch)"
       },
-      "accountLearned": "Absenderprüfung: {id} ({count} Mails)",
-      "accountMicrosoft": "Absenderprüfung: Microsoft 365",
-      "accountManual": "Absenderprüfung: {id} (manuell)",
-      "accountNone": "Absenderprüfung noch nicht eingerichtet: Alle Absender gelten als ungeprüft.",
-      "learn": "Aus dem Postfach lernen",
-      "learnDone": "Gelernt: {id}. {count} Mails neu bewertet.",
-      "learnDoneMicrosoft": "Erkannt: Microsoft 365. {count} Mails neu bewertet.",
+      "accountLearned": "Aktiv, erkannt an {count} Mails ({id})",
+      "accountMicrosoft": "Aktiv über Microsoft 365",
+      "accountProvider": "Aktiv über {provider}",
+      "accountManual": "Aktiv, von Hand eingestellt ({id})",
+      "accountNone": "Richtet sich von selbst ein, sobald genug Mails im Posteingang sind. Bis dahin gelten alle Absender als ungeprüft.",
+      "learn": "Absenderprüfung",
+      "learnDone": "Erkannt: {id}. {count} Mails neu geprüft.",
+      "learnDoneMicrosoft": "Erkannt: Microsoft 365. {count} Mails neu geprüft.",
       "learnTooFew": "Noch zu wenige Mails im Posteingang, um den Anbieter sicher zu erkennen ({count}). Versuche es später noch einmal.",
-      "learnFailed": "Das Lernen ist fehlgeschlagen."
+      "learnFailed": "Das hat nicht geklappt. Versuche es später noch einmal."
     },
     "draft": {
       "title": "Entwurf deines Agenten",

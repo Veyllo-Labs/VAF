@@ -231,11 +231,18 @@ def upsert_sender_rule(
 # Every host here answered a TLS IMAP/SMTP greeting on 993/587 when it was
 # entered; every alias domain resolves to its operator's MX records.
 
+#
+# `authserv_id` is the id the provider writes into its own Authentication-Results header
+# (RFC 8601), for a provider where that id is a fact rather than a guess: sender
+# verification trusts it without learning it from the mailbox first. Only where it was
+# read off real delivered mail; everyone else is learned (vaf/mail/verification.py).
+
 _PROVIDER_RECORDS = (
     (("gmail.com", "googlemail.com"),
      {"name": "Gmail", "auth": "app_password",
       "help_url": "https://support.google.com/accounts/answer/185833",
-      "imap_host": "imap.gmail.com", "smtp_host": "smtp.gmail.com"}),
+      "imap_host": "imap.gmail.com", "smtp_host": "smtp.gmail.com",
+      "authserv_id": "mx.google.com"}),
     (("outlook.com", "outlook.de", "hotmail.com", "hotmail.de",
       "live.com", "live.de", "msn.com"),
      {"name": "Outlook.com", "auth": "oauth",
@@ -362,6 +369,34 @@ MAIL_PROVIDERS: Dict[str, Dict[str, Any]] = {
     domain: {"imap_port": 993, "smtp_port": 587, "enable_imap": False, **record}
     for domains, record in _PROVIDER_RECORDS for domain in domains
 }
+
+# Derived, never hand-maintained: the domains a provider hands out to its customers. An
+# address there says nothing about an organisation - gmail.com is nobody's own domain -
+# so sender verification never treats one as the owner's domain, and the phishing and
+# outbound checks read it as "a free mailbox anybody can open".
+SHARED_MAIL_DOMAINS = frozenset(MAIL_PROVIDERS)
+
+# The OAuth providers, by the account's `provider` field, to the record that serves them.
+_OAUTH_PROVIDER_DOMAIN = {"gmail": "gmail.com", "microsoft": "outlook.com"}
+
+
+def known_provider(account: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The MAIL_PROVIDERS record of the provider that serves this account's mailbox, or
+    None: by the OAuth provider, else by the IMAP host, else by the address's domain.
+    The host outranks the domain because it names who stores the mail (a custom domain
+    hosted by Google still reaches imap.gmail.com)."""
+    acc = account or {}
+    oauth = _OAUTH_PROVIDER_DOMAIN.get(str(acc.get("provider") or "").strip().lower())
+    if oauth:
+        return MAIL_PROVIDERS[oauth]
+    host = str(acc.get("imap_host") or "").strip().lower().rstrip(".")
+    if host:
+        for record in MAIL_PROVIDERS.values():
+            if record.get("imap_host") == host:
+                return record
+    address = str(acc.get("email") or acc.get("account_id") or "").strip().lower()
+    return MAIL_PROVIDERS.get(address.rsplit("@", 1)[-1]) if "@" in address else None
+
 
 _HOST_FIELDS = ("imap_host", "imap_port", "smtp_host", "smtp_port")
 

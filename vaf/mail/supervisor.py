@@ -107,6 +107,9 @@ def _sync_one(scope: str, cred_username: Optional[str], acc: Dict[str, Any]) -> 
         except Exception as e:
             logger.warning("op replay failed for %s: %s", (account_id or "")[:3] + "***", e)
         stats = eng.sync_account()
+        # Sender verification is on by default: learn the provider's id once the inbox
+        # holds enough evidence, and recompute verdicts from an older policy.
+        svc.settle_verification(acc, cred_username)
         new_total = sum(int(s.get("new", 0)) for s in stats.values())
         if new_total:
             _notify_new_mail(scope, account_id, {"new": new_total, "folders": stats})

@@ -214,7 +214,8 @@ def test_learn_provider_reads_the_majority_topmost_id(svc):
         raw = _gmail_raw(mid=f"<m{i}@example.org>")
         store.ingest_message(apk, fpk, i + 1, parse_message(raw), raw=raw)
     learned = svc.learn_provider("bob@example.com")
-    assert learned == {"authserv_id": "mx.google.com", "profile": "rfc8601", "count": 3, "total": 3}
+    assert learned == {"authserv_id": "mx.google.com", "profile": "rfc8601", "count": 3, "total": 3,
+                       "domains": 1}
     assert svc.learn_provider("nobody@example.com")["authserv_id"] == ""
 
 

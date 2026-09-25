@@ -288,18 +288,21 @@ class ImapSyncEngine:
         self._report_spoof(pk, parsed)
 
     def _report_spoof(self, pk: int, parsed) -> None:
-        """A mail claiming one of the account's own domains that did not authenticate is
-        the one verdict that belongs in the security log: somebody writes as the owner's
-        organisation. Read only when the From domain is an own domain, so the check costs
-        nothing on ordinary mail. Never raises."""
+        """A mail claiming one of the account's own domains, or the owner's own address,
+        that did not authenticate is the one verdict that belongs in the security log:
+        somebody writes as the owner. Read only when the From names an own domain or
+        address, so the check costs nothing on ordinary mail. Never raises."""
         try:
-            own = set((self.auth_policy or {}).get("own_domains") or [])
-            if not own:
+            policy = self.auth_policy or {}
+            own = set(policy.get("own_domains") or [])
+            own_addrs = {str(a).lower() for a in (policy.get("own_addresses") or [])}
+            if not (own or own_addrs):
                 return
             from email.utils import parseaddr
             _name, addr = parseaddr(parsed.from_addr or "")
-            domain = addr.rsplit("@", 1)[-1].strip().lower() if "@" in addr else ""
-            if not domain or not any(domain == d or domain.endswith("." + d) for d in own):
+            addr = addr.strip().lower()
+            domain = addr.rsplit("@", 1)[-1] if "@" in addr else ""
+            if not domain or not (addr in own_addrs or any(domain == d or domain.endswith("." + d) for d in own)):
                 return
             verdict = self.store.message_auth([pk]).get(pk) or {}
             if "own_domain_spoof" not in (verdict.get("flags") or []):

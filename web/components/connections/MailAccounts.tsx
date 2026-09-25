@@ -84,11 +84,13 @@ interface Acct {
     imap_ready: boolean;
     auto_sync_enabled: boolean;
     /** Sender verification (EMAIL_CLIENT.md, "Verification and cases"): the provider's
-     *  Authentication-Results id the store trusts, how it was learned, and whether the
-     *  account is set up at all (a Microsoft account needs no id). */
+     *  Authentication-Results id the store trusts, how it was learned ("provider": known
+     *  for the provider, named in authserv_provider), and whether the account is set up
+     *  at all (a Microsoft account needs no id). */
     trusted_authserv_id?: string;
     auth_profile?: string;
     authserv_source?: string;
+    authserv_provider?: string;
     authserv_samples?: number;
     auth_ready?: boolean;
 }
@@ -322,19 +324,21 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
                                 </div>
                             </div>
 
-                            <div className="mt-2 flex items-center gap-2 flex-wrap text-xs">
+                            <div className="mt-2 flex items-center gap-2 text-xs">
                                 <ShieldCheck className={cn('w-3.5 h-3.5 flex-shrink-0', a.auth_ready ? 'text-green-600' : 'text-gray-500')} />
-                                <span className={cn('min-w-0', a.auth_ready ? 'text-gray-700' : 'text-gray-500')}>
+                                <span className={cn('flex-1 min-w-0', a.auth_ready ? 'text-gray-700' : 'text-gray-500')}>
                                     {a.auth_profile === 'microsoft'
                                         ? t('auth.accountMicrosoft')
                                         : a.trusted_authserv_id
-                                            ? (a.authserv_source === 'mailbox'
-                                                ? t('auth.accountLearned', { id: a.trusted_authserv_id, count: a.authserv_samples || 0 })
-                                                : t('auth.accountManual', { id: a.trusted_authserv_id }))
+                                            ? (a.authserv_source === 'provider'
+                                                ? t('auth.accountProvider', { provider: a.authserv_provider || a.trusted_authserv_id })
+                                                : a.authserv_source === 'mailbox'
+                                                    ? t('auth.accountLearned', { id: a.trusted_authserv_id, count: a.authserv_samples || 0 })
+                                                    : t('auth.accountManual', { id: a.trusted_authserv_id }))
                                             : t('auth.accountNone')}
                                 </span>
                                 <button type="button" onClick={() => learnAuth(a)} disabled={learn[a.account_id]?.kind === 'busy'}
-                                    className={cn('text-xs px-2 py-1 rounded-md', SFC_FILL, 'border border-gray-200 hover:border-gray-400 flex items-center gap-1')}>
+                                    className={cn('text-xs px-2 py-1 rounded-md flex-shrink-0', SFC_FILL, 'border border-gray-200 hover:border-gray-400 flex items-center gap-1')}>
                                     {learn[a.account_id]?.kind === 'busy' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
                                     <span>{t('auth.learn')}</span>
                                 </button>

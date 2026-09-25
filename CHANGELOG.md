@@ -35,6 +35,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **Sender verification is on by default.** VAF reads what your mail provider found out
+  about each sender (SPF, DKIM and DMARC) and shows it as a shield next to the mail. Until
+  now this stayed off until somebody found a button in the account settings. Gmail and
+  Microsoft accounts are now checked right away. Every other account sets itself up once
+  enough mail from different senders has arrived. It asks for more evidence than the button
+  does, so a few forged mails in a new mailbox cannot set it up wrongly. The button is now
+  called **Sender check** and is only needed to set it up again by hand. The phishing and
+  outgoing-mail checks also know every mail provider VAF knows now, including web.de and
+  T-Online, which were missing.
+
 - **The agent stops at a message it wrote for you, and you can change it before it goes.**
   When the agent writes a mail or a WhatsApp message to somebody else in the chat, its turn now
   ends at the draft instead of carrying on and saying the draft is ready. Click into the text
@@ -55,6 +65,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   a second strip above the list.
 
 ### Fixed
+
+- **The agent sees mail from other Gmail users again.** With a Gmail address (or one at
+  web.de, GMX and other free-mail providers), VAF treated the provider's whole domain as
+  yours, so every mail from another Gmail user looked like somebody pretending to be you.
+  The phishing filter hid those mails from the agent, and your own sent mail could put a
+  false "somebody writes as you" warning into the security log. Only your own addresses
+  count as yours now, and a mail that really forges them is still caught.
 
 - **Long host commands are no longer cut off after two minutes.** A shell command on the
   machine could be given up to five minutes, but VAF stopped waiting for it after two and

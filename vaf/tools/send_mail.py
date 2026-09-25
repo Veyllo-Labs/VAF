@@ -12,13 +12,13 @@ import re
 from email.utils import parseaddr
 
 from vaf.core.config import Config, get_local_admin_scope_id
+from vaf.core.email_accounts import SHARED_MAIL_DOMAINS
 from vaf.core.email_transport import get_account
 from vaf.mail.service import MailService, deliver_queued_sends
 from vaf.core.text_match import contains_any_word
 from vaf.tools.base import BaseTool
 from vaf.tools.mail_utils import (
     _EXEC_IMPERSONATION_WORDS,
-    _FREE_MAIL_DOMAINS,
     cred_scope_from_kwargs,
     cred_username_from_kwargs,
     list_accounts_for_user,
@@ -61,7 +61,7 @@ def _high_risk_send_reasons(to: str, subject: str, body: str, attachments: list[
     trusted_domains_cfg = Config.get("email_agent_trusted_sender_domains") or []
     trusted_domains = {str(x).strip().lower() for x in trusted_domains_cfg if str(x).strip()}
 
-    if to_domain and to_domain not in trusted_domains and to_domain in _FREE_MAIL_DOMAINS:
+    if to_domain and to_domain not in trusted_domains and to_domain in SHARED_MAIL_DOMAINS:
         if any(word in text for word in _EXEC_IMPERSONATION_WORDS):
             reasons.append("possible_exec_impersonation_to_free_mail_domain")
 

@@ -2633,15 +2633,16 @@
         "own_loop": "Kendi postan",
         "null_return_path": "Dönüş yolu yok (otomatik)"
       },
-      "accountLearned": "Gönderen doğrulaması: {id} ({count} posta)",
-      "accountMicrosoft": "Gönderen doğrulaması: Microsoft 365",
-      "accountManual": "Gönderen doğrulaması: {id} (elle ayarlandı)",
-      "accountNone": "Gönderen doğrulaması henüz kurulmadı: Her gönderen denetlenmemiş sayılır.",
-      "learn": "Posta kutusundan öğren",
-      "learnDone": "Öğrenildi: {id}. {count} posta yeniden değerlendirildi.",
-      "learnDoneMicrosoft": "Tanındı: Microsoft 365. {count} posta yeniden değerlendirildi.",
+      "accountLearned": "Etkin, {count} postadan tanındı ({id})",
+      "accountMicrosoft": "Microsoft 365 üzerinden etkin",
+      "accountProvider": "{provider} üzerinden etkin",
+      "accountManual": "Etkin, elle ayarlandı ({id})",
+      "accountNone": "Gelen kutusunda yeterli posta olunca kendiliğinden kurulur. O zamana kadar her gönderen denetlenmemiş sayılır.",
+      "learn": "Gönderen doğrulaması",
+      "learnDone": "Tanındı: {id}. {count} posta yeniden denetlendi.",
+      "learnDoneMicrosoft": "Tanındı: Microsoft 365. {count} posta yeniden denetlendi.",
       "learnTooFew": "Sağlayıcıyı kesin tanımak için gelen kutusunda henüz çok az posta var ({count}). Daha sonra tekrar dene.",
-      "learnFailed": "Öğrenme başarısız oldu."
+      "learnFailed": "Olmadı. Daha sonra tekrar dene."
     },
     "draft": {
       "title": "Ajanının taslağı",

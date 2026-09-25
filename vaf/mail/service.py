@@ -161,16 +161,79 @@ class MailService:
 
     # ── verification: learning the provider, recomputing verdicts ──────────
 
-    def learn_provider(self, account_id: str) -> Dict[str, Any]:
+    def learn_provider(self, account_id: str, *, automatic: bool = False) -> Dict[str, Any]:
         """What this account's inbox says about the provider's Authentication-Results
         header (`verification.learn_provider`): the majority authserv-id or the Microsoft
-        profile, with the sample counts. Reads the stored verdicts only, never the server."""
-        from vaf.mail.verification import learn_provider
+        profile, with the sample counts. Reads the stored verdicts only, never the server.
+        `automatic` asks for the stricter evidence of a learn nobody watches."""
+        from vaf.mail.verification import AUTO_LEARN_MIN_DOMAINS, AUTO_LEARN_MIN_SAMPLES, learn_provider
         apk = self.store.account_pk(account_id)
         if apk is None:
-            return {"authserv_id": "", "profile": "rfc8601", "count": 0, "total": 0}
-        return learn_provider(self.store.topmost_authserv_ids(apk),
-                              self.store.topmost_auth_headers(apk))
+            return {"authserv_id": "", "profile": "rfc8601", "count": 0, "total": 0, "domains": 0}
+        if automatic:
+            return learn_provider(self.store.inbox_auth_samples(apk),
+                                  min_samples=AUTO_LEARN_MIN_SAMPLES, min_domains=AUTO_LEARN_MIN_DOMAINS)
+        return learn_provider(self.store.inbox_auth_samples(apk))
+
+    def learn_sender_check(self, account: Dict[str, Any], username: Optional[str], *,
+                           automatic: bool = False) -> Dict[str, Any]:
+        """Set up sender verification for one account: learn the provider's id from the
+        mailbox, save it on the account entry and re-assess every stored verdict under
+        it. The one path for the account panel's button and for the learn after a sync.
+        Returns {learned, saved, backfilled}; with too little evidence nothing is saved
+        and `learned` carries the counts that say why."""
+        from datetime import datetime, timezone
+
+        from vaf.core.email_accounts import get_account, patch_account
+        account_id = str(account.get("account_id") or account.get("email") or "")
+        learned = self.learn_provider(account_id, automatic=automatic)
+        saved, backfilled = False, 0
+        if learned.get("authserv_id") or learned.get("profile") == "microsoft":
+            fields = {
+                "trusted_authserv_id": learned.get("authserv_id") or "",
+                "auth_profile": learned.get("profile") or "rfc8601",
+                "authserv_source": "mailbox",
+                "authserv_learned_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "authserv_samples": int(learned.get("count") or 0),
+            }
+            saved = bool(patch_account(account_id, fields, username, user_scope_id=self.user_scope_id))
+            if saved:
+                backfilled = self.reassess(get_account(account_id, username, user_scope_id=self.user_scope_id))
+        return {"learned": learned, "saved": saved, "backfilled": backfilled}
+
+    def reassess(self, account: Optional[Dict[str, Any]]) -> int:
+        """Recompute the account's verdicts that were computed under another policy than
+        its current one. Never raises: a pass that fails leaves the old verdicts, and the
+        next sync retries."""
+        if not account:
+            return 0
+        try:
+            from vaf.mail.verification import auth_policy_for_account
+            aid = str(account.get("account_id") or account.get("email") or "")
+            return self.backfill_verification(aid, auth_policy_for_account(account))
+        except Exception as e:
+            logger.warning("verification backfill failed for %s: %s",
+                           str(account.get("account_id") or "")[:3] + "***", e)
+            return 0
+
+    def settle_verification(self, account: Dict[str, Any], username: Optional[str]) -> None:
+        """After a sync: sender verification is on by default. An account with no
+        trusted id yet learns it from its own inbox as soon as the evidence is strong
+        enough (`learn_sender_check(automatic=True)`); either way, verdicts computed
+        under an older policy (a learned id, a provider id VAF now knows, a changed rule)
+        are recomputed. Nothing is learned where the policy already has its answer: an id
+        set by hand or learned before, a provider id VAF knows, the Microsoft profile, or
+        the profile "none" (the provider writes no header at all). Never raises."""
+        try:
+            from vaf.mail.verification import auth_policy_for_account
+            policy = auth_policy_for_account(account)
+            wants_learning = not policy["trusted_authserv_id"] and policy["auth_profile"] == "rfc8601"
+            if wants_learning and self.learn_sender_check(account, username, automatic=True)["saved"]:
+                return
+            self.reassess(account)
+        except Exception as e:
+            logger.warning("sender verification pass failed for %s: %s",
+                           str(account.get("account_id") or "")[:3] + "***", e)
 
     def backfill_verification(self, account_id: str, policy: Dict[str, Any], *, limit: int = 5000) -> int:
         """Recompute the verdicts of every message of the account whose verdict is missing

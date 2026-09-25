@@ -577,7 +577,16 @@ independent answers, never mixed:
    header). Identity flags ride beside the state, because DKIM and DMARC bind the
    From field but never judge its meaning: `reply_to_mismatch` (Reply-To outside the
    From domain's tree), `own_domain_spoof` (a mail claiming one of the account's own
-   domains that did not verify), `dmarc_fail`, `no_message_id`, `multiple_from`.
+   domains, or one of the owner's own addresses, that did not verify), `dmarc_fail`,
+   `no_message_id`, `multiple_from`. A provider's shared domain (`gmail.com`,
+   `web.de`, every domain in `email_accounts.SHARED_MAIL_DOMAINS`, which is derived
+   from the provider table) is never an own domain: it belongs to every customer of
+   that provider, and treating it as the owner's flagged every other Gmail user as a
+   forgery and hid their mail from the agent. For such an owner the address carries
+   the claim. The owner's own address with no trusted header at all is not flagged
+   either: that is the owner's own copy (the Sent folder, a draft), because a provider
+   stamps only mail it received, and a forgery that arrived carries the provider's
+   failing header.
 
 What an IMAP client cannot do, stated so nobody looks for it: it cannot re-run SPF
 (that needs the connecting IP and MAIL FROM at SMTP time, and the `Received`
@@ -593,25 +602,51 @@ copies of its own authserv-id before delivery (Gmail, Microsoft and Fastmail do)
 
 ### Learning the provider's id
 
-The trusted authserv-id is per account (`email_config_by_scope[...].accounts[]`:
-`trusted_authserv_id`, `auth_profile` rfc8601|microsoft|none, `authserv_source`
-mailbox|manual, `authserv_learned_at`, `authserv_samples`, `aliases`) and is never
-typed from memory: the account panel's **Learn from the mailbox** button
-(`POST /api/mail/accounts/{id}/learn-auth`) reads the topmost authserv-id of the
-account's newest inbox messages (`MailStore.topmost_authserv_ids`), accepts the
-majority when at least three samples agree at ninety percent
-(`authenticity.learn_authserv_id`), recognises the Microsoft id-less form
-(`looks_microsoft`), saves it, and recomputes every stored verdict under the new
-policy (`MailService.backfill_verification`, which reads the header snapshot every
-verdict row keeps in `headers`, so a message whose raw bytes were never cached or
-were evicted by retention still gets its verdict; a migrated row without a snapshot
-is re-parsed from its cached raw). `PATCH /api/mail/accounts/{id}` accepts the same
-fields by hand (`authserv_source: manual`) and backfills too. Until an id is learned
-every sender stays `unknown`, the badge shows nothing, and the panel says so.
-`policy_key` on every verdict names the policy it was computed under, which is how
-the backfill knows a row is stale. A stale trusted id is the one way to get a wrong
-verdict (a forged header carrying an id that is not the provider's would be read),
-which is why the id is learned from the mailbox and shown next to its sample count.
+Sender verification is on by default. The trusted authserv-id is per account
+(`email_config_by_scope[...].accounts[]`: `trusted_authserv_id`, `auth_profile`
+rfc8601|microsoft|none, `authserv_source` mailbox|manual, `authserv_learned_at`,
+`authserv_samples`, `aliases`) and is never typed from memory. It comes from one of
+three places, in this order:
+
+1. **Set on the account**, learned before or typed by hand
+   (`PATCH /api/mail/accounts/{id}`, `authserv_source: manual`).
+2. **Known for the provider.** A provider whose id is a fact rather than a guess
+   carries it in the provider table (`authserv_id` on the `_PROVIDER_RECORDS` row in
+   `vaf/core/email_accounts.py`; today Gmail's `mx.google.com`, read off real delivered
+   mail), found by `email_accounts.known_provider` from the OAuth provider, the IMAP
+   host or the address's domain. Microsoft needs no id (the `microsoft` profile, from
+   the account's provider). Nothing is written onto the account; the panel shows
+   `authserv_source: provider` with the provider's name.
+3. **Learned from the mailbox.** `MailService.learn_sender_check` reads the topmost
+   authserv-id, the topmost header and the From domain of the account's newest inbox
+   messages (`MailStore.inbox_auth_samples`), accepts the majority when enough samples
+   agree at ninety percent (`authenticity.learn_authserv_id`), recognises the Microsoft
+   id-less form (`looks_microsoft`), saves it and recomputes every stored verdict under
+   the new policy. It runs after every sync on its own (`MailService.settle_verification`,
+   called by the sweep in `vaf/mail/supervisor.py` and by the Sync button's route), and
+   on the account panel's **Sender check** button
+   (`POST /api/mail/accounts/{id}/learn-auth`). The automatic learn asks for more
+   evidence than the button: at least twenty samples from at least five different
+   sender domains (`AUTO_LEARN_MIN_SAMPLES`, `AUTO_LEARN_MIN_DOMAINS` in
+   `vaf/mail/verification.py`), because nobody looks at its result. A mailbox at a
+   provider that writes no header of its own shows only what senders put there, and a
+   few forged headers from one sender in a new, nearly empty mailbox must not become the
+   trusted id. The button keeps three samples, since whoever presses it sees what was
+   learned and from how many mails.
+
+The same pass after every sync recomputes each verdict computed under another policy
+(`MailService.reassess` over `backfill_verification`, which reads the header snapshot
+every verdict row keeps in `headers`, so a message whose raw bytes were never cached
+or were evicted by retention still gets its verdict; a migrated row without a snapshot
+is re-parsed from its cached raw; at most 5000 rows per pass, the next sync goes on).
+A newly known provider id or a changed rule therefore reaches the mail already stored,
+not only new mail. Until an id is known every sender stays `unknown`, the badge shows
+nothing, and the panel says it sets itself up once the inbox holds enough mail.
+`policy_key` on every verdict names the policy it was computed under (trusted id,
+profile, own addresses, own domains), which is how the pass knows a row is stale. A
+stale trusted id is the one way to get a wrong verdict (a forged header carrying an id
+that is not the provider's would be read), which is why the id is learned from the
+mailbox and shown next to its sample count.
 
 ### What reads the verdict
 
@@ -881,9 +916,10 @@ through only split-horizon names the local resolver does not know.
   store would make an account still awaiting re-consent look deleted.
 - High-risk outbound gate in `send_mail` (exec-impersonation to free-mail,
   high-risk request language, attachment-exfiltration wording, coercive
-  urgency) requiring an explicit confirm re-call. Word lists live ONLY in
-  `mail_utils.py` (`_FREE_MAIL_DOMAINS`, `_EXEC_IMPERSONATION_WORDS`);
-  `send_mail.py` imports them - do not create copies.
+  urgency) requiring an explicit confirm re-call. The word list lives ONLY in
+  `mail_utils.py` (`_EXEC_IMPERSONATION_WORDS`), the free-mail domains ONLY in the
+  provider table (`email_accounts.SHARED_MAIL_DOMAINS`, derived from
+  `MAIL_PROVIDERS`); `send_mail.py` imports both - do not create copies.
 - Attachment sending resolves paths under the shared per-user filesystem
   jail (`compute_user_jail` in `vaf/tools/filesystem.py`, same mechanism as
   LibrarianTool/WriteFileTool): a non-admin user cannot attach files outside

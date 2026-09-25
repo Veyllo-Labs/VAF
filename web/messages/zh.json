@@ -2633,15 +2633,16 @@
         "own_loop": "你自己的邮件",
         "null_return_path": "无退信路径（自动）"
       },
-      "accountLearned": "发件人验证：{id}（{count} 封邮件）",
-      "accountMicrosoft": "发件人验证：Microsoft 365",
-      "accountManual": "发件人验证：{id}（手动设置）",
-      "accountNone": "尚未设置发件人验证：所有发件人都视为未检查。",
-      "learn": "从邮箱学习",
-      "learnDone": "已学习：{id}。已重新评估 {count} 封邮件。",
-      "learnDoneMicrosoft": "已识别：Microsoft 365。已重新评估 {count} 封邮件。",
+      "accountLearned": "已启用，根据 {count} 封邮件识别（{id}）",
+      "accountMicrosoft": "已通过 Microsoft 365 启用",
+      "accountProvider": "已通过 {provider} 启用",
+      "accountManual": "已启用，手动设置（{id}）",
+      "accountNone": "收件箱中的邮件足够多时会自动设置。在此之前，所有发件人都视为未检查。",
+      "learn": "发件人验证",
+      "learnDone": "已识别：{id}。已重新检查 {count} 封邮件。",
+      "learnDoneMicrosoft": "已识别：Microsoft 365。已重新检查 {count} 封邮件。",
       "learnTooFew": "收件箱中的邮件还太少，无法确定服务商（{count}）。请稍后再试。",
-      "learnFailed": "学习失败。"
+      "learnFailed": "没有成功。请稍后再试。"
     },
     "draft": {
       "title": "智能体的草稿",

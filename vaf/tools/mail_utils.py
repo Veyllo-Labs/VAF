@@ -7,6 +7,7 @@ from email.utils import parseaddr
 from typing import List, Optional, Tuple
 
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
+from vaf.core.email_accounts import SHARED_MAIL_DOMAINS
 from vaf.core.text_match import contains_any_word
 
 
@@ -98,21 +99,6 @@ def list_accounts_with_labels_for_user(
     ]
 
 
-_FREE_MAIL_DOMAINS = {
-    "gmail.com",
-    "googlemail.com",
-    "outlook.com",
-    "hotmail.com",
-    "live.com",
-    "yahoo.com",
-    "icloud.com",
-    "gmx.de",
-    "gmx.net",
-    "mail.com",
-    "proton.me",
-    "protonmail.com",
-}
-
 # Shared with send_mail's high-risk outbound gate - single source, do not copy
 # (the previous duplicate in send_mail.py had already drifted).
 _EXEC_IMPERSONATION_WORDS = (
@@ -175,7 +161,7 @@ def _phishing_score(message: dict) -> tuple[int, List[str]]:
     if contains_any_word(text, _SOCIAL_ENGINEERING_WORDS):
         score += 2
         reasons.append("social_engineering_language")
-    if any(word in sender_lower for word in _EXEC_IMPERSONATION_WORDS) and domain in _FREE_MAIL_DOMAINS:
+    if any(word in sender_lower for word in _EXEC_IMPERSONATION_WORDS) and domain in SHARED_MAIL_DOMAINS:
         score += 3
         reasons.append("exec_impersonation_free_mail")
     if ("reply-to" in text and "different" in text) or ("unusual activity" in text and "click" in text):

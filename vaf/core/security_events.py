@@ -83,9 +83,10 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     # mail
     "mail_high_risk_send_blocked": "Outgoing mail stopped as high-risk before sending",
     "mail_image_proxy_blocked": "Remote image proxy refused a host",
-    "mail_spoofed_own_domain": "A mail claiming one of the account's own domains did not "
-                               "authenticate with the provider (DMARC fail or no aligned pass): "
-                               "somebody writes as the owner's organisation. `username` the "
+    "mail_spoofed_own_domain": "A mail claiming one of the account's own domains, or the "
+                               "owner's own address, did not authenticate with the provider "
+                               "(DMARC fail or no aligned pass): somebody writes as the owner. "
+                               "`username` the "
                                "account's owner, `channel` email, `detail` the masked sender",
     "mail_case_token_misuse": "A mail carried a case anchor that is not this account's (another "
                               "scope, another account, or tampered); the mail was not attributed. "

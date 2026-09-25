@@ -2633,15 +2633,16 @@
         "own_loop": "Your own mail",
         "null_return_path": "No return path (automatic)"
       },
-      "accountLearned": "Sender verification: {id} ({count} mails)",
-      "accountMicrosoft": "Sender verification: Microsoft 365",
-      "accountManual": "Sender verification: {id} (set by hand)",
-      "accountNone": "Sender verification not set up yet: every sender counts as unchecked.",
-      "learn": "Learn from the mailbox",
-      "learnDone": "Learned: {id}. {count} mails re-assessed.",
-      "learnDoneMicrosoft": "Recognised: Microsoft 365. {count} mails re-assessed.",
+      "accountLearned": "Active, recognised from {count} mails ({id})",
+      "accountMicrosoft": "Active via Microsoft 365",
+      "accountProvider": "Active via {provider}",
+      "accountManual": "Active, set by hand ({id})",
+      "accountNone": "Sets itself up once the inbox holds enough mail. Until then every sender counts as unchecked.",
+      "learn": "Sender check",
+      "learnDone": "Recognised: {id}. {count} mails checked again.",
+      "learnDoneMicrosoft": "Recognised: Microsoft 365. {count} mails checked again.",
       "learnTooFew": "Too few mails in the inbox to recognise the provider with certainty ({count}). Try again later.",
-      "learnFailed": "Learning failed."
+      "learnFailed": "That did not work. Try again later."
     },
     "draft": {
       "title": "Your agent's draft",

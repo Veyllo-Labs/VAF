@@ -43,6 +43,15 @@ SNAPSHOT_FIELDS = (
 
 AUTH_PROFILES = ("rfc8601", "microsoft", "none")
 
+# Learning the provider's id with nobody looking (after a sync) asks for more evidence
+# than the button does. A mailbox at a provider that writes no Authentication-Results of
+# its own shows only what senders put there, so a few forged headers from one sender in a
+# new, nearly empty mailbox must not become the trusted id: the id has to top at least
+# twenty inbox mails from at least five different sender domains. The button keeps the
+# low bar, because whoever presses it sees what was learned and from how many mails.
+AUTO_LEARN_MIN_SAMPLES = 20
+AUTO_LEARN_MIN_DOMAINS = 5
+
 
 def identity_snapshot(parsed: ParsedMessage) -> Dict[str, Any]:
     """The identity headers of a parsed message as a JSON-ready dict."""
@@ -81,7 +90,16 @@ def auth_policy_for_account(account: Optional[Dict[str, Any]]) -> Dict[str, Any]
     """The verification policy of one configured mail account (the config entry of
     `email_accounts.get_email_config`): the trusted authserv-id, the header profile and
     the account's own addresses. Missing fields fail safe: no trusted id means every
-    sender stays unknown, never verified."""
+    sender stays unknown, never verified.
+
+    Two things come from the provider table (`email_accounts.known_provider`) rather than
+    the account entry: a provider whose Authentication-Results id is known (Gmail's
+    mx.google.com) is trusted without learning it first, unless an id was set or learned
+    for the account; and a provider's shared domain (gmail.com, web.de) is never an own
+    domain - it belongs to every customer of that provider, so "claims the owner's own
+    domain" would flag every one of them. Own ADDRESSES stay, whatever the domain."""
+    from vaf.core.email_accounts import SHARED_MAIL_DOMAINS, known_provider
+
     acc = account or {}
     own: List[str] = []
     for key in ("email", "account_id"):
@@ -95,11 +113,14 @@ def auth_policy_for_account(account: Optional[Dict[str, Any]]) -> Dict[str, Any]
     profile = str(acc.get("auth_profile") or "").strip().lower()
     if profile not in AUTH_PROFILES:
         profile = "microsoft" if str(acc.get("provider") or "").lower() == "microsoft" else "rfc8601"
+    trusted = str(acc.get("trusted_authserv_id") or "").strip().lower()
+    if not trusted and profile == "rfc8601":
+        trusted = str((known_provider(acc) or {}).get("authserv_id") or "")
     return {
-        "trusted_authserv_id": str(acc.get("trusted_authserv_id") or "").strip().lower(),
+        "trusted_authserv_id": trusted,
         "auth_profile": profile,
         "own_addresses": own,
-        "own_domains": sorted({a.rsplit("@", 1)[-1] for a in own if "@" in a}),
+        "own_domains": sorted({a.rsplit("@", 1)[-1] for a in own if "@" in a} - SHARED_MAIL_DOMAINS),
     }
 
 
@@ -110,6 +131,7 @@ def policy_key(policy: Optional[Dict[str, Any]]) -> str:
         "trusted_authserv_id": str(p.get("trusted_authserv_id") or ""),
         "auth_profile": str(p.get("auth_profile") or ""),
         "own_addresses": sorted(str(x) for x in (p.get("own_addresses") or [])),
+        "own_domains": sorted(str(x) for x in (p.get("own_domains") or [])),
     }, sort_keys=True)
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
 
@@ -147,7 +169,7 @@ def assess(parsed: ParsedMessage, *, policy: Optional[Dict[str, Any]] = None,
     try:
         av = authenticity.verdict(
             parsed, trusted_authserv_id=trusted, auth_profile=profile,
-            own_domains=pol.get("own_domains") or ())
+            own_domains=pol.get("own_domains") or (), own_addresses=pol.get("own_addresses") or ())
         row.update({
             "auth_state": av.state, "auth_source": av.source, "authserv_id": av.authserv_id,
             "topmost_authserv_id": av.topmost_authserv_id, "from_domain": av.from_domain,
@@ -180,18 +202,30 @@ def summary(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def learn_provider(topmost_ids: Iterable[str], topmost_headers: Iterable[str]) -> Dict[str, Any]:
+def learn_provider(samples: Iterable[Any], *, min_samples: int = 3,
+                   min_domains: int = 1) -> Dict[str, Any]:
     """What the mailbox says about the provider's Authentication-Results: the majority
     authserv-id (`authenticity.learn_authserv_id`) or the Microsoft id-less profile.
-    Returns {authserv_id, profile, count, total}; an empty authserv_id with profile
-    rfc8601 means nothing could be learned yet (too few samples, or no agreement)."""
+    `samples` are (topmost authserv-id, topmost header, From domain) per inbox message
+    that carries the header (`MailStore.inbox_auth_samples`). The winner must also top
+    mail from at least `min_domains` different sender domains. Returns {authserv_id,
+    profile, count, total, domains}; an empty authserv_id with profile rfc8601 means
+    nothing could be learned yet (too few samples or domains, or no agreement)."""
     from vaf.mail import authenticity
 
-    ids = [str(x or "") for x in topmost_ids]
-    heads = [str(x or "") for x in topmost_headers]
-    learned, count, total = authenticity.learn_authserv_id(ids)
+    rows = [(str(t or "").strip().lower().rstrip("."), str(h or ""), str(d or "").strip().lower())
+            for t, h, d in samples]
+    learned, count, total = authenticity.learn_authserv_id([t for t, _h, _d in rows], min_samples=min_samples)
     if learned:
-        return {"authserv_id": learned, "profile": "rfc8601", "count": count, "total": total}
-    if authenticity.looks_microsoft(heads):
-        return {"authserv_id": "", "profile": "microsoft", "count": len(heads), "total": len(heads)}
-    return {"authserv_id": "", "profile": "rfc8601", "count": count, "total": total}
+        domains = len({d for t, _h, d in rows if d and t == learned})
+        if domains >= max(1, int(min_domains)):
+            return {"authserv_id": learned, "profile": "rfc8601", "count": count, "total": total,
+                    "domains": domains}
+        return {"authserv_id": "", "profile": "rfc8601", "count": count, "total": total, "domains": domains}
+    heads = [h for _t, h, _d in rows]
+    if authenticity.looks_microsoft(heads, min_samples=min_samples):
+        domains = len({d for t, _h, d in rows if d and not t})
+        if domains >= max(1, int(min_domains)):
+            return {"authserv_id": "", "profile": "microsoft", "count": len(heads), "total": len(heads),
+                    "domains": domains}
+    return {"authserv_id": "", "profile": "rfc8601", "count": count, "total": total, "domains": 0}

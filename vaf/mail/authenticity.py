@@ -282,9 +282,9 @@ def trusted_results(parsed: ParsedMessage, *, trusted_authserv_id: str,
     return None
 
 
-def domain_of(addr_or_header: str) -> str:
-    """The domain of the first addr-spec in an address header, lowercased, without a
-    trailing dot; "" when the header names no address."""
+def address_of(addr_or_header: str) -> str:
+    """The first addr-spec with a domain in an address header, lowercased; "" when the
+    header names none."""
     s = str(addr_or_header or "").strip()
     if not s:
         return ""
@@ -294,11 +294,20 @@ def domain_of(addr_or_header: str) -> str:
         pairs = []
     for _name, addr in pairs:
         addr = (addr or "").strip()
-        if "@" in addr:
-            domain = addr.rsplit("@", 1)[1].strip().lower().rstrip(".")
-            if domain:
-                return domain
-    m = re.search(r"@([A-Za-z0-9.\-\[\]:]+)", s)
+        if "@" in addr and addr.rsplit("@", 1)[1].strip():
+            return addr.lower()
+    return ""
+
+
+def domain_of(addr_or_header: str) -> str:
+    """The domain of the first addr-spec in an address header, lowercased, without a
+    trailing dot; "" when the header names no address."""
+    addr = address_of(addr_or_header)
+    if addr:
+        domain = addr.rsplit("@", 1)[1].strip().rstrip(".")
+        if domain:
+            return domain
+    m = re.search(r"@([A-Za-z0-9.\-\[\]:]+)", str(addr_or_header or ""))
     return m.group(1).lower().rstrip(".") if m else ""
 
 
@@ -374,7 +383,7 @@ def _decide(trusted: AuthResults, from_domain: str) -> Tuple[str, str, str, str,
 
 
 def verdict(parsed: ParsedMessage, *, trusted_authserv_id: str, auth_profile: str = "rfc8601",
-            own_domains: Iterable[str] = ()) -> AuthVerdict:
+            own_domains: Iterable[str] = (), own_addresses: Iterable[str] = ()) -> AuthVerdict:
     """The authentication verdict for one parsed message. Never raises: an internal
     error yields state "unknown" with an "error:<type>" reason, the way the parser
     records a defect instead of aborting a sync.
@@ -384,18 +393,22 @@ def verdict(parsed: ParsedMessage, *, trusted_authserv_id: str, auth_profile: st
     in via_domain), "unverified" (a trusted header without a pass), "unknown" (no
     trusted header). Flags: reply_to_mismatch (Reply-To names a domain outside the
     From domain's tree, in either direction), own_domain_spoof (the From domain is one
-    of own_domains or below one, and the state is not verified), no_message_id,
+    of own_domains or below one, or the From address is one of own_addresses, and the
+    state is not verified; the address half is what remains for an owner whose domain
+    is a provider's, like gmail.com, which is nobody's own domain; the owner's own
+    address with no trusted header at all is the owner's own copy, not a forgery),
+    no_message_id,
     dmarc_fail, multiple_from (two or more addr-specs in From, which RFC 7489 6.6.1
     treats as suspect)."""
     try:
         return _verdict(parsed, trusted_authserv_id=trusted_authserv_id, auth_profile=auth_profile,
-                        own_domains=own_domains)
+                        own_domains=own_domains, own_addresses=own_addresses)
     except Exception as e:  # the boundary rule: a verdict failure is a defect, never an abort
         return AuthVerdict(state="unknown", source="none", reasons=(f"error:{type(e).__name__}",))
 
 
 def _verdict(parsed: ParsedMessage, *, trusted_authserv_id: str, auth_profile: str,
-             own_domains: Iterable[str]) -> AuthVerdict:
+             own_domains: Iterable[str], own_addresses: Iterable[str] = ()) -> AuthVerdict:
     from_header = str(getattr(parsed, "from_addr", "") or "")
     from_domain = domain_of(from_header)
     headers = list(getattr(parsed, "auth_results", None) or [])
@@ -429,7 +442,14 @@ def _verdict(parsed: ParsedMessage, *, trusted_authserv_id: str, auth_profile: s
     if reply_domain and from_domain and not (aligned(reply_domain, from_domain) or aligned(from_domain, reply_domain)):
         flags.append("reply_to_mismatch")
     own = [str(d or "").strip().lower().rstrip(".") for d in (own_domains or ())]
-    if from_domain and state != "verified" and any(aligned(d, from_domain) for d in own if d):
+    own_addrs = {str(a or "").strip().lower() for a in (own_addresses or ())}
+    from_address = address_of(from_header)
+    is_own_address = bool(from_address) and from_address in own_addrs
+    claims_own = is_own_address or bool(from_domain and any(aligned(d, from_domain) for d in own if d))
+    # Without a trusted header the owner's own address is the owner's own copy (the Sent
+    # folder, a draft): a provider stamps only mail it received, so there was nothing to
+    # fail. A forgery of that address that ARRIVED carries the provider's header and fails.
+    if claims_own and state != "verified" and not (state == "unknown" and is_own_address):
         flags.append("own_domain_spoof")
     if not str(getattr(parsed, "message_id", "") or "").strip():
         flags.append("no_message_id")

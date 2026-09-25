@@ -13,7 +13,6 @@ Rules:
 - Provider IO always runs via asyncio.to_thread - never on the event loop.
 """
 import asyncio
-from datetime import datetime, timezone
 import logging
 from typing import Any, Dict, Optional
 
@@ -227,6 +226,7 @@ async def sync_account(account_id: str, folder: Optional[str] = None,
                                  acc.get("email") or account_id, client,
                                  auth_policy=auth_policy_for_account(acc))
             stats = (eng.sync_folder(folder) if folder else eng.sync_account())
+            svc.settle_verification(acc, username)
             # Carry the user's legacy labels/answered markers over here too: the
             # import used to run ONLY on the supervisor sweep, so a user with
             # auto-sync off never got them even though pressing Sync did surface
@@ -630,8 +630,11 @@ async def accounts(_user: Dict[str, Any] = Depends(_get_current_user)):
 def _account_row(a: Dict[str, Any]) -> Dict[str, Any]:
     """One account for the panel: the settings and the sender-verification state (the
     provider's Authentication-Results id the store trusts, how it was learned)."""
+    from vaf.core.email_accounts import known_provider
     from vaf.mail.verification import auth_policy_for_account
     policy = auth_policy_for_account(a)
+    # "provider": the id is not on the account entry but known for its provider (Gmail).
+    derived = bool(policy["trusted_authserv_id"]) and not str(a.get("trusted_authserv_id") or "").strip()
     return {
         "account_id": a.get("account_id") or a.get("email"),
         "email": a.get("email") or a.get("account_id"),
@@ -641,7 +644,8 @@ def _account_row(a: Dict[str, Any]) -> Dict[str, Any]:
         "auto_sync_enabled": bool(a.get("auto_sync_enabled")),
         "trusted_authserv_id": policy["trusted_authserv_id"],
         "auth_profile": policy["auth_profile"],
-        "authserv_source": str(a.get("authserv_source") or ""),
+        "authserv_source": "provider" if derived else str(a.get("authserv_source") or ""),
+        "authserv_provider": str((known_provider(a) or {}).get("name") or "") if derived else "",
         "authserv_learned_at": str(a.get("authserv_learned_at") or ""),
         "authserv_samples": int(a.get("authserv_samples") or 0),
         "aliases": [str(x) for x in (a.get("aliases") or [])],
@@ -776,24 +780,10 @@ async def accounts_patch(account_id: str, body: Dict[str, Any] = Body(...), _use
         raise HTTPException(status_code=404, detail="account not found")
     backfilled = 0
     if {"trusted_authserv_id", "auth_profile", "aliases"} & set(fields):
-        backfilled = await asyncio.to_thread(
-            lambda: _backfill_account(scope, get_account(account_id, username, user_scope_id=scope)))
-    return {"ok": True, "backfilled": backfilled}
-
-
-def _backfill_account(scope: str, account: Optional[Dict[str, Any]]) -> int:
-    """Recompute the account's verdicts under its current policy (never raises: a
-    backfill that fails leaves the old verdicts, and the next learn or patch retries)."""
-    if not account:
-        return 0
-    try:
         from vaf.mail.service import MailService
-        from vaf.mail.verification import auth_policy_for_account
-        aid = account.get("account_id") or account.get("email") or ""
-        return MailService(scope).backfill_verification(aid, auth_policy_for_account(account))
-    except Exception as e:
-        logger.warning("verification backfill failed for %s: %s", (str(account.get("account_id") or ""))[:3] + "***", e)
-        return 0
+        backfilled = await asyncio.to_thread(
+            lambda: MailService(scope).reassess(get_account(account_id, username, user_scope_id=scope)))
+    return {"ok": True, "backfilled": backfilled}
 
 
 @router.post("/accounts/{account_id}/learn-auth")
@@ -803,32 +793,14 @@ async def accounts_learn_auth(account_id: str, _user: Dict[str, Any] = Depends(_
     and recompute every stored verdict under it. Answers what was learned and how many
     rows were rewritten; with too few or disagreeing samples nothing is saved and the
     counts say why."""
-    from vaf.core.email_accounts import get_account, patch_account
+    from vaf.core.email_accounts import get_account
+    from vaf.mail.service import MailService
     username, _cred, scope = _acct_identity(_user)
     acc = get_account(account_id, username, user_scope_id=scope)
     if acc is None:
         raise HTTPException(status_code=404, detail="account not found")
-
-    def _run():
-        from vaf.mail.service import MailService
-        svc = MailService(scope)
-        learned = svc.learn_provider(acc.get("account_id") or account_id)
-        saved = False
-        backfilled = 0
-        if learned.get("authserv_id") or learned.get("profile") == "microsoft":
-            fields = {
-                "trusted_authserv_id": learned.get("authserv_id") or "",
-                "auth_profile": learned.get("profile") or "rfc8601",
-                "authserv_source": "mailbox",
-                "authserv_learned_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "authserv_samples": int(learned.get("count") or 0),
-            }
-            saved = patch_account(account_id, fields, username, user_scope_id=scope)
-            if saved:
-                backfilled = _backfill_account(scope, get_account(account_id, username, user_scope_id=scope))
-        return {"ok": True, "learned": learned, "saved": bool(saved), "backfilled": backfilled}
-
-    return await asyncio.to_thread(_run)
+    out = await asyncio.to_thread(lambda: MailService(scope).learn_sender_check(acc, username))
+    return {"ok": True, **out}
 
 
 @router.get("/drafts")

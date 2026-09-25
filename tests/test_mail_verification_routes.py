@@ -80,7 +80,8 @@ def test_learning_reads_the_mailbox_saves_the_id_and_reassesses_the_stored_mail(
     before = asyncio.run(mr.list_threads(_user=USER))["threads"]
     assert {t["auth"]["state"] for t in before} == {"unknown"}, "no trusted id yet: nothing is verified"
     out = asyncio.run(mr.accounts_learn_auth(ACCOUNT, _user=USER))
-    assert out["learned"] == {"authserv_id": "mx.google.com", "profile": "rfc8601", "count": 3, "total": 3}
+    assert out["learned"] == {"authserv_id": "mx.google.com", "profile": "rfc8601", "count": 3, "total": 3,
+                              "domains": 1}
     assert out["saved"] is True and out["backfilled"] == 3
     acc = world["email_config_by_scope"][SCOPE]["accounts"][0]
     assert acc["trusted_authserv_id"] == "mx.google.com" and acc["authserv_source"] == "mailbox" and acc["authserv_samples"] == 3
@@ -152,13 +153,13 @@ def test_the_mail_window_renders_the_badge_on_rows_and_in_the_reader():
 def test_the_account_panel_shows_the_trusted_id_and_learns_it():
     src = _ACCOUNTS.read_text(encoding="utf-8")
     assert "learn-auth" in src and "t('auth.learn')" in src
-    for key in ("auth.accountLearned", "auth.accountMicrosoft", "auth.accountManual", "auth.accountNone",
+    for key in ("auth.accountLearned", "auth.accountMicrosoft", "auth.accountProvider", "auth.accountManual", "auth.accountNone",
                 "auth.learnDone", "auth.learnDoneMicrosoft", "auth.learnTooFew", "auth.learnFailed"):
         assert f"t('{key}'" in src, key
 
 
 def test_every_catalogue_carries_the_verification_strings():
-    keys = {"verified", "via", "unverified", "spoof", "machine", "accountLearned", "accountMicrosoft", "accountManual",
+    keys = {"verified", "via", "unverified", "spoof", "machine", "accountLearned", "accountMicrosoft", "accountProvider", "accountManual",
             "accountNone", "learn", "learnDone", "learnDoneMicrosoft", "learnTooFew", "learnFailed"}
     kinds = {"bounce", "mdn", "auto_reply", "list", "bulk", "calendar", "own_loop", "null_return_path"}
     for path in sorted(_MESSAGES.glob("*.json")):
@@ -167,3 +168,4 @@ def test_every_catalogue_carries_the_verification_strings():
         assert set(block["machine"]) == kinds, path.name
         assert re.search(r"\{method\}.*\{domain\}", block["verified"]), path.name
         assert "{count}" in block["learnTooFew"] and "{id}" in block["learnDone"], path.name
+        assert "{provider}" in block["accountProvider"], path.name

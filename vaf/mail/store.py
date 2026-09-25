@@ -873,38 +873,22 @@ class MailStore:
                 out[int(d["message_pk"])] = d
         return out
 
-    def topmost_authserv_ids(self, account_pk: int, *, limit: int = 200) -> List[str]:
-        """The authserv-id of the topmost Authentication-Results header of the account's
-        newest inbox messages (the value written by whichever host delivered the mail into
-        this mailbox), for learning the provider's id. Empty strings are the Microsoft
-        id-less form and stay in the list so the caller can recognise that profile."""
+    def inbox_auth_samples(self, account_pk: int, *, limit: int = 200) -> List[Tuple[str, str, str]]:
+        """What the account's newest inbox messages say about the provider, for learning
+        its id: (authserv-id of the topmost Authentication-Results header, that header's
+        raw value, the From domain) per message, newest first. The topmost header is the
+        one written by whichever host delivered the mail into this mailbox; an empty id is
+        the Microsoft id-less form and stays so the caller can recognise that profile. A
+        message without any Authentication-Results says nothing about the provider and is
+        left out."""
         rows = self._conn().execute(
-            "SELECT ma.topmost_authserv_id AS tid, ma.headers AS headers FROM message_auth ma "
+            "SELECT ma.topmost_authserv_id AS tid, ma.from_domain AS from_domain, ma.headers AS headers "
+            "FROM message_auth ma "
             "JOIN messages m ON m.id=ma.message_pk JOIN folders f ON f.id=m.folder_id "
             "WHERE m.account_id=? AND (f.special_use='\\Inbox' OR upper(f.name)='INBOX') "
             "ORDER BY COALESCE(m.date_ts, m.internaldate_ts, 0) DESC, m.id DESC LIMIT ?",
             (int(account_pk), max(1, min(int(limit), 2000)))).fetchall()
-        out: List[str] = []
-        for r in rows:
-            try:
-                heads = json.loads(r["headers"] or "{}")
-            except Exception:
-                heads = {}
-            if not (heads.get("auth_results") or []):
-                continue  # a message without any Authentication-Results says nothing about the provider
-            out.append(str(r["tid"] or ""))
-        return out
-
-    def topmost_auth_headers(self, account_pk: int, *, limit: int = 200) -> List[str]:
-        """The raw topmost Authentication-Results value per inbox message, newest first
-        (the learner's second input: recognising the Microsoft id-less form)."""
-        rows = self._conn().execute(
-            "SELECT ma.headers AS headers FROM message_auth ma "
-            "JOIN messages m ON m.id=ma.message_pk JOIN folders f ON f.id=m.folder_id "
-            "WHERE m.account_id=? AND (f.special_use='\\Inbox' OR upper(f.name)='INBOX') "
-            "ORDER BY COALESCE(m.date_ts, m.internaldate_ts, 0) DESC, m.id DESC LIMIT ?",
-            (int(account_pk), max(1, min(int(limit), 2000)))).fetchall()
-        out: List[str] = []
+        out: List[Tuple[str, str, str]] = []
         for r in rows:
             try:
                 heads = json.loads(r["headers"] or "{}")
@@ -912,7 +896,7 @@ class MailStore:
                 continue
             vals = heads.get("auth_results") or []
             if vals:
-                out.append(str(vals[0]))
+                out.append((str(r["tid"] or ""), str(vals[0]), str(r["from_domain"] or "")))
         return out
 
     # ── sent ids (schema v2): every Message-ID VAF itself sent ───────────────

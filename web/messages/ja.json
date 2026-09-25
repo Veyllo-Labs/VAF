@@ -2633,15 +2633,16 @@
         "own_loop": "自分のメール",
         "null_return_path": "返送先なし（自動）"
       },
-      "accountLearned": "差出人確認：{id}（{count}件のメール）",
-      "accountMicrosoft": "差出人確認：Microsoft 365",
-      "accountManual": "差出人確認：{id}（手動設定）",
-      "accountNone": "差出人確認はまだ設定されていません。すべての差出人は未確認として扱われます。",
-      "learn": "メールボックスから学習",
-      "learnDone": "学習しました：{id}。{count}件のメールを再評価しました。",
-      "learnDoneMicrosoft": "認識しました：Microsoft 365。{count}件のメールを再評価しました。",
+      "accountLearned": "有効：{count}件のメールから認識（{id}）",
+      "accountMicrosoft": "有効：Microsoft 365経由",
+      "accountProvider": "有効：{provider}経由",
+      "accountManual": "有効：手動で設定（{id}）",
+      "accountNone": "受信トレイのメールが十分に集まると自動で設定されます。それまでは、すべての差出人が未確認として扱われます。",
+      "learn": "差出人確認",
+      "learnDone": "認識しました：{id}。{count}件のメールを確認し直しました。",
+      "learnDoneMicrosoft": "認識しました：Microsoft 365。{count}件のメールを確認し直しました。",
       "learnTooFew": "受信トレイのメールがまだ少なく、プロバイダーを確実に判別できません（{count}件）。後でもう一度お試しください。",
-      "learnFailed": "学習に失敗しました。"
+      "learnFailed": "うまくいきませんでした。後でもう一度お試しください。"
     },
     "draft": {
       "title": "エージェントの下書き",

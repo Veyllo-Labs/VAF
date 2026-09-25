@@ -1251,7 +1251,8 @@ Four limits worth knowing before you rely on it:
   workflow your agent starts while it HAS an authorizer never moves into such a
   subprocess: `execute_workflow`, `run_temp` and the `@workflow` lane run it inline
   then (`vaf/workflows/background.py`, `enabled(..., authorizer=)`), where every
-  step is put to you.
+  non-spawn step is put to you - spawn-mode sub-agent steps stay the limit named
+  above and do not consult your authorizer.
 
 ---
 

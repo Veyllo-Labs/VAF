@@ -150,3 +150,25 @@ def test_a_link_out_of_the_ceiling_is_not_read(tmp_path):
     (mine / "VAF.md").unlink()
     os.symlink(mine / "own.md", mine / "VAF.md")
     assert find_project_context_file(mine, stop_at=tmp_path / "tenant") == mine / "VAF.md"
+
+
+def test_the_file_read_is_the_file_checked(tmp_path, monkeypatch):
+    """A link swapped between the check and the read must not be read: the loader checks the
+    file it has OPEN. Simulated by an open that lands on a foreign file while the path still
+    resolves inside the tree. MUTATION: check the path and not the open file - red."""
+    import builtins
+    from vaf.core.project_context import load_project_context
+    foreign = tmp_path / "owner" / "notes.md"
+    foreign.parent.mkdir()
+    foreign.write_text("OWNER ONLY")
+    mine = _project(tmp_path / "tenant" / "proj", "MINE")
+    real_open = builtins.open
+
+    def swapped(file, *a, **kw):
+        if str(file).endswith("VAF.md"):
+            return real_open(foreign, *a, **kw)
+        return real_open(file, *a, **kw)
+
+    assert load_project_context(mine, stop_at=tmp_path / "tenant").content == "MINE"
+    monkeypatch.setattr(builtins, "open", swapped)
+    assert load_project_context(mine, stop_at=tmp_path / "tenant") is None

@@ -15,6 +15,7 @@ Rules:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -68,6 +69,20 @@ def find_project_context_file(start_dir: Path, filenames: tuple[str, ...] = DEFA
         cur = cur.parent
 
 
+def _opened_within(fd: int, path: Path, ceiling: Path) -> bool:
+    """Is the file open on `fd` the one that `path` resolves to INSIDE `ceiling`? The resolved
+    location must lie within the ceiling, and the open file must be that very file (same
+    device and inode), so a link swapped after the open cannot pass for it."""
+    try:
+        real = Path(os.path.realpath(path))
+        if real != ceiling and ceiling not in real.parents:
+            return False
+        opened, there = os.fstat(fd), os.stat(real)
+    except OSError:
+        return False
+    return (opened.st_dev, opened.st_ino) == (there.st_dev, there.st_ino)
+
+
 def load_project_context(start_dir: Path, max_chars: int = 12_000,
                          *, stop_at: Optional[Path] = None) -> Optional[ProjectContext]:
     """
@@ -78,8 +93,15 @@ def load_project_context(start_dir: Path, max_chars: int = 12_000,
     if not path:
         return None
 
+    # Opened ONCE, and the open file itself is what is checked against the ceiling: a check on
+    # the path followed by a second open would read whatever the link points at by then, and
+    # a link can be swapped in between.
+    ceiling = stop_at.resolve() if stop_at is not None else None
     try:
-        text = path.read_text(encoding="utf-8", errors="replace").strip()
+        with open(path, "rb") as fh:
+            if ceiling is not None and not _opened_within(fh.fileno(), path, ceiling):
+                return None
+            text = fh.read().decode("utf-8", errors="replace").strip()
     except Exception:
         return None
 

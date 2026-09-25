@@ -679,6 +679,29 @@ class ContextManager:
     # CONTEXT COMPRESSION (Cursor-Style)
     # ═══════════════════════════════════════════════════════════════════════════
     
+    def summary_budget_tokens(self) -> int:
+        """How long the conversation summary a compression writes may be, in tokens.
+
+        It scales with the effective limit. A fixed "2-3 sentences" was right for an 8k local
+        window and wrong for everything larger: every compression re-rolled the previous summary
+        into three sentences again, so after a few of them in a long session the user's standing
+        instructions, the decisions and the file paths were gone (measured in a long build
+        session: four compressions). Small windows keep the short summary; above them it is 5%
+        of the limit, between 600 and 4000 tokens (the default API budget of 45k gives ~2250).
+        """
+        if self.max_tokens <= 16384:
+            return 200
+        return int(min(4000, max(600, self.max_tokens * 0.05)))
+
+    def critical_tool_budget(self) -> tuple[int, int]:
+        """How many compressed-away tool results survive, and how much of each: (count, chars).
+        Five cut to 300 characters on a small window; more, and more of each, above it."""
+        if self.max_tokens <= 16384:
+            return 5, 300
+        if self.max_tokens <= 64000:
+            return 10, 800
+        return 15, 1200
+
     def should_compress(self, history: List[Dict]) -> bool:
         """Check if compression is needed."""
         usage = self.get_usage_percent(history)
@@ -736,12 +759,13 @@ class ContextManager:
         # 3. Extract critical tool results from middle section
         critical_tools = []
         middle_section = history[1:-self.recent_memory_size] if len(history) > self.recent_memory_size + 1 else []
+        keep_count, keep_chars = self.critical_tool_budget()
 
         for msg in middle_section:
             if msg.get("role") == "tool" and msg.get("name") in preserve_tools:
                 # Truncate content but keep structure
                 content = msg.get("content", "")
-                truncated = content[:300] + "..." if len(content) > 300 else content
+                truncated = content[:keep_chars] + "..." if len(content) > keep_chars else content
                 critical_tools.append({
                     "role": "tool",
                     "name": msg.get("name"),
@@ -772,8 +796,8 @@ class ContextManager:
                 "content": combined_summary
             })
 
-        # Add critical tool results (max 5)
-        new_history.extend(critical_tools[-5:])
+        # Add critical tool results (the budget's count, newest)
+        new_history.extend(critical_tools[-keep_count:])
 
         new_history.extend(recent_messages)
 
@@ -792,7 +816,7 @@ class ContextManager:
         else:
             UI.event("Context", f"Compressed: {len(history)} → {len(new_history)} msgs, {current_tokens} → {new_tokens} tokens", style="success")
             if critical_tools:
-                UI.event("Context", f"Preserved {len(critical_tools[-5:])} critical tool results", style="dim")
+                UI.event("Context", f"Preserved {len(critical_tools[-keep_count:])} critical tool results", style="dim")
         UI.event("Context", f"Full history archived. Use /restore to recover.", style="dim")
 
         return new_history

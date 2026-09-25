@@ -60,6 +60,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **Long conversations keep more when they are compressed.** When a long chat is shortened
+  to fit, the part that is removed is now summarized in proportion to the space available:
+  your requests and standing instructions in your own words, the decisions, the files and
+  commands, the errors and what is still open. The earlier summary is merged into the new
+  one instead of being shrunk to three sentences again, and more of the earlier results are
+  kept. Small local models keep the short summary.
 - **A chat reads the VAF.md of its own project.** Instructions for a project in a `VAF.md`
   file now reach the chat that works on that project, in the web app and on the messaging
   channels. Before, the web app read the `VAF.md` of the folder VAF was started from, for

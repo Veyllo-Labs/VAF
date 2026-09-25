@@ -102,8 +102,8 @@ This keeps intent and state up to date **before** the old messages are discarded
 
 - **Middle part:** `history[1 : -recent_memory_size]` (everything except the first entry and the last `recent_memory_size` messages).
 - Within it, messages with `role == "tool"` and a `name` in `preserve_tools` are searched for (including core tools such as `set_todos`, `write_file`, `read_file`, plus further safety-relevant tools depending on the current implementation).
-- Per match: the content is truncated to 300 characters and collected in `critical_tools` as a message with `role`, `name`, `content`, and `tool_call_id`.
-- Later, at most the **last 5** of these critical tool messages are carried over into the new history.
+- Per match: the content is truncated (`critical_tool_budget()`: 300 characters on a window up to 16k, 800 up to 64k, 1200 above) and collected in `critical_tools` as a message with `role`, `name`, `content`, and `tool_call_id`.
+- Later, the **newest 5 / 10 / 15** of these critical tool messages (same three tiers) are carried over into the new history.
 
 ### 4.5 Step 4: Building blocks of the new history
 
@@ -113,7 +113,7 @@ This keeps intent and state up to date **before** the old messages are discarded
 ### 4.6 Step 5: Build the context summary ("glue")
 
 - `_build_context_summary()` produces a text block consisting of:
-  - **Narrative summary** (if set by the state),
+  - **Narrative summary** (if set by the state; written just before `compress()` by `Agent._generate_summary` over the removed messages, sized by `summary_budget_tokens()`: two or three sentences on a small window, a structured summary that merges the previous one above it - see CONTEXT_MANAGEMENT.md, rule 8),
   - **Project state:** created/modified/read files,
   - **Errors,** key decisions,
   - **Primary goal** from the intent.
@@ -123,7 +123,7 @@ This keeps intent and state up to date **before** the old messages are discarded
 
 - `new_history = [system_prompt]`
 - If `context_summary` is not empty: a **second system message** with content `context_summary` is appended.
-- Then: up to 5 critical tool messages (see 4.4).
+- Then: the critical tool messages (see 4.4).
 - Then: `recent_messages` (the last 10 messages).
 
 Result: significantly fewer messages and a sharply reduced token count, while preserving "stability" (intent, state, last N messages).
@@ -142,8 +142,8 @@ Result: significantly fewer messages and a sharply reduced token count, while pr
    `context_glue = self.context_manager._build_context_summary()` is built **again** and appended to **`new_prompt`** (`new_prompt += ...`).
    Note: `new_prompt` only exists if the "Dynamic Context" block ran during **this** turn (i.e. `user_input` and `prompt_manager` were present). Otherwise `new_prompt` is not defined in this branch.
 
-2. **Preserve PROJECT CONTEXT:**
-   If `self.history[0]["content"]` contains the `## PROJECT CONTEXT` section, that part is extracted and appended to `new_prompt`.
+2. **Project context (VAF.md):**
+   `Agent._project_context_block()` is resolved again for THIS turn's chat and appended to `new_prompt` (it is no longer copied from the previous prompt: one agent serves every chat; see CORE_AGENT.md).
 
 3. **Replace the system prompt:**
    `self.history[0]["content"] = new_prompt`

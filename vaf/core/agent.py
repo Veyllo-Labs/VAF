@@ -6349,14 +6349,24 @@ class Agent:
                 return None
         return None
 
-    def _generate_summary(self, messages: list) -> str:
+    def _generate_summary(self, messages: list, budget_tokens: int = 200) -> str:
         """
-        Generates a concise narrative summary of the provided messages using the LLM.
+        Summarize the messages a compression removes, using the LLM.
+
+        `budget_tokens` (ContextManager.summary_budget_tokens) decides the shape. At the small
+        budget of a small local window it stays two or three sentences. Above it the summary is
+        STRUCTURED and as long as the budget allows - the requests and standing instructions
+        in the user's own words, the decisions, the work done with its paths, the errors and
+        their fixes, what is open - and a previous summary is merged, not re-rolled: a long
+        session is compressed again and again, and each three-sentence re-roll dropped what the
+        one before had kept.
         """
         if not messages:
             return ""
 
-        # Prepare text to summarize
+        # Prepare text to summarize. The input is bounded too: a summary call that overflows
+        # the model's window returns nothing, and the compression then keeps no summary at all.
+        input_cap = max(20_000, budget_tokens * 30)
         conversation_text = ""
         for msg in messages:
             role = msg.get("role", "unknown")
@@ -6365,14 +6375,42 @@ class Agent:
             if role == "tool" and len(content) > 500:
                 content = content[:500] + "... [truncated]"
             conversation_text += f"{role.upper()}: {content}\n"
+        if len(conversation_text) > input_cap:
+            # Keep the start (a previous summary, the first requests) and the end.
+            head = conversation_text[: input_cap // 3]
+            tail = conversation_text[-(input_cap - len(head)):]
+            conversation_text = head + "\n... [middle of the segment left out] ...\n" + tail
 
-        prompt = (
-            f"Summarize the following conversation segment into 2-3 concise sentences.\n"
-            f"Focus on the user's goal, key actions taken, and important outcomes.\n"
-            f"Ignore minor details.\n\n"
-            f"{conversation_text}\n\n"
-            f"Summary (max 3 sentences):"
-        )
+        if budget_tokens <= 300:
+            prompt = (
+                f"Summarize the following conversation segment into 2-3 concise sentences.\n"
+                f"Focus on the user's goal, key actions taken, and important outcomes.\n"
+                f"Ignore minor details.\n\n"
+                f"{conversation_text}\n\n"
+                f"Summary (max 3 sentences):"
+            )
+        else:
+            words = int(budget_tokens * 0.7)
+            prompt = (
+                "The conversation segment below is about to be removed from the assistant's "
+                "context. Write the summary that replaces it, for the assistant that continues "
+                "the conversation. Keep what is still needed, in these sections (leave out an "
+                "empty one):\n"
+                "1. Requests and instructions: every request and every standing instruction or "
+                "preference of the user (always / never / from now on), quoted in their own "
+                "words where short.\n"
+                "2. Decisions: what was decided, and why.\n"
+                "3. Work done: files created or changed with their full paths, commands that "
+                "worked, results that matter.\n"
+                "4. Errors and fixes: what went wrong and what fixed it.\n"
+                "5. Open: what is pending, promised or was about to happen next.\n"
+                "If the segment starts with a previous summary, merge it: keep everything in it "
+                "that still matters, do not shorten it away. Quote in the conversation's "
+                f"language. At most {words} words. No preamble.\n\n"
+                f"{conversation_text}\n\nSummary:"
+            )
+        # The small path stays exactly what it was; a longer summary gets room to finish.
+        max_out = 200 if budget_tokens <= 300 else int(budget_tokens * 1.2)
 
         try:
             # Use a separate, low-temp call for summarization
@@ -6383,12 +6421,14 @@ class Agent:
             if self.use_server:
                 payload = {
                     "messages": temp_history, 
-                    "max_tokens": 200, 
+                    "max_tokens": max_out, 
                     "temperature": 0.3,
                     "stream": False
                 }
                 try:
-                    res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=30).json()
+                    # A longer summary needs longer on a local model (~8 tokens/s floor).
+                    res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload,
+                                        timeout=max(30, max_out // 8)).json()
                     content = res['choices'][0]['message']['content']
                 except Exception:
                     pass
@@ -6396,7 +6436,7 @@ class Agent:
                 # Cloud provider (no local :8080 server) - resolve model via api_model_{provider}.
                 chunks = list(self.api_backend.chat_completion(
                     messages=temp_history,
-                    max_tokens=200,
+                    max_tokens=max_out,
                     temperature=0.3,
                     stream=False,
                 ))
@@ -6404,7 +6444,7 @@ class Agent:
             elif self.llm:
                  output = self.llm.create_chat_completion(
                      messages=temp_history,
-                     max_tokens=200,
+                     max_tokens=max_out,
                      temperature=0.3
                  )
                  content = output['choices'][0]['message']['content']
@@ -6682,7 +6722,8 @@ class Agent:
                     # Prepend previous summary as a context note
                     messages_for_llm = [{"role": "system", "content": f"Previous Summary: {previous_summary}"}] + msgs_to_summarize
                 
-                new_summary = self._generate_summary(messages_for_llm)
+                new_summary = self._generate_summary(
+                    messages_for_llm, budget_tokens=cm.summary_budget_tokens())
                 
                 if new_summary:
                     cm.state.narrative_summary = new_summary

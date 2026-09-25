@@ -36,7 +36,7 @@ import { TurnDrafts, UnplacedDrafts, isWaitingDraft, type HeldSendRow } from '@/
 import { useChatDrafts } from '@/components/outbox/useChatDrafts';
 import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX } from '@/components/outbox/draftRefs';
 import AskChoices from '@/components/chat/AskChoices';
-import { asksOf, withoutOptions } from '@/components/chat/askChoices';
+import { asksOf, withoutOptions } from '@/components/chat/askContract';
 import type { SettingsChatJump } from '@/components/SettingsModal';
 import CreateAutomationPopup, { type CreateAutomationPayload, type EditAutomationTask } from '@/components/CreateAutomationPopup';
 import NotificationsModal, { type NotificationItem } from '@/components/NotificationsModal';

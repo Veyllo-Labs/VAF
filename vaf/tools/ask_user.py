@@ -17,7 +17,7 @@ from, is the turn's answer and the turn ends at it (`ends_turn`, BaseTool.turn_c
 person's reply is simply the chat's next message, typed or picked. The turn is not held open for
 it: one chat worker serves every chat, and the person may answer in an hour. The options travel as
 a JSON line in the tool result, which is what the history holds and the web chat reads to draw
-them as buttons (web/components/chat/askChoices.ts); every other surface shows the numbered list
+them as buttons (web/components/chat/askContract.ts); every other surface shows the numbered list
 the closing carries, and a number or a word is an answer there.
 """
 import json
@@ -26,7 +26,7 @@ from typing import Any, List, Optional
 from vaf.tools.base import BaseTool
 
 #: The first words of a chat question's tool result. The web chat keys on them
-#: (web/components/chat/askChoices.ts, pinned by tests/test_ask_user_chat.py).
+#: (web/components/chat/askContract.ts, pinned by tests/test_ask_user_chat.py).
 ASKED_PREFIX = "ASKED THE USER."
 MAX_OPTIONS = 8
 

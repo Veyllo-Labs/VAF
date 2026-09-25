@@ -6,7 +6,7 @@
 import { Check } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
-import { pickedIndex, type AskQuestion } from './askChoices';
+import { pickedIndex, type AskQuestion } from './askContract';
 
 interface Props {
     asks: AskQuestion[];

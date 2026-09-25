@@ -124,6 +124,18 @@ The rule: a test may write an executable stub only when it is skipped on
 Windows, and it then tests the exec itself and nothing more. A test that is
 about a DECISION stands in for the one step that starts the program (here
 `ServerManager._version_output`), which is what makes it hold on every host.
+
+## 6. No two modules in one folder whose names differ only in case.
+
+Windows and macOS compare file names without case; Linux does not. The web chat
+had `askChoices.ts` (the question contract) next to `AskChoices.tsx` (the
+component). `import AskChoices from './AskChoices'` looks for `.ts` before
+`.tsx`, so on a case-blind file system it found the CONTRACT module, and the
+build failed with "differs from already included file name only in casing" and
+"has no default export" - on the macOS and Windows web-build legs only, while
+every Linux build, local ones included, was green. The same holds for two tracked
+paths that differ only in case: a checkout on those systems keeps one of them.
+This guard reads the tracked names, so it fails HERE, on any OS.
 """
 import ast
 import ntpath
@@ -661,4 +673,48 @@ def test_no_test_writes_an_executable_stub_it_expects_the_host_to_run():
         "a shell stub is not a program on Windows, so a test that starts one decides "
         "differently there. Stand in for the step that starts it, or skip the test on "
         "Windows (os.name == 'nt'):\n  " + "\n  ".join(offenders)
+    )
+
+
+# ---------------------------------------------------------------------------
+# 6. Case-blind name collisions
+# ---------------------------------------------------------------------------
+
+# The extensions an import resolves without naming them: two such files in one folder whose
+# names differ only in case are one module on a case-blind file system.
+_MODULE_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py")
+
+
+def _case_blind_collisions(paths):
+    """Groups of tracked paths that a case-blind file system cannot tell apart: the same
+    path in another case, or modules of one folder whose names without the extension
+    differ only in case."""
+    by_path, by_module = {}, {}
+    for rel in paths:
+        by_path.setdefault(rel.lower(), set()).add(rel)
+        stem, ext = posixpath.splitext(rel)
+        if ext.lower() in _MODULE_EXTENSIONS:
+            by_module.setdefault(stem.lower(), set()).add(rel)
+    groups = [g for g in by_path.values() if len(g) > 1]
+    groups += [g for g in by_module.values()
+               if len({posixpath.splitext(r)[0] for r in g}) > 1]
+    return sorted(sorted(g) for g in groups)
+
+
+def test_the_case_blind_class_is_real():
+    assert _case_blind_collisions([
+        "web/components/chat/askChoices.ts", "web/components/chat/AskChoices.tsx",
+    ]) == [["web/components/chat/AskChoices.tsx", "web/components/chat/askChoices.ts"]]
+    assert _case_blind_collisions(["docs/Readme.md", "docs/README.md"])
+    # One module in two languages of the same name and case is resolved the same everywhere.
+    assert _case_blind_collisions(["web/lib/x.ts", "web/lib/x.tsx", "vaf/a.py", "vaf/b.py"]) == []
+
+
+def test_no_two_tracked_names_differ_only_in_case():
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=_REPO, capture_output=True,
+                         check=True).stdout.decode("utf-8", errors="ignore")
+    collisions = _case_blind_collisions([rel for rel in out.split("\0") if rel])
+    assert not collisions, (
+        "these names are one file or one module on Windows and macOS; rename one of each "
+        "group:\n  " + "\n  ".join(" / ".join(g) for g in collisions)
     )

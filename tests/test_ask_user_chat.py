@@ -161,7 +161,7 @@ def test_weak_model_shapes_of_options_are_understood():
 
 # ── the web chat's half of the contract ──────────────────────────────────────
 
-WEB = Path(__file__).resolve().parents[1] / "web" / "components" / "chat" / "askChoices.ts"
+WEB = Path(__file__).resolve().parents[1] / "web" / "components" / "chat" / "askContract.ts"
 
 
 def test_the_web_chat_reads_the_same_contract():

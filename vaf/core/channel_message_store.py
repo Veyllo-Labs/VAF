@@ -719,6 +719,38 @@ def mark_deleted(
     return changed
 
 
+def scrub_values(env: Dict[str, str], *, username: Optional[str] = None,
+                 user_scope_id: Optional[str] = None) -> int:
+    """Replace forgotten credentials ({NAME: value}) in this account's stored messages and held
+    sends with `[NAME]` (vaf/core/forget_secrets.py). Rows are rewritten, never removed, and the
+    write-ahead log is folded back so the old page does not linger in it. Returns rows changed."""
+    from vaf.core.forget_secrets import forms, scrub_text, usable
+    env = usable(env)
+    if not env or not store_exists(username, user_scope_id):
+        return 0
+    conn = _get_conn(username, user_scope_id)
+    changed = 0
+    try:
+        for table, cols in (("channel_messages", ("body",)), ("held_sends", ("args", "preview"))):
+            for form in {f for value in env.values() for f in forms(value)}:
+                for col in cols:
+                    rows = conn.execute(
+                        f"SELECT rowid, {col} FROM {table} WHERE instr({col}, ?) > 0", (form,)
+                    ).fetchall()
+                    for row in rows:
+                        conn.execute(f"UPDATE {table} SET {col} = ? WHERE rowid = ?",
+                                     (scrub_text(row[1], env), row[0]))
+                        changed += 1
+        conn.commit()
+        if changed:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        conn.close()
+    if changed:
+        _announce_changed(username, user_scope_id)
+    return changed
+
+
 def replace_chat_rows(
     username: str,
     chat_id: str,

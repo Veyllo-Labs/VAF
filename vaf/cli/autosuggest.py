@@ -173,6 +173,32 @@ class SmartAutoSuggest(AutoSuggest):
         
         self._save_learned()
     
+    def forget(self, values) -> bool:
+        """Drop every learned word that carries one of `values` (a credential the person handed
+        over in the chat, vaf/core/forget_secrets.py) - as a prefix, inside a two-word prefix,
+        or as a suggested next word. True when something was dropped."""
+        parts = {w for v in values for w in str(v or "").lower().split() if len(w) >= 4}
+        if not parts:
+            return False
+
+        def carries(text: str) -> bool:
+            return any(part in text for part in parts)
+
+        dropped = False
+        with self._save_lock:
+            for prefix in list(self.learned_phrases):
+                if carries(prefix):
+                    del self.learned_phrases[prefix]
+                    dropped = True
+                    continue
+                nexts = self.learned_phrases[prefix]
+                for word in [w for w in nexts if carries(w)]:
+                    del nexts[word]
+                    dropped = True
+        if dropped:
+            self.flush()
+        return dropped
+
     def suggest(self, text: str) -> Optional[str]:
         """The suggestion for `text`, as a plain string.
 
@@ -356,6 +382,27 @@ def autosuggest_for(user_scope_id: Optional[str]) -> Optional[SmartAutoSuggest]:
         if found is None:
             found = _per_account[key] = SmartAutoSuggest(path)
         return found
+
+
+def _forget_listener(env=None, user_scope_id=None, transcript_scrubbed=False, **_):
+    """A credential forgotten in a chat leaves the account's word corpus too."""
+    if transcript_scrubbed or not env:
+        return
+    from vaf.core.config import get_local_admin_scope_id
+    suggester = autosuggest_for(user_scope_id or get_local_admin_scope_id())
+    if suggester is not None:
+        suggester.forget(env.values())
+
+
+def _register_forget_listener() -> None:
+    try:
+        from vaf.core.forget_secrets import add_listener
+        add_listener(_forget_listener)
+    except Exception:
+        pass
+
+
+_register_forget_listener()
 
 
 def create_autosuggest(history_file: Path = None) -> CombinedAutoSuggest:

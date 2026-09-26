@@ -586,8 +586,29 @@ class SessionManager:
         
         filepath = self.storage_dir / filename
         
+        # A credential the person handed over in this chat and the agent stored is replaced
+        # wherever the chat carries it - the person's own message, which the runner writes
+        # at the end of the turn, included (vaf/core/forget_secrets.py).
+        from vaf.core import forget_secrets
+        _forgotten = forget_secrets.session_env(session.id)
+        _scrubbed = False
+        if _forgotten:
+            for _m in session.messages:
+                for _field in ("content", "tool_calls", "tool_results", "metadata"):
+                    _old = getattr(_m, _field, None)
+                    if _old is not None and forget_secrets.contains(_old, _forgotten):
+                        setattr(_m, _field, forget_secrets.scrub_obj(_old, _forgotten))
+                        _scrubbed = True
+            if session.runtime_state and forget_secrets.contains(session.runtime_state, _forgotten):
+                session.runtime_state = forget_secrets.scrub_obj(session.runtime_state, _forgotten)
+                _scrubbed = True
+
         # Serialize
         data = json.dumps(session.to_dict(), indent=2, ensure_ascii=False)
+        if _forgotten:
+            _plain = data
+            data = forget_secrets.scrub_text(data, _forgotten)
+            _scrubbed = _scrubbed or data != _plain
         # Strip lone Unicode surrogates (e.g. from PDF emoji extracted by PyPDF2).
         # json.dumps(ensure_ascii=False) produces them as literal surrogate codepoints
         # which UTF-8 cannot encode, causing UnicodeEncodeError on file write.
@@ -613,6 +634,8 @@ class SessionManager:
         # file_encryption_enabled is off), written atomically, owner-only.
         from vaf.core import data_files
         data_files.write_bytes_atomic(filepath, data.encode("utf-8"))
+        if _scrubbed:
+            forget_secrets.transcript_scrubbed(session.id)
         return filepath
 
     def _read_session_file(self, filepath: Path) -> Dict[str, Any]:

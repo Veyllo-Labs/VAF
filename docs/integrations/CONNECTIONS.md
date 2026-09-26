@@ -49,9 +49,20 @@ without echo). The agent sees only the names and writes `$VAF_SECRET_<NAME>` int
 `host_bash` command or `os.environ["VAF_SECRET_<NAME>"]` into `python_exec` code; the tool
 hands the command exactly the variables it names and removes their values from the output
 before the model reads it. A value is never shown again, only replaced or deleted. Per
-person, in `user_secrets.enc` (envelope-encrypted). A credential typed into the chat is in the
-chat for good: it travels with every later turn, so it belongs here instead. Rules and
-boundaries: `vaf/core/user_secrets.py`; isolation: [USER_ISOLATION.md](../security/USER_ISOLATION.md).
+person, in `user_secrets.enc` (envelope-encrypted).
+
+The person can also simply hand a credential to the agent in the chat - in the browser, the
+terminal or over Telegram ("FTP: user xy, password ..."). The agent stores each value at once
+with `store_credential`, and from then on it is gone from everywhere VAF keeps that chat: the
+agent's history, the saved chat, the stored intent, the context archives, the channel store,
+the word suggestions, the terminal's input history and the debug logs of the last two days,
+each message kept in place with the
+value replaced by `[VAF_SECRET_<NAME>]` so the chat stays valid. Over Telegram the bot also
+deletes the person's message (a bot may, for 48 hours). What cannot be taken back: the model
+provider received that turn, and WhatsApp and Discord keep the message on the platform. The
+Settings route never passes through the model at all. Rules and boundaries:
+`vaf/core/user_secrets.py`, `vaf/core/forget_secrets.py`; isolation:
+[USER_ISOLATION.md](../security/USER_ISOLATION.md).
 
 ### Developer
 

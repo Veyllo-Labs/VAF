@@ -134,6 +134,8 @@ KWARGS_BASELINE = {
     # to one person's chat; host_process is the handle on those commands.
     "host_bash":                 ("chat", ["_is_channel_session", "user_role", "user_scope_id", "username"]),
     "host_process":              ("chat", ["user_scope_id"]),
+    # Measured. A credential is stored for the person the chat belongs to.
+    "store_credential":          ("chat", ["user_scope_id", "username"]),
     "label_mail":                ("chat", ["user_scope_id", "username"]),
     "learn_attached_knowledge":  ("chat", ["_agent", "session_id", "user_scope_id"]),
     "learn_document":            ("chat", ["_agent", "user_role", "user_scope_id"]),

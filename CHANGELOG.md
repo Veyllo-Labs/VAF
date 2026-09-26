@@ -13,6 +13,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **You can just give the agent a password in the chat, and it keeps it safe.** Write
+  something like "FTP: user xy, password ..." in the browser, the terminal or on Telegram.
+  The agent stores each value in your own encrypted credential store under a name and uses
+  it by that name from then on. The value itself is then removed from everywhere VAF keeps
+  the chat (the conversation, the saved chat, the chat's notes, the word suggestions, the
+  logs), without breaking the conversation, and on Telegram your message is deleted too. What
+  cannot be taken back: the provider of the AI model has already received that message, and
+  WhatsApp and Discord keep it on their side. For a sensitive password the settings page
+  (Connections, "Credentials for commands") is still the way that never shows it to anyone.
+
 - **The agent can run a command in the background and gets told when it is done.** A
   local test server, an upload or a long build used to hold up the agent's whole answer,
   and anything longer than a few minutes was given up on. Now the agent can start such a

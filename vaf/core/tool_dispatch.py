@@ -1199,8 +1199,11 @@ class ToolCaller:
         # allow(). Handed to a tool that declared it wants to know (accepts_call_confirmation).
         confirmed = verdict.decision == "allow"
         if needs_gate and self.gate_enabled:
+            # The dialog shows what will run, never a credential the tool declared.
+            from vaf.core.arg_preview import mask_secret_args
             refusal = resolve_confirmation_gate(
-                name, reason=(verdict.reason if forced_ask else decision.reason), args=args,
+                name, reason=(verdict.reason if forced_ask else decision.reason),
+                args=mask_secret_args(args, getattr(tool, "secret_args", ())),
                 ignore_standing_grants=forced_ask,
                 trust_dir=self.trust_dir if self.trust_dir is not None else Path.cwd(),
                 user_scope_id=self.user_scope_id, user_role=self.user_role,
@@ -1314,8 +1317,11 @@ class ToolCaller:
             pass
 
     def _preview(self, name, args):
-        """Argument preview for the event stream - heavy fields stripped, Paths stringified."""
-        serializable = make_json_serializable(args) if args else {}
+        """Argument preview for the event stream - heavy fields stripped, Paths stringified,
+        credentials masked (the tool's declared secret_args and any key named like one)."""
+        from vaf.core.arg_preview import mask_secret_args
+        serializable = mask_secret_args(make_json_serializable(args) if args else {},
+                                        getattr((self.tools or {}).get(name), "secret_args", ()))
         try:
             from vaf.core.subagent_debug import sanitize_args
             return sanitize_args(name, serializable)

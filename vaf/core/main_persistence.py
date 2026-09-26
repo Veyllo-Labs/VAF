@@ -160,6 +160,19 @@ class MainPersistenceManager:
         except Exception:
             return default
 
+    def forget(self, env: Dict[str, str]) -> None:
+        """Replace forgotten credentials in every file of this chat's persistence - the stored
+        intent, working memory, team state, validation state and results (forget_secrets)."""
+        from vaf.core import forget_secrets
+        files = []
+        for folder in (self.context_dir, self.results_dir):
+            try:
+                files.extend(p for p in folder.iterdir() if p.is_file())
+            except OSError:
+                pass
+        for path in files:
+            forget_secrets.scrub_file(path, env)
+
     # --- USER INTENT ---
     def get_user_intent(self) -> str:
         from vaf.core import data_files

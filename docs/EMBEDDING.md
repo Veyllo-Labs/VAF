@@ -861,6 +861,22 @@ it by anchored belts only (a document is not a failure for containing the word
 "failed"). Observation is unaffected either way: the event stream caps tool
 results independently.
 
+**An argument that is a credential.** A tool that takes a password, a token or a
+login as an argument declares it: `secret_args = ("password",)`. The funnel then
+never lets the value reach the tool-use log, the event stream or the confirmation
+dialog (it becomes `[redacted]` there; a key NAMED like a credential - `password`,
+`api_key`, `FTP_PASS` - is masked even undeclared), and after a call that did not
+fail the full agent forgets it everywhere it keeps the chat: its history, the saved
+chat, the stored intent, the context archives, the channel store, the recent debug
+logs and whatever a lane registered through `vaf.core.forget_secrets.add_listener`. Nothing is deleted - the
+value is replaced by `[<secret_placeholder()>]` inside the messages, so every tool
+call keeps its result and the provider's history contract holds. Override
+`secret_placeholder(self, args, arg)` to name it (VAF's `store_credential` names it
+`VAF_SECRET_<NAME>`). What already left the machine stays where it went: the turn at
+the model provider, a message on a platform that cannot delete it. A loop of your
+own around CoreAgent gets the masking and the save-time scrub, and calls
+`forget_secrets.forget(...)` itself for its own history.
+
 **How long one call may take.** The funnel waits `tool_timeout_seconds` (120 s)
 for a call and then stops waiting. A tool whose calls legitimately take longer -
 or should give up sooner - declares `timeout_seconds = 600`, or overrides

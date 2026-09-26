@@ -8254,6 +8254,14 @@ class Agent:
                 _force_skill_tools("list_skills", "read_skill")
             _force_skill_tools("use_skill")
 
+        # A credential handed over in the chat: the store tool must be callable in that very turn,
+        # or the model uses the value in place and it stays in the chat for good.
+        if "store_credential" in self.tools and any(kw in u_lower for kw in (
+            "passwort", "password", "kennwort", "zugangsdaten", "credential", "api key",
+            "api-key", "apikey", "access token", "zugangstoken", "logindaten", "login-daten",
+        )):
+            forced_tools.add("store_credential")
+
         # 1. Create a simplified list of tools
         tool_info = []
         for name, tool_instance in self.visible_tools().items():
@@ -9091,6 +9099,13 @@ class Agent:
         with no open item sent a run into a 12-turn retry loop.
         """
         from vaf.cli.ui import UI
+        # A credential forgotten in an earlier turn leaves the history before anything of this
+        # turn is built from it: the signed replay blocks the last turn still needed, and
+        # anything said after the store call. Here and not at the turn's end, because a turn
+        # ends through some thirty return statements and this is the one door every next turn
+        # passes; between turns only this process's memory holds them (the save and the memory
+        # compaction scrub on their own, vaf/core/forget_secrets.py).
+        self._forget_at_turn_boundary()
         # Turn-local flag: avoids cross-thread leakage from process-wide env vars.
         self._current_turn_thinking_mode = bool(thinking_mode)
         # True once a call of this turn ended it (_close_turn): the return value is then the
@@ -11486,8 +11501,12 @@ class Agent:
                         # Through make_json_serializable: a Path in the arguments used to make
                         # json.dumps raise, and the shared except below then swallowed the
                         # timeline event along with it.
-                        _args_preview = json.dumps(make_json_serializable(arguments),
-                                                   ensure_ascii=False) if arguments else ""
+                        # Credentials masked: the timeline is hash-chained and cannot be
+                        # cleaned afterwards (BaseTool.secret_args, arg_preview).
+                        from vaf.core.arg_preview import mask_secret_args
+                        _args_preview = json.dumps(make_json_serializable(mask_secret_args(
+                            arguments, getattr(self.tools.get(function_name), "secret_args", ()))),
+                            ensure_ascii=False) if arguments else ""
                         log_timeline_event('tool_start', tool=function_name, call_id=_tl_call_id,
                                            session=str(_sid or ''), scope=str(_scope or ''),
                                            args=_args_preview[:500])
@@ -11512,7 +11531,11 @@ class Agent:
                             if not _tool_session:
                                 from vaf.core.subagent_ipc import get_current_session_id
                                 _tool_session = get_current_session_id()
-                            get_web_interface().emit_tool_update('start', function_name, tc['id'], data=json.dumps(arguments), session_id=_tool_session)
+                            # Credentials masked: the browser caches these arguments.
+                            from vaf.core.arg_preview import mask_secret_args as _mask_args
+                            get_web_interface().emit_tool_update('start', function_name, tc['id'], data=json.dumps(
+                                _mask_args(arguments, getattr(self.tools.get(function_name), "secret_args", ()))),
+                                session_id=_tool_session)
                         else:
                             # Proof line: a silent background run suppressed this live tool bubble (it would
                             # otherwise have broadcast into the active web user's chat). Background runs only.
@@ -11696,6 +11719,10 @@ class Agent:
                                 "name": function_name,
                                 "content": processed_result
                             })
+
+                    # A tool that took a credential as an argument (BaseTool.secret_args): once the
+                    # call went through, the value is forgotten everywhere the chat is kept.
+                    self._forget_declared_secrets(function_name, arguments, result_str)
                     
                     # ── Whare Wananga reactive delivery (B-track): on a tool ERROR, re-feed the
                     #    failed tool's learned know-how so the loop's natural retry is informed.
@@ -12880,6 +12907,40 @@ class Agent:
             return bool(getattr((self.tools or {}).get(name), "result_is_deliverable", False))
         except Exception:
             return False
+
+    def _forget_declared_secrets(self, name, args, result) -> None:
+        """After a call that did not fail, forget the credentials the tool declared
+        (BaseTool.secret_args) everywhere this chat is kept (vaf/core/forget_secrets.py). A failed
+        call keeps them: the value would otherwise be gone before it was stored anywhere.
+        Never raises - a turn is not lost to its own cleanup."""
+        try:
+            tool = (self.tools or {}).get(name)
+            declared = tuple(getattr(tool, "secret_args", ()) or ())
+            if not declared or not isinstance(args, dict):
+                return
+            from vaf.core.context import tool_result_is_error
+            if tool_result_is_error(str(result or "")):
+                return
+            env = {tool.secret_placeholder(args, arg): args[arg] for arg in declared
+                   if isinstance(args.get(arg), str) and args.get(arg)}
+            if not env:
+                return
+            from vaf.core import forget_secrets
+            forget_secrets.forget(env, session_id=getattr(self, "current_session_id", None),
+                                  user_scope_id=getattr(self, "_current_user_scope_id", None),
+                                  username=getattr(self, "_current_username", None), agent=self)
+        except Exception as e:
+            append_domain_log("backend", f"forget_secrets failed for {name}: {type(e).__name__}: {e}")
+
+    def _forget_at_turn_boundary(self) -> None:
+        """At the start of a turn, where the provider no longer replays the last turn's signed
+        blocks: scrub the history with everything forgotten in this chat and drop the replay
+        blocks that still carry it (forget_secrets.forget_in_history)."""
+        try:
+            from vaf.core import forget_secrets
+            forget_secrets.forget_in_history(self.history, getattr(self, "current_session_id", None))
+        except Exception as e:
+            append_domain_log("backend", f"forget_secrets at turn boundary failed: {e}")
 
     def _chat_turn_gates(self, name, tool_instance, args):
         """The five turn gates. Each returns a RESULT string rather than prompting or

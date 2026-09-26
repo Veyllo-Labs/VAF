@@ -73,6 +73,21 @@ class BaseTool(ABC):
     # the event stream applies its own limit independently of this.
     result_is_deliverable: bool = False
 
+    # The arguments that carry a credential - a password, a token, a login. Declared, the
+    # value never reaches a log, the event stream or a confirmation dialog, and after a call
+    # that did not fail it is forgotten everywhere VAF keeps the conversation: the agent's
+    # history, the saved chat, the stored intent, the context archives, the channel store,
+    # and whatever else registered for it (vaf/core/forget_secrets.py). Nothing is deleted
+    # to do that - the value is replaced by `secret_placeholder()` inside the messages, so
+    # the message count and every tool call's pairing with its result stay as they were.
+    # What already left the machine stays where it went: the model provider has the turn,
+    # and a messaging platform keeps what it delivered unless its channel can delete it.
+    secret_args: tuple[str, ...] = ()
+
+    def secret_placeholder(self, args: Dict[str, Any], arg: str) -> str:
+        """The NAME that stands in for a forgotten secret argument, shown as `[NAME]`."""
+        return "secret"
+
     # How long ONE call may run before the dispatcher stops waiting for it, in seconds.
     # None means the caller's default (`tool_timeout_seconds`, 120 in a chat turn). A tool
     # whose calls legitimately take longer - or should give up sooner - says so here, or

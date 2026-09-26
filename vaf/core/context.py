@@ -1128,6 +1128,22 @@ class ContextManager:
         except Exception:
             pass  # Silent fail for disk archive
     
+    def forget(self, env: Dict[str, str]) -> None:
+        """Replace forgotten credentials in what this manager keeps (vaf/core/forget_secrets.py):
+        the intent and state it extracted from the messages, the snapshots it holds, and the
+        archive files it wrote. Archives other processes wrote record no chat and stay."""
+        from vaf.core import forget_secrets
+        for layer in (self.intent, self.state):
+            for key, value in list(vars(layer).items()):
+                setattr(layer, key, forget_secrets.scrub_obj(value, env))
+        for snap in self.archive:
+            forget_secrets.scrub_messages(snap.history, env, drop_replay_cache=True)
+            for layer in (snap.intent, snap.state):
+                for key, value in list(vars(layer).items()):
+                    setattr(layer, key, forget_secrets.scrub_obj(value, env))
+        for path in list(self.created_archives):
+            forget_secrets.scrub_file(path, env)
+
     def cleanup(self):
         """Cleanup temporary archive files created during this session."""
         for file_path in self.created_archives:

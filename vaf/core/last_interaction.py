@@ -64,6 +64,10 @@ def update_last_interaction(
             and an agent woken in that chat took its own request for somebody else's.
     """
     try:
+        # A credential the person handed over in this chat and the agent stored is not kept
+        # as the preview either: the runner records the turn after it ran (forget_secrets).
+        from vaf.core.forget_secrets import scrub_text, session_env
+        preview = scrub_text(preview, session_env(session_id))
         path = _store_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         # A corrupt or truncated store must be treated as empty here, NOT abort the

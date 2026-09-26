@@ -509,6 +509,10 @@ lanes. `host_bash` (foreground and background) and `python_exec` hand a command 
 `VAF_SECRET_<NAME>` variables its text names, never the whole store, and scrub those values
 out of what it prints before the model reads it; a background command's owner-only log keeps
 the raw output and is scrubbed when read back. No route, command or prompt returns a value.
+A value the person hands over in a chat is stored for the person the chat belongs to
+(`store_credential` declares `user_scope_id` and `username`), and its removal from the chat
+touches only that chat and that person's own sinks: the saved chat of THAT session, that
+person's channel store and word-suggestion corpus (`vaf/core/forget_secrets.py`).
 Guarded by `tests/test_user_secrets.py`.
 
 Cloud DOWNLOADS follow the same rule. Both download actions wrote to

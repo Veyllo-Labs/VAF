@@ -102,10 +102,11 @@ class TUI:
         self._setup_autosuggest()
     
     def _setup_history(self):
-        """Setup command history."""
-        history_dir = Path.home() / ".vaf"
-        history_dir.mkdir(exist_ok=True)
-        self.history_file = history_dir / "history"
+        """Setup command history: the one file both terminal lanes share (vaf/cli/history.py,
+        which also removes a credential the owner handed over in a chat from it)."""
+        from vaf.cli.history import history_file
+        self.history_file = history_file()
+        self.history_file.parent.mkdir(exist_ok=True)
     
     def _setup_autosuggest(self):
         """Setup smart autosuggest."""

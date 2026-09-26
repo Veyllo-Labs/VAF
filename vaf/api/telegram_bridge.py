@@ -52,6 +52,61 @@ _outgoing_queue: Optional[queue.Queue] = None
 _pending_by_chat: Dict[str, Dict[str, Any]] = {}
 _pending_lock = threading.Lock()
 
+# The person's recent text messages per chat session, in memory only: (time, chat id, message
+# id, text). When the agent stores a credential it read in one of them (store_credential,
+# vaf/core/forget_secrets.py), the bridge deletes that message in the Telegram chat as well -
+# a burst of messages is one turn, so the one carrying the value has to be found by its text.
+# A bot may delete a person's message in a private chat for 48 hours.
+_RECENT_INBOUND_MAX = 50
+_RECENT_INBOUND_TTL_S = 48 * 3600
+_recent_inbound: Dict[str, List[Tuple[float, str, str, str]]] = {}
+_recent_lock = threading.Lock()
+
+
+def _remember_inbound(session_id: str, chat_id: str, message_id: Any, text: str) -> None:
+    with _recent_lock:
+        entries = _recent_inbound.setdefault(session_id, [])
+        entries.append((time.time(), str(chat_id), str(message_id), text))
+        del entries[:-_RECENT_INBOUND_MAX]
+
+
+def _delete_telegram_message(chat_id: str, message_id: str) -> bool:
+    bot_token = channel_secret("telegram")
+    if not bot_token:
+        return False
+    try:
+        resp = requests.post(f"https://api.telegram.org/bot{bot_token}/deleteMessage",
+                             data={"chat_id": chat_id, "message_id": message_id}, timeout=15)
+        return bool(resp.ok and (resp.json() or {}).get("ok"))
+    except Exception:
+        return False
+
+
+def _forget_listener(env=None, session_id=None, transcript_scrubbed=False, **_):
+    """Delete the person's Telegram message that carried a credential the agent just stored."""
+    if transcript_scrubbed or not env or not str(session_id or "").startswith("telegram_"):
+        return
+    now = time.time()
+    with _recent_lock:
+        entries = list(_recent_inbound.get(str(session_id), ()))
+    carrying = [e for e in entries
+                if now - e[0] <= _RECENT_INBOUND_TTL_S and any(v in e[3] for v in env.values())]
+    for entry in carrying:
+        deleted = _delete_telegram_message(entry[1], entry[2])
+        logger.info("credential message %s in chat %s %s", entry[2], entry[1],
+                    "deleted" if deleted else "could not be deleted")
+    if carrying:
+        with _recent_lock:
+            kept = [e for e in _recent_inbound.get(str(session_id), ()) if e not in carrying]
+            _recent_inbound[str(session_id)] = kept
+
+
+try:
+    from vaf.core.forget_secrets import add_listener as _add_forget_listener
+    _add_forget_listener(_forget_listener)
+except Exception:
+    pass
+
 # Accumulated RAG documents per Telegram session (session_id -> [{name, content, ...}]).
 # index_session_attachments_sync REPLACES a session's index, so we keep the full set and
 # re-index it on each new document. In-memory (reset on restart); the agent always also sees
@@ -979,6 +1034,7 @@ def _run_bot():
         msg_text = update.message.text.strip()
         if not msg_text:
             return
+        _remember_inbound(f"telegram_{telegram_user_id}", chat_id, update.message.message_id, msg_text)
 
         with _pending_lock:
             if chat_id not in _pending_by_chat:

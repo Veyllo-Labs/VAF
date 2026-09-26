@@ -994,6 +994,33 @@ def _session_status_label(session_id) -> str:
     return "working"
 
 
+def _refresh_after_forget(session_id=None, transcript_scrubbed=False, **_):
+    """A save of this chat has just replaced a credential the agent stored
+    (vaf/core/forget_secrets.py). The browser still holds the person's message as typed, on
+    screen and in its local cache: drop the cache and hand every view of the chat the
+    stored transcript, the same two events a regenerated answer sends."""
+    if not transcript_scrubbed or not session_id:
+        return
+    try:
+        loaded = session_mgr.load(str(session_id))
+    except Exception:
+        return
+    sid = str(session_id)
+    wi = get_web_interface()
+    wi._bridge_or_push({"type": "context_checkpoint", "session_id": sid}, sid)
+    active = _session_is_active(sid)
+    wi._bridge_or_push({
+        "type": "history_update",
+        "messages": _history_projection(loaded, sid),
+        "isActive": active,
+        "currentStatus": _session_status_label(sid) if active else "idle",
+    }, sid)
+
+
+from vaf.core.forget_secrets import add_listener as _add_forget_listener
+_add_forget_listener(_refresh_after_forget)
+
+
 # Mount Memory System routes if enabled
 if Config.get("memory_enabled", True):
     try:

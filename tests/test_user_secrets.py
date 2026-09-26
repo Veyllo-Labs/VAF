@@ -165,5 +165,5 @@ def test_the_turn_block_carries_the_note_when_a_host_tool_is_loaded():
     import inspect
     from vaf.core.system_prompt import SystemPromptManager
     src = inspect.getsource(SystemPromptManager._build_tool_documentation)
-    assert '"host_bash" in tool_names or "python_exec" in tool_names' in src
+    assert '{"host_bash", "python_exec", "store_credential"} & set(tool_names)' in src
     assert "{_vision_note}{_secrets_note}" in src

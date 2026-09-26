@@ -1442,8 +1442,13 @@ def _build_compaction_conversation_excerpt(agent: Any, max_chars: int = 12000) -
     history = getattr(agent, "history", None) or []
     if not history:
         return ""
+    # A credential the person handed over in this chat never becomes a learned fact: the
+    # compaction can run before the next turn has scrubbed what was said after the store call
+    # (vaf/core/forget_secrets.py).
+    from vaf.core.forget_secrets import scrub_text, session_env
+    forgotten = session_env(getattr(agent, "current_session_id", None))
     return _format_compaction_dialogue(
-        [(msg.get("role"), msg.get("content")) for msg in history], max_chars)
+        [(msg.get("role"), scrub_text(msg.get("content"), forgotten)) for msg in history], max_chars)
 
 
 def session_dialogue_excerpt(session_id: str, *, user_label: str = "Contact",

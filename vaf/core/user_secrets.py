@@ -13,8 +13,10 @@ command itself, the session and the timeline still carried it.
 How it works:
 
 - The person stores a value under a NAME: in Settings (Connections), with `vaf secrets set NAME`,
-  or through `PUT /api/secrets/{name}`. Never through the chat - a value typed there is already
-  where it must not be.
+  or through `PUT /api/secrets/{name}` - or hands it to the agent in the chat, and the agent
+  stores it with the store_credential tool. The value then leaves everywhere VAF keeps that
+  chat (vaf/core/forget_secrets.py); what already left the machine - the turn at the model
+  provider, a message on a messaging platform that cannot delete it - stays there.
 - The agent sees only the names (`prompt_note`, in the tool section of the turn block) and writes
   `$VAF_SECRET_<NAME>` into a host_bash command, or `os.environ["VAF_SECRET_<NAME>"]` into
   python_exec code.
@@ -164,14 +166,23 @@ def scrub(text, env: Optional[Dict[str, str]]) -> str:
     return out
 
 
-def prompt_note(*, user_scope_id=None, username=None) -> str:
-    """The line the model reads about the stored names, or "" when there are none."""
+def prompt_note(*, user_scope_id=None, username=None, can_store: bool = False) -> str:
+    """The lines the model reads about credentials: the stored names, and - when the
+    store_credential tool is loaded - how a value the person gives in the chat gets stored.
+    "" when there is nothing to say. Without the second part the model did not know the store
+    existed while it was empty, and asked for the password to go into the chat."""
     stored = names(user_scope_id=user_scope_id, username=username)
-    if not stored:
-        return ""
-    listed = ", ".join(f"${ENV_PREFIX}{n}" for n in stored)
-    return ("\n\n**Stored credentials:** the user keeps these for your commands: " + listed
-            + ". Use them by name - `$VAF_SECRET_<NAME>` in host_bash, "
-            "`os.environ[\"VAF_SECRET_<NAME>\"]` in python_exec - and never ask for, print or "
-            "repeat the value. A credential the user has not stored is set in Settings, "
-            "Connections, not in the chat.")
+    parts = []
+    if stored:
+        listed = ", ".join(f"${ENV_PREFIX}{n}" for n in stored)
+        parts.append("**Stored credentials:** the user keeps these for your commands: " + listed
+                     + ". Use them by name - `$VAF_SECRET_<NAME>` in host_bash, "
+                     "`os.environ[\"VAF_SECRET_<NAME>\"]` in python_exec - and never print or "
+                     "repeat the value.")
+    if can_store:
+        parts.append("**A password, token or login the user gives you:** store each value with "
+                     "store_credential (a NAME like FTP_PASS) as your FIRST step - before a plan, "
+                     "a note, a memory entry or any other tool call, and never repeat the value in "
+                     "one: those are logged before the store can remove it. It is then removed from "
+                     "this conversation, and you use it by name from then on.")
+    return ("\n\n" + "\n".join(parts)) if parts else ""

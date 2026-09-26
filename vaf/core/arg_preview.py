@@ -112,6 +112,29 @@ def neutralize(text: str) -> Tuple[str, int]:
     return "".join(out), count
 
 
+_SECRET_KEY = re.compile(r"^" + _SECRET_NAME + r"$", re.IGNORECASE)
+
+
+def mask_secret_args(args: Any, declared: Tuple[str, ...] | list = ()) -> Any:
+    """A copy of a tool's arguments with every credential replaced by [redacted]: the
+    arguments the tool DECLARES as secret (BaseTool.secret_args) and any key whose name says
+    it is one (password, token, api_key, FTP_PASS, ...). For everything that records or shows
+    a call - the tool-use log, the timeline, the event stream, the confirmation dialog.
+    Anything that is not a dict comes back unchanged."""
+    if not isinstance(args, dict):
+        return args
+    declared = set(declared or ())
+    out: Dict[str, Any] = {}
+    for key, value in args.items():
+        if value not in (None, "") and (key in declared or _SECRET_KEY.match(str(key))):
+            out[key] = REDACTED
+        elif isinstance(value, dict):
+            out[key] = mask_secret_args(value)
+        else:
+            out[key] = value
+    return out
+
+
 def redact(text: str) -> Tuple[str, int]:
     """Replace credential material with a placeholder. Returns (text, count)."""
     if not text:

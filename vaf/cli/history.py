@@ -51,3 +51,22 @@ def append_history(text: str) -> None:
         _store().append_string(text)
     except Exception:
         pass
+
+
+def _forget_listener(env=None, user_scope_id=None, transcript_scrubbed=False, **_):
+    """A credential the machine owner handed over in a chat leaves the terminal's input history
+    too (vaf/core/forget_secrets.py): the terminal lanes are the owner, and this file is theirs."""
+    if transcript_scrubbed or not env:
+        return
+    from vaf.core.config import get_local_admin_scope_id
+    if user_scope_id and str(user_scope_id) != str(get_local_admin_scope_id()):
+        return
+    from vaf.core.forget_secrets import scrub_file
+    scrub_file(history_file(), env)
+
+
+try:
+    from vaf.core.forget_secrets import add_listener as _add_forget_listener
+    _add_forget_listener(_forget_listener)
+except Exception:
+    pass

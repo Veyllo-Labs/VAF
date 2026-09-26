@@ -657,9 +657,9 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
             # Try to auto-start the scheduler if not already running. MUST go through
             # the process-wide singleton (ensure_scheduler_running): this tool's own
             # manager instance has _running=False even while the real scheduler runs,
-            # and starting on it re-registered every task into the module-global
-            # `schedule` registry a second time (live 2026-07-13: double TRIGGER on
-            # every automation; only the run lock prevented double execution).
+            # and starting on it armed every task a second time on a second loop
+            # (live 2026-07-13: double TRIGGER on every automation; only the run
+            # lock prevented double execution).
             scheduler_started = False
             try:
                 from vaf.core.automation import ensure_scheduler_started

@@ -3,7 +3,7 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Scheduler single-owner guard (live 2026-07-13: double TRIGGER on every task).
 
-The `schedule` registry is module-global while AutomationManager._running is
+The clock registry was module-global while AutomationManager._running is
 per-instance: the create_automation tool auto-started the scheduler on ITS OWN
 manager instance (whose _running was False even though the process scheduler
 ran), re-registering every job a second time and spinning up a second loop -

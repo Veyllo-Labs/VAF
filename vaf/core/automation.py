@@ -28,13 +28,6 @@ from vaf.core.channels import ALL_SEND_TOOLS, CHAT_CHANNELS
 from vaf.core.log_helper import append_domain_log, append_domain_log_always
 from vaf.core.subagent_ipc import get_current_session_id, set_current_session_id
 
-# Cross-platform scheduler
-try:
-    import schedule
-    HAS_SCHEDULE = True
-except ImportError:
-    HAS_SCHEDULE = False
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA CLASSES
@@ -139,17 +132,20 @@ class AutomationTask:
     def from_dict(cls, data: Dict) -> "AutomationTask":
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
     
-    def calculate_next_run(self) -> Optional[datetime]:
+    def calculate_next_run(self, after: Optional[datetime] = None) -> Optional[datetime]:
         """Next execution time, interpreted in the OWNER's timezone, returned as a SERVER-local
-        naive datetime.
+        naive datetime. `after` (naive server-local) is the moment to count from; now when omitted.
 
         Wall-clock times (self.time) are the user's local times, so "now" is taken in the owner's
         timezone (user_identity.timezone, the single source of truth; server-local when unset). The
         result is converted back to a naive server-local datetime so sort/min over tasks and
         comparisons with naive datetime.now() never mix aware+naive (which would raise).
 
+        This is also the scheduler's clock (AutomationManager._schedule_task): what a list or the
+        calendar shows as the next run is the moment the task fires.
+
         None when the record carries no clock rule this code can read: an empty or malformed
-        `time`, an hour or minute out of range, a day the month does not have, or a frequency
+        `time`, an hour or minute out of range, a day no month has, or a frequency
         this version does not know. NEVER an exception. A record is data that arrived from a
         file or a caller, and the boundary coerces rather than trusts it: one record with an
         unreadable time used to make list() raise, and list() is what the Web UI automations
@@ -157,12 +153,17 @@ class AutomationTask:
         took every automation surface down for every user. The create path admits exactly
         such a record, because the interval check steps aside whenever the time has no colon.
         """
-        from vaf.core.user_time import user_now
+        from vaf.core.user_time import resolve_user_timezone, user_now
         try:
             hour, minute = (int(part) for part in str(self.time or "").split(":"))
         except (TypeError, ValueError):
             return None
-        now = user_now(_resolve_username(self.user_scope_id))
+        username = _resolve_username(self.user_scope_id)
+        if after is None:
+            now = user_now(username)
+        else:
+            tz = resolve_user_timezone(username)
+            now = after.astimezone(tz) if tz else after
         try:
             next_time = self._next_clock_time(now, hour, minute)
         except (ValueError, OverflowError):
@@ -200,20 +201,36 @@ class AutomationTask:
                 days_ahead += 7
             next_time += timedelta(days=days_ahead)
         elif self.frequency == Frequency.MONTHLY:
+            # The next month that HAS the day: the 31st skips the thirty-day months and February
+            # rather than having no next run while the current month is one of them.
             target_day = self.day or 1
-            next_time = now.replace(day=target_day, hour=hour, minute=minute, second=0, microsecond=0)
-            if next_time <= now:
-                # Move to next month
-                if now.month == 12:
-                    next_time = next_time.replace(year=now.year + 1, month=1)
-                else:
-                    next_time = next_time.replace(month=now.month + 1)
+            year, month = now.year, now.month
+            for _ in range(13):
+                try:
+                    next_time = now.replace(year=year, month=month, day=target_day, hour=hour,
+                                            minute=minute, second=0, microsecond=0)
+                except ValueError:
+                    next_time = None
+                if next_time is not None and next_time > now:
+                    break
+                year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+            else:
+                return None
         else:
             # Not "now": a frequency with no clock rule has no next clock run. Answering
             # "now" sorted such a record first and told the thinking-mode gate that
             # something was due this instant, every time it asked.
             return None
         return next_time
+
+
+@dataclass
+class _ClockJob:
+    """A clock task the running scheduler has armed: when it is due next (naive server-local,
+    from AutomationTask.calculate_next_run) and whether it ends after it has fired."""
+    task: AutomationTask
+    due: datetime
+    once: bool = False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -909,6 +926,8 @@ class AutomationManager:
         self.tasks: Dict[str, AutomationTask] = {}
         self._scheduler_thread: Optional[threading.Thread] = None
         self._running = False
+        self._clock_jobs: Dict[str, _ClockJob] = {}
+        self._clock_lock = threading.Lock()
         self._create_readme()
         self._load_tasks()
 
@@ -2304,20 +2323,15 @@ vaf automation delete <id>   # Delete task
     
     def start_scheduler(self):
         """Start the background scheduler."""
-        if not HAS_SCHEDULE:
-            self._log_scheduler_event("START_FAILED reason='schedule package missing'")
-            raise ImportError("'schedule' package required. Install: pip install schedule")
-
         if self._running:
             self._log_scheduler_event("START_SKIPPED reason='already running'")
             return
 
-        # The `schedule` registry is MODULE-GLOBAL while _running is per-instance:
-        # a second manager instance starting "its" scheduler re-registers every job
-        # into the same global registry (without a clear) and spins up a second
-        # loop thread - every task then fires twice and only the run lock prevents
-        # double execution (live 2026-07-13: double TRIGGER on every automation).
-        # Only the process-wide singleton may pump the scheduler. Deliberately read
+        # One scheduler per process. A second manager instance starting "its" scheduler
+        # arms every task a second time and spins up a second loop thread - every task
+        # then fires twice and only the run lock prevents double execution (live
+        # 2026-07-13: double TRIGGER on every automation, when the clock registry was
+        # still module-global). Only the process-wide singleton may pump the scheduler. Deliberately read
         # WITHOUT _scheduler_manager_lock: ensure_scheduler_started() calls this
         # method while holding that (non-reentrant) lock - taking it here would
         # deadlock. The bare reference read is atomic under the GIL, and this guard
@@ -2333,6 +2347,9 @@ vaf automation delete <id>   # Delete task
             return
         
         self._running = True
+        # A start arms every task afresh.
+        self._clock_lock = getattr(self, "_clock_lock", None) or threading.Lock()
+        self._clock_jobs = {}
         enabled_tasks = self.list(enabled_only=True)
         self._log_scheduler_event(
             f"START task_count={len(enabled_tasks)} storage_dir={str(self.storage_dir)!r}"
@@ -2341,7 +2358,7 @@ vaf automation delete <id>   # Delete task
         def scheduler_loop():
             self._log_scheduler_event("LOOP_STARTED")
             while self._running:
-                schedule.run_pending()
+                self._run_due_clock_jobs()
                 # One-shot reminders (narrow lane, see vaf/core/reminders.py): a
                 # reminder is stored data delivered verbatim - no agent run. Fired
                 # here so only the process singleton ever delivers them.
@@ -2379,7 +2396,11 @@ vaf automation delete <id>   # Delete task
         """Stop the background scheduler."""
         self._log_scheduler_event("STOP_REQUESTED")
         self._running = False
-        schedule.clear()
+        self._clear_clock_jobs()
+
+    def _clear_clock_jobs(self) -> None:
+        with self._clock_lock:
+            self._clock_jobs.clear()
     
     def _schedule_task(self, task: AutomationTask):
         """Add a task to the scheduler."""
@@ -2397,78 +2418,69 @@ vaf automation delete <id>   # Delete task
             )
             return
 
-        # Owner timezone (IANA name) so wall-clock times fire in the USER's zone, not the server's.
-        # schedule's Job.at(time, tz) handles DST; tz=None -> server-local (unchanged behavior).
-        from vaf.core.user_time import resolve_user_timezone_name, user_now
-        _owner_user = _resolve_username(task.user_scope_id)
-        _tz = resolve_user_timezone_name(_owner_user)
-
-        # Run in new terminal window by default
-        job_func = lambda t=task: self._run_scheduled_task(t)
-
-        if task.frequency == Frequency.HOURLY:
-            schedule.every().hour.at(f":{task.time.split(':')[1]}", _tz).do(job_func)
-            self._log_scheduler_event(
-                f"REGISTERED task_id={task.id} name={task.name!r} frequency=hourly time={task.time}"
-            )
-        
-        elif task.frequency == Frequency.DAILY:
-            schedule.every().day.at(task.time, _tz).do(job_func)
-            self._log_scheduler_event(
-                f"REGISTERED task_id={task.id} name={task.name!r} frequency=daily time={task.time}"
-            )
-        
-        elif task.frequency == Frequency.WEEKLY:
-            weekday = task.weekday or "monday"
-            getattr(schedule.every(), weekday).at(task.time, _tz).do(job_func)
-            self._log_scheduler_event(
-                f"REGISTERED task_id={task.id} name={task.name!r} frequency=weekly weekday={weekday} time={task.time}"
-            )
-        
-        elif task.frequency == Frequency.MONTHLY:
-            # Monthly is trickier - check daily and run if day matches
-            def monthly_check(t=task, _u=_owner_user):
-                _cur_day = user_now(_u).day  # day-of-month in the owner's timezone
-                if _cur_day == (t.day or 1):
-                    self._run_scheduled_task(t)
-                else:
-                    self._log_scheduler_event(
-                        f"MONTHLY_SKIP task_id={t.id} name={t.name!r} expected_day={t.day or 1} current_day={_cur_day}"
-                    )
-            schedule.every().day.at(task.time, _tz).do(monthly_check)
-            self._log_scheduler_event(
-                f"REGISTERED task_id={task.id} name={task.name!r} frequency=monthly day={task.day or 1} time={task.time}"
-            )
-
-        elif task.frequency == Frequency.ONCE:
-            # einmalig = einmalig: never re-arm a one-time task that has already
-            # fired. Guards against a lingering file being re-registered after a
-            # restart or scheduler refresh, which would otherwise run it again.
-            if task.last_run or task.last_completed_local_date:
-                self._log_scheduler_event(
-                    f"REGISTER_SKIPPED task_id={task.id} name={task.name!r} "
-                    f"reason='once already ran' last_run={task.last_run}"
-                )
-                try:
-                    self.delete(task.id, permanent=True)
-                except Exception:
-                    pass
-                return
-            # Run exactly once at the specified time (today if still in the future,
-            # tomorrow if the time has already passed).  Returning schedule.CancelJob
-            # from the callback removes the job automatically after it fires.
-            def once_job(t=task):
-                self._run_scheduled_task(t)
-                return schedule.CancelJob
-            schedule.every().day.at(task.time, _tz).do(once_job)
-            self._log_scheduler_event(
-                f"REGISTERED task_id={task.id} name={task.name!r} frequency=once time={task.time}"
-            )
-
-        else:
+        if task.frequency not in (Frequency.HOURLY, Frequency.DAILY, Frequency.WEEKLY,
+                                  Frequency.MONTHLY, Frequency.ONCE):
             self._log_scheduler_event(
                 f"REGISTER_SKIPPED task_id={task.id} name={task.name!r} reason='unsupported frequency {task.frequency}'"
             )
+            return
+
+        if task.frequency == Frequency.ONCE and (task.last_run or task.last_completed_local_date):
+            # einmalig = einmalig: never re-arm a one-time task that has already
+            # fired. Guards against a lingering file being re-registered after a
+            # restart or scheduler refresh, which would otherwise run it again.
+            self._log_scheduler_event(
+                f"REGISTER_SKIPPED task_id={task.id} name={task.name!r} "
+                f"reason='once already ran' last_run={task.last_run}"
+            )
+            try:
+                self.delete(task.id, permanent=True)
+            except Exception:
+                pass
+            return
+
+        # The clock is the task's own next run, the one the lists and the calendar show,
+        # computed in the owner's timezone with the standard library (user_time.user_now,
+        # zoneinfo) and asked again after every run. A third-party scheduler used to keep a
+        # second clock here, and it needed pytz for any timezone: pytz was never a dependency,
+        # so once an owner had a timezone set, registering the first task raised and the
+        # scheduler did not start at all (measured: "No module named 'pytz'" on every start).
+        due = task.calculate_next_run()
+        if due is None:
+            self._log_scheduler_event(
+                f"REGISTER_SKIPPED task_id={task.id} name={task.name!r} reason='no readable clock rule' "
+                f"when={task.schedule_label!r}"
+            )
+            return
+        with self._clock_lock:
+            self._clock_jobs[task.id] = _ClockJob(task=task, due=due,
+                                                  once=task.frequency == Frequency.ONCE)
+        self._log_scheduler_event(
+            f"REGISTERED task_id={task.id} name={task.name!r} when={task.schedule_label!r} "
+            f"next={due:%Y-%m-%d %H:%M}"
+        )
+
+    def _run_due_clock_jobs(self, now: Optional[datetime] = None) -> None:
+        """Run every armed clock task that is due, then arm it for its next run (a one-time
+        task ends). Called on the scheduler loop's tick; `now` is naive server-local."""
+        now = now or datetime.now()
+        with self._clock_lock:
+            due = [job for job in self._clock_jobs.values() if job.due <= now]
+        for job in sorted(due, key=lambda j: j.due):
+            try:
+                self._run_scheduled_task(job.task)
+            except Exception as e:
+                self._log_scheduler_event(f"RUN_FAILED task_id={job.task.id} error={e!r}")
+            with self._clock_lock:
+                if self._clock_jobs.get(job.task.id) is not job:
+                    continue  # a refresh re-armed or removed it meanwhile
+                # Counted from the later of the tick and the end of the run: a run that
+                # outlasts its interval skips the missed slot instead of firing at once again.
+                nxt = None if job.once else job.task.calculate_next_run(after=max(now, datetime.now()))
+                if nxt is None:
+                    del self._clock_jobs[job.task.id]
+                else:
+                    job.due = nxt
 
 
 def get_next_automation_run_utc(user_scope_id: Optional[str]) -> Optional[datetime]:
@@ -2661,7 +2673,7 @@ def ensure_scheduler_started(origin: str = "unknown") -> tuple[AutomationManager
             )
             _scheduler_manager._running = False
             try:
-                schedule.clear()
+                _scheduler_manager._clear_clock_jobs()
             except Exception:
                 pass
 
@@ -2692,7 +2704,7 @@ def refresh_scheduler_from_disk(origin: str = "unknown") -> bool:
 
         _scheduler_manager._log_scheduler_event(f"REFRESH_START origin={origin!r}")
         _scheduler_manager.reload_tasks()
-        schedule.clear()
+        _scheduler_manager._clear_clock_jobs()
         for task in _scheduler_manager.list(enabled_only=True):
             _scheduler_manager._schedule_task(task)
         _scheduler_manager._log_scheduler_event(
@@ -2879,11 +2891,6 @@ def start_scheduler():
     from rich.text import Text
     
     console = Console()
-    
-    if not HAS_SCHEDULE:
-        console.print("[red]Missing dependency: schedule[/red]")
-        console.print("[dim]Install with: pip install schedule[/dim]")
-        raise typer.Exit(1)
     
     manager = get_manager()
     tasks = manager.list(enabled_only=True)

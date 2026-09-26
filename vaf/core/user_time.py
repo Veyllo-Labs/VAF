@@ -71,8 +71,8 @@ def resolve_user_timezone_name(
 ) -> Optional[str]:
     """The user's configured IANA timezone STRING if set and valid, else None.
 
-    Use for APIs that take a tz name rather than a tzinfo (e.g. the `schedule`
-    library's Job.at(time, tz)). None -> caller should use server-local.
+    Use for APIs and records that take a tz name rather than a tzinfo (a calendar
+    event's `tz`). None -> caller should use server-local.
     """
     ui = _load_identity(username, identity)
     tz_str = (ui.get("timezone") or "").strip() or None

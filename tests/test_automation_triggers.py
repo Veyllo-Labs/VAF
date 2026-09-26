@@ -4,8 +4,8 @@
 """An automation that runs when a room says something, not when a clock says so.
 
 The run half of an automation was always trigger-agnostic; what VAF lacked was the "is
-it due" decision for anything but a clock, which the `schedule` package holds and cannot
-express as a condition. `RoomTriggerWatch` is that decision for room events, and this file
+it due" decision for anything but a clock, whose next run (calculate_next_run) cannot
+express a condition. `RoomTriggerWatch` is that decision for room events, and this file
 pins the three rules the module docstring names: the owner's own agent never fires a
 trigger (a loop nothing else would stop), a trigger fires only in a room the owner is a
 member of, and the cursor starts at the room's newest frame, never at zero.
@@ -14,7 +14,6 @@ import json
 from pathlib import Path
 
 import pytest
-import schedule
 from typer.testing import CliRunner
 
 import vaf.core.a2a.store as store_mod
@@ -33,7 +32,7 @@ SCOPE = "scope-a"
 
 @pytest.fixture()
 def world(tmp_path, monkeypatch):
-    """A scratch home, a scratch room store, and the clock scheduler's registry empty.
+    """A scratch home and a scratch room store.
 
     The manager cache is cleared too, and that is not belt-and-braces: `get_manager()`
     holds a module-global AutomationManager (vaf/core/automation.py), so the FIRST test
@@ -47,7 +46,6 @@ def world(tmp_path, monkeypatch):
                         lambda base=None: Path(base) if base else tmp_path / "rooms")
     monkeypatch.setattr(automation_mod, "_manager", None)
     (tmp_path / "rooms").mkdir()
-    schedule.clear()
     return tmp_path
 
 
@@ -128,8 +126,7 @@ def test_the_record_carries_its_format_tag_and_reads_untagged_files(world):
 def test_the_scheduler_registers_no_clock_job_for_an_event_task(world):
     """MUTATION: let an event task fall through to the clock branches.
 
-    The clock registry is module-global, and no job may be registered for a task
-    with no time. The else arm already refuses an unknown frequency, so the job
+    No clock job may be armed for a task with no time. The else arm already refuses an unknown frequency, so the job
     count alone cannot see the mutation; what it changes is the DIAGNOSTIC, and that
     is pinned too: a scheduler log that calls a supported frequency "unsupported"
     is the silent else arm the measurement flagged, wearing a new frequency.
@@ -137,14 +134,12 @@ def test_the_scheduler_registers_no_clock_job_for_an_event_task(world):
     manager = AutomationManager(storage_dir=str(world / "automations"))
     logged = []
     manager._log_scheduler_event = logged.append
-    before = len(schedule.jobs)
     manager._schedule_task(_task())
-    assert len(schedule.jobs) == before
+    assert manager._clock_jobs == {}
     assert any("REGISTERED_EVENT" in line for line in logged), logged
     assert not any("unsupported" in line for line in logged), logged
     manager._schedule_task(_task(id="clock", frequency="daily", time="07:15", trigger=None))
-    assert len(schedule.jobs) == before + 1
-    schedule.clear()
+    assert list(manager._clock_jobs) == ["clock"]
 
 
 # ── the decision ───────────────────────────────────────────────────────────

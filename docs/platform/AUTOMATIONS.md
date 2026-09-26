@@ -54,6 +54,12 @@ There is no passive text-marker delivery path: an older one was documented, neve
 
 **Code:** `vaf/core/timers.py` (store + scheduler + the `_fire` wake-turn framing), `vaf/tools/timer.py` (the tools + `_resolve_session`), `vaf/core/headless_runner.py` (the `kind="timer"` wake emit before the turn), `vaf/cli/tui_app/agent_bridge.py` (`queue_tick` / `_drain_queue_once`), `web/app/page.tsx` (the `kind`-based wake card).
 
+## The clock
+
+A clock automation fires at its own next run: `AutomationTask.calculate_next_run()`, the value the automations list, the calendar window and the thinking-mode start gate already show. It is computed in the owner's timezone (`user_identity.timezone` through `vaf/core/user_time.py`, the standard library's `zoneinfo`, server-local when unset) and asked again after every run, counted from the later of the tick and the end of the run, so a run that outlasts its interval skips the missed slot rather than firing again at once. The scheduler loop checks the armed tasks on its 30-second tick (`AutomationManager._run_due_clock_jobs`); a run that raises is logged and the task stays armed. A monthly task on a day the current month does not have (the 31st in September) runs in the next month that has it.
+
+There is no third-party scheduler behind it any more. The `schedule` package used to keep a second clock, and for any timezone it imports `pytz`, which was never a dependency of VAF: once an owner had a timezone set, registering the first task raised and the scheduler did not start at all (measured: `Automation scheduler start error: No module named 'pytz'` on every start). The suite had not seen it because no test gave an owner a timezone; `tests/test_automation_clock.py` does, with `pytz` blocked.
+
 ## Today status, persisted completion, and catch-up runs
 
 - **Task JSON fields:** On each **successful** run, the task file stores `last_run` (ISO timestamp) and **`last_completed_local_date`** (`YYYY-MM-DD` in the **host’s local** calendar). The latter is the source of truth for “already finished today” and **survives tray/VAF restarts** until the local date rolls over (e.g. automation at 06:00 completes → still **Done (today)** after a restart at 11:00; the next day it is no longer “today” and the status follows schedule vs clock again).

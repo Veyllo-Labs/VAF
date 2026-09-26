@@ -129,6 +129,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Timed automations run again.** Once your account had a timezone set, the automation
+  scheduler failed to start ("No module named 'pytz'" in the log), so no daily, weekly,
+  monthly, hourly or one-time automation ran. The scheduler now fires each automation at the
+  next run the automations list and the calendar show, computed in your timezone with
+  Python's own time zone support, and no longer needs the `schedule` package at all. A
+  monthly automation on the 31st now runs in the next month that has a 31st instead of
+  showing no next run.
+
 - **In a long task the agent no longer forgets what you asked for.** When a task took many
   steps, VAF shortened the conversation along the way and eventually dropped your request
   itself. The agent then went by a note that was meant to hold your current request but

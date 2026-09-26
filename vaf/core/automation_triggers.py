@@ -4,8 +4,9 @@
 """Event triggers for automations: an automation that runs when something happens in a room.
 
 Until this existed an automation could only be due by the clock, and the reason was deeper
-than the frequency enum: the "is it due" decision was not in VAF at all. Clock automations
-hand it to the `schedule` package, which cannot express a condition. This module IS that
+than the frequency enum: the "is it due" decision for anything but a clock was not in VAF at
+all. A clock automation is due at its next clock run (AutomationTask.calculate_next_run), which
+cannot express a condition. This module IS that
 decision for events, and everything else was already there and is reused as it stands: the
 run half of an automation (`AutomationManager._run_scheduled_task`) is trigger-agnostic, the
 arrival detector is the room store's own `read_since`, and the matcher is `text_match`.

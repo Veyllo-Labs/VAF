@@ -69,7 +69,6 @@ Also present in `requirements.txt`.
 | openai | >=1.12.0 | Apache-2.0 |
 | anthropic | >=0.18.0 | MIT |
 | google-genai | >=1.0.0 | Apache-2.0 |
-| schedule | >=1.2.0 | MIT |
 | inquirer | >=3.1.0 | MIT |
 | tzdata | >=2024.1 | Apache-2.0 |
 | ruff | >=0.1.0 | MIT |

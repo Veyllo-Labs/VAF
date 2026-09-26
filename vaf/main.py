@@ -58,8 +58,7 @@ def bootstrap():
         # AI/ML
         "huggingface_hub": "huggingface_hub",
         "tqdm": "tqdm",  # Progress bars for downloads
-        # Automation
-        "schedule": "schedule",
+        # Interactive CLI prompts
         "inquirer": "inquirer",
         # Speech (TTS/STT/Wake Word)
         "SpeechRecognition": "speech_recognition",

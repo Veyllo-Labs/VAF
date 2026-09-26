@@ -79,3 +79,26 @@ def test_attachment_gates_share_the_number():
     assert "MAX_ATTACH_BYTES = 100 * 1024 * 1024" in page, \
         "the client-side attachment gate drifted or vanished"
     assert "fileTooLargeToAttach" in page, "the size refusal lost its message"
+
+
+def test_every_uvicorn_config_carries_the_redacting_log_config():
+    """The uvicorn loggers are process-wide. One server built without the redacting
+    log_config re-runs dictConfig with uvicorn's defaults and strips the token filter from
+    every other server in the process - measured: the HTTPS proxy did it, and full
+    /ws?token=<jwt> lines (the desktop's live admin token among them) landed in
+    tray_debug.log. MUTATION: drop log_config from the proxy's Config and this goes red."""
+    tray = (ROOT / "vaf" / "tray.py").read_bytes().decode("utf-8")
+    assert "_log_cfg = redacted_uvicorn_log_config()" in tray
+    offenders = []
+    for file, line, window in _uvicorn_config_sites():
+        call = window.split("\n)", 1)[0].split("        )", 1)[0]
+        if "log_config=redacted_uvicorn_log_config()" in call or "log_config=_log_cfg" in call:
+            continue
+        if "log-exempt:" in call:
+            continue
+        offenders.append(f"{file}:{line}")
+    assert not offenders, (
+        f"uvicorn.Config without the redacting log_config: {offenders}. Pass "
+        f"log_config=redacted_uvicorn_log_config() (vaf.core.log_helper) or add a named "
+        f"'log-exempt: <reason>' comment."
+    )

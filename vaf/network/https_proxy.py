@@ -425,7 +425,11 @@ def run_https_proxy(
         app = create_proxy_app()
         # Compatibility: ensure TLS 1.2 clients can connect.
         # Some devices fail with ERR_EMPTY_RESPONSE if only TLS 1.3 is effectively negotiated.
-        from vaf.core.log_helper import WS_MAX_SIZE_BYTES
+        from vaf.core.log_helper import WS_MAX_SIZE_BYTES, redacted_uvicorn_log_config
+        # The uvicorn loggers are process-wide: a Config without the redacting log_config
+        # re-runs dictConfig with uvicorn's defaults and strips the token filter from EVERY
+        # server in the tray (8001 and 8005 included) - measured: full /ws?token=<jwt>
+        # lines in tray_debug.log.
         config = uvicorn.Config(
             app,
             host=host,
@@ -436,6 +440,7 @@ def run_https_proxy(
             ssl_ciphers="DEFAULT",
             log_level="info",
             use_colors=False,
+            log_config=redacted_uvicorn_log_config(),
             # The FRONT door of the LAN path: without this the proxy re-capped
             # uploads at uvicorn's 16 MB default no matter what the backend allowed.
             ws_max_size=WS_MAX_SIZE_BYTES,

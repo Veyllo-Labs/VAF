@@ -243,6 +243,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **Your login no longer ends up in the tray log.** The app's connection carries your login
+  token, and a filter is meant to hide it in the log. With network access switched on, the
+  built-in HTTPS proxy started its server without that filter, which switched it off for the
+  whole app whenever the proxy happened to start last: the full token was then written to
+  `tray_debug.log`, a file other accounts on the computer can read. Every server now keeps the
+  filter.
+
 - **"Allow once" means once, and there is a new "For this chat".** Answering "Allow once" to
   a tool confirmation used to leave that tool allowed for the rest of the server process: in
   every chat, for every account on the machine, and without any trace. Now "Only this time"

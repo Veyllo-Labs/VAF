@@ -10,7 +10,7 @@ VAF keeps the chat: the argument is declared secret (BaseTool.secret_args), so i
 log or the event stream, and after the call it is replaced by `[VAF_SECRET_<NAME>]` in the
 history, the saved chat and the other sinks vaf/core/forget_secrets.py names. What already left
 the machine stays where it went: the model provider saw the message, and a messaging platform
-keeps it unless its channel can delete it (Telegram can).
+keeps it unless its channel can delete it (the Telegram bridge tries, within 48 hours).
 """
 from __future__ import annotations
 

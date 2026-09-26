@@ -18,7 +18,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   The agent stores each value in your own encrypted credential store under a name and uses
   it by that name from then on. The value itself is then removed from everywhere VAF keeps
   the chat (the conversation, the saved chat, the chat's notes, the word suggestions, the
-  logs), without breaking the conversation, and on Telegram your message is deleted too. What
+  logs), without breaking the conversation, and on Telegram VAF also tries to delete your message
+  (possible for 48 hours). What
   cannot be taken back: the provider of the AI model has already received that message, and
   WhatsApp and Discord keep it on their side. For a sensitive password the settings page
   (Connections, "Credentials for commands") is still the way that never shows it to anyone.

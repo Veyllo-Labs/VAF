@@ -58,7 +58,8 @@ agent's history, the saved chat, the stored intent, the context archives, the ch
 the word suggestions, the terminal's input history and the debug logs of the last two days,
 each message kept in place with the
 value replaced by `[VAF_SECRET_<NAME>]` so the chat stays valid. Over Telegram the bot also
-deletes the person's message (a bot may, for 48 hours). What cannot be taken back: the model
+tries to delete the person's message - an attempt: a bot may do that for 48 hours, and only for
+a message that arrived since the bridge last started. What cannot be taken back: the model
 provider received that turn, and WhatsApp and Discord keep the message on the platform. The
 Settings route never passes through the model at all. Rules and boundaries:
 `vaf/core/user_secrets.py`, `vaf/core/forget_secrets.py`; isolation:

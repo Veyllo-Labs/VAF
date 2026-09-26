@@ -54,9 +54,10 @@ _pending_lock = threading.Lock()
 
 # The person's recent text messages per chat session, in memory only: (time, chat id, message
 # id, text). When the agent stores a credential it read in one of them (store_credential,
-# vaf/core/forget_secrets.py), the bridge deletes that message in the Telegram chat as well -
-# a burst of messages is one turn, so the one carrying the value has to be found by its text.
-# A bot may delete a person's message in a private chat for 48 hours.
+# vaf/core/forget_secrets.py), the bridge tries to delete that message in the Telegram chat as
+# well - a burst of messages is one turn, so the one carrying the value has to be found by its
+# text. An attempt, logged either way: a bot may delete a person's message in a private chat
+# for 48 hours, the Bot API can refuse, and what arrived before this process started is unknown.
 _RECENT_INBOUND_MAX = 50
 _RECENT_INBOUND_TTL_S = 48 * 3600
 _recent_inbound: Dict[str, List[Tuple[float, str, str, str]]] = {}
@@ -91,10 +92,12 @@ def _forget_listener(env=None, session_id=None, transcript_scrubbed=False, **_):
         entries = list(_recent_inbound.get(str(session_id), ()))
     carrying = [e for e in entries
                 if now - e[0] <= _RECENT_INBOUND_TTL_S and any(v in e[3] for v in env.values())]
+    from vaf.core.log_helper import log_telegram_reply
     for entry in carrying:
         deleted = _delete_telegram_message(entry[1], entry[2])
-        logger.info("credential message %s in chat %s %s", entry[2], entry[1],
-                    "deleted" if deleted else "could not be deleted")
+        # Into the bridge's own lane log: the module logger's INFO never reached a file.
+        log_telegram_reply(f"CREDENTIAL_MESSAGE {'deleted' if deleted else 'not deleted'} "
+                           f"chat_id={entry[1]} message_id={entry[2]}")
     if carrying:
         with _recent_lock:
             kept = [e for e in _recent_inbound.get(str(session_id), ()) if e not in carrying]

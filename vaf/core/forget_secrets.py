@@ -29,7 +29,7 @@ The sinks, in the order a value reaches them:
 - the last-interaction preview and the channel store;
 - the debug logs of the last two days (`scrub_recent_logs`);
 - whatever a lane registered with `add_listener`: the terminal's input history, the
-  word-suggestion corpus, the Telegram bridge (which deletes the person's message there), the
+  word-suggestion corpus, the Telegram bridge (which tries to delete the person's message there), the
   web chat (which drops its cached copy).
 
 NAMED BOUNDARIES - where the value stays, stated so nobody promises more:

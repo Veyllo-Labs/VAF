@@ -269,11 +269,15 @@ def test_telegram_deletes_the_message_that_carried_it(monkeypatch):
     deleted = []
     monkeypatch.setattr(tg, "_recent_inbound", {})
     monkeypatch.setattr(tg, "_delete_telegram_message", lambda chat, mid: deleted.append((chat, mid)) or True)
+    lines = []
+    import vaf.core.log_helper as log_helper
+    monkeypatch.setattr(log_helper, "log_telegram_reply", lines.append)
     fs.add_listener(tg._forget_listener)
     tg._remember_inbound("telegram_42", "42", 7, "Server ist ftp.example.org")
     tg._remember_inbound("telegram_42", "42", 8, f"Passwort: {VALUE}")
     fs.forget({"VAF_SECRET_FTP_PASS": VALUE}, session_id="telegram_42")
     assert deleted == [("42", "8")], "only the message that carried it"
+    assert lines == ["CREDENTIAL_MESSAGE deleted chat_id=42 message_id=8"], "the attempt is on record"
 
 
 def test_the_web_chat_reloads_after_the_scrubbed_save():

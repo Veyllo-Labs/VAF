@@ -1821,7 +1821,14 @@ class Agent:
         task content passes. The gate's loop-cap still lets the model proceed after repeated blocks,
         so a false positive never hard-locks."""
         import re as _re
-        text = " ".join(str(p) for p in plan) if isinstance(plan, (list, tuple)) else str(plan or "")
+        # The stored plan is a list of {"t": <timestamp>, "text": ...} entries: judged on their
+        # text. Joined as dicts, the keys and the timestamp ("t", "text", "26t17") were words no
+        # filler list knows, so a stored "test" plan was never recognised as a placeholder.
+        if isinstance(plan, (list, tuple)):
+            from vaf.core.context import ContextManager
+            text = " ".join(ContextManager._flatten_working_memory_entries(list(plan)))
+        else:
+            text = str(plan or "")
         core = _re.sub(r'[^\w\s]', ' ', text)        # drop punctuation / bullets
         core = _re.sub(r'\b\d+\b', ' ', core)         # drop list numbering
         core = _re.sub(r'\s+', ' ', core).strip().lower()
@@ -2048,6 +2055,28 @@ class Agent:
         except Exception:
             return "continue"
 
+    def _plan_gate_state(self) -> tuple:
+        """(gate_active, plan_exists): the one answer the plan gate and the plan line of the turn
+        block share, so the model is never told one thing while the gate does another.
+
+        gate_active: `plan_gate_enabled`, and neither a non-interactive run (automation, CLI
+        one-shot) nor a sub-agent process - those are never gated. plan_exists: a plan in this
+        chat's working memory that is not a placeholder ("Neuer Test-Plan hier" / "test" must not
+        open the gate). A read error counts as a plan: the gate fails open, and the line then
+        claims nothing is held."""
+        from vaf.core.config import Config
+        is_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "") == "1"
+        gate_active = bool(Config.get("plan_gate_enabled", True)) and not (
+            getattr(self, "_noninteractive", False) or is_subagent)
+        plan_exists = True
+        try:
+            if self.main_persistence is not None:
+                _plan = self.main_persistence.get_working_memory().get("plan")
+                plan_exists = bool(_plan) and not self._is_placeholder_plan(_plan)
+        except Exception:
+            plan_exists = True
+        return gate_active, plan_exists
+
     def _plan_gate_decision(self, name, tool_instance, tool_args=None):
         """Main-agent plan gate: block a state-changing tool until a plan exists in working memory
         ("explore freely, plan before you act"). Returns a block message (str) to show the model, or
@@ -2065,24 +2094,12 @@ class Agent:
         call itself (observability preserved) and allows the launch."""
         try:
             from vaf.core.config import Config
-            if not Config.get("plan_gate_enabled", True):
-                return None
-            # Main agent only: sub-agents / non-interactive runs (automations, CLI one-shot) skip.
-            is_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "") == "1"
-            if self._noninteractive or is_subagent:
+            gate_active, plan_exists = self._plan_gate_state()
+            if not gate_active:
                 return None
             # Gated set: write/dangerous tools, except python_sandbox.
             level = getattr(tool_instance, "permission_level", "read") if tool_instance else "read"
             if level not in ("write", "dangerous") or name == "python_sandbox":
-                return None
-            # Plan present AND substantive? (working memory is already session-scoped). A placeholder
-            # plan ("Neuer Test-Plan hier" / "test") must NOT open the gate. Fail-open on any error.
-            plan_exists = True
-            try:
-                if self.main_persistence is not None:
-                    _plan = self.main_persistence.get_working_memory().get("plan")
-                    plan_exists = bool(_plan) and not self._is_placeholder_plan(_plan)
-            except Exception:
                 return None
             if plan_exists:
                 self._plan_gate_blocks = 0

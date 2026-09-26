@@ -75,7 +75,7 @@ def test_the_module_guidance_is_still_delivered(module):
     builder.active_modules = {module: 3}
     builder.build_prompt(username="admin", session_id="green123456")
     block = builder.build_turn_block()
-    marker = "MISSION STATUS" if module == "orchestrator" else f'module="{module}"'
+    marker = "Plan status" if module == "orchestrator" else f'module="{module}"'
     assert marker in block, f"{module} reaches neither the prompt nor the turn block"
 
 
@@ -83,14 +83,15 @@ def test_the_orchestrator_block_is_still_delivered():
     """Moved twice, dropped never. It started at character 0, went to the end of
     the system message when that was measured to cost the whole request, and left
     the message entirely when the end was measured at only sixty-one per cent.
-    The text is unchanged throughout."""
+    The wording changed once, to say what the plan gate really does
+    (tests/test_plan_status_line.py)."""
     builder = SystemPromptManager(tools={}, model_name="gpt-4o-mini",
                                   agent_instance=None, username="admin")
     builder.active_modules = {"orchestrator": 3}
     head = builder.build_prompt(username="admin", session_id="green123456")
     block = builder.build_turn_block()
-    assert "MISSION STATUS" in block and "PLAN LOADED" in block
-    assert "MISSION STATUS" not in head, "the volatile block is back in the system prompt"
+    assert "Plan status" in block and "Plan set:" in block
+    assert "Plan status" not in head, "the volatile block is back in the system prompt"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

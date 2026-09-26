@@ -139,6 +139,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The agent no longer loops on "no plan" or calls its own plan hint an attack.** On tasks
+  with several steps, the agent was told "PLAN LOADED: NO, SYSTEM LOCKED" for the rest of its
+  answer even after it had set a plan, so it set the plan again and again, and some answers
+  warned you about an "injected instruction". The hint is now checked at every step and says
+  only what really applies: tools that change something wait until a plan is set. A plan that
+  is only a placeholder like "test" no longer counts as one.
+
 - **Timed automations run again.** Once your account had a timezone set, the automation
   scheduler failed to start ("No module named 'pytz'" in the log), so no daily, weekly,
   monthly, hourly or one-time automation ran. The scheduler now fires each automation at the

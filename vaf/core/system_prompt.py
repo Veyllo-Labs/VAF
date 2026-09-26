@@ -622,47 +622,6 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
         # without it. See docs/agents/ACTION_TAG.md.
         _action_on = bool(Config.get("action_tag_enabled", False))
 
-        # MISSION STATUS (orchestrator feedback). Rendered here, where its inputs
-        # are at hand, and APPENDED AT THE END, where it costs only itself.
-        #
-        # It used to be the first thing in the prompt, and that made it the single
-        # most expensive block in the product. Providers cache on the leading
-        # tokens of a request, so a block at position 0 that appears and
-        # disappears invalidates EVERYTHING behind it. Measured on a live account:
-        # toggling this module moves the first differing character from somewhere
-        # deep in the prompt to character 0, and the provider then reports a nought
-        # per cent cache hit on a thirteen-thousand-token request. Its trigger is
-        # not rare either - thirty-eight keywords activate the module, among them
-        # words as ordinary as "alle", "plan" and "review", and it decays two turns
-        # later, so a normal conversation switches it on and off repeatedly.
-        #
-        # The text is unchanged, and so is its authority: it is still in the system
-        # message, now at the end, which is where the user-identity block already
-        # sits for the same reason (a late instruction is followed at least as
-        # well as an early one).
-        self._turn_mission_status = ""
-        if "orchestrator" in self.active_modules:
-            plan_exists = False
-            if self.mpm:
-                try:
-                    wm = self.mpm.get_working_memory()
-                    plan_exists = bool(wm.get("plan"))
-                except Exception:
-                    pass
-            
-            status_part = [
-                "## 🎯 MISSION STATUS: ORCHESTRATOR ACTIVE",
-                f"PLAN LOADED: {'✅ Yes' if plan_exists else '❌ NO'}"
-            ]
-            if not plan_exists:
-                status_part.append("⚠️ **SYSTEM LOCKED:** All heavy tools are disabled.")
-                status_part.append("REQUIRED ACTION: Call `update_working_memory(plan=['Step 1: ...', ...])` now.")
-                status_part.append("**Protocol:** You cannot act or search until a plan is persisted in working memory.")
-            else:
-                status_part.append("💡 Plan is active. Execute one step at a time. Use `checkpoint_context` after completing a major task.")
-            
-            self._turn_mission_status = "\n".join(status_part) + "\n"
-
         # 1. CORE IDENTITY & PERSONA (Soul)
         
         def _log_soul(msg: str) -> None:
@@ -1392,6 +1351,42 @@ Then use the results to answer. Do NOT guess from your training data!
         except Exception:
             return ""
 
+    def _plan_status(self) -> str:
+        """The plan line of the turn block while the orchestrator module is active, read afresh for
+        EVERY step. It lives here, at the end of the request, because a block that appears and
+        disappears at the head of the prompt invalidated the provider's whole prompt cache
+        (measured: a nought per cent hit on a thirteen-thousand-token request).
+
+        Read afresh because a turn builds its system prompt once and this block once per step: a
+        status computed with the prompt kept saying "no plan" for the rest of a turn in which the
+        model had just set one, and the model set it again and again (measured live, and reported
+        by the agent itself as a loop). The state is the plan gate's own (Agent._plan_gate_state),
+        and the wording says what the gate does - it holds state-changing tools until a plan is
+        set, and nothing else. The old text ("SYSTEM LOCKED", "you cannot act or search") claimed
+        more than that, and a model told that this block is data read it as an injected order."""
+        if "orchestrator" not in (self.active_modules or {}):
+            return ""
+        state = getattr(self.agent, "_plan_gate_state", None) if self.agent is not None else None
+        if callable(state):
+            try:
+                gate_active, plan_exists = state()
+            except Exception:
+                return ""
+        else:
+            gate_active, plan_exists = True, False
+            try:
+                plan_exists = bool(self.mpm and (self.mpm.get_working_memory() or {}).get("plan"))
+            except Exception:
+                plan_exists = True
+        if plan_exists:
+            return ("## Plan status\nPlan set: yes. Work through it one step at a time; use "
+                    "`checkpoint_context` after completing a major task.")
+        if not gate_active:
+            return ""
+        return ("## Plan status\nPlan set: no. Tools that change state (write or dangerous) are held "
+                "until you set your approach with `update_working_memory(plan=[...])`; reading and "
+                "searching need no plan.")
+
     def build_turn_block(self) -> str:
         """The volatile half of the prompt, rendered for ONE step, appended last.
 
@@ -1405,8 +1400,9 @@ Then use the results to answer. Do NOT guess from your training data!
         an empty block.
         """
         parts = []
-        if getattr(self, "_turn_mission_status", ""):
-            parts.append(self._turn_mission_status.rstrip())
+        plan_status = self._plan_status()
+        if plan_status:
+            parts.append(plan_status)
         if getattr(self, "_turn_time_line", ""):
             parts.append(self._turn_time_line)
         parts.extend(getattr(self, "_turn_module_blocks", []) or [])

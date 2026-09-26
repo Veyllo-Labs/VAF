@@ -130,6 +130,7 @@ Proactive delivery now works in both the main VAF process and in background/subp
 
 ### Inbound Messages
 
+- **A password in a message**: when the agent stores a credential it read in one of your messages (`store_credential`), the bridge deletes that message in the Telegram chat - a bot may delete a person's message in a private chat for 48 hours. The bridge keeps the chat's recent text messages in memory to find it, because a debounced burst is one turn and only its text says which message carried the value (`_remember_inbound`, `_forget_listener` in `vaf/api/telegram_bridge.py`). The value is replaced everywhere VAF keeps the chat as well ([CONNECTIONS.md](CONNECTIONS.md)).
 - **Debouncing**: Incoming messages are buffered per chat. After each message, the bridge waits a short period (default 5 seconds, configurable). If another message arrives in that period, the timer resets and the new text is appended. When no further message arrives for the full period, the combined text is sent as a single prompt.
 - **Cross-Channel Synchronization**: **New:** Activity on Telegram is now synchronized with Thinking Mode.
   1. **History Sync:** If the background Thinking Agent asks you a question via Telegram, that question is automatically persisted to your Telegram chat history. When you reply, the Main Agent sees the full context of the background question.

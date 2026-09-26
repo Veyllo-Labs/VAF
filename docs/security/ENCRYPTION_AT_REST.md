@@ -196,7 +196,10 @@ Named, not hidden - each of these is a decision with a reason:
 - **Log previews.** Message text no longer goes to disk in full: the whole
   system prompt is off by default (`prompt_log_full_enabled`). Short previews
   (60 characters in the queue log, tool arguments in the timeline) remain, in
-  plaintext, under the data directory.
+  plaintext, under the data directory. A credential in a tool's arguments is
+  masked before it is written (`secret_args`, and any key named like one), and a
+  credential the person hands over in a chat is replaced in the debug logs of that
+  day and the day before once the agent stored it (`forget_secrets.scrub_recent_logs`).
 
 ## Still plaintext, and measured
 

@@ -2,7 +2,7 @@
 
 The tools the **main agent** loads by default, grouped by area. Generated from the live
 tool registry (`Agent.tools`, populated by `_load_tools()` in
-[vaf/core/agent.py](../../vaf/core/agent.py)); 128 tools, counted from a freshly
+[vaf/core/agent.py](../../vaf/core/agent.py)); 129 tools, counted from a freshly
 constructed chat agent rather than from this list's own history. The **Coder sub-agent**
 additionally loads `coder_only` file/shell tools (e.g. `bash`, `move_file`,
 `codesearch`) that are not in this list. Some tools only do anything once their

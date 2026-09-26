@@ -173,8 +173,26 @@ def repair_tool_input(schema: Any, args: Any, aliases: Any = None):
 
         # R4 — bare non-empty string where an array is expected: wrap it
         if "array" in types and isinstance(val, str) and val.strip():
-            repaired[key] = [val]
+            repaired[key] = val = [val]
             applied.append(f"{key}: bare-string-wrap")
+
+        # R5 - bare string ITEMS where each item is an object with exactly ONE required
+        # string property: wrap each into that property. Measured live:
+        # update_working_memory(tasks=["Server starten", "list testen"]) was refused as
+        # "field 'tasks.0' expects object, got str" and cost the turn a retry. Only for that
+        # unambiguous shape; an item schema that also allows strings, or asks for more than
+        # one field, is left for the model to fix.
+        items = prop.get("items")
+        if "array" in types and isinstance(val, list) and isinstance(items, dict):
+            item_types = _type_set(items)
+            req = items.get("required") or []
+            iprops = items.get("properties") or {}
+            if ("object" in item_types and "string" not in item_types and len(req) == 1
+                    and "string" in _type_set(iprops.get(req[0]) or {})
+                    and any(isinstance(v, str) and v.strip() for v in val)):
+                repaired[key] = val = [{req[0]: v} if isinstance(v, str) and v.strip() else v
+                                       for v in val]
+                applied.append(f"{key}: bare-string-item-wrap")
 
     errors = [_localize(e) for e in Draft202012Validator(schema).iter_errors(repaired)]
     return repaired, applied, errors

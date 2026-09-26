@@ -298,3 +298,45 @@ def test_repair_without_aliases_arg_is_unchanged():
     rep, applied, errors = repair_tool_input(schema, {"file_path": "x"})
     assert errors  # no aliases passed -> still missing 'path'
     assert not any(a.startswith("path: alias") for a in applied)
+
+
+TASKS = {"type": "object", "properties": {"tasks": {"type": "array", "items": {
+    "type": "object",
+    "properties": {"text": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "done"]}},
+    "required": ["text"]}}}, "required": []}
+
+
+def test_r5_bare_string_items_become_the_one_required_field():
+    """Measured live: update_working_memory(tasks=["a", "b"]) was refused and cost a retry.
+    MUTATION: drop R5 and this goes red."""
+    out, applied, errors = repair_tool_input(TASKS, {"tasks": ["Server starten", "list testen"]})
+    assert out == {"tasks": [{"text": "Server starten"}, {"text": "list testen"}]}
+    assert "tasks: bare-string-item-wrap" in applied and errors == []
+
+
+def test_r5_keeps_real_objects_and_follows_r4():
+    out, _applied, errors = repair_tool_input(TASKS, {"tasks": ["a", {"text": "b", "status": "done"}]})
+    assert out["tasks"] == [{"text": "a"}, {"text": "b", "status": "done"}] and errors == []
+    out, applied, errors = repair_tool_input(TASKS, {"tasks": "nur ein Schritt"})
+    assert out == {"tasks": [{"text": "nur ein Schritt"}]}
+    assert applied == ["tasks: bare-string-wrap", "tasks: bare-string-item-wrap"] and errors == []
+
+
+def test_r5_leaves_an_ambiguous_item_shape_alone():
+    two = {"type": "object", "properties": {"edits": {"type": "array", "items": {
+        "type": "object", "properties": {"search": {"type": "string"}, "replace": {"type": "string"}},
+        "required": ["search", "replace"]}}}}
+    out, applied, errors = repair_tool_input(two, {"edits": ["x"]})
+    assert out == {"edits": ["x"]} and not applied and errors
+    either = {"type": "object", "properties": {"steps": {"type": "array", "items": {
+        "type": ["object", "string"], "properties": {"text": {"type": "string"}}, "required": ["text"]}}}}
+    out, applied, errors = repair_tool_input(either, {"steps": ["x"]})
+    assert out == {"steps": ["x"]} and not applied and errors == []
+
+
+def test_the_working_memory_tool_takes_plain_task_texts():
+    """The shape the tool declares is the one R5 was measured on."""
+    from vaf.tools.context_tools import UpdateWorkingMemoryTool
+
+    out, applied, errors = repair_tool_input(UpdateWorkingMemoryTool.parameters, {"tasks": ["a", "b"]})
+    assert errors == [] and out["tasks"] == [{"text": "a"}, {"text": "b"}]

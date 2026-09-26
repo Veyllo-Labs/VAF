@@ -129,6 +129,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The agent's to-do list accepts plain lines.** When the agent wrote its steps as simple
+  lines instead of the expected entries, the whole update was refused and the agent had to try
+  again. VAF now turns such lines into steps.
+
 - **The agent gets the tools your request needs, not coding and git tools it read into a
   hint.** When VAF suggested a workflow for a message, it picked the agent's tools from that
   suggestion as well as from your words, and a word inside the suggestion made it add the

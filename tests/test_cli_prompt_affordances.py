@@ -221,7 +221,8 @@ def test_the_learned_corpus_still_reaches_disk(tmp_path):
         time.sleep(0.05)
 
     assert smart.history_file.exists(), "the debounced save never landed"
-    stored = json.loads(smart.history_file.read_text())
+    from vaf.core import data_files
+    stored = data_files.read_json(smart.history_file, default={})
     assert stored.get("alpha", {}).get("beta") == 1
 
 
@@ -236,14 +237,15 @@ def test_flush_writes_immediately(tmp_path):
 
 
 def test_a_half_written_corpus_can_never_be_read(tmp_path):
-    """Written to a temp file and renamed: a crash mid-write must not leave
-    invalid JSON where the next start expects a corpus."""
+    """Written through the one atomic writer (temp file, then rename): a crash
+    mid-write must not leave invalid JSON where the next start expects a corpus.
+    The same writer encrypts it and makes it owner-only (tests/test_autosuggest_per_account.py)."""
     import inspect
 
     from vaf.cli.autosuggest import SmartAutoSuggest
 
     src = inspect.getsource(SmartAutoSuggest._write_learned)
-    assert ".replace(" in src and "with_suffix" in src
+    assert "data_files.write_json_atomic(" in src
 
 
 def test_suggest_is_public_and_lane_agnostic(tmp_path):

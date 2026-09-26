@@ -21,7 +21,7 @@ log("WebServer", "Basic imports done")
 
 from vaf.core.web_interface import get_web_interface
 from vaf.core.session import SessionManager, Session
-from vaf.cli.autosuggest import SmartAutoSuggest
+from vaf.cli.autosuggest import autosuggest_for
 import json
 from vaf.core.config import Config, is_admin_identity
 from vaf.core.channels import CHAT_SESSION_PREFIXES
@@ -819,8 +819,6 @@ def unload_whisper_model():
             log("WebServer", "WhisperModel unloaded")
 log("WebServer", "Getting SessionManager...")
 session_mgr = SessionManager()
-log("WebServer", "SmartAutoSuggest will be lazy loaded...")
-autosuggest = None
 tray_context = TrayContext()
 
 
@@ -1506,14 +1504,6 @@ def _scan_tool_modules() -> List[dict]:
         return sorted(tools, key=lambda t: t["name"])
     except Exception:
         return []
-
-def get_autosuggest():
-    global autosuggest
-    if autosuggest is None:
-        log("WebServer", "Lazy loading SmartAutoSuggest...")
-        autosuggest = SmartAutoSuggest()
-    return autosuggest
-
 
 def _get_trusted_sources_for_ui():
     """
@@ -5722,9 +5712,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "get_autosuggest":
                     text = cmd.get("text", "")
-                    if text:
-                        # Use the internal _get_best_suggestion method
-                        suggestion = get_autosuggest()._get_best_suggestion(text)
+                    # Suggested from what THIS account typed, never from another's words.
+                    suggester = autosuggest_for(manager.get_connection_user(websocket))
+                    if text and suggester is not None:
+                        suggestion = suggester.suggest(text)
                         await websocket.send_json({
                             "type": "autosuggest_result",
                             "suggestion": suggestion
@@ -5853,9 +5844,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                     if content or files:
                         tray_context.register_activity()
-                        # Learn from user input
-                        if content:
-                            get_autosuggest().learn(content)
+                        # Learn from user input, into this account's own corpus
+                        _suggester = (autosuggest_for(manager.get_connection_user(websocket))
+                                      if content else None)
+                        if _suggester is not None:
+                            _suggester.learn(content)
 
                         # Separate image files from document/text files
                         image_files = [f for f in files if (f.get("mimeType") or "").startswith("image/")]

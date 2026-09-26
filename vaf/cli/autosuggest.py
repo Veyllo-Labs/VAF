@@ -4,9 +4,13 @@
 """
 VAF Smart AutoSuggest - Inline word completion like Google Search
 Cross-Platform: Windows, macOS, Linux
+
+The learned corpus is made of what a person TYPED, so it belongs to that person: one corpus per
+account (`autosuggest_for`), written encrypted and owner-only like the chats it was learned from
+(vaf/core/data_files.py). Measured before: the web server learned every message of every account
+into one shared file (0644, plaintext) and answered every connection's suggestion request from it,
+so a word one person had typed - a name, an address, a password - could be offered to another.
 """
-import os
-import json
 import threading
 import re
 from pathlib import Path
@@ -94,14 +98,11 @@ class SmartAutoSuggest(AutoSuggest):
         self._load_learned()
     
     def _load_learned(self):
-        """Load learned phrases from file."""
+        """Load learned phrases from file (a plaintext file from before encryption still opens)."""
         try:
-            if self.history_file.exists():
-                with open(self.history_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    self.learned_phrases = {
-                        k: Counter(v) for k, v in data.items()
-                    }
+            from vaf.core import data_files
+            data = data_files.read_json(self.history_file, default={}) or {}
+            self.learned_phrases = {k: Counter(v) for k, v in data.items()}
         except Exception:
             self.learned_phrases = {}
     
@@ -137,11 +138,9 @@ class SmartAutoSuggest(AutoSuggest):
             with self._save_lock:
                 data = {k: dict(v) for k, v in self.learned_phrases.items()}
                 self._save_timer = None
-            self.history_file.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.history_file.with_suffix(".tmp")
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
-            tmp.replace(self.history_file)          # never a half-written corpus
+            # Atomic (never a half-written corpus), encrypted, owner-only.
+            from vaf.core import data_files
+            data_files.write_json_atomic(self.history_file, data)
         except Exception:
             pass
     
@@ -320,6 +319,44 @@ class CombinedAutoSuggest(AutoSuggest):
 # ═══════════════════════════════════════════════════════════════════════════════
 # USAGE EXAMPLE
 # ═══════════════════════════════════════════════════════════════════════════════
+
+_per_account: Dict[str, SmartAutoSuggest] = {}
+_per_account_lock = threading.Lock()
+
+
+def autosuggest_file(user_scope_id: Optional[str]) -> Optional[Path]:
+    """Where an account's learned corpus lives, or None for a caller with no account.
+
+    The machine owner keeps `autosuggest.json` in the VAF directory, the file the terminal lanes
+    (`vaf run`, the TUI) have always used, because they ARE the owner. Every other account gets
+    its own file under `autosuggest/`."""
+    scope = str(user_scope_id or "").strip()
+    if not scope:
+        return None
+    from vaf.core.config import get_local_admin_scope_id
+    from vaf.core.platform import Platform
+    if scope == str(get_local_admin_scope_id()).strip():
+        return Platform.vaf_dir() / "autosuggest.json"
+    from vaf.core.path_jail import PathEscape, safe_entry_name
+    try:
+        return Platform.vaf_dir() / "autosuggest" / f"{safe_entry_name(scope)}.json"
+    except PathEscape:
+        return None
+
+
+def autosuggest_for(user_scope_id: Optional[str]) -> Optional[SmartAutoSuggest]:
+    """The account's own suggester: it learns from what this account types and suggests only
+    that. None for a caller with no account, which then neither learns nor gets suggestions."""
+    path = autosuggest_file(user_scope_id)
+    if path is None:
+        return None
+    key = str(path)
+    with _per_account_lock:
+        found = _per_account.get(key)
+        if found is None:
+            found = _per_account[key] = SmartAutoSuggest(path)
+        return found
+
 
 def create_autosuggest(history_file: Path = None) -> CombinedAutoSuggest:
     """

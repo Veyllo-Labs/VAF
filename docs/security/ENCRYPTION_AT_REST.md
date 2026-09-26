@@ -168,6 +168,7 @@ reason to skip the backup - losing the keys is the unrecoverable direction.
 | Mail bodies | `mail.db` | AES-256-GCM (unchanged) |
 | Credentials (mail, cloud, API keys, a person's credentials for commands in `user_secrets.enc`) | `<data_dir>/*.enc` | Envelope (unchanged) |
 | User profile cache | `~/.vaf/user_profile_cache/` | AES-256-GCM (unchanged) |
+| Word suggestions learned from what a person types | `~/.vaf/autosuggest.json` (machine owner), `~/.vaf/autosuggest/<scope>.json` | AES-256-GCM; a plaintext corpus from before opens and is encrypted on its next write |
 
 File format: `VAFENC1:` ‖ 12-byte nonce ‖ ciphertext. A file WITHOUT that prefix
 is plaintext and is read as-is for as long as the store still tolerates

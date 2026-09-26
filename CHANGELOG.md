@@ -270,6 +270,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **Word suggestions in the chat come only from your own words.** The suggestions shown while
+  you type were learned from every message of every account on the installation, kept in one
+  file other accounts on the computer could read, and offered to everyone. So a word one person
+  had typed, a name or a password, could be suggested to another. Each account now has its own
+  suggestions, stored encrypted and readable only by you. What the machine owner's suggestions
+  had learned before stays the owner's.
+
 - **Your login no longer ends up in the tray log.** The app's connection carries your login
   token, and a filter is meant to hide it in the log. With network access switched on, the
   built-in HTTPS proxy started its server without that filter, which switched it off for the

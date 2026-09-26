@@ -43,7 +43,7 @@ and R5 runs after R4.
 | R1 | optional field (not in `required`), value is `null` | drop the key so the tool's own default applies |
 | R3 | non-object field, value is a single-key object (`{"value": [...]}`) | unwrap to the inner value |
 | R4 | array field, value is a non-empty string (`"urgent"`) | wrap as `["urgent"]` |
-| R5 | array field whose items are objects with exactly ONE required string property, and some items are non-empty strings (`["a", "b"]`) | wrap each string item into that property (`[{"text": "a"}, {"text": "b"}]`); object items stay as they are. Runs after R4, so a single string becomes a one-item list first. An item schema that also allows strings, or requires more than one field, is left alone. Measured live on `update_working_memory(tasks=[...])`, refused as "expects object, got str" and retried |
+| R5 | array field whose items are objects with exactly ONE required string property, and some items are non-empty strings (`["a", "b"]`) | wrap each string item into that property (`[{"text": "a"}, {"text": "b"}]`); object items stay as they are. Runs after R4, so a single string becomes a one-item list first. Positions covered by `prefixItems` stay as they are: under draft 2020-12 `items` governs only the positions after them. An item schema that also allows strings, or requires more than one field, is left alone. Measured live on `update_working_memory(tasks=[...])`, refused as "expects object, got str" and retried |
 
 R0 is conservative on purpose: it never overwrites a canonical key the model
 already supplied, and it does nothing when two aliases are present at once

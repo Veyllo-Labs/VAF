@@ -181,17 +181,20 @@ def repair_tool_input(schema: Any, args: Any, aliases: Any = None):
         # update_working_memory(tasks=["Server starten", "list testen"]) was refused as
         # "field 'tasks.0' expects object, got str" and cost the turn a retry. Only for that
         # unambiguous shape; an item schema that also allows strings, or asks for more than
-        # one field, is left for the model to fix.
+        # one field, is left for the model to fix. Under draft 2020-12 `items` governs only
+        # the positions after `prefixItems`, so those leading positions stay as they are.
         items = prop.get("items")
         if "array" in types and isinstance(val, list) and isinstance(items, dict):
+            prefix = prop.get("prefixItems")
+            start = len(prefix) if isinstance(prefix, list) else 0
             item_types = _type_set(items)
             req = items.get("required") or []
             iprops = items.get("properties") or {}
             if ("object" in item_types and "string" not in item_types and len(req) == 1
                     and "string" in _type_set(iprops.get(req[0]) or {})
-                    and any(isinstance(v, str) and v.strip() for v in val)):
-                repaired[key] = val = [{req[0]: v} if isinstance(v, str) and v.strip() else v
-                                       for v in val]
+                    and any(isinstance(v, str) and v.strip() for v in val[start:])):
+                repaired[key] = val = val[:start] + [
+                    {req[0]: v} if isinstance(v, str) and v.strip() else v for v in val[start:]]
                 applied.append(f"{key}: bare-string-item-wrap")
 
     errors = [_localize(e) for e in Draft202012Validator(schema).iter_errors(repaired)]

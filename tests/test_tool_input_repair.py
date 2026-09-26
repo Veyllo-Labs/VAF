@@ -340,3 +340,16 @@ def test_the_working_memory_tool_takes_plain_task_texts():
 
     out, applied, errors = repair_tool_input(UpdateWorkingMemoryTool.parameters, {"tasks": ["a", "b"]})
     assert errors == [] and out["tasks"] == [{"text": "a"}, {"text": "b"}]
+
+
+def test_r5_leaves_the_prefix_items_positions_alone():
+    """Draft 2020-12: `items` governs only the positions after `prefixItems`. A leading
+    string there is valid as it is and must not be wrapped. MUTATION: wrap from position 0
+    and this goes red."""
+    schema = {"type": "object", "properties": {"row": {
+        "type": "array",
+        "prefixItems": [{"type": "string"}],
+        "items": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}}}
+    out, applied, errors = repair_tool_input(schema, {"row": ["Titel", "a", {"text": "b"}]})
+    assert out == {"row": ["Titel", {"text": "a"}, {"text": "b"}]}
+    assert "row: bare-string-item-wrap" in applied and errors == []

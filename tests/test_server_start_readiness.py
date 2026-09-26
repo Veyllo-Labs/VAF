@@ -15,6 +15,7 @@ Covers the contributed local-model fix plus the review amendments:
 Hermetic: requests / subprocess.Popen / time are faked; no llama-server, no network.
 """
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -121,12 +122,22 @@ def mgr(tmp_path, monkeypatch):
 
 
 def _wire_http(monkeypatch, health_fn, props_payload=None):
-    """Fake the requests module: reuse-check refused, /health scripted, /props optional."""
+    """Fake the requests module: reuse-check refused, /health scripted, /props optional.
+
+    Only the TEST's thread is answered from the script. The fake replaces a module global,
+    so a thread an earlier test left running inside the backend (a start it began and never
+    finished) calls it too, and each of its calls moved the script one step: the reuse
+    pre-check then read "loading" instead of "no server", took the running server, and never
+    spawned one - on the slow Windows leg, where such a thread is still alive. A foreign
+    thread is told there is no server, which touches nothing here."""
     calls = {"n": 0}
+    owner = threading.get_ident()
 
     class FakeRequests:
         @staticmethod
         def get(url, timeout=None):
+            if threading.get_ident() != owner:
+                raise ConnectionError("connection refused")
             if "/props" in url:
                 return FakeResponse(200, props_payload or {"total_slots": 1})
             calls["n"] += 1
@@ -136,6 +147,28 @@ def _wire_http(monkeypatch, health_fn, props_payload=None):
 
     monkeypatch.setattr(backend, "requests", FakeRequests)
     return calls
+
+
+def test_a_foreign_thread_does_not_move_the_script(mgr, monkeypatch):
+    """A leftover thread calling the faked module must not consume the test's own calls.
+    MUTATION: answer every thread from the script again and the pre-check reads 503, the
+    manager reuses a server that does not exist, and nothing is spawned."""
+    spawned = []
+    _wire_http(monkeypatch, lambda n: FakeResponse(200 if n > 2 else 503))
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        _llama_popen(spawned, lambda cmd, out: FakeProc(4242, lambda: None)))
+
+    def stray():
+        try:
+            backend.requests.get("http://127.0.0.1:8080/health", timeout=1)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=stray)
+    t.start()
+    t.join()
+    assert mgr.start_server(mgr._test["model"], n_ctx=8192) is True
+    assert len(spawned) == 1
 
 
 def test_slow_load_beyond_60s_still_succeeds(mgr, monkeypatch):

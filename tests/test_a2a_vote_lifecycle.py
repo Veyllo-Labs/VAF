@@ -63,11 +63,17 @@ def test_a_vote_that_named_no_deadline_still_ends(rooms):
     assert entry["deadline"] == pytest.approx(vote.ts + 180.0, abs=1.0)
     assert entry["remind_at"] == pytest.approx(vote.ts + 60.0, abs=1.0)
 
-    # And a vote that DID name one keeps it, with the reminder two minutes before.
+    # And a vote that DID name one keeps it, with the reminder two minutes before. The
+    # deadline is WHOLE seconds (frame.read_deadline): the clock's fraction is cut off, so it
+    # sits up to a second before ts + 600, plus the time between the two clock reads. A slow
+    # runner measured 1.000057 s against the old one-second tolerance, so the exact value is
+    # compared, and the distance to ts only roughly.
     timed = room.open_vote(host, "Now?", options=["yes"], closes_in_s=600.0)
     late = _entry(room, timed.id)
-    assert late["deadline"] == pytest.approx(timed.ts + 600.0, abs=1.0)
-    assert late["remind_at"] == pytest.approx(timed.ts + 480.0, abs=1.0)
+    whole = int(timed.body["closes_at"])
+    assert late["deadline"] == whole
+    assert whole == pytest.approx(timed.ts + 600.0, abs=2.0)
+    assert late["remind_at"] == whole - 120.0
 
 
 def test_everybody_voting_ends_it_without_waiting_for_the_clock(rooms):

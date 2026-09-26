@@ -1556,6 +1556,9 @@ class Agent:
         self._active_tools = None
         self._recent_tools = {}
         self._recent_tool_keep_turns = 2
+        # Tools a suggestion note of the current turn names (use_skill, execute_workflow);
+        # pinned into the capped set once the router has run, then cleared.
+        self._note_tools_this_turn: set = set()
 
         # Optional application-supplied authorizer; see set_tool_authorizer().
         self._tool_authorizer = None
@@ -9089,8 +9092,9 @@ class Agent:
         raw_user_input: the user's message BEFORE lane enrichment (workspace
         preamble, front-office block, ...). Used only for ROUTING decisions
         (workflow/skill router, variable extraction, workflow-mention
-        advisory) - the LLM still sees the enriched user_input. Callers that
-        pass the raw message as user_input already (CLI) omit it.
+        advisory, the tool router) - the LLM still sees the enriched
+        user_input. Callers that pass the raw message as user_input already
+        (CLI) omit it.
 
         thinking_node: which rung of the thinking ladder this step is
         ("forced_item", "proactive", "getto", ...). Thinking-mode only. It
@@ -9449,6 +9453,13 @@ class Agent:
         # Workflows provide structured, multi-step pipelines for common tasks
         
         workflow_tried = False
+        # What the TOOL router classifies: the person's own words. Not the lane's enrichment and
+        # not the suggestion notes this step prepends below - their wording chose tools for the
+        # turn by itself (measured: a "[WORKFLOW SUGGESTION]" carrying description="..." forced
+        # coding_agent, git_status and git_add_commit into three of three server-setup turns,
+        # because "script" sits inside "description", and pushed host_bash out of the capped
+        # set). A tool the notes point at is pinned instead (_note_tools_this_turn).
+        _route_text = raw_user_input or user_input
         # Never run the workflow router during a background thinking run: it would match the thinking
         # PROMPT itself (which contains phrases like "automatisch um 7:00"/"create automation") and prepend
         # a "[WORKFLOW SUGGESTION] Create Scheduled Task" nudge — with garbage variables (every var "07:00")
@@ -9476,6 +9487,7 @@ class Agent:
                     _wf_hint, raw_user_input or user_input
                 )
                 user_input = _wf_note + "\n" + user_input
+                self._note_tools_this_turn.add("execute_workflow")
 
             # Skills are the second routing tier. If the router matched a SKILL
             # (and not a workflow), surface it the same way: the router only saw
@@ -9488,7 +9500,7 @@ class Agent:
                 self._pending_skill_hint = None  # one-shot — clear immediately
                 # Pin use_skill into the active tool set for this turn (the router
                 # runs just below) so the agent can actually load the skill.
-                self._skill_tool_needed_this_turn = True
+                self._note_tools_this_turn.add("use_skill")
                 _sk_note = (
                     f"[SKILL SUGGESTION] The skill \"{_sk_hint['name']}\" "
                     f"({_sk_hint['skill_id']}) looks relevant to this request.\n"
@@ -9618,7 +9630,7 @@ class Agent:
         if not auto_retry and not skip_input and user_input:
             from vaf.cli.ui import UI
             
-            selected_tools = self._route_tools(user_input)
+            selected_tools = self._route_tools(_route_text)
 
             if selected_tools:
                 recent_tools = self._get_recent_tools()
@@ -9735,18 +9747,15 @@ class Agent:
             else:
                 self._active_tools = selected_tools
 
-            # If the router suggested a skill this turn, make sure use_skill is in the
-            # active set so the agent can actually load it (the [SKILL SUGGESTION] told
-            # it to). Pinned after the cap, like the discovery tools. When _active_tools
-            # is None (ALL tools) it is already available.
-            if getattr(self, "_skill_tool_needed_this_turn", False):
-                self._skill_tool_needed_this_turn = False
-                if (
-                    "use_skill" in self.tools
-                    and self._active_tools is not None
-                    and "use_skill" not in self._active_tools
-                ):
-                    self._active_tools = list(self._active_tools) + ["use_skill"]
+            # The tool a suggestion note of this turn tells the agent to call (use_skill for a
+            # [SKILL SUGGESTION], execute_workflow for a [WORKFLOW SUGGESTION]) must be callable:
+            # the router classifies the person's words, not the note. Pinned after the cap, like
+            # the discovery tools. When _active_tools is None (ALL tools) it is already there.
+            _note_tools, self._note_tools_this_turn = self._note_tools_this_turn, set()
+            if self._active_tools is not None:
+                for _name in sorted(_note_tools):
+                    if _name in self.tools and _name not in self._active_tools:
+                        self._active_tools = list(self._active_tools) + [_name]
 
             # Termination guarantee for background runs. Placed after BOTH safety nets and the
             # cap, so no narrowing above can leave the run without a way to stop.

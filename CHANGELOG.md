@@ -129,6 +129,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The agent gets the tools your request needs, not coding and git tools it read into a
+  hint.** When VAF suggested a workflow for a message, it picked the agent's tools from that
+  suggestion as well as from your words, and a word inside the suggestion made it add the
+  coding agent and two git tools to requests that had nothing to do with code. They took up
+  room, and a shell command the task needed could drop out. VAF now picks the tools from what
+  you wrote, and still offers the tool a suggestion names.
+
 - **After you send a draft, the agent can confirm it went out.** When you pressed Send on
   a draft in the chat, the agent was told the message was sent, said so, and was then
   made to take it back ("I cannot confirm this"), because the check on its answers only

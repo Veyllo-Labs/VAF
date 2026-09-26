@@ -82,6 +82,8 @@ To add examples to any other tool, just add the `input_examples` class attribute
 
 VAF already solves the "load only relevant tools" problem without any Anthropic-specific API. The `_route_tools` method runs before every main model call:
 
+**It classifies the person's own words.** `chat_step` routes on `raw_user_input` (the message before the lane's enrichment) and never on the suggestion notes it prepends itself (`[WORKFLOW SUGGESTION]`, `[SKILL SUGGESTION]`). Their wording used to choose tools for the turn: a workflow note carrying `description="..."` reads as "script" to the substring heuristics below and forced `coding_agent`, `git_status` and `git_add_commit` into three of three server-setup turns in a live measurement, and one of them lost `host_bash` to the cap. The tool a note tells the agent to call (`execute_workflow`, `use_skill`) is pinned into the capped set instead, for that turn only (`_note_tools_this_turn`). The heuristics still match inside words on purpose, for German compounds (`Monatsrechnung`); on 152 real messages of a long build session they fired on a false stem only a handful of times (`digit` for git, `determine` for termin).
+
 ```mermaid
 graph TD
     A[User Input] --> B{Heuristic Check}
@@ -152,6 +154,8 @@ The declaration travels the WHOLE path, not just the funnel - exempting only the
 **Tool cap (`router_max_tools`):** After the router selects tools (and core/discovery tools are added), the list is capped at `router_max_tools` (default: **12**). `list_tools` and `search_tools` are **always kept**; they count against the cap, so ten places remain for the rest. This prevents context pollution when many tools are registered.
 
 **What the cap cuts first (`_task_tools_first`):** the tools the router and the recent turns chose for THIS task come first, and the riders that are added on every turn come after them: `update_intent`, `update_working_memory`, `memory_search`, `memory_save`, `memory_update`, `update_user_identity`, `set_timer`, `ask_user`, `analyze_image` (only when a vision backend exists: `vision_available()`) and the send tool of every connected messenger. Each group is sorted, so the cut is reproducible. One sorted list put the riders in the way of the task: with three messengers connected the riders alone filled the cap, and a research turn lost `web_search` because "w" sorts last (measured with the defaults). `ask_user` rides along because a question with options comes up in the middle of a task, when the router has picked tools for the task and never for asking; `analyze_image` for the same reason, for a screenshot or a rendered page looked at along the way (measured in a long build session: 162 of 168 file reads were images).
+
+**`host_process` is not a rider, and that is measured.** `host_bash(background=true)` points the agent at `host_process` for the running command's log, input and stop, and the router picks the task before that need exists. In three live turns of "set up a local test server and test it", the router offered `host_process` once; the agent reached it all three times anyway, twice through `search_tools` and once by calling it directly. Riding along on every turn would cost a slot the task tools need; revisit if a turn is measured to fail on it.
 
 ```json
 // ~/.vaf/config.json

@@ -87,8 +87,16 @@ chat_step(
     images=None,               # [{data, mime_type, name, ...}] vision input
     force_tool_choice=None,    # thinking_mode only
     allow_memory_search=False, # thinking_mode only
+    raw_user_input=None,       # the message before your own enrichment
 ) -> str | None
 ```
+
+**`raw_user_input` is what routing reads.** A lane that prepends its own context to
+`user_input` (a workspace preamble, a front-office block) passes the person's message
+here: the workflow and skill routers, variable extraction and the tool router classify
+it, while the model still sees the enriched `user_input`. Without it, routing reads
+`user_input`, which is right for a caller that does not enrich. The suggestion notes
+`chat_step` prepends itself never reach the tool router either way.
 
 Runs one full turn: routing, system-prompt rebuild, context compression, the
 LLM/tool loop (with loop budgets), guardrails, persistence.

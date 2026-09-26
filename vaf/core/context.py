@@ -750,9 +750,10 @@ class ContextManager:
                 "set_todos", "write_file", "read_file",
                 "github_list_repos", "github_get_file", "github_get_file_structure", "github_list_issues", "github_list_pulls",
                 "web_search",
-                # Sub-agent spawns: keep the "[!] TASK DELEGATED" anchor and its
-                # tool_call/tool pairing alive across compression, so a long light chat
-                # while the sub-agent runs cannot erase the evidence that work is pending.
+                # Sub-agent spawns: keep the "[!] TASK DELEGATED" anchor in the history across
+                # compression, so a long light chat while the sub-agent runs cannot erase the
+                # evidence that work is pending. Only the result is kept, not its tool_call, so
+                # the send path drops it as an orphan (CONTEXT_COMPRESSION_FLOW.md 4.4).
                 "coding_agent", "research_agent", "document_agent", "librarian_agent",
             ]
 
@@ -778,17 +779,19 @@ class ContextManager:
         middle_section = history[1:-self.recent_memory_size] if len(history) > self.recent_memory_size + 1 else []
         keep_count, keep_chars = self.critical_tool_budget()
 
-        for msg in middle_section:
+        # Each kept result carries its index in `history`, so the assembly below can keep it on its
+        # side of the turn's request.
+        for idx, msg in enumerate(middle_section, start=1):
             if msg.get("role") == "tool" and msg.get("name") in preserve_tools:
                 # Truncate content but keep structure
                 content = msg.get("content", "")
                 truncated = content[:keep_chars] + "..." if len(content) > keep_chars else content
-                critical_tools.append({
+                critical_tools.append((idx, {
                     "role": "tool",
                     "name": msg.get("name"),
                     "content": truncated,
                     "tool_call_id": msg.get("tool_call_id", "")
-                })
+                }))
 
         # 4. Build compressed history
         system_prompt = history[0]  # Always keep
@@ -815,12 +818,17 @@ class ContextManager:
         combined_summary = "\n\n".join(summary_parts)
 
         # 6. Construct new history: system, summary, the kept tool results (the budget's count,
-        # newest), the recent messages.
+        # newest) with the turn's request among them in its place, the recent messages.
         summary_part = [{"role": "system", "content": combined_summary}] if combined_summary else []
         tools_part = critical_tools[-keep_count:]
 
         def _assemble():
-            return [system_prompt] + summary_part + tools_part + anchor_part + recent_messages
+            # A kept result of the current turn stays AFTER the request it answers. Placed before
+            # it, the result read as older than the request, the turn-end squash (which starts
+            # after the request) left it out of the turn's summary, and the save did not find it.
+            before = [m for i, m in tools_part if not anchor_part or i < anchor_idx]
+            after = [m for i, m in tools_part if anchor_part and i > anchor_idx]
+            return [system_prompt] + summary_part + before + anchor_part + after + recent_messages
 
         new_history = _assemble()
         new_tokens = self.estimate_tokens(new_history)

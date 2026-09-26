@@ -103,13 +103,14 @@ This keeps intent and state up to date **before** the old messages are discarded
 - **Middle part:** `history[1 : -recent_memory_size]` (everything except the first entry and the last `recent_memory_size` messages).
 - Within it, messages with `role == "tool"` and a `name` in `preserve_tools` are searched for (including core tools such as `set_todos`, `write_file`, `read_file`, plus further safety-relevant tools depending on the current implementation).
 - Per match: the content is truncated (`critical_tool_budget()`: 300 characters on a window up to 16k, 800 up to 64k, 1200 above) and collected in `critical_tools` as a message with `role`, `name`, `content`, and `tool_call_id`.
-- Later, the **newest 5 / 10 / 15** of these critical tool messages (same three tiers) are carried over into the new history.
+- Later, the **newest 5 / 10 / 15** of these critical tool messages (same three tiers) are carried over into the new history. Each one remembers its place in the old history, so a result of the current turn is put back AFTER the turn's request (see 4.7).
+- Measured limit: the kept results stay in the history (the turn-end squash and the saved chat see them), but the model does not. Their assistant `tool_calls` message is not kept, and `Agent._prepare_messages` drops every `role:"tool"` result that no surviving tool call claims, before each send.
 
 ### 4.5 Step 4: Building blocks of the new history
 
 - **System prompt:** `system_prompt = history[0]` (**always** carried over; its content can still be replaced by `new_prompt` in the agent afterwards).
 - **Recent:** `recent_messages = history[-recent_memory_size:]` (dynamic, depending on `max_tokens`) – kept **unchanged** ("raw").
-- **The turn's request:** `turn_anchor_index(history)` finds the message the current turn answers (the last user-role message that is not a checkpoint's `[CONTEXT RESTORED]` block). When it is older than the recent window it is carried over too, right before `recent_messages`, and it is never dropped to fit the limit (only the kept tool results and the summary give way). Without it a long turn lost the person's own request: the model then followed the `<user_intent>` block alone, and the save that anchors the turn's steps on the request found nothing to anchor on.
+- **The turn's request:** `turn_anchor_index(history)` finds the message the current turn answers (the last user-role message that is not a checkpoint's `[CONTEXT RESTORED]` block). When it is older than the recent window it is carried over too, in its place among the kept tool results (see 4.7), and it is never dropped to fit the limit (only the kept tool results and the summary give way). Without it a long turn lost the person's own request: the model then followed the `<user_intent>` block alone, and the save that anchors the turn's steps on the request found nothing to anchor on.
 
 ### 4.6 Step 5: Build the context summary ("glue")
 
@@ -124,8 +125,9 @@ This keeps intent and state up to date **before** the old messages are discarded
 
 - `new_history = [system_prompt]`
 - If `context_summary` is not empty: a **second system message** with content `context_summary` is appended.
-- Then: the critical tool messages (see 4.4).
+- Then: the critical tool messages from before the turn's request (see 4.4).
 - Then: the turn's request, when it is older than the recent window (see 4.5).
+- Then: the critical tool messages of the current turn. Put before the request, such a result read as older than the request it answers, the turn-end squash (it starts after the request) left it out of the turn's `[Context: ...]` summary, and the saved chat lost it.
 - Then: `recent_messages` (the last 10 messages).
 
 Result: significantly fewer messages and a sharply reduced token count, while preserving "stability" (intent, state, last N messages).

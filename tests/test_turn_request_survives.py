@@ -134,6 +134,35 @@ def test_the_compression_keeps_the_request_of_the_turn():
     assert turn_context_messages_since_last_user(out, request), "the save finds the turn's steps"
 
 
+def test_a_kept_result_of_this_turn_stays_after_its_request():
+    """read_file results are kept across a compression. One from THIS turn sat before the request
+    it answers, so the turn-end squash (it starts after the request) left it out of the turn's
+    summary and the save did not find it. MUTATION: put the kept results before the request - red."""
+    cm = ContextManager(max_tokens=128000)
+    cm.recent_memory_size = 12
+    request = "Lies die Konfiguration"
+    history = [{"role": "system", "content": "SYSTEM"},
+               {"role": "user", "content": "Vorige Aufgabe"},
+               {"role": "assistant", "content": "",
+                "tool_calls": [{"id": "p0", "function": {"name": "read_file", "arguments": "{}"}}]},
+               {"role": "tool", "name": "read_file", "tool_call_id": "p0", "content": "alte Datei"},
+               {"role": "assistant", "content": "Erledigt."},
+               {"role": "user", "content": request}]
+    for i in range(10):
+        history.append({"role": "assistant", "content": "",
+                        "tool_calls": [{"id": f"c{i}", "function": {"name": "read_file", "arguments": "{}"}}]})
+        history.append({"role": "tool", "name": "read_file", "tool_call_id": f"c{i}", "content": f"output {i}"})
+    out = cm.compress(history)
+    at = {str(m.get("content")): i for i, m in enumerate(out)}
+    anchor = turn_anchor_index(out)
+    assert out[anchor]["content"] == request
+    assert at["alte Datei"] < anchor, "a result of the previous turn stays before the request"
+    assert all(at[f"output {i}"] > anchor for i in range(10)), "this turn's results follow the request"
+    assert [f"output {i}" for i in range(10)] == [m["content"] for m in out if str(m["content"]).startswith("output")]
+    steps = turn_context_messages_since_last_user(out, request)
+    assert "output 0" in [m.get("content") for m in steps], "the save finds the kept result"
+
+
 def test_a_checkpoints_restored_context_is_not_a_request():
     history = [{"role": "system", "content": "S"}, {"role": "user", "content": "Die Anfrage"},
                {"role": "user", "content": f"{CONTEXT_RESTORED_PREFIX}\nsummary"},

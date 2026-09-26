@@ -139,6 +139,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **No more nameless 06:00 automation that cannot be deleted.** An automation's run history
+  was read as if it were an automation of its own: it showed up in the list without a name, set
+  to daily at 06:00, deleting it did nothing, it came back after every restart, and it would have
+  run an empty task every morning. Every automation that has run would have gained such a twin.
+  Run histories are no longer read as automations, and the phantom is gone.
+
 - **The agent no longer loops on "no plan" or calls its own plan hint an attack.** On tasks
   with several steps, the agent was told "PLAN LOADED: NO, SYSTEM LOCKED" for the rest of its
   answer even after it had set a plan, so it set the plan again and again, and some answers

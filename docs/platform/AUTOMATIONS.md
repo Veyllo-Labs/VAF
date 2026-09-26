@@ -110,6 +110,15 @@ workflow-success path, which returns earlier), follows the task into and out of
 the trash, and is read back with `load_run_log`. A missing log is normal: it
 only starts existing once the task has run again.
 
+A run log is never a task. Every reader of an automation directory takes its files through
+`_task_files`, which leaves out `*.runs.json`, and `_read_task_record` refuses a record without
+an `id`. Before, every reader globbed `*.json`, and a run log loaded as a nameless daily 06:00
+automation with a new random id on every load: it could not be deleted (the list could never
+name it twice the same way), it came back after each restart, and the scheduler armed it with
+an empty prompt. The one that surfaced was the log of a one-time task, written after the task
+had already been deleted at the end of its run; `append_run_log` now writes only beside a task
+file that still exists.
+
 `review_findings()` in [vaf/core/automation.py](../../vaf/core/automation.py)
 computes what can be checked from those records: never completed, no successful
 run since a date, disabled and forgotten, two automations in the same time slot,

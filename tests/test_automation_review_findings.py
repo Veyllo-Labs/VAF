@@ -144,6 +144,7 @@ def test_no_automations_no_findings():
 def test_run_log_roundtrip(tmp_path):
     from vaf.core.automation import append_run_log, load_run_log
     task_file = tmp_path / "a1.json"
+    task_file.write_text("{}", encoding="utf-8")   # a log is written only beside its task
     append_run_log(task_file, status="success", started_at=NOW.isoformat(), duration_seconds=2.4)
     append_run_log(task_file, status="error", started_at=NOW.isoformat(), duration_seconds=0.2,
                    summary="Error: provider unreachable")
@@ -156,6 +157,7 @@ def test_run_log_roundtrip(tmp_path):
 def test_run_log_is_bounded(tmp_path):
     from vaf.core.automation import append_run_log, load_run_log, _RUN_LOG_MAX
     task_file = tmp_path / "a1.json"
+    task_file.write_text("{}", encoding="utf-8")   # a log is written only beside its task
     for i in range(_RUN_LOG_MAX + 20):
         append_run_log(task_file, status="success", started_at=NOW.isoformat(), duration_seconds=i)
     log = load_run_log(task_file)
@@ -167,6 +169,7 @@ def test_run_log_carries_the_format_tag(tmp_path):
     import json
     from vaf.core.automation import append_run_log, _RUN_LOG_FORMAT
     task_file = tmp_path / "a1.json"
+    task_file.write_text("{}", encoding="utf-8")   # a log is written only beside its task
     append_run_log(task_file, status="success", started_at=NOW.isoformat(), duration_seconds=1)
     on_disk = json.loads((tmp_path / "a1.runs.json").read_text(encoding="utf-8"))
     assert on_disk["format"] == _RUN_LOG_FORMAT

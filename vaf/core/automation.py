@@ -589,6 +589,33 @@ def _run_log_path(task_path: Path) -> Path:
     return task_path.with_suffix(".runs.json")
 
 
+def _task_files(directory: Path) -> List[Path]:
+    """The task files of one automation directory: `<id>.json`, never a `<id>.runs.json` run log.
+
+    Every reader globbed `*.json`, and the run log that arrived later matches that pattern too.
+    Loaded as a task, a run log became a nameless daily 06:00 automation (every field defaulted)
+    with a new random id on every load - so deleting it in the list did nothing, it came back
+    after each restart, and the scheduler armed it to run an empty prompt (measured live)."""
+    try:
+        return sorted(p for p in directory.glob("*.json") if not p.name.endswith(".runs.json"))
+    except OSError:
+        return []
+
+
+def _read_task_record(path: Path) -> Optional[Dict[str, Any]]:
+    """A task file's record, or None when the file is not one. A record without an id is refused:
+    AutomationTask would invent one per load, and a task whose id changes can never be found to
+    be edited or deleted."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not str(data.get("id") or "").strip():
+        return None
+    return data
+
+
 def load_run_log(task_path: Path) -> List[Dict[str, Any]]:
     """Newest-last run records, or [] when there are none.
 
@@ -607,8 +634,13 @@ def load_run_log(task_path: Path) -> List[Dict[str, Any]]:
 
 def append_run_log(task_path: Path, *, status: str, started_at: str, duration_seconds: float,
                    summary: str = "") -> None:
-    """Record one outcome. Never raises: a bookkeeping write must not fail an automation."""
+    """Record one outcome. Never raises: a bookkeeping write must not fail an automation.
+
+    Only beside a task that still exists: a one-time task is deleted when its run ends, before its
+    outcome is recorded, and a log written then was an orphan the loaders used to take for a task."""
     try:
+        if not Path(task_path).exists():
+            return
         runs = load_run_log(task_path)
         runs.append({
             "status": "success" if status == "success" else "error",
@@ -851,11 +883,10 @@ def _slot_occupancy(base_dir: Path) -> Dict[tuple, set]:
         return {}
     occupancy: Dict[tuple, set] = {}
     # Root-level tasks (legacy/admin)
-    for filepath in base_dir.glob("*.json"):
+    for filepath in _task_files(base_dir):
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not data.get("enabled", True):
+            data = _read_task_record(filepath)
+            if data is None or not data.get("enabled", True):
                 continue
             t = data.get("time") or "06:00"
             freq = data.get("frequency") or "daily"
@@ -872,11 +903,10 @@ def _slot_occupancy(base_dir: Path) -> Dict[tuple, set]:
             uuid.UUID(subdir.name)
         except (ValueError, TypeError):
             continue
-        for filepath in subdir.glob("*.json"):
+        for filepath in _task_files(subdir):
             try:
-                with open(filepath, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if not data.get("enabled", True):
+                data = _read_task_record(filepath)
+                if data is None or not data.get("enabled", True):
                     continue
                 t = data.get("time") or "06:00"
                 freq = data.get("frequency") or "daily"
@@ -1157,10 +1187,11 @@ vaf automation delete <id>   # Delete task
     def _load_tasks(self):
         """Load all tasks from storage. When manager is global (no user_scope_id), also load from user subdirs."""
         # Load from current storage_dir (global dir or this user's dir)
-        for filepath in self.storage_dir.glob("*.json"):
+        for filepath in _task_files(self.storage_dir):
             try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+                data = _read_task_record(filepath)
+                if data is None:
+                    continue
                 task = AutomationTask.from_dict(data)
                 # Ensure task has scope when loaded from user-scoped manager
                 if self.user_scope_id and not task.user_scope_id:
@@ -1172,10 +1203,11 @@ vaf automation delete <id>   # Delete task
         if self.user_scope_id is None and self.base_dir.exists():
             for subdir in self.base_dir.iterdir():
                 if subdir.is_dir() and self._is_uuid_dir(subdir.name):
-                    for filepath in subdir.glob("*.json"):
+                    for filepath in _task_files(subdir):
                         try:
-                            with open(filepath, 'r', encoding='utf-8') as f:
-                                data = json.load(f)
+                            data = _read_task_record(filepath)
+                            if data is None:
+                                continue
                             task = AutomationTask.from_dict(data)
                             if not task.user_scope_id:
                                 task.user_scope_id = subdir.name
@@ -1451,10 +1483,11 @@ vaf automation delete <id>   # Delete task
     def list_trash(self) -> List[AutomationTask]:
         """List all tasks in trash."""
         tasks = []
-        for filepath in self.trash_dir.glob("*.json"):
+        for filepath in _task_files(self.trash_dir):
             try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+                data = _read_task_record(filepath)
+                if data is None:
+                    continue
                 task = AutomationTask.from_dict(data)
                 tasks.append(task)
             except Exception:

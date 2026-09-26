@@ -910,7 +910,8 @@ def init_project(
 
 @app.command(name="prompt")
 def prompt_command(
-    prompt: str = typer.Option(..., "--prompt", "-p", help="Prompt text (non-interactive)"),
+    prompt_arg: str = typer.Argument(None, metavar="PROMPT", help="Prompt text (or use -p)"),
+    prompt: str = typer.Option(None, "--prompt", "-p", help="Prompt text (non-interactive)"),
     output_format: str = typer.Option("text", "--output-format", help="text | json | stream-json"),
     session: str = typer.Option(None, "--session", "-s", help="Load an existing session ID"),
     save_session: bool = typer.Option(False, "--save-session", help="Save this interaction as a session"),
@@ -919,92 +920,14 @@ def prompt_command(
     Non-interactive mode (scripting).
 
     Examples:
+        vaf prompt "Explain this repo"
         vaf prompt -p "Explain this repo" --output-format json
         vaf prompt -p "Search latest release notes" --output-format stream-json
     """
-    import json
-    import os
-    import sys
-    from vaf.core.agent import Agent
-    from vaf.core.session import SessionManager
-    from vaf.cli.ui import UI
-
-    fmt = (output_format or "text").strip().lower()
-    if fmt not in ("text", "json", "stream-json"):
-        raise typer.BadParameter("output-format must be one of: text, json, stream-json")
-
-    # In non-interactive mode we never block on prompts (trust gating will return errors).
-    os.environ["VAF_NONINTERACTIVE"] = "1"
-
-    # Silence rich UI events for machine-readable outputs
-    if fmt in ("json", "stream-json"):
-        UI.event = staticmethod(lambda *args, **kwargs: None)
-        UI.error = staticmethod(lambda *args, **kwargs: None)
-        UI.warning = staticmethod(lambda *args, **kwargs: None)
-        UI.success = staticmethod(lambda *args, **kwargs: None)
-        UI.info = staticmethod(lambda *args, **kwargs: None)
-
-    mgr = SessionManager()
-    loaded_session = None
-    if session:
-        try:
-            loaded_session = mgr.load(session)
-        except FileNotFoundError:
-            loaded_session = None
-
-    agent = Agent(verbose=False, run_kind="chat")
-    agent.init_chat()
-    # Local mode has no lazy load inside chat_step: without a backend the turn
-    # aborts and every local-mode `vaf prompt` returned an EMPTY answer (found
-    # by pre-push smoke testing; same bug class as the library facade fix).
-    # load_model reuses an already-running llama server (one-server rule).
-    if agent.api_backend is None and not agent.llm and not agent.use_server:
-        agent.load_model()
-
-    # Restore session history if provided (keeps system prompt at history[0])
-    if loaded_session:
-        for m in loaded_session.get_history():
-            if m.get("role") == "system":
-                continue
-            agent.history.append({"role": m.get("role", "user"), "content": m.get("content", "")})
-
-    def ndjson_emit(evt: dict):
-        line = json.dumps(evt, ensure_ascii=False)
-        sys.stdout.write(line + "\n")
-        sys.stdout.flush()
-
-    if fmt == "stream-json":
-        agent.set_event_sink(ndjson_emit)
-        ndjson_emit({"type": "start"})
-
-    result_text = agent.chat_step(
-        prompt,
-        stream_callback=(lambda s: ndjson_emit({"type": "text_delta", "text": s})) if fmt == "stream-json" else None,
-    )
-
-    if fmt == "text":
-        if result_text:
-            print(result_text)
-        raise typer.Exit(0)
-
-    if fmt == "json":
-        payload = {"ok": True, "output": result_text or ""}
-        print(json.dumps(payload, ensure_ascii=False))
-        if save_session:
-            s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
-            s.add_message("user", prompt)
-            s.add_message("assistant", result_text or "")
-            mgr.save(s)
-        raise typer.Exit(0)
-
-    if save_session:
-        s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
-        s.add_message("user", prompt)
-        s.add_message("assistant", result_text or "")
-        mgr.save(s)
-        ndjson_emit({"type": "session_saved", "id": s.id})
-
-    ndjson_emit({"type": "end"})
+    # One implementation with `vaf run prompt` (vaf/cli/cmd/run.py): the two copies had
+    # drifted, and only the unreachable one bound the local-admin identity.
+    from vaf.cli.cmd.run import prompt_once, prompt_text
+    prompt_once(prompt_text(prompt_arg, prompt), output_format, session, save_session)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TRUST COMMAND (Trusted folders / capability gating)

@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
+import click
 import typer
+from typer.core import TyperGroup
 import sys
 import os
 import signal
@@ -148,7 +150,21 @@ def _heartbeat_loop(interval=5):
         time.sleep(interval)
 
 
-app = typer.Typer()
+class _RunGroup(TyperGroup):
+    """`vaf run [MESSAGE]` and its subcommands share one group, and click lets the optional
+    MESSAGE argument swallow a subcommand's name: `vaf run prompt -p "x"` made "prompt" the
+    message and refused -p as an unknown option. A first token that names a subcommand is
+    that subcommand; anything else is still the message."""
+
+    def parse_args(self, ctx, args):
+        if args and args[0] in self.commands:
+            click.Command.parse_args(self, ctx, [])   # the group's own options at their defaults
+            ctx._protected_args, ctx.args = [args[0]], list(args[1:])
+            return ctx.args
+        return super().parse_args(ctx, args)
+
+
+app = typer.Typer(cls=_RunGroup)
 console = Console()
 
 
@@ -799,19 +815,23 @@ def run(
         _run_classic(message, verbose, session)
 
 
-@app.command("prompt")
-def run_prompt(
-    prompt: str = typer.Option(..., "--prompt", "-p", help="Prompt text (non-interactive)"),
-    output_format: str = typer.Option("text", "--output-format", help="text | json | stream-json"),
-    session: str = typer.Option(None, "--session", "-s", help="Load an existing session ID"),
-    save_session: bool = typer.Option(False, "--save-session", help="Save this interaction as a session"),
-):
-    """
-    Convenience alias: `vaf run prompt ...` -> same behavior as `vaf prompt ...`.
+def prompt_text(positional, option) -> str:
+    """The prompt of `vaf prompt` / `vaf run prompt`: as text (`vaf prompt "Hello"`, the form
+    the README shows) or with -p. One of the two, not both."""
+    if positional and option:
+        raise typer.BadParameter("give the prompt either as text or with -p, not both")
+    text = (option or positional or "").strip()
+    if not text:
+        raise typer.BadParameter("no prompt: pass it as text (vaf prompt \"...\") or with -p")
+    return text
 
-    Note: this does NOT (yet) send the prompt into an already-running interactive `vaf run`.
-    It starts a new non-interactive run (but can load/save sessions).
-    """
+
+def prompt_once(prompt: str, output_format: str = "text", session: str = None,
+                save_session: bool = False) -> None:
+    """One non-interactive turn: the ONE implementation behind `vaf prompt` and
+    `vaf run prompt` (scripting and subprocess integration, docs/OBSERVABILITY.md). Binds the
+    local-admin identity like every other CLI lane (_make_cli_agent), never plays audio, and
+    keeps the HTTP client logs out of the output."""
     import json
     from vaf.cli.ui import UI
     from vaf.core.session import SessionManager
@@ -895,6 +915,20 @@ def run_prompt(
         ndjson_emit({"type": "session_saved", "id": s.id})
 
     ndjson_emit({"type": "end"})
+
+
+
+
+@app.command("prompt")
+def run_prompt(
+    prompt_arg: str = typer.Argument(None, metavar="PROMPT", help="Prompt text (or use -p)"),
+    prompt: str = typer.Option(None, "--prompt", "-p", help="Prompt text (non-interactive)"),
+    output_format: str = typer.Option("text", "--output-format", help="text | json | stream-json"),
+    session: str = typer.Option(None, "--session", "-s", help="Load an existing session ID"),
+    save_session: bool = typer.Option(False, "--save-session", help="Save this interaction as a session"),
+):
+    """Non-interactive mode (scripting): the same command as `vaf prompt`."""
+    prompt_once(prompt_text(prompt_arg, prompt), output_format, session, save_session)
 
 
 def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None, web_enabled: bool = False):

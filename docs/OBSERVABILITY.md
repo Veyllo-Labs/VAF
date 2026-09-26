@@ -110,7 +110,7 @@ Flags:
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--prompt` / `-p` | required | the user message |
+| `PROMPT` or `--prompt` / `-p` | required | the user message, as text (`vaf prompt "..."`) or with `-p`; one of the two, not both |
 | `--output-format` | `text` | `text` \| `json` \| `stream-json` |
 | `--session` / `-s` | none | load an existing session's history first (a missing id silently starts fresh) |
 | `--save-session` | off | save prompt + answer as a **new** session (new id; ignored in `text` mode) |
@@ -119,9 +119,11 @@ Flags:
 strings, nothing blocks on stdin. It uses the same `~/.vaf/config.json` as the
 rest of VAF (env overrides `VAF_PROVIDER` / `VAF_MODEL_OVERRIDE` apply), and it
 is cwd-sensitive: a `VAF.md` found from the current directory upward (nearest
-parent wins; `.vaf/VAF.md` works too) is loaded as project context. The alias `vaf run prompt` is equivalent but additionally binds the
-local-admin identity (memory/RAG then read and write the same scope the Web UI
-uses) and silences HTTP client logs.
+parent wins; `.vaf/VAF.md` works too) is loaded as project context. `vaf run prompt` is the
+same command (one implementation, `prompt_once` in `vaf/cli/cmd/run.py`). Both bind the
+local-admin identity like every other CLI lane (memory/RAG read and write the same scope
+the Web UI uses), never play audio, and silence HTTP client logs. `vaf run` takes an
+optional message too; a first word that names a subcommand (`prompt`) is that subcommand.
 
 ### Output formats
 

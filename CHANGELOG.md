@@ -129,6 +129,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **`vaf run prompt` works, and `vaf prompt "..."` works without `-p`.** `vaf run prompt -p
+  "..."` failed with "No such option: -p", and `vaf prompt "Hello"`, the way the README shows it,
+  asked for `-p`. Both commands are now one and take the prompt either way. `vaf prompt` also
+  runs as you now, like the rest of the terminal app, so it shares your memory with the app
+  instead of keeping its own.
+
 - **The agent's to-do list accepts plain lines.** When the agent wrote its steps as simple
   lines instead of the expected entries, the whole update was refused and the agent had to try
   again. VAF now turns such lines into steps.

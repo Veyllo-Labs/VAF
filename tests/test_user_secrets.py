@@ -119,7 +119,7 @@ def test_the_model_reads_names_only():
     us.set_secret("FTP_PASSWORD", VALUE, user_scope_id=TENANT)
     note = us.prompt_note(user_scope_id=TENANT)
     assert "$VAF_SECRET_FTP_PASSWORD" in note and VALUE not in note
-    assert us.prompt_note(user_scope_id=OTHER) == ""
+    assert "VAF_SECRET_FTP_PASSWORD" not in us.prompt_note(user_scope_id=OTHER)
 
 
 def test_the_routes_never_return_a_value():

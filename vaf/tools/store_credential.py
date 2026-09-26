@@ -65,6 +65,13 @@ class StoreCredentialTool(BaseTool):
         value = kwargs.get("secret")
         if not isinstance(value, str) or not value.strip():
             return "Error: `secret` is empty - pass the value exactly as the user wrote it."
+        if len(value) < user_secrets.MIN_SCRUB_LENGTH:
+            # Refused before anything is stored: this tool's promise is "kept, and gone from the
+            # chat", and a value this short cannot be found in the chat without wrecking it.
+            return (f"Error: the value is shorter than {user_secrets.MIN_SCRUB_LENGTH} characters, "
+                    "too short to find and remove from this conversation, so it is NOT stored this "
+                    "way. Do not keep it anywhere else; tell the user to enter it in Settings, "
+                    "Connections, 'Credentials for commands'.")
         try:
             stored = user_secrets.set_secret(kwargs.get("name"), value,
                                              user_scope_id=kwargs.get("user_scope_id"),
@@ -79,10 +86,6 @@ class StoreCredentialTool(BaseTool):
                     "memory entry: tell the user it could not be stored, and that it can be entered "
                     "in Settings, Connections, 'Credentials for commands' once the store works.")
         env = user_secrets.ENV_PREFIX + stored
-        if len(value) < user_secrets.MIN_SCRUB_LENGTH:
-            return (f"Stored as ${env}. The value is shorter than {user_secrets.MIN_SCRUB_LENGTH} "
-                    "characters, too short to find and remove from this conversation; tell the "
-                    "user so. Use it by name from now on.")
         return (f"Stored as ${env}. The value is removed from this conversation. Use it by name "
                 f"from now on (`${env}` in host_bash, `os.environ[\"{env}\"]` in python_exec) "
                 "and never repeat it.")

@@ -286,4 +286,12 @@ def test_the_web_chat_reloads_after_the_scrubbed_save():
 def test_the_model_learns_how_to_store_one():
     note = us.prompt_note(can_store=True)
     assert "store_credential" in note
-    assert us.prompt_note() == "", "no tool, nothing stored: nothing to say"
+    without = us.prompt_note()
+    assert "store_credential" not in without and "never ask for it in the chat" in without \
+        and "Settings" in without, "without the tool the chat is still not the way"
+
+
+def test_a_value_too_short_to_remove_is_not_stored(agent):
+    result = agent.tools["store_credential"].run(name="PIN", secret="123", username="admin")
+    assert result.startswith("Error:") and "NOT stored" in result and "Settings" in result
+    assert us.names(username="admin") == [], "refused before anything was stored"

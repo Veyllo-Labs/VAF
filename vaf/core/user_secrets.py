@@ -167,10 +167,11 @@ def scrub(text, env: Optional[Dict[str, str]]) -> str:
 
 
 def prompt_note(*, user_scope_id=None, username=None, can_store: bool = False) -> str:
-    """The lines the model reads about credentials: the stored names, and - when the
-    store_credential tool is loaded - how a value the person gives in the chat gets stored.
-    "" when there is nothing to say. Without the second part the model did not know the store
-    existed while it was empty, and asked for the password to go into the chat."""
+    """The lines the model reads about credentials, for a turn where a tool that uses them (or
+    store_credential) is loaded: the stored names, and how a credential the person has not
+    stored gets there - through store_credential when it is loaded, through Settings when it
+    is not. Without that second part the model did not know the store existed while it was
+    empty, and asked for the password to go into the chat."""
     stored = names(user_scope_id=user_scope_id, username=username)
     parts = []
     if stored:
@@ -185,4 +186,8 @@ def prompt_note(*, user_scope_id=None, username=None, can_store: bool = False) -
                      "a note, a memory entry or any other tool call, and never repeat the value in "
                      "one: those are logged before the store can remove it. It is then removed from "
                      "this conversation, and you use it by name from then on.")
-    return ("\n\n" + "\n".join(parts)) if parts else ""
+    else:
+        parts.append("**A credential the user has not stored:** never ask for it in the chat. "
+                     "The user enters it in Settings, Connections, 'Credentials for commands', "
+                     "and you then use it by name.")
+    return "\n\n" + "\n".join(parts)

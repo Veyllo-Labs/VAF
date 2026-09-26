@@ -12,8 +12,10 @@ preamble into query=. Because a template "matched", the no-match run_temp hint
 suggestion and did all steps manually (44-step turn).
 
 Pinned here:
-- _try_workflow(route_input=...): router match, variable extraction, the
-  workflow-mention detection and the intent lock all consume the RAW text.
+- _try_workflow(route_input=...): router match, variable extraction and the
+  workflow-mention detection consume the RAW text. The intent lock that used to
+  sit here moved into chat_step, before the prompt build (it reads the raw text
+  there too; tests/test_turn_request_survives.py).
 - The [WORKFLOW SUGGESTION] note advertises create_agent_workflow(run_temp)
   as the fallback whenever the user's own message mentions a workflow, so a
   wrong template match can no longer eat an explicit workflow request.
@@ -115,7 +117,7 @@ def test_no_match_hint_strength_follows_the_raw_message_not_the_enrichment():
     assert "user's message mentions a workflow" not in ns2.history[0]["content"]
 
 
-def test_variables_and_intent_come_from_the_raw_message_on_a_match():
+def test_variables_come_from_the_raw_message_on_a_match():
     ns = _agent_ns(analyze_returns="research_and_document")
     result = Agent._try_workflow(ns, PREAMBLE + RAW_WITH_WORKFLOW, None,
                                  route_input=RAW_WITH_WORKFLOW)
@@ -127,8 +129,10 @@ def test_variables_and_intent_come_from_the_raw_message_on_a_match():
         assert "[SESSION WORKSPACE]" not in str(value)
         assert "coding_agent" not in str(value)
 
-    # Intent lock stores the raw request, not the preamble.
-    assert ns._seen["intent"] == RAW_WITH_WORKFLOW
+    # The intent lock is not here any more: chat_step writes the raw request once, before the
+    # prompt is built (tests/test_turn_request_survives.py). A second write here came after the
+    # build and kept the <user_intent> block one message behind.
+    assert "intent" not in ns._seen
 
 
 def test_without_route_input_behavior_is_unchanged():

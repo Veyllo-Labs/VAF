@@ -2652,8 +2652,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                             _call_ids.add(_id)
                                         if _content.lstrip().startswith("[Context:"):
                                             _existing_ctx.add(_content.strip())
-                                except Exception:
-                                    pass
+                                except Exception as _ctx_e:
+                                    # Never silent: a turn whose steps are missing from the saved
+                                    # chat has to be explainable from the logs afterwards.
+                                    append_domain_log("headless", f"turn context not persisted for "
+                                                      f"{task.session_id}: {type(_ctx_e).__name__}: {_ctx_e}")
                                 if _clean_response:
                                     session.add_message(role="assistant", content=_clean_response)
                                 session_mgr.save(session)

@@ -8,7 +8,7 @@ This document describes **exactly** what happens during context compression in V
 
 **File:** `vaf/core/agent.py`
 
-Compression is checked **once per user turn** in `chat_step()`, **before** the new user message is appended to the history.
+Compression is checked at the start of each user turn in `chat_step()`, **before** the new user message is appended to the history, AND inside the turn: `Agent.manage_context` runs after every tool result and after the final answer, so a long tool loop compresses many times within one turn (measured live: from round 20 of a 37-round turn, after every result). The request of the current turn is therefore pinned by the compression itself (section 4.5), not only kept by being recent.
 
 Order within `chat_step()`:
 
@@ -109,6 +109,7 @@ This keeps intent and state up to date **before** the old messages are discarded
 
 - **System prompt:** `system_prompt = history[0]` (**always** carried over; its content can still be replaced by `new_prompt` in the agent afterwards).
 - **Recent:** `recent_messages = history[-recent_memory_size:]` (dynamic, depending on `max_tokens`) – kept **unchanged** ("raw").
+- **The turn's request:** `turn_anchor_index(history)` finds the message the current turn answers (the last user-role message that is not a checkpoint's `[CONTEXT RESTORED]` block). When it is older than the recent window it is carried over too, right before `recent_messages`, and it is never dropped to fit the limit (only the kept tool results and the summary give way). Without it a long turn lost the person's own request: the model then followed the `<user_intent>` block alone, and the save that anchors the turn's steps on the request found nothing to anchor on.
 
 ### 4.6 Step 5: Build the context summary ("glue")
 
@@ -124,6 +125,7 @@ This keeps intent and state up to date **before** the old messages are discarded
 - `new_history = [system_prompt]`
 - If `context_summary` is not empty: a **second system message** with content `context_summary` is appended.
 - Then: the critical tool messages (see 4.4).
+- Then: the turn's request, when it is older than the recent window (see 4.5).
 - Then: `recent_messages` (the last 10 messages).
 
 Result: significantly fewer messages and a sharply reduced token count, while preserving "stability" (intent, state, last N messages).

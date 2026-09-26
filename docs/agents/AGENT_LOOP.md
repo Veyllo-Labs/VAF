@@ -22,8 +22,8 @@ user input
     ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ 1. PRE-TURN SETUP                                            │
-│    decay state · rebuild dynamic system prompt ·            │
-│    compress context if over threshold                       │
+│    record intent (a person's turn) · decay state ·          │
+│    rebuild dynamic system prompt · compress if over limit   │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼
@@ -35,9 +35,9 @@ user input
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 3. RECORD INPUT + INTENT                                    │
-│    append user msg · reset per-turn gate budgets ·          │
-│    update_user_intent()                                     │
+│ 3. RECORD INPUT                                             │
+│    append user msg · reset per-turn gate budgets            │
+│                                                             │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼
@@ -106,10 +106,10 @@ grep the symbol names to find them.
 
 | # | Phase | Key methods / symbols |
 |---|-------|------------------------|
-| 1 | Pre-turn setup / context decay / compress | `decay_state`, `prompt_manager.build_prompt`, `context_manager.should_compress`, `_compress_history_if_needed` (fires the compaction hook, `set_compaction_hook`) |
+| 1 | Pre-turn setup / intent / context decay / compress | `main_persistence.update_user_intent` FIRST: the system prompt built right after carries it in `<user_intent>`, and writing it after the build left that block one message behind in every turn (measured live: a long turn followed the stale block back to the previous task). Written from `raw_user_input` (the person's words, never the lane's enrichment) and only when `_turn_is_from_the_user` (1b) says a person sent the turn: a wake, a timer or a drain turn does not become the goal. Then `decay_state`, `prompt_manager.build_prompt`, `context_manager.should_compress`, `_compress_history_if_needed` (fires the compaction hook, `set_compaction_hook`) |
 | 1b | Who is speaking: the two "the user replied" latches | `_turn_is_from_the_user` decides whether this turn is the user in their own chat; only then is the ask-first latch (`_pending_user_question`) cleared and a waiting background question (`thinking_mode.get_waiting_for_reply`) picked up as answered and cleared. A synthetic drain turn (`_synthetic_drain_turn`: runner drain, A2A room wake), a queue turn the harness marked as not a person (`_turn_is_human=False`: timer, automation) and a background run's own prompt (`run_kind` thinking/automation) fail the test. See [Thinking-Mode.md](Thinking-Mode.md) (Automatic Cleanup) |
 | 2 | Workflow / skill match | `_try_workflow` |
-| 3 | Record input + intent | `main_persistence.update_user_intent` |
+| 3 | Record input | the user message is appended; the intent was recorded in phase 1 |
 | 4 | Tool router | `_route_tools` |
 | 5 | Adaptive temperature | `analyze_intent` |
 | 6 | LLM call (streaming) + parse tool calls | `_prepare_messages` runs on ALL THREE lanes (api_backend / local llama-server / llama-cpp-python in-process) before the call - it strips dangling `tool_calls`, drops orphaned `role:tool` messages, converts images to text and downgrades synthetic tool ids; the memory block is spliced into the first system message right after. The server lane re-prepares per retry attempt, because its 400/500 recovery rebinds the history between attempts. Then `api_backend.chat_completion`, `_parse_qwen_tool_calls`, `_parse_gemma4_tool_calls` |

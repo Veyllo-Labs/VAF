@@ -129,6 +129,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **In a long task the agent no longer forgets what you asked for.** When a task took many
+  steps, VAF shortened the conversation along the way and eventually dropped your request
+  itself. The agent then went by a note that was meant to hold your current request but
+  still held the one before it, and in a live test it went back to the previous task and
+  called the actual task an accident. That chat was also saved without the steps it took.
+  Your request is now always kept, the note always holds the message being answered (and
+  only what you wrote yourself, never an automatic "command finished" message), and the
+  steps are saved.
+
 - **`vaf run prompt` works, and `vaf prompt "..."` works without `-p`.** `vaf run prompt -p
   "..."` failed with "No such option: -p", and `vaf prompt "Hello"`, the way the README shows it,
   asked for `-p`. Both commands are now one and take the prompt either way. `vaf prompt` also

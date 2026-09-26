@@ -27,6 +27,23 @@ from vaf.core.config import Config
 # Marker prefix for the per-turn tool/reasoning summary that replaces squashed
 # intermediate steps. Used to recognize (and preserve) these messages on reload.
 TURN_CONTEXT_PREFIX = "[Context:"
+# The user-role message a checkpoint writes in front of the kept messages (Agent.checkpoint_and_reset):
+# restored context, never a request anybody made.
+CONTEXT_RESTORED_PREFIX = "[CONTEXT RESTORED]"
+
+
+def turn_anchor_index(history: List[Dict]) -> Optional[int]:
+    """Index of the message the current turn answers: the last user-role message that is not a
+    checkpoint's restored context. None when the history holds none after the system turn.
+
+    Inside a turn nothing else is appended as a user message (the per-step turn block lives only in
+    the prepared copy sent to the model), so the last one IS the request being worked on - the one
+    thing a compression must never drop and the point the turn-end squash starts after."""
+    for i in range(len(history or []) - 1, 0, -1):
+        m = history[i] or {}
+        if m.get("role") == "user" and not str(m.get("content") or "").lstrip().startswith(CONTEXT_RESTORED_PREFIX):
+            return i
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -781,6 +798,16 @@ class ContextManager:
         # by ~the system size (observed 31985 -> 51235). Slice from history[1:] so it can never overlap.
         recent_messages = history[1:][-self.recent_memory_size:]  # Keep raw
 
+        # The request the current turn answers is never compressed away. The compression also runs
+        # after every tool result (Agent.manage_context), so a long tool loop pushed the person's own
+        # message out of the recent window: measured live, 37 tool rounds, compression after each
+        # result from round 20 on, and by round ~34 the request was gone. The model then followed a
+        # stale goal, and the turn's steps could not be saved (the save anchors on this message).
+        anchor_idx = turn_anchor_index(history)
+        anchor_part = ([history[anchor_idx]]
+                       if anchor_idx is not None and anchor_idx < len(history) - len(recent_messages)
+                       else [])
+
         # 5. Build context summary
         context_summary = self._build_context_summary()
         resume_block = self.build_resume_block(history, working_memory=working_memory)
@@ -793,7 +820,7 @@ class ContextManager:
         tools_part = critical_tools[-keep_count:]
 
         def _assemble():
-            return [system_prompt] + summary_part + tools_part + recent_messages
+            return [system_prompt] + summary_part + tools_part + anchor_part + recent_messages
 
         new_history = _assemble()
         new_tokens = self.estimate_tokens(new_history)
@@ -802,8 +829,8 @@ class ContextManager:
         # summary that backfired (30725 -> 43754 tokens over a 32768 limit) tripped CRITICAL
         # OVERFLOW at once; and an input already over the limit could shrink and still leave
         # the next request over it. So the retained extras give way while it does not fit -
-        # the kept tool results oldest first, then the summary - down to the system turn and
-        # the recent messages, which are always kept (the full history is archived for
+        # the kept tool results oldest first, then the summary - down to the system turn, the
+        # turn's request and the recent messages, which are always kept (the full history is archived for
         # /restore). Under the limit nothing is dropped: a small context that merely grows a
         # little (88 -> 150) keeps the resume block, which /restore and NEXT_ACTION depend on.
         dropped_tools = 0

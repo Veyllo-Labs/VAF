@@ -6813,7 +6813,8 @@ class Agent:
                 working_memory = None
         resume_block = cm.build_resume_block(self.history, working_memory=working_memory)
         restored_parts = [part for part in (context_summary, resume_block) if part]
-        glue_msg = {"role": "user", "content": f"[CONTEXT RESTORED]\n" + "\n\n".join(restored_parts)}
+        from vaf.core.context import CONTEXT_RESTORED_PREFIX
+        glue_msg = {"role": "user", "content": f"{CONTEXT_RESTORED_PREFIX}\n" + "\n\n".join(restored_parts)}
 
         new_history = []
         if system_msg and system_msg.get("role") == "system":
@@ -7566,20 +7567,6 @@ class Agent:
                 UI.event("Step 1/2", f"Workflow [Tier 2: No auto-match - Agent deciding]", style="cyan")
                 return None
             
-            # 🔒 INTENT LOCK (Workflow): Save the fresh user intent to persistence
-            # CRITICAL: Skip intent update if running in thinking mode (background).
-            if hasattr(self, 'main_persistence') and self.main_persistence:
-                _is_thinking_mode = self._is_thinking_run()
-                if not _is_thinking_mode:
-                    try:
-                        # Store the RAW request as the intent: the enriched text
-                        # would put the whole workspace preamble into the
-                        # <user_intent> prompt block (observed live).
-                        self.main_persistence.update_user_intent(route_input)
-                        self.main_persistence.reset_validation_retry_count()
-                    except Exception:
-                        pass
-
             # Get the matched template
             from vaf.workflows.templates import get_template
             template = get_template(workflow_id)
@@ -9379,6 +9366,20 @@ class Agent:
         # ------------------------------------------------------------------
         # Dynamic Context: Update System Prompt
         # ------------------------------------------------------------------
+        # INTENT LOCK, before the prompt below is built: the <user_intent> block it carries is read
+        # from this file, and writing the file after the build left the block one message behind in
+        # every turn (measured: prompt built 14:43:29, intent written 14:43:32; once the request had
+        # dropped out of a long turn, the model followed the stale block back to the previous task).
+        # The person's own words (raw_user_input, never the lane's enrichment), and only for a turn a
+        # person sent: a wake, a timer, a drain turn or a background run is not the goal.
+        if (not thinking_mode and getattr(self, "main_persistence", None)
+                and self._turn_is_from_the_user(user_input, skip_input)):
+            try:
+                self.main_persistence.update_user_intent(raw_user_input or user_input)
+                self.main_persistence.reset_validation_retry_count()
+            except Exception:
+                pass
+
         new_prompt = self.history[0].get("content", "") if self.history and self.history[0].get("role") == "system" else None
         if hasattr(self, 'prompt_manager') and user_input and not skip_input:
             # Detect language first so it can be used in build_prompt (e.g. for localized date)
@@ -9595,19 +9596,6 @@ class Agent:
                 except Exception as e:
                     # Don't crash if first-time detection fails - just skip it
                     UI.event("Onboarding", f"First-time check failed: {e}", style="dim")
-            
-            # 🔒 INTENT LOCK: Save the fresh user intent to persistence
-            # CRITICAL: Skip intent update if running in thinking mode (background).
-            # This prevents technical thinking prompts from overwriting the actual user intent.
-            if hasattr(self, 'main_persistence') and self.main_persistence:
-                _is_thinking_mode = bool(thinking_mode)
-                if not _is_thinking_mode:
-                    try:
-                        # Update the "North Star" for the session
-                        self.main_persistence.update_user_intent(user_input)
-                        self.main_persistence.reset_validation_retry_count()
-                    except Exception:
-                        pass
             
             # LIVE CONTEXT UPDATE: Ensure intent is fresh for the router immediately
             if hasattr(self, 'context_manager'):
@@ -12450,10 +12438,13 @@ class Agent:
             # "Only Questions and Answers remain in Context"
             # We squash ALL intermediate steps: Tools, Thoughts, System prompts.
             try:
-                # User Msg is at history_snapshot_len.
-                # New content starts at history_snapshot_len + 1.
-                # Final Answer is at -1.
-                start_idx = history_snapshot_len + 1
+                # The turn's own steps sit between its request and the final answer (at -1).
+                # The request is found again rather than taken from history_snapshot_len: the
+                # compression that runs after tool results rebuilds the list, and the index taken
+                # at the start of the turn then points somewhere else.
+                from vaf.core.context import turn_anchor_index
+                _anchor = turn_anchor_index(self.history)
+                start_idx = (_anchor + 1) if _anchor is not None else history_snapshot_len + 1
                 end_idx = len(self.history) - 1
                 
                 # Only under CONTEXT PRESSURE, and that is the whole change.

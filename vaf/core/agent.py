@@ -2094,12 +2094,13 @@ class Agent:
         call itself (observability preserved) and allows the launch."""
         try:
             from vaf.core.config import Config
-            gate_active, plan_exists = self._plan_gate_state()
-            if not gate_active:
-                return None
-            # Gated set: write/dangerous tools, except python_sandbox.
+            # Gated set: write/dangerous tools, except python_sandbox. Asked FIRST: the state below
+            # reads the chat's working memory from disk, and every other tool call would pay for it.
             level = getattr(tool_instance, "permission_level", "read") if tool_instance else "read"
             if level not in ("write", "dangerous") or name == "python_sandbox":
+                return None
+            gate_active, plan_exists = self._plan_gate_state()
+            if not gate_active:
                 return None
             if plan_exists:
                 self._plan_gate_blocks = 0

@@ -127,3 +127,15 @@ def test_the_gate_itself_does_not_take_a_stored_placeholder_plan(agent):
     assert str(agent._plan_gate_decision("write_file", tool)).startswith("[PLAN REQUIRED]")
     agent.main_persistence.update_working_memory(plan=["Die Konfiguration anpassen und speichern"])
     assert agent._plan_gate_decision("write_file", tool) is None
+
+
+def test_a_tool_the_gate_does_not_cover_reads_no_working_memory(agent, monkeypatch):
+    """The gate's state reads the chat's working memory from disk; a read tool, a system tool
+    and python_sandbox are never gated, so their calls must not pay for that read."""
+    calls = []
+    monkeypatch.setattr(agent, "_plan_gate_state", lambda: calls.append(1) or (True, False))
+    for name in ("read_file", "update_working_memory", "python_sandbox"):
+        assert agent._plan_gate_decision(name, agent.tools.get(name)) is None
+    assert calls == []
+    assert str(agent._plan_gate_decision("write_file", agent.tools["write_file"])).startswith("[PLAN REQUIRED]")
+    assert calls == [1]

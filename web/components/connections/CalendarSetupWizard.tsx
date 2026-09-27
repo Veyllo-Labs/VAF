@@ -50,6 +50,7 @@ export default function CalendarSetupWizard({ isOpen, onClose, onComplete, initi
         if (isOpen) {
             setError('');
             setShowSuccess(false);
+            setSignInPage('');
             fetchStatus();
         }
     }, [isOpen]);
@@ -69,6 +70,8 @@ export default function CalendarSetupWizard({ isOpen, onClose, onComplete, initi
         const tab = reserveAuthTab();
         setLoading(provider);
         setError('');
+        // A link from an earlier attempt must not outlive it (another provider, a failed start).
+        setSignInPage('');
         try {
             const res = await fetch(api(`api/email/oauth/start?provider=${provider}`), { credentials: 'include' });
             if (!res.ok) throw new Error(res.status === 400 ? 'Sign-in could not be started. An admin may need to configure OAuth in Settings.' : `Request failed: ${res.status}`);

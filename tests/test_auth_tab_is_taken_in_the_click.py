@@ -56,6 +56,20 @@ def test_every_reserved_tab_is_taken_before_the_first_await():
                 f"{rel}: the reserved tab is neither sent to the address nor closed on failure")
 
 
+# The state each sign-in keeps its fallback link in, and how it is emptied.
+_LINK_CLEARED = ("setSignInPage('')", "setAuthUrl('')", "delete next[")
+
+
+def test_a_new_attempt_clears_the_link_of_the_last_one():
+    """The fallback link belongs to one attempt: a later attempt that fails, or one for another
+    provider, must not leave the earlier address on screen."""
+    for rel, text in _components():
+        for match in re.finditer(r"reserveAuthTab\(\);", text):
+            before_fetch = text[match.end():text.find("fetch(", match.end())]
+            assert any(clear in before_fetch for clear in _LINK_CLEARED), (
+                f"{rel}: the link of the previous attempt is not cleared before the new start")
+
+
 def test_the_reserved_tab_loses_its_opener_before_it_leaves_the_origin():
     src = (_WEB / "lib" / "authTab.ts").read_text(encoding="utf-8")
     reserve = src[src.index("export function reserveAuthTab"):]

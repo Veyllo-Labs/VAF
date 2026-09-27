@@ -232,6 +232,8 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
         const tab = reserveAuthTab();
         setBusy(account || provider);
         setError(null);
+        // A link from an earlier attempt must not outlive it (another account, a failed start).
+        setSignInPage('');
         try {
             const q = `provider=${encodeURIComponent(provider)}&imap=true`
                 + (account ? `&account=${encodeURIComponent(account)}` : '');

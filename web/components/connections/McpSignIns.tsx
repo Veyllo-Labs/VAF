@@ -84,6 +84,8 @@ export default function McpSignIns({ query = '', onShownCount }: { query?: strin
         const tab = reserveAuthTab();
         setBusy(name);
         setProblem(null);
+        // A link from an earlier attempt must not outlive it (a failed start).
+        setPages((prev) => { const next = { ...prev }; delete next[name]; return next; });
         try {
             const r = await fetch(api(`/api/mcp/sign-in/${encodeURIComponent(name)}`), { method: 'POST', credentials: 'include' });
             const d = await r.json().catch(() => ({}));

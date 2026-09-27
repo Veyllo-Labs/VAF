@@ -178,6 +178,8 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
         // keeps the address as a link for a browser that blocked it anyway.
         const tab = reserveAuthTab();
         setLoading(true);
+        // A link from an earlier attempt must not outlive it (another provider, a failed start).
+        setAuthUrl('');
         const redirectBase = typeof window !== 'undefined' ? encodeURIComponent(window.location.origin) : '';
         const startUrl = redirectBase
             ? api(`api/cloud/oauth/start?provider=${id}&redirect_base=${redirectBase}`)

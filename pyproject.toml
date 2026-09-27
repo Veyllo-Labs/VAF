@@ -72,8 +72,10 @@ dependencies = [
     "jsonschema>=4.18.0",
     # PEP 440 version parsing/comparison for the self-updater (vaf/cli/cmd/update.py)
     "packaging>=23.0",
-    # The official Model Context Protocol SDK: remote MCP servers (vaf/core/mcp_remote.py)
-    "mcp>=1.26.0",
+    # The official Model Context Protocol SDK: remote MCP servers (vaf/core/mcp_remote.py).
+    # Capped below 2 like requirements.txt: 2.x is a breaking release the remote lane is not
+    # tested on.
+    "mcp>=1.26.0,<2",
     # Auth + encrypted credential store (core infra)
     "argon2-cffi>=23.1.0",
     "keyring>=24.0.0",

@@ -73,7 +73,7 @@ Also present in `requirements.txt`.
 | tzdata | >=2024.1 | Apache-2.0 |
 | ruff | >=0.1.0 | MIT |
 | jsonschema | >=4.18.0 | MIT |
-| mcp | >=1.26.0 | MIT |
+| mcp | >=1.26.0,<2 | MIT |
 | packaging | >=23.0 | Apache-2.0 OR BSD-2-Clause |
 | argon2-cffi | >=23.1.0 | MIT |
 | keyring | >=24.0.0 | MIT |

@@ -75,20 +75,56 @@ echo "    OK"
 
 echo ""
 echo "=== 5/9  Lock file freshness ==="
-# The lock-sync job exists ONLY in remote CI, and that asymmetry is how a
-# dependency swap once shipped with a stale requirements.lock as the first red
-# of a 28-commit push. Regenerating the lock here would need CI's exact pins in
-# a throwaway venv; what CAN be checked cheaply is the incident's exact shape:
-# requirements.txt changed and requirements.lock did not.
+# The lock-sync job in remote CI regenerates requirements.lock and fails on any
+# difference, and a dependency swap once shipped with a stale lock as the first
+# red of a 28-commit push because nothing here did the same. When either file
+# changed, this stage now runs that job's own check: pip-compile with the job's
+# exact pip and pip-tools pins (read from ci.yml, never copied) in a throwaway
+# Python 3.13 venv, with the committed lock present so no pin moves by itself.
+# The shape check it replaces ("requirements.txt changed, the lock did not")
+# refused a correct change: a cap the pinned version already meets leaves the
+# regenerated lock byte-identical. Without python3.13 the shape check remains.
 if git rev-parse --verify -q origin/main >/dev/null; then
     REQ_CHANGED=$(git diff --name-only origin/main...HEAD -- requirements.txt; git diff --name-only -- requirements.txt)
     LOCK_CHANGED=$(git diff --name-only origin/main...HEAD -- requirements.lock; git diff --name-only -- requirements.lock)
-    if [ -n "$REQ_CHANGED" ] && [ -z "$LOCK_CHANGED" ]; then
-        echo "ERROR: requirements.txt changed but requirements.lock did not." >&2
+    if [ -z "$REQ_CHANGED" ] && [ -z "$LOCK_CHANGED" ]; then
+        echo "    OK (neither file changed)"
+    elif command -v python3.13 >/dev/null 2>&1; then
+        LOCK_PINS=$(grep -o '"pip==[^"]*" "pip-tools==[^"]*"' .github/workflows/ci.yml | head -1 | tr -d '"')
+        if [ -z "$LOCK_PINS" ]; then
+            echo "ERROR: the pip / pip-tools pins of the lock-sync job were not found in ci.yml" >&2
+            exit 1
+        fi
+        LOCK_TMP="$(mktemp -d)"
+        cp requirements.txt requirements.lock "$LOCK_TMP/"
+        echo "    regenerating the lock like the lock-sync job ($LOCK_PINS, Python 3.13)"
+        # shellcheck disable=SC2086  # the pins are two separate arguments
+        if ! { python3.13 -m venv "$LOCK_TMP/venv" \
+               && "$LOCK_TMP/venv/bin/python" -m pip install -q $LOCK_PINS \
+               && (cd "$LOCK_TMP" && "$LOCK_TMP/venv/bin/pip-compile" --allow-unsafe --generate-hashes \
+                   --output-file=requirements.lock requirements.txt); } >"$LOCK_TMP/compile.log" 2>&1; then
+            echo "ERROR: pip-compile failed (a resolution conflict, or no network); last lines:" >&2
+            tail -5 "$LOCK_TMP/compile.log" >&2
+            rm -rf "$LOCK_TMP"
+            exit 1
+        fi
+        if ! diff -u requirements.lock "$LOCK_TMP/requirements.lock" >"$LOCK_TMP/lock.diff"; then
+            echo "ERROR: requirements.lock is out of sync with requirements.txt:" >&2
+            head -40 "$LOCK_TMP/lock.diff" >&2
+            echo "Regenerate it the same way and commit it (recipe in CLAUDE.md Rule 5)." >&2
+            rm -rf "$LOCK_TMP"
+            exit 1
+        fi
+        rm -rf "$LOCK_TMP"
+        echo "    OK (regenerated lock is identical)"
+    elif [ -n "$REQ_CHANGED" ] && [ -z "$LOCK_CHANGED" ]; then
+        echo "ERROR: requirements.txt changed but requirements.lock did not, and without" >&2
+        echo "python3.13 the lock cannot be regenerated here to prove it needs no change." >&2
         echo "Regenerate the lock in the SAME commit (recipe in CLAUDE.md Rule 5)." >&2
         exit 1
+    else
+        echo "    OK (shape check only: python3.13 not found)"
     fi
-    echo "    OK"
 else
     echo "    SKIPPED (no origin/main to compare against)"
 fi

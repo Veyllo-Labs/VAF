@@ -19,6 +19,13 @@ files declare, and both are edited by hand:
   and one web row named a package that is not a dependency.
 
 Neither drift was caught by anything, so both are pinned here.
+
+A third mirror is an UPPER BOUND. requirements.txt is what CI and the release job
+install, pyproject.toml is what a pip install of the package resolves, and the
+THIRD_PARTY row states the range. A cap in one and not the other hands one of the
+three a major release nobody tested: CI installed mcp 2.x from an uncapped
+requirements.txt while the lock held 1.x, and the remote MCP tests failed on a
+renamed class.
 """
 import ast
 import json
@@ -156,4 +163,55 @@ def test_third_party_inventory_matches_whatsapp_bridge_manifest():
     assert rows == deps, (
         "docs/legal/THIRD_PARTY.md and vaf/whatsapp_node/package.json disagree: "
         f"stale rows {sorted(rows - deps)}, missing rows {sorted(deps - rows)}"
+    )
+
+
+def _upper_bounds(spec: str) -> frozenset:
+    """The `<` / `<=` clauses of one requirement's version range, markers dropped."""
+    rng = spec.split(";", 1)[0]
+    return frozenset(c.replace(" ", "") for c in rng.split(",") if c.strip().startswith("<"))
+
+
+def _ranges() -> dict:
+    """Manifest -> {package: version range as written}."""
+    import tomllib
+
+    def split(spec):
+        m = _NAME_RE.match(spec.strip())
+        return (_norm(m.group(1)), spec.strip()[m.end():]) if m else (None, "")
+
+    out = {"requirements.txt": {}, "pyproject.toml": {}, "THIRD_PARTY.md": {}}
+    for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
+        name, rng = split(line.split("#", 1)[0])
+        if name:
+            out["requirements.txt"][name] = rng
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    specs = list(data["project"]["dependencies"])
+    for extra_specs in data["project"]["optional-dependencies"].values():
+        specs.extend(extra_specs)
+    for spec in specs:
+        name, rng = split(spec)
+        if name and name != "vaf":
+            out["pyproject.toml"][name] = rng
+    for line in (ROOT / "docs/legal/THIRD_PARTY.md").read_text(encoding="utf-8").splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if line.startswith("|") and len(cells) >= 3 and cells[1][:1] in "<>=~!":
+            out["THIRD_PARTY.md"][_norm(cells[0])] = cells[1]
+    return out
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="tomllib requires Python 3.11+")
+def test_an_upper_bound_is_the_same_in_every_manifest_that_names_the_package():
+    """MUTATION: drop `,<2` from the mcp line of pyproject.toml and this goes red."""
+    ranges = _ranges()
+    capped = {n for r in ranges.values() for n, rng in r.items() if _upper_bounds(rng)}
+    assert capped, "no capped package found: the parser no longer reads the manifests"
+    drift = {}
+    for name in sorted(capped):
+        seen = {src: sorted(_upper_bounds(r[name])) for src, r in ranges.items() if name in r}
+        if len({tuple(v) for v in seen.values()}) > 1:
+            drift[name] = seen
+    assert not drift, (
+        "An upper bound differs between the manifests that name the package "
+        f"(requirements.txt is what CI and releases install, pyproject.toml what pip resolves): {drift}"
     )

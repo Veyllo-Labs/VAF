@@ -8,8 +8,8 @@ Like a facial expression, but abstract.
 
 > **Brand & ownership:** the agent avatar - the living-dot visual identity and its animated
 > states - is a brand asset of **Veyllo GmbH**. The source code is available under the
-> repository license; the brand/identity itself is reserved (see `LICENSE`, section
-> "Trademarks and Brand Assets").
+> repository license; the brand/identity itself is reserved (see
+> [LICENSING.md](../../LICENSING.md), section "Trademarks and Brand Assets").
 
 ---
 
@@ -28,8 +28,9 @@ Like a facial expression, but abstract.
 > with the GPU in-process, where a continuously *repainting* idle animation drives sustained
 > GPU memory growth. Idle animation is
 > therefore **compositor-only** (`transform`/`opacity`). The organic **blob-morph** (animated
-> `border-radius` via `agentAvatarMorph`) is intentionally limited to the transient active
-> states below (thinking / talking / waiting). See `web/app/globals.css` and
+> `border-radius` via `agentAvatarMorph`, plus the shape change inside `agentAvatarTalk`) is
+> intentionally limited to transient active states (`waiting`, `talking`, and the `confused` /
+> `working` modes); `thinking` is transform-only. See `web/app/globals.css` and
 > `vaf/core/desktop_window.py` for the full rationale.
 
 ### 1b. `idle + dim` - Resting (older messages)
@@ -50,12 +51,13 @@ Like a facial expression, but abstract.
 
 ---
 
-### 3. `thinking` - Reasoning / think-tags active
-- **Appearance:** White dot (`#ffffff`), visible glow (`rgba(255,255,255,0.35)`)
-- **Animation:** Two overlapping animations
-  - `agentAvatarMorph` - organic border-radius transitions (1.0 s)
-  - `agentAvatarBreathe` - scale pulse 1.0 → 1.18 → 1.0 (0.7 s)
-- **Feel:** Focused, turned inward. Steady and deliberate.
+### 3. `thinking` - Reasoning / think-tags active ("Pondering")
+- **Appearance:** White dot (`#ffffff`), visible glow (`rgba(255,255,255,0.35)`), no blob-morph
+- **Animation:** Three layers, all transform/opacity only
+  - Eye: `ponderGaze` (4.2 s) - the dot looks up (about 4-5 px) and drifts slowly left to right while holding the upward gaze; it never re-centres
+  - Body: `ponderBody` (4.2 s) - the square floats gently (lift of 0.4 px, scale 1.015)
+  - Glyph stream: every 200 ms a small glyph (a shape - circle, ring, square, diamond or triangle - or a digit or letter) spawns in a `.tgly-stream` container above the head, rises and fades via `ponderPop` (0.95-1.6 s, random horizontal offset and tilt), then is removed. Skipped for `dim` and `lite`; with `lite` the eye still runs `ponderGaze`
+- **Feel:** Pondering. The agent looks up while thoughts flicker by.
 - **When:** `<think>` tag is open but `</think>` has not yet appeared
 
 ---
@@ -210,7 +212,7 @@ Older messages: `dim` prop → light gray box, gray static dot.
 
 **File:** `web/components/AgentAvatar.tsx` - component `AgentAvatar` (imported by `web/app/page.tsx`)  
 **Keyframes:** defined in `web/app/globals.css` (always available on first paint - no runtime injection)  
-**Props:** `mode` (all 18 modes; default `'idle'`), `dim: boolean` (default `false`), `invert: boolean` (dark dot on light container, for the judge), `noScene: boolean` (default `false`; suppress the WIDE tool/away scenes the way the mobile column does - for callers whose layout has content directly to the avatar's right, e.g. the actions timeline's rail gutter, where a 108px magnifier scene would be clipped under the cards and its leftward lean would detach the walking dot from its rail. A suppressed scene mode falls back to an in-place animation: `searching` to the figure's own `search` look-around, other scenes to `working` - never to a frozen dot)  
+**Props:** `mode` (any of the 40 `AvatarMode` values: 4 base, 14 emotion, 11 activity, 7 tool scenes, 4 away scenes; default `'idle'`), `dim: boolean` (default `false`), `invert: boolean` (dark dot on light container, for the judge), `noScene: boolean` (default `false`; suppress the WIDE tool/away scenes the way the mobile column does - for callers whose layout has content directly to the avatar's right, e.g. the actions timeline's rail gutter, where a 108px magnifier scene would be clipped under the cards and its leftward lean would detach the walking dot from its rail. A suppressed scene mode falls back to an in-place animation: `searching` to the figure's own `search` look-around, other scenes to `working` - never to a frozen dot)  
 **Interactive reference:** `docs/animations/agent_avatar/` - standalone single-file HTML showcases of every
 state (base, emotions, away-scenes, activity) plus the transition player. Open
 `animations/agent_avatar/agent-all-animations.html` to see everything in one place; no build step. These

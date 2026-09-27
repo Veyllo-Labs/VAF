@@ -327,7 +327,7 @@ When TLS is active, the following changes take effect across the stack:
 | Backend API | `http://host:8001` | LAN: via proxy `https://<LAN-IP>:8443`; desktop: internal plain `http://127.0.0.1:8005` |
 | WebSocket | `ws://host:8001/ws` | LAN: same-origin `wss://<LAN-IP>:8443/ws` (via proxy); desktop: plain `ws://127.0.0.1:8005/ws` |
 | Auth Cookies | `httponly`, `samesite=lax` | `httponly`, `samesite=lax`, **`secure`** |
-| CORS Origins | `http://` variants only | `http://` + `https://` variants |
+| CORS Origins | `http://` + `https://` on localhost and RFC 1918 hosts (one static regex, see [CORS Configuration](#cors-configuration)) | Unchanged |
 | Security Headers | Standard set | Standard set + **HSTS** (`max-age=31536000`) |
 | Frontend Proxy | `http://127.0.0.1:8001` | `http://127.0.0.1:8005` (internal plain channel) |
 
@@ -358,15 +358,15 @@ Implementation: `vaf/network/ssl_utils.py`
 
 ## CORS Configuration
 
-CORS origins are dynamically built based on the current mode:
+CORS uses one static origin regex, `_CORS_ORIGIN_REGEX`, passed to FastAPI's `CORSMiddleware` as `allow_origin_regex`. It is not rebuilt per mode: the same rule applies in localhost, network and TLS mode. An origin is allowed when it matches:
 
-- **Localhost mode**: `http://localhost:3000-3011` and `http://127.0.0.1:3000-3011`
-- **Network mode**: Adds all detected local network IPs (e.g. `http://192.168.1.100:3000`)
-- **TLS mode**: Adds `https://` variants of all allowed origins
+- **Scheme**: `http://` or `https://`
+- **Host**: `localhost`, `127.0.0.1`, or any RFC 1918 private address (`10.x.x.x`, `172.16.x.x`-`172.31.x.x`, `192.168.x.x`)
+- **Port**: any, or none
 
-This ensures that browsers on network devices can make credentialed requests to the API without CORS errors.
+The middleware is registered with `allow_credentials=True`, `allow_methods=["*"]` and `allow_headers=["*"]`, so browsers on network devices can make credentialed requests to the API without CORS errors.
 
-Implementation: `_build_cors_origins()` in `vaf/core/web_server.py`
+Implementation: `_CORS_ORIGIN_REGEX` and the `CORSMiddleware` registration in `vaf/core/web_server.py`
 
 ---
 

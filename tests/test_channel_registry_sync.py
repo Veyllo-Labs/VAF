@@ -172,6 +172,7 @@ _RESTRICTED_TOOLS = (
     ("vaf.tools.timer", "SetTimerTool"),
     ("vaf.tools.host_bash", "HostBashTool"),
     ("vaf.tools.python_exec", "PythonExecTool"),
+    ("vaf.tools.ssh", "SshTool"),
 )
 
 

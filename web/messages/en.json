@@ -2435,6 +2435,21 @@
     "failed": "That did not work.",
     "delete": "Delete"
   },
+  "ssh": {
+    "title": "SSH to your servers",
+    "intro": "The agent logs in to your servers with this account's own key, never with the SSH setup of this computer. The first connection to a server always asks you.",
+    "unavailable": "Not available on this computer: {reason}",
+    "publicKey": "Your agent's public key",
+    "copy": "Copy",
+    "copied": "Copied.",
+    "noKey": "No key yet. It is created at the first connection, or now.",
+    "createKey": "Create key",
+    "keyHint": "Put it into the server's ~/.ssh/authorized_keys or your hoster's panel, or let the agent install it once with the server password.",
+    "servers": "Servers you confirmed",
+    "noServers": "None yet.",
+    "forget": "Remove; the next connection asks again",
+    "failed": "That did not work."
+  },
   "inbox": {
     "title": "Inbox",
     "subtitle": "{waits} waiting for an answer · {unread} unread",

@@ -31,6 +31,7 @@ import SkillsEditor from './settings/SkillsEditor';
 import UpdateRepairModal from './settings/UpdateRepairModal';
 import LanguagePicker from './settings/LanguagePicker';
 import SecretsSection from './settings/SecretsSection';
+import SshSection from './settings/SshSection';
 import { PickerSelect } from '@/components/ui/PickerDialog';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { groupToolsIntoBundles, bundleColor, bundleLabel, bundleIconKey } from '@/lib/toolBundles';
@@ -345,15 +346,17 @@ const WW_DESTRUCTIVE_RE = /(^|_)(delete|remove|drop|clear|reset|uninstall|kill|d
 const WW_READABLE_RE = /(^|_)(list|read|get|search|view|show|fetch|find|query|describe|status|info|count)(_|$)/i;
 
 /** Resolve a preset to concrete tool names + workflow ids from the live lists. Returns null for 'custom'
- *  (the caller keeps the manual selection). 'full' selects literally everything. */
+ *  (the caller keeps the manual selection). 'full' selects literally everything. A tool that
+ *  declares `account_opt_in` (e.g. `ssh`) is granted only by name, so 'standard' and 'readonly'
+ *  leave it out; 'full' and a custom selection can grant it. */
 function resolveAccessPreset(
     preset: AccessPreset,
-    tools: { name: string }[],
+    tools: { name: string; account_opt_in?: boolean }[],
     workflows: { id: string }[],
 ): { tools: string[]; workflows: string[] } | null {
     if (preset === 'full') return { tools: tools.map(t => t.name), workflows: workflows.map(w => w.id) };
-    if (preset === 'readonly') return { tools: tools.filter(t => WW_READABLE_RE.test(t.name) && !WW_DESTRUCTIVE_RE.test(t.name)).map(t => t.name), workflows: [] };
-    if (preset === 'standard') return { tools: tools.filter(t => !WW_DESTRUCTIVE_RE.test(t.name)).map(t => t.name), workflows: workflows.map(w => w.id) };
+    if (preset === 'readonly') return { tools: tools.filter(t => !t.account_opt_in && WW_READABLE_RE.test(t.name) && !WW_DESTRUCTIVE_RE.test(t.name)).map(t => t.name), workflows: [] };
+    if (preset === 'standard') return { tools: tools.filter(t => !t.account_opt_in && !WW_DESTRUCTIVE_RE.test(t.name)).map(t => t.name), workflows: workflows.map(w => w.id) };
     return null;
 }
 
@@ -4612,6 +4615,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {/* The person's own credentials for their agent's commands: per person,
                             like the connections above it, so not admin-only. */}
                         {activeTab === 'connections' && <SecretsSection />}
+                        {activeTab === 'connections' && <SshSection />}
 
                         {activeTab === 'local_network' && currentUser?.role === 'admin' && (
                             <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">

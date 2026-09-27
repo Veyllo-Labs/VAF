@@ -185,6 +185,7 @@ reason to skip the backup - losing the keys is the unrecoverable direction.
 | Credentials (mail, cloud, API keys, a person's credentials for commands in `user_secrets.enc`) | `<data_dir>/*.enc` | Envelope (unchanged) |
 | User profile cache | `~/.vaf/user_profile_cache/` | AES-256-GCM (unchanged) |
 | Word suggestions learned from what a person types | `~/.vaf/autosuggest.json` (machine owner), `~/.vaf/autosuggest/<scope>.json` | AES-256-GCM; a plaintext corpus from before opens and is encrypted on its next write |
+| An account's SSH key (`vaf/core/ssh.py`) | `~/.vaf/ssh/<account>/id_ed25519` | OpenSSH's own key encryption (bcrypt KDF, 64 rounds); the passphrase is in `user_secrets.enc` (envelope) under the namespace `ssh`, and reaches OpenSSH only through its prompt, never a file or a command line |
 
 File format: `VAFENC1:` ‖ 12-byte nonce ‖ ciphertext. A file WITHOUT that prefix
 is plaintext and is read as-is for as long as the store still tolerates
@@ -194,6 +195,11 @@ existed keep opening.
 ## What is deliberately NOT encrypted
 
 Named, not hidden - each of these is a decision with a reason:
+
+- **An account's SSH `known_hosts`** (`~/.vaf/ssh/<account>/known_hosts`, 0600 in a
+  0700 folder). OpenSSH reads it as a file on every connection, and it holds server names
+  and their PUBLIC keys, no secret. Its public key (`id_ed25519.pub`) is plaintext for the
+  same reason: it is meant to be handed out.
 
 - **Embeddings** (`memories.embedding`, `chunks.embedding`). pgvector needs
   plaintext vectors to search; the codebase's own comment calls them

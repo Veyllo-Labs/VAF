@@ -224,6 +224,20 @@ def resolve_tool_contract(tool_name: str, tool: Any | None) -> ToolContract:
     )
 
 
+def tool_list_entry(name: str, tool: Any, *,
+                    default_description: str = "No description") -> dict:
+    """How a tool appears in a tool LIST (the web's `tools_list`, the account pickers): name,
+    description, bundle, and `account_opt_in` - whether a regular account must be granted it
+    by name, so a preset of "everything" leaves it out. One projection: the web server built
+    this dict by hand in five places, so a new field reached some lists and not others."""
+    return {
+        "name": name,
+        "description": getattr(tool, "description", default_description),
+        "category": tool_category(name, tool),
+        "account_opt_in": bool(getattr(tool, "account_opt_in", False)),
+    }
+
+
 def tool_category(tool_name: str, tool: Any | None) -> str:
     """
     Which bundle does this tool belong to in a human-facing list?

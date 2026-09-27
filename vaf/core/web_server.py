@@ -1112,6 +1112,16 @@ except ImportError as e:
 except Exception as e:
     log("WebServer", f"Failed to mount secrets routes: {e}")
 
+# Mount the SSH routes (the caller's own SSH key and confirmed servers; nothing secret)
+try:
+    from vaf.api.ssh_routes import router as ssh_router
+    app.include_router(ssh_router)
+    log("WebServer", "SSH routes mounted at /api/ssh")
+except ImportError as e:
+    log("WebServer", f"SSH routes not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount SSH routes: {e}")
+
 # Mount the MCP sign-in routes (each account signs in to an MCP server on its own; mcp_oauth.py)
 try:
     from vaf.api.mcp_routes import router as mcp_router
@@ -1393,7 +1403,7 @@ async def _broadcast_tools_update(manager) -> None:
             get_tool_manifest_entry,
         )
 
-        from vaf.core.tool_contract import tool_category
+        from vaf.core.tool_contract import tool_list_entry
 
         agent          = manager.agent_instance
         all_custom     = set(get_all_custom_tool_names())
@@ -1422,9 +1432,7 @@ async def _broadcast_tools_update(manager) -> None:
                         except Exception:
                             continue          # fail closed, like the funnel
                         entry = {
-                            "name":        name,
-                            "description": getattr(tool, "description", ""),
-                            "category":    tool_category(name, tool),
+                            **tool_list_entry(name, tool, default_description=""),
                             "is_custom":   is_custom,
                             "can_manage":  _is_admin,
                         }
@@ -1494,7 +1502,7 @@ def _scan_tool_modules() -> List[dict]:
         import importlib
         import inspect
         from vaf.tools.base import BaseTool
-        from vaf.core.tool_contract import tool_category
+        from vaf.core.tool_contract import tool_list_entry
         import vaf.tools
         
         tools = []
@@ -1508,11 +1516,8 @@ def _scan_tool_modules() -> List[dict]:
                 module = importlib.import_module(f"vaf.tools.{name}")
                 for _, obj in inspect.getmembers(module):
                     if inspect.isclass(obj) and issubclass(obj, BaseTool) and obj is not BaseTool:
-                        tools.append({
-                            "name": getattr(obj, "name", name),
-                            "description": getattr(obj, "description", "Python tool"),
-                            "category": tool_category(getattr(obj, "name", name), obj)
-                        })
+                        tools.append(tool_list_entry(getattr(obj, "name", name), obj,
+                                                     default_description="Python tool"))
             except Exception:
                 # Fallback to module name if import fails
                 tools.append({
@@ -4445,7 +4450,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         })
         # Send tools list (cached or live) so UI has correct count
         try:
-            from vaf.core.tool_contract import tool_category
+            from vaf.core.tool_contract import tool_list_entry
             agent = manager.agent_instance
             if agent and hasattr(agent, "tools"):
                 # The first list a client ever sees. It had NO filter at all, so a
@@ -4460,15 +4465,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         return account_allows_tool(_name, _oc_scope, _oc_role, tool=_tool)
                     except Exception:
                         return False
-                tools_list = [
-                    {
-                        "name": name,
-                        "description": getattr(tool, "description", "No description"),
-                        "category": tool_category(name, tool)
-                    }
-                    for name, tool in agent.tools.items()
-                    if _oc_allows(name, tool)
-                ]
+                tools_list = [tool_list_entry(name, tool)
+                              for name, tool in agent.tools.items()
+                              if _oc_allows(name, tool)]
             elif manager.tools_cache:
                 tools_list = manager.tools_cache
             else:
@@ -6625,7 +6624,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                         all_custom_names   = set(get_all_custom_tool_names())
                         visible_custom     = set(get_visible_tool_names_for_user(_gt_filter_scope))
-                        from vaf.core.tool_contract import tool_category
+                        from vaf.core.tool_contract import tool_list_entry
 
                         agent = manager.agent_instance
                         if agent and hasattr(agent, "tools"):
@@ -6645,9 +6644,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 if not _gt_account_allows(name, tool):
                                     continue
                                 entry = {
-                                    "name":        name,
-                                    "description": getattr(tool, "description", "No description"),
-                                    "category":    tool_category(name, tool),
+                                    **tool_list_entry(name, tool),
                                     # Frontend uses these two flags to render management controls
                                     "is_custom":   is_custom,
                                     "can_manage":  _gt_is_admin,

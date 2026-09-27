@@ -74,6 +74,40 @@ Settings route never passes through the model at all. Rules and boundaries:
 `vaf/core/user_secrets.py`, `vaf/core/forget_secrets.py`; isolation:
 [USER_ISOLATION.md](../security/USER_ISOLATION.md).
 
+### SSH to your servers
+
+The agent can work on another machine - update a server, set one up, copy a file to it - with
+the `ssh` tool (`vaf/tools/ssh.py`, built on `vaf/core/ssh.py` and the system's own OpenSSH
+client). The person says "my server is tester@203.0.113.7, the password is ..."; the agent
+stores the password with `store_credential` and passes only its NAME (`login_credential`).
+
+- **Every account has its own identity.** A key of its own (ed25519, encrypted by OpenSSH with
+  a passphrase that lives in the account's credential store, never in a file or a command
+  line) and its own list of servers, under `~/.vaf/ssh/<account>/` (owner-only, and closed to the file tools). The
+  machine owner's `~/.ssh`, its config and its ssh-agent are never used, and `ssh`, `scp` and
+  `sftp` in `host_bash` are refused with a pointer to this tool.
+- **The first connection is asked, a changed key is refused.** The first call to a server
+  this account has not confirmed is always put to the person (also under "always"), with the
+  server and, afterwards, its fingerprint; a workflow step cannot make it. A server that
+  later shows a different key is refused until the person removes it.
+- **Passwords never travel in the command.** The login password (or the key's passphrase) is
+  handed to OpenSSH's prompt by a small askpass helper from the environment of that one call,
+  and a call never carries both. `as_root` runs the command through `sudo`, with the sudo
+  password read by sudo alone (`sudo_credential`, default `login_credential`). Stored values are
+  removed from everything the tool returns.
+- **Once the key is installed, no password is needed.** `install_key` adds the account's
+  public key to the server's `authorized_keys` once; a hoster's panel usually has a field for
+  it as well. **Settings, Connections, SSH** (and `vaf ssh key`) show the public key;
+  `vaf ssh hosts` and `vaf ssh forget HOST` list and remove confirmed servers, as the
+  settings section does.
+- **Confirmed in the chat, like `host_bash`.** A trusted folder does not silence it (a server
+  is in no folder), and "always" stores only the tool. Not over Telegram, WhatsApp or
+  Discord. A regular account gets it only when its tool allowlist names it.
+- **Named boundaries.** The first connection trusts the key the server shows (compare the
+  fingerprint with your hoster's panel if you can). Not on Windows yet. No background runs yet;
+  a long update gets up to 600 seconds per call. An account that also has `host_bash` can
+  read files on this computer, the key folder included.
+
 ### Developer
 
 | Platform | Status | Description |

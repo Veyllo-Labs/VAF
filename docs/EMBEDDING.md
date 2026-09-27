@@ -948,6 +948,16 @@ from the model: `host_bash` and `python_exec` hand a command exactly the
 engine-internal like the channel credentials and not on the facade, because
 VAF's own host tools are its only measured consumers.
 
+**A shell on another machine** is VAF's `ssh` tool (`vaf/core/ssh.py`): each
+account's own OpenSSH key and list of servers, the password handed to OpenSSH's
+prompt from the environment of one call, the first connection to a server always
+put to the person. It is built from the contract above and nothing else - a
+dangerous tool restricted on channels, `trusted_dir_grants = False`,
+`ask_reason`, `accepts_call_confirmation`, `account_opt_in` - so the same
+declarations give a tool of yours the same treatment. NAMED BOUNDARY: `vaf.core.ssh`
+is engine-internal, not on the facade; the tool, `vaf ssh` and the settings route
+are its only callers.
+
 `self.log(message)` is the supported way for a tool to write a diagnostic
 line. It appends to `tools_<date>.log` in the VAF log directory, filling in
 your tool's name and the current session id, and it inherits everything the

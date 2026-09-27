@@ -83,6 +83,11 @@ _WRAPPER_LEADING_ARGUMENT = frozenset({"timeout"})     # `timeout 5 cmd`: 5 is t
 
 # Executables that run a command they are GIVEN AS TEXT; the text is classified too.
 _COMMAND_STRING_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+# Logging in to another machine with THIS computer's OpenSSH setup: its owner's ~/.ssh, its
+# config and its agent, for whichever account runs the command, and a password prompt that
+# lands on a terminal nobody sees. The host lane refuses it and points at the ssh tool, which
+# keeps each account's own key and servers (vaf/core/ssh.py). `git` over ssh is not this.
+_REMOTE_LOGINS = frozenset({"ssh", "scp", "sftp"})
 # ssh's single-letter options that take a value (ssh(1) synopsis).
 _SSH_VALUE_LETTERS = frozenset("BbcDEeFIiJLlmOoPpQRSWw")
 # How deep `bash -c "sh -c '...'"` may nest before the command is refused as unreadable.
@@ -116,12 +121,15 @@ CATEGORY_REASONS = {
     "opaque_command": "builds the executable from a command substitution, so the "
                       "text being approved is not the text that will run",
     "nested_too_deep": "nests commands inside commands deeper than anyone can review",
+    "remote_login": "logs in to another machine with this computer's own SSH setup; use the "
+                    "ssh tool, which keeps each account's key and servers apart and answers "
+                    "the password prompt",
 }
 
 # What each profile refuses outright. Everything else in CATEGORY_REASONS is a note.
 _BLOCKING = {
     "host": ("fork_bomb", "device_write", "destructive_removal", "pipe_to_shell",
-             "opaque_command", "nested_too_deep"),
+             "opaque_command", "nested_too_deep", "remote_login"),
     # The jail has no network and its workspace is disposable; only what reaches the
     # machine or the jail root is refused.
     "jailed": ("fork_bomb", "device_write", "destructive_removal", "opaque_command",
@@ -443,6 +451,9 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0) ->
             target.extend(c for c in sub.categories if c not in target)
             if sub.blocked and not nested_refusal:
                 nested_refusal = sub.reason
+
+        if exe in _REMOTE_LOGINS and "remote_login" not in cats:
+            cats.append("remote_login")
 
         if exe in _NETWORK_FETCHERS:
             pipeline_fetch = True

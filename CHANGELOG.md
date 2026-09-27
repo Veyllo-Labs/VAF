@@ -13,6 +13,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **Your agent can work on your servers over SSH.** Tell it "my server is user@host, the
+  password is ..." and it can update the server, set it up, or copy a file to or from it. The
+  password is stored first and only its name is used, so it appears in no command, no result
+  and no log. Each account has its own SSH key, created on first use and protected by a
+  passphrase only VAF knows, and its own list of servers; your computer's own SSH setup is
+  never used. The first connection to a server always asks you and names the server's
+  fingerprint, and a server that later shows a different key is refused. Once the agent has
+  put its key on the server, no password is needed any more. Commands run as root through
+  `sudo` when asked. The public key and your confirmed servers are in Settings, Connections,
+  SSH, and in `vaf ssh key`, `vaf ssh hosts` and `vaf ssh forget`. Every call is confirmed in
+  the chat, it does not work over Telegram, WhatsApp or Discord, and regular accounts get it
+  only when an admin enables it for them. Not available on Windows yet.
+
 - **Every account can sign in to an MCP server with its own access.** Many hosted MCP
   servers hold your own data, a workspace, a mailbox, a tracker, and want you to sign in
   rather than take one key for the whole installation. An admin now sets such a server to

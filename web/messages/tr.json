@@ -2435,6 +2435,21 @@
     "failed": "Bu işe yaramadı.",
     "delete": "Sil"
   },
+  "ssh": {
+    "title": "Sunucularına SSH",
+    "intro": "Ajan, sunucularına bu bilgisayarın SSH ayarlarıyla değil, bu hesabın kendi anahtarıyla bağlanır. Bir sunucuya ilk bağlantıda sana her zaman sorulur.",
+    "unavailable": "Bu bilgisayarda kullanılamıyor: {reason}",
+    "publicKey": "Ajanının açık anahtarı",
+    "copy": "Kopyala",
+    "copied": "Kopyalandı.",
+    "noKey": "Henüz anahtar yok. İlk bağlantıda ya da şimdi oluşturulur.",
+    "createKey": "Anahtar oluştur",
+    "keyHint": "Onu sunucudaki ~/.ssh/authorized_keys dosyasına ya da barındırma panelindeki alana ekle veya ajanın sunucu parolasıyla bir kez kurmasına izin ver.",
+    "servers": "Onayladığın sunucular",
+    "noServers": "Henüz yok.",
+    "forget": "Kaldır; sonraki bağlantı yine sorar",
+    "failed": "Bu işe yaramadı."
+  },
   "inbox": {
     "title": "Gelen kutusu",
     "subtitle": "{waits} yanıt bekliyor · {unread} okunmamış",

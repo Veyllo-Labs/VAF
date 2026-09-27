@@ -347,6 +347,33 @@ block and, for workflow steps, the application's authorizer that decide. The con
 pinned in `tests/test_host_bash.py`, `tests/test_command_policy.py` and
 `tests/test_coder_dispatch_gate.py`.
 
+### `ssh` - a shell on another machine (`vaf/tools/ssh.py`)
+
+Runs a command on a server, or copies a file to or from it, over the system's own OpenSSH
+client (`vaf/core/ssh.py`). It never touches this computer beyond the account's own files:
+the local side of a copy is under the account's write jail (`file_access = "write"`), and the
+command line is argv with the remote command after `--`, so a server name cannot smuggle an
+OpenSSH option (measured: `ssh -G -F none localhost -oProxyCommand=echo` takes one even
+after the host). The controls:
+
+1. **Confirmed in the chat** (`dangerous`), and a trusted folder does not silence it
+   (`trusted_dir_grants = False`: a server is in no folder).
+2. **The first connection to a server is always asked** (`ask_reason`), also under "always"
+   and the admin's hands-off switch, with only "this time" and "cancel" on offer. Where
+   nobody is asked (a workflow step) it is refused (`accepts_call_confirmation`), so an
+   unattended run reaches only servers a person confirmed. A server that later shows a
+   different key is refused (`StrictHostKeyChecking=accept-new` on the account's own list).
+3. **Never over a messaging channel** (dangerous and restricted with `"channel"`, see 3 in
+   the `host_bash` section), and **a regular account only when its allowlist names it**
+   (`account_opt_in`).
+4. **The remote command is classified** with the `remote` profile: the catastrophic core is
+   refused, an installer piped into a shell is named in the dialog.
+5. **Each account's own identity**: key, passphrase and servers are the account's, never the
+   machine owner's `~/.ssh`, config or ssh-agent ([USER_ISOLATION.md](USER_ISOLATION.md)).
+   For the same reason `host_bash` refuses `ssh`, `scp` and `sftp` and points here.
+
+Pinned in `tests/test_ssh.py` (a fake `ssh` on PATH and the real `ssh-keygen`).
+
 > **Note on `channel_tools_unrestricted`:** this admin setting (default ON) lets channel sessions
 > use the same tools as the main agent and lifts `channel_restrictions` for tools that rely on it
 > (e.g. `browser_agent`). A tool that needs a person - `dangerous` and restricted on channels:

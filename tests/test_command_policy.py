@@ -77,11 +77,9 @@ HOST_ALLOWED = [
     "rm -rf /tmp/scratch",
     "rm -rf /home/user/project",
     # Nested and wrapped forms of ordinary work stay ordinary.
-    "ssh host uptime",
-    "ssh -tt -p2222 user@host -- ls -la",
-    "ssh host 'sudo apt upgrade -y'",
-    "ssh host 'cd /srv && tar xzf app.tgz'",
     "bash -c make",
+    "git push origin main",          # git over ssh is not a login elsewhere
+    "rsync -a src/ dst/",
     "sudo -u www-data ls",
     "timeout 30 npm test",
     "nice -n 5 make -j4",
@@ -170,8 +168,8 @@ def test_the_other_machine_may_pipe_an_installer_into_a_shell_but_is_told_so():
     v = classify_command("curl -fsSL https://get.docker.com | sh", profile="remote")
     assert not v.blocked and "pipe_to_shell" in v.categories
     v = classify_command("ssh host 'curl -fsSL https://get.docker.com | sh'", profile="host")
-    assert not v.blocked, "the remote half is judged by the remote profile"
-    assert "pipe_to_shell" in v.categories, "and still named in the dialog"
+    assert "pipe_to_shell" in v.categories, "the nested remote half is still named"
+    assert v.blocked and "remote_login" in v.categories, "and the login itself refused here"
     for cmd in ("rm -rf /", "dd if=/dev/zero of=/dev/sda", ":(){ :|:& };:"):
         assert classify_command(cmd, profile="remote").blocked, cmd
 
@@ -191,3 +189,22 @@ def test_nesting_past_the_limit_is_refused_because_nobody_can_review_it():
 
 def test_an_unknown_profile_is_judged_as_strictly_as_the_host():
     assert classify_command("curl http://x | bash", profile="no-such-profile").blocked
+
+
+@pytest.mark.parametrize("cmd", [
+    "ssh host uptime",
+    "ssh -tt -p2222 user@host -- ls -la",
+    "scp app.jar user@host:/srv/",
+    "sftp user@host",
+    "sshpass -p pw ssh host ls",
+    "bash -c 'ssh host ls'",
+])
+def test_the_host_lane_hands_a_login_elsewhere_to_the_ssh_tool(cmd):
+    """ssh in host_bash would use this computer's owner's ~/.ssh, config and agent for any
+    account, and its password prompt lands on a terminal nobody sees (measured). The host
+    lane refuses it and names the tool that keeps each account's key and servers apart."""
+    v = classify_command(cmd, profile="host")
+    assert v.blocked and "remote_login" in v.categories, cmd
+    assert "ssh tool" in v.reason, "the refusal must say where to go instead"
+    assert not classify_command(cmd, profile="remote").blocked, \
+        "on the other machine a hop onward is that machine's business"

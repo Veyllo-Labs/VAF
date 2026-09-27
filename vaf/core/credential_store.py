@@ -67,6 +67,10 @@ _KEY_PROFILES = {
     # A person's own credentials for commands (vaf/core/user_secrets.py). No legacy data, so
     # the plainest shape: `secret:<scope>:<name>`, the local admin as `secret:<name>`.
     "secret":    (False,             None,             None),
+    # An account's internal values that are no command credential, e.g. its SSH key's
+    # passphrase (vaf/core/ssh.py): `ssh:<scope>:<name>`, the local admin as `ssh:<name>`.
+    # A namespace of its own keeps them out of the credentials list and out of env_for.
+    "ssh":       (False,             None,             None),
 }
 
 

@@ -2435,6 +2435,21 @@
     "failed": "처리하지 못했어요.",
     "delete": "삭제"
   },
+  "ssh": {
+    "title": "서버에 SSH 연결",
+    "intro": "에이전트는 이 컴퓨터의 SSH 설정이 아니라 이 계정 전용 키로 서버에 로그인해요. 서버에 처음 연결할 때는 항상 먼저 물어봐요.",
+    "unavailable": "이 컴퓨터에서는 사용할 수 없어요: {reason}",
+    "publicKey": "에이전트의 공개 키",
+    "copy": "복사",
+    "copied": "복사했어요.",
+    "noKey": "아직 키가 없어요. 첫 연결 때 만들어지거나 지금 만들 수 있어요.",
+    "createKey": "키 만들기",
+    "keyHint": "서버의 ~/.ssh/authorized_keys나 호스팅 관리 화면에 등록하거나, 서버 비밀번호로 에이전트가 한 번 설치하게 하세요.",
+    "servers": "확인한 서버",
+    "noServers": "아직 없어요.",
+    "forget": "삭제 (다음 연결 때 다시 물어봐요)",
+    "failed": "실패했어요."
+  },
   "inbox": {
     "title": "받은 편지함",
     "subtitle": "{waits}개 답장 대기 중 · {unread}개 읽지 않음",

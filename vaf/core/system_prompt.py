@@ -1468,7 +1468,10 @@ Then use the results to answer. Do NOT guess from your training data!
         # that can hand them to a command is loaded. Without the names the model asks for the
         # password in the chat, which is exactly where it must not go.
         _secrets_note = ""
-        if self.agent and ({"host_bash", "python_exec", "store_credential"} & set(tool_names)):
+        # A list, deliberately: each of these tools takes a stored credential its own way
+        # (prompt_note says how), so a declared flag would still need a sentence per tool.
+        if self.agent and ({"host_bash", "python_exec", "store_credential", "ssh"}
+                           & set(tool_names)):
             try:
                 from vaf.core.user_secrets import prompt_note
                 _secrets_note = prompt_note(

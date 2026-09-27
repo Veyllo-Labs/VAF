@@ -2435,6 +2435,21 @@
     "failed": "Das hat nicht geklappt.",
     "delete": "Löschen"
   },
+  "ssh": {
+    "title": "SSH zu deinen Servern",
+    "intro": "Der Agent meldet sich mit dem eigenen Schlüssel dieses Kontos bei deinen Servern an, nie mit der SSH-Einrichtung dieses Computers. Die erste Verbindung zu einem Server fragt dich immer.",
+    "unavailable": "Auf diesem Computer nicht verfügbar: {reason}",
+    "publicKey": "Öffentlicher Schlüssel deines Agenten",
+    "copy": "Kopieren",
+    "copied": "Kopiert.",
+    "noKey": "Noch kein Schlüssel. Er entsteht bei der ersten Verbindung, oder jetzt.",
+    "createKey": "Schlüssel anlegen",
+    "keyHint": "Trag ihn beim Server in ~/.ssh/authorized_keys oder im Panel deines Hosters ein, oder lass den Agenten ihn einmal mit dem Server-Passwort einrichten.",
+    "servers": "Von dir bestätigte Server",
+    "noServers": "Noch keine.",
+    "forget": "Entfernen; die nächste Verbindung fragt wieder",
+    "failed": "Das hat nicht geklappt."
+  },
   "inbox": {
     "title": "Posteingang",
     "subtitle": "{waits} warten auf Antwort · {unread} ungelesen",

@@ -36,8 +36,12 @@ NAMED BOUNDARIES:
   credential inside a container is a credential the container's code can keep.
 - A background command's log file (owner-only, per chat) holds the raw output; the scrub runs when
   the log is read into the conversation, because the command writes the file itself.
-- Engine-internal like `channel_secrets`, not on the facade: the three consumers are VAF's own
-  host tools, and no third-party tool has been measured to need it.
+- Engine-internal like `channel_secrets`, not on the facade: the consumers are VAF's own host
+  tools (host_bash, python_exec, store_credential, ssh), and no third-party tool has been
+  measured to need it.
+- The same store keeps an account's INTERNAL values under namespaces of their own
+  (`account_value`): the SSH key's passphrase (vaf/core/ssh.py). They are never listed by
+  `names`, never handed to a command by `env_for`, and never shown.
 """
 from __future__ import annotations
 
@@ -143,6 +147,29 @@ def delete_secret(name, *, user_scope_id=None, username=None) -> bool:
     return bool(found)
 
 
+def _account_key(namespace: str, name: str, user_scope_id) -> str:
+    if namespace == "secret":
+        raise ValueError("the 'secret' namespace holds command credentials; use set_secret")
+    from vaf.core.credential_store import build_credential_key
+    return build_credential_key(name, namespace=namespace, user_scope_id=user_scope_id)
+
+
+def account_value(namespace: str, name: str, *, user_scope_id=None) -> Optional[str]:
+    """An internal value of this account (namespace other than "secret"), or None when it was
+    never set. Keyed by the scope alone: the caller derives the account, so one derivation
+    addresses both its files and this value (vaf/core/ssh.py). Never listed, never handed to a
+    command. A store that cannot be READ raises, unlike `names`: "not set" and "not readable"
+    lead to different advice, and the caller has to be able to tell them apart."""
+    return _store().load().get(_account_key(namespace, name, user_scope_id))
+
+
+def set_account_value(namespace: str, name: str, value: str, *, user_scope_id=None) -> None:
+    key = _account_key(namespace, name, user_scope_id)
+    if not str(value or "").strip():
+        raise ValueError("an empty value is not stored")
+    _store().update(lambda blob: blob.__setitem__(key, str(value)), strict=True)
+
+
 def env_for(text, *, user_scope_id=None, username=None) -> Dict[str, str]:
     """The environment a command needs: exactly the `VAF_SECRET_<NAME>` it names and this
     person has stored. A name the person has not stored is left out, so the command sees an
@@ -178,8 +205,8 @@ def prompt_note(*, user_scope_id=None, username=None, can_store: bool = False) -
         listed = ", ".join(f"${ENV_PREFIX}{n}" for n in stored)
         parts.append("**Stored credentials:** the user keeps these for your commands: " + listed
                      + ". Use them by name - `$VAF_SECRET_<NAME>` in host_bash, "
-                     "`os.environ[\"VAF_SECRET_<NAME>\"]` in python_exec - and never print or "
-                     "repeat the value.")
+                     "`os.environ[\"VAF_SECRET_<NAME>\"]` in python_exec, the bare NAME as "
+                     "login_credential in ssh - and never print or repeat the value.")
     if can_store:
         parts.append("**A password, token or login the user gives you:** store each value with "
                      "store_credential (a NAME like FTP_PASS) as your FIRST step - before a plan, "

@@ -1237,6 +1237,12 @@ def reload_all_api_backends(*, force: bool = False) -> int:
 #: The send tools that reach the OWNER from a Front Office turn (the back-channel).
 _OWNER_SEND_TOOLS = CHAT_SEND_TOOLS + ("send_to_user",)
 
+
+# The router forces the ssh tool for a message that names another machine the way people
+# do: ssh itself, a VPS, or an IPv4 address (module level: _route_tools imports `re` locally).
+_SSH_ROUTE_RE = re.compile(r"\b(?:ssh|sftp|scp|vps|putty)\b|\b\d{1,3}(?:\.\d{1,3}){3}\b")
+
+
 class Agent:
     """The VAF engine: one instance = one conversation over one LLM backend.
 
@@ -8287,6 +8293,11 @@ class Agent:
             "api-key", "apikey", "access token", "zugangstoken", "logindaten", "login-daten",
         )):
             forced_tools.add("store_credential")
+
+        # Another machine, named the way people name one: ssh itself, a VPS, an IPv4 address.
+        # Deliberately not "server" alone - every Minecraft sentence says it.
+        if "ssh" in self.tools and _SSH_ROUTE_RE.search(u_lower):
+            forced_tools.add("ssh")
 
         # 1. Create a simplified list of tools
         tool_info = []

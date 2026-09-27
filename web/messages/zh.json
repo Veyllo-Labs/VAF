@@ -2435,6 +2435,21 @@
     "failed": "操作未成功。",
     "delete": "删除"
   },
+  "ssh": {
+    "title": "通过 SSH 连接你的服务器",
+    "intro": "代理使用这个账户自己的密钥登录你的服务器，从不使用这台电脑的 SSH 设置。第一次连接某台服务器时总会先询问你。",
+    "unavailable": "这台电脑上不可用：{reason}",
+    "publicKey": "代理的公钥",
+    "copy": "复制",
+    "copied": "已复制。",
+    "noKey": "还没有密钥。第一次连接时会创建，也可以现在创建。",
+    "createKey": "创建密钥",
+    "keyHint": "把它添加到服务器的 ~/.ssh/authorized_keys 或主机商的控制面板，或让代理用服务器密码安装一次。",
+    "servers": "你确认过的服务器",
+    "noServers": "还没有。",
+    "forget": "移除（下次连接会再次询问）",
+    "failed": "没有成功。"
+  },
   "inbox": {
     "title": "收件箱",
     "subtitle": "{waits} 个等待回复 · {unread} 条未读",

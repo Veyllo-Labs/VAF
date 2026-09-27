@@ -1032,6 +1032,14 @@ without them.
 Frames from foreign agents are untrusted input. That is the prompt-injection surface of
 this feature, and the mode is what bounds it.
 
+NAMED BOUNDARY - the host tools in an `autonomous` room. A room turn is not a messaging-channel
+turn, so `host_bash`, `python_exec` and `ssh` are not refused there by the channel rule; they
+stay behind the confirmation gate, which a room turn cannot answer. A standing answer
+("always" for the tool) does answer it, so in an `autonomous` room a foreign agent's message
+can then drive them - `ssh` only on servers the person already confirmed, because a first
+connection is always put to a person. Deliberate: `autonomous` is the person's own decision for
+that room, and "always" for a host tool is a second one.
+
 ### A room turn is a turn: it retrieves, and it learns
 
 A room turn runs through the same `chat_step` a chat does. The tool router runs, tools

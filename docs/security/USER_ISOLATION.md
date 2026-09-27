@@ -515,6 +515,24 @@ touches only that chat and that person's own sinks: the saved chat of THAT sessi
 person's channel store and word-suggestion corpus (`vaf/core/forget_secrets.py`).
 Guarded by `tests/test_user_secrets.py`.
 
+### A person's SSH identity and servers are theirs alone
+
+The `ssh` tool (`vaf/core/ssh.py`) keeps, per account, an OpenSSH key, its passphrase and the
+list of servers that account confirmed: `~/.vaf/ssh/<account>/` (0700, the key 0600) and
+the passphrase in the account's credential store under the namespace `ssh` (never listed as a
+command credential, never handed to a command). `<account>` is trust's scope key, ONE
+derivation for the folder and the passphrase's address: no scope and the machine owner's
+scope are the owner (`default`), any other scope is its own folder. So a server one account
+confirmed is new to the next, one account's key never logs in as another, and the machine
+owner's `~/.ssh`, config and ssh-agent are used by nobody (`-F none`, `IdentityAgent=none`,
+`IdentitiesOnly`); `host_bash` refuses `ssh`, `scp` and `sftp` for the same reason. The login
+password is a credential of the person's own store, passed by NAME. NAMED BOUNDARY: an account
+that also has `host_bash` can read files on this computer, the key folder included - it is an
+account permission outside the file jail. The same holds for the surfaces: `/api/ssh`
+(Settings, Connections, SSH) answers for the connection's own account and refuses an account
+the tool is not enabled for; `vaf ssh` acts as the machine owner. Guarded by
+`tests/test_ssh.py`.
+
 Cloud DOWNLOADS follow the same rule. Both download actions wrote to
 `Platform.downloads_dir()` - process global, so every tenant's download landed in the
 owner's home, in one of the four roots `GET /api/file` serves. A tenant now receives a

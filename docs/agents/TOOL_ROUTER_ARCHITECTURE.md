@@ -124,6 +124,8 @@ graph TD
 | "mail", "inbox", "posteingang", "nachricht", "newsletter", "rechnung" | `inbox`, `find_mail`, `list_email_accounts` |
 | "draft", "entwurf", "gesendet", "abgeschickt", "verschickt", "rausgegangen", "went out" | `list_drafts` (the draft wake turn says "Draft", so a woken agent can look up the chat's other drafts) |
 | "search", "find", "news", "weather" | `web_search` |
+| "passwort", "password", "zugangsdaten", "api key", ... | `store_credential` |
+| "ssh", "sftp", "scp", "vps", "putty" (whole words), or an IPv4 address | `ssh` (deliberately not "server" alone: every Minecraft sentence says it) |
 
 ### `search_tools` - on-demand discovery tool
 

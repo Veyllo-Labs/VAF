@@ -161,17 +161,34 @@ _FANOUT_TOOLS = ("librarian_agent", "research_agent")
 _MAX_FANOUT = 4
 
 
-def _task_tools_first(tools, task_tools) -> list:
-    """The per-turn tool set in cap order: the tools chosen for this task, then the ones that
-    ride along on every turn (memory, working memory, timer, messengers, ask_user), each group
-    sorted so the cut is reproducible.
+# The tools that ride along on every routed turn, most important first: when the cap cuts
+# riders, it cuts from the end of this tuple. update_working_memory leads because the plan gate
+# refuses every write tool until a plan is stored and this is the tool that stores it; sorted
+# by name it came last and was the first one cut (measured with scripts/router_eval.py: missing
+# in 7 of 20 turns, 5 of them turns that needed a write tool). memory_update rides with
+# memory_save on purpose: the save's duplicate notice tells the model to call it. ask_user rides
+# along because a question with options comes up in the middle of a task, when the router has
+# picked tools for the task, never for asking.
+_TURN_RIDERS = (
+    "update_working_memory", "ask_user", "memory_search", "memory_save", "memory_update",
+    "update_intent", "set_timer", "update_user_identity",
+)
 
-    One sorted list put the riders in the way of the task: with three messengers connected the
-    riders alone filled the cap of 12, and a research turn lost `web_search` to
-    `update_working_memory` because "w" sorts last (measured with the default cap and the
-    default riders)."""
-    task = set(task_tools or ()) & set(tools or ())
-    return sorted(task) + sorted(set(tools or ()) - task)
+
+def _task_tools_first(tools, task_tools, riders=()) -> list:
+    """The per-turn tool set in cap order: the tools chosen for this task in the order they
+    were chosen (the router ranks its picks, most important first), then the riders in the
+    order given, then anything else sorted by name.
+
+    The order is what the cap cuts by, so it has to carry the ranking: a set sorted by name
+    cut the task's tools by their first letter, and one sorted list put the riders in the way
+    of the task (with three messengers connected the riders alone filled the cap of 12, and a
+    research turn lost `web_search` because "w" sorts last)."""
+    pool = set(tools or ())
+    task = [t for t in dict.fromkeys(task_tools or ()) if t in pool]
+    ride = [t for t in dict.fromkeys(riders or ()) if t in pool and t not in task]
+    placed = set(task) | set(ride)
+    return task + ride + sorted(pool - placed)
 
 
 def _apply_tool_cap(selected, router_max: int, pinned) -> list:
@@ -8106,13 +8123,66 @@ class Agent:
                 seen.add(name)
         return merged
     
+    def _router_history(self, exchanges: int = 3, per_message: int = 300) -> str:
+        """The last exchanges before the current message, compact, for the tool router.
+
+        One line per user message and per final assistant answer, each cut to `per_message`
+        characters, plus the tools that exchange used. A user message keeps its END: what a lane
+        or a suggestion note adds is prepended, so the person's own words are the tail. An
+        answer keeps its START, where it says what was done. Stops at the last user message,
+        which is the one being routed."""
+        hist = list(getattr(self, "history", None) or [])
+        last_user = max((i for i, m in enumerate(hist) if isinstance(m, dict)
+                         and m.get("role") == "user"), default=None)
+        if last_user is None:
+            return ""
+
+        def _text(m) -> str:
+            c = m.get("content")
+            if isinstance(c, list):
+                c = " ".join(str(p.get("text", "")) for p in c if isinstance(p, dict))
+            return " ".join(str(c or "").split())
+
+        turns: list = []
+        for m in hist[:last_user]:
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            if role == "user":
+                turns.append({"user": _text(m), "answer": "", "tools": []})
+            elif role == "assistant" and turns:
+                for tc in m.get("tool_calls") or []:
+                    name = ((tc or {}).get("function") or {}).get("name")
+                    if name and name not in turns[-1]["tools"]:
+                        turns[-1]["tools"].append(name)
+                text = _text(m)
+                if text:
+                    turns[-1]["answer"] = text
+        lines = []
+        for t in turns[-exchanges:]:
+            if t["user"]:
+                lines.append(f"User: {t['user'][-per_message:]}")
+            used = f" [tools used: {', '.join(t['tools'])}]" if t["tools"] else ""
+            if t["answer"] or used:
+                lines.append(f"Assistant: {t['answer'][:per_message]}{used}")
+        return "\n".join(lines)
+
     def _route_tools(self, user_input: str) -> List[str]:
-        """
-        Dynamically selects relevant tools based on user input AND context.
-        Uses a lightweight LLM call to classify intent.
+        """The tools this turn needs, most important first, chosen by one LLM call.
+
+        The router LLM reads the request, the last exchanges of the conversation
+        (`_router_history`) and every visible tool grouped by its category, and answers with a
+        ranked list. The keyword table below does not choose tools any more: its matches are
+        handed to the router as hints and are used as the answer only when the router gives
+        none (the call fails, times out, answers nothing or nothing parsable). Measured before:
+        the keywords forced 5 to 8 tools into a turn on stems inside words ("report" forced
+        the git tools, "antwort" the mail tools on a WhatsApp reply), and the router, told only
+        to list names, picked a single tool in 164 of 272 turns. Deliberate exception:
+        `store_credential` stays forced, see its match below.
         """
         if not self.tools:
             return []
+        from vaf.cli.ui import UI
             
         u_lower = user_input.lower()
         forced_tools = set()
@@ -8126,14 +8196,14 @@ class Agent:
             if intent.sub_goals:
                 context_str += f"Recent Topics: {', '.join(intent.sub_goals)}\n"
         
-        # Add Last Assistant Message (Immediate Context)
-        if len(self.history) >= 2:
-            last_msg = self.history[-2]
-            if last_msg.get('role') == 'assistant':
-                content = str(last_msg.get('content', ''))[:300].replace('\n', ' ')
-                context_str += f"Last Assistant Message: \"{content}\"\n"
+        # The conversation before this message: what "it", "him" or "the second one" refers to
+        # lives there, and the last assistant message alone often does not name the channel or
+        # the object (a reply to "Bob wrote yesterday ..." went to WhatsApp instead of mail).
+        _history_str = self._router_history()
+        if _history_str:
+            context_str += f"Recent conversation (oldest first):\n{_history_str}\n"
         
-        # Heuristic checks (Fast Path)
+        # Keyword checks. Their matches are HINTS for the router, not a choice (see docstring).
         if "weather" in u_lower or "wetter" in u_lower:
              if "web_search" in self.tools: forced_tools.add("web_search")
         
@@ -8288,36 +8358,73 @@ class Agent:
 
         # A credential handed over in the chat: the store tool must be callable in that very turn,
         # or the model uses the value in place and it stays in the chat for good.
+        # Forced, not a hint, whatever the router answers.
+        always_forced: list = []
         if "store_credential" in self.tools and any(kw in u_lower for kw in (
             "passwort", "password", "kennwort", "zugangsdaten", "credential", "api key",
             "api-key", "apikey", "access token", "zugangstoken", "logindaten", "login-daten",
         )):
-            forced_tools.add("store_credential")
+            always_forced.append("store_credential")
+
+        def _keyword_answer(reason: str) -> List[str]:
+            # The router gave no usable answer: the keyword matches are the choice now.
+            chosen = list(always_forced) + [t for t in sorted(forced_tools) if t not in always_forced]
+            if chosen:
+                UI.event("Router", f"Script-based ({reason}): {', '.join(chosen)}", style="dim")
+            else:
+                UI.event("Router", f"No tools selected ({reason})", style="dim")
+            return chosen
 
         # Another machine, named the way people name one: ssh itself, a VPS, an IPv4 address.
         # Deliberately not "server" alone - every Minecraft sentence says it.
         if "ssh" in self.tools and _SSH_ROUTE_RE.search(u_lower):
             forced_tools.add("ssh")
 
-        # 1. Create a simplified list of tools
-        tool_info = []
+        # 1. Every visible tool, grouped by its category. Soft structure only: the router may
+        # take tools from as many areas as the request needs. A hard category step first
+        # ("pick the area, then the tool") was measured as the weakest shortlist in the one
+        # study that tested it, because a missed area can never be recovered.
+        from vaf.core.tool_contract import TOOL_CATEGORIES, tool_category
+        by_category: Dict[str, list] = {}
         for name, tool_instance in self.visible_tools().items():
             description = getattr(tool_instance, 'description', 'No description available.')
-            tool_info.append(f"- {name}: {description}")
-        
-        tool_list_str = "\n".join(tool_info)
+            by_category.setdefault(tool_category(name, tool_instance), []).append(
+                f"- {name}: {description}")
+        _order = [c for c in TOOL_CATEGORIES if c in by_category and c != "general"]
+        _order += sorted(c for c in by_category if c not in TOOL_CATEGORIES)
+        _order += [c for c in ("general",) if c in by_category]
+        tool_list_str = "\n\n".join(
+            f"## {c}\n" + "\n".join(sorted(by_category[c])) for c in _order)
 
-        # 2. Build the prompt for the router WITH CONTEXT
-        # CRITICAL: Router must NEVER chat - only output tool names or nothing. No greeting, no explanation.
+        try:
+            _max_pick = max(1, int(self.config.get("router_max_tools", 12)))
+        except (TypeError, ValueError):
+            _max_pick = 12
+        _hint_line = ""
+        if forced_tools:
+            _hint_line = ("Keyword hints (simple word matching, often wrong - include a hinted "
+                          f"tool only if the request needs it): {', '.join(sorted(forced_tools))}\n")
+
+        # 2. The prompt. Recall first: the router's list is the ONLY tool set the assistant gets
+        # for this turn, so a missing tool costs more than an extra one.
+        # CRITICAL: Router must NEVER chat - only output tool names or nothing.
         tool_names_list = ", ".join(sorted(self.visible_tools().keys()))
         prompt = (
-            f"You are a tool router. Your ONLY output must be a comma-separated list of tool names from this exact list, or nothing.\n"
+            "You are a tool router. Choose the tools an assistant needs for the user's request below.\n"
+            "Select EVERY tool that could be needed to complete the request, including the steps on "
+            "the way (for example looking up a contact before sending to them, or reading a file "
+            "before changing it). Use the recent conversation to understand what the request refers "
+            "to. The tools are grouped by area; a request can need tools from several areas. A "
+            "missing tool is worse than one extra tool.\n\n"
             f"Allowed names: {tool_names_list}\n\n"
-            f"Tools with descriptions:\n{tool_list_str}\n\n"
+            f"Tools by area:\n{tool_list_str}\n\n"
             f"{context_str}"
+            f"{_hint_line}"
             f"User request: \"{user_input}\"\n\n"
-            f"CRITICAL: Reply with ONLY tool names from the list above (e.g. web_search, memory_save). No greeting, no 'How can I help', no explanation. Any other text is invalid.\n"
-            f"Tools:"
+            f"Reply with ONLY tool names from the list above, comma-separated, the most important "
+            f"first, at most {_max_pick}. If no tool is needed, reply with nothing. No greeting, "
+            "no explanation. Any other text is invalid.\n"
+            "Tools:"
         )
 
         # 3. Make a lightweight LLM call
@@ -8405,7 +8512,8 @@ class Agent:
                     try:
                         response_chunks = _fut.result(timeout=_ROUTER_TIMEOUT)
                     except _cf.TimeoutError:
-                        _timeout_msg = f"Tool Router: Timeout nach {_ROUTER_TIMEOUT}s — falle zurück auf list_tools / search_tools"
+                        _timeout_msg = (f"Tool Router: Timeout nach {_ROUTER_TIMEOUT}s - falle zurück auf "
+                                        "die Stichwort-Treffer, list_tools und search_tools")
                         UI.event("Router", _timeout_msg, style="yellow")
                         try:
                             from vaf.core.web_interface import get_web_interface as _gwi
@@ -8413,27 +8521,23 @@ class Agent:
                         except Exception:
                             pass
                         _fallback = [t for t in ("list_tools", "search_tools") if t in self.tools]
-                        return list(forced_tools) + [t for t in _fallback if t not in forced_tools]
+                        _chosen = _keyword_answer("router timeout")
+                        return _chosen + [t for t in _fallback if t not in _chosen]
                     finally:
                         _ex.shutdown(wait=False)
                     selected_tools_str = "".join(str(c) for c in response_chunks)
                 else:
                     UI.event("Router Debug", "No backend available for routing", style="yellow")
         except Exception as e:
-            # On error, log it but don't crash. Return [] to trigger safety net.
+            # On error, log it but don't crash: the keyword matches answer instead, and an empty
+            # answer triggers the safety net in _select_turn_tools.
             from vaf.cli.ui import UI
             UI.event("Router Debug", f"LLM Call Failed: {e}", style="red")
-            return []
+            return _keyword_answer("router call failed")
 
         # 4. Parse the response
         if not selected_tools_str:
-            from vaf.cli.ui import UI
-            if forced_tools:
-                UI.event("Router", f"Script-based selection: {', '.join(forced_tools)}", style="dim")
-                return list(forced_tools)
-            else:
-                UI.event("Router", "No tools selected (fallback)", style="dim")
-                return [] # Will trigger safety net in chat_step
+            return _keyword_answer("router answered nothing")
             
         import re
         # First, remove any thinking tags (e.g., <think>...</think>)
@@ -8467,31 +8571,193 @@ class Agent:
                     valid_from_llm.append(t)
                 if len(valid_from_llm) >= 20: # Safety cap
                     break
+            # In the order the text names them: the router ranks, so its prose does too.
+            valid_from_llm.sort(key=_scan_target.find)
         
         from vaf.cli.ui import UI
-        if forced_tools:
-            UI.event("Router", f"Script-based: {', '.join(forced_tools)}", style="dim")
         if valid_from_llm:
             UI.event("Router", f"LLM-based: {', '.join(valid_from_llm)}", style="dim")
-        elif tool_names and not valid_from_llm:
+            if forced_tools:
+                UI.event("Router", f"Keyword hints (not forced): {', '.join(sorted(forced_tools))}",
+                         style="dim")
+            return list(always_forced) + [t for t in valid_from_llm if t not in always_forced]
+        if tool_names:
             # Log WHAT could not be parsed. Saying only that the answer was invalid leaves the next
             # occurrence to inference - and this fires on real turns (twice on 2026-08-30, once on a
             # messenger reply). Truncated and single-lined: it is model output, not a transcript.
             _bad = " ".join((clean_str or selected_tools_str or "").split())[:200]
-            UI.event("Router", f"No tools selected (unparsable answer): {_bad!r}", style="dim")
+            UI.event("Router", f"Unparsable router answer: {_bad!r}", style="dim")
             try:
                 append_domain_log("backend", f"[ROUTER] unparsable tool answer: {_bad!r}")
             except Exception:
                 pass
-        elif not forced_tools:
-            UI.event("Router", "No tools selected", style="dim")
+        return _keyword_answer("router answer unparsable")
+
+    def _select_turn_tools(self, route_text: str, current_tokens: int, max_tokens: int) -> None:
+        """The tool set of one new turn: route, add the recent tools, the discovery tools and the
+        riders, cap, fall back to a safety net when nothing was chosen, pin what the turn's notes
+        name, and publish the result. Sets ``self._active_tools``.
+
+        One method so the chat turn and anything that measures the router (scripts/router_eval.py)
+        run the same selection, not two copies of it."""
+        from vaf.cli.ui import UI
         
-        # Final deduplication and merging with forced tools
-        combined_set = set(valid_from_llm) | set(forced_tools or [])
-        # Ensure we only return tools that actually exist
-        valid_tools = [name for name in combined_set if name in self.tools]
-        
-        return valid_tools
+        selected_tools = self._route_tools(route_text)
+
+        if selected_tools:
+            recent_tools = self._get_recent_tools()
+            if recent_tools:
+                selected_tools = self._merge_tool_lists(selected_tools, recent_tools)
+
+        # Decay AFTER merge so tools stay for the full N turns
+        self._decay_recent_tools()
+        # What the router (and the recent turns) chose for THIS task, before anything rides
+        # along: the cap below cuts the riders first (_task_tools_first).
+        _task_tools = list(selected_tools or [])
+
+        # list_tools and search_tools are ALWAYS included when we have a restricted set
+        # so the model can discover other tools on-demand (provider-agnostic Tool Search).
+        for _discovery_tool in ("list_tools", "search_tools"):
+            if selected_tools and _discovery_tool in self.tools and _discovery_tool not in selected_tools:
+                selected_tools = list(selected_tools) + [_discovery_tool]
+
+        # Memory/identity tools are ALWAYS included when we have a restricted set (no duplicates).
+        # Only skipped when Safety Net = ALL tools (would be redundant).
+        if selected_tools:
+            # Convert to set for efficient deduplication
+            tools_set = set(selected_tools)
+            
+            # The riders, in the order the cap keeps them (see _TURN_RIDERS for why each rides).
+            rider_order = list(_TURN_RIDERS)
+            for name in _TURN_RIDERS:
+                if name in self.tools:
+                    tools_set.add(name)
+            # analyze_image rides along whenever something can see: the agent looks at a
+            # screenshot or a rendered page in the middle of a task, when the router has
+            # picked tools for the task (measured in a long build session: 162 of 168 file
+            # reads were images). No setting: where no vision backend exists it stays off,
+            # because offering it would only earn a refusal.
+            if "analyze_image" in self.tools:
+                try:
+                    from vaf.core.vision_infer import vision_available
+                    if vision_available():
+                        tools_set.add("analyze_image")
+                        rider_order.append("analyze_image")
+                except Exception:
+                    pass
+            
+            # Messaging tools: only add those for which the user has the connection
+            try:
+                from vaf.core.messaging_connections import get_messaging_connections
+                conn = get_messaging_connections(
+                    username=getattr(self, "_current_username", None),
+                    user_scope_id=getattr(self, "_current_user_scope_id", None),
+                )
+                # "available" = the OWNER is reachable there; "outbound" = the agent can
+                # reach third parties there (WhatsApp linked as the agent's own number
+                # without a registered main-user number). Either earns the send tool.
+                for ch in list(conn.get("available") or []) + list(conn.get("outbound") or []):
+                    tool_name = CHANNEL_SEND_TOOLS.get(ch)
+                    if tool_name and tool_name in self.tools:
+                        tools_set.add(tool_name)
+                        rider_order.append(tool_name)
+                # Channel-agnostic delivery: pinned whenever ANY messenger is
+                # connected (it resolves the platform itself at run time).
+                if (conn.get("available") or []) and "send_to_user" in self.tools:
+                    tools_set.add("send_to_user")
+                    rider_order.append("send_to_user")
+            except Exception:
+                pass
+            
+            # Convert back to a list in cap order, never list(set): the cap below truncates
+            # whatever does not fit, and hash order made which tool got cut depend on the run.
+            # The task's own tools go first in the router's ranking, then the riders.
+            selected_tools = _task_tools_first(tools_set, _task_tools, rider_order)
+
+        # Cap the number of tools to keep the context window clean.
+        # Discovery tools are pinned and don't count against the cap, they come on top of it
+        # (_apply_tool_cap); in a thinking run the exit tools are pinned too, so the run can
+        # always end (see _THINKING_EXIT_TOOLS).
+        _router_max = int(self.config.get("router_max_tools", 12))
+        _pin_names = ("list_tools", "search_tools") + (
+            _THINKING_EXIT_TOOLS
+            + _THINKING_NODE_REQUIRED_TOOLS.get((getattr(self, "_thinking_node", "") or "").strip(), ())
+            if self._is_thinking_run() else ()
+        )
+        selected_tools = _apply_tool_cap(selected_tools, _router_max, set(_pin_names))
+
+        # SAFETY NET: If router returns empty list, fallback to sensible tools
+        # Otherwise the model gets 0 tools and hallucinates using them.
+        used_core_subset = False
+        if not selected_tools:
+            # If context is tight, use CORE_TOOLS subset to avoid HTTP 400 / overflow
+            is_small = max_tokens <= 20000
+            router_safety_threshold = 0.75 if is_small else 0.85
+            
+            if current_tokens > (max_tokens * router_safety_threshold):
+                CORE_TOOLS = [
+                    "web_search", "memory_search", "memory_save", "list_tools", "search_tools",
+                    "update_intent", "update_working_memory", "read_file", "list_files",
+                    "coding_agent", "librarian_agent", "research_agent"
+                ]
+                fallback_set = [t for t in CORE_TOOLS if t in self.tools]
+                UI.event("Router", f"Safety Net: Context tight ({current_tokens}/{max_tokens}). Using {len(fallback_set)} Core tools.", style="warning")
+                self._active_tools = fallback_set
+                used_core_subset = True
+            else:
+                # Router found no specific tools: give only discovery tools so the model can list/search
+                # Discovery PLUS what this turn was already using. Discovery-only made the model
+                # re-find tools it had just called - a wasted turn on exactly the turns where the
+                # router had already failed once. _get_recent_tools is the same decay-tracked list
+                # the normal path merges in; nothing new is introduced here.
+                DISCOVERY_ONLY = ["list_tools", "search_tools"]
+                self._active_tools = self._merge_tool_lists(
+                    [t for t in DISCOVERY_ONLY if t in self.tools], self._get_recent_tools()
+                )
+                UI.event("Router", f"Safety Net: Router found none. Using {len(self._active_tools)} "
+                                   "discovery + recent tools.", style="dim")
+        else:
+            self._active_tools = selected_tools
+
+        # The tool a suggestion note of this turn tells the agent to call (use_skill for a
+        # [SKILL SUGGESTION], execute_workflow for a [WORKFLOW SUGGESTION]) must be callable:
+        # the router classifies the person's words, not the note. Pinned after the cap, like
+        # the discovery tools. When _active_tools is None (ALL tools) it is already there.
+        _note_tools, self._note_tools_this_turn = self._note_tools_this_turn, set()
+        if self._active_tools is not None:
+            for _name in sorted(_note_tools):
+                if _name in self.tools and _name not in self._active_tools:
+                    self._active_tools = list(self._active_tools) + [_name]
+
+        # Termination guarantee for background runs. Placed after BOTH safety nets and the
+        # cap, so no narrowing above can leave the run without a way to stop.
+        self._ensure_thinking_exit_tools()
+
+        # Show final tools once in Web UI (single source; CLI/router logs above already show selection)
+        actual_tools = self._active_tools if self._active_tools is not None else list(self.tools.keys())
+        final_list = ", ".join(actual_tools)
+        if self._active_tools is None:
+            final_list = f"ALL ({len(actual_tools)})"
+        elif not selected_tools and used_core_subset:
+            final_list = f"CORE ({len(actual_tools)})"
+        # Single display path: push to Web UI only (avoids duplicate with UI.event→log in Web)
+        if _emit_to_web_ui():
+            try:
+                from vaf.core.web_interface import get_web_interface
+                from vaf.core.subagent_ipc import get_current_session_id
+                from datetime import datetime
+                session_id = get_current_session_id()
+                get_web_interface()._push_session_update(session_id, {
+                    "type": "new_log",
+                    "entry": {
+                        "timestamp": datetime.now().isoformat(),
+                        "message": f"Final tools: {final_list}",
+                        "level": "info",
+                        "source": "Router"
+                    }
+                })
+            except Exception:
+                pass
 
     def _validate_final_answer(self, draft: str, user_intent: str) -> bool:
         """
@@ -9668,165 +9934,7 @@ class Agent:
         # Dynamic Tool Selection (Tool Router)
         # Only route tools on a new, non-empty input
         if not auto_retry and not skip_input and user_input:
-            from vaf.cli.ui import UI
-            
-            selected_tools = self._route_tools(_route_text)
-
-            if selected_tools:
-                recent_tools = self._get_recent_tools()
-                if recent_tools:
-                    selected_tools = self._merge_tool_lists(selected_tools, recent_tools)
-
-            # Decay AFTER merge so tools stay for the full N turns
-            self._decay_recent_tools()
-            # What the router (and the recent turns) chose for THIS task, before anything rides
-            # along: the cap below cuts the riders first (_task_tools_first).
-            _task_tools = list(selected_tools or [])
-
-            # list_tools and search_tools are ALWAYS included when we have a restricted set
-            # so the model can discover other tools on-demand (provider-agnostic Tool Search).
-            for _discovery_tool in ("list_tools", "search_tools"):
-                if selected_tools and _discovery_tool in self.tools and _discovery_tool not in selected_tools:
-                    selected_tools = list(selected_tools) + [_discovery_tool]
-
-            # Memory/identity tools are ALWAYS included when we have a restricted set (no duplicates).
-            # Only skipped when Safety Net = ALL tools (would be redundant).
-            if selected_tools:
-                # Convert to set for efficient deduplication
-                tools_set = set(selected_tools)
-                
-                # Add core tools
-                # memory_update rides with memory_save on purpose: the save's duplicate
-                # notice tells the model to call it, so it must be callable in the SAME
-                # restricted set without another router round trip.
-                # ask_user rides along too: a question with options is decided in the middle of
-                # a task, when the router has picked tools for the task, never for asking.
-                for name in ("update_intent", "update_working_memory", "memory_search", "memory_save", "memory_update", "update_user_identity", "set_timer", "ask_user"):
-                    if name in self.tools:
-                        tools_set.add(name)
-                # analyze_image rides along whenever something can see: the agent looks at a
-                # screenshot or a rendered page in the middle of a task, when the router has
-                # picked tools for the task (measured in a long build session: 162 of 168 file
-                # reads were images). No setting: where no vision backend exists it stays off,
-                # because offering it would only earn a refusal.
-                if "analyze_image" in self.tools:
-                    try:
-                        from vaf.core.vision_infer import vision_available
-                        if vision_available():
-                            tools_set.add("analyze_image")
-                    except Exception:
-                        pass
-                
-                # Messaging tools: only add those for which the user has the connection
-                try:
-                    from vaf.core.messaging_connections import get_messaging_connections
-                    conn = get_messaging_connections(
-                        username=getattr(self, "_current_username", None),
-                        user_scope_id=getattr(self, "_current_user_scope_id", None),
-                    )
-                    # "available" = the OWNER is reachable there; "outbound" = the agent can
-                    # reach third parties there (WhatsApp linked as the agent's own number
-                    # without a registered main-user number). Either earns the send tool.
-                    for ch in list(conn.get("available") or []) + list(conn.get("outbound") or []):
-                        tool_name = CHANNEL_SEND_TOOLS.get(ch)
-                        if tool_name and tool_name in self.tools:
-                            tools_set.add(tool_name)
-                    # Channel-agnostic delivery: pinned whenever ANY messenger is
-                    # connected (it resolves the platform itself at run time).
-                    if (conn.get("available") or []) and "send_to_user" in self.tools:
-                        tools_set.add("send_to_user")
-                except Exception:
-                    pass
-                
-                # Convert back to list. SORTED, not list(set): the cap below truncates whatever
-                # does not fit, and hash order made which tool got cut depend on the run. The
-                # task's own tools go first, then the riders.
-                selected_tools = _task_tools_first(tools_set, _task_tools)
-
-            # Cap the number of tools to keep the context window clean.
-            # Discovery tools are pinned and don't count against the cap, they come on top of it
-            # (_apply_tool_cap); in a thinking run the exit tools are pinned too, so the run can
-            # always end (see _THINKING_EXIT_TOOLS).
-            _router_max = int(self.config.get("router_max_tools", 12))
-            _pin_names = ("list_tools", "search_tools") + (
-                _THINKING_EXIT_TOOLS
-                + _THINKING_NODE_REQUIRED_TOOLS.get((getattr(self, "_thinking_node", "") or "").strip(), ())
-                if self._is_thinking_run() else ()
-            )
-            selected_tools = _apply_tool_cap(selected_tools, _router_max, set(_pin_names))
-
-            # SAFETY NET: If router returns empty list, fallback to sensible tools
-            # Otherwise the model gets 0 tools and hallucinates using them.
-            used_core_subset = False
-            if not selected_tools:
-                # If context is tight, use CORE_TOOLS subset to avoid HTTP 400 / overflow
-                is_small = max_tokens <= 20000
-                router_safety_threshold = 0.75 if is_small else 0.85
-                
-                if current_tokens > (max_tokens * router_safety_threshold):
-                    CORE_TOOLS = [
-                        "web_search", "memory_search", "memory_save", "list_tools", "search_tools",
-                        "update_intent", "update_working_memory", "read_file", "list_files",
-                        "coding_agent", "librarian_agent", "research_agent"
-                    ]
-                    fallback_set = [t for t in CORE_TOOLS if t in self.tools]
-                    UI.event("Router", f"Safety Net: Context tight ({current_tokens}/{max_tokens}). Using {len(fallback_set)} Core tools.", style="warning")
-                    self._active_tools = fallback_set
-                    used_core_subset = True
-                else:
-                    # Router found no specific tools: give only discovery tools so the model can list/search
-                    # Discovery PLUS what this turn was already using. Discovery-only made the model
-                    # re-find tools it had just called - a wasted turn on exactly the turns where the
-                    # router had already failed once. _get_recent_tools is the same decay-tracked list
-                    # the normal path merges in; nothing new is introduced here.
-                    DISCOVERY_ONLY = ["list_tools", "search_tools"]
-                    self._active_tools = self._merge_tool_lists(
-                        [t for t in DISCOVERY_ONLY if t in self.tools], self._get_recent_tools()
-                    )
-                    UI.event("Router", f"Safety Net: Router found none. Using {len(self._active_tools)} "
-                                       "discovery + recent tools.", style="dim")
-            else:
-                self._active_tools = selected_tools
-
-            # The tool a suggestion note of this turn tells the agent to call (use_skill for a
-            # [SKILL SUGGESTION], execute_workflow for a [WORKFLOW SUGGESTION]) must be callable:
-            # the router classifies the person's words, not the note. Pinned after the cap, like
-            # the discovery tools. When _active_tools is None (ALL tools) it is already there.
-            _note_tools, self._note_tools_this_turn = self._note_tools_this_turn, set()
-            if self._active_tools is not None:
-                for _name in sorted(_note_tools):
-                    if _name in self.tools and _name not in self._active_tools:
-                        self._active_tools = list(self._active_tools) + [_name]
-
-            # Termination guarantee for background runs. Placed after BOTH safety nets and the
-            # cap, so no narrowing above can leave the run without a way to stop.
-            self._ensure_thinking_exit_tools()
-
-            # Show final tools once in Web UI (single source; CLI/router logs above already show selection)
-            actual_tools = self._active_tools if self._active_tools is not None else list(self.tools.keys())
-            final_list = ", ".join(actual_tools)
-            if self._active_tools is None:
-                final_list = f"ALL ({len(actual_tools)})"
-            elif not selected_tools and used_core_subset:
-                final_list = f"CORE ({len(actual_tools)})"
-            # Single display path: push to Web UI only (avoids duplicate with UI.event→log in Web)
-            if _emit_to_web_ui():
-                try:
-                    from vaf.core.web_interface import get_web_interface
-                    from vaf.core.subagent_ipc import get_current_session_id
-                    from datetime import datetime
-                    session_id = get_current_session_id()
-                    get_web_interface()._push_session_update(session_id, {
-                        "type": "new_log",
-                        "entry": {
-                            "timestamp": datetime.now().isoformat(),
-                            "message": f"Final tools: {final_list}",
-                            "level": "info",
-                            "source": "Router"
-                        }
-                    })
-                except Exception:
-                    pass
+            self._select_turn_tools(_route_text, current_tokens, max_tokens)
         else:
             # On retries or for internal steps, use a slightly more generous set if ALL doesn't fit
             self._active_tools = None

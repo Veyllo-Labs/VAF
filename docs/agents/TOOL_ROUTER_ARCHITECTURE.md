@@ -80,38 +80,31 @@ To add examples to any other tool, just add the `input_examples` class attribute
 
 ### Hybrid Router (`_route_tools`)
 
-VAF already solves the "load only relevant tools" problem without any Anthropic-specific API. The `_route_tools` method runs before every main model call:
+VAF already solves the "load only relevant tools" problem without any Anthropic-specific API. The `_route_tools` method runs before every main model call, inside `_select_turn_tools` (the whole per-turn selection: route, recent tools, riders, cap, safety net, pins):
 
-**It classifies the person's own words.** `chat_step` routes on `raw_user_input` (the message before the lane's enrichment) and never on the suggestion notes it prepends itself (`[WORKFLOW SUGGESTION]`, `[SKILL SUGGESTION]`). Their wording used to choose tools for the turn: a workflow note carrying `description="..."` reads as "script" to the substring heuristics below and forced `coding_agent`, `git_status` and `git_add_commit` into three of three server-setup turns in a live measurement, and one of them lost `host_bash` to the cap. The tool a note tells the agent to call (`execute_workflow`, `use_skill`) is pinned into the capped set instead, for that turn only (`_note_tools_this_turn`). The heuristics still match inside words on purpose, for German compounds (`Monatsrechnung`); on 152 real messages of a long build session they fired on a false stem only a handful of times (`digit` for git, `determine` for termin).
+**One LLM call chooses, ranked and recall-first.** The router LLM reads the request, the last three exchanges of the conversation (`_router_history`: each user message and final answer cut to 300 characters, plus the tools that exchange used; a user message keeps its END, because what a lane or a note adds is prepended) and every visible tool grouped under its `category` (`## mail`, `## whatsapp`, ...). It is asked for EVERY tool that could be needed, including the steps on the way (a contact lookup before a send, a read before an edit), the most important first, at most `router_max_tools`, because its list is the only tool set the assistant gets for the turn. The categories are a soft structure: the router takes tools from as many areas as the request needs. A hard category step first ("pick the area, then the tool") was the weakest shortlist in the one study that measured it at scale, because a missed area cannot be recovered afterwards.
+
+**The keyword table only hints.** Its matches go into the router prompt as "Keyword hints (often wrong)" and become the answer only when the router gives none: the call raises, times out, answers nothing, or answers text with no tool name in it. Measured before, over a month of router log lines: the table forced tools into 197 of 347 turns, 52 times eight at once, on stems inside words ("report" forced the git tools, "antwort" the mail tools on a WhatsApp reply), and the router, told only to list names, picked a single tool in 164 of 272 turns. Deliberate exception: `store_credential` stays forced whatever the router answers, and first in the list, because a credential handed over in the chat must be storable in that very turn.
+
+**It classifies the person's own words.** `chat_step` routes on `raw_user_input` (the message before the lane's enrichment) and never on the suggestion notes it prepends itself (`[WORKFLOW SUGGESTION]`, `[SKILL SUGGESTION]`). Their wording used to choose tools for the turn: a workflow note carrying `description="..."` reads as "script" to the substring heuristics below and forced `coding_agent`, `git_status` and `git_add_commit` into three of three server-setup turns in a live measurement, and one of them lost `host_bash` to the cap. The tool a note tells the agent to call (`execute_workflow`, `use_skill`) is pinned into the capped set instead, for that turn only (`_note_tools_this_turn`). The keyword checks still match inside words on purpose, for German compounds (`Monatsrechnung`); since they only hint, a false stem costs a line in the router prompt and no longer a place in the set.
 
 ```mermaid
 graph TD
-    A[User Input] --> B{Heuristic Check}
-
-    subgraph "Stage 1: Hybrid Routing"
-    B -- "Contains 'folder size'?" --> C[Force: librarian_agent]
-    B -- "Contains 'commit'?" --> D[Force: git_tools]
-    B -- "Contains 'weather'?" --> E[Force: web_search]
-
-    A --> F(Router LLM Call)
-    F -- "Reasoning" --> G[LLM Selected Tools]
-
-    C & D & E --> H[Forced Tools]
-    H & G --> I[Combined Tool List]
-    end
-
-    subgraph "Stage 2: Context Assembly"
-    I --> J{Filter & Deduplicate}
-    K[All Tool Definitions] --> J
-    J --> L[Optimized System Prompt]
-    end
-
+    A[User Input] --> B{Keyword Check}
+    H[Recent conversation] --> F
+    K[Tools grouped by category] --> F
+    B -- "matches become hints" --> F(Router LLM Call)
+    F -- "ranked answer" --> G[Router's tools, most important first]
+    F -- "no usable answer" --> E[Keyword matches as the answer]
+    G & E --> I[+ recent tools + riders in priority order]
+    I --> J{Cap: router_max_tools, pins on top}
+    J --> L[Tool set of the turn]
     L --> M[Main Model Inference]
 ```
 
-**Heuristic keywords → forced tools:**
+**Keyword hints** (the answer only when the router gives none; `store_credential` always):
 
-| Keywords | Forced tools |
+| Keywords | Hinted tools |
 |---|---|
 | "folder size", "disk usage", "storage" | `librarian_agent` |
 | "Google Drive", "OneDrive", "cloud" | `librarian_agent` |
@@ -124,7 +117,7 @@ graph TD
 | "mail", "inbox", "posteingang", "nachricht", "newsletter", "rechnung" | `inbox`, `find_mail`, `list_email_accounts` |
 | "draft", "entwurf", "gesendet", "abgeschickt", "verschickt", "rausgegangen", "went out" | `list_drafts` (the draft wake turn says "Draft", so a woken agent can look up the chat's other drafts) |
 | "search", "find", "news", "weather" | `web_search` |
-| "passwort", "password", "zugangsdaten", "api key", ... | `store_credential` |
+| "passwort", "password", "zugangsdaten", "api key", ... | `store_credential` (forced always, see above) |
 | "ssh", "sftp", "scp", "vps", "putty" (whole words), or an IPv4 address | `ssh` (deliberately not "server" alone: every Minecraft sentence says it) |
 
 ### `search_tools` - on-demand discovery tool
@@ -155,9 +148,11 @@ The declaration travels the WHOLE path, not just the funnel - exempting only the
 
 **Tool cap (`router_max_tools`):** After the router selects tools and the riders are added, the list is capped at `router_max_tools` (default: **12**). The cap counts the tools chosen for the turn and the riders. `list_tools` and `search_tools` are **always kept and come on top of it** (with the default, at most 14 tools), and so do a thinking run's exit tools (`_apply_tool_cap`). A pinned tool is the way out of a narrowed set, not a choice about the turn, so it takes no place from the turn's tools: counted against the cap, the two discovery tools left ten places, a one-tool weather turn already filled all twelve, and a turn whose router picked twelve tools lost the two that sort last (`send_mail`, `web_search`). The tool a suggestion note names (`execute_workflow`, `use_skill`) is added after the cap as well, and what `search_tools` discovers during the turn joins the set on top. The cap prevents context pollution when many tools are registered. Guard: `tests/test_tool_router_cap_and_fallbacks.py`.
 
-**What the cap cuts first (`_task_tools_first`):** the tools the router and the recent turns chose for THIS task come first, and the riders that are added on every turn come after them: `update_intent`, `update_working_memory`, `memory_search`, `memory_save`, `memory_update`, `update_user_identity`, `set_timer`, `ask_user`, `analyze_image` (only when a vision backend exists: `vision_available()`) and the send tool of every connected messenger. Each group is sorted, so the cut is reproducible. One sorted list put the riders in the way of the task: with three messengers connected the riders alone filled the cap, and a research turn lost `web_search` because "w" sorts last (measured with the defaults). `ask_user` rides along because a question with options comes up in the middle of a task, when the router has picked tools for the task and never for asking; `analyze_image` for the same reason, for a screenshot or a rendered page looked at along the way (measured in a long build session: 162 of 168 file reads were images).
+**What the cap cuts first (`_task_tools_first`):** the tools the router chose for THIS task come first, in the router's ranking, then the tools of the recent turns, then the riders that are added on every turn, in the priority order of `_TURN_RIDERS`: `update_working_memory`, `ask_user`, `memory_search`, `memory_save`, `memory_update`, `update_intent`, `set_timer`, `update_user_identity`, then `analyze_image` (only when a vision backend exists: `vision_available()`) and the send tool of every connected messenger. The cap therefore cuts the router's last picks and the least needed riders, never by name. Sorted by name, the task's tools were cut by their first letter (a research turn lost `web_search` because "w" sorts last), and `update_working_memory`, the tool that stores the plan the plan gate asks for before any write tool, was the first rider cut: missing in 7 of 20 measured turns, 5 of them turns that needed a write tool. `ask_user` rides along because a question with options comes up in the middle of a task, when the router has picked tools for the task and never for asking; `analyze_image` for the same reason, for a screenshot or a rendered page looked at along the way (measured in a long build session: 162 of 168 file reads were images).
 
 **`host_process` is not a rider, and that is measured.** `host_bash(background=true)` points the agent at `host_process` for the running command's log, input and stop, and the router picks the task before that need exists. In three live turns of "set up a local test server and test it", the router offered `host_process` once; the agent reached it all three times anyway, twice through `search_tools` and once by calling it directly. Riding along on every turn would cost a slot the task tools need; revisit if a turn is measured to fail on it.
+
+**Measuring the router (`scripts/router_eval.py`).** Twenty fixed cases run through `_select_turn_tools` with the configured provider: ten single messages in a fresh chat (set A) and ten follow-ups whose earlier turn is in the history (set B), synthetic people and addresses throughout. Only the router's own LLM call is made; no tool runs. A case passes when every group of expected tools has one member in the final set; the script also reports whether the router LLM alone (without the keyword table) would have passed, whether `update_working_memory` is in the set, and which task tools came in beyond the expectation. Measured with the change to the ranked, conversation-aware router: pass 20/20 before and after; the router alone 19/20 before (a mail reply to "Bob wrote yesterday ..." went to WhatsApp and only the keyword "antwort" rescued it) and 20/20 after; `update_working_memory` offered in 13/20 before and 20/20 after; extra task tools 23 before, 12 of them off-topic (the git tools for "report", the mail send tools on Telegram, WhatsApp and room turns), and 14 after, each a step of the task (a contact lookup, a listing before a create). The cases pass on a capable router model; a weaker one is exactly what the script is there to compare.
 
 ```json
 // ~/.vaf/config.json
@@ -188,7 +183,7 @@ model is not offered.
 | `None` | Use ALL registered tools (router failure / retry / internal step) |
 | `[list]` | Use only these tool names (normal operation, post-router) |
 
-**Visibility in the Web UI:** The selected tools (e.g. `LLM-based: list_calendar_events` or `Script-based: web_search`) are shown in the chat as a Router system step so you can see which tools were chosen for each turn. See [WEB_UI.md](../web-ui/WEB_UI.md) → Workflow Steps / System Steps.
+**Visibility in the Web UI:** The selected tools (e.g. `LLM-based: list_calendar_events`, with `Keyword hints (not forced): ...` beside it, or `Script-based (router call failed): web_search` when the keyword matches had to answer) are shown in the chat as a Router system step so you can see which tools were chosen for each turn. See [WEB_UI.md](../web-ui/WEB_UI.md) → Workflow Steps / System Steps.
 
 ---
 
@@ -276,13 +271,13 @@ User: "What is the weather?"
 
 ## 7. Fallback Mechanisms
 
-A failed router call never loads ALL tools. The model gets the discovery path, finds the rest through `search_tools`, and the `search_tools` post-hook makes a found tool callable at the next step.
+A failed router call never loads ALL tools. The keyword matches answer in its place; with none, the model gets the discovery path, finds the rest through `search_tools`, and the `search_tools` post-hook makes a found tool callable at the next step.
 
 | Situation | Behaviour |
 |---|---|
-| Router LLM call raises (provider error, local server unreachable) | `_route_tools` returns an empty list; the keyword-forced tools of that turn are dropped with it. The safety net below applies. |
-| Router LLM call times out (API backend only, 15 s) | The keyword-forced tools plus `list_tools` and `search_tools`; the recent tools and the riders are added as on a normal turn. |
-| Router answers with no valid tool name (it chats, or answers nothing) | The keyword-forced tools when there are any, handled as a normal turn; otherwise empty, and the safety net applies. |
+| Router LLM call raises (provider error, local server unreachable) | The keyword matches are the answer (`Script-based (router call failed)`), handled as a normal turn; with no match the result is empty and the safety net applies. |
+| Router LLM call times out (API backend only, 15 s) | The keyword matches plus `list_tools` and `search_tools`; the recent tools and the riders are added as on a normal turn. |
+| Router answers nothing, or text with no tool name in it | The keyword matches when there are any, handled as a normal turn; otherwise empty, and the safety net applies. |
 | Safety net: router result empty, context OK | Discovery-only: `list_tools`, `search_tools`, plus the tools used in the last two turns (`_get_recent_tools`). No riders. |
 | Safety net: router result empty, context tight (>75% at a context of 20k tokens or less, >85% above) | CORE_TOOLS subset (below). |
 | Main model retry, internal step | `_active_tools = None` → ALL tools. Context >80% (20k or less) / >90%: the internal subset (`web_search`, `memory_search`, `list_tools`, `search_tools`, `update_intent`, `read_file`, `list_files`). |
@@ -544,12 +539,13 @@ Two adjacent systems build on the tool layer described here:
   Whare Wananga's safety gating (probe-safe read-only tools vs side-effecting ones, which
   may only be learned via the error/validation path).
 
-  After the router scopes the turn's tools (`_active_tools`), Whare Wananga's **delivery** appends
-  each selected tool's learned pitfalls to its schema description (proactive), and re-feeds a failed
-  tool's know-how on error (reactive) - see [WHARE_WANANGA.md](../memory/WHARE_WANANGA.md) "Delivery".
-  Because `Agent.TOOLS` sits on the hot path of **every** LLM call, the built schema (with the injected
-  pitfalls) is **cached** and only rebuilt when the scoping inputs change (active tools, exclusions,
-  context size). It was previously rebuilt - re-running pitfall injection per tool - on every access
-  (thousands of times per session), which steadily churned memory.
+  After the router scopes the turn's tools (`_active_tools`), Whare Wananga's **delivery** puts
+  each selected tool's learned pitfalls into the turn block (proactive,
+  `SystemPromptManager._turn_pitfalls`), and re-feeds a failed tool's know-how on error (reactive) -
+  see [WHARE_WANANGA.md](../memory/WHARE_WANANGA.md) "Delivery". The pitfalls stay out of the tool
+  schema, so a newly learned one does not change the cached tools array. Because `Agent.TOOLS`
+  sits on the hot path of **every** LLM call, the built schema is **cached** and only rebuilt when
+  the scoping inputs change (active tools, exclusions, context size). It was previously rebuilt on
+  every access (thousands of times per session), which steadily churned memory.
 - **Action Tag** ([ACTION_TAG.md](ACTION_TAG.md)) - the agent declares the tool it is about
   to use; a backend parser matches that intent against the loaded tool list.

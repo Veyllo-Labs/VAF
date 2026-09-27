@@ -117,6 +117,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   several messengers connected, the tools the agent is offered on every turn filled its tool
   list, and a research question could arrive without the web search. The tools chosen for
   the question now come first.
+- **The agent gets the right tools for a follow-up, and no longer tools that only share a
+  word with the message.** Before each message VAF picks which tools the agent is offered.
+  That choice now reads the last exchanges of the conversation, so "answer him" after a mail
+  from Bob offers the mail reply and not WhatsApp. It asks for every tool the task could
+  need, the most important first, and keeps that order when the list has to be shortened.
+  The fixed word list no longer forces tools in: a message saying "report" used to bring
+  the git tools, and "antwort" the mail tools on a WhatsApp reply. The word list now only
+  steps in when the choice fails. The tool that stores the agent's plan, which it needs
+  before it may send or write anything, is no longer the first one dropped from a long list.
 - **The two tools for finding other tools no longer take places from the question's own.**
   The agent is offered up to twelve tools per message (`router_max_tools`), and the two it
   uses to look up any other tool counted among them, so a single weather question already

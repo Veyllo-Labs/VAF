@@ -186,13 +186,12 @@ def test_memory_update_rides_every_registry_memory_save_is_in():
         "thinking runs exclude memory_save but not memory_update - a background "
         "run could write durable memory through the sibling"
     )
-    core_tuple = re.search(
-        r'for name in \(("update_intent"[^)]*)\):\s*\n\s*if name in self\.tools', src
-    )
-    assert core_tuple and "memory_update" in core_tuple.group(1), (
-        "memory_update is not in the always-include core tuple, so the duplicate "
+    from vaf.core.agent import _TURN_RIDERS
+    assert "memory_save" in _TURN_RIDERS and "memory_update" in _TURN_RIDERS, (
+        "memory_update is not in the always-include riders, so the duplicate "
         "notice names a tool the restricted set cannot call"
     )
+    assert "for name in _TURN_RIDERS:" in src, "the per-turn set no longer adds the riders"
 
 
 def test_declarations_match_the_sibling():

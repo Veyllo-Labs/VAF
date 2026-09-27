@@ -77,7 +77,7 @@ def test_the_router_logs_what_it_could_not_parse():
     from pathlib import Path
     src = (Path(Agent.__module__.replace(".", "/")).with_suffix(".py"))
     code = (Path(__file__).resolve().parent.parent / src).read_text(encoding="utf-8")
-    marker = "No tools selected (unparsable answer)"
+    marker = "Unparsable router answer"
     assert marker in code, "the router no longer reports WHAT it could not read"
     block = code.split(marker, 1)[0][-600:]
     assert "_bad" in block, "the offending answer is not captured"

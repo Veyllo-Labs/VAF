@@ -16,7 +16,7 @@ It is distinct from two neighbouring concepts:
 - **Built:** the `tool_knowledge` store; the predict-then-verify learning loop (LLM-judged
   validation + a final challenge); its safety tiering (full-probe / error-path / declare / gated);
   the producers (training dashboard + the `vaf ww` CLI, plus a one-pass sweep over all tools); the
-  **proactive** delivery (router-driven pitfalls injection into the tool schema); the
+  **proactive** delivery (router-driven pitfalls in the turn block); the
   **reactive** delivery (re-feed a failed tool's know-how on error, with a known-vs-novel surprise
   signal; may deliver gate-failing records tagged UNVERIFIED); **runtime re-learning** (a novel
   runtime error is distilled into a new pitfall from the real observation); **eager training**
@@ -307,9 +307,13 @@ How a record gets filled:
 ## Delivery (how know-how reaches the agent)
 
 **Proactive (built).** Router-driven: after the tool router scopes the turn's tool set
-(`Agent._active_tools`), the learned **pitfalls** (`tuatea`) of each selected tool are appended to
-that tool's description in the LLM tool schema (`Agent.TOOLS`), so the model sees them inline
-*before* it forms the call -- no extra generation, independent of the Action tag. Only `tuatea` is
+(`Agent._active_tools`), the learned **pitfalls** (`tuatea`) of each selected tool are delivered in
+the turn block at the end of the request (`SystemPromptManager._turn_pitfalls`: "Learned pitfalls
+for the tools available this step", up to 3 per tool, 1 with a context under 32k), so the model
+sees them *before* it forms the call -- no extra generation, independent of the Action tag. They
+used to hang off each tool's description in the tool schema; that put them in the request's cached
+prefix, and a pitfall is learned exactly when a tool fails, so the tools array changed on a
+schedule nobody controls and took the provider's prompt cache with it. Only `tuatea` is
 delivered (`aronui` overlaps the static description; `tuarua` is a later phase), and only for
 reliable knowledge: gated on `status=confirmed` + `challenge_passed` + a probed `learn_mode`
 (declare-mode/draft excluded). Injection happens only when the router has scoped the set (the
@@ -349,7 +353,7 @@ fails the quality gate (declare-mode, stale, draft) is still delivered, prefixed
 `UNVERIFIED - <reason>` tag. Rationale (live incident): the call has ALREADY failed, so a
 possibly-imperfect hint costs little -- while the withheld record often holds exactly the missing
 knowledge (document_writer's declare-mode record contained the fix for the live failure and was
-never delivered). The vacuous-pitfall filter still applies. The A-track schema injection stays
+never delivered). The vacuous-pitfall filter still applies. The A-track turn-block delivery stays
 strictly gated on `status=confirmed` + `challenge_passed` + a probed `learn_mode`.
 
 **Re-training queue (built).** A record that fails the delivery gate no longer rots: every gate
@@ -390,15 +394,15 @@ it harvests the `runtime`-sourced pitfalls FIRST and re-attaches them - deduplic
 fresh distillate via the shared `store.is_duplicate_pitfall` rule - after EVERY distil pass (the
 distil runs mid-run and per refinement round; a carry done once would be wiped by the second
 pass). At most 5 carry over (`_RUNTIME_CARRY_MAX`), newest first; fresh distilled entries stay
-in front, because the top-3 schema injection should lead with the current contract while the
+in front, because the top-3 proactive delivery should lead with the current contract while the
 carried lessons still ride every reactive re-feed. Log marker: `[WW-PRESERVE]`.
 
-**Visibility.** The learning events are logged twice: the debug markers (`[WW-INJECT]`,
-`[WW-SURPRISE]`, `[WW-REACTIVE]`, `[WW-RELEARN]`, `[WW-STALE]`) go to `backend.log`, and the
+**Visibility.** The learning events are logged twice: the debug markers (`[WW-SURPRISE]`,
+`[WW-REACTIVE]`, `[WW-RELEARN]`, `[WW-STALE]`) go to `backend.log`, and the
 OWNER-relevant ones - a reactive re-feed, a runtime re-learn, and know-how going stale (with the
-drain hint) - additionally appear in the UI log timeline as source `Whare Wananga`. The per-turn
-`[WW-INJECT]` stays file-only on purpose: it fires for every scoped tool on every turn and would
-drown the timeline.
+drain hint) - additionally appear in the UI log timeline as source `Whare Wananga`. The proactive
+delivery writes no marker: the per-turn `[WW-INJECT]` belonged to the schema injection and went
+with it.
 
 The **Action tag** is NOT the injection trigger; its role stays transparency / verify
 (declared-vs-actual) / learn-signal (see [ACTION_TAG.md](../agents/ACTION_TAG.md)). Independently of any path,

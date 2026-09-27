@@ -229,25 +229,24 @@ def test_a_later_mention_in_a_sentence_does_not_hide_the_list():
 def test_the_riders_never_push_out_what_the_task_needs():
     """MUTATION: build the set as one sorted list again (`sorted(tools_set)`) and the research
     turn loses web_search to update_working_memory, because "w" sorts last."""
-    from vaf.core.agent import _apply_tool_cap, _task_tools_first
-    riders = ["update_intent", "update_working_memory", "memory_search", "memory_save",
-              "memory_update", "update_user_identity", "set_timer", "ask_user",
-              "send_telegram", "send_whatsapp", "send_to_user"]
+    from vaf.core.agent import _TURN_RIDERS, _apply_tool_cap, _task_tools_first
+    riders = list(_TURN_RIDERS) + ["send_telegram", "send_whatsapp", "send_to_user"]
     task = ["web_search", "write_file", "coding_agent"]
     tools = set(task + riders + ["list_tools", "search_tools"])
-    out = _apply_tool_cap(_task_tools_first(tools, task), 12, {"list_tools", "search_tools"})
+    out = _apply_tool_cap(_task_tools_first(tools, task, riders), 12, {"list_tools", "search_tools"})
     assert set(task) <= set(out)
-    assert "ask_user" in out, "the question tool is the first rider"
-    assert out == _apply_tool_cap(_task_tools_first(set(tools), list(reversed(task))), 12,
-                                  {"list_tools", "search_tools"}), "reproducible"
+    assert "ask_user" in out, "the question tool rides along"
+    assert out == _apply_tool_cap(_task_tools_first(set(reversed(sorted(tools))), task, riders), 12,
+                                  {"list_tools", "search_tools"}), "reproducible whatever the set order"
 
 
 def test_the_chat_turn_builds_its_set_task_first():
     import inspect
-    from vaf.core.agent import Agent
-    src = inspect.getsource(Agent.chat_step)
-    assert "selected_tools = _task_tools_first(tools_set, _task_tools)" in src
-    assert '"set_timer", "ask_user"):' in src
+    from vaf.core.agent import Agent, _TURN_RIDERS
+    src = inspect.getsource(Agent._select_turn_tools)
+    assert "selected_tools = _task_tools_first(tools_set, _task_tools, rider_order)" in src
+    assert "for name in _TURN_RIDERS:" in src
+    assert "ask_user" in _TURN_RIDERS
 
 
 def test_a_wake_turn_does_not_answer_the_question():

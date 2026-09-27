@@ -126,11 +126,14 @@ class MCPClientTool(BaseTool):
             return self._locks.setdefault(server_command, threading.Lock())
 
     def call_remote(self, transport: str, server_url: str, tool_name: str, arguments: Dict[str, Any],
-                    headers: Optional[Dict[str, str]] = None) -> str:
-        """Call a tool of a remote server (Streamable HTTP or SSE) through the shared session pool."""
+                    headers: Optional[Dict[str, str]] = None, auth=None) -> str:
+        """Call a tool of a remote server (Streamable HTTP or SSE) through the shared session pool;
+        `auth` (vaf.core.mcp_remote.RemoteAuth) is the account's own session at a server that
+        signs every account in (vaf/core/mcp_oauth.py)."""
         from vaf.core.mcp_remote import RemoteMcpError, get_remote_pool
         try:
-            return get_remote_pool().call_tool(transport, server_url, tool_name, arguments or {}, headers=headers)
+            return get_remote_pool().call_tool(transport, server_url, tool_name, arguments or {},
+                                               headers=headers, auth=auth)
         except RemoteMcpError as exc:
             return f"Error: MCP server at {server_url}: {exc}"
     
@@ -214,7 +217,7 @@ class MCPClientTool(BaseTool):
 
     def list_server_tools(self, server_command: str, transport: str = "stdio",
                           server_url: str = "", env: Optional[Dict[str, str]] = None,
-                          headers: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+                          headers: Optional[Dict[str, str]] = None, auth=None) -> List[Dict[str, Any]]:
         """Discover the tools a server offers via tools/list. Returns a list of tool dicts (each
         with name / description / inputSchema), or [] when the server has none or could not be
         asked. A remote server's reason is raised as RemoteMcpError for the caller to show."""
@@ -222,7 +225,7 @@ class MCPClientTool(BaseTool):
             if not server_url:
                 return []
             from vaf.core.mcp_remote import get_remote_pool
-            return get_remote_pool().list_tools(transport, server_url, headers=headers)
+            return get_remote_pool().list_tools(transport, server_url, headers=headers, auth=auth)
         if transport != "stdio":
             return []
         try:

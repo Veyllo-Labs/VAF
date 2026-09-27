@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
+import McpSignIns from './McpSignIns';
 
 /** GitHub logo (official mark) as black SVG for Connections. */
 function GitHubLogo({ className }: { className?: string }) {
@@ -462,6 +463,8 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
     /** The Front Office state (GET /api/front-office) for the card's status line; the switch lives in the window. */
     const [frontOffice, setFrontOffice] = useState<{ enabled: boolean; channels: Record<string, boolean>; reachable_contacts: number }>({ enabled: false, channels: {}, reachable_contacts: 0 });
     const [connectionSearchQuery, setConnectionSearchQuery] = useState('');
+    /** How many MCP sign-in rows the search leaves (McpSignIns reports it). */
+    const [mcpShown, setMcpShown] = useState(0);
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'linked' | 'disconnected' | 'checking'>>({});
     const [whatsappInfo, setWhatsappInfo] = useState<{ linked_phone: string | null; owner_number: string | null }>({ linked_phone: null, owner_number: null });
     /** The shared Discord and Telegram bots as their status routes last reported them, apart from
@@ -969,7 +972,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                 Connect external apps and services to interact with your VAF agent.
             </p>
 
-            {connectionSearchQuery.trim() && !CATEGORIES.some(cat => getFilteredAppsByCategory(cat.id).length > 0) && (
+            {connectionSearchQuery.trim() && mcpShown === 0 && !CATEGORIES.some(cat => getFilteredAppsByCategory(cat.id).length > 0) && (
                 <p className="text-sm text-gray-500 py-4">{t('noResults')}</p>
             )}
             {CATEGORIES.filter(cat => getFilteredAppsByCategory(cat.id).length > 0).map(category => (
@@ -1296,6 +1299,8 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                     </div>
                 </div>
             ))}
+            {/* MCP servers that sign every account in: one row per server, this account's own state. */}
+            <McpSignIns query={connectionSearchQuery} onShownCount={setMcpShown} />
         </div>
     );
 }

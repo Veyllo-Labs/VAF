@@ -889,7 +889,20 @@
       "telegramPairIntroBot": "Telegramでリンクを開くか、{bot}にこのメッセージを送信してください。",
       "telegramPairOpen": "Telegramで開く",
       "telegramPairWaiting": "ボットへのメッセージを待っています。コードの有効期間は{minutes}分です。",
-      "telegramPairFailed": "ペアリングを開始できませんでした。"
+      "telegramPairFailed": "ペアリングを開始できませんでした。",
+      "mcpTitle": "MCPサービス",
+      "mcpDescription": "アカウントごとにサインインするサービス",
+      "mcpSignedIn": "サインイン済み",
+      "mcpSignedOut": "未サインイン",
+      "mcpWaiting": "ブラウザーでのサインインを待っています",
+      "mcpTurnedOff": "オフ",
+      "mcpSignIn": "サインイン",
+      "mcpSignOut": "サインアウト",
+      "mcpUsesYourAccount": "エージェントはこのサービスをこのアカウントのアクセス権で使います。",
+      "mcpSignInFirst": "サインインすると、エージェントがこのサービスを代わりに使えるようになります。",
+      "mcpFailed": "サインインできませんでした：{reason}",
+      "mcpStartFailed": "サインインを開始できませんでした：{reason}",
+      "mcpSignOutFailed": "サインアウトできませんでした。"
     },
     "frontOffice": {
       "title": "インバウンドコミュニケーション",
@@ -2060,6 +2073,8 @@
       "tools": "{count}個のツール",
       "offline": "オフライン",
       "disabled": "無効",
+      "signInPerAccount": "アカウントごとにサインイン · {count}件サインイン済み",
+      "signInNeeded": "サインインが必要",
       "editor": {
         "addTitle": "MCPサーバーを追加",
         "editTitle": "MCPサーバーを編集",
@@ -2095,7 +2110,17 @@
         "tokenStoredPlaceholder": "保存済み",
         "tokenStoredHint": "トークンは保存済みです。そのまま使う場合は空欄のままにしてください。",
         "tokenRemove": "トークンを削除",
-        "envHint": "envの値は暗号化して保存され、再表示されません。空の値は保存済みの値をそのまま使います。"
+        "envHint": "envの値は暗号化して保存され、再表示されません。空の値は保存済みの値をそのまま使います。",
+        "auth": "サインイン方式",
+        "authNone": "なし、または全員共通のアクセストークン",
+        "authOauth": "アカウントごとにサインイン（OAuth）",
+        "authOauthHint": "各アカウントが「連携」から自分のアクセス権でサインインします。エージェントは、そのとき作業している相手のアクセス権を使います。",
+        "clientId": "クライアントID（任意）",
+        "clientSecret": "クライアントシークレット（任意）",
+        "clientHint": "VAFがサービスに自動で登録できる場合は、両方とも空欄のままにしてください。サービス側で手動登録するクライアントには、次のリダイレクト先アドレスが必要です：",
+        "clientSecretStoredHint": "シークレットは保存済みです。そのまま使う場合は空欄のままにしてください。",
+        "clientSecretRemove": "シークレットを削除",
+        "testSignIn": "接続できます。各アカウントのサインインが必要です。"
       }
     },
     "workflows": {

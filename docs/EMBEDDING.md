@@ -1806,7 +1806,11 @@ usable from an embedded engine too, documented in their own pages:
   older transport, a `url`); their tools appear as native tools
   (`mcp_<server>_<tool>`). Secrets do not stay in the file: `env` values and a
   remote server's token move into the key ring on the next load
-  (`vaf.core.mcp_registry.upsert_server` writes them there directly), see
+  (`vaf.core.mcp_registry.upsert_server` writes them there directly). A remote
+  server with `"auth": "oauth"` signs every account in on its own:
+  `vaf.core.mcp_oauth.start_sign_in` hands your UI the authorization address,
+  `finish_sign_in` completes it from your callback, and its tools declare
+  `identity_kwargs = ("user_scope_id",)`, so each call runs as the caller. See
   [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md).
 - **Update-surviving local tools** - a `custom_tools/` folder in the platform
   data dir (managed via the Web UI, admin-only), see

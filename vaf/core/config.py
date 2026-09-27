@@ -395,6 +395,9 @@ class Config:
                 # server is skipped and never blocks startup.
                 "mcp_native_tools_enabled": True,              # global kill-switch
                 "mcp_discovery_timeout_seconds": 5,            # per-batch discovery deadline
+                # Override for the redirect_uri base of an MCP server's sign-in (e.g. behind a
+                # reverse proxy); empty = the same rule as the email and cloud sign-ins.
+                "mcp_oauth_callback_base_url": "",
 
                 # Voice / STT Settings
                 "stt_enabled": False,                  # Legacy STT toggle (kept: ORed with speech_stt_enabled in speech.py)

@@ -5,9 +5,9 @@
 
 The OAuth redirect_uri must point at a URL that is ACTUALLY reachable on this machine. Behind the
 integrated HTTPS proxy a non-root user cannot bind privileged 443 and the proxy falls back to 8443;
-`runtime_status` is the single source of truth for the port it really bound. Email, Cloud (and any
-future) OAuth flows share this helper so their callbacks stay consistent and reachable — see
-`vaf/api/email_routes.py` and `vaf/cloud/oauth_cloud.py`.
+`runtime_status` is the single source of truth for the port it really bound. Email, Cloud, MCP (and
+any future) OAuth flows share this helper so their callbacks stay consistent and reachable, see
+`vaf/api/email_routes.py`, `vaf/cloud/oauth_cloud.py` and `vaf/api/mcp_routes.py`.
 """
 from __future__ import annotations
 
@@ -49,4 +49,17 @@ def oauth_callback_base_url(override_key: str) -> str:
     if network_on and tls_on:
         return f"https://localhost{effective_https_suffix()}"
     port = int(Config.get("local_network_port", 8001) or 8001)
+    return f"http://localhost:{port}"
+
+
+def frontend_base_url() -> str:
+    """Base URL of the Web UI, where a finished OAuth callback sends the browser back to (the
+    Settings on the Connections tab). Same mode rule as the callback base: the integrated HTTPS
+    proxy on its effective port in network+TLS mode, else the Web UI's own port."""
+    import os
+    network_on = bool(Config.get("local_network_enabled", False))
+    tls_on = bool(Config.get("local_network_tls_enabled", False))
+    if network_on and tls_on:
+        return f"https://localhost{effective_https_suffix()}"
+    port = os.environ.get("VAF_WEB_UI_PORT", "3000")
     return f"http://localhost:{port}"

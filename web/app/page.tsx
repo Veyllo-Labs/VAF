@@ -3255,7 +3255,7 @@ function VAFDashboardContent() {
     const [isMcpSaving, setIsMcpSaving] = useState(false);
     const [mcpBackendError, setMcpBackendError] = useState<string | null>(null);
     const [isMcpTesting, setIsMcpTesting] = useState(false);
-    const [mcpTestResult, setMcpTestResult] = useState<{ connected: boolean; tool_count: number; tools?: string[]; error?: string | null } | null>(null);
+    const [mcpTestResult, setMcpTestResult] = useState<{ connected: boolean; tool_count: number; tools?: string[]; error?: string | null; sign_in_required?: boolean } | null>(null);
     const [workflows, setWorkflows] = useState<Array<{ id: string; name: string; description: string; steps: number; is_custom?: boolean }>>([]);
     const [isWorkflowSaving, setIsWorkflowSaving]       = useState(false);
     const [workflowBackendError, setWorkflowBackendError] = useState<string | null>(null);
@@ -6918,7 +6918,7 @@ function VAFDashboardContent() {
                 }
                 else if (data.type === 'mcp_server_test_result') {
                     setIsMcpTesting(false);
-                    setMcpTestResult({ connected: !!data.connected, tool_count: data.tool_count || 0, tools: data.tools || [], error: data.error ?? null });
+                    setMcpTestResult({ connected: !!data.connected, tool_count: data.tool_count || 0, tools: data.tools || [], error: data.error ?? null, sign_in_required: !!data.sign_in_required });
                 }
                 else if (data.type === 'custom_tool_users') {
                     // List of non-admin users for the share picker

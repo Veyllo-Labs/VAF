@@ -312,6 +312,16 @@ def peek_data_secret(name: str) -> str:
         raise RuntimeError(f"The data keyring cannot be opened while reading {name!r}.")
 
 
+def data_secret_names(prefix: str) -> list:
+    """The names of the stored secrets that start with `prefix` (never their values), for an
+    owner whose entries are keyed per account and has to find all of them (an MCP server's
+    sign-ins, one per account). Strict on corruption, like `peek_data_secret`."""
+    try:
+        return sorted(name for name in _ring().load_strict() if name.startswith(str(prefix)))
+    except SecureStoreUnreadable:
+        raise RuntimeError(f"The data keyring cannot be opened while listing {prefix!r}.")
+
+
 def delete_data_secret(name: str) -> bool:
     """Remove a named secret; True when there was one. For credentials a person revokes
     (a disconnected bot), never for a data key: deleting a key orphans what it encrypted.

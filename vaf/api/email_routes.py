@@ -167,13 +167,9 @@ def _oauth_callback_base_url() -> str:
 
 
 def _frontend_base_url() -> str:
-    """Return Web UI base URL for post-OAuth redirects."""
-    network_on = bool(Config.get("local_network_enabled", False))
-    tls_on = bool(Config.get("local_network_tls_enabled", False))
-    if network_on and tls_on:
-        return f"https://localhost{_effective_https_suffix()}"
-    port = __import__("os").environ.get("VAF_WEB_UI_PORT", "3000")
-    return f"http://localhost:{port}"
+    """Return Web UI base URL for post-OAuth redirects (shared helper; see vaf/network/oauth_redirect)."""
+    from vaf.network.oauth_redirect import frontend_base_url
+    return frontend_base_url()
 
 
 @router.get("/oauth/start")

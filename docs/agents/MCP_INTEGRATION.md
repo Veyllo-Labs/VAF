@@ -49,6 +49,8 @@ A hot-reloadable manifest in the VAF data directory (next to the custom-tools da
 | `permission_level` | `read` · `write` (default) · `dangerous` - see below |
 | `env` | environment variables for a local server process (e.g. `{ "GITHUB_TOKEN": "…" }`), merged onto the VAF process environment. The file keeps only the names; the values live in the key ring (below). |
 | `token` | a remote server's access token, sent as `Authorization: Bearer <token>`. Accepted here once and moved into the key ring; a `headers` object with an `Authorization: Bearer` entry (the shape other MCP clients write) is taken the same way, other headers stay and are sent as they are. |
+| `auth` | `"oauth"`: every account signs in to this remote server on its own (below) instead of one token for everybody. Absent or empty: no sign-in, or the `token`. |
+| `oauth_client_id` | optional, with `auth: "oauth"`: a client registered at the service by hand, for a service that does not let VAF register one itself. Its secret (`oauth_client_secret`) is accepted here once and moved into the key ring. |
 | `tool_permissions` | optional per-tool permission overrides (below) |
 
 At startup VAF connects to every enabled server **in parallel** with a per-server timeout
@@ -71,8 +73,56 @@ JSON-RPC, no handshake, no session, no login - so no server that implements the 
 answered it, the SSE path was not built at all, and discovery skipped every server that had a URL
 and no command: no remote server ever registered a tool.
 
-Servers that require an OAuth sign-in are not supported yet: a remote server is reached without a
-login or with a fixed access token, which the admin sets for the whole installation.
+### Sign-in per account
+
+A hosted server that holds each person's own data (a workspace, a mailbox, a tracker) does not take
+one token for the whole installation: every person signs in with their own account. A server with
+`"auth": "oauth"` works that way (`vaf/core/mcp_oauth.py`), through OAuth as the MCP authorization
+specification defines it, implemented by the official SDK (`OAuthClientProvider`): VAF reads the
+server's protected-resource and authorization-server metadata, registers itself as a client where
+the service allows that (dynamic client registration; otherwise the admin enters a client registered
+by hand), signs in with PKCE and refreshes the tokens.
+
+- **Signing in** is every account's own step, admin or not: Settings, Connections, "MCP services"
+  lists the servers that sign accounts in, with this account's state and a Sign in / Sign out
+  button. Sign in opens the service's page in a new tab (the system browser in the desktop app); the
+  service sends that tab back to `/api/mcp/oauth/callback`, which must be reached by the person who
+  started the sign-in (the same actor binding as the mail sign-in), finishes the exchange and lands
+  on the Connections tab. A sign-in not finished within 10 minutes is dropped.
+- **Every call runs as the caller.** The tools of such a server declare
+  `identity_kwargs = ("user_scope_id",)`, and each call runs in the caller's own session at the
+  server. An account that has not signed in gets "not signed in" before any request is made, and
+  never another account's session. A sign-in the service no longer accepts (the refresh refused)
+  fails the call with "sign in again" at once: nothing waits for a browser nobody opened.
+- **The tool list** is read with one signed-in account (the local admin's when it has one), since
+  the tools are the server's and the same for every account. Until the first account signs in the
+  server shows "sign-in needed" in the MCP list and registers no tools; the first sign-in loads them.
+- **Tokens** live in the key ring, one record per account and server
+  (`mcp_server.<name>.oauth.<account>`: the tokens, their expiry and the client the account
+  registered). A token that ran out while VAF was not running is refreshed on the next call. The
+  SDK does not restore the expiry of stored tokens by itself, and without it the provider would send
+  the old token, meet a 401 and start a new interactive sign-in instead of the refresh.
+- **Signing out** deletes the record and closes the account's session first, then asks the service
+  to invalidate the tokens (RFC 7009) where its metadata offers a revocation endpoint.
+- **The sign-ins belong to the server as it was set up.** A server moved to another host, switched
+  away from the sign-in or given another client drops every account's sign-in (and the service is
+  asked to invalidate them); removing the server does the same. A server with the sign-in takes no
+  fixed token: one stored before is removed.
+- **The redirect address** a hand-registered client needs is shown in the editor; it is this
+  installation's `/api/mcp/oauth/callback` on the same base as the email and cloud sign-ins, and
+  `mcp_oauth_callback_base_url` overrides the base behind a reverse proxy.
+
+Named boundaries, also in the module docstring: the raw `mcp_call` has no sign-in (it knows a URL,
+not a configured server); scopes are the ones the server asks for in its metadata; the sign-ins of a
+deleted account stay in the ring until the server is removed, as no store in VAF has a per-account
+deletion hook; the terminal has no sign-in (there is no `vaf mcp` command at all), while the
+framework functions take the redirect address from their caller, so one could offer a loopback
+address.
+
+For an embedder: `mcp_oauth.start_sign_in(name, user_scope_id=, redirect_uri=)` returns the
+authorization address, `finish_sign_in(state, code, error)` completes it from your callback
+(`pending_owner(state)` says who started it), `sign_out` and `sign_in_status` do the rest; after a
+first sign-in, `Agent.reload_mcp_tools()` loads the server's tools.
 
 ### Secrets
 
@@ -83,6 +133,15 @@ ring the next time the file is loaded (after the ring read it back; a move that 
 file as it was and is tried again). Removing a server removes its secrets. `vaf secure status` names
 a server whose secret is still in the file. Every env value counts as a secret, not only the ones
 whose names look like one.
+
+A stored token stays with the server it was stored for (same scheme, host and port): an entry
+moved to another host without a new token keeps none, and the editor's test button sends the
+stored token only to the saved host, so a typo or a new server under an old name never receives
+it. Removing a server removes its secrets only once the file no longer lists it.
+
+A server with a sign-in per account adds two kinds of entry: `mcp_server.<name>.oauth.<account>`
+(one account's tokens and registered client, see "Sign-in per account") and
+`mcp_server.<name>.oauth_client_secret` (the secret of a client registered by hand).
 
 ### One caller at a time on a local server
 
@@ -105,6 +164,12 @@ enabled, `permission_level`), or paste a standard `{ "mcpServers": { … } }` co
 used by Claude Desktop / Cursor: `command` + `args` + `env` for a local server, `url` + `type` +
 `headers` for a remote one, whose bearer token fills the token field) into the panel to auto-fill the
 form. The token field starts empty and says when a token is stored; leaving it empty keeps it.
+For a remote server the form also sets the sign-in: none or one token for everybody, or every
+account signing in on its own, with an optional hand-registered client (ID and a write-only
+secret) and the redirect address such a client needs. The editor's test of such a server runs as
+the tester's own account when it has signed in, never as another's, and reads a 401 from a server
+nobody signed in to yet as "reachable, every account has to sign in". The server card says how many
+accounts signed in.
 Env values come back empty for the same reason, and an empty value keeps the stored one. Saving
 keeps the keys the form does not show (`tool_permissions`). The
 Advanced-tab row shows "N connected / M configured" at a glance. Saving writes `mcp_servers.json` and
@@ -142,6 +207,8 @@ entry to override individual tools (the rest fall back to the server level) - ma
 - `mcp_native_tools_enabled` (default `true`) - kill-switch for the whole registration step;
   `mcp_call` still works when it is off.
 - `mcp_discovery_timeout_seconds` (default `5`) - the parallel-discovery deadline.
+- `mcp_oauth_callback_base_url` (default empty) - the base of the sign-in's redirect address behind
+  a reverse proxy; empty derives it like the email and cloud sign-ins.
 
 ## How it fits
 

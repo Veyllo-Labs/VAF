@@ -13,6 +13,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **Every account can sign in to an MCP server with its own access.** Many hosted MCP
+  servers hold your own data, a workspace, a mailbox, a tracker, and want you to sign in
+  rather than take one key for the whole installation. An admin now sets such a server to
+  "every account signs in on its own" in Settings, Advanced, MCP, and each person signs in
+  under Connections, MCP services, in their browser. The agent then uses the service with the
+  access of the person it is working for, never with somebody else's; a person who has not
+  signed in is told so. Signing out asks the service to invalidate the access. Services that
+  do not let VAF register itself take a client the admin registers by hand; the form shows
+  the address that client needs.
+
 - **You can just give the agent a password in the chat, and it keeps it safe.** Write
   something like "FTP: user xy, password ..." in the browser, the terminal or on Telegram.
   The agent stores each value in your own encrypted credential store under a name and uses
@@ -146,8 +156,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   all, and such a server was skipped when the tools were loaded. Now a remote server is added
   in Settings, Advanced, MCP with its address, over Streamable HTTP or SSE, and its tools
   appear like any other. A server that needs an access token gets one in the same form; it is
-  stored encrypted and never shown again. Servers that need you to sign in with an account
-  are not supported yet.
+  stored encrypted and never shown again.
 - **Your MCP server keys are no longer stored in plaintext or shown in the browser.** The
   environment values of an MCP server - typically an API key - sat in plain text in
   `mcp_servers.json`, and the Settings page received them with the server list. They now live

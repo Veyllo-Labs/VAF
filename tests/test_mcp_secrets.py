@@ -76,7 +76,8 @@ def test_the_browser_sees_names_never_values(manifest, monkeypatch, ring_works):
 
         monkeypatch.setattr(data_keyring, "set_data_secret", boom)
     shown = {s["name"]: s for s in reg.servers_for_display({})}
-    assert "secret" not in json.dumps(shown)
+    dumped = json.dumps(shown)
+    assert "ghp_secret" not in dumped and "tok_secret" not in dumped
     assert shown["gh"]["env"] == {"GITHUB_TOKEN": ""}
     assert shown["gh"]["token_set"] is False
     if ring_works:
@@ -198,3 +199,34 @@ def test_secure_status_names_a_server_whose_secret_is_still_in_the_file(manifest
     assert "mcp_servers.json:gh" in data_keyring.ring_status()["legacy_in_config"]
     reg.load_mcp_manifest()                                          # moves it
     assert not [k for k in data_keyring.ring_status()["legacy_in_config"] if k.startswith("mcp_servers.json")]
+
+
+def test_a_removal_the_file_did_not_take_keeps_the_secrets(manifest, monkeypatch):
+    reg.upsert_server("r", transport="http", url="https://example.com/mcp", token="tok_1")
+    monkeypatch.setattr(reg, "save_mcp_manifest", lambda data: False)
+    assert reg.remove_server("r") is False
+    assert mcp_secrets.server_token("r") == "tok_1", "the server is still configured; so is its token"
+
+
+def test_removing_a_name_the_file_does_not_have_touches_nothing(manifest):
+    mcp_secrets.set_server_token("ghost", "tok_ghost")
+    manifest.write({})
+    assert reg.remove_server("ghost") is False
+    assert mcp_secrets.server_token("ghost") == "tok_ghost"
+
+
+def test_a_stored_token_does_not_follow_the_server_to_another_host(manifest):
+    reg.upsert_server("r", transport="http", url="https://mcp.example.com/mcp", token="tok_1")
+    reg.upsert_server("r", transport="http", url="https://mcp.example.com/v2/mcp")
+    assert mcp_secrets.server_token("r") == "tok_1", "a new path on the same host keeps it"
+    reg.upsert_server("r", transport="http", url="https://other.example.net/mcp")
+    assert mcp_secrets.server_token("r") == "", "another host gets no old token"
+    reg.upsert_server("r", transport="http", url="https://third.example.org/mcp", token="tok_3")
+    assert mcp_secrets.server_token("r") == "tok_3", "unless a new one comes with it"
+
+
+def test_same_origin():
+    assert reg.same_origin("https://a.example/mcp", "https://A.example:443/other")
+    assert not reg.same_origin("https://a.example/mcp", "http://a.example/mcp")
+    assert not reg.same_origin("https://a.example/mcp", "https://a.example.evil/mcp")
+    assert not reg.same_origin("", "")

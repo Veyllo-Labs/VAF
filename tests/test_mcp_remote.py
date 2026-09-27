@@ -167,3 +167,28 @@ def test_the_editor_can_test_a_token_before_saving(remote, manifest):
     assert reg.probe_mcp_server(cfg, 15)["connected"] is False
     ok = reg.probe_mcp_server(cfg, 15, token=TOKEN)
     assert ok["connected"] is True and "echo" in ok["tools"]
+
+
+def test_the_editor_never_sends_a_stored_token_to_another_address(remote, manifest):
+    """Testing a saved server with its URL changed: the stored token belongs to the saved host,
+    so the other address gets the request without it."""
+    import vaf.core.mcp_registry as reg
+    reg.upsert_server("guarded", transport="http", url=remote.urls["auth"], token=TOKEN)
+    before = len(remote.http.requests)
+    reg.probe_mcp_server({"transport": "http", "url": remote.urls["http"]}, 15, name="guarded")
+    sent = remote.http.requests[before:]
+    assert sent, "the other address was asked"
+    assert not any(TOKEN in r.get("authorization", "") for r in sent)
+    ok = reg.probe_mcp_server({"transport": "http", "url": remote.urls["auth"]}, 15, name="guarded")
+    assert ok["connected"] is True, "the saved address still gets it"
+
+
+def test_moving_a_server_closes_the_old_session(remote, manifest):
+    import vaf.core.mcp_registry as reg
+    from vaf.core.mcp_remote import get_remote_pool
+    reg.upsert_server("moving", transport="http", url=remote.urls["http"])
+    reg.discover_mcp_tools(timeout_seconds=15)
+    pool = get_remote_pool()
+    assert any(k[1] == remote.urls["http"] for k in pool._sessions)
+    reg.upsert_server("moving", transport="sse", url=remote.urls["sse"])
+    assert not any(k[1] == remote.urls["http"] for k in pool._sessions), "the old address stays open"

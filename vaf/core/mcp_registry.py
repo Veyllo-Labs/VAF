@@ -16,14 +16,17 @@ vaf/core/custom_tools_registry.py — not config.py, which is for core/sacred se
           "enabled": true,
           "permission_level": "write",    # default "write" (plan-gated, automation-safe);
                                           # "dangerous" forces a confirmation prompt; "read" = no gate
-          "url": ""                       # only for http/sse
+          "url": "",                      # only for http/sse
+          "auth": "",                     # "oauth": every account signs in on its own (http/sse)
+          "oauth_client_id": ""           # a client registered at the service by hand (optional)
         }
       }
     }
 
-Secrets are not kept here: a local server's `env` values and a remote server's access token
-live in the encrypted key ring (vaf/core/mcp_secrets.py). A value written into this file by
-hand is moved there the next time the file is loaded; the file keeps the env NAMES.
+Secrets are not kept here: a local server's `env` values, a remote server's access token, the
+secret of a hand-registered client and every account's sign-in live in the encrypted key ring
+(vaf/core/mcp_secrets.py; the sign-in flow is vaf/core/mcp_oauth.py). A value written into this
+file by hand is moved there the next time the file is loaded; the file keeps the env NAMES.
 
 Discovery is eager + parallel with a per-batch deadline: a server that is slow / hung / misconfigured
 is terminated and skipped — it never blocks VAF startup (same discipline as the bootstrap fix).
@@ -75,20 +78,24 @@ def load_mcp_manifest() -> Dict[str, Any]:
     return data
 
 
-def save_mcp_manifest(data: Dict[str, Any]) -> None:
-    """Atomically write the manifest (temp file + rename), like the custom-tools manifest."""
+def save_mcp_manifest(data: Dict[str, Any]) -> bool:
+    """Atomically write the manifest (temp file + rename), like the custom-tools manifest.
+    Never raises; False when the file could not be written (a caller that removes something
+    else together with the entry, the server's secrets, must not do so then)."""
     path = get_mcp_manifest_path()
     tmp = path.with_suffix(".json.tmp")
     try:
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2, ensure_ascii=False)
         tmp.replace(path)
+        return True
     except Exception as exc:
         logger.error("mcp_registry: failed to write %s: %s", path, exc)
         try:
             tmp.unlink(missing_ok=True)
         except Exception:
             pass
+        return False
 
 
 REMOTE_TRANSPORTS = ("http", "sse")
@@ -96,13 +103,30 @@ REMOTE_TRANSPORTS = ("http", "sse")
 
 def server_headers(server_name: str, server_cfg: Dict[str, Any]) -> Dict[str, str]:
     """What a remote server is sent with every request: the manifest's own (non-secret)
-    `headers` and the access token from the key ring as `Authorization: Bearer`."""
+    `headers` and the access token from the key ring as `Authorization: Bearer`. A server that
+    signs every account in gets no fixed token: each session carries its account's own."""
+    from vaf.core.mcp_oauth import uses_sign_in
     from vaf.core.mcp_remote import bearer_headers
     from vaf.core.mcp_secrets import server_token
     headers = {str(k): str(v) for k, v in (server_cfg.get("headers") or {}).items()
                if str(k).lower() != "authorization"} if isinstance(server_cfg.get("headers"), dict) else {}
-    headers.update(bearer_headers(server_token(server_name)))
+    if not uses_sign_in(server_cfg):
+        headers.update(bearer_headers(server_token(server_name)))
     return headers
+
+
+def same_origin(url_a: str, url_b: str) -> bool:
+    """Whether two URLs name the same server (scheme, host and port): the audience of a stored
+    access token. A path may change; another host is another server."""
+    from urllib.parse import urlsplit
+
+    def origin(url: str):
+        parts = urlsplit(str(url or "").strip())
+        port = parts.port or {"http": 80, "https": 443}.get(parts.scheme.lower())
+        return (parts.scheme.lower(), (parts.hostname or "").lower(), port)
+
+    a, b = origin(url_a), origin(url_b)
+    return bool(a[1]) and a == b
 
 
 def _addressable(cfg: Dict[str, Any]) -> bool:
@@ -142,17 +166,29 @@ def make_mcp_tool(server_name: str, server_cfg: Dict[str, Any], tool_meta: Dict[
     command = str(server_cfg.get("command", ""))
     transport = str(server_cfg.get("transport", "stdio"))
     server_url = str(server_cfg.get("url", ""))
+    from vaf.core.mcp_oauth import uses_sign_in
+    per_account = uses_sign_in(server_cfg)
 
     def _run(self, **kwargs) -> str:
         # Secrets are read at call time, from the ring, never captured in the tool.
         client = get_mcp_client()
+        # The dispatcher's identity key is VAF's, never an argument for the server.
+        user_scope_id = kwargs.pop("user_scope_id", None) if per_account else None
         try:
             if transport == "stdio":
                 from vaf.core.mcp_secrets import effective_env
                 return client._call_stdio(command, real_tool, kwargs, effective_env(server_name, server_cfg) or None)
             if transport in REMOTE_TRANSPORTS:
+                auth = None
+                if per_account:
+                    from vaf.core.mcp_oauth import auth_for
+                    from vaf.core.mcp_remote import McpSignInRequired
+                    try:
+                        auth = auth_for(server_name, server_cfg, user_scope_id)
+                    except McpSignInRequired as exc:
+                        return f"Error: {exc}"
                 return client.call_remote(transport, server_url, real_tool, kwargs,
-                                          headers=server_headers(server_name, server_cfg))
+                                          headers=server_headers(server_name, server_cfg), auth=auth)
             return f"Error: Unsupported MCP transport '{transport}'"
         except Exception as exc:
             return f"Error calling MCP tool '{real_tool}': {exc}"
@@ -170,6 +206,10 @@ def make_mcp_tool(server_name: str, server_cfg: Dict[str, Any], tool_meta: Dict[
         "run": _run,
         "__doc__": description,
     }
+    if per_account:
+        # Each call runs in the CALLER's session at the server (vaf/core/mcp_oauth.py), so the
+        # dispatcher has to say who the caller is.
+        attrs["identity_kwargs"] = ("user_scope_id",)
     return type(f"MCPTool_{tool_name}", (BaseTool,), attrs)
 
 
@@ -197,6 +237,7 @@ def discover_mcp_tools(timeout_seconds: float = 5.0):
 
     discovered: Dict[str, List[Dict[str, Any]]] = {}
     reasons: Dict[str, str] = {}
+    sign_in: Dict[str, bool] = {}
 
     def _discover(name: str, cfg: Dict[str, Any]) -> None:
         try:
@@ -204,6 +245,8 @@ def discover_mcp_tools(timeout_seconds: float = 5.0):
         except Exception as exc:
             discovered[name] = []
             reasons[name] = str(exc)
+            if type(exc).__name__ == "McpSignInRequired":
+                sign_in[name] = True
 
     threads = []
     for name, cfg in enabled:
@@ -257,15 +300,20 @@ def discover_mcp_tools(timeout_seconds: float = 5.0):
         else:
             status[name] = {"connected": False, "tool_count": 0,
                             "error": reasons.get(name) or "no tools (unreachable or empty)"}
+            if sign_in.get(name):
+                status[name]["sign_in_required"] = True
     if tools:
         logger.info("mcp_registry: registered %d MCP tool(s) from %d server(s)", len(tools), len(enabled))
     return tools, status
 
 
 def _list_tools(name: str, cfg: Dict[str, Any], client, *, token: Optional[str] = None,
-                env: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+                env: Optional[Dict[str, str]] = None, auth=None, discover: bool = True) -> List[Dict[str, Any]]:
     """tools/list for one server entry, with its secrets from the key ring (or the ones given,
-    for a server the editor is testing before it is saved)."""
+    for a server the editor is testing before it is saved). A server that signs every account
+    in is asked as `auth`, or else (`discover`) as one signed-in account
+    (`mcp_oauth.discovery_auth`)."""
+    from vaf.core.mcp_oauth import discovery_auth, uses_sign_in
     from vaf.core.mcp_secrets import effective_env
     transport = str(cfg.get("transport", "stdio"))
     if transport in REMOTE_TRANSPORTS:
@@ -273,30 +321,57 @@ def _list_tools(name: str, cfg: Dict[str, Any], client, *, token: Optional[str] 
         if token:
             from vaf.core.mcp_remote import bearer_headers
             headers.update(bearer_headers(token))
-        return client.list_server_tools("", transport, str(cfg.get("url", "")), headers=headers)
+        if auth is None and discover and uses_sign_in(cfg) and name:
+            auth = discovery_auth(name, cfg)
+        return client.list_server_tools("", transport, str(cfg.get("url", "")), headers=headers, auth=auth)
     return client.list_server_tools(str(cfg.get("command", "")), "stdio", "",
                                     (env if env is not None else effective_env(name, cfg)) or None)
 
 
 def probe_mcp_server(server_cfg: Dict[str, Any], timeout_seconds: float = 5.0, *, name: str = "",
-                     token: Optional[str] = None) -> Dict[str, Any]:
+                     token: Optional[str] = None, user_scope_id: Optional[str] = None) -> Dict[str, Any]:
     """Test a single server config (for the UI "test connection" button): list its tools with a
     timeout, terminating a hung server. Returns {connected, tool_count, tools, error}; never raises.
     `name` is the server's name when it is already saved (its stored secrets are used); `token`
     and `server_cfg["env"]` values are the editor's, for a test before saving: an env value left
-    empty falls back to the stored one."""
+    empty falls back to the stored one.
+
+    A remote server's stored token is used only when the tested URL names the same server as the
+    saved one (`same_origin`): an editor pointed at another address, a typo or a new server under
+    an old name, must not send the stored token there. It then needs a token of its own.
+
+    A server that signs every account in (`"auth": "oauth"`) is tested as the tester's own
+    account (`user_scope_id`) when it has signed in to the saved server, never as anybody
+    else's; otherwise without a sign-in, and a 401 then reads as what it is: the server wants
+    each account to sign in (`sign_in_required`), which is the expected answer before the first
+    sign-in, not a failure."""
     from vaf.core.mcp_secrets import merge_env, server_env
     from vaf.tools.mcp_client import get_mcp_client
     client = get_mcp_client()
     cmd = str(server_cfg.get("command", ""))
     result: Dict[str, Any] = {}
     env = merge_env(server_env(name) if name else {}, server_cfg.get("env") if isinstance(server_cfg.get("env"), dict) else None)
+    stored_name = name
+    if name and str(server_cfg.get("transport", "stdio")) in REMOTE_TRANSPORTS:
+        saved = ((load_mcp_manifest() or {}).get("servers") or {}).get(name)
+        if not (isinstance(saved, dict) and str(saved.get("transport", "stdio")) in REMOTE_TRANSPORTS
+                and same_origin(str(saved.get("url", "")), str(server_cfg.get("url", "")))):
+            stored_name = ""
+
+    from vaf.core import mcp_oauth
+    auth = None
+    if stored_name and mcp_oauth.uses_sign_in(server_cfg) and mcp_oauth.signed_in(stored_name, user_scope_id):
+        saved_cfg = ((load_mcp_manifest() or {}).get("servers") or {}).get(stored_name) or {}
+        if mcp_oauth.uses_sign_in(saved_cfg):
+            auth = mcp_oauth.auth_for(stored_name, saved_cfg, user_scope_id)
 
     def _run() -> None:
         try:
-            result["tools"] = _list_tools(name, server_cfg, client, token=token, env=env)
+            result["tools"] = _list_tools(stored_name, server_cfg, client, token=token, env=env,
+                                          auth=auth, discover=False)
         except Exception as exc:
             result["error"] = str(exc)
+            result["unauthorized"] = type(exc).__name__ == "RemoteMcpUnauthorized"
 
     th = threading.Thread(target=_run, daemon=True)
     th.start()
@@ -311,12 +386,17 @@ def probe_mcp_server(server_cfg: Dict[str, Any], timeout_seconds: float = 5.0, *
         return {"connected": False, "tool_count": 0, "tools": [], "error": "timeout"}
     tools = result.get("tools") or []
     names = [t.get("name") for t in tools if isinstance(t, dict) and t.get("name")]
-    return {
+    out = {
         "connected": len(names) > 0,
         "tool_count": len(names),
         "tools": names,
         "error": result.get("error") or (None if names else "no tools (unreachable or empty)"),
     }
+    if mcp_oauth.uses_sign_in(server_cfg) and auth is None and result.get("unauthorized"):
+        out["sign_in_required"] = True
+        out["error"] = ("the server is reachable and asks every account to sign in: save it, then "
+                        "sign in under Settings > Connections > MCP services")
+    return out
 
 
 # ── Editing the manifest (the Settings form, and anything else that edits a server) ──────────────
@@ -328,15 +408,26 @@ _PERMISSIONS = ("read", "write", "dangerous")
 def upsert_server(name: str, *, command: str = "", transport: str = "stdio", url: str = "",
                   enabled: bool = True, permission_level: str = "write",
                   env: Optional[Dict[str, Any]] = None, token: Optional[str] = None,
-                  clear_token: bool = False) -> None:
+                  clear_token: bool = False, auth: Optional[str] = None,
+                  oauth_client_id: Optional[str] = None, oauth_client_secret: Optional[str] = None,
+                  clear_oauth_client_secret: bool = False) -> None:
     """Add or change one server. Raises ValueError with a readable reason for a bad entry.
 
     Keys the form does not know (`tool_permissions`, `headers`) are kept: the form used to
     rewrite the whole entry and dropped them. Secrets go to the key ring
     (vaf/core/mcp_secrets.py): `env` values are merged (empty keeps the stored value, a name left
     out is removed), a non-empty `token` replaces the stored one, `clear_token` removes it; the
-    manifest keeps only the env names."""
-    from vaf.core import mcp_secrets
+    manifest keeps only the env names.
+
+    `auth="oauth"` makes a remote server sign every account in on its own (vaf/core/mcp_oauth.py)
+    instead of sending one token for everybody, so a stored token is dropped. `oauth_client_id`
+    and `oauth_client_secret` name a client the admin registered at the service by hand; without
+    them each account registers its own client, where the service allows that. `auth`,
+    `oauth_client_id` left as None keep what the entry has. The accounts' sign-ins belong to the
+    server, the sign-in mode and the client they were made with: a server moved to another host,
+    switched away from the sign-in or given another client drops them (and asks the service to
+    invalidate them)."""
+    from vaf.core import mcp_oauth, mcp_secrets
 
     name = str(name or "").strip()
     if not _NAME_RE.match(name):
@@ -357,13 +448,47 @@ def upsert_server(name: str, *, command: str = "", transport: str = "stdio", url
     manifest = load_mcp_manifest() or {}
     servers = manifest.get("servers") if isinstance(manifest.get("servers"), dict) else {}
     entry = dict(servers.get(name) or {}) if isinstance(servers.get(name), dict) else {}
+    before = dict(entry)
+    old_url = str(entry.get("url") or "")
+    old_remote = str(entry.get("transport", "stdio")) in REMOTE_TRANSPORTS
+    old_auth = "oauth" if mcp_oauth.uses_sign_in(entry) else ""
+    new_auth = old_auth if auth is None else str(auth or "").strip().lower()
+    if new_auth not in ("", "oauth"):
+        raise ValueError(f"Unknown sign-in '{auth}'.")
+    if new_auth == "oauth" and transport not in REMOTE_TRANSPORTS:
+        raise ValueError("A sign-in per account needs a remote server (http or sse).")
+    old_client_id = str(entry.get("oauth_client_id") or "").strip() if old_auth else ""
+    new_client_id = (old_client_id if oauth_client_id is None else str(oauth_client_id or "").strip()) if new_auth else ""
+    new_client_secret = str(oauth_client_secret or "").strip() if new_auth else ""
+    if new_client_secret and not new_client_id:
+        raise ValueError("A client secret needs the client ID it belongs to.")
+
     stored_env = mcp_secrets.server_env(name)
     new_env = mcp_secrets.merge_env(stored_env, env) if env is not None else stored_env
     mcp_secrets.set_server_env(name, new_env)
-    if clear_token:
+    # A stored token belongs to the server it was stored for: moved to another host without a
+    # new token, the server keeps none rather than sending the old one to the new address. A
+    # server that signs every account in has no token for everybody at all.
+    moved = old_remote and bool(old_url) and not (transport in REMOTE_TRANSPORTS and same_origin(old_url, url))
+    if clear_token or new_auth or (moved and not str(token or "").strip()):
         mcp_secrets.clear_server_token(name)
     elif str(token or "").strip():
         mcp_secrets.set_server_token(name, str(token))
+    # The same for the accounts' sign-ins and the hand-registered client's secret: they belong
+    # to this host, this sign-in mode and this client.
+    if old_auth and (moved or not new_auth or new_client_id != old_client_id):
+        mcp_oauth.forget_server(name, before)
+    if new_client_secret:
+        mcp_secrets.set_oauth_client_secret(name, new_client_secret)
+    elif (clear_oauth_client_secret or not new_auth or moved or new_client_id != old_client_id) \
+            and mcp_secrets.oauth_client_secret(name):
+        mcp_secrets.clear_oauth_client_secret(name)
+    for key, value in (("auth", new_auth), ("oauth_client_id", new_client_id)):
+        if value:
+            entry[key] = value
+        else:
+            entry.pop(key, None)
+    entry.pop("oauth_client_secret", None)
     entry.update({
         "command": command,
         "transport": transport,
@@ -376,25 +501,35 @@ def upsert_server(name: str, *, command: str = "", transport: str = "stdio", url
     servers[name] = entry
     manifest["servers"] = servers
     save_mcp_manifest(manifest)
-    if transport in REMOTE_TRANSPORTS:
+    # A changed token or URL opens a fresh session; the old address's session is closed too,
+    # or it stays open, token and all, for the rest of the process.
+    stale = {u for u in (old_url if old_remote else "", url if transport in REMOTE_TRANSPORTS else "") if u}
+    if stale:
         try:
             from vaf.core.mcp_remote import get_remote_pool
-            get_remote_pool().close(url)          # a changed token or URL opens a fresh session
+            for stale_url in stale:
+                get_remote_pool().close(stale_url)
         except Exception:  # noqa: BLE001
             pass
 
 
 def remove_server(name: str) -> bool:
-    """Remove one server and everything the key ring holds for it. True when it existed."""
+    """Remove one server and everything the key ring holds for it. True when it existed and
+    the manifest was written; a name the manifest does not have leaves the ring alone."""
     from vaf.core import mcp_secrets
     manifest = load_mcp_manifest() or {}
     servers = manifest.get("servers") if isinstance(manifest.get("servers"), dict) else {}
     cfg = servers.pop(str(name), None)
-    mcp_secrets.clear_server_secrets(str(name))
     if cfg is None:
         return False
     manifest["servers"] = servers
-    save_mcp_manifest(manifest)
+    # Secrets go only once the entry is gone: a write that fails leaves the server configured,
+    # and it must keep its token and env then.
+    if not save_mcp_manifest(manifest):
+        return False
+    from vaf.core.mcp_oauth import forget_server
+    forget_server(str(name), cfg if isinstance(cfg, dict) else {})     # the service is asked to invalidate them
+    mcp_secrets.clear_server_secrets(str(name))
     if isinstance(cfg, dict) and cfg.get("url"):
         try:
             from vaf.core.mcp_remote import get_remote_pool
@@ -406,8 +541,10 @@ def remove_server(name: str) -> bool:
 
 def servers_for_display(status: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """The server list the Settings page may see: every entry with its live status, the env
-    names without values and whether a token is stored, never a secret."""
-    from vaf.core.mcp_secrets import redacted_env, server_token
+    names without values, whether a token or a client secret is stored and how many accounts
+    signed in, never a secret."""
+    from vaf.core.mcp_oauth import uses_sign_in
+    from vaf.core.mcp_secrets import oauth_accounts, oauth_client_secret, oauth_record, redacted_env, server_token
     servers = (load_mcp_manifest() or {}).get("servers", {}) or {}
     status = dict(status or {})
     out = []
@@ -415,6 +552,9 @@ def servers_for_display(status: Optional[Dict[str, Any]] = None) -> List[Dict[st
         if not isinstance(cfg, dict):
             continue
         st = status.get(name, {})
+        per_account = uses_sign_in(cfg)
+        signed_in = sum(1 for account in oauth_accounts(name)
+                        if (oauth_record(name, account).get("tokens") or {})) if per_account else 0
         out.append({
             "name": name,
             "command": cfg.get("command", ""),
@@ -423,7 +563,12 @@ def servers_for_display(status: Optional[Dict[str, Any]] = None) -> List[Dict[st
             "enabled": bool(cfg.get("enabled", True)),
             "permission_level": cfg.get("permission_level", "write"),
             "env": redacted_env(name, cfg),
-            "token_set": bool(server_token(name)) if str(cfg.get("transport", "stdio")) in REMOTE_TRANSPORTS else False,
+            "token_set": bool(server_token(name)) if str(cfg.get("transport", "stdio")) in REMOTE_TRANSPORTS and not per_account else False,
+            "auth": "oauth" if per_account else "",
+            "oauth_client_id": str(cfg.get("oauth_client_id") or "") if per_account else "",
+            "oauth_client_secret_set": bool(oauth_client_secret(name)) if per_account else False,
+            "accounts_signed_in": signed_in,
+            "sign_in_required": bool(st.get("sign_in_required", False)),
             "connected": bool(st.get("connected", False)),
             "tool_count": int(st.get("tool_count", 0) or 0),
             "error": st.get("error"),

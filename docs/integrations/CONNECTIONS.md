@@ -40,6 +40,15 @@ VAF has a calendar of its own (the calendar window in the sidebar footer; design
 | Dropbox | Coming Soon | Sync and access Dropbox files |
 | Nextcloud | Coming Soon | Connect to self-hosted Nextcloud via WebDAV |
 
+### MCP services
+
+A remote MCP server the admin set up with a sign-in per account (Settings, Advanced, MCP; see
+[MCP_INTEGRATION.md](../agents/MCP_INTEGRATION.md)) appears here, under **MCP services**, for every
+account: its state for this account and a Sign in / Sign out button. Sign in opens the service's
+page in a new tab; after "Allow" the service sends that tab back to VAF and the row reads Signed in.
+From then on the agent uses the service with this account's own access, and only while it works
+for this account. The section is hidden while no server signs accounts in.
+
 ### Credentials for commands
 
 Passwords and tokens the agent may use in the commands it runs on this computer - an FTP

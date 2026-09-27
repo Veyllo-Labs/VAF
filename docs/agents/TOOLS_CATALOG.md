@@ -254,5 +254,5 @@ closed.
 | Tool | Perm | What it does |
 |------|------|--------------|
 | `cloud_storage` | write | Google Drive / OneDrive access (prefer `search_all`). |
-| `mcp_call` | write | Call external tools via Model Context Protocol: a local server (`stdio`, `server_command`) or a remote one (`http` for Streamable HTTP, `sse`, `server_url`, without a login; a server that needs a token is registered instead). |
+| `mcp_call` | write | Call external tools via Model Context Protocol: a local server (`stdio`, `server_command`) or a remote one (`http` for Streamable HTTP, `sse`, `server_url`, without a login; a server that needs a token or a sign-in per account is registered instead, and its `mcp_<server>_<tool>` tools run as the calling account). |
 | `thinking_note_add` | system | Save a note for the next background thinking run. |

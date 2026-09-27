@@ -24,7 +24,7 @@ import { useMemoryStore } from './memory/stores/memoryStore';
 import { SpeakerTest } from './SpeakerTest';
 import CustomToolEditor from './settings/CustomToolEditor';
 import McpServerEditor from './settings/McpServerEditor';
-import type { McpServerInfo, McpTestConfig } from './settings/McpServerEditor';
+import type { McpServerInfo, McpTestConfig, McpTestResult } from './settings/McpServerEditor';
 import WorkflowCreator from './settings/WorkflowCreator';
 import type { WorkflowSaveData } from './settings/WorkflowCreator';
 import SkillsEditor from './settings/SkillsEditor';
@@ -183,7 +183,7 @@ export interface SettingsModalProps {
     /** Probe a server config (test connection) without saving */
     onTestMcpServer?: (cfg: McpTestConfig) => void;
     /** Result of the last test connection */
-    mcpTestResult?: { connected: boolean; tool_count: number; tools?: string[]; error?: string | null } | null;
+    mcpTestResult?: McpTestResult | null;
     /** Whether a test connection is in progress */
     isMcpTesting?: boolean;
     trustedSources?: { categories: Array<{ id: string; name: string; description: string; is_custom?: boolean; sources: Array<{ name: string; url: string; domains: string[]; trust_score: number; is_custom: boolean }> }> };
@@ -6243,12 +6243,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     <Network size={20} />
                                                 </div>
                                                 <div className="flex items-center gap-1.5">
-                                                    <span className={`w-2 h-2 rounded-full ${srv.connected ? 'bg-green-500' : (srv.enabled ? 'bg-red-400' : 'bg-gray-300')}`} />
-                                                    <span className="text-[11px] text-gray-500">{srv.connected ? tModals('mcp.tools', { count: srv.tool_count ?? 0 }) : (srv.enabled ? tModals('mcp.offline') : tModals('mcp.disabled'))}</span>
+                                                    {/* A server waiting for its first sign-in is not broken: amber, and it says what it waits for. */}
+                                                    <span className={`w-2 h-2 rounded-full ${srv.connected ? 'bg-green-500' : (!srv.enabled ? 'bg-gray-300' : (srv.sign_in_required ? 'bg-amber-400' : 'bg-red-400'))}`} />
+                                                    <span className="text-[11px] text-gray-500">{srv.connected ? tModals('mcp.tools', { count: srv.tool_count ?? 0 }) : (!srv.enabled ? tModals('mcp.disabled') : (srv.sign_in_required ? tModals('mcp.signInNeeded') : tModals('mcp.offline')))}</span>
                                                 </div>
                                             </div>
                                             <h3 className="relative z-10 text-base font-bold text-gray-800 truncate">{srv.name}</h3>
                                             <p className="relative z-10 text-xs text-gray-400 mt-1 line-clamp-2 break-all">{srv.transport === 'stdio' ? srv.command : srv.url}</p>
+                                            {srv.auth === 'oauth' && (
+                                                <p className="relative z-10 text-[11px] text-gray-500 mt-1">{tModals('mcp.signInPerAccount', { count: srv.accounts_signed_in ?? 0 })}</p>
+                                            )}
                                             <div className="relative z-10 mt-auto pt-2 flex items-center gap-1.5">
                                                 <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wider rounded-md">MCP</span>
                                                 <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-[10px] font-bold uppercase tracking-wider rounded-md">{srv.permission_level}</span>

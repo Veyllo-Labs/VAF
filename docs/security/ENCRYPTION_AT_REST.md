@@ -84,13 +84,20 @@ THE MASTER KEY, per platform (secure_store_kek_backend = "auto"):
         |                                Discord bot tokens), vaf/core/channel_secrets.py
         +-- mcp_server.<name>.env        a local MCP server's environment (its API keys)
         +-- mcp_server.<name>.token      a remote MCP server's access token,
-                                         vaf/core/mcp_secrets.py
+        |                                vaf/core/mcp_secrets.py
+        +-- mcp_server.<name>.oauth.<account>
+        |                                one account's sign-in at a remote MCP server
+        |                                (tokens, expiry, the client it registered),
+        |                                vaf/core/mcp_oauth.py
+        +-- mcp_server.<name>.oauth_client_secret
+                                         the secret of a client registered by hand
 ```
 
 `mcp_servers.json` keeps only the NAMES of a server's env variables. A value written there
 by hand (a documented way to add a server) moves into the ring the next time the file is
-loaded, and so do a `token` or an `Authorization: Bearer` header; the Settings page receives
-the names and whether a token is stored, never a value. `vaf secure status` names a server
+loaded, and so do a `token`, an `Authorization: Bearer` header or an `oauth_client_secret`; the
+Settings page receives the names and whether a token or a client secret is stored, never a
+value. `vaf secure status` names a server
 whose secret is still in the file.
 
 `~/.vaf/config.json` holds **no key material and no messenger login**. It used to

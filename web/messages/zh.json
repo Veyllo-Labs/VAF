@@ -889,7 +889,20 @@
       "telegramPairIntroBot": "在 Telegram 中打开链接，或把这条消息发送给 {bot}。",
       "telegramPairOpen": "在 Telegram 中打开",
       "telegramPairWaiting": "正在等待你发给机器人的消息。代码在 {minutes} 分钟内有效。",
-      "telegramPairFailed": "无法开始配对。"
+      "telegramPairFailed": "无法开始配对。",
+      "mcpTitle": "MCP 服务",
+      "mcpDescription": "每个账户各自登录的服务",
+      "mcpSignedIn": "已登录",
+      "mcpSignedOut": "未登录",
+      "mcpWaiting": "正在等待你在浏览器中完成登录",
+      "mcpTurnedOff": "已关闭",
+      "mcpSignIn": "登录",
+      "mcpSignOut": "退出登录",
+      "mcpUsesYourAccount": "智能体用你的权限使用这个服务。",
+      "mcpSignInFirst": "登录后，智能体就能替你使用这个服务。",
+      "mcpFailed": "登录没有成功：{reason}",
+      "mcpStartFailed": "无法开始登录：{reason}",
+      "mcpSignOutFailed": "退出登录没有成功。"
     },
     "frontOffice": {
       "title": "入站沟通",
@@ -2060,6 +2073,8 @@
       "tools": "{count} 个工具",
       "offline": "离线",
       "disabled": "已禁用",
+      "signInPerAccount": "按账户登录 · 已登录 {count} 个",
+      "signInNeeded": "需要登录",
       "editor": {
         "addTitle": "添加 MCP 服务器",
         "editTitle": "编辑 MCP 服务器",
@@ -2095,7 +2110,17 @@
         "tokenStoredPlaceholder": "已保存",
         "tokenStoredHint": "已保存令牌。留空即可保留。",
         "tokenRemove": "移除令牌",
-        "envHint": "env 值会加密保存，不会再次显示；留空的值会保留已保存的值。"
+        "envHint": "env 值会加密保存，不会再次显示；留空的值会保留已保存的值。",
+        "auth": "登录方式",
+        "authNone": "无，或所有人共用一个访问令牌",
+        "authOauth": "每个账户各自登录（OAuth）",
+        "authOauthHint": "每个账户在“连接”中用自己的权限登录。智能体为谁工作，就使用谁的权限。",
+        "clientId": "客户端 ID（可选）",
+        "clientSecret": "客户端密钥（可选）",
+        "clientHint": "如果 VAF 能在该服务上自行注册，两项都留空。你在那里手动注册的客户端需要这个重定向地址：",
+        "clientSecretStoredHint": "已保存密钥。留空即可保留。",
+        "clientSecretRemove": "移除密钥",
+        "testSignIn": "可以连接。每个账户都需要登录。"
       }
     },
     "workflows": {

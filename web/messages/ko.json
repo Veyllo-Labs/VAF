@@ -889,7 +889,20 @@
       "telegramPairIntroBot": "Telegram에서 링크를 열거나 {bot}에게 이 메시지를 보내세요",
       "telegramPairOpen": "Telegram에서 열기",
       "telegramPairWaiting": "봇에게 보낼 메시지를 기다리고 있어요. 코드는 {minutes}분 동안 유효해요",
-      "telegramPairFailed": "연결을 시작할 수 없어요"
+      "telegramPairFailed": "연결을 시작할 수 없어요",
+      "mcpTitle": "MCP 서비스",
+      "mcpDescription": "계정마다 따로 로그인하는 서비스",
+      "mcpSignedIn": "로그인됨",
+      "mcpSignedOut": "로그인 안 됨",
+      "mcpWaiting": "브라우저에서 로그인을 기다리고 있어요",
+      "mcpTurnedOff": "꺼짐",
+      "mcpSignIn": "로그인",
+      "mcpSignOut": "로그아웃",
+      "mcpUsesYourAccount": "에이전트가 이 서비스를 내 권한으로 사용해요",
+      "mcpSignInFirst": "로그인하면 에이전트가 이 서비스를 대신 사용할 수 있어요",
+      "mcpFailed": "로그인하지 못했어요: {reason}",
+      "mcpStartFailed": "로그인을 시작할 수 없어요: {reason}",
+      "mcpSignOutFailed": "로그아웃하지 못했어요"
     },
     "frontOffice": {
       "title": "인바운드 커뮤니케이션",
@@ -2060,6 +2073,8 @@
       "tools": "도구 {count}개",
       "offline": "오프라인",
       "disabled": "사용 안 함",
+      "signInPerAccount": "계정별 로그인 · {count}개 계정 로그인됨",
+      "signInNeeded": "로그인 필요",
       "editor": {
         "addTitle": "MCP 서버 추가",
         "editTitle": "MCP 서버 편집",
@@ -2095,7 +2110,17 @@
         "tokenStoredPlaceholder": "저장됨",
         "tokenStoredHint": "토큰이 저장되어 있어요. 유지하려면 비워 두세요",
         "tokenRemove": "토큰 삭제",
-        "envHint": "env 값은 암호화되어 저장되고 다시 표시되지 않아요. 빈 값은 저장된 값을 유지해요"
+        "envHint": "env 값은 암호화되어 저장되고 다시 표시되지 않아요. 빈 값은 저장된 값을 유지해요",
+        "auth": "로그인 방식",
+        "authNone": "없음 또는 모두가 함께 쓰는 액세스 토큰",
+        "authOauth": "계정마다 따로 로그인(OAuth)",
+        "authOauthHint": "각 계정은 연결에서 자기 권한으로 로그인해요. 에이전트는 지금 일해 주는 사람의 권한을 써요",
+        "clientId": "클라이언트 ID(선택)",
+        "clientSecret": "클라이언트 시크릿(선택)",
+        "clientHint": "VAF가 서비스에 스스로 등록할 수 있다면 둘 다 비워 두세요. 서비스에서 직접 등록하는 클라이언트에는 이 리디렉션 주소가 필요해요:",
+        "clientSecretStoredHint": "시크릿이 저장되어 있어요. 유지하려면 비워 두세요",
+        "clientSecretRemove": "시크릿 삭제",
+        "testSignIn": "연결할 수 있어요. 계정마다 로그인해야 해요"
       }
     },
     "workflows": {

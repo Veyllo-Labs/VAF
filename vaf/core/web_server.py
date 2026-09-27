@@ -1112,6 +1112,16 @@ except ImportError as e:
 except Exception as e:
     log("WebServer", f"Failed to mount secrets routes: {e}")
 
+# Mount the MCP sign-in routes (each account signs in to an MCP server on its own; mcp_oauth.py)
+try:
+    from vaf.api.mcp_routes import router as mcp_router
+    app.include_router(mcp_router)
+    log("WebServer", "MCP sign-in routes mounted at /api/mcp")
+except ImportError as e:
+    log("WebServer", f"MCP sign-in routes not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount MCP sign-in routes: {e}")
+
 # Mount Auth routes (Local Network Authentication)
 try:
     from vaf.api.auth_routes import router as auth_router
@@ -6818,7 +6828,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type in ("create_mcp_server", "update_mcp_server"):
                     # Add or edit an MCP server in mcp_servers.json, then hot-reload.
                     # Payload: { name, command, transport?, url?, enabled?, permission_level?,
-                    # env?, token?, clear_token? }; secrets go to the key ring (mcp_registry.upsert_server).
+                    # env?, token?, clear_token?, auth?, oauth_client_id?, oauth_client_secret?,
+                    # clear_oauth_client_secret? }; secrets go to the key ring
+                    # (mcp_registry.upsert_server), a sign-in per account is mcp_oauth.py.
                     try:
                         from vaf.core.mcp_registry import upsert_server
 
@@ -6839,6 +6851,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 env=data.get("env") if isinstance(data.get("env"), dict) else None,
                                 token=data.get("token") or None,
                                 clear_token=bool(data.get("clear_token")),
+                                auth=data.get("auth") if isinstance(data.get("auth"), str) else None,
+                                oauth_client_id=data.get("oauth_client_id") if isinstance(data.get("oauth_client_id"), str) else None,
+                                oauth_client_secret=data.get("oauth_client_secret") or None,
+                                clear_oauth_client_secret=bool(data.get("clear_oauth_client_secret")),
                             )
                             agent = manager.agent_instance if manager else None
                             if agent and hasattr(agent, "reload_mcp_tools"):
@@ -6873,8 +6889,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "test_mcp_server":
                     # Probe a server config (without saving) so the admin can validate it in the
-                    # editor. Payload: { name?, command, transport?, url?, env?, token? } - an empty
-                    # token or env value falls back to the stored one. Reply: mcp_server_test_result.
+                    # editor. Payload: { name?, command, transport?, url?, env?, token?, auth? } - an
+                    # empty token or env value falls back to the stored one (the token only on the
+                    # saved server's host, mcp_registry.probe_mcp_server); a server with a sign-in per
+                    # account is tested as the tester's own account. Reply: mcp_server_test_result.
                     try:
                         from vaf.core.config import Config as _CfgMcp
                         from vaf.core.mcp_registry import probe_mcp_server
@@ -6891,10 +6909,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 "transport": (data.get("transport") or "stdio").strip(),
                                 "url": (data.get("url") or "").strip(),
                                 "env": {str(k): str(v) for k, v in _tm_env.items()},
+                                "auth": (data.get("auth") or "").strip() if isinstance(data.get("auth"), str) else "",
                             }
                             _tm_timeout = float(_CfgMcp.get("mcp_discovery_timeout_seconds", 5) or 5)
                             _tm_res = probe_mcp_server(_tm_cfg, _tm_timeout, name=(data.get("name") or "").strip(),
-                                                       token=data.get("token") or None)
+                                                       token=data.get("token") or None, user_scope_id=_tm_scope)
                             await websocket.send_json({"type": "mcp_server_test_result", **_tm_res})
                     except Exception as e:
                         await websocket.send_json({"type": "mcp_server_test_result", "connected": False, "tool_count": 0, "tools": [], "error": str(e)})

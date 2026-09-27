@@ -691,6 +691,22 @@ When the primary lookup returns no accounts (e.g. chat session uses local admin 
 
 Synced messages are stored per-scope in `scopes/<user_scope_id>/email_sync.db` (or legacy path for local admin).
 
+### MCP servers with a sign-in per account
+
+A remote MCP server with `"auth": "oauth"` (`vaf/core/mcp_oauth.py`) is set up once by an admin,
+and every account signs in to it on its own (Connections, "MCP services"; the routes under
+`/api/mcp/sign-in` act on the caller's own account only). Each account's tokens are a record of
+their own in the key ring (`mcp_server.<name>.oauth.<scope>`), and each account has its own
+session at the server, keyed by the account in the session pool. The server's tools declare
+`identity_kwargs = ("user_scope_id",)`, so the dispatcher assigns the caller's scope, a
+model-supplied value is overwritten, and a call runs in that account's session or not at all: an
+account that has not signed in is refused before any request, never served by another account's
+session. The callback that finishes a sign-in must be reached by the account that started it
+(`enforce_callback_actor_binding`, as for the mail sign-in), and a sign-in's `state` is used once.
+The editor's test of such a server runs as the tester's own account. The tool LIST is read with one
+signed-in account (the local admin's when it has one): it is the server's, the same for everybody.
+A missing scope is the local admin's here too (`is_local_admin_lane`).
+
 ### Config: global vs user-scoped
 
 - **Global (admin-only to change):** Backend and network settings apply to all users. Only admins can edit them. This includes: Network tab (local network, ports, TLS, hosting), Advanced tab (server, tray, timeouts, etc.), API keys and provider/model settings, OAuth client IDs, TTS/STT engines, URLs and enable toggles (`stt_enabled` included), the voice provider selection (`speech_tts_provider`, `speech_stt_provider` and their model/voice keys, plus `api_key_elevenlabs`), and similar server-wide options. The auto-speak preference `tts_auto_speak` is deliberately user-writable (playback preference; billing exposure is bounded by the admin-gated enable and provider keys). Stored in the single `config.json`; non-admin PATCH and WebSocket `save_config` are filtered so these keys are not overwritten. To reduce accidental data loss, config merge also preserves existing sensitive values when an incoming update contains empty API key strings or `null` connection configs.

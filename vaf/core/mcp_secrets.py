@@ -8,6 +8,11 @@ Two kinds, one per transport:
   (`GITHUB_TOKEN`) the server process reads;
 - a remote server's access token, sent as `Authorization: Bearer <token>`.
 
+A remote server that signs every account in on its own (`"auth": "oauth"`,
+vaf/core/mcp_oauth.py) adds two more: each account's sign-in (`mcp_server.<name>.oauth.<account>`,
+a JSON record with the tokens and the client the account registered) and the secret of a client
+the admin registered at the service by hand (`mcp_server.<name>.oauth_client_secret`).
+
 Both used to sit in plaintext in `mcp_servers.json`, and the Settings list sent the manifest's
 `env` to the admin's browser as it was - the same exposure the messenger bot tokens had
 (vaf/core/channel_secrets.py). Now they live in the ring (`vaf.core.data_keyring`) under
@@ -16,7 +21,8 @@ only place they are read or written:
 
 - The manifest may still carry them, because editing `mcp_servers.json` by hand is a
   documented way to add a server and it is how an older release left it: `env` values, a
-  `token`, or `headers.Authorization: Bearer ...` (the shape other MCP clients write).
+  `token`, `headers.Authorization: Bearer ...` (the shape other MCP clients write), or an
+  `oauth_client_secret`.
   `move_manifest_secrets` moves them into the ring and takes them out of the file, after the
   ring read them back; the manifest keeps the NAMES of the env variables, never a value.
 - The write side keeps what the browser does not re-send: an env variable sent with an empty
@@ -114,6 +120,74 @@ def clear_server_secrets(server: str) -> None:
     with _lock:
         _drop(_ring_name(server, "token"))
         _drop(_ring_name(server, "env"))
+        _drop(_ring_name(server, "oauth_client_secret"))
+        for account in oauth_accounts(server):
+            _drop(_oauth_name(server, account))
+
+
+# -- sign-in per account (vaf/core/mcp_oauth.py runs the flow; the records live here) ----------
+
+def _oauth_name(server: str, account: str) -> str:
+    return _ring_name(server, f"oauth.{account}")
+
+
+def oauth_record(server: str, account: str) -> Dict[str, Any]:
+    """One account's sign-in at a server ({} when it has none, or the ring cannot be read)."""
+    from vaf.core import data_keyring
+    try:
+        raw = data_keyring.peek_data_secret(_oauth_name(server, account))
+    except Exception as exc:  # noqa: BLE001 - an unreadable ring reads as "not signed in"
+        logger.error("The key ring cannot be read for MCP server %s: %s", server, exc)
+        return {}
+    try:
+        data = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def set_oauth_record(server: str, account: str, record: Dict[str, Any]) -> None:
+    with _lock:
+        _put(_oauth_name(server, account), json.dumps(record, sort_keys=True))
+
+
+def clear_oauth_record(server: str, account: str) -> None:
+    with _lock:
+        _drop(_oauth_name(server, account))
+
+
+def oauth_accounts(server: str) -> list:
+    """The accounts with a sign-in record at a server (their keys, never a token)."""
+    from vaf.core import data_keyring
+    prefix = _oauth_name(server, "")
+    try:
+        return [name[len(prefix):] for name in data_keyring.data_secret_names(prefix)]
+    except Exception as exc:  # noqa: BLE001
+        logger.error("The key ring cannot be read for MCP server %s: %s", server, exc)
+        return []
+
+
+def oauth_client_secret(server: str) -> str:
+    """The secret of the client the admin registered at the service by hand, or ""."""
+    from vaf.core import data_keyring
+    try:
+        return data_keyring.peek_data_secret(_ring_name(server, "oauth_client_secret"))
+    except Exception as exc:  # noqa: BLE001
+        logger.error("The key ring cannot be read for MCP server %s: %s", server, exc)
+        return ""
+
+
+def set_oauth_client_secret(server: str, secret: str) -> None:
+    value = str(secret or "").strip()
+    if not value:
+        raise ValueError("an empty client secret is not a secret; use clear_oauth_client_secret")
+    with _lock:
+        _put(_ring_name(server, "oauth_client_secret"), value)
+
+
+def clear_oauth_client_secret(server: str) -> None:
+    with _lock:
+        _drop(_ring_name(server, "oauth_client_secret"))
 
 
 def merge_env(stored: Dict[str, str], incoming: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -173,6 +247,11 @@ def move_manifest_secrets(manifest: Dict[str, Any]) -> bool:
                         if not cfg["headers"]:
                             cfg.pop("headers")
                     changed = True
+                client_secret = str(cfg.get("oauth_client_secret") or "").strip()
+                if client_secret:
+                    set_oauth_client_secret(name, client_secret)
+                    cfg.pop("oauth_client_secret", None)
+                    changed = True
             except Exception as exc:  # noqa: BLE001 - the file keeps the only copy until it moves
                 logger.error("Could not move the secrets of MCP server %s into the key ring: %s", name, exc)
     return changed
@@ -214,6 +293,7 @@ def secrets_in_manifest(manifest: Dict[str, Any]) -> list:
         env = cfg.get("env")
         headers = cfg.get("headers") if isinstance(cfg.get("headers"), dict) else {}
         if (isinstance(env, dict) and any(str(v) for v in env.values())) or str(cfg.get("token") or "").strip() \
+                or str(cfg.get("oauth_client_secret") or "").strip() \
                 or any(str(k).lower() == "authorization" and _bearer(v) for k, v in headers.items()):
             out.append(str(name))
     return out

@@ -889,7 +889,20 @@
       "telegramPairIntroBot": "Öffne den Link in Telegram oder schick diese Nachricht an {bot}:",
       "telegramPairOpen": "In Telegram öffnen",
       "telegramPairWaiting": "Wartet auf deine Nachricht an den Bot. Der Code gilt {minutes} Minuten.",
-      "telegramPairFailed": "Das Verbinden konnte nicht gestartet werden."
+      "telegramPairFailed": "Das Verbinden konnte nicht gestartet werden.",
+      "mcpTitle": "MCP-Dienste",
+      "mcpDescription": "Dienste, bei denen sich jedes Konto selbst anmeldet",
+      "mcpSignedIn": "Angemeldet",
+      "mcpSignedOut": "Nicht angemeldet",
+      "mcpWaiting": "Wartet auf die Anmeldung im Browser",
+      "mcpTurnedOff": "Ausgeschaltet",
+      "mcpSignIn": "Anmelden",
+      "mcpSignOut": "Abmelden",
+      "mcpUsesYourAccount": "Der Agent nutzt diesen Dienst mit deinem Zugang.",
+      "mcpSignInFirst": "Melde dich an, damit der Agent diesen Dienst für dich nutzen kann.",
+      "mcpFailed": "Die Anmeldung hat nicht geklappt: {reason}",
+      "mcpStartFailed": "Die Anmeldung konnte nicht gestartet werden: {reason}",
+      "mcpSignOutFailed": "Das Abmelden hat nicht geklappt."
     },
     "frontOffice": {
       "title": "Inbound-Kommunikation",
@@ -2060,6 +2073,8 @@
       "tools": "{count} Tools",
       "offline": "offline",
       "disabled": "deaktiviert",
+      "signInPerAccount": "Anmeldung pro Konto · {count} angemeldet",
+      "signInNeeded": "Anmeldung nötig",
       "editor": {
         "addTitle": "MCP-Server hinzufügen",
         "editTitle": "MCP-Server bearbeiten",
@@ -2095,7 +2110,17 @@
         "tokenStoredPlaceholder": "Gespeichert",
         "tokenStoredHint": "Ein Token ist gespeichert. Lass das Feld leer, um es zu behalten.",
         "tokenRemove": "Token entfernen",
-        "envHint": "Die env-Werte werden verschlüsselt gespeichert und nicht wieder angezeigt; ein leerer Wert behält den gespeicherten."
+        "envHint": "Die env-Werte werden verschlüsselt gespeichert und nicht wieder angezeigt; ein leerer Wert behält den gespeicherten.",
+        "auth": "Anmeldung",
+        "authNone": "Keine, oder ein Zugangs-Token für alle",
+        "authOauth": "Jedes Konto meldet sich selbst an (OAuth)",
+        "authOauthHint": "Jedes Konto meldet sich unter Verbindungen mit dem eigenen Zugang an. Der Agent nutzt dann den Zugang der Person, für die er gerade arbeitet.",
+        "clientId": "Client-ID (optional)",
+        "clientSecret": "Client-Secret (optional)",
+        "clientHint": "Beide leer lassen, wenn sich VAF beim Dienst selbst registrieren kann. Ein Client, den du dort von Hand registrierst, braucht diese Weiterleitungsadresse:",
+        "clientSecretStoredHint": "Ein Secret ist gespeichert. Lass das Feld leer, um es zu behalten.",
+        "clientSecretRemove": "Secret entfernen",
+        "testSignIn": "Erreichbar. Jedes Konto muss sich anmelden."
       }
     },
     "workflows": {

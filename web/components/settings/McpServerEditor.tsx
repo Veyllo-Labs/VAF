@@ -14,12 +14,16 @@
  *     Cursor etc.
  * Secrets never come back from the server (vaf/core/mcp_secrets.py): env values arrive empty and an
  * empty value keeps the stored one, a remote server's token field starts empty with a "stored" note.
+ * A remote server either takes one token for everybody or signs every account in on its own
+ * (`auth: "oauth"`, vaf/core/mcp_oauth.py); then the form offers an optional hand-registered client
+ * (ID, write-only secret) and shows the redirect address such a client needs (GET /api/mcp/sign-in).
  * It does NOT do WS itself — the parent SettingsModal drives onSave / onDelete / onTest. Overlay z-[80].
  */
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { AlertCircle, CheckCircle2, Loader2, Save, Trash2, Wifi, X } from 'lucide-react';
+import { getApiBase } from '@/lib/utils';
 
 export interface McpServerInfo {
   name: string;
@@ -34,9 +38,29 @@ export interface McpServerInfo {
   /** Sent on save only: a new access token, or clear_token to remove the stored one. */
   token?: string;
   clear_token?: boolean;
+  /** "oauth": every account signs in on its own (a remote server only); "" otherwise. */
+  auth?: string;
+  /** A client registered at the service by hand; its secret is write-only like the token. */
+  oauth_client_id?: string;
+  oauth_client_secret_set?: boolean;
+  oauth_client_secret?: string;
+  clear_oauth_client_secret?: boolean;
+  /** How many accounts have signed in (a server with a sign-in per account). */
+  accounts_signed_in?: number;
+  /** Discovery found no signed-in account to list the tools with. */
+  sign_in_required?: boolean;
   connected?: boolean;
   tool_count?: number;
   error?: string | null;
+}
+
+export interface McpTestResult {
+  connected: boolean;
+  tool_count: number;
+  tools?: string[];
+  error?: string | null;
+  /** The server answered, and wants every account to sign in: expected before the first sign-in. */
+  sign_in_required?: boolean;
 }
 
 export interface McpServerEditorProps {
@@ -47,7 +71,7 @@ export interface McpServerEditorProps {
   onDelete?: (name: string) => void;
   onClose: () => void;
   onTest?: (cfg: McpTestConfig) => void;
-  testResult?: { connected: boolean; tool_count: number; tools?: string[]; error?: string | null } | null;
+  testResult?: McpTestResult | null;
   isTesting?: boolean;
 }
 
@@ -58,6 +82,7 @@ export interface McpTestConfig {
   url: string;
   env: Record<string, string>;
   token?: string;
+  auth?: string;
 }
 
 const REMOTE = ['http', 'sse'];
@@ -130,12 +155,32 @@ export default function McpServerEditor({ server, isSaving = false, backendError
   const [token, setToken] = useState('');
   const [clearToken, setClearToken] = useState(false);
   const tokenStored = Boolean(server?.token_set) && !clearToken;
+  const [auth, setAuth] = useState(server?.auth === 'oauth' ? 'oauth' : '');
+  const [clientId, setClientId] = useState(server?.oauth_client_id ?? '');
+  // Write-only like the token: starts empty, empty on save keeps the stored secret.
+  const [clientSecret, setClientSecret] = useState('');
+  const [clearClientSecret, setClearClientSecret] = useState(false);
+  const clientSecretStored = Boolean(server?.oauth_client_secret_set) && !clearClientSecret;
+  const [redirectUri, setRedirectUri] = useState('');
   const [jsonText, setJsonText] = useState(() => toStandardBlock(server?.name ?? '', server?.command ?? '', server?.env ?? {}, server?.transport ?? 'stdio', server?.url ?? ''));
   const [jsonInvalid, setJsonInvalid] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const lastSource = useRef<'form' | 'json'>('form');
 
   const isStdio = transport === 'stdio';
+  const perAccount = !isStdio && auth === 'oauth';
+
+  // The redirect address a hand-registered client needs is this backend's, which only the
+  // backend knows (it depends on the network mode): ask it once the form shows the field.
+  useEffect(() => {
+    if (!perAccount || redirectUri) return;
+    let gone = false;
+    fetch(`${getApiBase()}/api/mcp/sign-in`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!gone && d?.redirect_uri) setRedirectUri(String(d.redirect_uri)); })
+      .catch(() => { /* the field stays without the address */ });
+    return () => { gone = true; };
+  }, [perAccount, redirectUri]);
 
   // Form → JSON (skip while the change came from the JSON panel, to avoid clobbering the user's text).
   useEffect(() => {
@@ -170,13 +215,21 @@ export default function McpServerEditor({ server, isSaving = false, backendError
     if (!validate()) return;
     onSave({
       name: name.trim(), command: command.trim(), transport, url: url.trim(), enabled, permission_level: permission, env,
-      ...(isStdio ? {} : { token: token.trim() || undefined, clear_token: clearToken && !token.trim() }),
+      ...(isStdio ? { auth: '' } : perAccount
+        ? {
+          auth: 'oauth',
+          oauth_client_id: clientId.trim(),
+          oauth_client_secret: clientSecret.trim() || undefined,
+          clear_oauth_client_secret: clearClientSecret && !clientSecret.trim(),
+        }
+        : { auth: '', token: token.trim() || undefined, clear_token: clearToken && !token.trim() }),
     });
   };
 
   const handleTest = () => {
     if (!validate()) return;
-    onTest?.({ name: isEdit ? server!.name : undefined, command: command.trim(), transport, url: url.trim(), env, token: isStdio ? undefined : (token.trim() || undefined) });
+    onTest?.({ name: isEdit ? server!.name : undefined, command: command.trim(), transport, url: url.trim(), env,
+      token: isStdio || perAccount ? undefined : (token.trim() || undefined), auth: perAccount ? 'oauth' : '' });
   };
 
   const inputCls = 'w-full px-4 h-11 bg-white border border-gray-200 rounded-xl text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-500 transition-all';
@@ -225,15 +278,50 @@ export default function McpServerEditor({ server, isSaving = false, backendError
                   <input type="text" value={url} onChange={(e) => F(() => setUrl(e.target.value))} placeholder="https://example.com/mcp" className={inputCls} />
                 </div>
                 <div>
-                  <label className={labelCls}>{t('token')}</label>
-                  <input type="password" value={token} autoComplete="off" onChange={(e) => { setToken(e.target.value); setClearToken(false); }} placeholder={tokenStored ? t('tokenStoredPlaceholder') : ''} className={inputCls} />
-                  <p className="text-[11px] text-gray-400 mt-1">
-                    {tokenStored ? t('tokenStoredHint') : t('tokenHint')}
-                    {tokenStored && !token && (
-                      <button type="button" onClick={() => setClearToken(true)} className="ml-2 underline text-gray-500 hover:text-gray-700">{t('tokenRemove')}</button>
-                    )}
-                  </p>
+                  <label className={labelCls}>{t('auth')}</label>
+                  <select value={auth} onChange={(e) => setAuth(e.target.value)} className={inputCls}>
+                    <option value="">{t('authNone')}</option>
+                    <option value="oauth">{t('authOauth')}</option>
+                  </select>
+                  {perAccount && <p className="text-[11px] text-gray-400 mt-1">{t('authOauthHint')}</p>}
                 </div>
+                {perAccount ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
+                      <div>
+                        <label className={labelCls}>{t('clientId')}</label>
+                        <input type="text" value={clientId} autoComplete="off" onChange={(e) => setClientId(e.target.value)} className={inputCls} />
+                      </div>
+                      <div>
+                        <label className={labelCls}>{t('clientSecret')}</label>
+                        <input type="password" value={clientSecret} autoComplete="off" onChange={(e) => { setClientSecret(e.target.value); setClearClientSecret(false); }} placeholder={clientSecretStored ? t('tokenStoredPlaceholder') : ''} className={inputCls} />
+                      </div>
+                    </div>
+                    <div className="text-[11px] text-gray-400 space-y-1">
+                      {clientSecretStored && (
+                        <p>
+                          {t('clientSecretStoredHint')}
+                          {!clientSecret && (
+                            <button type="button" onClick={() => setClearClientSecret(true)} className="ml-2 underline text-gray-500 hover:text-gray-700">{t('clientSecretRemove')}</button>
+                          )}
+                        </p>
+                      )}
+                      <p>{t('clientHint')}</p>
+                      {redirectUri && <p className="font-mono text-gray-600 break-all select-all">{redirectUri}</p>}
+                    </div>
+                  </>
+                ) : (
+                  <div>
+                    <label className={labelCls}>{t('token')}</label>
+                    <input type="password" value={token} autoComplete="off" onChange={(e) => { setToken(e.target.value); setClearToken(false); }} placeholder={tokenStored ? t('tokenStoredPlaceholder') : ''} className={inputCls} />
+                    <p className="text-[11px] text-gray-400 mt-1">
+                      {tokenStored ? t('tokenStoredHint') : t('tokenHint')}
+                      {tokenStored && !token && (
+                        <button type="button" onClick={() => setClearToken(true)} className="ml-2 underline text-gray-500 hover:text-gray-700">{t('tokenRemove')}</button>
+                      )}
+                    </p>
+                  </div>
+                )}
               </>
             )}
 
@@ -295,7 +383,9 @@ export default function McpServerEditor({ server, isSaving = false, backendError
             {!isTesting && testResult && (
               testResult.connected
                 ? <span className="flex items-center gap-1.5 text-sm text-green-600 truncate"><CheckCircle2 size={16} className="shrink-0" /> {t('testOk', { count: testResult.tool_count })}</span>
-                : <span className="flex items-center gap-1.5 text-sm text-red-600 truncate"><AlertCircle size={16} className="shrink-0" /> {testResult.error || t('testFail')}</span>
+                : testResult.sign_in_required
+                  ? <span className="flex items-center gap-1.5 text-sm text-amber-700 truncate"><CheckCircle2 size={16} className="shrink-0" /> {t('testSignIn')}</span>
+                  : <span className="flex items-center gap-1.5 text-sm text-red-600 truncate"><AlertCircle size={16} className="shrink-0" /> {testResult.error || t('testFail')}</span>
             )}
           </div>
           <div className="flex items-center gap-2">

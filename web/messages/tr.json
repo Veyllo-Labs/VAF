@@ -889,7 +889,20 @@
       "telegramPairIntroBot": "Bağlantıyı Telegram'da aç ya da bu mesajı {bot} botuna gönder:",
       "telegramPairOpen": "Telegram'da aç",
       "telegramPairWaiting": "Bota göndereceğin mesaj bekleniyor. Kod {minutes} dakika geçerli.",
-      "telegramPairFailed": "Eşleştirme başlatılamadı."
+      "telegramPairFailed": "Eşleştirme başlatılamadı.",
+      "mcpTitle": "MCP hizmetleri",
+      "mcpDescription": "Her hesabın kendi girişini yaptığı hizmetler",
+      "mcpSignedIn": "Giriş yapıldı",
+      "mcpSignedOut": "Giriş yapılmadı",
+      "mcpWaiting": "Tarayıcıdaki giriş bekleniyor",
+      "mcpTurnedOff": "Kapalı",
+      "mcpSignIn": "Giriş yap",
+      "mcpSignOut": "Çıkış yap",
+      "mcpUsesYourAccount": "Ajan bu hizmeti senin erişiminle kullanır.",
+      "mcpSignInFirst": "Ajanın bu hizmeti senin için kullanabilmesi için giriş yap.",
+      "mcpFailed": "Giriş başarısız oldu: {reason}",
+      "mcpStartFailed": "Giriş başlatılamadı: {reason}",
+      "mcpSignOutFailed": "Çıkış yapılamadı."
     },
     "frontOffice": {
       "title": "Inbound iletişim",
@@ -2060,6 +2073,8 @@
       "tools": "{count} araç",
       "offline": "çevrimdışı",
       "disabled": "devre dışı",
+      "signInPerAccount": "Hesap başına giriş · {count} hesap giriş yaptı",
+      "signInNeeded": "giriş gerekli",
       "editor": {
         "addTitle": "MCP sunucusu ekle",
         "editTitle": "MCP sunucusunu düzenle",
@@ -2095,7 +2110,17 @@
         "tokenStoredPlaceholder": "Kayıtlı",
         "tokenStoredHint": "Kayıtlı bir belirteç var. Korumak için alanı boş bırak.",
         "tokenRemove": "Belirteci kaldır",
-        "envHint": "env değerleri şifreli saklanır ve bir daha gösterilmez; boş bir değer kayıtlı olanı korur."
+        "envHint": "env değerleri şifreli saklanır ve bir daha gösterilmez; boş bir değer kayıtlı olanı korur.",
+        "auth": "Giriş",
+        "authNone": "Yok ya da herkes için tek bir erişim belirteci",
+        "authOauth": "Her hesap kendi girişini yapar (OAuth)",
+        "authOauthHint": "Her hesap Bağlantılar altında kendi erişimiyle giriş yapar. Ajan o sırada kimin için çalışıyorsa onun erişimini kullanır.",
+        "clientId": "İstemci kimliği (isteğe bağlı)",
+        "clientSecret": "İstemci gizli anahtarı (isteğe bağlı)",
+        "clientHint": "VAF hizmete kendini kaydedebiliyorsa ikisini de boş bırak. Orada elle kaydettiğin bir istemcinin şu yönlendirme adresine ihtiyacı var:",
+        "clientSecretStoredHint": "Kayıtlı bir gizli anahtar var. Korumak için alanı boş bırak.",
+        "clientSecretRemove": "Gizli anahtarı kaldır",
+        "testSignIn": "Erişilebilir. Her hesabın giriş yapması gerekiyor."
       }
     },
     "workflows": {

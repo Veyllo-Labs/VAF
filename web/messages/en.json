@@ -889,7 +889,20 @@
       "telegramPairIntroBot": "Open the link in Telegram, or send this message to {bot}:",
       "telegramPairOpen": "Open in Telegram",
       "telegramPairWaiting": "Waiting for your message to the bot. The code works for {minutes} minutes.",
-      "telegramPairFailed": "The pairing could not be started."
+      "telegramPairFailed": "The pairing could not be started.",
+      "mcpTitle": "MCP services",
+      "mcpDescription": "Services every account signs in to on its own",
+      "mcpSignedIn": "Signed in",
+      "mcpSignedOut": "Not signed in",
+      "mcpWaiting": "Waiting for the sign-in in your browser",
+      "mcpTurnedOff": "Turned off",
+      "mcpSignIn": "Sign in",
+      "mcpSignOut": "Sign out",
+      "mcpUsesYourAccount": "The agent uses this service with your access.",
+      "mcpSignInFirst": "Sign in so the agent can use this service for you.",
+      "mcpFailed": "The sign-in did not work: {reason}",
+      "mcpStartFailed": "The sign-in could not be started: {reason}",
+      "mcpSignOutFailed": "Signing out did not work."
     },
     "frontOffice": {
       "title": "Inbound communication",
@@ -2060,6 +2073,8 @@
       "tools": "{count} tools",
       "offline": "offline",
       "disabled": "disabled",
+      "signInPerAccount": "Sign-in per account · {count} signed in",
+      "signInNeeded": "sign-in needed",
       "editor": {
         "addTitle": "Add MCP Server",
         "editTitle": "Edit MCP Server",
@@ -2095,7 +2110,17 @@
         "tokenStoredPlaceholder": "Stored",
         "tokenStoredHint": "A token is stored. Leave the field empty to keep it.",
         "tokenRemove": "Remove token",
-        "envHint": "env values are stored encrypted and not shown again; an empty value keeps the stored one."
+        "envHint": "env values are stored encrypted and not shown again; an empty value keeps the stored one.",
+        "auth": "Sign-in",
+        "authNone": "None, or one access token for everybody",
+        "authOauth": "Every account signs in on its own (OAuth)",
+        "authOauthHint": "Every account signs in with its own access under Connections. The agent then uses the access of the person it is working for.",
+        "clientId": "Client ID (optional)",
+        "clientSecret": "Client secret (optional)",
+        "clientHint": "Leave both empty when VAF can register itself at the service. A client you register there by hand needs this redirect address:",
+        "clientSecretStoredHint": "A secret is stored. Leave the field empty to keep it.",
+        "clientSecretRemove": "Remove secret",
+        "testSignIn": "Reachable. Every account has to sign in."
       }
     },
     "workflows": {

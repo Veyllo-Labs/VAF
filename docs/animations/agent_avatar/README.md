@@ -16,7 +16,7 @@ viewing, screenshots, and post content.
 | **`agent-activity-states.html`** | **Functional states** - shows *what the agent is doing right now*: 21 states in 4 clusters (Tool & Action · Status & Outcome · Lifecycle · Multi-Agent & Learning), dark + light + cycle |
 
 They all use the **same dot** and the same base keyframes, ported 1:1 from the real
-VAF code (`web/app/page.tsx` + `web/app/globals.css`).
+VAF code (component in `web/components/AgentAvatar.tsx`, keyframes in `web/app/globals.css`).
 
 ---
 
@@ -221,4 +221,5 @@ automatically.
 
 All colors, sizes and animation timings sit at the very top of the `<style>` section of each
 HTML file (CSS variables + keyframes). They are ported **1:1 from the real VAF code**
-(`web/app/page.tsx` + `web/app/globals.css`), so they are faithful to the original.
+(component in `web/components/AgentAvatar.tsx`, keyframes in `web/app/globals.css`), so they
+are faithful to the original.

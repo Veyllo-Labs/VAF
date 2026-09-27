@@ -141,11 +141,14 @@ def run(label: str, only: str) -> dict:
             t0 = time.monotonic()
             agent._select_turn_tools(message, 2000, 128000)
             secs = time.monotonic() - t0
-            final = list(agent._active_tools) if agent._active_tools is not None else ["ALL"]
+            # None means ALL tools: resolve it to what the model would be offered, so the case
+            # is scored against real names and its size is the real count.
+            all_tools = agent._active_tools is None
+            final = list(agent.visible_tools()) if all_tools else list(agent._active_tools)
             missing = [g for g in must if not any(t in final for t in g)]
             results.append({
                 "id": cid, "message": message, "pass": not missing,
-                "missing": missing, "final": final, "size": len(final),
+                "missing": missing, "final": final, "size": len(final), "all_tools": all_tools,
                 "router_events": list(events), "seconds": round(secs, 1),
             })
     finally:
@@ -180,10 +183,12 @@ def score(report: dict) -> dict:
         r["llm_alone_pass"] = all(any(t in own for t in g) for g in must)
         r["plan_tool"] = "update_working_memory" in r["final"]
         wanted = {t for g in must for t in g} | recent | every_turn
-        r["extras"] = [t for t in r["final"] if t not in wanted]
+        # Nothing was chosen when every tool is offered, so nothing counts as an extra.
+        r["extras"] = [] if r.get("all_tools") else [t for t in r["final"] if t not in wanted]
     res = report["results"]
     report["summary"] = {
-        s: {"pass": sum(1 for r in res if r["id"].startswith(s) and r["pass"]),
+        s: {"cases": sum(1 for r in res if r["id"].startswith(s)),
+            "pass": sum(1 for r in res if r["id"].startswith(s) and r["pass"]),
             "llm_alone": sum(1 for r in res if r["id"].startswith(s) and r["llm_alone_pass"]),
             "plan_tool": sum(1 for r in res if r["id"].startswith(s) and r["plan_tool"]),
             "extras": sum(len(r["extras"]) for r in res if r["id"].startswith(s))}
@@ -203,10 +208,17 @@ def show(report: dict) -> None:
             print(f"       {e[:160]}")
         if r["extras"]:
             print(f"       extras: {', '.join(r['extras'])}")
-        print(f"       final: {', '.join(r['final'])}")
+        if r.get("all_tools"):
+            print(f"       final: ALL ({r['size']} tools)")
+        else:
+            print(f"       final: {', '.join(r['final'])}")
     for s, v in report["summary"].items():
-        print(f"=== set {s}: pass {v['pass']}/10, llm-alone {v['llm_alone']}/10, "
-              f"plan-tool {v['plan_tool']}/10, extras {v['extras']} ===")
+        n = v["cases"]
+        if not n:
+            print(f"=== set {s}: not run ===")
+            continue
+        print(f"=== set {s}: pass {v['pass']}/{n}, llm-alone {v['llm_alone']}/{n}, "
+              f"plan-tool {v['plan_tool']}/{n}, extras {v['extras']} ===")
     sys.stdout.flush()
 
 

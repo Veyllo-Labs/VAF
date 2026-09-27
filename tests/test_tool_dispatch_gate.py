@@ -514,3 +514,13 @@ def test_the_terminal_prompt_offers_only_the_answers_the_gate_keeps(monkeypatch)
     assert "[a]lways" not in asked[-1] and "[t]his chat" not in asked[-1]
     assert Agent._ask_user_about_gate(fake, "remote_probe", REASON) == "allow_always"
     assert "[a]lways" in asked[-1]
+
+
+def test_the_tools_own_reason_joins_an_authorizers_instead_of_replacing_it(trust):
+    """Review finding: with an authorizer's ask() AND the tool's own reason, the tool's
+    replaced the application's, so the person never read why the application asked."""
+    tool, asked = _probe_tool(), []
+    caller = _funnel(tool, asked, authorize=lambda req: req.ask("the admin reviews every host call"))
+    assert caller.execute("remote_probe", {"server": "new"}) == "RAN"
+    reason = asked[0][0]
+    assert "the admin reviews every host call" in reason and "first connection" in reason

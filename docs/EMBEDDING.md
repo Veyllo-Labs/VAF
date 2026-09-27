@@ -920,7 +920,7 @@ asks the person even under a stored "always", a chat grant or the admin's
 hands-off switch, and offers only "this time" and "cancel". It is asked before
 argument repair and identity assignment, so it gets the raw arguments and the
 identity as keywords; answer fail-closed, and a hook that raises counts as a
-reason to ask. Where nobody is asked (a workflow step), the call arrives with
+reason to ask. When your authorizer asks as well, the person reads both reasons. Where nobody is asked (a workflow step), the call arrives with
 `_call_confirmed = False` for a tool that declared `accepts_call_confirmation`,
 which is how such a tool refuses on its own.
 

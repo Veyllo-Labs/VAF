@@ -228,9 +228,13 @@ def test_the_prompt_answer_matches_the_prompt_and_nothing_else(lab):
     from vaf.core import ssh
     helper = str(ssh.askpass_helper())
 
-    def ask(prompt, **env):
-        return subprocess.run([helper, prompt], capture_output=True, text=True,
-                              env={"PATH": os.environ["PATH"], **env})
+    def ask(prompt, **answers):
+        env = {"PATH": os.environ["PATH"]}
+        for keep in ("SYSTEMROOT", "SystemRoot", "SYSTEMDRIVE", "SystemDrive"):
+            if keep in os.environ:
+                env[keep] = os.environ[keep]
+        env.update(answers)
+        return subprocess.run([helper, prompt], capture_output=True, text=True, env=env)
 
     assert ask("Enter passphrase for key 'k': ", VAF_ASKPASS_PASSPHRASE="pp").stdout == "pp\n"
     assert ask("u@h's password: ", VAF_ASKPASS_PASSWORD="pw").stdout == "pw\n"
@@ -564,3 +568,18 @@ def test_an_unreadable_store_is_named_as_such_not_as_a_missing_key(lab, monkeypa
 def test_the_router_offers_ssh_when_a_machine_is_named(text, forced):
     from vaf.core.agent import _SSH_ROUTE_RE
     assert bool(_SSH_ROUTE_RE.search(text.lower())) is forced
+
+
+def test_a_download_target_that_cannot_be_written_is_an_error_before_ssh_runs(lab, tmp_path):
+    """Review finding: the target was opened after ssh had started, so a target that could not
+    be opened raised out of the call with a live child, its timer and its reader threads."""
+    from vaf.core import user_secrets
+    user_secrets.set_secret("SERVER_PASS", PASSWORD)
+    owner = {"user_scope_id": None, "username": None, "user_role": "admin"}
+    _tool(command="true", login_credential="SERVER_PASS", _call_confirmed=True, **owner)
+    before = len(lab.calls())
+    out = _tool(action="download", remote_path="/etc/hostname",
+                local_path=str(tmp_path / "no-such-folder" / "x"), login_credential="SERVER_PASS",
+                **owner)
+    assert out.startswith("Error:") and "cannot be written" in out, out
+    assert len(lab.calls()) == before, "ssh ran although the target could not be written"

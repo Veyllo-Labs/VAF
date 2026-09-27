@@ -453,9 +453,17 @@ def run(target: Target, remote_command: str, *, user_scope_id: Optional[str],
                               "stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "env": env}
     if os.name != "nt":
         kwargs["start_new_session"] = True
+    # The download target is opened before ssh starts: one that cannot be written is an error
+    # while nothing runs yet, never an exception with a live child, its timer and its readers.
+    try:
+        sink = open(stdout_path, "wb") if stdout_path is not None else None
+    except OSError as e:
+        raise SshError(f"the download target cannot be written: {e}") from None
     try:
         proc = subprocess.Popen(argv, **kwargs)
     except OSError as e:
+        if sink is not None:
+            sink.close()
         raise SshError(f"ssh could not be started: {e}") from None
 
     state = {"timed_out": False, "too_large": False}
@@ -501,7 +509,6 @@ def run(target: Target, remote_command: str, *, user_scope_id: Optional[str],
         t.start()
     out_chunks: List[bytes] = []
     written = 0
-    sink = open(stdout_path, "wb") if stdout_path is not None else None
     try:
         for chunk in iter(lambda: proc.stdout.read(65536), b""):
             written += len(chunk)

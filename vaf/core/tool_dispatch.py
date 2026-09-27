@@ -1240,7 +1240,10 @@ class ToolCaller:
             # The tool's own say about THIS call (BaseTool.ask_reason), e.g. a first contact.
             own_reason = self._tool_ask_reason(tool, args)
             if own_reason:
-                forced_ask, ask_reason = True, own_reason
+                # Joined, never replacing: an authorizer's ask() is the application's reason
+                # and the person must still read it.
+                ask_reason = f"{ask_reason} {own_reason}" if ask_reason else own_reason
+                forced_ask = True
         needs_gate = (decision.requires_confirmation or forced_ask) and verdict.decision != "allow"
         # Whether THIS call was confirmed - by a person at the gate, or by the application's
         # allow(). Handed to a tool that declared it wants to know (accepts_call_confirmation).

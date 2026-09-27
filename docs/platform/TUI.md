@@ -104,7 +104,10 @@ second turn implementation:
   on `web_interface.register_gate` whenever a session id is bound, which
   previously timed out (300 s, then cancel) unless a browser was watching. The
   app answers through the same `web_interface.resolve_gate` contract the web
-  UI uses.
+  UI uses. The modal offers what the gate keeps: "always (tool)" instead of
+  "always (tool + this folder)" when the event's `always_trusts_folder` is false,
+  and only "allow once" and "cancel" when `offer_standing` is false (the other
+  keys do nothing there). The plain terminal prompt lists the same choices.
 
 ## Keys and commands
 

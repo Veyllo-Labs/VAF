@@ -907,6 +907,30 @@ ASSIGNS the value, so a model that writes `_call_confirmed: true` into its
 arguments is overwritten. VAF's `python_exec` uses it, so "only this time" runs
 the code instead of being refused by the tool's own check.
 
+**A tool whose effect is not in a folder.** A trusted directory silences the
+confirmation of every gated tool under it, and "always" trusts the current
+folder. For a tool that acts somewhere else (a shell on another machine) a
+folder says nothing, so it declares `trusted_dir_grants = False`: a trusted
+directory does not silence it, and "always" stores only the tool.
+
+**A call that must be asked even under a standing answer.** A tool may override
+`ask_reason(args, *, user_scope_id=None, username=None)` and return a reason for
+THIS call (the first connection to a server nobody confirmed). The funnel then
+asks the person even under a stored "always", a chat grant or the admin's
+hands-off switch, and offers only "this time" and "cancel". It is asked before
+argument repair and identity assignment, so it gets the raw arguments and the
+identity as keywords; answer fail-closed, and a hook that raises counts as a
+reason to ask. Where nobody is asked (a workflow step), the call arrives with
+`_call_confirmed = False` for a tool that declared `accepts_call_confirmation`,
+which is how such a tool refuses on its own.
+
+**A tool that is not part of "everything".** `account_opt_in = True` keeps a
+tool away from a regular account unless the account's allowlist NAMES it; a
+missing or empty list means "everything" for every other tool. Admins and a
+caller with no scope always have it. `account_allows_tool(name, scope, role,
+tool=tool)` gives the same answer to a surface that lists tools; without `tool`
+it answers the plain list rule.
+
 **Background host commands** (`host_bash(background=true)`, then `host_process`)
 report their end as a wake turn queued on VAF's `TaskQueue`, the lane a fired
 timer uses. VAF's own runners (the web server, the terminal apps) consume that
@@ -963,7 +987,11 @@ Key declarative rules the runtime enforces:
   matches any call the dispatcher judges to come from a chat (by `source` or by a
   channel session id), so it also covers a channel VAF adds later. Naming the channels
   one by one (`("telegram", "whatsapp")`) blocks exactly those and leaves the tool open
-  on the next.
+  on the next. A tool that is BOTH `dangerous` and restricted with `"channel"` needs a
+  person for every use, and no channel can show the confirmation: it is refused on a
+  channel even when the admin's `channel_tools_unrestricted` lifts the other channel
+  restrictions, in the lane that would ask a person (a `ToolCaller` with its gate on).
+  Declare the two and nothing else is needed - there is no per-tool guard to write.
 - `category` - which bundle the tool appears under in the human-facing tool
   lists (the web tools window, the CLI table, the TUI overlay, `list_tools`).
   The in-tree vocabulary is `TOOL_CATEGORIES` in `vaf/core/tool_contract.py`,
@@ -1332,9 +1360,13 @@ cannot run and the refusal arrives too late to mean anything:
 ```python
 from vaf import account_allows_tool
 
-visible = [name for name in registry
-           if account_allows_tool(name, user_scope_id, user_role)]
+visible = [name for name, tool in registry.items()
+           if account_allows_tool(name, user_scope_id, user_role, tool=tool)]
 ```
+
+Hand it the tool object when you have it: a tool that declares
+`account_opt_in = True` is only allowed where the account's list names it, and
+without the object the answer is the plain list rule.
 
 Use it instead of consulting your own resolver directly: the exemptions are
 part of the answer. A lister that reproduced the lookup but forgot that a

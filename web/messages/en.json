@@ -368,6 +368,7 @@
     "gateAllowAlways": "Always allow",
     "gateAllowChatHint": "Allows this tool for you for the rest of this chat. Other chats still ask. Ends when VAF restarts.",
     "gateAllowAlwaysHint": "Allows this tool for you everywhere, and trusts the current folder for every tool that asks for confirmation.",
+    "gateAllowAlwaysToolHint": "Allows this tool for you everywhere. No folder is trusted by this.",
     "wakeTimer": "Timer",
     "wakeProcess": "Background command",
     "wakeDraft": "Draft sent",

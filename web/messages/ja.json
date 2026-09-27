@@ -368,6 +368,7 @@
     "gateAllowAlways": "常に許可",
     "gateAllowChatHint": "このチャットの間、このツールを許可します。ほかのチャットでは引き続き確認します。VAFを再起動すると解除されます。",
     "gateAllowAlwaysHint": "このツールをどこでも許可し、確認が必要なすべてのツールについて現在のフォルダーを信頼します。",
+    "gateAllowAlwaysToolHint": "このツールをどこでも許可します。フォルダーは信頼しません。",
     "wakeTimer": "タイマー",
     "wakeProcess": "バックグラウンドコマンド",
     "wakeDraft": "送信した下書き",

@@ -2883,6 +2883,7 @@ def _coder_dispatch_refusal(fn_name: str, tool, *, coder_allowed, caller_allowed
         tool_name=fn_name, tool=tool, current_source="",
         is_channel_session=is_channel_session("", session_id),
         is_admin=policy_admin_flag(role, scope),
+        gated_lane=False,               # the coder runs unattended; nobody is asked here
     )
     if decision.blocked:
         return f"Security Error: {decision.reason}"

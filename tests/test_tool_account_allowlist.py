@@ -363,3 +363,53 @@ def test_the_universe_endpoint_offers_bash():
 
     out = asyncio.run(tool_universe(_={"role": "admin"}))
     assert "bash" in out["coder_only"]
+
+
+# ── a tool that is not in "everything" (BaseTool.account_opt_in) ─────────────
+
+class _OptInProbe(_Probe):
+    account_opt_in = True
+
+
+def _opt_in_caller(**kw):
+    return ToolCaller({"probe": _OptInProbe()}, **kw)
+
+
+@pytest.mark.parametrize("answer", [None, "unregistered"])
+def test_an_opt_in_tool_is_not_part_of_everything(answer):
+    """A missing or empty list means "everything" for the other tools (the admin UI's creation
+    default). A tool of this weight must not reach every account the day it ships."""
+    if answer != "unregistered":
+        _resolver(answer)
+    out = _opt_in_caller(user_scope_id=SCOPE, user_role="user").execute("probe", {})
+    assert out.startswith("Security Error:") and "not enabled for your account" in out
+
+
+def test_an_opt_in_tool_runs_when_the_list_names_it():
+    _resolver(frozenset({"probe"}))
+    assert _opt_in_caller(user_scope_id=SCOPE, user_role="user").execute("probe", {}) == "RAN"
+
+
+def test_an_admin_and_the_machine_owner_always_have_it():
+    _resolver(None)
+    assert _opt_in_caller(user_scope_id=SCOPE, user_role="admin").execute("probe", {}) == "RAN"
+    assert _opt_in_caller().execute("probe", {}) == "RAN", "a scopeless caller is the owner"
+
+
+def test_the_listing_answer_hides_it_the_same_way():
+    """The tool lists ask the same function; handed the tool, they hide it too."""
+    from vaf.core.tool_dispatch import account_allows_tool
+    _resolver(None)
+    assert account_allows_tool("probe", SCOPE, "user", tool=_OptInProbe()) is False
+    assert account_allows_tool("probe", SCOPE, "user", tool=_Probe()) is True
+    assert account_allows_tool("probe", SCOPE, "user") is True, "without the tool: the plain rule"
+
+
+def test_an_empty_stored_list_does_not_grant_it():
+    """The harness resolver turns an EMPTY stored list into None (unrestricted); for an
+    opt-in tool that is still no grant."""
+    import vaf.auth.permissions as perms
+    assert perms._tools_from_permissions({"tools": []}) is None
+    _resolver(perms._tools_from_permissions({"tools": []}))
+    out = _opt_in_caller(user_scope_id=SCOPE, user_role="user").execute("probe", {})
+    assert out.startswith("Security Error:")

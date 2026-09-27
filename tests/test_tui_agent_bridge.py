@@ -52,8 +52,9 @@ class Recorder:
     def tool_start(self, tool, preview):     self._rec("tool_start", tool, preview)
     def tool_end(self, tool, ok, duration, output=""):
         self._rec("tool_end", tool, ok, duration, output)
-    def gate_required(self, tool, reason, preview="", notes=""):
-        self._rec("gate_required", tool, reason, preview, notes)
+    def gate_required(self, tool, reason, preview="", notes="", offer_standing=True,
+                      trusts_folder=True):
+        self._rec("gate_required", tool, reason, preview, notes, offer_standing, trusts_folder)
     def gate_decision(self, decision):       self._rec("gate_decision", decision)
     def presence(self, state, detail=""):    self._rec("presence", state)
     def context(self, used, total):          self._rec("context", used, total)

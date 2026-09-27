@@ -489,8 +489,17 @@ categories, and the reason. Four answers, sent back as `gate_response`:
   agent started from this chat inherits it (it matters there for `python_exec`, which checks
   it itself; the coder runs `host_bash` without asking anyway).
 - **Always allow** (`allow_always`): stored for this person - the tool everywhere, plus trust
-  for the current folder for every gated tool. The button's tooltip says so.
+  for the current folder for every gated tool. The button's tooltip says so. For a tool whose
+  effect is not in a folder (`BaseTool.trusted_dir_grants = False`, the event's
+  `always_trusts_folder: false`) it stores the tool only, and the tooltip says that instead
+  (`gateAllowAlwaysToolHint`).
 - **Cancel**.
+
+A question that must be asked even under a standing answer (the tool's own `ask_reason`, e.g.
+the first connection to a server, or an embedder's `ask()`) arrives with
+`offer_standing: false`: the dialog then shows only **Only this time** and **Cancel**, and the
+gate counts any other answer as `allow_once`, because a standing answer would outlive the
+question it was given to.
 
 The server accepts exactly the answers the trust module defines (`vaf.core.trust.Decision`).
 All strings come from `main.gate*` in `web/messages/*.json`.

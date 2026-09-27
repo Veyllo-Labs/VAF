@@ -346,6 +346,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   one difference: an installer piped into a shell is shown in the confirmation there instead of
   refused, because that is how software such as Docker is commonly installed on a server.
 
+- **Host Python no longer runs from a messaging channel.** With the admin setting that gives
+  Telegram, WhatsApp and Discord the same tools as the app switched on (the default), the
+  agent's tool that runs Python directly on your computer worked from a chat message without
+  any confirmation, as soon as it had been set to "always allow" once. The host shell was
+  protected against this, the Python tool was not. Both are now refused on every messaging
+  channel, because a confirmation cannot be shown there. In the app nothing changes.
+
 - **Only an admin can change the MCP settings.** Any account could switch off the MCP tools for
   everybody, change how long VAF waits for MCP servers at startup, and set the address a
   sign-in to an MCP server sends its authorization code to. All MCP settings are now admin-only,

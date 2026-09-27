@@ -529,7 +529,9 @@ class AgentBridge:
                 self.events.gate_required(str(evt.get("tool", "")),
                                           str(evt.get("reason", "")),
                                           str(evt.get("args_preview", "") or ""),
-                                          "; ".join(_notes))
+                                          "; ".join(_notes),
+                                          offer_standing=evt.get("offer_standing") is not False,
+                                          trusts_folder=evt.get("always_trusts_folder") is not False)
             elif etype == "gate_decision":
                 self.events.gate_decision(str(evt.get("decision", "")))
             # llm_start/llm_end: enrichment only (local providers emit none) - ignored.

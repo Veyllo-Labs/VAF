@@ -17,13 +17,12 @@ the standard preset includes it). HOW each use is controlled:
      applies there: the account allowlist, the policy block, and (for workflow steps) an
      application's authorizer.
   3. The main agent's DIRECT call from a messaging channel (Telegram/WhatsApp/Discord) is
-     refused in TWO layers, because the person cannot be shown the confirmation there:
-       a. channel_restrictions -> the policy-layer block (evaluate_tool_policy).
-       b. a non-liftable guard in run(), fed by the `_is_channel_session` the chat lane
-          hands over (vaf/core/agent.py). It holds even when the admin sets
-          channel_tools_unrestricted, which lifts 3a for the convenience tools. Only the
-          chat lane hands it over: the guard protects the turn where somebody would have
-          been asked, not the unattended lanes in 2.
+     refused, because the person cannot be shown the confirmation there. The policy does it
+     (vaf/core/tool_contract.evaluate_tool_policy, section 1a): a dangerous tool with
+     "channel" in its channel_restrictions is refused on a channel in the lane that would ask
+     a person, BEFORE channel_tools_unrestricted can lift the restriction for the convenience
+     tools. Only that lane: the rule protects the turn where somebody would have been asked,
+     not the unattended lanes in 2.
 
 A cheap blocklist stops the few catastrophic patterns (command_policy, host profile).
 """
@@ -90,19 +89,6 @@ class HostBashTool(BaseTool):
         command = str(kwargs.get("command") or "").strip()
         if not command:
             return "[ERROR] host_bash: no command provided"
-
-        # Non-liftable channel guard (defense in depth). channel_restrictions above is the
-        # policy-layer block, but it is lifted when the admin sets channel_tools_unrestricted
-        # (default ON on a fresh install). host_bash on a remote channel is categorically not
-        # allowed: there is no way to show the confirmation there, so a Telegram message could
-        # otherwise run host commands unconfirmed. The chat lane injects the authoritative
-        # _is_channel_session it already computed; refuse unconditionally when it is a channel.
-        if kwargs.get("_is_channel_session"):
-            return (
-                "[BLOCKED] host_bash is not available over remote messaging channels "
-                "(Telegram/WhatsApp/Discord). Host/docker commands must be run from the local "
-                "app, where each command is shown and confirmed before it executes."
-            )
 
         timeout = self._command_timeout(kwargs)
 

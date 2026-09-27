@@ -54,8 +54,9 @@ def make_json_serializable(obj: Any) -> Any:
 
 
 # Every chat channel with a bridge, from the registry: a channel added there is a chat
-# source here at once, so the `"channel"` sentinel in `channel_restrictions` (and
-# host_bash's own non-liftable guard, which reads the same answer) blocks it from day one.
+# source here at once, so the `"channel"` sentinel in `channel_restrictions` (and the
+# policy's refusal of a tool that needs a person, which reads the same answer) blocks it
+# from day one.
 CHANNEL_SOURCES = frozenset(CHAT_CHANNELS)
 CHANNEL_SESSION_PREFIXES = CHAT_SESSION_PREFIXES
 
@@ -351,7 +352,9 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
                               ignore_standing_grants: bool = False,
                               user_scope_id: str | None = None,
                               user_role: str | None = None,
-                              session_id: str | None = None) -> str | None:
+                              session_id: str | None = None,
+                              offer_standing: bool = True,
+                              trust_folder: bool = True) -> str | None:
     """Decide whether a confirmation-gated tool may run.
 
     Returns ``None`` when it may proceed, or the string to hand back to the model. Never
@@ -400,6 +403,16 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
     person again. Without it, ``ask()`` would be a suggestion rather than a decision - the
     first standing grant would silence it forever, which is precisely the situation an
     application overrides the default for.
+
+    ``offer_standing=False`` is the other half of that: a question that ignores standing
+    answers must not create one. The dialog then offers only "this time" and "cancel"
+    (``gate_required`` says so in ``offer_standing``), and an ``allow_chat`` or
+    ``allow_always`` that arrives anyway counts as ``allow_once`` - it never widens.
+
+    ``trust_folder=False`` is for a tool whose effect is not in a folder
+    (``BaseTool.trusted_dir_grants``): a trusted directory does not silence it, and
+    ``allow_always`` stores only the tool policy. ``gate_required`` says so in
+    ``always_trusts_folder``, so no dialog promises a folder it does not trust.
     """
     from vaf.core.trust import (get_tool_policy, grant_tool_for_chat, has_chat_grant,
                                 is_trusted_dir, mark_trusted_dir, set_tool_policy)
@@ -415,7 +428,7 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
                               "why": _bypass_why})
             return None
         if (get_tool_policy(tool_name, user_scope_id) == "allow"
-                or is_trusted_dir(trust_dir, user_scope_id)):
+                or (trust_folder and is_trusted_dir(trust_dir, user_scope_id))):
             return None
         if has_chat_grant(tool_name, user_scope_id, session_id):
             emit_event(emit, {"type": "gate_bypassed", "tool": tool_name,
@@ -437,7 +450,11 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
              "reason": reason, "args_preview": preview,
              "args_preview_truncated": bool(_pv.get("truncated")),
              "args_preview_neutralized": int(_pv.get("neutralized") or 0),
-             "args_preview_redacted": int(_pv.get("redacted") or 0)}
+             "args_preview_redacted": int(_pv.get("redacted") or 0),
+             # What the dialog may offer, so no surface promises an answer the gate
+             # will not keep (see offer_standing / trust_folder above).
+             "offer_standing": bool(offer_standing),
+             "always_trusts_folder": bool(trust_folder)}
     # For shell lanes the offline classifier already knows WHY a command is
     # noteworthy; the dialog should say it rather than only that it is gated.
     try:
@@ -457,8 +474,12 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
             pass
 
     if not interactive:
+        _how = ("Re-run interactively or mark folder trusted." if trust_folder else
+                "Re-run interactively, or allow the tool always in the app.")
+        if not offer_standing:
+            _how = "Re-run interactively: this call must be confirmed by the person."
         return (f"[ERROR] Tool '{tool_name}' requires confirmation ({reason}). "
-                f"Re-run interactively or mark folder trusted.")
+                f"{_how}")
 
     # decide(tool_name, reason): the reason is what a terminal prompt shows the person, and
     # only this function knows it - the caller cannot close over a value computed here.
@@ -466,15 +487,25 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
     # accepts `preview` gets it (our CLI and TUI do, so the person sees the arguments
     # they are approving), and every two-argument decider keeps working unchanged -
     # `decide(tool_name, reason)` is the published contract (docs/EMBEDDING.md).
+    # The answers on offer travel the same optional way (`choices`), so a terminal prompt
+    # lists only what counts.
+    choices = (("allow_once", "allow_chat", "allow_always", "cancel") if offer_standing
+               else ("allow_once", "cancel"))
     choice = "cancel"
     if callable(decide):
         try:
             import inspect as _inspect
-            _wants_preview = "preview" in _inspect.signature(decide).parameters
+            _params = _inspect.signature(decide).parameters
         except (TypeError, ValueError):
-            _wants_preview = False
-        choice = decide(tool_name, reason, preview=dict(_pv)) if _wants_preview \
-            else decide(tool_name, reason)
+            _params = {}
+        _extra = {}
+        if "preview" in _params:
+            _extra["preview"] = dict(_pv)
+        if "choices" in _params:
+            _extra["choices"] = choices
+        choice = decide(tool_name, reason, **_extra)
+    if not offer_standing and choice in ("allow_chat", "allow_always"):
+        choice = "allow_once"       # never widen: this question offered no standing answer
     if choice == "allow_once":
         # This call and nothing else: remembering it anywhere would silently widen a single
         # approval into a standing one.
@@ -486,9 +517,11 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
                           "decision": "allow_chat" if _granted else "allow_once"})
         return None
     if choice == "allow_always":
-        # Both at once, as documented: the directory subtree AND the tool. Outlives the
-        # process, per user - the only persistent write on any dispatch path.
-        mark_trusted_dir(trust_dir, user_scope_id)
+        # Both at once, as documented: the directory subtree AND the tool - the folder only
+        # for a tool whose effect is in one. Outlives the process, per user - the only
+        # persistent write on any dispatch path.
+        if trust_folder:
+            mark_trusted_dir(trust_dir, user_scope_id)
         set_tool_policy(tool_name, "allow", user_scope_id)
         emit_event(emit, {"type": "gate_decision", "tool": tool_name, "decision": "allow_always"})
         return None
@@ -876,7 +909,7 @@ def resolve_account_allowlist(user_scope_id: str):
 
 
 def account_allows_tool(tool_name: str, user_scope_id: str | None,
-                        user_role: str | None = None) -> bool:
+                        user_role: str | None = None, *, tool=None) -> bool:
     """Would the account allowlist let this caller run this tool?
 
     The same question the dispatcher asks before every call, asked WITHOUT making
@@ -893,12 +926,20 @@ def account_allows_tool(tool_name: str, user_scope_id: str | None,
     Raises whatever the registered resolver raises: a guard that crashed must not
     silently become no guard, and each caller decides what its own fail-closed
     looks like (the dispatcher refuses the call; a lister may drop the entry).
+
+    ``tool`` is the tool object when the caller has it: a tool that declares
+    ``account_opt_in`` is allowed for a regular account only when its list NAMES it,
+    because a missing or empty list means "everything" for every other tool. Without
+    ``tool`` the answer is the plain list rule.
     """
     if not user_scope_id:
         return True
     if policy_admin_flag(user_role, user_scope_id):
         return True
     allowed = resolve_account_allowlist(user_scope_id)
+    if getattr(tool, "account_opt_in", False):
+        # Only a list that NAMES it: "no list" means everything for the other tools.
+        return allowed is not None and tool_name in allowed
     return allowed is None or tool_name in allowed
 
 
@@ -1175,7 +1216,7 @@ class ToolCaller:
         # lanes with their own check is the shape where four forget. After `_policy` (admin
         # exemption rides the same `policy_admin_flag` the other gates use) and BEFORE the
         # authorizer - an account-level ban must not be overridable by an embedder's allow().
-        blocked_reason = self._account_allowlist_blocks(name)
+        blocked_reason = self._account_allowlist_blocks(name, tool)
         if blocked_reason:
             return f"Security Error: {blocked_reason}"
 
@@ -1194,6 +1235,12 @@ class ToolCaller:
                 return gate_msg
 
         forced_ask = verdict.decision == "ask"
+        ask_reason = verdict.reason if forced_ask else ""
+        if verdict.decision != "allow" and tool is not None:
+            # The tool's own say about THIS call (BaseTool.ask_reason), e.g. a first contact.
+            own_reason = self._tool_ask_reason(tool, args)
+            if own_reason:
+                forced_ask, ask_reason = True, own_reason
         needs_gate = (decision.requires_confirmation or forced_ask) and verdict.decision != "allow"
         # Whether THIS call was confirmed - by a person at the gate, or by the application's
         # allow(). Handed to a tool that declared it wants to know (accepts_call_confirmation).
@@ -1202,9 +1249,11 @@ class ToolCaller:
             # The dialog shows what will run, never a credential the tool declared.
             from vaf.core.arg_preview import mask_secret_args
             refusal = resolve_confirmation_gate(
-                name, reason=(verdict.reason if forced_ask else decision.reason),
+                name, reason=(ask_reason if forced_ask else decision.reason),
                 args=mask_secret_args(args, getattr(tool, "secret_args", ())),
                 ignore_standing_grants=forced_ask,
+                offer_standing=not forced_ask,
+                trust_folder=bool(getattr(tool, "trusted_dir_grants", True)),
                 trust_dir=self.trust_dir if self.trust_dir is not None else Path.cwd(),
                 user_scope_id=self.user_scope_id, user_role=self.user_role,
                 session_id=self.session_id, interactive=self.interactive,
@@ -1253,15 +1302,31 @@ class ToolCaller:
             user_role=self.user_role, source=self.source, session_id=self.session_id,
         ))
 
+    def _tool_ask_reason(self, tool, args) -> str:
+        """BaseTool.ask_reason for this call, as a string ("" for none). Fail-closed: a hook
+        that raises is a reason to ask, never a silent pass."""
+        fn = getattr(tool, "ask_reason", None)
+        if not callable(fn):
+            return ""
+        try:
+            return str(fn(dict(args or {}), user_scope_id=self.user_scope_id,
+                          username=self.username) or "")
+        except Exception as exc:                                  # noqa: BLE001
+            return (f"This call could not be checked ({type(exc).__name__}), so it is put "
+                    "to you.")
+
     def _policy(self, name, tool):
         from vaf.core.tool_contract import evaluate_tool_policy
         return evaluate_tool_policy(
             tool_name=name, tool=tool, current_source=self.source,
             is_channel_session=is_channel_session(self.source, self.session_id),
             is_admin=policy_admin_flag(self.user_role, self.user_scope_id),
+            # Only the lane that would ask a person refuses a tool that needs one on a
+            # channel; the unattended lanes (gate off) decide by the account allowlist.
+            gated_lane=self.gate_enabled,
         )
 
-    def _account_allowlist_blocks(self, name: str) -> str:
+    def _account_allowlist_blocks(self, name: str, tool=None) -> str:
         """The account-level tool allowlist, as a refusal reason or "".
 
         Admins are exempt by the same rule as every other gate; a caller with no scope is
@@ -1273,7 +1338,7 @@ class ToolCaller:
         INSIDE the resolver that knows its backend, and VAF's own resolver makes it there.
         """
         try:
-            if account_allows_tool(name, self.user_scope_id, self.user_role):
+            if account_allows_tool(name, self.user_scope_id, self.user_role, tool=tool):
                 return ""
         except Exception:
             return (f"The account allowlist resolver failed, so '{name}' is refused. "

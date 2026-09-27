@@ -20,9 +20,12 @@ all.
 WHY THIS FILE EXISTS: splitting `execute_tool` into a shared pipeline plus chat hooks left
 three separate computations of this flag where there had been one. The policy stage kept
 both signals; the two tool-level guards were rewritten to read the attribute alone. For a
-drained channel session the two then disagreed, and the disagreement is fail-OPEN:
-`vaf/tools/host_bash.py` reads the injected `_is_channel_session` as plain truthiness, so
-False means "not a channel" and the non-liftable host-command guard stops guarding.
+drained channel session the two then disagreed, and the disagreement was fail-OPEN:
+`vaf/tools/host_bash.py` read an injected `_is_channel_session` as plain truthiness, so
+False meant "not a channel" and the host-command guard stopped guarding. That guard is now
+the policy's refusal of a tool that needs a person (tool_contract section 1a), which reads
+the chat lane's source and session through ToolCaller - the same single resolution, and
+what this file keeps proving for every path a channel turn can take.
 
 Nothing caught it. The kwargs baseline pins that the KEY arrives, not its value; the
 channel-context test sets `current_session_id` on the fake directly, so the attribute path
@@ -56,8 +59,13 @@ class _Spy(BaseTool):
         return "ok"
 
 
-def _dispatch(tool_name, *, attr_sid, contextvar_sid, source="", args=None):
+def _run(tool_name, *, attr_sid, contextvar_sid, source="", args=None, needs_a_person=False):
+    """Dispatch through the chat lane with the admin's channel lift ON; (result, what ran)."""
     spy = _Spy(tool_name)
+    if needs_a_person:
+        # What host_bash, python_exec and ssh declare: dangerous, and off every channel.
+        spy.permission_level = "dangerous"
+        spy.channel_restrictions = ("channel",)
     fake = bind_chat_stages(SimpleNamespace(
         tools={tool_name: spy}, _event_sink=None,
         _noninteractive=True, _current_turn_thinking_mode=False,
@@ -80,46 +88,54 @@ def _dispatch(tool_name, *, attr_sid, contextvar_sid, source="", args=None):
                side_effect=lambda k, d=None: True if k == "channel_tools_unrestricted" else d), \
          patch("vaf.core.subagent_ipc.get_current_session_id", return_value=contextvar_sid):
         result = Agent.execute_tool(fake, tool_name, dict(args or {}))
-    assert spy.seen is not None, f"{tool_name} never ran: {str(result)[:120]!r}"
-    return spy.seen
+    return result, spy.seen
 
 
-# ── the flag host_bash reads ─────────────────────────────────────────────────
+def _dispatch(tool_name, **kw):
+    result, seen = _run(tool_name, **kw)
+    assert seen is not None, f"{tool_name} never ran: {str(result)[:120]!r}"
+    return seen
+
+
+# ── a tool that needs a person is refused on every channel path ──────────────
+
+def _host_tool(**kw):
+    return _run("host_bash", needs_a_person=True, **kw)
+
+
+def _assert_refused(result, seen, why):
+    assert seen is None and str(result).startswith("Security Error"), (
+        f"{why}: a host tool ran unconfirmed on a channel turn: {str(result)[:120]!r}")
+
 
 def test_a_channel_source_alone_is_enough():
     """The control: with a channel SOURCE the session id is not consulted at all, which is
     why the regression stayed invisible in the obvious test."""
-    seen = _dispatch("host_bash", attr_sid=None, contextvar_sid=None, source="telegram")
-    assert seen.get("_is_channel_session") is True
+    _assert_refused(*_host_tool(attr_sid=None, contextvar_sid=None, source="telegram"),
+                    "source")
 
 
 def test_the_session_on_the_agent_is_enough():
-    seen = _dispatch("host_bash", attr_sid=CHANNEL_SID, contextvar_sid=None)
-    assert seen.get("_is_channel_session") is True
+    _assert_refused(*_host_tool(attr_sid=CHANNEL_SID, contextvar_sid=None), "attribute")
 
 
 def test_the_session_in_the_contextvar_is_enough():
     """THE regression. A drained or resumed channel turn carries its session only in the
     contextvar - an Agent built for an automation has no `current_session_id` at all. Reading
-    the attribute alone answers False here, and False disarms host_bash's non-liftable guard."""
-    seen = _dispatch("host_bash", attr_sid=None, contextvar_sid=CHANNEL_SID)
-    assert seen.get("_is_channel_session") is True, (
-        "the channel flag lost the contextvar: a drained channel turn would run host "
-        "commands unconfirmed, because host_bash reads this key as plain truthiness"
-    )
+    the attribute alone answers "not a channel" here, and the host tool would run."""
+    _assert_refused(*_host_tool(attr_sid=None, contextvar_sid=CHANNEL_SID), "contextvar")
 
 
 def test_the_contextvar_wins_over_a_stale_attribute():
     """With several main workers in one process the attribute can belong to a previous
     session; the contextvar is the one that belongs to THIS turn."""
-    seen = _dispatch("host_bash", attr_sid="web_local", contextvar_sid=CHANNEL_SID)
-    assert seen.get("_is_channel_session") is True
+    _assert_refused(*_host_tool(attr_sid="web_local", contextvar_sid=CHANNEL_SID), "stale")
 
 
 def test_a_plain_web_turn_is_not_a_channel():
-    seen = _dispatch("host_bash", attr_sid="web_local", contextvar_sid="web_local",
-                     source="web")
-    assert seen.get("_is_channel_session") is False
+    result, seen = _host_tool(attr_sid="web_local", contextvar_sid="web_local", source="web")
+    assert seen is not None, f"refused off-channel: {str(result)[:120]!r}"
+    assert "_is_channel_session" not in seen, "the flag is no longer handed to the tool"
 
 
 # ── the second consumer, which is a different code path ──────────────────────
@@ -178,8 +194,8 @@ def test_the_generic_channel_sentinel_fires_for_a_contextvar_only_session():
     The tool here carries the GENERIC `"channel"` sentinel, which is the only entry that can
     fire without a matching source string: `evaluate_tool_policy` intersects the tool's list
     with `{"channel"} | {source}`, so a named restriction like `("telegram",)` deliberately
-    does NOT block a source-less drained turn. `host_bash` is the real tool that carries the
-    sentinel, and it is exactly the one whose second guard reads truthiness."""
+    does NOT block a source-less drained turn. `host_bash` is a real tool that carries the
+    sentinel."""
     result, seen = _blocked(attr_sid=None, contextvar_sid=CHANNEL_SID)
     assert result.startswith("Security Error:"), (
         "a channel-restricted tool ran on a drained channel session: the policy stage lost "

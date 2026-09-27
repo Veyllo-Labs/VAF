@@ -12799,8 +12799,10 @@ class Agent:
         There is exactly one resolution because there used to be several: splitting the
         dispatcher briefly left the tool-level channel guards reading the attribute alone
         while the policy stage read both, and the two then disagreed for a drained or
-        resumed channel session. That disagreement is fail-OPEN - `host_bash` reads
-        `_is_channel_session` as plain truthiness. Guard:
+        resumed channel session. That disagreement was fail-OPEN - `host_bash` read an
+        injected `_is_channel_session` as plain truthiness. The refusal of a tool that
+        needs a person on a channel now lives in the policy, which gets this same answer
+        through the chat lane's ToolCaller (source and this session id). Guard:
         tests/test_channel_session_resolution.py.
         """
         try:
@@ -13004,7 +13006,7 @@ class Agent:
             return gate_msg
         return None
 
-    def _ask_user_about_gate(self, name, reason, preview=None):
+    def _ask_user_about_gate(self, name, reason, preview=None, choices=None):
         """How THIS lane reaches a human. Prefer the WebSocket gate when a web session is
         live (pywebview / browser), else prompt the terminal."""
         from vaf.cli.ui import UI
@@ -13030,10 +13032,17 @@ class Agent:
                     UI.event("Security", f"({_notes})", style="warning")
         except Exception:
             pass
-        _raw = UI.prompt("Allow? [o]nce / [t]his chat / [a]lways / [c]ancel: ").strip().lower()
-        return {"o": "allow_once", "once": "allow_once",
-                "t": "allow_chat", "chat": "allow_chat",
-                "a": "allow_always", "always": "allow_always"}.get(_raw, "cancel")
+        # Only the answers the gate offers (a forced question has no standing answer).
+        _offered = tuple(choices or ("allow_once", "allow_chat", "allow_always", "cancel"))
+        _labels = [label for decision, label in (("allow_once", "[o]nce"),
+                                                 ("allow_chat", "[t]his chat"),
+                                                 ("allow_always", "[a]lways"))
+                   if decision in _offered]
+        _raw = UI.prompt(f"Allow? {' / '.join(_labels + ['[c]ancel'])}: ").strip().lower()
+        _choice = {"o": "allow_once", "once": "allow_once",
+                   "t": "allow_chat", "chat": "allow_chat",
+                   "a": "allow_always", "always": "allow_always"}.get(_raw, "cancel")
+        return _choice if _choice in _offered else "cancel"
 
     def _push_gate_to_websocket(self, evt):
         """The web UI's dialog does not arrive through _event_sink - that is None in the web
@@ -13139,14 +13148,6 @@ class Agent:
             if name == "python_sandbox" and is_channel_session:
                 # Non-main channel sessions must not bridge host tools from sandbox code.
                 tool_args["with_vaf_tools"] = False
-        if name == "host_bash":
-            # Authoritative channel flag for host_bash's own non-liftable guard. Set
-            # unconditionally so an LLM-supplied value cannot spoof it. host_bash refuses
-            # on channels even when channel_tools_unrestricted lifts the policy block.
-            # Only THIS lane hands it over, deliberately: the guard protects the chat
-            # turn, where the person would be asked; the coder and workflow steps run
-            # host commands unattended by decision, and the account permission decides.
-            tool_args["_is_channel_session"] = is_channel_session
         if name == "create_agent_tool":
             # Inject agent reference so the tool can call reload_custom_tools()
             # after writing the file — making the new tool live immediately

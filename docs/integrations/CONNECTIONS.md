@@ -575,7 +575,9 @@ sentinel matches whatever the registry calls a chat channel, so a new channel is
 from its first day; a tool that lists channels by name would be open on it (measured when
 the registry arrived: four of the seven restricted tools would have run on a fourth
 channel). The admin switch `channel_tools_unrestricted` lifts the policy block for every
-channel alike; host_bash's non-liftable guard reads the same chat-source answer.
+channel alike, except for a tool that needs a person: a `dangerous` tool with `"channel"` in
+its restrictions (`host_bash`, `python_exec`) is refused on a channel before the lift, from the
+same chat-source answer ([TOOL_ROUTER_ARCHITECTURE.md](../agents/TOOL_ROUTER_ARCHITECTURE.md)).
 
 `tests/test_channel_registry_sync.py` refuses a hand-written channel list anywhere in
 `vaf/` (two or more channel names, or their send and read tools, in one literal), refuses a

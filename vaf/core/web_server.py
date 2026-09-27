@@ -1417,7 +1417,7 @@ async def _broadcast_tools_update(manager) -> None:
                         # list must not quietly hand back what the allowlist removed.
                         try:
                             from vaf.core.tool_dispatch import account_allows_tool
-                            if not account_allows_tool(name, _scope, _role):
+                            if not account_allows_tool(name, _scope, _role, tool=tool):
                                 continue
                         except Exception:
                             continue          # fail closed, like the funnel
@@ -4454,10 +4454,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 _oc_scope = manager.get_connection_user(websocket)
                 _oc_role = manager.get_connection_user_role(websocket)
 
-                def _oc_allows(_name: str) -> bool:
+                def _oc_allows(_name: str, _tool=None) -> bool:
                     try:
                         from vaf.core.tool_dispatch import account_allows_tool
-                        return account_allows_tool(_name, _oc_scope, _oc_role)
+                        return account_allows_tool(_name, _oc_scope, _oc_role, tool=_tool)
                     except Exception:
                         return False
                 tools_list = [
@@ -4467,7 +4467,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         "category": tool_category(name, tool)
                     }
                     for name, tool in agent.tools.items()
-                    if _oc_allows(name)
+                    if _oc_allows(name, tool)
                 ]
             elif manager.tools_cache:
                 tools_list = manager.tools_cache
@@ -6607,7 +6607,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         _gt_role  = manager.get_connection_user_role(websocket) if manager else None
                         _gt_is_admin = is_admin_identity(_gt_role, _gt_scope)
 
-                        def _gt_account_allows(_name: str) -> bool:
+                        def _gt_account_allows(_name: str, _tool=None) -> bool:
                             """The account allowlist, as a LISTING question.
 
                             Fails CLOSED per entry, the same polarity the funnel uses: a
@@ -6616,7 +6616,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             smaller harm than one that should not be there at all."""
                             try:
                                 from vaf.core.tool_dispatch import account_allows_tool
-                                return account_allows_tool(_name, _gt_scope, _gt_role)
+                                return account_allows_tool(_name, _gt_scope, _gt_role, tool=_tool)
                             except Exception:
                                 return False
 
@@ -6642,7 +6642,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 # time that it was refused. The exemptions (no scope,
                                 # admin) live inside account_allows_tool, so this cannot
                                 # drift from the funnel's own answer.
-                                if not _gt_account_allows(name):
+                                if not _gt_account_allows(name, tool):
                                     continue
                                 entry = {
                                     "name":        name,

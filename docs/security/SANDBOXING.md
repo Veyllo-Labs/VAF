@@ -222,6 +222,8 @@ The `python_exec` tool runs code directly on your host system. It is:
 - **Disabled by default**
 - Only available with explicit trust configuration
 - Shows clear warnings when used
+- Never run from a messaging channel in the chat, also with `channel_tools_unrestricted` on
+  (it needs a person, like `host_bash`, see "Shell execution surfaces" below)
 
 Use this only when you need host filesystem/network access and trust the code source.
 
@@ -303,15 +305,18 @@ account has it unless the admin takes it away). How each use is controlled:
    `channel_restrictions` while the admin keeps `channel_tools_unrestricted` off), and for
    workflow steps an application's authorizer. The coder enforces its own tool allow-list
    at dispatch as well, so a tool it was never given does not run because the model named it.
-3. **The main agent's direct call is blocked on remote channels, in two layers.** There is no
-   safe way to show the confirmation on Telegram/WhatsApp/Discord, so:
-   - **`channel_restrictions`** is the policy-layer block (`evaluate_tool_policy`), and
-   - a **non-liftable guard** inside `run()` refuses on a channel *even when the admin enables
-     `channel_tools_unrestricted`* (default ON on a fresh install), which otherwise lifts the
-     policy block for the convenience tools. The guard uses the authoritative `is_channel_session`
-     that the chat lane injects (set unconditionally so the LLM cannot spoof it). Only the chat
-     lane injects it, deliberately: it protects the turn where somebody would have been asked,
-     not the unattended lanes in 2 - a coder started from a Telegram message may still build.
+3. **The main agent's direct call is blocked on remote channels.** There is no safe way to
+   show the confirmation on Telegram/WhatsApp/Discord. `channel_restrictions = ("channel",)`
+   is the policy-layer block (`evaluate_tool_policy`), and because the tool is ALSO
+   `dangerous` it needs a person, so the policy refuses it on a channel *even when the admin
+   enables `channel_tools_unrestricted`* (default ON on a fresh install), which otherwise
+   lifts the block and the confirmation for the convenience tools (section 1a of
+   `evaluate_tool_policy`). The answer comes from the chat lane's own source and session, the
+   same single resolution every channel decision uses. Only in the lane that would ask a
+   person (`ToolCaller` with its gate on), deliberately: it protects the turn where somebody
+   would have been asked, not the unattended lanes in 2 - a coder started from a Telegram
+   message may still build. `python_exec` declares the same two and is refused the same way;
+   before the rule it ran from Telegram for anyone with a stored "always" (measured).
 
    **The main agent: local Web UI / CLI only.**
 4. **Background mode** (`background=true`) starts the command detached and returns its id;
@@ -336,7 +341,7 @@ option values are stepped over (`sudo -u root rm -rf /` is judged as `rm -rf /`)
 command nested more than `MAX_NESTING` deep is refused. Before this, ten of ten measured
 wrapped forms passed. The verdict carries its categories, which the confirmation dialog
 shows. For the main agent's own call, the real safety is still the
-person's approval plus the two-layer local-only gate. The unattended lanes (the coder and
+person's approval plus the local-only rule in 3. The unattended lanes (the coder and
 workflow steps, point 2) have no approval: there it is the account allowlist, the policy
 block and, for workflow steps, the application's authorizer that decide. The controls are
 pinned in `tests/test_host_bash.py`, `tests/test_command_policy.py` and
@@ -344,5 +349,7 @@ pinned in `tests/test_host_bash.py`, `tests/test_command_policy.py` and
 
 > **Note on `channel_tools_unrestricted`:** this admin setting (default ON) lets channel sessions
 > use the same tools as the main agent and lifts `channel_restrictions` for tools that rely on it
-> (e.g. `python_exec`). `host_bash` is deliberately exempt via its own non-liftable guard, because
-> a raw host shell with no confirmation path must never be reachable from a messaging channel.
+> (e.g. `browser_agent`). A tool that needs a person - `dangerous` and restricted on channels:
+> `host_bash`, `python_exec` - is deliberately exempt, because code on a computer with no
+> confirmation path must never be reachable from a messaging channel. This used to be a guard
+> inside `host_bash` alone, and `python_exec` was lifted with the rest.

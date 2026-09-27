@@ -116,6 +116,28 @@ class BaseTool(ABC):
     # not tell that it had been given.
     accepts_call_confirmation: bool = False
 
+    # Set to False when a trusted FOLDER says nothing about whether this tool may run, because
+    # its effect is not in a folder (a shell on another machine). A trusted directory then
+    # does not silence its confirmation, and "always" for it allows the tool without trusting
+    # the current folder. Measured: an owner whose home folder was trusted would never have
+    # been asked about such a tool at all, because a trusted directory silences EVERY gated
+    # tool under it.
+    trusted_dir_grants: bool = True
+
+    def ask_reason(self, args: Dict[str, Any], *, user_scope_id: Optional[str] = None,
+                   username: Optional[str] = None) -> Optional[str]:
+        """A reason to put THIS call to the person even under a standing grant, or None.
+
+        For a call whose risk a standing answer did not cover (the first connection to a
+        server nobody has confirmed yet). The funnel asks BEFORE argument repair and identity
+        assignment, so this receives the model's raw arguments and the caller's identity as
+        keywords. Answer fail-closed: an argument that cannot be read is a reason to ask. The
+        question then offers only "this time" and "cancel", because a standing answer would
+        outlive the question it was given to. Where nobody is asked (the coder, a workflow
+        step) the call is not confirmed; a tool that must refuse then declares
+        `accepts_call_confirmation` and reads `_call_confirmed`."""
+        return None
+
     # Set to True when a call of this tool hands the next move to the person, so the chat
     # turn ENDS after it: the agent loop answers every other call of the round, makes no
     # further model call, and the turn's answer is turn_closing(). A question with options is
@@ -300,6 +322,15 @@ class BaseTool(ABC):
     # e.g. create_agent_tool, which lets the agent write arbitrary Python code
     # to disk.  An admin has explicitly elevated trust; a regular user has not.
     admin_only: bool = False
+
+    # account_opt_in: True when a regular account gets this tool only if its allowlist NAMES
+    # it. A missing or empty allowlist means "everything" for every other tool (the admin
+    # UI's creation default; vaf/auth/permissions.py), so without this a new tool of this
+    # weight would reach every account the moment it ships. Unlike admin_only the admin
+    # can grant it per account; admins and scopeless callers (the machine owner) always
+    # have it. Answered in ONE place, `account_allows_tool` in vaf/core/tool_dispatch.py,
+    # which the dispatcher and every tool list already ask.
+    account_opt_in: bool = False
 
     # category: which bundle this tool belongs to in the human-facing tool
     # lists - the web tools window, the CLI tool table, the TUI overlay and

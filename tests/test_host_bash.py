@@ -26,8 +26,8 @@ def _force_channel_restricted(monkeypatch):
     Its default is ON (channels get the main agent's tools), which lifts
     channel_restrictions at the policy layer - so this must be pinned or the assertion
     depends on the machine's stored config (green locally, red on a fresh CI checkout).
-    The default-ON path (where the non-liftable in-tool guard is what protects host_bash)
-    is covered by test_channel_guard_is_non_liftable.
+    The default-ON path (where the policy's refusal of a tool that needs a person is what
+    protects host_bash) is covered by test_the_channel_refusal_holds_with_the_admin_lift_on.
     """
     import vaf.core.config as cfg
     real = cfg.Config.get.__func__
@@ -71,19 +71,38 @@ def test_runs_a_real_host_command():
     assert "host-ok" in out and "HOST EXECUTION" in out
 
 
-def test_channel_guard_is_non_liftable():
-    # channel_restrictions is lifted when channel_tools_unrestricted is ON (fresh-install
-    # default), so host_bash must ALSO refuse at the tool level when execute_tool injects the
-    # authoritative is_channel_session. The real command must never run on a channel.
-    out = HostBashTool().run(command="echo host-ok", _is_channel_session=True)
-    assert "BLOCKED" in out and "remote" in out.lower()
-    assert "host-ok" not in out, "the command must not execute on a channel session"
+def _call_from(source, *, gate_enabled=True):
+    """host_bash through the framework funnel, with the shipped default: the admin's
+    channel_tools_unrestricted ON, which lifts channel_restrictions for the other tools."""
+    from unittest.mock import patch
+
+    from vaf.core.tool_dispatch import ToolCaller
+    caller = ToolCaller({"host_bash": HostBashTool()}, source=source,
+                        session_id=f"{source}_9001" if source != "web" else "web_local",
+                        interactive=False, gate_enabled=gate_enabled,
+                        user_scope_id=None, user_role="admin")
+    with patch("vaf.core.trust.get_tool_policy", return_value="allow"):
+        return caller.execute("host_bash", {"command": "echo host-ok"})
 
 
-def test_local_session_runs_normally():
-    # Explicit non-channel flag (what execute_tool injects for a Web/CLI session) still runs.
-    out = HostBashTool().run(command="echo host-ok", _is_channel_session=False)
-    assert "host-ok" in out
+def test_the_channel_refusal_holds_with_the_admin_lift_on():
+    """The admin's lift (default ON) also lifts the confirmation, and a channel cannot show
+    one: the policy refuses a tool that needs a person there BEFORE the lift, even with a
+    stored "always". The command must never run."""
+    for source in ("telegram", "whatsapp", "discord"):
+        out = _call_from(source)
+        assert out.startswith("Security Error") and "messaging channels" in out, out
+        assert "host-ok" not in out, f"the command ran on {source}"
+
+
+def test_a_local_session_runs_normally():
+    assert "host-ok" in _call_from("web")
+
+
+def test_the_unattended_lanes_are_not_asked_and_not_refused_by_it():
+    """The coder and workflow steps run host_bash unattended by decision; a coder started
+    from a chat may still build. The rule protects the turn where somebody would be asked."""
+    assert "host-ok" in _call_from("telegram", gate_enabled=False)
 
 
 def test_empty_command():

@@ -23,6 +23,9 @@ Contract fields (all defined on BaseTool):
 
 Evaluation order inside evaluate_tool_policy():
   1. admin_only check  (hard block — role-based)
+     then, on a messaging channel: a dangerous tool restricted on channels is refused in
+     the lane that would ask a person; after that `channel_tools_unrestricted` may lift
+     2-4 for the rest
   2. channel_restrictions check  (hard block — source-based)
   3. permission_level == "dangerous"  → confirmation required
   4. permission_level == "system"     → skip legacy confirmation gate
@@ -242,6 +245,7 @@ def evaluate_tool_policy(
     current_source: str,
     is_channel_session: bool,
     is_admin: bool = False,
+    gated_lane: bool = True,
 ) -> ToolPolicyDecision:
     """
     Evaluate whether a tool may run in the current session context.
@@ -256,6 +260,11 @@ def evaluate_tool_policy(
     is_admin          : True when the current user is an admin.
                         Derived in execute_tool() from _current_user_role and
                         _current_user_scope_id vs get_local_admin_scope_id().
+    gated_lane        : True when this call would be put to a person (the chat
+                        lane: ToolCaller with its confirmation gate on). The
+                        unattended lanes (the coder, workflow steps) pass False:
+                        nobody is asked there, by decision, and the account
+                        allowlist is what decides.
 
     Returns
     -------
@@ -264,6 +273,8 @@ def evaluate_tool_policy(
     Evaluation order
     ----------------
     1. admin_only check      — role-based hard block (new)
+    1a. a tool that needs a person, on a channel, in the gated lane: hard block
+    1b. channel_tools_unrestricted: admin opt-in that lifts 2-4 on channels
     2. channel_restrictions  — source-based hard block (existing)
     3. permission_level      — confirmation gate (extended: "system" now skips legacy gate)
     4. Legacy risky-tool gate — fallback for tools that predate this contract
@@ -287,14 +298,38 @@ def evaluate_tool_policy(
             ),
         )
 
+    # ── 1a. A tool that needs a person, on a channel ─────────────────────
+    # A DANGEROUS tool that also names "channel" in its channel_restrictions acts on a
+    # computer (a host shell, host Python, a shell on another machine) and has to be
+    # confirmed by the person, which no messaging channel can show. It is refused there
+    # BEFORE the admin's lift below, because that lift also lifts the confirmation: with it
+    # on (the shipped default), python_exec ran from Telegram unconfirmed for anyone with a
+    # stored "always" (measured), while host_bash only held because of a guard of its own.
+    # Derived from the two declarations every such tool already makes, so a new one is
+    # covered without a line of its own. Only in the gated lane: the coder and workflow
+    # steps run unattended by decision, and a coder started from a chat may still build.
+    if (is_channel_session and gated_lane and contract.permission_level == "dangerous"
+            and "channel" in contract.channel_restrictions):
+        logger.info("POLICY_BLOCK tool=%s reason=channel_needs_a_person source=%s",
+                    tool_name, source or "channel")
+        return ToolPolicyDecision(
+            blocked=True,
+            requires_confirmation=False,
+            reason=(
+                f"Tool '{tool_name}' is not available over messaging channels: it acts on a "
+                "computer, and its confirmation can only be shown in the local app."
+            ),
+        )
+
     # ── 1b. Channel full-access (admin opt-in) ────────────────────────────
     # Messaging channels (Telegram/WhatsApp/Discord) normally cannot use
     # channel-restricted tools and have no interactive confirmation path. When
     # the admin enables `channel_tools_unrestricted`, channel sessions get the
     # same tools as the main agent: channel restrictions (section 2) and per-call
     # confirmations (sections 3–4) are lifted. This runs AFTER the admin_only
-    # check above, so a non-admin channel user still cannot reach admin-only
-    # tools — and the channel whitelist remains the primary gate upstream.
+    # check and 1a above, so a non-admin channel user still cannot reach admin-only
+    # tools, nobody reaches a tool that needs a person, and the channel whitelist
+    # remains the primary gate upstream.
     if is_channel_session:
         try:
             from vaf.core.config import Config
@@ -310,7 +345,7 @@ def evaluate_tool_policy(
     # ── 2. Channel restrictions ───────────────────────────────────────────
     # Hard block based on chat source (Telegram, WhatsApp, Discord, …).
     # Unrelated to user role — a tool can be blocked on messaging channels
-    # even for admins (e.g. python_exec is blocked on all channels).
+    # even for admins (e.g. browser_agent while channel_tools_unrestricted is off).
     if is_channel_session and contract.channel_restrictions:
         blocked_sources  = set(contract.channel_restrictions)
         effective_sources = {"channel"}  # generic "any channel" sentinel

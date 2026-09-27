@@ -191,18 +191,42 @@ def _patch_channel_flag(value):
     return patch.object(Config, "get", new=fake_get)
 
 
+class ChannelRestrictedWriteDummyTool(ChannelRestrictedDangerousDummyTool):
+    name = "channel_restricted_write_dummy"
+    permission_level = "write"
+
+
 def test_channel_full_access_allows_restricted_tool_when_enabled():
-    # Flag ON: a channel-restricted, dangerous tool runs on Telegram with no confirmation.
+    # Flag ON: a channel-restricted convenience tool runs on Telegram with no confirmation.
     with _patch_channel_flag(True):
         decision = evaluate_tool_policy(
-            tool_name="channel_restricted_dangerous_dummy",
-            tool=ChannelRestrictedDangerousDummyTool(),
+            tool_name="channel_restricted_write_dummy",
+            tool=ChannelRestrictedWriteDummyTool(),
             current_source="telegram",
             is_channel_session=True,
             is_admin=True,
         )
     assert decision.blocked is False
     assert decision.requires_confirmation is False
+
+
+def test_channel_full_access_does_not_reach_a_tool_that_needs_a_person():
+    """Dangerous AND restricted on channels: the lift would also lift its confirmation, which
+    no channel can show. Deliberately changed: this test used to pin that such a tool RAN on
+    Telegram unconfirmed, and python_exec did exactly that (measured). The unattended lanes
+    (gated_lane=False: the coder, workflow steps) keep the lift."""
+    def decide(gated_lane):
+        with _patch_channel_flag(True):
+            return evaluate_tool_policy(
+                tool_name="channel_restricted_dangerous_dummy",
+                tool=ChannelRestrictedDangerousDummyTool(),
+                current_source="telegram",
+                is_channel_session=True,
+                is_admin=True,
+                gated_lane=gated_lane,
+            )
+    assert decide(True).blocked is True
+    assert decide(False).blocked is False
 
 
 def test_channel_full_access_off_still_blocks():

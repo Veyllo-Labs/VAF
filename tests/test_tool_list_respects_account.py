@@ -93,10 +93,12 @@ def test_all_three_tools_list_producers_filter_by_account():
     # The CALL, not the definition. Checking only that the helper exists nearby
     # let a mutation that deleted the actual filter line pass: the helper was
     # still defined three lines above the loop that no longer used it.
+    # Each hands over the tool object too, so a tool that declares `account_opt_in` is
+    # hidden where the account's list does not name it.
     calls = [
-        "if not _gt_account_allows(name):",              # get_tools handler
-        "if _oc_allows(name)",                            # on-connect push
-        "if not account_allows_tool(name, _scope, _role):",  # refresh broadcast
+        "if not _gt_account_allows(name, tool):",         # get_tools handler
+        "if _oc_allows(name, tool)",                      # on-connect push
+        "if not account_allows_tool(name, _scope, _role, tool=tool):",  # refresh broadcast
     ]
     for call in calls:
         assert call in src, f"a tools_list producer no longer filters: {call!r} is gone"

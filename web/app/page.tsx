@@ -3280,7 +3280,7 @@ function VAFDashboardContent() {
     const [personaLoaded, setPersonaLoaded] = useState(false);
     const [gateRequest, setGateRequest] = useState<{ tool: string; cwd: string; reason: string; args_preview: string;
         args_preview_truncated?: boolean; args_preview_neutralized?: number; args_preview_redacted?: number;
-        command_categories?: string[] } | null>(null);
+        command_categories?: string[]; offer_standing?: boolean; always_trusts_folder?: boolean } | null>(null);
     // The main agent avatar briefly FLASHES a tool's outcome (success / error); a pending risky-tool
     // confirmation (gateRequest) shows `permission`. The flash auto-clears after ~one cycle so we
     // never leave an infinite reaction running on the avatar.
@@ -5324,6 +5324,10 @@ function VAFDashboardContent() {
                         args_preview_neutralized: Number(data.args_preview_neutralized) || 0,
                         args_preview_redacted: Number(data.args_preview_redacted) || 0,
                         command_categories: Array.isArray(data.command_categories) ? data.command_categories : undefined,
+                        // What the gate will keep: a forced question offers no standing
+                        // answer, and "always" trusts no folder for a tool outside one.
+                        offer_standing: data.offer_standing !== false,
+                        always_trusts_folder: data.always_trusts_folder !== false,
                     });
                 }
                 else if (data.type === 'gate_decision') {
@@ -13168,6 +13172,7 @@ function VAFDashboardContent() {
                             >
                                 {tMain('gateAllowOnce')}
                             </button>
+                            {gateRequest.offer_standing !== false && (<>
                             <button
                                 onClick={() => { ws?.send(JSON.stringify({ type: 'gate_response', decision: 'allow_chat' })); setGateRequest(null); }}
                                 title={tMain('gateAllowChatHint')}
@@ -13177,11 +13182,12 @@ function VAFDashboardContent() {
                             </button>
                             <button
                                 onClick={() => { ws?.send(JSON.stringify({ type: 'gate_response', decision: 'allow_always' })); setGateRequest(null); }}
-                                title={tMain('gateAllowAlwaysHint')}
+                                title={gateRequest.always_trusts_folder === false ? tMain('gateAllowAlwaysToolHint') : tMain('gateAllowAlwaysHint')}
                                 className="px-4 py-2 rounded-lg bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                             >
                                 {tMain('gateAllowAlways')}
                             </button>
+                            </>)}
                         </div>
                     </div>
                 </div>

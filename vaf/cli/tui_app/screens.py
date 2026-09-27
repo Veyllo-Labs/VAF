@@ -44,7 +44,10 @@ class GateScreen(ModalScreen[str]):
 
     "always" is labelled for what it does: it allows the tool for this user
     everywhere AND trusts the current folder for every gated tool, not only
-    this tool in this folder.
+    this tool in this folder - or only the tool, when the gate says the tool's
+    effect is not in a folder (`always_trusts_folder`). A question that ignores
+    standing answers (`offer_standing` false) offers "once" and "cancel" only,
+    and the keys for the other two do nothing there.
     """
 
     BINDINGS = [
@@ -54,12 +57,15 @@ class GateScreen(ModalScreen[str]):
         Binding("escape", "answer('cancel')", "cancel"),
     ]
 
-    def __init__(self, tool: str, reason: str, preview: str = "", notes: str = "") -> None:
+    def __init__(self, tool: str, reason: str, preview: str = "", notes: str = "", *,
+                 offer_standing: bool = True, trusts_folder: bool = True) -> None:
         super().__init__()
         self._tool = tool
         self._reason = reason
         self._preview = preview
         self._notes = notes
+        self._offer_standing = offer_standing
+        self._trusts_folder = trusts_folder
 
     def compose(self) -> ComposeResult:
         with Vertical(id="gate-box", classes="modal-box"):
@@ -71,13 +77,17 @@ class GateScreen(ModalScreen[str]):
                 yield Static(f"[$text]{_esc(self._preview)}[/]", classes="modal-body")
             if self._notes:
                 yield Static(f"[$vaf-muted]({_esc(self._notes)})[/]", classes="modal-body")
-            yield Static(
-                "[$text][bold]y[/bold][/] [$vaf-muted]allow once[/]   "
-                "[$text][bold]t[/bold][/] [$vaf-muted]for this chat[/]   "
-                "[$text][bold]a[/bold][/] [$vaf-muted]always (tool + this folder)[/]   "
-                "[$text][bold]esc[/bold][/] [$vaf-muted]cancel[/]", classes="modal-keys")
+            keys = "[$text][bold]y[/bold][/] [$vaf-muted]allow once[/]   "
+            if self._offer_standing:
+                always = "always (tool + this folder)" if self._trusts_folder else "always (tool)"
+                keys += ("[$text][bold]t[/bold][/] [$vaf-muted]for this chat[/]   "
+                         f"[$text][bold]a[/bold][/] [$vaf-muted]{always}[/]   ")
+            keys += "[$text][bold]esc[/bold][/] [$vaf-muted]cancel[/]"
+            yield Static(keys, classes="modal-keys")
 
     def action_answer(self, result: str) -> None:
+        if not self._offer_standing and result in ("chat", "always"):
+            return                  # not offered here: the key does nothing
         self.dismiss(result)
 
 

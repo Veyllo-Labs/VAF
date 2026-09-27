@@ -12,7 +12,7 @@ the measurement it has to survive.
 
 WHAT IS PINNED. Per tool, the exact set of keys the dispatcher ADDS to the model's arguments -
 identity (`user_scope_id`, `username`, `user_role`) and plumbing (`_agent`, `_session_id`,
-`session_id`, `_session_workspace`, `_is_channel_session`) alike. Both directions are
+`session_id`, `_session_workspace`) alike. Both directions are
 failures: one key fewer and a tool silently loses its scope or its bridge to the agent; one
 more and a tool starts branching on a value it never had, or writes into the session
 workspace instead of where it used to.
@@ -131,8 +131,9 @@ KWARGS_BASELINE = {
     "github_search_files":       ("chat", ["user_scope_id", "username"]),
     "github_update_file":        ("chat", ["user_scope_id", "username"]),
     # Measured. host_bash declares the caller's identity since a background command belongs
-    # to one person's chat; host_process is the handle on those commands.
-    "host_bash":                 ("chat", ["_is_channel_session", "user_role", "user_scope_id", "username"]),
+    # to one person's chat; host_process is the handle on those commands. No channel flag any
+    # more: the policy refuses it on a channel before it runs (tool_contract section 1a).
+    "host_bash":                 ("chat", ["user_role", "user_scope_id", "username"]),
     "host_process":              ("chat", ["user_scope_id"]),
     # Measured. A credential is stored for the person the chat belongs to.
     "store_credential":          ("chat", ["user_scope_id", "username"]),
@@ -252,7 +253,7 @@ KWARGS_BASELINE = {
 
 IDENTITY_KEYS = {"user_scope_id", "username", "user_role"}
 PLUMBING_KEYS = {"_agent", "_session_id", "session_id", "_session_workspace",
-                 "_is_channel_session", "with_vaf_tools",
+                 "with_vaf_tools",
                  # The chat stage's own two: on a web turn the mail send tools are told to
                  # park the message for the person instead of delivering it, and which chat
                  # asked, so the draft shows up in that conversation and in no other.

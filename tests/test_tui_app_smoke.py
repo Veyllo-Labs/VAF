@@ -1473,3 +1473,27 @@ def test_growth_nobody_announced_still_keeps_the_bottom(smoke_app, size):
 def stream_all(callback, text, chunk=32):
     for i in range(0, len(text), chunk):
         callback(text[i:i + chunk])
+
+
+def test_a_forced_question_offers_only_once_and_cancel(smoke_app):
+    """`offer_standing: false` (a tool's own question, an authorizer's ask()): the keys for a
+    standing answer do nothing, and "once" still answers."""
+    app, bridge, web = smoke_app.app, smoke_app.bridge, smoke_app.web
+
+    async def _drive():
+        async with app.run_test(size=(110, 32)) as pilot:
+            bridge.on_sink_event({"type": "gate_required", "tool": "remote_probe",
+                                  "reason": "first connection", "offer_standing": False,
+                                  "always_trusts_folder": False})
+            assert await _settle(pilot, lambda: isinstance(app.screen, GateScreen))
+            assert app.screen._offer_standing is False and app.screen._trusts_folder is False
+            await pilot.press("a")
+            await pilot.pause()
+            assert isinstance(app.screen, GateScreen), "'always' answered a forced question"
+            assert not web.resolved
+            await pilot.press("y")
+            assert await _settle(pilot, lambda: bool(web.resolved))
+            assert web.resolved[0] == ("sess-smoke-1", "allow_once")
+
+    asyncio.run(_drive())
+    bridge.shutdown()

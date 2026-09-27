@@ -365,3 +365,152 @@ def test_every_answer_the_web_dialog_sends_is_one_the_engine_accepts():
     page = (Path(__file__).resolve().parent.parent / "web" / "app" / "page.tsx").read_bytes().decode("utf-8")
     sent = set(re.findall(r"type: 'gate_response', decision: '([a-z_]+)'", page))
     assert sent == set(get_args(Decision)), sent
+
+
+# ── a tool whose effect is not in a folder, and a question that must be asked ─
+
+def _gate_outside(trust, *, decide=None, events=None, interactive=True, **kw):
+    return resolve_confirmation_gate(
+        "remote_probe", reason=REASON, args={"server": "user@host"},
+        trust_dir=Path("/tmp/project"), interactive=interactive, decide=decide,
+        emit=(events.append if events is not None else None), session_id=CHAT,
+        trust_folder=False, **kw)
+
+
+def test_a_trusted_folder_does_not_silence_a_tool_whose_effect_is_not_in_one(trust):
+    """Measured on a real machine: the owner's home folder was trusted, and a trusted folder
+    silences every gated tool under it - a shell on another machine would never have been
+    asked about at all."""
+    trust["trusted"] = True
+    events = []
+    out = _gate_outside(trust, events=events, interactive=False)
+    assert out and "requires confirmation" in out, "silenced by a folder"
+    assert "mark folder trusted" not in out, "advice the gate would not honour"
+    assert events and events[0]["always_trusts_folder"] is False
+
+
+def test_always_for_it_stores_the_tool_and_trusts_no_folder(trust):
+    assert _gate_outside(trust, decide=lambda tool, reason: "allow_always") is None
+    assert trust["writes"] == [("set_tool_policy", "remote_probe", "allow", None)]
+
+
+def test_a_folder_tool_still_trusts_the_folder_on_always(trust):
+    """The default is unchanged: "always" writes the folder AND the tool."""
+    events = []
+    assert _gate(decide=lambda tool, reason: "allow_always", events=events) is None
+    assert [w[0] for w in trust["writes"]] == ["mark_trusted_dir", "set_tool_policy"]
+    assert events[0]["always_trusts_folder"] is True and events[0]["offer_standing"] is True
+
+
+def test_a_forced_question_offers_no_standing_answer_and_never_widens(trust):
+    """A question that ignores standing answers must not create one: "always" there would
+    have allowed the tool for every later call the question was never about."""
+    trust["policy"] = "allow"                      # a stored "always", ignored here
+    events, offered = [], []
+
+    def decide(tool, reason, choices=None):
+        offered.append(choices)
+        return "allow_always"                      # what a stale UI might still send
+
+    out = _gate_outside(trust, decide=decide, events=events,
+                        ignore_standing_grants=True, offer_standing=False)
+    assert out is None
+    assert offered == [("allow_once", "cancel")]
+    assert trust["writes"] == [], "a forced question wrote a standing answer"
+    assert events[0]["offer_standing"] is False
+    assert events[-1] == {"type": "gate_decision", "tool": "remote_probe",
+                          "decision": "allow_once"}
+
+
+def test_a_decider_without_choices_keeps_working(trust):
+    """`decide(tool_name, reason)` is the published contract; the extras are optional."""
+    assert _gate(decide=lambda tool, reason: "allow_once") is None
+
+
+# ── the tool's own question, through the funnel ──────────────────────────────
+
+def _probe_tool():
+    from vaf.tools.base import BaseTool
+
+    class _Remote(BaseTool):
+        name = "remote_probe"
+        description = "probe"
+        permission_level = "dangerous"
+        trusted_dir_grants = False
+        accepts_call_confirmation = True
+        parameters = {"type": "object", "properties": {"server": {"type": "string"}}}
+
+        def __init__(self):
+            super().__init__()
+            self.asked_with = None
+            self.confirmed = None
+
+        def ask_reason(self, args, *, user_scope_id=None, username=None):
+            self.asked_with = (args.get("server"), user_scope_id, username)
+            if args.get("server") == "boom":
+                raise ValueError("unreadable")
+            return "first connection" if args.get("server") == "new" else None
+
+        def run(self, **kwargs):
+            self.confirmed = kwargs.get("_call_confirmed")
+            return "RAN"
+
+    return _Remote()
+
+
+def _funnel(tool, asked, **kw):
+    from vaf.core.tool_dispatch import ToolCaller
+
+    def decide(tool_name, reason, choices=None):
+        asked.append((reason, choices))
+        return "allow_once"
+
+    return ToolCaller({tool.name: tool}, interactive=True, decide=decide,
+                      user_scope_id="ab12cd34", username="alice", session_id=CHAT, **kw)
+
+
+def test_a_tool_can_have_one_call_asked_despite_a_standing_grant(trust):
+    trust["policy"] = "allow"
+    tool, asked = _probe_tool(), []
+    caller = _funnel(tool, asked)
+    assert caller.execute("remote_probe", {"server": "known"}) == "RAN"
+    assert asked == [], "a standing grant covers an ordinary call"
+    assert caller.execute("remote_probe", {"server": "new"}) == "RAN"
+    assert asked == [("first connection", ("allow_once", "cancel"))]
+    assert tool.asked_with == ("new", "ab12cd34", "alice"), "the identity reaches the hook"
+    assert tool.confirmed is True
+
+
+def test_a_hook_that_raises_is_a_reason_to_ask(trust):
+    trust["policy"] = "allow"
+    tool, asked = _probe_tool(), []
+    assert _funnel(tool, asked).execute("remote_probe", {"server": "boom"}) == "RAN"
+    assert asked and "could not be checked" in asked[0][0]
+
+
+def test_where_nobody_is_asked_the_call_is_not_confirmed(trust):
+    """The unattended lanes (gate off) ask nobody; the tool hears the call was not confirmed
+    and decides for itself (the ssh tool refuses a server nobody confirmed)."""
+    trust["policy"] = "allow"
+    tool, asked = _probe_tool(), []
+    assert _funnel(tool, asked, gate_enabled=False).execute(
+        "remote_probe", {"server": "new"}) == "RAN"
+    assert asked == [] and tool.confirmed is False
+
+
+def test_the_terminal_prompt_offers_only_the_answers_the_gate_keeps(monkeypatch):
+    """The plain terminal lane: a forced question lists "once" and "cancel", and a typed
+    "a" is no answer it offered."""
+    from types import SimpleNamespace
+
+    from vaf.cli.ui import UI
+    from vaf.core.agent import Agent
+    asked = []
+    monkeypatch.setattr(UI, "prompt", staticmethod(lambda text, *a, **k: asked.append(text) or "a"))
+    monkeypatch.setattr(UI, "event", staticmethod(lambda *a, **k: None))
+    fake = SimpleNamespace(current_session_id=None)
+    assert Agent._ask_user_about_gate(fake, "remote_probe", REASON,
+                                      choices=("allow_once", "cancel")) == "cancel"
+    assert "[a]lways" not in asked[-1] and "[t]his chat" not in asked[-1]
+    assert Agent._ask_user_about_gate(fake, "remote_probe", REASON) == "allow_always"
+    assert "[a]lways" in asked[-1]

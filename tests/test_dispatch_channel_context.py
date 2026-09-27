@@ -7,14 +7,14 @@
 adds. That is the right shape for plumbing - but it leaves two holes, and both were found by
 adversarially re-reading the cascade rather than by any test going red.
 
-**Hole 1: the value, not the key.** ``host_bash`` receives ``_is_channel_session`` in every
-context, so the key-set baseline pins it and stays green whatever the value is. The receiving
-guard is ``if kwargs.get("_is_channel_session")`` - plain truthiness, therefore FAIL-OPEN. A
-missing value, a None, a refactor that hands over the key without the answer: all of them are
-green in the key-set baseline and all of them let host_bash run over Telegram, WhatsApp and
-Discord. That guard is explicitly non-liftable - it exists because there is no way to show a
-confirmation on a channel, so a message could otherwise run host commands unconfirmed. It is
-the one place where getting the plumbing wrong is a security bug rather than a cosmetic one.
+**Hole 1: the value, not the key.** ``host_bash`` used to receive ``_is_channel_session`` in
+every context and guard on its truthiness, so the key-set baseline stayed green whatever the
+value was - FAIL-OPEN. The refusal now lives in the policy (a dangerous tool with "channel" in
+its restrictions is refused on a channel in the lane that would ask a person, before the admin's
+lift), so what is pinned here is the OUTCOME: host_bash and python_exec never run on a channel,
+with the lift ON, on either way a session becomes a channel. It is the one place where getting
+the plumbing wrong is a security bug rather than a cosmetic one: measured before the policy
+rule, python_exec ran from Telegram with a stored "always".
 
 **Hole 2: the context itself.** ``with_vaf_tools=False`` is set for ``python_sandbox`` ONLY on
 channel sessions. The key-set baseline measures one canonical context - a non-channel web turn
@@ -94,8 +94,8 @@ def _required(schema):
     return out
 
 
-def _dispatch(tool_name, context):
-    """Run one dispatch in the named context and report what the tool received."""
+def _run(tool_name, context):
+    """Run one dispatch in the named context; (result, what the tool received or None)."""
     source, session_id = CONTEXTS[context]
     cls = _tool_class(tool_name)
     stub = _stub(cls)
@@ -121,34 +121,35 @@ def _dispatch(tool_name, context):
          patch("vaf.core.config.Config.get",
                side_effect=lambda k, d=None: True if k == "channel_tools_unrestricted" else d):
         result = Agent.execute_tool(fake, tool_name, dict(model_args))
-    assert stub.seen is not None, f"{tool_name} never ran in {context}: {result[:120]!r}"
-    return stub.seen
+    return result, stub.seen
 
 
-# ── host_bash: the value is the whole point ──────────────────────────────────
+def _dispatch(tool_name, context):
+    """Run one dispatch in the named context and report what the tool received."""
+    result, seen = _run(tool_name, context)
+    assert seen is not None, f"{tool_name} never ran in {context}: {result[:120]!r}"
+    return seen
 
+
+# ── the host tools: the outcome is the whole point ───────────────────────────
+
+@pytest.mark.parametrize("tool_name", ["host_bash", "python_exec"])
 @pytest.mark.parametrize("context", CHANNEL_CONTEXTS)
-def test_host_bash_is_told_it_is_on_a_channel(context):
-    """THE hole. The key-set baseline pins that the key arrives; only the VALUE closes the
-    guard, and the guard reads plain truthiness, so a None reopens it silently."""
-    assert _dispatch("host_bash", context).get("_is_channel_session") is True, (
-        "host_bash was not told it is on a channel - its non-liftable guard reads truthiness, "
-        "so it would run host commands from Telegram/WhatsApp/Discord unconfirmed"
+def test_a_host_tool_never_runs_on_a_channel(tool_name, context):
+    """THE hole. With the admin's lift ON (the shipped default) the confirmation is lifted
+    too, and a channel cannot show one: the tool must be refused before it runs."""
+    result, seen = _run(tool_name, context)
+    assert seen is None and result.startswith("Security Error"), (
+        f"{tool_name} ran in {context}: host commands from Telegram/WhatsApp/Discord unconfirmed"
     )
 
 
-def test_host_bash_is_told_it_is_not_on_a_channel_in_the_web_app():
-    """The other direction matters too: a permanently-true value would break the local app,
-    which is the only place host_bash is meant to work."""
-    assert _dispatch("host_bash", "web").get("_is_channel_session") is False
-
-
-def test_the_channel_answer_is_never_merely_present():
-    """Guards against the shape this file exists to catch: a key handed over without an
-    answer. None is falsy, so it reads as 'not a channel'."""
-    for context in CHANNEL_CONTEXTS + ["web"]:
-        value = _dispatch("host_bash", context).get("_is_channel_session")
-        assert isinstance(value, bool), f"{context}: got {value!r}, not a boolean"
+@pytest.mark.parametrize("tool_name", ["host_bash", "python_exec"])
+def test_a_host_tool_runs_in_the_web_app(tool_name):
+    """The other direction matters too: a refusal everywhere would break the local app,
+    which is the only place these tools are meant to work."""
+    seen = _dispatch(tool_name, "web")
+    assert "_is_channel_session" not in seen, "the tool is no longer handed the flag"
 
 
 # ── python_sandbox: the line the canonical context never reaches ─────────────
@@ -205,4 +206,39 @@ def test_the_session_prefix_alone_makes_it_a_channel():
     leave this lane - a resumed or drained channel session - open."""
     seen = _dispatch("python_sandbox", "channel_by_session_prefix")
     assert seen.get("with_vaf_tools") is False
-    assert _dispatch("host_bash", "channel_by_session_prefix").get("_is_channel_session") is True
+    result, ran = _run("host_bash", "channel_by_session_prefix")
+    assert ran is None and result.startswith("Security Error")
+
+
+# ── the rule itself, at the policy and with the real python_exec ─────────────
+
+def test_the_rule_needs_both_declarations_and_the_gated_lane():
+    """Dangerous AND off every channel is what "needs a person" means. A write-level tool that
+    is kept off channels (browser_agent) is still lifted by the admin's switch, as before, and
+    the unattended lanes (gate off) are not refused by this rule."""
+    from vaf.core.tool_contract import evaluate_tool_policy
+
+    def decide(tool_name, *, gated_lane=True):
+        with patch("vaf.core.config.Config.get",
+                   side_effect=lambda k, d=None: True if k == "channel_tools_unrestricted" else d):
+            return evaluate_tool_policy(tool_name=tool_name, tool=_tool_class(tool_name)(),
+                                        current_source="telegram", is_channel_session=True,
+                                        is_admin=True, gated_lane=gated_lane)
+
+    assert decide("host_bash").blocked and decide("python_exec").blocked
+    assert not decide("browser_agent").blocked, "a convenience tool keeps the admin's lift"
+    assert not decide("host_bash", gated_lane=False).blocked, "the coder may still build"
+
+
+def test_python_exec_from_telegram_does_not_run_with_a_stored_always(tmp_path):
+    """Measured before the rule: the lift took the confirmation away, and python_exec's own
+    check let the stored "always" through, so a Telegram message ran host Python."""
+    from vaf.core.tool_dispatch import ToolCaller
+    marker = tmp_path / "ran.txt"
+    caller = ToolCaller({"python_exec": _tool_class("python_exec")()}, source="telegram",
+                        session_id="telegram_42", interactive=False, user_role="admin")
+    with patch("vaf.core.trust.get_tool_policy", return_value="allow"), \
+         patch("vaf.tools.python_exec.get_tool_policy", return_value="allow"):
+        out = caller.execute("python_exec", {"code": f"open({str(marker)!r}, 'w').write('x')"})
+    assert out.startswith("Security Error"), out[:200]
+    assert not marker.exists(), "host Python ran from a messaging channel"

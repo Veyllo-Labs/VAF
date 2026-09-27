@@ -328,8 +328,14 @@ from the network and piped into a shell, writes to a block device, a fork bomb, 
 delete of a system or home root, and a command whose executable is built by a substitution
 (there the approved text is not the text that would run). It tokenizes quote-aware and
 descends into substitutions rather than matching substrings, so `rm -rf /tmp/scratch` is
-ordinary work while `rm  -rf  /` is not. The verdict carries its categories, which the
-confirmation dialog shows. For the main agent's own call, the real safety is still the
+ordinary work while `rm  -rf  /` is not. It also classifies the command a command carries:
+`bash -c '...'`, `su -c '...'`, `eval ...` with the lane's own profile, and `ssh host '...'`
+with the `remote` profile (the catastrophic core, while an installer piped into a shell is
+named rather than refused, because that is how a server is commonly set up). A wrapper's
+option values are stepped over (`sudo -u root rm -rf /` is judged as `rm -rf /`), and a
+command nested more than `MAX_NESTING` deep is refused. Before this, ten of ten measured
+wrapped forms passed. The verdict carries its categories, which the confirmation dialog
+shows. For the main agent's own call, the real safety is still the
 person's approval plus the two-layer local-only gate. The unattended lanes (the coder and
 workflow steps, point 2) have no approval: there it is the account allowlist, the policy
 block and, for workflow steps, the application's authorizer that decide. The controls are

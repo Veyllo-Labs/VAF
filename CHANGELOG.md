@@ -336,6 +336,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **A dangerous command wrapped in another command is refused like the command itself.** A few
+  catastrophic commands are refused on your computer even after you confirm them, such as
+  deleting the whole disk or piping a download straight into a shell. The check only looked at
+  the outer command. Wrapped in `bash -c '...'`, `su -c`, `eval`, `sudo -u root`,
+  `nice -n 10`, `timeout 5` or `ssh host '...'`, or placed inside `"$(...)"`, all ten tested
+  forms went through. The check now looks inside, and it refuses a command nested too deeply to
+  follow. A command sent to another machine over ssh is checked by the same core rules, with
+  one difference: an installer piped into a shell is shown in the confirmation there instead of
+  refused, because that is how software such as Docker is commonly installed on a server.
+
 - **Only an admin can change the MCP settings.** Any account could switch off the MCP tools for
   everybody, change how long VAF waits for MCP servers at startup, and set the address a
   sign-in to an MCP server sends its authorization code to. All MCP settings are now admin-only,

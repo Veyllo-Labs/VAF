@@ -149,9 +149,9 @@ The declaration travels the WHOLE path, not just the funnel - exempting only the
 
 **Post-execution hook (`Agent._chat_post_dispatch`, wired into the pipeline as the chat lane's `after_dispatch`):** After `search_tools` returns, the discovered tool names are immediately added to `_active_tools` so the model can call them in the very **next turn** without another router round-trip.
 
-**Always available:** `search_tools` (and `list_tools`) are injected into every restricted tool set: the discovery-only fallback (router found no tools), CORE_TOOLS (tight context), and the emergency fallback list, so the model always has a discovery path.
+**Always available:** `search_tools` (and `list_tools`) are part of every tool set the chat turn narrows: the router's own set (pinned through the cap, below), the discovery-only fallback (router found no tools), CORE_TOOLS (tight context), the internal-step subset and the context-pressure subset of the local server lane (Section 7), so the model always has a discovery path. The Front Office allow-list is the deliberate exception (see [FRONT_OFFICE.md](FRONT_OFFICE.md#tool-restriction)). Guard: `tests/test_tool_router_cap_and_fallbacks.py`.
 
-**Tool cap (`router_max_tools`):** After the router selects tools (and core/discovery tools are added), the list is capped at `router_max_tools` (default: **12**). `list_tools` and `search_tools` are **always kept**; they count against the cap, so ten places remain for the rest. This prevents context pollution when many tools are registered.
+**Tool cap (`router_max_tools`):** After the router selects tools and the riders are added, the list is capped at `router_max_tools` (default: **12**). The cap counts the tools chosen for the turn and the riders. `list_tools` and `search_tools` are **always kept and come on top of it** (with the default, at most 14 tools), and so do a thinking run's exit tools (`_apply_tool_cap`). A pinned tool is the way out of a narrowed set, not a choice about the turn, so it takes no place from the turn's tools: counted against the cap, the two discovery tools left ten places, a one-tool weather turn already filled all twelve, and a turn whose router picked twelve tools lost the two that sort last (`send_mail`, `web_search`). The tool a suggestion note names (`execute_workflow`, `use_skill`) is added after the cap as well, and what `search_tools` discovers during the turn joins the set on top. The cap prevents context pollution when many tools are registered. Guard: `tests/test_tool_router_cap_and_fallbacks.py`.
 
 **What the cap cuts first (`_task_tools_first`):** the tools the router and the recent turns chose for THIS task come first, and the riders that are added on every turn come after them: `update_intent`, `update_working_memory`, `memory_search`, `memory_save`, `memory_update`, `update_user_identity`, `set_timer`, `ask_user`, `analyze_image` (only when a vision backend exists: `vision_available()`) and the send tool of every connected messenger. Each group is sorted, so the cut is reproducible. One sorted list put the riders in the way of the task: with three messengers connected the riders alone filled the cap, and a research turn lost `web_search` because "w" sorts last (measured with the defaults). `ask_user` rides along because a question with options comes up in the middle of a task, when the router has picked tools for the task and never for asking; `analyze_image` for the same reason, for a screenshot or a rendered page looked at along the way (measured in a long build session: 162 of 168 file reads were images).
 
@@ -162,7 +162,7 @@ The declaration travels the WHOLE path, not just the funnel - exempting only the
 { "router_max_tools": 12 }
 ```
 
-Range: 1–100. Raise it if agents report missing tools; lower it to reduce token overhead.
+Suggested range: 1–100 (the value is not clamped). Raise it if agents report missing tools; lower it to reduce token overhead.
 
 **Reasoning model compatibility:** When the router uses a reasoning model (DeepSeek Reasoner, R1) the tool selection often lands inside `<think>…</think>` blocks rather than in the response content. The parser strips think-tags first, then falls back to scanning the full raw response (including reasoning) for tool name substrings, so routing works correctly regardless of model type.
 
@@ -274,12 +274,19 @@ User: "What is the weather?"
 
 ## 7. Fallback Mechanisms
 
+A failed router call never loads ALL tools. The model gets the discovery path, finds the rest through `search_tools`, and the `search_tools` post-hook makes a found tool callable at the next step.
+
 | Situation | Behaviour |
 |---|---|
-| Router LLM fails | `_active_tools = None` → ALL tools loaded (fail-safe) |
-| Router returns empty | Context OK: discovery-only (`list_tools`, `search_tools`). Context tight (e.g. >75%): CORE_TOOLS subset. |
-| Main model retry | `_active_tools = None` → full tool reload |
-| Emergency (internal step) | Context >80%: minimal subset (`web_search`, `memory_search`, `list_tools`, `search_tools`, …) |
+| Router LLM call raises (provider error, local server unreachable) | `_route_tools` returns an empty list; the keyword-forced tools of that turn are dropped with it. The safety net below applies. |
+| Router LLM call times out (API backend only, 15 s) | The keyword-forced tools plus `list_tools` and `search_tools`; the recent tools and the riders are added as on a normal turn. |
+| Router answers with no valid tool name (it chats, or answers nothing) | The keyword-forced tools when there are any, handled as a normal turn; otherwise empty, and the safety net applies. |
+| Safety net: router result empty, context OK | Discovery-only: `list_tools`, `search_tools`, plus the tools used in the last two turns (`_get_recent_tools`). No riders. |
+| Safety net: router result empty, context tight (>75% at a context of 20k tokens or less, >85% above) | CORE_TOOLS subset (below). |
+| Main model retry, internal step | `_active_tools = None` → ALL tools. Context >80% (20k or less) / >90%: the internal subset (`web_search`, `memory_search`, `list_tools`, `search_tools`, `update_intent`, `read_file`, `list_files`). |
+| Context pressure in the local server lane (still over its limit after compression, with ALL or more than 15 tools active) | The context-pressure subset: `web_search`, `memory_search`, `memory_save`, `list_tools`, `search_tools`, `update_intent`, `read_file`, `list_files`, `librarian_agent`, `coding_agent`. |
+
+In a thinking run, `thinking_done` and `ask_user` are pinned after every one of these narrowings (`_ensure_thinking_exit_tools`). Guard for the failed-call and context-pressure rows: `tests/test_tool_router_cap_and_fallbacks.py`.
 
 **CORE_TOOLS** (used when context is tight and router returns nothing):
 `web_search`, `memory_search`, `memory_save`, `list_tools`, `search_tools`,

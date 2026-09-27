@@ -38,17 +38,19 @@ def test_pinned_tool_survives_the_cap_from_the_last_position():
 
     Before the fix the cap pinned only the discovery tools and truncated the rest, so a
     merely force-included `thinking_done` at index 19 of 20 was cut. Sorting the set first
-    made WHICH tool got cut reproducible; pinning makes it survive."""
+    made WHICH tool got cut reproducible; pinning makes it survive. The pin comes on top of
+    the twelve places, it does not take one of them."""
     incoming = [f"tool_{i:02d}" for i in range(19)] + ["thinking_done"]
     out = _apply_tool_cap(incoming, 12, {"list_tools", "search_tools", "thinking_done"})
     assert "thinking_done" in out
-    assert len(out) == 12
+    assert len(out) == 13
 
 
 def test_pins_are_never_sacrificed_to_a_tiny_cap():
+    """And they leave the cap's places to the rest: a cap of 2 still carries two others."""
     incoming = ["a", "b", "c", "thinking_done", "ask_user"]
     out = _apply_tool_cap(incoming, 2, {"thinking_done", "ask_user"})
-    assert set(out) == {"thinking_done", "ask_user"}
+    assert set(out) == {"thinking_done", "ask_user", "a", "b"}
 
 
 def test_cap_preserves_order_and_is_a_noop_below_the_limit():

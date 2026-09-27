@@ -104,6 +104,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   several messengers connected, the tools the agent is offered on every turn filled its tool
   list, and a research question could arrive without the web search. The tools chosen for
   the question now come first.
+- **The two tools for finding other tools no longer take places from the question's own.**
+  The agent is offered up to twelve tools per message (`router_max_tools`), and the two it
+  uses to look up any other tool counted among them, so a single weather question already
+  filled the list and a larger task lost the tools that sort last. They now come on top of
+  the twelve.
 - **The agent can look at any image in your files, not only in the chat's workspace.** A
   screenshot or picture saved elsewhere in your files could be read with `read_file` but
   not looked at, so the agent guessed from its file name or bytes. `analyze_image` now takes
@@ -150,6 +155,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **With a local model and a nearly full conversation, the agent can still search for a
+  tool.** When the conversation no longer fits and VAF cuts the agent's tools down to a small
+  core, that core now includes the tool search, so the agent can still find a tool the core
+  leaves out.
 - **A sign-in page opens even when getting its address takes a moment.** Connecting a mail
   account, a calendar, a cloud drive or an MCP service first asks VAF for the sign-in address and
   then opens it in a new tab. When that took more than a few seconds, the browser treated the

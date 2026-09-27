@@ -175,7 +175,15 @@ def _task_tools_first(tools, task_tools) -> list:
 
 
 def _apply_tool_cap(selected, router_max: int, pinned) -> list:
-    """Cap the per-turn tool set, never at the expense of a pinned tool.
+    """Cap the per-turn tool set. Pinned tools come on top of the cap and never take one of
+    its places.
+
+    The cap counts what was chosen for the turn and the riders. A pinned tool (the two discovery
+    tools, and in a thinking run its exit tools) is not a choice about the turn but the way out
+    of a narrowed set, so it must not compete with the turn's tools for a place: counted against
+    the cap, the discovery tools left ten of the default twelve, a one-tool weather turn already
+    filled all twelve, and a turn whose router picked twelve tools lost the two that sort last
+    (measured: `send_mail` and `web_search`).
 
     Pure and order-preserving so the truncation is reproducible: the caller hands in a LIST, and
     pinned names survive regardless of where they sit in it. Callers that build the set from a
@@ -187,11 +195,11 @@ def _apply_tool_cap(selected, router_max: int, pinned) -> list:
     except (TypeError, ValueError):
         return list(selected or [])
     items = list(selected or [])
-    if not items or len(items) <= cap:
-        return items
     keep = [t for t in items if t in (pinned or ())]
     rest = [t for t in items if t not in keep]
-    return keep + rest[:max(0, cap - len(keep))]
+    if len(rest) <= cap:
+        return items
+    return keep + rest[:cap]
 
 # Working-memory note firewall: outcome/progress CLAIMS a model may only write
 # after real work happened. A weak model narrates its intentions as notes
@@ -9725,8 +9733,9 @@ class Agent:
                 selected_tools = _task_tools_first(tools_set, _task_tools)
 
             # Cap the number of tools to keep the context window clean.
-            # Discovery tools are pinned and don't count against the cap; in a thinking run the
-            # exit tools are pinned too, so the run can always end (see _THINKING_EXIT_TOOLS).
+            # Discovery tools are pinned and don't count against the cap, they come on top of it
+            # (_apply_tool_cap); in a thinking run the exit tools are pinned too, so the run can
+            # always end (see _THINKING_EXIT_TOOLS).
             _router_max = int(self.config.get("router_max_tools", 12))
             _pin_names = ("list_tools", "search_tools") + (
                 _THINKING_EXIT_TOOLS
@@ -10222,7 +10231,10 @@ class Agent:
                         # Emergency tool reduction
                         if self._active_tools is None or len(self._active_tools) > 15:
                              UI.event("Context", "Tight context: Using CORE tool subset to save VRAM.", style="warning")
-                             CORE_FALLBACK = ["web_search", "memory_search", "memory_save", "list_tools", "update_intent", "read_file", "list_files", "librarian_agent", "coding_agent"]
+                             # list_tools AND search_tools, like every other narrowed set: they are
+                             # the way to a tool this subset leaves out, and search_tools is the one
+                             # that finds a tool by what it does.
+                             CORE_FALLBACK = ["web_search", "memory_search", "memory_save", "list_tools", "search_tools", "update_intent", "read_file", "list_files", "librarian_agent", "coding_agent"]
                              self._active_tools = [t for t in CORE_FALLBACK if t in self.tools]
                              self._ensure_thinking_exit_tools()
                              # Re-calculate after tool reduction

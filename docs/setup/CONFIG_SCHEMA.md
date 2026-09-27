@@ -59,7 +59,7 @@ need; everything else has a sensible default.
 | `temperature` | `0.7` | Sampling temperature (API + local). |
 | `gpu_layers` | `-1` | Local model GPU offload layers. `-1` = all; `0` = CPU only. |
 | `auto_start_local_server` | `True` | Start the local llama-server automatically. Set `False` when using only an API provider. |
-| `router_max_tools` | `12` | Max tools handed to the model per turn (1–100). Lower = faster inference. |
+| `router_max_tools` | `12` | Max tools the router and the per-turn riders hand the model per turn; `list_tools` and `search_tools` come on top of it (suggested 1–100, not clamped). Lower = faster inference. |
 
 Default API models (from `Config.PROVIDER_MODELS`):
 

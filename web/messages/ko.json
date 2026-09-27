@@ -2087,7 +2087,15 @@
         "testFail": "연결할 수 없었어요",
         "pasteTitle": "표준 설정(붙여 넣으면 자동으로 채워져요)",
         "pasteHint": "{ \"mcpServers\": … } 블록을 붙여 넣으면 양식이 저절로 채워져요.",
-        "jsonInvalid": "JSON이 올바르지 않아요. 양식과 맞추려면 고쳐 주세요."
+        "jsonInvalid": "JSON이 올바르지 않아요. 양식과 맞추려면 고쳐 주세요.",
+        "transportHttp": "원격(Streamable HTTP)",
+        "transportSse": "원격(SSE, 이전 방식)",
+        "token": "액세스 토큰",
+        "tokenHint": "Authorization: Bearer로 전송되며 암호화되어 저장되고 다시 표시되지 않아요",
+        "tokenStoredPlaceholder": "저장됨",
+        "tokenStoredHint": "토큰이 저장되어 있어요. 유지하려면 비워 두세요",
+        "tokenRemove": "토큰 삭제",
+        "envHint": "env 값은 암호화되어 저장되고 다시 표시되지 않아요. 빈 값은 저장된 값을 유지해요"
       }
     },
     "workflows": {

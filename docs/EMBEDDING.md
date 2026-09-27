@@ -1801,8 +1801,12 @@ usable from an embedded engine too, documented in their own pages:
   dropped in `~/.vaf/workflows/`, see
   [WORKFLOW_SELECTION.md](agents/WORKFLOW_SELECTION.md).
 - **Skills** - reusable prompt/procedure packages, see [SKILLS.md](agents/SKILLS.md).
-- **MCP servers** - register external MCP tool servers in `mcp_servers.json`;
-  their tools appear as native tools (`mcp_<server>_<tool>`), see
+- **MCP servers** - register external MCP tool servers in `mcp_servers.json`,
+  local (`stdio`, a command) or remote (`http` for Streamable HTTP, `sse` for the
+  older transport, a `url`); their tools appear as native tools
+  (`mcp_<server>_<tool>`). Secrets do not stay in the file: `env` values and a
+  remote server's token move into the key ring on the next load
+  (`vaf.core.mcp_registry.upsert_server` writes them there directly), see
   [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md).
 - **Update-surviving local tools** - a `custom_tools/` folder in the platform
   data dir (managed via the Web UI, admin-only), see

@@ -2087,7 +2087,15 @@
         "testFail": "接続できませんでした",
         "pasteTitle": "標準の設定（貼り付けると自動入力されます）",
         "pasteHint": "{ \"mcpServers\": … }のブロックを貼り付けると、フォームが自動で埋まります。",
-        "jsonInvalid": "JSONが正しくありません。フォームと同期するには修正してください。"
+        "jsonInvalid": "JSONが正しくありません。フォームと同期するには修正してください。",
+        "transportHttp": "リモート（Streamable HTTP）",
+        "transportSse": "リモート（SSE、旧方式）",
+        "token": "アクセストークン",
+        "tokenHint": "Authorization: Bearerとして送信され、暗号化して保存されます。再表示されることはありません。",
+        "tokenStoredPlaceholder": "保存済み",
+        "tokenStoredHint": "トークンは保存済みです。そのまま使う場合は空欄のままにしてください。",
+        "tokenRemove": "トークンを削除",
+        "envHint": "envの値は暗号化して保存され、再表示されません。空の値は保存済みの値をそのまま使います。"
       }
     },
     "workflows": {

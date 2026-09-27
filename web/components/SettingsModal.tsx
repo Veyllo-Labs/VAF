@@ -24,7 +24,7 @@ import { useMemoryStore } from './memory/stores/memoryStore';
 import { SpeakerTest } from './SpeakerTest';
 import CustomToolEditor from './settings/CustomToolEditor';
 import McpServerEditor from './settings/McpServerEditor';
-import type { McpServerInfo } from './settings/McpServerEditor';
+import type { McpServerInfo, McpTestConfig } from './settings/McpServerEditor';
 import WorkflowCreator from './settings/WorkflowCreator';
 import type { WorkflowSaveData } from './settings/WorkflowCreator';
 import SkillsEditor from './settings/SkillsEditor';
@@ -181,7 +181,7 @@ export interface SettingsModalProps {
     /** Last error from the backend for an MCP server operation */
     mcpBackendError?: string | null;
     /** Probe a server config (test connection) without saving */
-    onTestMcpServer?: (cfg: { command: string; transport: string; url: string; env: Record<string, string> }) => void;
+    onTestMcpServer?: (cfg: McpTestConfig) => void;
     /** Result of the last test connection */
     mcpTestResult?: { connected: boolean; tool_count: number; tools?: string[]; error?: string | null } | null;
     /** Whether a test connection is in progress */

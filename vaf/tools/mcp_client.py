@@ -7,12 +7,20 @@ MCP Client Tool - Bridge to external Model Context Protocol servers
 This tool allows VAF to interact with external MCP servers, enabling
 integration with tools written in any language and following the MCP standard.
 
-MCP (Model Context Protocol) uses JSON-RPC over stdio, HTTP, or SSE.
-This implementation supports stdio transport (most common).
+MCP (Model Context Protocol) uses JSON-RPC over stdio, Streamable HTTP or SSE. A local
+server (stdio) is a process of ours, driven by the loop below; a remote one (http / sse) goes
+through vaf/core/mcp_remote.py, which speaks the protocol through the official SDK.
+
+The stdio loop is shared by every caller in the process (the raw `mcp_call`, discovery, the
+registered `mcp_<server>_<tool>` tools), so one request at a time runs per server process, and
+every request carries its own id. Before, all calls used the same id and nothing serialised
+them: two chats calling the same server at once could each read the other's answer.
 """
 
+import itertools
 import json
 import subprocess
+import threading
 
 from vaf.version import __version__
 import sys
@@ -56,15 +64,15 @@ class MCPClientTool(BaseTool):
             "transport": {
                 "type": "string",
                 "enum": ["stdio", "http", "sse"],
-                "description": "Transport method (default: stdio)",
+                "description": "stdio (a local server started by server_command, the default), http (a remote server over Streamable HTTP at server_url) or sse (a remote server over the older SSE transport)",
                 "default": "stdio"
             },
             "server_url": {
                 "type": "string",
-                "description": "Server URL (required for http/sse transport)"
+                "description": "Server URL (required for http/sse transport). A server that needs a login is registered in Settings instead, where its token is kept."
             }
         },
-        "required": ["server_command", "tool_name"]
+        "required": ["tool_name"]
     }
     
     def __init__(self):
@@ -72,6 +80,10 @@ class MCPClientTool(BaseTool):
         # Cache for active MCP server processes
         self._server_processes: Dict[str, subprocess.Popen] = {}
         self._server_initialized: Dict[str, bool] = {}
+        # One request at a time per server process, each with its own id (module docstring).
+        self._locks: Dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+        self._request_ids = itertools.count(1)
     
     def run(self, **kwargs) -> str:
         """
@@ -93,20 +105,34 @@ class MCPClientTool(BaseTool):
         transport = kwargs.get("transport", "stdio")
         server_url = kwargs.get("server_url", "")
         
-        if not server_command or not tool_name:
-            return "Error: server_command and tool_name are required"
-        
+        if not tool_name:
+            return "Error: tool_name is required"
+        if transport == "stdio" and not server_command:
+            return "Error: server_command is required for the stdio transport"
+        if transport in ("http", "sse") and not server_url:
+            return "Error: server_url is required for the http and sse transports"
+
         try:
             if transport == "stdio":
                 return self._call_stdio(server_command, tool_name, arguments)
-            elif transport == "http":
-                return self._call_http(server_url, tool_name, arguments)
-            elif transport == "sse":
-                return self._call_sse(server_url, tool_name, arguments)
-            else:
-                return f"Error: Unsupported transport '{transport}'"
+            if transport in ("http", "sse"):
+                return self.call_remote(transport, server_url, tool_name, arguments)
+            return f"Error: Unsupported transport '{transport}'"
         except Exception as e:
             return f"Error calling MCP tool: {e}"
+
+    def _lock_for(self, server_command: str) -> threading.Lock:
+        with self._locks_guard:
+            return self._locks.setdefault(server_command, threading.Lock())
+
+    def call_remote(self, transport: str, server_url: str, tool_name: str, arguments: Dict[str, Any],
+                    headers: Optional[Dict[str, str]] = None) -> str:
+        """Call a tool of a remote server (Streamable HTTP or SSE) through the shared session pool."""
+        from vaf.core.mcp_remote import RemoteMcpError, get_remote_pool
+        try:
+            return get_remote_pool().call_tool(transport, server_url, tool_name, arguments or {}, headers=headers)
+        except RemoteMcpError as exc:
+            return f"Error: MCP server at {server_url}: {exc}"
     
     def _ensure_server(self, server_command: str, env: Optional[Dict[str, str]] = None) -> Optional[subprocess.Popen]:
         """Spawn (if needed) and initialize the stdio MCP server, cached by command. Returns the
@@ -140,7 +166,7 @@ class MCPClientTool(BaseTool):
             "protocolVersion": "2024-11-05",
             "capabilities": {},
             "clientInfo": {"name": "VAF", "version": __version__},
-        }, request_id=1)
+        }, request_id=next(self._request_ids))
         if init is None or "error" in init:
             try:
                 process.terminate()
@@ -187,26 +213,24 @@ class MCPClientTool(BaseTool):
         return None
 
     def list_server_tools(self, server_command: str, transport: str = "stdio",
-                          server_url: str = "", env: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
-        """Discover the tools a server offers via JSON-RPC tools/list. Returns a list of tool dicts
-        (each with name / description / inputSchema), or [] on any failure (never raises)."""
-        try:
-            if transport == "http":
-                # Best-effort HTTP discovery (mirrors the simple _call_http shape). SSE is not
-                # supported for discovery.
-                if not server_url:
-                    return []
-                import requests
-                r = requests.post(f"{server_url}/tools/list", json={}, timeout=15)
-                r.raise_for_status()
-                tools = (r.json() or {}).get("tools", [])
-                return tools if isinstance(tools, list) else []
-            if transport != "stdio":
-                return []  # sse discovery not supported
-            process = self._ensure_server(server_command, env)
-            if process is None:
+                          server_url: str = "", env: Optional[Dict[str, str]] = None,
+                          headers: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+        """Discover the tools a server offers via tools/list. Returns a list of tool dicts (each
+        with name / description / inputSchema), or [] when the server has none or could not be
+        asked. A remote server's reason is raised as RemoteMcpError for the caller to show."""
+        if transport in ("http", "sse"):
+            if not server_url:
                 return []
-            resp = self._json_rpc(process, "tools/list", {}, request_id=3)
+            from vaf.core.mcp_remote import get_remote_pool
+            return get_remote_pool().list_tools(transport, server_url, headers=headers)
+        if transport != "stdio":
+            return []
+        try:
+            with self._lock_for(server_command):
+                process = self._ensure_server(server_command, env)
+                if process is None:
+                    return []
+                resp = self._json_rpc(process, "tools/list", {}, request_id=next(self._request_ids))
             if not resp or "error" in resp or "result" not in resp:
                 return []
             tools = resp["result"].get("tools", [])
@@ -218,12 +242,13 @@ class MCPClientTool(BaseTool):
                     env: Optional[Dict[str, str]] = None) -> str:
         """Call an MCP tool via stdio transport (JSON-RPC over stdin/stdout) — the most common MCP
         transport."""
-        process = self._ensure_server(server_command, env)
-        if process is None:
-            return "Error: Failed to initialize MCP server"
-
-        response = self._json_rpc(process, "tools/call",
-                                  {"name": tool_name, "arguments": arguments or {}}, request_id=2)
+        with self._lock_for(server_command):
+            process = self._ensure_server(server_command, env)
+            if process is None:
+                return "Error: Failed to initialize MCP server"
+            response = self._json_rpc(process, "tools/call",
+                                      {"name": tool_name, "arguments": arguments or {}},
+                                      request_id=next(self._request_ids))
         if response is None:
             return "Error: No response from MCP server"
         if "error" in response:
@@ -247,54 +272,6 @@ class MCPClientTool(BaseTool):
                 return "\n".join(text_parts) if text_parts else str(result)
             return str(result)
         return str(result)
-    
-    def _call_http(self, server_url: str, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """
-        Call MCP tool via HTTP transport.
-        
-        Note: HTTP transport requires the MCP server to be running
-        as an HTTP server. This is less common than stdio.
-        """
-        import requests
-        
-        if not server_url:
-            return "Error: server_url required for HTTP transport"
-        
-        try:
-            # MCP HTTP uses POST requests
-            response = requests.post(
-                f"{server_url}/tools/call",
-                json={
-                    "name": tool_name,
-                    "arguments": arguments
-                },
-                timeout=30
-            )
-            
-            response.raise_for_status()
-            result = response.json()
-            
-            if "content" in result:
-                content = result["content"]
-                if isinstance(content, list):
-                    return "\n".join(item.get("text", "") for item in content if isinstance(item, dict))
-            
-            return str(result)
-            
-        except requests.RequestException as e:
-            return f"HTTP Error: {e}"
-        except Exception as e:
-            return f"Error: {e}"
-    
-    def _call_sse(self, server_url: str, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """
-        Call MCP tool via Server-Sent Events (SSE) transport.
-        
-        Note: SSE is used for streaming responses.
-        """
-        # SSE implementation would require more complex handling
-        # For now, return a message indicating it's not fully implemented
-        return "Error: SSE transport not yet fully implemented. Use stdio or http transport."
     
     def __del__(self):
         """Cleanup: Close all server processes on tool destruction."""

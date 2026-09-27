@@ -30,6 +30,11 @@ A hot-reloadable manifest in the VAF data directory (next to the custom-tools da
       "transport": "stdio",
       "enabled": true,
       "permission_level": "write"
+    },
+    "tracker": {
+      "transport": "http",
+      "url": "https://mcp.example.com/mcp",
+      "permission_level": "read"
     }
   }
 }
@@ -38,16 +43,55 @@ A hot-reloadable manifest in the VAF data directory (next to the custom-tools da
 | Field | Meaning |
 |---|---|
 | `command` | command that starts the server (stdio transport) |
-| `transport` | `stdio` (default) · `http` · `sse`. Tool **discovery** is full for `stdio`, best-effort for `http`, and not supported for `sse` (an `sse` server registers no tools - use `stdio`/`http`, or the raw `mcp_call` tool). |
+| `transport` | `stdio` (default): a local process VAF starts. `http`: a remote server over **Streamable HTTP**, the transport the specification defines today. `sse`: a remote server over the older HTTP+SSE transport. |
+| `url` | the remote server's endpoint (`http` / `sse`), e.g. `https://mcp.example.com/mcp` |
 | `enabled` | set `false` to keep the entry but not load it |
 | `permission_level` | `read` · `write` (default) · `dangerous` - see below |
-| `url` | only for `http` / `sse` |
-| `env` | optional environment variables for the server process (e.g. `{ "GITHUB_TOKEN": "…" }`); merged onto the VAF process environment |
+| `env` | environment variables for a local server process (e.g. `{ "GITHUB_TOKEN": "…" }`), merged onto the VAF process environment. The file keeps only the names; the values live in the key ring (below). |
+| `token` | a remote server's access token, sent as `Authorization: Bearer <token>`. Accepted here once and moved into the key ring; a `headers` object with an `Authorization: Bearer` entry (the shape other MCP clients write) is taken the same way, other headers stay and are sent as they are. |
+| `tool_permissions` | optional per-tool permission overrides (below) |
 
 At startup VAF connects to every enabled server **in parallel** with a per-server timeout
 (`mcp_discovery_timeout_seconds`, default 5), lists its tools, and registers each as
 `mcp_<server>_<tool>`. A server that is slow, hung, or misconfigured is terminated and **skipped** -
-it never blocks startup.
+it never blocks startup. The server list in Settings shows why a server did not connect (a
+refused token reads "the server refused the access (401)").
+
+### Remote servers
+
+A remote server is reached through the official `mcp` SDK (`vaf/core/mcp_remote.py`): JSON-RPC
+over Streamable HTTP or SSE, with the `initialize` handshake and the session the server hands out
+(`Mcp-Session-Id`). One session per server stays open for the life of the process and serves every
+call; a session idle for a minute is pinged before it is used and reopened if it does not answer.
+A `tools/call` is never retried: a tool may have acted before its answer was lost, and doing it
+twice is worse than an error. A changed URL or token opens a fresh session.
+
+Before this, the HTTP path posted a bare `{"name", "arguments"}` to `<url>/tools/call` - no
+JSON-RPC, no handshake, no session, no login - so no server that implements the specification
+answered it, the SSE path was not built at all, and discovery skipped every server that had a URL
+and no command: no remote server ever registered a tool.
+
+Servers that require an OAuth sign-in are not supported yet: a remote server is reached without a
+login or with a fixed access token, which the admin sets for the whole installation.
+
+### Secrets
+
+A local server's `env` values and a remote server's token live in the encrypted key ring
+(`vaf/core/mcp_secrets.py`, entries `mcp_server.<name>.env` and `mcp_server.<name>.token`), never in
+`mcp_servers.json` and never in the browser. A value written into the file by hand moves into the
+ring the next time the file is loaded (after the ring read it back; a move that fails leaves the
+file as it was and is tried again). Removing a server removes its secrets. `vaf secure status` names
+a server whose secret is still in the file. Every env value counts as a secret, not only the ones
+whose names look like one.
+
+### One caller at a time on a local server
+
+A local server process is shared by every caller in VAF (the raw `mcp_call`, discovery, the
+registered tools), so one request at a time runs per process and every request carries its own
+JSON-RPC id. Before, every call used the same id and nothing serialised them: two chats calling
+the same tool at once could each read the other's answer. The stdio loop itself stays
+hand-written (it works; moving it onto the SDK is a change of its own, with the Windows process
+flags and the warm-process cache to carry).
 
 Naming is `mcp_<server>_<tool>` (e.g. `mcp_filesystem_read_file`): unambiguous, no dotted names in
 LLM tool schemas, and the `mcp_` prefix marks it as external at a glance.
@@ -56,9 +100,13 @@ LLM tool schemas, and the `mcp_` prefix marks it as external at a glance.
 
 Admins can manage servers without editing JSON by hand: **Settings → Advanced → MCP** lists the
 configured servers (with a connection status dot and tool count per server) and lets you add, edit, or
-remove a server through a form (name, transport, command/url, enabled, `permission_level`), or paste
-a standard `{ "mcpServers": { … } }` config block (the format used by Claude Desktop / Cursor, with
-`command` + `args` + `env`) into the panel to auto-fill the form. The
+remove a server through a form (name, transport, command or URL, an access token for a remote server,
+enabled, `permission_level`), or paste a standard `{ "mcpServers": { … } }` config block (the format
+used by Claude Desktop / Cursor: `command` + `args` + `env` for a local server, `url` + `type` +
+`headers` for a remote one, whose bearer token fills the token field) into the panel to auto-fill the
+form. The token field starts empty and says when a token is stored; leaving it empty keeps it.
+Env values come back empty for the same reason, and an empty value keeps the stored one. Saving
+keeps the keys the form does not show (`tool_permissions`). The
 Advanced-tab row shows "N connected / M configured" at a glance. Saving writes `mcp_servers.json` and
 hot-reloads the tools immediately (no restart); the underlying manifest is the same file described
 above, so manual edits and the UI are interchangeable. Editing the manifest directly still takes

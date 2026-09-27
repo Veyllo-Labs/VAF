@@ -140,6 +140,24 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Remote MCP servers work.** VAF could only use MCP servers it starts itself on your
+  computer. A server on the internet - the kind most services now offer - never connected:
+  VAF did not speak the protocol those servers use, the older SSE variant was not built at
+  all, and such a server was skipped when the tools were loaded. Now a remote server is added
+  in Settings, Advanced, MCP with its address, over Streamable HTTP or SSE, and its tools
+  appear like any other. A server that needs an access token gets one in the same form; it is
+  stored encrypted and never shown again. Servers that need you to sign in with an account
+  are not supported yet.
+- **Your MCP server keys are no longer stored in plaintext or shown in the browser.** The
+  environment values of an MCP server - typically an API key - sat in plain text in
+  `mcp_servers.json`, and the Settings page received them with the server list. They now live
+  in VAF's encrypted key ring; the page shows only their names. Existing values move there by
+  themselves the next time VAF loads the servers.
+- **Two chats using the same MCP tool at once each get their own answer.** Calls to a server
+  VAF runs itself could cross: when two came in at the same time, one could receive the
+  other's result.
+- **Saving an MCP server in Settings keeps its per-tool permissions.** The form rewrote the
+  whole entry and dropped the `tool_permissions` you had set in the file.
 - **No more nameless 06:00 automation that cannot be deleted.** An automation's run history
   was read as if it were an automation of its own: it showed up in the list without a name, set
   to daily at 06:00, deleting it did nothing, it came back after every restart, and it would have

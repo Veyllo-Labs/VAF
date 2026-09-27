@@ -1336,27 +1336,11 @@ def _mcp_servers_payload(agent) -> list:
     discovery. Used by `get_mcp_servers` and returned directly in create/update/delete replies so
     the UI list updates without a separate refetch round-trip.
     """
-    from vaf.core.mcp_registry import load_mcp_manifest
-    servers = (load_mcp_manifest() or {}).get("servers", {}) or {}
-    status = dict(getattr(agent, "_mcp_server_status", {}) or {})
-    out = []
-    for name, cfg in servers.items():
-        if not isinstance(cfg, dict):
-            continue
-        st = status.get(name, {})
-        out.append({
-            "name": name,
-            "command": cfg.get("command", ""),
-            "transport": cfg.get("transport", "stdio"),
-            "url": cfg.get("url", ""),
-            "enabled": bool(cfg.get("enabled", True)),
-            "permission_level": cfg.get("permission_level", "write"),
-            "env": cfg.get("env") if isinstance(cfg.get("env"), dict) else {},
-            "connected": bool(st.get("connected", False)),
-            "tool_count": int(st.get("tool_count", 0) or 0),
-            "error": st.get("error"),
-        })
-    return out
+    # The framework builds it (vaf.core.mcp_registry.servers_for_display): env names without
+    # values and whether a token is stored, never a secret. This list used to send the
+    # manifest's env as it was, API keys included, to the admin's browser.
+    from vaf.core.mcp_registry import servers_for_display
+    return servers_for_display(getattr(agent, "_mcp_server_status", {}) or {})
 
 
 def _attach_learned_states(tools_list: list) -> list:
@@ -6833,9 +6817,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type in ("create_mcp_server", "update_mcp_server"):
                     # Add or edit an MCP server in mcp_servers.json, then hot-reload.
-                    # Payload: { name, command, transport?, url?, enabled?, permission_level? }
+                    # Payload: { name, command, transport?, url?, enabled?, permission_level?,
+                    # env?, token?, clear_token? }; secrets go to the key ring (mcp_registry.upsert_server).
                     try:
-                        from vaf.core.mcp_registry import load_mcp_manifest, save_mcp_manifest
+                        from vaf.core.mcp_registry import upsert_server
 
                         _ms_scope = manager.get_connection_user(websocket) if manager else None
                         _ms_role  = manager.get_connection_user_role(websocket) if manager else None
@@ -6843,34 +6828,18 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         if not _ms_admin:
                             await websocket.send_json({"type": "mcp_server_error", "error": "Admin permission required to manage MCP servers."})
                         else:
-                            import re as _re
                             _ms_name = (data.get("name") or "").strip()
-                            if not _re.match(r'^[A-Za-z][A-Za-z0-9_-]*$', _ms_name):
-                                raise ValueError("Server name must start with a letter and use only letters, digits, _ or -.")
-                            _ms_transport = (data.get("transport") or "stdio").strip()
-                            _ms_cmd = (data.get("command") or "").strip()
-                            if _ms_transport == "stdio" and not _ms_cmd:
-                                raise ValueError("A command is required for stdio transport.")
-                            _ms_perm = (data.get("permission_level") or "write").strip().lower()
-                            if _ms_perm not in ("read", "write", "dangerous"):
-                                _ms_perm = "write"
-                            _manifest = load_mcp_manifest() or {}
-                            _srv = _manifest.get("servers")
-                            if not isinstance(_srv, dict):
-                                _srv = {}
-                            _ms_env = data.get("env")
-                            if not isinstance(_ms_env, dict):
-                                _ms_env = {}
-                            _srv[_ms_name] = {
-                                "command": _ms_cmd,
-                                "transport": _ms_transport,
-                                "url": (data.get("url") or "").strip(),
-                                "enabled": bool(data.get("enabled", True)),
-                                "permission_level": _ms_perm,
-                                "env": {str(k): str(v) for k, v in _ms_env.items()},
-                            }
-                            _manifest["servers"] = _srv
-                            save_mcp_manifest(_manifest)
+                            upsert_server(
+                                _ms_name,
+                                command=data.get("command") or "",
+                                transport=data.get("transport") or "stdio",
+                                url=data.get("url") or "",
+                                enabled=bool(data.get("enabled", True)),
+                                permission_level=data.get("permission_level") or "write",
+                                env=data.get("env") if isinstance(data.get("env"), dict) else None,
+                                token=data.get("token") or None,
+                                clear_token=bool(data.get("clear_token")),
+                            )
                             agent = manager.agent_instance if manager else None
                             if agent and hasattr(agent, "reload_mcp_tools"):
                                 agent.reload_mcp_tools()
@@ -6883,7 +6852,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "delete_mcp_server":
                     # Remove an MCP server from mcp_servers.json, then hot-reload. Payload: { name }
                     try:
-                        from vaf.core.mcp_registry import load_mcp_manifest, save_mcp_manifest
+                        from vaf.core.mcp_registry import remove_server
 
                         _md_scope = manager.get_connection_user(websocket) if manager else None
                         _md_role  = manager.get_connection_user_role(websocket) if manager else None
@@ -6892,12 +6861,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "mcp_server_error", "error": "Admin permission required to manage MCP servers."})
                         else:
                             _md_name = (data.get("name") or "").strip()
-                            _manifest = load_mcp_manifest() or {}
-                            _srv = _manifest.get("servers")
-                            if isinstance(_srv, dict) and _md_name in _srv:
-                                del _srv[_md_name]
-                                _manifest["servers"] = _srv
-                                save_mcp_manifest(_manifest)
+                            remove_server(_md_name)       # and its secrets in the key ring
                             agent = manager.agent_instance if manager else None
                             if agent and hasattr(agent, "reload_mcp_tools"):
                                 agent.reload_mcp_tools()
@@ -6909,7 +6873,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "test_mcp_server":
                     # Probe a server config (without saving) so the admin can validate it in the
-                    # editor. Payload: { command, transport?, url? }. Reply: mcp_server_test_result.
+                    # editor. Payload: { name?, command, transport?, url?, env?, token? } - an empty
+                    # token or env value falls back to the stored one. Reply: mcp_server_test_result.
                     try:
                         from vaf.core.config import Config as _CfgMcp
                         from vaf.core.mcp_registry import probe_mcp_server
@@ -6928,7 +6893,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 "env": {str(k): str(v) for k, v in _tm_env.items()},
                             }
                             _tm_timeout = float(_CfgMcp.get("mcp_discovery_timeout_seconds", 5) or 5)
-                            _tm_res = probe_mcp_server(_tm_cfg, _tm_timeout)
+                            _tm_res = probe_mcp_server(_tm_cfg, _tm_timeout, name=(data.get("name") or "").strip(),
+                                                       token=data.get("token") or None)
                             await websocket.send_json({"type": "mcp_server_test_result", **_tm_res})
                     except Exception as e:
                         await websocket.send_json({"type": "mcp_server_test_result", "connected": False, "tool_count": 0, "tools": [], "error": str(e)})

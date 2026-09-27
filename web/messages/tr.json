@@ -2087,7 +2087,15 @@
         "testFail": "Bağlanılamadı",
         "pasteTitle": "Standart yapılandırma (otomatik doldurmak için yapıştır)",
         "pasteHint": "Bir { \"mcpServers\": … } bloğu yapıştır - form kendiliğinden dolar.",
-        "jsonInvalid": "Geçersiz JSON - formu eşitlemek için lütfen düzelt."
+        "jsonInvalid": "Geçersiz JSON - formu eşitlemek için lütfen düzelt.",
+        "transportHttp": "Uzak (Streamable HTTP)",
+        "transportSse": "Uzak (SSE, eski)",
+        "token": "Erişim belirteci",
+        "tokenHint": "Authorization: Bearer olarak gönderilir, şifreli saklanır ve bir daha gösterilmez.",
+        "tokenStoredPlaceholder": "Kayıtlı",
+        "tokenStoredHint": "Kayıtlı bir belirteç var. Korumak için alanı boş bırak.",
+        "tokenRemove": "Belirteci kaldır",
+        "envHint": "env değerleri şifreli saklanır ve bir daha gösterilmez; boş bir değer kayıtlı olanı korur."
       }
     },
     "workflows": {

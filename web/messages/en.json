@@ -2087,7 +2087,15 @@
         "testFail": "Could not connect",
         "pasteTitle": "Standard config (paste to auto-fill)",
         "pasteHint": "Paste a { \"mcpServers\": … } block — the form fills in automatically.",
-        "jsonInvalid": "Invalid JSON — fix it to sync the form."
+        "jsonInvalid": "Invalid JSON — fix it to sync the form.",
+        "transportHttp": "Remote (Streamable HTTP)",
+        "transportSse": "Remote (SSE, older)",
+        "token": "Access token",
+        "tokenHint": "Sent as Authorization: Bearer, stored encrypted and never shown again.",
+        "tokenStoredPlaceholder": "Stored",
+        "tokenStoredHint": "A token is stored. Leave the field empty to keep it.",
+        "tokenRemove": "Remove token",
+        "envHint": "env values are stored encrypted and not shown again; an empty value keeps the stored one."
       }
     },
     "workflows": {

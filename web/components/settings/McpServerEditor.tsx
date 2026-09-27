@@ -8,9 +8,12 @@
  * ===============
  * Two-column modal to add or edit an MCP server in mcp_servers.json:
  *   - Left: a form (name, transport, command/url, permission, enabled) + a Test-connection button.
- *   - Right: a standard MCP config block ({ "mcpServers": { name: { command, args, env } } }). Paste a
- *     block from anywhere and the form auto-fills; edit the form and the block regenerates. This is the
- *     de-facto format used by Claude Desktop / Cursor etc.
+ *   - Right: a standard MCP config block ({ "mcpServers": { name: { command, args, env } } }, or
+ *     { url, type, headers } for a remote server). Paste a block from anywhere and the form auto-fills;
+ *     edit the form and the block regenerates. This is the de-facto format used by Claude Desktop /
+ *     Cursor etc.
+ * Secrets never come back from the server (vaf/core/mcp_secrets.py): env values arrive empty and an
+ * empty value keeps the stored one, a remote server's token field starts empty with a "stored" note.
  * It does NOT do WS itself — the parent SettingsModal drives onSave / onDelete / onTest. Overlay z-[80].
  */
 
@@ -26,6 +29,11 @@ export interface McpServerInfo {
   enabled: boolean;
   permission_level: string;     // "read" | "write" | "dangerous"
   env?: Record<string, string>;
+  /** Remote servers: whether an access token is stored (the token itself never comes back). */
+  token_set?: boolean;
+  /** Sent on save only: a new access token, or clear_token to remove the stored one. */
+  token?: string;
+  clear_token?: boolean;
   connected?: boolean;
   tool_count?: number;
   error?: string | null;
@@ -38,24 +46,47 @@ export interface McpServerEditorProps {
   onSave: (data: McpServerInfo) => void;
   onDelete?: (name: string) => void;
   onClose: () => void;
-  onTest?: (cfg: { command: string; transport: string; url: string; env: Record<string, string> }) => void;
+  onTest?: (cfg: McpTestConfig) => void;
   testResult?: { connected: boolean; tool_count: number; tools?: string[]; error?: string | null } | null;
   isTesting?: boolean;
 }
+
+export interface McpTestConfig {
+  name?: string;
+  command: string;
+  transport: string;
+  url: string;
+  env: Record<string, string>;
+  token?: string;
+}
+
+const REMOTE = ['http', 'sse'];
 
 function splitCommand(cmd: string): { command: string; args: string[] } {
   const parts = (cmd || '').trim().split(/\s+/).filter(Boolean);
   return { command: parts[0] || '', args: parts.slice(1) };
 }
 
-function toStandardBlock(name: string, command: string, env: Record<string, string>): string {
+function toStandardBlock(name: string, command: string, env: Record<string, string>, transport = 'stdio', url = ''): string {
+  if (REMOTE.includes(transport)) {
+    return JSON.stringify({ mcpServers: { [name || 'server']: { type: transport, url } } }, null, 2);
+  }
   const { command: c, args } = splitCommand(command);
   const entry: Record<string, unknown> = { command: c, args };
   if (env && Object.keys(env).length) entry.env = env;
   return JSON.stringify({ mcpServers: { [name || 'server']: entry } }, null, 2);
 }
 
-function parseStandardBlock(text: string): { name?: string; command?: string; transport?: string; url?: string; env?: Record<string, string> } | null {
+/** A pasted remote entry names its transport as `type` (Claude, Cursor) or `transport`; one with
+ *  only a url is Streamable HTTP. A bearer token in `headers.Authorization` fills the token field. */
+function remoteTransport(cfg: any): string {
+  const kind = String(cfg.transport || cfg.type || '').toLowerCase();
+  if (kind === 'sse') return 'sse';
+  if (kind === 'http' || kind === 'streamable-http' || kind === 'streamable_http' || kind === 'streamablehttp') return 'http';
+  return cfg.url && !cfg.command ? 'http' : 'stdio';
+}
+
+function parseStandardBlock(text: string): { name?: string; command?: string; transport?: string; url?: string; env?: Record<string, string>; token?: string } | null {
   let obj: any;
   try { obj = JSON.parse(text); } catch { return null; }
   if (!obj || typeof obj !== 'object') return null;
@@ -72,12 +103,16 @@ function parseStandardBlock(text: string): { name?: string; command?: string; tr
   }
   if (!cfg || typeof cfg !== 'object') return null;
   const command = [cfg.command, ...(Array.isArray(cfg.args) ? cfg.args : [])].filter(Boolean).join(' ');
+  const auth = cfg.headers && typeof cfg.headers === 'object'
+    ? String(Object.entries(cfg.headers).find(([k]) => k.toLowerCase() === 'authorization')?.[1] ?? '')
+    : '';
   return {
     name,
     command,
-    transport: cfg.transport || 'stdio',
+    transport: remoteTransport(cfg),
     url: cfg.url || '',
     env: (cfg.env && typeof cfg.env === 'object') ? cfg.env : {},
+    token: /^bearer\s+/i.test(auth) ? auth.replace(/^bearer\s+/i, '').trim() : undefined,
   };
 }
 
@@ -91,7 +126,11 @@ export default function McpServerEditor({ server, isSaving = false, backendError
   const [permission, setPermission] = useState(server?.permission_level ?? 'write');
   const [enabled, setEnabled] = useState(server?.enabled ?? true);
   const [env, setEnv] = useState<Record<string, string>>(server?.env ?? {});
-  const [jsonText, setJsonText] = useState(() => toStandardBlock(server?.name ?? '', server?.command ?? '', server?.env ?? {}));
+  // Starts empty: a stored token never comes back. Empty on save keeps the stored one.
+  const [token, setToken] = useState('');
+  const [clearToken, setClearToken] = useState(false);
+  const tokenStored = Boolean(server?.token_set) && !clearToken;
+  const [jsonText, setJsonText] = useState(() => toStandardBlock(server?.name ?? '', server?.command ?? '', server?.env ?? {}, server?.transport ?? 'stdio', server?.url ?? ''));
   const [jsonInvalid, setJsonInvalid] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const lastSource = useRef<'form' | 'json'>('form');
@@ -100,8 +139,8 @@ export default function McpServerEditor({ server, isSaving = false, backendError
 
   // Form → JSON (skip while the change came from the JSON panel, to avoid clobbering the user's text).
   useEffect(() => {
-    if (lastSource.current === 'form') setJsonText(toStandardBlock(name, command, env));
-  }, [name, command, env]);
+    if (lastSource.current === 'form') setJsonText(toStandardBlock(name, command, env, transport, url));
+  }, [name, command, env, transport, url]);
 
   const onJsonChange = (text: string) => {
     lastSource.current = 'json';
@@ -114,6 +153,7 @@ export default function McpServerEditor({ server, isSaving = false, backendError
     if (parsed.transport) setTransport(parsed.transport);
     if (parsed.url !== undefined) setUrl(parsed.url || '');
     if (parsed.env) setEnv(parsed.env);
+    if (parsed.token) { setToken(parsed.token); setClearToken(false); }
   };
 
   const F = (fn: () => void) => { lastSource.current = 'form'; fn(); };
@@ -128,12 +168,15 @@ export default function McpServerEditor({ server, isSaving = false, backendError
 
   const handleSave = () => {
     if (!validate()) return;
-    onSave({ name: name.trim(), command: command.trim(), transport, url: url.trim(), enabled, permission_level: permission, env });
+    onSave({
+      name: name.trim(), command: command.trim(), transport, url: url.trim(), enabled, permission_level: permission, env,
+      ...(isStdio ? {} : { token: token.trim() || undefined, clear_token: clearToken && !token.trim() }),
+    });
   };
 
   const handleTest = () => {
     if (!validate()) return;
-    onTest?.({ command: command.trim(), transport, url: url.trim(), env });
+    onTest?.({ name: isEdit ? server!.name : undefined, command: command.trim(), transport, url: url.trim(), env, token: isStdio ? undefined : (token.trim() || undefined) });
   };
 
   const inputCls = 'w-full px-4 h-11 bg-white border border-gray-200 rounded-xl text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-500 transition-all';
@@ -165,8 +208,8 @@ export default function McpServerEditor({ server, isSaving = false, backendError
               <label className={labelCls}>{t('transport')}</label>
               <select value={transport} onChange={(e) => F(() => setTransport(e.target.value))} className={inputCls}>
                 <option value="stdio">{t('transportStdio')}</option>
-                <option value="http">http</option>
-                <option value="sse">sse</option>
+                <option value="http">{t('transportHttp')}</option>
+                <option value="sse">{t('transportSse')}</option>
               </select>
             </div>
 
@@ -176,10 +219,22 @@ export default function McpServerEditor({ server, isSaving = false, backendError
                 <input type="text" value={command} onChange={(e) => F(() => setCommand(e.target.value))} placeholder="npx -y @modelcontextprotocol/server-filesystem /path" className={inputCls} />
               </div>
             ) : (
-              <div>
-                <label className={labelCls}>{t('url')}</label>
-                <input type="text" value={url} onChange={(e) => F(() => setUrl(e.target.value))} placeholder="http://127.0.0.1:8000" className={inputCls} />
-              </div>
+              <>
+                <div>
+                  <label className={labelCls}>{t('url')}</label>
+                  <input type="text" value={url} onChange={(e) => F(() => setUrl(e.target.value))} placeholder="https://example.com/mcp" className={inputCls} />
+                </div>
+                <div>
+                  <label className={labelCls}>{t('token')}</label>
+                  <input type="password" value={token} autoComplete="off" onChange={(e) => { setToken(e.target.value); setClearToken(false); }} placeholder={tokenStored ? t('tokenStoredPlaceholder') : ''} className={inputCls} />
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    {tokenStored ? t('tokenStoredHint') : t('tokenHint')}
+                    {tokenStored && !token && (
+                      <button type="button" onClick={() => setClearToken(true)} className="ml-2 underline text-gray-500 hover:text-gray-700">{t('tokenRemove')}</button>
+                    )}
+                  </p>
+                </div>
+              </>
             )}
 
             <div>
@@ -208,6 +263,7 @@ export default function McpServerEditor({ server, isSaving = false, backendError
               className={`flex-1 min-h-[220px] w-full px-3 py-2 font-mono text-xs bg-gray-900 text-gray-100 rounded-xl border ${jsonInvalid ? 'border-red-400' : 'border-gray-700'} focus:outline-none focus:ring-2 focus:ring-amber-400`}
             />
             <p className="text-[11px] text-gray-400 mt-1">{jsonInvalid ? t('jsonInvalid') : t('pasteHint')}</p>
+            {isStdio && Object.keys(env).length > 0 && <p className="text-[11px] text-gray-400 mt-1">{t('envHint')}</p>}
           </div>
         </div>
 

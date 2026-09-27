@@ -2087,7 +2087,15 @@
         "testFail": "无法连接",
         "pasteTitle": "标准配置（粘贴即可自动填充）",
         "pasteHint": "粘贴一段 { \"mcpServers\": … } 配置，表单会自动填好。",
-        "jsonInvalid": "JSON 无效，请修正后表单才能同步。"
+        "jsonInvalid": "JSON 无效，请修正后表单才能同步。",
+        "transportHttp": "远程（Streamable HTTP）",
+        "transportSse": "远程（SSE，旧方式）",
+        "token": "访问令牌",
+        "tokenHint": "以 Authorization: Bearer 发送，加密保存，不会再次显示。",
+        "tokenStoredPlaceholder": "已保存",
+        "tokenStoredHint": "已保存令牌。留空即可保留。",
+        "tokenRemove": "移除令牌",
+        "envHint": "env 值会加密保存，不会再次显示；留空的值会保留已保存的值。"
       }
     },
     "workflows": {

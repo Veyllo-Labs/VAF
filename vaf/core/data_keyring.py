@@ -383,6 +383,18 @@ def ring_status() -> dict:
         block = Config.get(f"{channel}_config")
         for field in fields:
             legacy[f"{channel}_config.{field}"] = bool(isinstance(block, dict) and block.get(field))
+    # An MCP server's env values and access token move out of mcp_servers.json the same way
+    # (vaf/core/mcp_secrets.py); the file is read as it is, without moving anything.
+    try:
+        import json
+        from vaf.core.mcp_registry import get_mcp_manifest_path
+        from vaf.core.mcp_secrets import secrets_in_manifest
+        path = get_mcp_manifest_path()
+        if path.exists():
+            for name in secrets_in_manifest(json.loads(path.read_text(encoding="utf-8"))):
+                legacy[f"mcp_servers.json:{name}"] = True
+    except Exception:  # noqa: BLE001 - a status report never fails on an unreadable file
+        pass
     return {
         "kek_backend": kek_backend(),
         "entries": names,

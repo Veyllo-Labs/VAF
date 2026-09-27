@@ -81,8 +81,17 @@ THE MASTER KEY, per platform (secure_store_kek_backend = "auto"):
         +-- redis_password               the cache that holds DECRYPTED memory
         +-- admin_password_hash          Argon2 hash, so the terminal can verify offline
         +-- channel_<name>_<field>       a messaging channel's login (the Telegram and
-                                         Discord bot tokens), vaf/core/channel_secrets.py
+        |                                Discord bot tokens), vaf/core/channel_secrets.py
+        +-- mcp_server.<name>.env        a local MCP server's environment (its API keys)
+        +-- mcp_server.<name>.token      a remote MCP server's access token,
+                                         vaf/core/mcp_secrets.py
 ```
+
+`mcp_servers.json` keeps only the NAMES of a server's env variables. A value written there
+by hand (a documented way to add a server) moves into the ring the next time the file is
+loaded, and so do a `token` or an `Authorization: Bearer` header; the Settings page receives
+the names and whether a token is stored, never a value. `vaf secure status` names a server
+whose secret is still in the file.
 
 `~/.vaf/config.json` holds **no key material and no messenger login**. It used to
 hold all of it, which made every "encrypted" store equivalent to chmod protection. The

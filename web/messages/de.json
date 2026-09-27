@@ -2087,7 +2087,15 @@
         "testFail": "Verbindung fehlgeschlagen",
         "pasteTitle": "Standard-Config (zum Auto-Ausfüllen einfügen)",
         "pasteHint": "Füge einen { \"mcpServers\": … }-Block ein — das Formular füllt sich automatisch.",
-        "jsonInvalid": "Ungültiges JSON — bitte korrigieren, um das Formular zu synchronisieren."
+        "jsonInvalid": "Ungültiges JSON — bitte korrigieren, um das Formular zu synchronisieren.",
+        "transportHttp": "Remote (Streamable HTTP)",
+        "transportSse": "Remote (SSE, älter)",
+        "token": "Zugangs-Token",
+        "tokenHint": "Wird als Authorization: Bearer gesendet, verschlüsselt gespeichert und nie wieder angezeigt.",
+        "tokenStoredPlaceholder": "Gespeichert",
+        "tokenStoredHint": "Ein Token ist gespeichert. Lass das Feld leer, um es zu behalten.",
+        "tokenRemove": "Token entfernen",
+        "envHint": "Die env-Werte werden verschlüsselt gespeichert und nicht wieder angezeigt; ein leerer Wert behält den gespeicherten."
       }
     },
     "workflows": {

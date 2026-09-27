@@ -755,7 +755,8 @@
     "redo": "Redo",
     "undoWithShortcut": "Undo ({shortcut})",
     "redoWithShortcut": "Redo ({shortcut})",
-    "ctrlKey": "Ctrl"
+    "ctrlKey": "Ctrl",
+    "openSignInPage": "Open the sign-in page"
   },
   "settings": {
     "title": "Settings",

@@ -999,6 +999,10 @@ class Config:
         "librarian_",
         "document_conversion_",
         "failover_",
+        # MCP is one set of servers for the whole instance: the kill switch that turns every
+        # account's MCP tools off, the discovery deadline, and the base of the sign-in's
+        # redirect address (which decides where every account's authorization code is sent).
+        "mcp_",
     )
     GLOBAL_CONFIG_KEYS = frozenset([
         "provider", "model", "n_ctx", "gpu_layers", "n_parallel", "llama_cache_ram",

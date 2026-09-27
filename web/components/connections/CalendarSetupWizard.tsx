@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Calendar, Loader2, CheckCircle2, ExternalLink } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
+import { reserveAuthTab } from '@/lib/authTab';
 
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
@@ -25,6 +26,9 @@ export default function CalendarSetupWizard({ isOpen, onClose, onComplete, initi
     const [status, setStatus] = useState<{ google_available: boolean; microsoft_available: boolean }>({ google_available: false, microsoft_available: false });
     const [refreshing, setRefreshing] = useState(false);
     const [showSuccess, setShowSuccess] = useState(false);
+    /** The sign-in page last opened, offered as a link for a browser that blocked the tab. */
+    const [signInPage, setSignInPage] = useState('');
+    const tCommon = useTranslations('common');
 
     const fetchStatus = async () => {
         try {
@@ -61,6 +65,8 @@ export default function CalendarSetupWizard({ isOpen, onClose, onComplete, initi
     }, [isOpen]);
 
     const startOAuth = async (provider: 'gmail' | 'microsoft') => {
+        // Before the first await: the click still counts for opening a tab (lib/authTab.ts).
+        const tab = reserveAuthTab();
         setLoading(provider);
         setError('');
         try {
@@ -69,11 +75,14 @@ export default function CalendarSetupWizard({ isOpen, onClose, onComplete, initi
             const data = await res.json();
             const url = data.authorization_url || '';
             if (url && typeof window !== 'undefined') {
-                window.open(url, '_blank', 'noopener,noreferrer');
+                setSignInPage(url);
+                tab.open(url);
             } else {
+                tab.cancel();
                 setError('No sign-in URL returned. Check OAuth client in Settings (Email / Central credentials).');
             }
         } catch (e) {
+            tab.cancel();
             setError(e instanceof Error ? e.message : 'Failed to start sign-in');
         } finally {
             setLoading(null);
@@ -198,6 +207,11 @@ export default function CalendarSetupWizard({ isOpen, onClose, onComplete, initi
                             <p className="text-xs text-gray-500 mt-4">
                                 A new tab will open for sign-in. After completing sign-in, click below to refresh.
                             </p>
+                            {signInPage && (
+                                <a href={signInPage} target="_blank" rel="noopener noreferrer" className="inline-block text-xs text-blue-700 hover:underline mt-1">
+                                    {tCommon('openSignInPage')}
+                                </a>
+                            )}
                             <button
                                 type="button"
                                 onClick={handleRefresh}

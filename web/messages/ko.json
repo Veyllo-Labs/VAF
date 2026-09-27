@@ -755,7 +755,8 @@
     "redo": "다시 실행",
     "undoWithShortcut": "실행 취소 ({shortcut})",
     "redoWithShortcut": "다시 실행 ({shortcut})",
-    "ctrlKey": "Ctrl"
+    "ctrlKey": "Ctrl",
+    "openSignInPage": "로그인 페이지 열기"
   },
   "settings": {
     "title": "설정",

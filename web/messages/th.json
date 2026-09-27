@@ -755,7 +755,8 @@
     "redo": "ทำซ้ำ",
     "undoWithShortcut": "เลิกทำ ({shortcut})",
     "redoWithShortcut": "ทำซ้ำ ({shortcut})",
-    "ctrlKey": "Ctrl"
+    "ctrlKey": "Ctrl",
+    "openSignInPage": "เปิดหน้าลงชื่อเข้าใช้"
   },
   "settings": {
     "title": "การตั้งค่า",

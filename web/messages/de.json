@@ -755,7 +755,8 @@
     "redo": "Wiederholen",
     "undoWithShortcut": "Rückgängig ({shortcut})",
     "redoWithShortcut": "Wiederholen ({shortcut})",
-    "ctrlKey": "Strg"
+    "ctrlKey": "Strg",
+    "openSignInPage": "Anmeldeseite öffnen"
   },
   "settings": {
     "title": "Einstellungen",

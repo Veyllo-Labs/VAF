@@ -755,7 +755,8 @@
     "redo": "Yinele",
     "undoWithShortcut": "Geri al ({shortcut})",
     "redoWithShortcut": "Yinele ({shortcut})",
-    "ctrlKey": "Ctrl"
+    "ctrlKey": "Ctrl",
+    "openSignInPage": "Giriş sayfasını aç"
   },
   "settings": {
     "title": "Ayarlar",

@@ -755,7 +755,8 @@
     "redo": "重做",
     "undoWithShortcut": "撤销（{shortcut}）",
     "redoWithShortcut": "重做（{shortcut}）",
-    "ctrlKey": "Ctrl"
+    "ctrlKey": "Ctrl",
+    "openSignInPage": "打开登录页面"
   },
   "settings": {
     "title": "设置",

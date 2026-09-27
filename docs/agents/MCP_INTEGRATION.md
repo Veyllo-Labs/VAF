@@ -85,7 +85,9 @@ by hand), signs in with PKCE and refreshes the tokens.
 
 - **Signing in** is every account's own step, admin or not: Settings, Connections, "MCP services"
   lists the servers that sign accounts in, with this account's state and a Sign in / Sign out
-  button. Sign in opens the service's page in a new tab (the system browser in the desktop app); the
+  button. Sign in opens the service's page in a new tab (the system browser in the desktop app),
+  taken during the click so the start's own wait cannot get it blocked (`web/lib/authTab.ts`), with
+  the page offered as a link while the sign-in waits; the
   service sends that tab back to `/api/mcp/oauth/callback`, which must be reached by the person who
   started the sign-in (the same actor binding as the mail sign-in), finishes the exchange and lands
   on the Connections tab. A sign-in not finished within 10 minutes is dropped.
@@ -209,6 +211,10 @@ entry to override individual tools (the rest fall back to the server level) - ma
 - `mcp_discovery_timeout_seconds` (default `5`) - the parallel-discovery deadline.
 - `mcp_oauth_callback_base_url` (default empty) - the base of the sign-in's redirect address behind
   a reverse proxy; empty derives it like the email and cloud sign-ins.
+
+All three are admin-only (the `mcp_` prefix in `Config.GLOBAL_CONFIG_KEY_PREFIXES`): they are one
+setting for the whole instance, and the last one decides where every account's authorization code
+is sent.
 
 ## How it fits
 

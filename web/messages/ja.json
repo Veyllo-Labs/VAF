@@ -755,7 +755,8 @@
     "redo": "やり直し",
     "undoWithShortcut": "元に戻す（{shortcut}）",
     "redoWithShortcut": "やり直し（{shortcut}）",
-    "ctrlKey": "Ctrl"
+    "ctrlKey": "Ctrl",
+    "openSignInPage": "サインインページを開く"
   },
   "settings": {
     "title": "設定",

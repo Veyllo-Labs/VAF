@@ -286,9 +286,9 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `mcp_native_tools_enabled` | `True` | Register each MCP server tool as a native tool at startup. |
-| `mcp_discovery_timeout_seconds` | `5` | Per-batch MCP discovery deadline. |
-| `mcp_oauth_callback_base_url` | `""` | Override for the redirect_uri base of an MCP server's sign-in per account (`<base>/api/mcp/oauth/callback`). Empty = derive automatically, the same rule as the email and cloud sign-ins. |
+| `mcp_native_tools_enabled` | `True` | Register each MCP server tool as a native tool at startup. Admin-only (`mcp_` prefix): it turns every account's MCP tools off. |
+| `mcp_discovery_timeout_seconds` | `5` | Per-batch MCP discovery deadline. Admin-only. |
+| `mcp_oauth_callback_base_url` | `""` | Override for the redirect_uri base of an MCP server's sign-in per account (`<base>/api/mcp/oauth/callback`). Empty = derive automatically, the same rule as the email and cloud sign-ins. Admin-only: it decides where every account's authorization code is sent. |
 
 ## Document tools (Librarian)
 

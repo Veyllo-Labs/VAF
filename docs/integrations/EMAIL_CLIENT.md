@@ -889,7 +889,12 @@ through only split-horizon names the local resolver does not know.
   wizard is not mounted. `account` becomes the OAuth `login_hint`, without which a
   multi-account user reconnects whichever mailbox the browser is signed in as (the
   identity comes back from the token, not the request). Consent completes in the
-  system browser, so the panel polls and re-checks on window focus. A
+  system browser, so the panel polls and re-checks on window focus. The tab is taken
+  in the click and sent to the address once the start answers (`web/lib/authTab.ts`,
+  shared by the mail, calendar, cloud and MCP sign-ins): opened only after the fetch,
+  a browser with its popup blocker on refused it silently once the click was more
+  than a few seconds old. A tab refused anyway leaves the address as a link in the
+  waiting banner. A
   password/app-password account is IMAP-capable by definition and never carries
   `imap_ready`, so the UI gates that badge on the provider too.
 - Silent-failure classes the single-lane design depends on. Each one fails without

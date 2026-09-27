@@ -11,7 +11,10 @@
  * signs this account in or out. Every account has its own row state; nobody sees another's.
  *
  * Signing in opens the service's page in a new tab (the system browser in the desktop app, the
- * same as the mail sign-in: services refuse embedded webviews). The service sends that tab to
+ * same as the mail sign-in: services refuse embedded webviews). The tab is taken during the click
+ * (lib/authTab.ts), because the start can outlast the moment a browser still allows one; if the
+ * browser blocked it anyway, or the person closed it, the row offers the page as a link while the
+ * sign-in waits. The service sends that tab to
  * VAF's callback, which lands on Settings > Connections there. This tab learns the outcome the
  * way the mail accounts do: it asks again every few seconds while a sign-in waits, and when the
  * window gets the focus back.
@@ -23,6 +26,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { KeyRound, Loader2 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
+import { reserveAuthTab } from '@/lib/authTab';
 
 interface Row {
     name: string;
@@ -45,6 +49,9 @@ export default function McpSignIns({ query = '', onShownCount }: { query?: strin
     const [busy, setBusy] = useState<string | null>(null);
     /** A failure this tab saw itself (start or sign-out); a failed sign-in comes from the server's row. */
     const [problem, setProblem] = useState<{ name: string; text: string } | null>(null);
+    /** The authorization address of a sign-in this tab started, per server, while it waits. */
+    const [pages, setPages] = useState<Record<string, string>>({});
+    const tCommon = useTranslations('common');
 
     const load = useCallback(async () => {
         try {
@@ -73,17 +80,23 @@ export default function McpSignIns({ query = '', onShownCount }: { query?: strin
     useEffect(() => { onShownCount?.(shown.length); }, [shown.length, onShownCount]);
 
     const signIn = async (name: string) => {
+        // Before the first await: the click still counts for opening a tab.
+        const tab = reserveAuthTab();
         setBusy(name);
         setProblem(null);
         try {
             const r = await fetch(api(`/api/mcp/sign-in/${encodeURIComponent(name)}`), { method: 'POST', credentials: 'include' });
             const d = await r.json().catch(() => ({}));
             if (!r.ok || !d?.authorization_url) {
+                tab.cancel();
                 setProblem({ name, text: t('mcpStartFailed', { reason: String(d?.detail || r.status) }) });
             } else {
-                window.open(d.authorization_url, '_blank', 'noopener,noreferrer');
+                const url = String(d.authorization_url);
+                setPages((prev) => ({ ...prev, [name]: url }));
+                tab.open(url);
             }
         } catch (e) {
+            tab.cancel();
             setProblem({ name, text: t('mcpStartFailed', { reason: String(e instanceof Error ? e.message : e) }) });
         } finally {
             setBusy(null);
@@ -116,6 +129,8 @@ export default function McpSignIns({ query = '', onShownCount }: { query?: strin
             <div className="space-y-2">
                 {shown.map((row) => {
                     const failure = problem?.name === row.name ? problem.text : (row.error ? t('mcpFailed', { reason: row.error }) : null);
+                    // Offered while the sign-in this tab started still waits: a blocked or closed tab is not a dead end.
+                    const page = row.pending && !row.signed_in ? pages[row.name] : undefined;
                     return (
                         <div
                             key={row.name}
@@ -147,7 +162,12 @@ export default function McpSignIns({ query = '', onShownCount }: { query?: strin
                                         </div>
                                         <p className="text-sm text-gray-500 truncate">{host(row.url)}</p>
                                         <p className="text-xs text-gray-600 mt-1">{row.signed_in ? t('mcpUsesYourAccount') : t('mcpSignInFirst')}</p>
-                                        {failure && !row.signed_in && <p className="text-xs text-red-600 mt-1 break-words">{failure}</p>}
+                                        {failure && <p className="text-xs text-red-600 mt-1 break-words">{failure}</p>}
+                                        {page && (
+                                            <a href={page} target="_blank" rel="noopener noreferrer" className="inline-block text-xs text-blue-700 hover:underline mt-1">
+                                                {tCommon('openSignInPage')}
+                                            </a>
+                                        )}
                                     </div>
                                 </div>
                                 {row.enabled && (

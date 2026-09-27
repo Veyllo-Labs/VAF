@@ -150,6 +150,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A sign-in page opens even when getting its address takes a moment.** Connecting a mail
+  account, a calendar, a cloud drive or an MCP service first asks VAF for the sign-in address and
+  then opens it in a new tab. When that took more than a few seconds, the browser treated the
+  new tab as an unrequested popup and silently blocked it, and nothing happened. The tab is now
+  opened the moment you click and filled in once the address is there; if the browser blocks it
+  anyway, the page is offered as a link.
 - **Remote MCP servers work.** VAF could only use MCP servers it starts itself on your
   computer. A server on the internet - the kind most services now offer - never connected:
   VAF did not speak the protocol those servers use, the older SSE variant was not built at
@@ -321,6 +327,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **Only an admin can change the MCP settings.** Any account could switch off the MCP tools for
+  everybody, change how long VAF waits for MCP servers at startup, and set the address a
+  sign-in to an MCP server sends its authorization code to. All MCP settings are now admin-only,
+  like the other settings that apply to the whole installation.
 - **Word suggestions in the chat come only from your own words.** The suggestions shown while
   you type were learned from every message of every account on the installation, kept in one
   file other accounts on the computer could read, and offered to everyone. So a word one person

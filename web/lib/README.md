@@ -12,6 +12,7 @@ This directory contains utility functions, shared logic, and helper modules used
 - **languages.ts**: Single source of truth for supported UI locales, plus helpers to validate and resolve a locale from the browser language.
 - **licenses_data.ts**: Static list of third-party dependencies and their licenses, shown in the about/licenses view.
 - **localeStore.ts**: Zustand store for the active UI locale, read from `localStorage` (or browser language) and persisted on change.
+- **authTab.ts**: `reserveAuthTab()` for a sign-in whose address the backend produces first: called in the click, before the first await, it takes the tab while the browser still allows one and sends it to the address later (or closes it); `open()` answers whether a tab got it, so the caller can offer a link instead. Used by the mail, calendar, cloud and MCP sign-ins.
 - **oauth_defaults.ts**: Built-in OAuth client IDs and a helper to hide the default value in the UI when the user hasn't set their own.
 - **sessionCache.ts**: Session cache persistence in `localStorage` with quota limits, trimming by session count, messages per session, and total bytes.
 - **version.ts**: Helpers to parse and format the app version (`formatVersion`, `parseMajorMinor`, `compareMajorMinor`) for the version badge and changelog gating.

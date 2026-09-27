@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import { SFC_CHROME, SFC_FILL, SFC_HOVER, SFC_WINDOW } from './ChannelDashboardShell';
+import { reserveAuthTab } from '@/lib/authTab';
 
 // What a refused IMAP login comes back with. The guidance arrives in PARTS so
 // the panel renders it in the reader's language; the backend also sends `hint`
@@ -122,6 +123,9 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
     const [confirmDel, setConfirmDel] = useState<string | null>(null);
     const [showAdd, setShowAdd] = useState(false);
     const [connecting, setConnecting] = useState<string | null>(null);
+    /** The sign-in page this panel opened, offered as a link while it waits (a blocked tab). */
+    const [signInPage, setSignInPage] = useState('');
+    const tCommon = useTranslations('common');
     // Which OAuth providers an admin has actually configured. VAF ships a client
     // id for Google only, so Microsoft is unusable on most instances - the wizard
     // hid the button entirely; without this the button would just 400.
@@ -224,6 +228,8 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
      *  (login_hint), without it connects a new one - the SAME flow either way,
      *  which is why the panel no longer needs the setup wizard for OAuth at all. */
     const startOAuth = async (provider: string, account?: string) => {
+        // Before the first await: the click still counts for opening a tab (lib/authTab.ts).
+        const tab = reserveAuthTab();
         setBusy(account || provider);
         setError(null);
         try {
@@ -231,12 +237,15 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
                 + (account ? `&account=${encodeURIComponent(account)}` : '');
             const d = await jfetch(`api/email/oauth/start?${q}`);
             if (d.authorization_url && typeof window !== 'undefined') {
-                window.open(d.authorization_url, '_blank', 'noopener,noreferrer');
+                setSignInPage(String(d.authorization_url));
+                tab.open(String(d.authorization_url));
                 setConnecting(account || provider);
             } else {
+                tab.cancel();
                 setError(t('reconnectFailed'));
             }
         } catch {
+            tab.cancel();
             // 400 here usually means the provider has no client id configured
             // (VAF ships one for Google only), so name that instead of a generic fail.
             setError(provider.startsWith('microsoft') ? t('oauthNotConfigured') : t('reconnectFailed'));
@@ -283,6 +292,11 @@ export function MailAccounts({ onClose }: { onClose: () => void }) {
                     <div className="px-3 py-2 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 text-[13px] flex items-center gap-2">
                         <Loader2 className="w-4 h-4 flex-shrink-0 animate-spin" />
                         <span className="flex-1">{t('reconnectWaiting')}</span>
+                        {signInPage && (
+                            <a href={signInPage} target="_blank" rel="noopener noreferrer" className="shrink-0 underline hover:no-underline">
+                                {tCommon('openSignInPage')}
+                            </a>
+                        )}
                     </div>
                 )}
                 {loading ? (

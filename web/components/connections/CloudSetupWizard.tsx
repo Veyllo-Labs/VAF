@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
+import { reserveAuthTab } from '@/lib/authTab';
 
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
@@ -173,6 +174,9 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
         }
 
         // OAuth flow – pass redirect_base so post-OAuth redirect matches the host (localhost vs 127.0.0.1)
+        // The tab is taken now, while the click still allows one (lib/authTab.ts); the step below
+        // keeps the address as a link for a browser that blocked it anyway.
+        const tab = reserveAuthTab();
         setLoading(true);
         const redirectBase = typeof window !== 'undefined' ? encodeURIComponent(window.location.origin) : '';
         const startUrl = redirectBase
@@ -187,18 +191,20 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                 const url = data.authorization_url || '';
                 setAuthUrl(url);
                 setCurrentStep(1);
+                if (!url) tab.cancel();
                 if (url && typeof window !== 'undefined') {
                     // Open in the SYSTEM browser, not the embedded desktop (Qt) webview: Google blocks
                     // OAuth inside embedded webviews ("this browser may not be secure"), and the desktop
                     // window cannot load the https callback (self-signed cert).
                     // Losing the new tab's session cookie is fine — the loopback callback is authorized
                     // via the signed, single-use OAuth state (see oauth_session_binding loopback path).
-                    window.open(url, '_blank', 'noopener,noreferrer');
+                    tab.open(url);
                 } else if (!url) {
                     setError('No sign-in URL returned. Check OAuth client ID in Settings.');
                 }
             })
             .catch(e => {
+                tab.cancel();
                 setError(e?.message || 'Failed to start sign-in');
                 setCurrentStep(1);
             })

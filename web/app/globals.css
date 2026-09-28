@@ -627,7 +627,8 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
    The border-radius morph was removed here — animating border-radius forces a real
    repaint every frame, and QtWebEngine's in-process GPU leaked ~2.4 MB/s rasterizing
    the several idle avatars. The dot still gently floats/breathes; the blob-morph now
-   runs only in the active modes (thinking/talking/waiting), which are transient. */
+   runs only in transient active states (waiting, talking, and the confused / working
+   modes); thinking is transform-only (ponderGaze / ponderBody). */
 @keyframes agentAvatarIdleFloat {
   0%   { transform: scale(1)    translate(0px,     0px);    }
   15%  { transform: scale(1.14) translate(0.85px, -0.7px);  }

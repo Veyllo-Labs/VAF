@@ -87,8 +87,10 @@ async def json_exception_handler(request, exc):
     return JSONResponse(status_code=500, content={"ok": False, "error": str(exc), "detail": str(exc)})
 
 
-# CORS: Use regex to allow localhost AND all RFC 1918 private network origins.
-# This is safe because Layer 2 (IPValidationMiddleware) already blocks non-local IPs.
+# CORS: one static regex allows localhost AND every RFC 1918 private origin, with credentials,
+# so a browser on a LAN device can call the API. This is no origin check: IPValidationMiddleware
+# (Layer 2) looks at the socket peer, not at the Origin header, and runs only with
+# local_network_enabled (docs/setup/NETWORK_FEATURES.md, CORS Configuration).
 _CORS_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+|192\.168\.\d+\.\d+)(:\d+)?$"
 
 app.add_middleware(

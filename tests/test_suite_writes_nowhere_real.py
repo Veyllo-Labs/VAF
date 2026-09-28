@@ -194,6 +194,8 @@ def test_the_log_resolver_follows_the_redirected_variable():
     assert not resolved.is_relative_to(REPO / "logs"), "the suite is writing into the live log directory"
 
 
+@pytest.mark.skipif(os.environ.get("VAF_SIMULATED_WINDOWS_HOME") == "1",
+                    reason="measures the real platform's home semantics, which scripts/hostile_env.py replaces on purpose (windows-home axis)")
 def test_every_platform_axis_moves_with_the_mechanism_that_claims_it(tmp_path):
     """MEASURED, not declared: move each mechanism in turn and see what follows.
 

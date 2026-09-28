@@ -478,6 +478,8 @@ def _posix_only_envs(source: str):
             yield node.lineno, "HOME without USERPROFILE: the scratch home is ignored on Windows"
 
 
+@pytest.mark.skipif(os.environ.get("VAF_SIMULATED_WINDOWS_HOME") == "1",
+                    reason="measures the real platform's home semantics, which scripts/hostile_env.py replaces on purpose (windows-home axis)")
 def test_the_env_class_is_real():
     """Why this guard exists, demonstrated: one environment, two meanings.
 

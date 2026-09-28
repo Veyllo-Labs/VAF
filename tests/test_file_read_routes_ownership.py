@@ -28,7 +28,10 @@ def _request(scope_id: str | None, role: str = "user") -> Request:
 
 @pytest.fixture
 def project_file(tmp_path, monkeypatch):
+    # Both: Path.home() reads HOME on POSIX and USERPROFILE on Windows (only HOME failed the
+    # Windows runner; hostile_env.py's windows-home axis reproduces that locally).
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     target = tmp_path / "Documents" / "VAF_Projects" / "ab12cd34" / "report.docx"
     target.parent.mkdir(parents=True)
     target.write_bytes(b"PK")
@@ -59,6 +62,7 @@ def test_a_member_of_the_room_whose_folder_it_is_may_read(project_file, monkeypa
 def test_a_file_outside_every_root_is_refused(tmp_path, monkeypatch):
     from vaf.core.web_server import _allowed_file_path
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     outside = tmp_path / "elsewhere.txt"
     outside.write_text("x")
     with pytest.raises(HTTPException) as refused:

@@ -28,6 +28,13 @@ locally, in the time the suite already takes:
                   safety one. The suite has twice written into the real user
                   store, once destroying a recovery key, and the isolation
                   fixtures do not cover every axis.
+  WINDOWS HOME    "~" (and so Path.home()) resolves from USERPROFILE and
+                  ignores HOME, as ntpath.expanduser does. A test that points
+                  only HOME at a scratch directory still sees the real profile
+                  on Windows; it failed on the Windows runner alone (the file
+                  routes' ownership tests, 403 from the roots check) because
+                  here HOME was the home. Set USERPROFILE too, or patch
+                  Path.home, which every OS honours.
 
 WHAT IT CANNOT DO. Real Windows file semantics - ACLs, MoveFileEx sharing
 violations, the read-only-flag-only chmod - need a real Windows machine. Those
@@ -88,6 +95,28 @@ class _HideOptional:
 
 
 sys.meta_path.insert(0, _HideOptional())
+
+
+import os as _os
+import posixpath as _posixpath
+
+_posix_expanduser = _posixpath.expanduser
+
+
+def _windows_expanduser(path):
+    """'~' from USERPROFILE, never from HOME - ntpath.expanduser's rule on Windows."""
+    p = _os.fspath(path)
+    if not isinstance(p, str) or not p.startswith("~"):
+        return _posix_expanduser(path)
+    end = p.find("/", 1)
+    end = len(p) if end == -1 else end
+    if end != 1:                        # ~user: not this axis's question
+        return _posix_expanduser(path)
+    profile = _os.environ.get("USERPROFILE")
+    return (profile + p[1:]) if profile else p
+
+
+_posixpath.expanduser = _windows_expanduser
 '''
 
 
@@ -106,6 +135,9 @@ def main() -> int:
             os.environ,
             HOME=str(home),
             USERPROFILE=str(home),
+            # Tells the two tests that MEASURE this platform's home semantics that the
+            # windows-home axis has replaced them on purpose.
+            VAF_SIMULATED_WINDOWS_HOME="1",
             PYTHONIOENCODING="cp1252",
             PYTHONPATH=os.pathsep.join([str(site), str(ROOT)]),
         )
@@ -114,6 +146,7 @@ def main() -> int:
         print(f"  narrow output   PYTHONIOENCODING=cp1252")
         print(f"  no extras       {', '.join(OPTIONAL_PACKAGES)}")
         print(f"  scratch home    {home}")
+        print(f"  windows home    '~' reads USERPROFILE, not HOME")
         print()
         return subprocess.run([sys.executable, "-m", "pytest", *args],
                               cwd=str(ROOT), env=env).returncode

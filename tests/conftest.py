@@ -186,13 +186,18 @@ def _no_real_imap_server(monkeypatch):
     address with no route) that is the full connect timeout per address, minutes per test,
     and the suite looked hung; measured twice in one run (send_mail, reply_mail). Refused
     here for every test: the code under test treats it as "no session", which is what these
-    tests assume. A test that needs a client patches it itself, which overrides this."""
+    tests assume. A test that needs a client patches it itself, which overrides this.
+
+    Plain IMAP is refused at `IMAP4.open`, the dial every IMAP class inherits, and not by
+    replacing the class: `imaplib.IMAP4.error` is the exception type the mail code catches
+    and imapclient subclasses at import, so a function in its place breaks both."""
     import imaplib
 
     def _refuse(*args, **kwargs):
         raise ConnectionRefusedError("tests never dial a real IMAP server (tests/conftest.py)")
 
     monkeypatch.setattr(imaplib, "IMAP4_SSL", _refuse)
+    monkeypatch.setattr(imaplib.IMAP4, "open", _refuse)
     try:
         import imapclient
     except ImportError:

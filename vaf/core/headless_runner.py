@@ -523,7 +523,8 @@ def _maybe_open_draft_in_editor(
     reads and saves it through the file routes, and those answer an account without admin
     rights only inside its own tree. It lived in the data directory, which worked only while
     the routes served that directory to every account. The dot folder keeps it out of the
-    workspace listing, and it goes with the workspace when the chat is deleted.
+    workspace listing; deleting the chat keeps the folder when it holds a draft, like any
+    other file (`session.DRAFTS_DIR`).
     ``user_scope_id`` is the turn's own, so the workspace is found without reading the session
     back off disk.
     """
@@ -539,11 +540,11 @@ def _maybe_open_draft_in_editor(
     if len(clean) < 200:
         return
     try:
-        from vaf.core.session import get_session_workspace_dir
+        from vaf.core.session import DRAFTS_DIR, get_session_workspace_dir
         workspace = get_session_workspace_dir(session_id, create=True, user_scope_id=user_scope_id)
         if workspace is None:
             return
-        draft_dir = workspace / ".drafts"
+        draft_dir = workspace / DRAFTS_DIR
         draft_dir.mkdir(parents=True, exist_ok=True)
         draft_path = draft_dir / "entwurf.md"
         draft_path.write_text(clean, encoding="utf-8")

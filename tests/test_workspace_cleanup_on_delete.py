@@ -52,6 +52,31 @@ def test_delete_ignores_dotfiles_when_deciding_empty(session):
     assert not chat_dir.exists()
 
 
+def test_delete_keeps_a_workspace_that_holds_a_draft(session):
+    """The editor keeps the draft of a text the user asked for in a hidden `.drafts` folder.
+    The user may have edited and saved it, so it is content; any other dot folder is not.
+    MUTATION: prune `.drafts` with the other dot folders and the draft goes with the chat."""
+    mgr, sess, chat_dir = session
+    (chat_dir / ".drafts").mkdir(parents=True)
+    (chat_dir / ".drafts" / "entwurf.md").write_text("my edited text")
+    (chat_dir / ".cache").mkdir()
+    (chat_dir / ".cache" / "x.bin").write_text("tool cache")
+
+    mgr.delete(sess.id)
+
+    assert (chat_dir / ".drafts" / "entwurf.md").read_text() == "my edited text"
+
+
+def test_delete_still_removes_a_workspace_with_only_other_dot_folders(session):
+    mgr, sess, chat_dir = session
+    (chat_dir / ".cache").mkdir(parents=True)
+    (chat_dir / ".cache" / "x.bin").write_text("tool cache")
+
+    mgr.delete(sess.id)
+
+    assert not chat_dir.exists()
+
+
 def test_delete_keeps_a_workspace_with_real_content(session):
     mgr, sess, chat_dir = session
     chat_dir.mkdir(parents=True)

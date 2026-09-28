@@ -220,6 +220,17 @@ class WebInterfaceManager:
         """Get user role for this connection, or None."""
         return self.connection_roles.get(websocket)
 
+    def connection_is_admin(self, websocket: WebSocket) -> bool:
+        """Whether this connection has admin rights: `is_admin_identity` over the role and the
+        scope it was authenticated with, the question `caller_is_admin` answers for an HTTP
+        request. NAMED BOUNDARY: the WebSocket handlers in web_server.py still spell this out by
+        hand (27 sites when this was added, each `is_admin_identity(role, scope)` over the two
+        getters above) - equivalent, and moving them is a mechanical change of its own. A new
+        gate asks here rather than adding a 28th copy."""
+        from vaf.core.config import is_admin_identity
+        return is_admin_identity(self.get_connection_user_role(websocket),
+                                 self.get_connection_user(websocket))
+
     def subscribe_to_session(self, websocket: WebSocket, session_id: str):
         """
         Subscribe a connection to receive updates for a specific session.

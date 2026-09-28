@@ -198,28 +198,28 @@ def test_the_jailed_tools_read_the_role_from_the_injected_argument():
 # ── Consumers 2+3: the HTTP file gates that had drifted ──────────────────────
 
 def test_the_project_file_gates_use_the_shared_definition():
-    """The ``VAF_Projects/<uid8>`` ownership check in web_server goes through is_admin_identity,
-    and there is ONE of it. GET /api/file and POST /api/image/describe used to carry a copy
-    each, the copies drifted (one decided "admin" scope-only, only one knew the shared-room
-    exception), and the two converters under /api/file had none. They all call
-    ``_project_path_allowed`` now. Pinned as source because reconstructing the comparison
-    inline is exactly how they drifted."""
+    """The web file routes decide "admin" with the shared definition and hold everyone else to
+    the tools' own jail - and the web server carries no ownership rule of its own. GET /api/file
+    and POST /api/image/describe used to carry a hand copy each, the copies drifted (one decided
+    "admin" scope-only, only one knew the shared-room exception), and the converters had none.
+    Then one copy, which still knew only the account folder. Now none: ``_allowed_file_path``
+    asks ``caller_is_admin`` and ``jail_allows``. Pinned as source because reconstructing the
+    comparison inline is exactly how they drifted."""
     import vaf.core.web_server as ws_mod
 
     src = Path(ws_mod.__file__).read_text(encoding="utf-8")
-    # Anchor on the uid8 prefix comparison - the expression unique to this gate.
+    # The uid8 prefix comparison - the expression unique to a hand-rolled ownership gate.
     gates = list(re.finditer(r'\.replace\("-", ""\)\.lower\(\)\.startswith\(', src))
-    assert len(gates) == 1, f"expected the one shared VAF_Projects ownership gate, found {len(gates)}"
-    preceding = src[max(0, gates[0].start() - 400):gates[0].start()]
-    assert "is_admin_identity(" in preceding, (
-        "the VAF_Projects ownership gate decides 'is admin' on its own instead of using "
-        "the shared definition - that is exactly how the two copies drifted"
-    )
-    gate_fn = src[src.index("def _project_path_allowed("):]
-    assert gates[0].start() > src.index("def _project_path_allowed(")
-    assert gates[0].start() < src.index("def _project_path_allowed(") + len(gate_fn.split("\ndef ", 1)[0])
+    assert gates == [], (
+        "a hand-rolled VAF_Projects ownership gate is back in the web server; the rule is the "
+        "file jail's (jail_allows), the one the account's tools obey")
+    decision = src[src.index("def _allowed_file_path("):]
+    decision = decision[:re.search(r"\n(?=\S)", decision[1:]).start() + 1]
+    assert "caller_is_admin(request)" in decision, (
+        "the file decision decides 'is admin' on its own instead of using the shared definition")
+    assert "jail_allows(" in decision
     describe = src[src.index("async def describe_image("):]
     # The function ends at the next line that is not indented (the next top-level statement);
     # cutting at the next route instead took in the module functions between them.
     describe = describe[:re.search(r"\n(?=\S)", describe[1:]).start() + 1]
-    assert "_project_path_allowed(request, target)" in describe
+    assert "_allowed_file_path(path, request)" in describe

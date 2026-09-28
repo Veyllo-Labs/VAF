@@ -251,8 +251,9 @@ def save_file_as(src_path: str) -> dict:
 
     Runs on a pywebview worker thread; create_file_dialog marshals to the Qt main
     thread internally, so the dialog is safe to call here. src_path must live under
-    an allowed root (same roots the /api/file endpoint serves) — defense in depth
-    so a page cannot read arbitrary files off disk."""
+    one of the roots the file routes serve (`Platform.served_file_roots`), as defense in
+    depth so a page cannot read arbitrary files off disk. This is the machine owner's own
+    window, so it keeps the four roots an admin has."""
     import shutil
     from pathlib import Path
     try:
@@ -261,18 +262,14 @@ def save_file_as(src_path: str) -> dict:
         src = Path(src_path).resolve()
         if not src.is_file():
             return {"ok": False, "error": "not found"}
+        # Fail-closed: a check that cannot run refuses, it does not fall through to the dialog.
         try:
             from vaf.core.platform import Platform
-            allowed = [
-                Platform.documents_dir().resolve(),
-                Platform.downloads_dir().resolve(),
-                Platform.data_dir().resolve(),
-                Platform.get_vaf_output_dir().resolve(),
-            ]
-            if not any(_is_relative_to(src, root) for root in allowed):
-                return {"ok": False, "error": "forbidden"}
+            allowed = Platform.served_file_roots()
         except Exception:
-            pass  # if roots can't be resolved, fall through (local desktop, trusted UI)
+            return {"ok": False, "error": "forbidden"}
+        if not any(_is_relative_to(src, root) for root in allowed):
+            return {"ok": False, "error": "forbidden"}
         result = _window.create_file_dialog(_webview.SAVE_DIALOG, save_filename=src.name)
         dest = None
         if result:

@@ -2177,9 +2177,23 @@ async def _open_report_in_viewer(session_id: str, file_path: str, title: Optiona
         append_domain_log("webui", f"[ERROR] open report in viewer failed: {e}")
 
 
+def _require_admin_caller(request: Request) -> dict:
+    """Depends() for the internal event routes below: the caller must have admin rights, the
+    one answer `require_admin` gives every route. Imported on use, like every other identity
+    lookup in this module: the user routes need the database layer."""
+    from vaf.api.user_routes import require_admin
+    return require_admin(request)
+
+
 @app.post("/api/workflow/update")
-async def receive_workflow_update(update: WorkflowUpdate):
-    """Receive workflow updates from external processes (like separate terminals)."""
+async def receive_workflow_update(update: WorkflowUpdate, _caller: dict = Depends(_require_admin_caller)):
+    """Receive workflow updates from external processes (like separate terminals).
+
+    Admin only, which is what its callers are: sub-agent processes and `vaf workflow` post over
+    loopback without a token, and the tokenless local caller is the local admin. An account's
+    token reached it too, and it trusts what it is sent - the viewer branch reads the named file
+    into the named session, `file_created` repoints a session's project folder, and an event
+    without a session goes to every connection."""
     data = update.dict(exclude_none=True)
     try:
         if update.type == "document_ready" and update.openMode == "viewer" and update.sessionId and update.filePath:
@@ -2297,10 +2311,13 @@ async def whare_wananga_active_runs():
 
 
 @app.post("/api/subagent/stream")
-async def receive_subagent_stream(update: SubAgentStreamUpdate):
+async def receive_subagent_stream(update: SubAgentStreamUpdate, _caller: dict = Depends(_require_admin_caller)):
     """
     Receive subagent output stream updates from external processes.
     This endpoint bridges subprocess output to WebSocket clients.
+
+    Admin only, for the reason /api/workflow/update is: its callers are local processes posting
+    without a token, and it routes whatever session, room or broadcast it is handed.
     """
     data = update.dict(exclude_none=True)
     # <ipc-notification>: a sub-agent subprocess signalling that its result is READY.
@@ -3344,14 +3361,15 @@ async def delete_my_workspace(req: WorkspaceFolderDeleteRequest, request: Reques
 
 @app.get("/api/file")
 async def get_file(request: Request, path: str = Query(..., description="Absolute path to local file")):
-    """Serve a local file by path (allowed roots: documents, downloads, data dir, VAF output dir).
+    """Serve a local file by path: for an admin under the four served roots (documents,
+    downloads, data dir, VAF output dir), for any other account only where its own file tools
+    may read.
 
-    FOUR roots, not three - the output dir is easy to miss and this docstring said three until
-    2026-07-30. The list matters beyond this endpoint: `document_editor` carries no access check
-    of its own precisely because the decision lives here, so anything added to it becomes
-    reachable by a tool that never looks at a path. The decision itself is `_allowed_file_path`,
-    shared with the other two read routes. Pinned in tests/test_api_file_allowed_roots.py.
-    Used by Web UI."""
+    FOUR roots, not three - the output dir is easy to miss. The list matters beyond this
+    endpoint: `document_editor` carries no access check of its own precisely because the
+    decision lives here, so anything added to it becomes reachable by a tool that never looks
+    at a path. The decision itself is `_allowed_file_path`, shared with every file route.
+    Pinned in tests/test_api_file_allowed_roots.py. Used by Web UI."""
     import mimetypes
     target = _allowed_file_path(path, request)
     mime_type, _ = mimetypes.guess_type(str(target))
@@ -3367,8 +3385,8 @@ async def describe_image(request: Request):
     """One-time vision description of a chat image (for the Image Viewer + agent context).
 
     Cached per (session, path) in runtime_state so it is generated once; reuses a
-    chat-uploaded image's existing base_description when present. Same per-user isolation
-    as /api/file: only the owner (or local admin) of VAF_Projects/<uid8> may describe it.
+    chat-uploaded image's existing base_description when present. Same per-account decision
+    as /api/file (`_allowed_file_path`), limited to files under VAF_Projects.
     """
     from pathlib import Path as _Path
     from vaf.core.platform import Platform
@@ -3380,17 +3398,11 @@ async def describe_image(request: Request):
     path = str((body or {}).get("path") or "").strip()
     if not session_id or not path:
         raise HTTPException(status_code=400, detail="sessionId and path required")
-    try:
-        target = Platform.normalize_path(path)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid path")
-    if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-
-    # Only a file of a per-account project folder can be described, and only by whoever may
-    # read it there - the same rule the file routes answer (_project_path_allowed).
+    # Whoever may read the file through the file routes (_allowed_file_path), and only a file of
+    # a per-account project folder: the description is a chat image's, never an arbitrary file.
+    target = _allowed_file_path(path, request)
     _projects_root = (Platform.documents_dir() / "VAF_Projects").resolve()
-    if not target.resolve().is_relative_to(_projects_root) or not _project_path_allowed(request, target):
+    if not target.is_relative_to(_projects_root):
         raise HTTPException(status_code=403, detail="Access denied")
 
     from vaf.core.session import SessionManager
@@ -3462,68 +3474,41 @@ async def describe_image(request: Request):
     return {"name": target.name, "description": desc}
 
 
-def _project_path_allowed(request: Request, target) -> bool:
-    """Whether the caller may touch ``target`` as far as per-account project folders go.
+def _allowed_file_path(path_str: str, request: Request, *, mode: str = "read",
+                       must_exist: bool = True):
+    """The one decision for a local file a route reads or writes for the caller: the three read
+    routes (``/api/file``, ``/as-html``, ``/docx-model``), the image description and the five
+    save routes. Returns the resolved Path or raises HTTPException.
 
-    ``VAF_Projects/<uid8>/...`` belongs to one account: that account, an admin, or a member of
-    a room whose shared folder it is (the agent's file tools make the same exception, and
-    without it a member could write a file into the room and then be refused its own link).
-    A path outside such a folder is not this check's business. FAIL-CLOSED: an identity that
-    cannot be resolved is refused. One answer for every route that reads a project file -
-    the file routes and the image description used to carry their own copies, and only one
-    of them knew the room exception.
-    """
-    import re as _re
-    from pathlib import Path as _P
+    1. Under one of the served roots (``Platform.served_file_roots``), for everyone.
+    2. An admin stops there. Any other account is held to its own file jail, the rule its agent
+       tools obey (``vaf.jail_allows``, ``mode`` "read" or "write"): its project tree, the shared
+       folders of its rooms and, for reading, its visible skills. Never the owner's Documents,
+       Downloads or the data directory, which holds every account's stores and, under
+       ``custom_tools/``, code that is loaded as tools. The identity is read as it was
+       authenticated (``caller_is_admin``): an account whose token carries no scope is refused,
+       where the shared helper would fill in the local admin's scope and make it an admin.
+    3. Only then does the disk count. Answering "not found" before "refused" told any account
+       which files exist anywhere under the roots.
+
+    A save route passes ``must_exist=False``: it asks before it creates."""
+    from vaf.api.user_routes import caller_is_admin
     from vaf.core.platform import Platform
-    projects_root = (Platform.documents_dir() / "VAF_Projects").resolve()
-    resolved = target.resolve()
-    if not resolved.is_relative_to(projects_root):
-        return True
-    parts = resolved.relative_to(projects_root).parts
-    first = parts[0] if parts else ""
-    if not _re.fullmatch(r"[0-9a-f]{8}", first):
-        return True  # legacy flat projects (no account prefix) stay accessible
-    try:
-        from vaf.api.config_routes import get_current_user_or_local_admin
-        from vaf.core.config import is_admin_identity
-        user = get_current_user_or_local_admin(request) or {}
-        scope = str(user.get("user_scope_id") or "")
-        if is_admin_identity(user.get("role"), scope) or scope.replace("-", "").lower().startswith(first):
-            return True
-        from vaf.tools.filesystem import _shared_room_roots
-        return any(resolved == _P(r).resolve() or resolved.is_relative_to(_P(r).resolve())
-                   for r in _shared_room_roots(scope))
-    except HTTPException:
-        raise
-    except Exception:
-        return False
-
-
-def _allowed_file_path(path_str: str, request: Request):
-    """The one read decision for a local file (``/api/file``, ``/api/file/as-html``,
-    ``/api/file/docx-model``): under one of the four roots, and a per-account project file
-    only for whoever may read it. Returns the Path or raises HTTPException.
-
-    The two converters used to check the roots only, so any account could read another's
-    project files through them; /api/file alone carried the ownership check."""
-    from vaf.core.platform import Platform
+    from vaf.tools.filesystem import jail_allows
     try:
         target = Platform.normalize_path(path_str)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid path")
-    if not target.exists() or not target.is_file():
+    if not any(target.is_relative_to(root) for root in Platform.served_file_roots()):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not caller_is_admin(request):
+        user = getattr(request.state, "user", None) or {}
+        scope = str(user.get("user_scope_id") or "")
+        if not scope or not jail_allows(target, user_scope_id=scope, user_role=user.get("role"),
+                                        mode=mode):
+            raise HTTPException(status_code=403, detail="Access denied")
+    if must_exist and not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    allowed_roots = [
-        Platform.documents_dir().resolve(),
-        Platform.downloads_dir().resolve(),
-        Platform.data_dir().resolve(),
-        Platform.get_vaf_output_dir().resolve(),
-    ]
-    if not any(target.is_relative_to(root) for root in allowed_roots):
-        raise HTTPException(status_code=403, detail="Access denied")
-    if not _project_path_allowed(request, target):
-        raise HTTPException(status_code=403, detail="Access denied")
     return target
 
 
@@ -3713,28 +3698,14 @@ def _strip_html_to_text(html_fragment: str) -> str:
 
 
 @app.post("/api/file/save-docx")
-async def save_file_as_docx(request: FileSaveDocxRequest):
+async def save_file_as_docx(body: FileSaveDocxRequest, request: Request):
     """Save editor content (HTML) back to a Word (.docx) file. Creates/overwrites the file."""
-    from vaf.core.platform import Platform
     import re
-    try:
-        target = Platform.normalize_path(request.path)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid path")
-    allowed_roots = [
-        Platform.documents_dir().resolve(),
-        Platform.downloads_dir().resolve(),
-        Platform.data_dir().resolve(),
-        Platform.get_vaf_output_dir().resolve(),
-    ]
-    if not any(target.is_relative_to(root) for root in allowed_roots):
-        raise HTTPException(status_code=403, detail="Access denied")
-    if target.suffix.lower() != ".docx":
-        raise HTTPException(status_code=400, detail="Path must be a .docx file")
+    target = _allowed_save_path(body.path, ".docx", request)
     try:
         from docx import Document
         doc = Document()
-        html = request.content or ""
+        html = body.content or ""
         body_match = re.search(r"<body[^>]*>(.*?)</body>", html, re.DOTALL | re.IGNORECASE)
         if body_match:
             html = body_match.group(1)
@@ -3775,14 +3746,14 @@ async def save_file_as_docx(request: FileSaveDocxRequest):
 
 
 @app.post("/api/file/save-docx-native")
-async def save_file_as_docx_native(request: FileSaveDocxNativeRequest):
+async def save_file_as_docx_native(body: FileSaveDocxNativeRequest, request: Request):
     """Save VAF's native DOCX editor model back as a .docx file."""
-    target = _allowed_save_path(request.path, ".docx")
+    target = _allowed_save_path(body.path, ".docx", request)
     try:
         from vaf.core.docx_export import export_native_docx
         from vaf.core.docx_native_model import NativeDocxDocument
 
-        document = NativeDocxDocument.from_dict(request.document or {})
+        document = NativeDocxDocument.from_dict(body.document or {})
         saved_path = export_native_docx(document, target)
         return {"status": "ok", "path": str(saved_path)}
     except ImportError as e:
@@ -3797,31 +3768,21 @@ class FileSaveOfficeRequest(BaseModel):
     content: str  # HTML from the editor
 
 
-def _allowed_save_path(path_str: str, required_suffix: str):
-    from vaf.core.platform import Platform
-    try:
-        target = Platform.normalize_path(path_str)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid path")
-    allowed_roots = [
-        Platform.documents_dir().resolve(),
-        Platform.downloads_dir().resolve(),
-        Platform.data_dir().resolve(),
-        Platform.get_vaf_output_dir().resolve(),
-    ]
-    if not any(target.is_relative_to(root) for root in allowed_roots):
-        raise HTTPException(status_code=403, detail="Access denied")
+def _allowed_save_path(path_str: str, required_suffix: str, request: Request):
+    """Where an office save route may write: the one file decision in write mode, then the
+    format the route produces."""
+    target = _allowed_file_path(path_str, request, mode="write", must_exist=False)
     if target.suffix.lower() != required_suffix:
         raise HTTPException(status_code=400, detail=f"Path must be a {required_suffix} file")
     return target
 
 
 @app.post("/api/file/save-xlsx")
-async def save_file_as_xlsx(request: FileSaveOfficeRequest):
+async def save_file_as_xlsx(body: FileSaveOfficeRequest, request: Request):
     """Save editor content (HTML tables) back to an Excel (.xlsx) file. First table = first sheet."""
     import re
-    target = _allowed_save_path(request.path, ".xlsx")
-    html = request.content or ""
+    target = _allowed_save_path(body.path, ".xlsx", request)
+    html = body.content or ""
     body_match = re.search(r"<body[^>]*>(.*?)</body>", html, re.DOTALL | re.IGNORECASE)
     if body_match:
         html = body_match.group(1)
@@ -3858,11 +3819,11 @@ async def save_file_as_xlsx(request: FileSaveOfficeRequest):
 
 
 @app.post("/api/file/save-pptx")
-async def save_file_as_pptx(request: FileSaveOfficeRequest):
+async def save_file_as_pptx(body: FileSaveOfficeRequest, request: Request):
     """Save editor content (HTML: h2 = slide title, p = body) back to a PowerPoint (.pptx) file."""
     import re
-    target = _allowed_save_path(request.path, ".pptx")
-    html = request.content or ""
+    target = _allowed_save_path(body.path, ".pptx", request)
+    html = body.content or ""
     body_match = re.search(r"<body[^>]*>(.*?)</body>", html, re.DOTALL | re.IGNORECASE)
     if body_match:
         html = body_match.group(1)
@@ -3911,26 +3872,12 @@ async def save_file_as_pptx(request: FileSaveOfficeRequest):
 
 
 @app.post("/api/file/save")
-async def save_file(request: FileSaveRequest):
-    """Save content to a local file (allowed roots: documents, downloads, data dir, VAF output dir)."""
-    from vaf.core.platform import Platform
-    try:
-        target = Platform.normalize_path(request.path)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid path")
-
-    # Security: only allow saving to specific directories
-    allowed_roots = [
-        Platform.documents_dir().resolve(),
-        Platform.downloads_dir().resolve(),
-        Platform.data_dir().resolve(),
-        Platform.get_vaf_output_dir().resolve(),
-    ]
-    if not any(target.is_relative_to(root) for root in allowed_roots):
-        raise HTTPException(status_code=403, detail="Access denied - file must be in Documents, Downloads, or VAF data directory")
+async def save_file(body: FileSaveRequest, request: Request):
+    """Save content to a local file, where `_allowed_file_path` lets the caller write."""
+    target = _allowed_file_path(body.path, request, mode="write", must_exist=False)
 
     import re
-    content = request.content
+    content = body.content
     # Markdown files are rendered to HTML for the Document Editor; convert the
     # edited HTML back to Markdown so a .md file never ends up containing HTML.
     if target.suffix.lower() in (".md", ".mdx", ".markdown") and re.search(r"<\s*(?:html|body|div|p|h[1-6]|ul|ol|table)\b", content[:2000], re.IGNORECASE):
@@ -5366,7 +5313,17 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "download_model":
                     repo_id = (cmd.get("repo_id") or "").strip()
                     filename = (cmd.get("filename") or "").strip() or None
-                    if not repo_id:
+                    # The machine's model folder, filled from any repository the client names:
+                    # disk and bandwidth of the whole installation, so an admin's decision like
+                    # every other model setting.
+                    if not (manager and manager.connection_is_admin(websocket)):
+                        await websocket.send_json({
+                            "type": "model_download_done",
+                            "success": False,
+                            "error": "Admin permission required to download models.",
+                            "models": []
+                        })
+                    elif not repo_id:
                         await websocket.send_json({
                             "type": "model_download_done",
                             "success": False,

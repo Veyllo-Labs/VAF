@@ -128,6 +128,23 @@ class Platform:
         return Path.home() / "Downloads"
     
     @staticmethod
+    def served_file_roots() -> list:
+        """The folders the web UI's file routes read from and save into, resolved: Documents,
+        Downloads, the data dir and the VAF output dir.
+
+        For an admin these four are the whole answer; any other account is additionally held
+        to its own file jail (``vaf.jail_allows``), see ``_allowed_file_path`` in
+        web_server.py. The desktop's native save bridge copies only from these. ONE list: the
+        routes carried four copies of it and the desktop bridge a fifth. A new entry is a
+        security decision, pinned in tests/test_api_file_allowed_roots.py."""
+        return [
+            Platform.documents_dir().resolve(),
+            Platform.downloads_dir().resolve(),
+            Platform.data_dir().resolve(),
+            Platform.get_vaf_output_dir().resolve(),
+        ]
+
+    @staticmethod
     def get_vaf_output_dir() -> Path:
         """
         Get the default output directory for agent-created files (cross-platform).

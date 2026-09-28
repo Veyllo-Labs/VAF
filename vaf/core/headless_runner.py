@@ -512,11 +512,20 @@ def _maybe_open_draft_in_editor(
     source: str,
     *,
     editor_has_content: bool = False,
+    user_scope_id: str | None = None,
 ) -> None:
     """
     If the user asked for a text (e.g. "Schreib mir einen Text") and the response is substantial,
     save it to a draft file and open the Document Editor so the user can edit or save.
     Only runs for Web UI (source == 'web').
+
+    The draft goes into the chat's own workspace (``.drafts/entwurf.md``), because the editor
+    reads and saves it through the file routes, and those answer an account without admin
+    rights only inside its own tree. It lived in the data directory, which worked only while
+    the routes served that directory to every account. The dot folder keeps it out of the
+    workspace listing, and it goes with the workspace when the chat is deleted.
+    ``user_scope_id`` is the turn's own, so the workspace is found without reading the session
+    back off disk.
     """
     if not session_id or (str(source or "").strip().lower() != "web"):
         return
@@ -530,8 +539,11 @@ def _maybe_open_draft_in_editor(
     if len(clean) < 200:
         return
     try:
-        # Use data_dir so /api/file and /api/file/save can read/write the draft (allowed_roots include data_dir)
-        draft_dir = Platform.data_dir() / "drafts" / session_id
+        from vaf.core.session import get_session_workspace_dir
+        workspace = get_session_workspace_dir(session_id, create=True, user_scope_id=user_scope_id)
+        if workspace is None:
+            return
+        draft_dir = workspace / ".drafts"
         draft_dir.mkdir(parents=True, exist_ok=True)
         draft_path = draft_dir / "entwurf.md"
         draft_path.write_text(clean, encoding="utf-8")
@@ -2353,6 +2365,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 str(final_text),
                                 getattr(task, "source", "web"),
                                 editor_has_content=editor_has_content,
+                                user_scope_id=(task.metadata or {}).get("user_scope_id"),
                             )
                         except Exception:
                             pass

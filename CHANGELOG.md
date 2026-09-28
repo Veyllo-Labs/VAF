@@ -371,6 +371,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **On a shared installation, an account opens and saves only its own files.** The web app's
+  file routes, which open a file in the viewer or the editor and save it back, served your
+  Documents, your Downloads and VAF's data folder to every signed-in account, and the save
+  routes checked nobody at all: another account could overwrite files anywhere in those
+  folders, including a folder VAF loads tools from. Now an account without admin rights opens
+  and saves exactly where its own agent may work - its own project folder, the shared folders
+  of its rooms, and the skills it can see - and an admin keeps what it had. A refused file no
+  longer tells whether it exists. The internal routes through which VAF's helper processes
+  report progress are for those local processes only. The editor's draft of a text you asked
+  for now lives in the chat's own files instead of VAF's data folder. The desktop window's
+  save dialog refuses when it cannot check where a file lies.
+
 - **An HTML file you open in VAF can no longer act as you.** The HTML viewer showed a file's
   page with its scripts running as part of the app, so a downloaded page, a file from a shared
   room or one the agent wrote could read your login and use VAF in your name. The document

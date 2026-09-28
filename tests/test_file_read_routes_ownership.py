@@ -9,7 +9,9 @@ GET /api/file checked ``VAF_Projects/<uid8>`` ownership; the two converters unde
 project documents through them. POST /api/image/describe carried its own copy of the rule and
 missed the shared-room exception. And GET /api/download checked no owner at all and served
 .html/.svg inline on the app's origin; it had no caller and is gone. One decision now:
-``_allowed_file_path`` asks ``_project_path_allowed``.
+``_allowed_file_path``, which holds an account without admin rights to its own file jail
+(``vaf.jail_allows``); what that leaves such an account is pinned in
+test_file_routes_account_jail.py.
 """
 import pytest
 from fastapi import HTTPException

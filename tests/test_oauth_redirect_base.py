@@ -45,6 +45,19 @@ def test_the_page_the_sign_in_started_from_is_kept(headers, base):
     assert own_redirect_base(base, _start_request(headers)) == base.rstrip("/")
 
 
+@pytest.mark.parametrize("headers,base,kept", [
+    (DESKTOP, "http://localhost:3000?", "http://localhost:3000"),
+    (DESKTOP, "http://localhost:3000#", "http://localhost:3000"),
+    (DESKTOP, "HTTP://LocalHost:3000", "http://localhost:3000"),
+    (DESKTOP, "http://[::1]:3000", "http://[::1]:3000"),
+    (LAN, "https://192.168.1.50:8443/", "https://192.168.1.50:8443"),
+])
+def test_what_is_kept_is_the_canonical_origin(headers, base, kept):
+    """The callback appends /settings?... to it: an empty "?" or "#" that the origin check lets
+    through would turn that path into a query, so the parsed parts are handed on, not the input."""
+    assert own_redirect_base(base, _start_request(headers)) == kept
+
+
 @pytest.mark.parametrize("headers,base", [
     (DESKTOP, 'http://x"><script>alert(1)</script>'),
     (DESKTOP, "https://evil.example"),

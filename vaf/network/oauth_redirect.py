@@ -75,9 +75,11 @@ def own_redirect_base(redirect_base, request) -> "str | None":
     sign-in (``binding.is_own_origin``, the rule the origin guard uses); otherwise the caller
     falls back to the Web UI's own address.
     """
-    from vaf.network.binding import is_own_origin
+    from vaf.network.binding import canonical_origin, is_own_origin
 
     base = (redirect_base or "").strip().rstrip("/")
-    if not base:
+    if not base or not is_own_origin(base, request.headers, scheme=request.url.scheme):
         return None
-    return base if is_own_origin(base, request.headers, scheme=request.url.scheme) else None
+    # The canonical form, not the string that passed: the callback appends a path, and an empty
+    # "?" or "#" that the origin check lets through would turn that path into a query.
+    return canonical_origin(base)

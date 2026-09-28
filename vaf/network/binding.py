@@ -171,6 +171,20 @@ def _origin_tuple(origin: str | None) -> Optional[Tuple[str, str, int]]:
     return scheme, parts.hostname.lower(), port or _DEFAULT_PORTS[scheme]
 
 
+def canonical_origin(origin: str | None) -> Optional[str]:
+    """``origin`` rebuilt as ``scheme://host[:port]`` from its parsed parts (lowercase, default
+    port omitted, IPv6 bracketed), or None when it is no origin. An empty ``?`` or ``#`` parses to
+    nothing and passes :func:`_origin_tuple`, so a caller that hands an origin on must hand on
+    THIS, never the string it received - ``http://localhost:3000?`` plus a path is a URL whose
+    path became its query."""
+    parts = _origin_tuple(origin)
+    if parts is None:
+        return None
+    scheme, host, port = parts
+    shown = f"[{host}]" if ":" in host else host
+    return f"{scheme}://{shown}" + ("" if port == _DEFAULT_PORTS[scheme] else f":{port}")
+
+
 def _cannot_be_rebound(hostport: str | None) -> bool:
     """True when a browser that dialled this Host cannot have been pointed at us by DNS.
 

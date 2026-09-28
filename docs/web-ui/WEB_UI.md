@@ -794,7 +794,7 @@ turn's final answer would otherwise never be drawn. Chips are frontend state onl
 they are not part of the stored history and disappear on reload or session switch.
 
 **Features:**
-- **Preview mode** (default): native iframe render with `allow-scripts allow-forms` - JavaScript-heavy reports (Chart.js, D3, etc.) work correctly.
+- **Preview mode** (default): native iframe render with `allow-scripts allow-forms` - JavaScript-heavy reports (Chart.js, D3, etc.) work correctly. Deliberately WITHOUT `allow-same-origin`: the file can come from anywhere (a downloaded page, a room upload, something the model wrote), and together with `allow-scripts` that flag made it the app - measured in Chromium, a framed page read the parent's `vaf_token` from localStorage. Without it the page runs under an opaque origin: its scripts still run, the parent, its storage and cookies do not answer, and a request it sends to `/api` carries `Origin: null`, which the origin guard refuses ([NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md#origin-guard-every-mode)). A page that needs localStorage or cookies of its own does not work in the viewer. Pinned by `tests/test_web_untrusted_html_frames.py`, which refuses the two flags together in any frame of the web UI.
 - **Source mode**: Monaco editor (read-only, HTML syntax highlighting) - toggle with the `Preview / Source` buttons in the header.
 - **Download button**: saves the file locally as `text/html`.
 - Loads file content via `/api/file?path=…` if only a path is given (no pre-loaded content).
@@ -806,7 +806,7 @@ The Document Editor is a rich-text editor in the right panel (dock or overlay). 
 **Editor split:** The Web UI now has two editor paths:
 
 - **Native DOCX editor** for `.docx` files. This path is model-driven and uses a native `DOCX -> NativeDocxDocument -> DOCX` flow instead of the old HTML roundtrip.
-- **Legacy HTML editor** for HTML and other non-DOCX editor flows. This path still uses the iframe/contentEditable editor.
+- **Legacy HTML editor** for HTML and other non-DOCX editor flows. This path still uses the iframe/contentEditable editor. The frame is sandboxed `allow-same-origin allow-modals`, WITHOUT scripts: the editor drives it entirely from the parent (it writes the document, sets `contentEditable`, runs `execCommand` and `queryCommand*`, attaches its listeners, calls `print()`), and the file inside is from anywhere - with `allow-scripts` an `onerror` attribute or a nested `srcdoc` frame in it ran as the viewer (measured in Chromium; editing, selection, undo and print work the same without it). Two paths that used to parse the file in the app's own document do not any more: the text sent to the agent comes from a `DOMParser` document (inert), and the browser PDF export copies a `DOMPurify`-cleaned body. The desktop's offscreen PDF page (`render_pdf` in `vaf/core/desktop_window.py`) loads the file as a fresh document, so it runs with JavaScript OFF - the print HTML is static markup.
 
 See also: [DOCUMENT_EDITOR_NATIVE_DOCX.md](../documents/DOCUMENT_EDITOR_NATIVE_DOCX.md)
 

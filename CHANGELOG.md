@@ -363,6 +363,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **An HTML file you open in VAF can no longer act as you.** The HTML viewer showed a file's
+  page with its scripts running as part of the app, so a downloaded page, a file from a shared
+  room or one the agent wrote could read your login and use VAF in your name. The document
+  editor let such a file run code the same way through an image error or an embedded frame,
+  and so did printing or exporting it as PDF, on the desktop too. A research report's text,
+  which the agent writes from web pages, went into the app unfiltered, and its print ran
+  unprotected. Pages in the HTML viewer still run their scripts (charts keep working), but
+  walled off from the app; the editor and the prints run no code from the file at all; research
+  text is cleaned before it is shown or printed.
+
 - **Another web page can no longer use VAF as you.** VAF treats a request from your own
   computer as coming from you, so the app works without logging in, and it allowed web pages
   from any local or home-network address to read its answers. A web page from such an address,

@@ -7,6 +7,7 @@ import React, { Fragment, useMemo, useRef, useEffect, useLayoutEffect, useState,
 import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, FolderOpen, FolderPlus, GitBranch, Moon, Printer, Search, Pencil, HardDrive, Cloud, Lock, FileText, Image as ImageIcon, Film, Archive, ChevronLeft } from 'lucide-react';
 import { WindowAgentSeat, seatModeFor } from '@/components/AgentAvatar';
 import { cn } from '@/lib/utils';
+import { sanitizeUntrustedHtml } from '@/lib/sanitize';
 
 /** Live research state streamed by the research agent (`research_state` event). */
 export type ResearchViewState = {
@@ -321,16 +322,21 @@ const decorateCitations = (html: string) =>
     ).join('');
 
 /**
- * Print the report exactly as previewed: a hidden same-origin iframe gets the
- * identical sheet markup and CSS, re-runs the same column measurement, and
- * prints each sheet as one A4 page. The iframe isolates the print from the
- * app shell (whose overflow containers would clip every page after the first).
+ * Print the report exactly as previewed: a hidden iframe gets the identical sheet markup and
+ * CSS, the same column measurement cuts it into sheets, and each sheet prints as one A4 page.
+ * The iframe isolates the print from the app shell (whose overflow containers would clip every
+ * page after the first).
+ *
+ * The frame is sandboxed WITHOUT scripts: the sections are model output built from web pages,
+ * and this frame used to be unsandboxed, so a script in a section ran as the viewer. The sheet
+ * cutting that ran inside it now runs here, on the frame's document (same origin, so
+ * reachable), and allow-modals keeps print() working.
  */
 function printResearchReport(topic: string, metaLine: string, sectionsHtml: string[],
     opts?: { headerHtml?: string; decorate?: (h: string) => string; extraCss?: string }) {
     const decorate = opts?.decorate ?? decorateCitations;
     const header = opts?.headerHtml ?? buildResearchHeaderHtml(topic, metaLine);
-    const fullHtml = header + decorate(sectionsHtml.join(''));
+    const fullHtml = header + decorate(sectionsHtml.map(sanitizeUntrustedHtml).join(''));
     const doc = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(topic)}</title><style>
 @page { size: A4; margin: 0; }
 html, body { margin: 0; padding: 0; background: #ffffff; }
@@ -341,31 +347,33 @@ ${opts?.extraCss || ''}
 .vaf-a4-page:last-child { page-break-after: auto; }
 </style></head><body>
 <div id="flow" class="vaf-a4-flow vaf-paper">${fullHtml}</div>
-<script>(function () {
-    var flow = document.getElementById('flow');
-    var step = ${A4_FLOW_STEP};
-    var n = Math.max(1, Math.round((flow.scrollWidth + ${A4_COL_GAP}) / step));
-    for (var i = 0; i < n; i++) {
-        var page = document.createElement('div'); page.className = 'vaf-a4-page';
-        var clip = document.createElement('div'); clip.className = 'vaf-a4-clip';
-        var copy = flow.cloneNode(true); copy.removeAttribute('id');
-        copy.style.transform = 'translateX(' + (-i * step) + 'px)';
-        clip.appendChild(copy); page.appendChild(clip); document.body.appendChild(page);
-    }
-    flow.remove();
-    requestAnimationFrame(function () { setTimeout(function () { window.print(); }, 60); });
-})();</` + `script></body></html>`;
+</body></html>`;
 
     const iframe = document.createElement('iframe');
+    iframe.setAttribute('sandbox', 'allow-same-origin allow-modals');
     iframe.setAttribute('aria-hidden', 'true');
     iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
-    document.body.appendChild(iframe);
     const cleanup = () => { try { iframe.remove(); } catch { /* already gone */ } };
     iframe.addEventListener('load', () => {
-        iframe.contentWindow?.addEventListener('afterprint', () => setTimeout(cleanup, 100));
+        const d = iframe.contentDocument;
+        const w = iframe.contentWindow;
+        const flow = d?.getElementById('flow');
+        if (!d || !w || !flow) { cleanup(); return; }
+        const n = Math.max(1, Math.round((flow.scrollWidth + A4_COL_GAP) / A4_FLOW_STEP));
+        for (let i = 0; i < n; i++) {
+            const page = d.createElement('div'); page.className = 'vaf-a4-page';
+            const clip = d.createElement('div'); clip.className = 'vaf-a4-clip';
+            const copy = flow.cloneNode(true) as HTMLElement; copy.removeAttribute('id');
+            copy.style.transform = `translateX(${-i * A4_FLOW_STEP}px)`;
+            clip.appendChild(copy); page.appendChild(clip); d.body.appendChild(page);
+        }
+        flow.remove();
+        w.addEventListener('afterprint', () => setTimeout(cleanup, 100));
+        requestAnimationFrame(() => setTimeout(() => { w.focus(); w.print(); }, 60));
     });
     setTimeout(cleanup, 120000); // fallback if afterprint never fires
     iframe.srcdoc = doc;
+    document.body.appendChild(iframe);
 }
 
 /**
@@ -375,7 +383,7 @@ ${opts?.extraCss || ''}
  * last sheet re-render per typing tick; finished sheets reuse a frozen copy
  * (with `column-fill: auto`, appended content never reflows earlier columns).
  */
-function A4ResearchPaper({ topic, metaLine, sectionsHtml, noticeHtml, onGrow, headerHtml, decorate = decorateCitations, paperClass = '' }: {
+function A4ResearchPaper({ topic, metaLine, sectionsHtml: rawSectionsHtml, noticeHtml, onGrow, headerHtml, decorate = decorateCitations, paperClass = '' }: {
     topic: string;
     metaLine: string;
     sectionsHtml: string[];
@@ -400,6 +408,9 @@ function A4ResearchPaper({ topic, metaLine, sectionsHtml, noticeHtml, onGrow, he
     const lastStableRef = useRef('');
     const pageCountRef = useRef(1);
     const onGrowRef = useRef(onGrow); onGrowRef.current = onGrow;
+    // The sections are model output built from web pages, rendered into the APP's document
+    // below: cleaned once here, before the decorator adds its own markup.
+    const sectionsHtml = useMemo(() => rawSectionsHtml.map(sanitizeUntrustedHtml), [rawSectionsHtml]);
 
     // ── typewriter for the newest section ──
     const [typedLen, setTypedLen] = useState(0);

@@ -985,6 +985,10 @@ export default function NativeDocxEditor({
 
       // Browser: print via a temporary off-screen iframe (reliable dialog everywhere).
       const frame = document.createElement('iframe');
+      // Same rule as every frame that shows document content: reachable from here (the
+      // write and print below), no script of its own. Set before insertion, or it does not
+      // apply to the frame's first document.
+      frame.setAttribute('sandbox', 'allow-same-origin allow-modals');
       frame.setAttribute('aria-hidden', 'true');
       frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
       document.body.appendChild(frame);

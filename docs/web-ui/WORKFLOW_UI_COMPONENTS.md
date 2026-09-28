@@ -165,7 +165,7 @@ Used for HTML and the older non-DOCX editor flows.
 
 - Displays in the same panel area as SubAgentWindow (dock mode)
 - Loads HTML content via `/api/file?path=...`
-- Editable iframe with contentEditable
+- Editable iframe with contentEditable, sandboxed `allow-same-origin allow-modals` (no scripts of the document's own run; the editor drives it from the parent - see WEB_UI.md, Document Editor)
 - Save, Export PDF, and Download HTML buttons
 - Optional workflow steps on the left
 - Status indicator (Ready/Active/Error)

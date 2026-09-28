@@ -318,7 +318,7 @@ def _ensure_pdf_renderer():
         return _pdf_renderer
     try:
         from qtpy.QtCore import QObject, Slot, QUrl, QTimer
-        from qtpy.QtWebEngineCore import QWebEnginePage
+        from qtpy.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
         from qtpy.QtWidgets import QFileDialog
         from qtpy.QtGui import QDesktopServices
     except Exception as e:
@@ -344,6 +344,12 @@ def _ensure_pdf_renderer():
                 if not dest.lower().endswith(".pdf"):
                     dest += ".pdf"
             page = QWebEnginePage(self)
+            # Deliberate: no JavaScript in this page. It renders the Document Editor's
+            # HTML, which is a file from anywhere, and loads it as a fresh document with
+            # a file:/// base: <script> elements and onerror attributes that sat inert in
+            # the editor's sandboxed frame would RUN here, with file access. The print
+            # HTML is static markup and CSS, so nothing it needs is lost.
+            page.settings().setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, False)
             self._pages.append(page)
 
             def _cleanup():

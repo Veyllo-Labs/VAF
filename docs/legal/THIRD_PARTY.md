@@ -194,6 +194,7 @@ VAF Web UI is itself licensed AGPL-3.0-or-later (per `web/package.json`).
 | @monaco-editor/react | ^4.7.0 | MIT |
 | chart.js | ^4.5.1 | MIT |
 | clsx | ^2.1.0 | MIT |
+| dompurify | ^3.4.16 | MPL-2.0 OR Apache-2.0 |
 | framer-motion | ^10.18.0 | MIT |
 | graphology | ^0.26.0 | MIT |
 | graphology-layout-forceatlas2 | ^0.10.1 | MIT |

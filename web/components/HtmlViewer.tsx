@@ -157,7 +157,14 @@ export default function HtmlViewer({ isOpen, filePath, title, initialContent, on
               : '<html><body style="font-family:sans-serif;color:#888;padding:2rem">Loading…</body></html>')}
             title={fileName}
             className="w-full h-full border-0 bg-white"
-            sandbox="allow-same-origin allow-scripts allow-forms"
+            // Scripts yes, the app's origin no. The file can come from anywhere (a downloaded
+            // page, a room upload, something the model wrote), and allow-scripts together with
+            // allow-same-origin let it read the parent's token and call /api as the viewer -
+            // it could even remove its own sandbox. Without allow-same-origin the page runs
+            // under an opaque origin: charts and CDN scripts still work, the parent, its
+            // storage and cookies do not, and a request to /api carries Origin "null", which
+            // the backend's origin guard refuses. Nothing here reads the frame's document.
+            sandbox="allow-scripts allow-forms"
             allow="microphone 'none'; camera 'none'"
           />
         ) : (

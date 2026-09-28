@@ -194,6 +194,17 @@ const A4_EDITOR_STYLE = `
             `;
 
 /** Default iframe height is ~150px; expand so stacked A4 sheets are visible (outer panel scrolls). */
+/**
+ * Sandbox of the editable sheet. The editor is driven entirely from this component - it
+ * writes the document, sets contentEditable, runs execCommand and queryCommand*, attaches
+ * its listeners and calls print() - so the frame needs the app's origin (to be reachable)
+ * and modals (for print), but none of its own script. Deliberately without allow-scripts:
+ * the sheet holds files from anywhere, and with scripts an onerror attribute or a nested
+ * srcdoc frame in the file ran as the viewer (measured in Chromium; editing, selection,
+ * undo and print work the same without it).
+ */
+const EDITOR_FRAME_SANDBOX = 'allow-same-origin allow-modals';
+
 function resizeEditorIframe(iframe: HTMLIFrameElement | null): void {
     if (!iframe) return;
     const d = iframe.contentDocument;
@@ -792,7 +803,11 @@ function LegacyDocumentEditor({
             wrapper.appendChild(style);
             const contentDiv = document.createElement('div');
             contentDiv.className = 'pdf-export-page';
-            contentDiv.innerHTML = body.innerHTML;   // body IS the continuous flow
+            // This copy lives in the APP's document, where an onerror attribute from the file
+            // would run as the viewer; the sanitized copy only feeds the PDF, the file itself
+            // is untouched. body IS the continuous flow.
+            const DOMPurify = (await import('dompurify')).default;
+            contentDiv.innerHTML = DOMPurify.sanitize(body.innerHTML);
             wrapper.appendChild(contentDiv);
             document.body.appendChild(wrapper);
             try {
@@ -1224,7 +1239,7 @@ function LegacyDocumentEditor({
                                                 ref={iframeRef}
                                                 className="w-full min-h-[297mm] border-0 block bg-[#e5e7eb]"
                                                 title="Document Editor"
-                                                sandbox="allow-same-origin allow-scripts allow-modals"
+                                                sandbox={EDITOR_FRAME_SANDBOX}
                                                 allow="microphone 'none'; camera 'none'"
                                             />
                                         </div>
@@ -1378,7 +1393,7 @@ function LegacyDocumentEditor({
                                             ref={iframeRef}
                                             className="w-full min-h-[297mm] border-0 block bg-[#e5e7eb]"
                                             title="Document Editor"
-                                            sandbox="allow-same-origin allow-scripts allow-modals"
+                                            sandbox={EDITOR_FRAME_SANDBOX}
                                             allow="microphone 'none'; camera 'none'"
                                         />
                                     </div>

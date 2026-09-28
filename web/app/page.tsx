@@ -7737,9 +7737,11 @@ function VAFDashboardContent() {
                             content: flattenNativeDocxText(documentEditorState.docxModel),
                         };
                     }
-                    const div = document.createElement('div');
-                    div.innerHTML = documentEditorState.content || '';
-                    return { name: documentEditorState.title || 'Document', content: (div.textContent || div.innerText || '').trim() };
+                    // DOMParser, not a div's innerHTML: the editor holds files from anywhere, and
+                    // innerHTML on an element of THIS document fires an <img onerror> as the app.
+                    // A parsed document is inert - no handler runs, nothing loads.
+                    const parsed = new DOMParser().parseFromString(documentEditorState.content || '', 'text/html');
+                    return { name: documentEditorState.title || 'Document', content: (parsed.body?.textContent || '').trim() };
                 })()
                 : undefined;
         const editorSelectionsPayload =

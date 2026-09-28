@@ -56,10 +56,9 @@ def frontend_base_url() -> str:
     """Base URL of the Web UI, where a finished OAuth callback sends the browser back to (the
     Settings on the Connections tab). Same mode rule as the callback base: the integrated HTTPS
     proxy on its effective port in network+TLS mode, else the Web UI's own port."""
-    import os
+    from vaf.network.binding import frontend_port
     network_on = bool(Config.get("local_network_enabled", False))
     tls_on = bool(Config.get("local_network_tls_enabled", False))
     if network_on and tls_on:
         return f"https://localhost{effective_https_suffix()}"
-    port = os.environ.get("VAF_WEB_UI_PORT", "3000")
-    return f"http://localhost:{port}"
+    return f"http://localhost:{frontend_port()}"

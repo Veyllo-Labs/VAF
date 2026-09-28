@@ -9,7 +9,6 @@ account metadata (github_config for local admin, github_config_by_user for other
 """
 
 import logging
-import os
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -17,6 +16,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from vaf.core.config import Config
+from vaf.network.binding import frontend_port
 from vaf.api.config_routes import get_current_user_or_local_admin
 from vaf.github.oauth import (
     get_authorization_url,
@@ -94,7 +94,7 @@ def _save_github_config(gc: Dict[str, Any], username: Optional[str] = None) -> N
 
 def _redirect_success(account_id: str, redirect_base: Optional[str] = None) -> RedirectResponse:
     """Redirect to frontend after successful GitHub OAuth."""
-    port = os.environ.get("VAF_WEB_UI_PORT", "3000")
+    port = frontend_port()
     base = (redirect_base or "").rstrip("/")
     if base and base.startswith("http"):
         url = f"{base}/settings?connections=1&github_oauth=success&account={account_id}"
@@ -105,7 +105,7 @@ def _redirect_success(account_id: str, redirect_base: Optional[str] = None) -> R
 
 def _redirect_error(message: str, redirect_base: Optional[str] = None) -> HTMLResponse:
     """Return an error page with a link back to settings."""
-    port = os.environ.get("VAF_WEB_UI_PORT", "3000")
+    port = frontend_port()
     base = (redirect_base or "").rstrip("/")
     if base and base.startswith("http"):
         url = f"{base}/settings?connections=1&github_oauth=error"

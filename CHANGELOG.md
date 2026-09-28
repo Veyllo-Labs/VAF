@@ -177,6 +177,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **After connecting a mail account or an MCP service, you land back in VAF even when the
+  Web UI runs on another port.** When port 3000 was taken, the Web UI moved to the next free
+  port, but the sign-in sent you back to 3000, where nothing answered. It now returns to the
+  port the Web UI really runs on (GitHub and cloud drives already used the page's own address,
+  and now use the real port in their fallback too).
 - **With a local model and a nearly full conversation, the agent can still search for a
   tool.** When the conversation no longer fits and VAF cuts the agent's tools down to a small
   core, that core now includes the tool search, so the agent can still find a tool the core

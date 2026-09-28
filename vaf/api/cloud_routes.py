@@ -10,7 +10,6 @@ config holds only account metadata keyed by username.
 
 import asyncio
 import logging
-import os
 import time
 import uuid
 from pathlib import Path
@@ -22,6 +21,7 @@ from pydantic import BaseModel
 
 from vaf.core.config import Config
 from vaf.core.platform import Platform
+from vaf.network.binding import frontend_port
 
 from vaf.cloud.oauth_cloud import (
     get_authorization_url,
@@ -849,7 +849,7 @@ async def resolve_conflict(
 
 def _redirect_success(account_id: str, provider: str, redirect_base: Optional[str] = None) -> RedirectResponse:
     """Redirect to frontend after successful OAuth. Use redirect_base to match the host the user used (localhost vs 127.0.0.1)."""
-    port = os.environ.get("VAF_WEB_UI_PORT", "3000")
+    port = frontend_port()
     base = (redirect_base or "").rstrip("/")
     if base and base.startswith("http"):
         url = f"{base}/settings?connections=1&cloud_oauth=success&account={account_id}&provider={provider}"
@@ -860,7 +860,7 @@ def _redirect_success(account_id: str, provider: str, redirect_base: Optional[st
 
 def _redirect_error(message: str, redirect_base: Optional[str] = None) -> HTMLResponse:
     """Return an error page with a link back to settings."""
-    port = os.environ.get("VAF_WEB_UI_PORT", "3000")
+    port = frontend_port()
     base = (redirect_base or "").rstrip("/")
     if base and base.startswith("http"):
         url = f"{base}/settings?connections=1&cloud_oauth=error"

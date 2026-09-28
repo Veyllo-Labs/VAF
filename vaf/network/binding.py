@@ -286,6 +286,32 @@ def _port_or(value, default: int) -> int:
     return port if 0 < port < 65536 else default
 
 
+def frontend_port() -> int:
+    """The port the Web UI (Next.js) actually serves on - the one answer every reader uses.
+
+    The frontend moves to the next free port when the configured one is taken and writes the
+    port it really bound to a file (``FrontendManager.get_active_port``, removed again on stop).
+    That file is the truth while the frontend runs; the config value answers before it starts
+    and after it stopped. ``VAF_WEB_UI_PORT``, when set, overrides both. It used to be read in
+    five places with a hardcoded fallback of 3000 and was set nowhere, so a frontend that had
+    moved to 3001 got its OAuth return sent to a port nothing listened on.
+    """
+    import os
+
+    override = _port_or(os.environ.get("VAF_WEB_UI_PORT"), 0)
+    if override:
+        return override
+    try:
+        from vaf.core.frontend_manager import FrontendManager
+        active = _port_or(FrontendManager().get_active_port(), 0)
+    except Exception:
+        active = 0
+    if active:
+        return active
+    from vaf.core.config import Config
+    return _port_or(Config.get("local_network_port_frontend", 3000), 3000)
+
+
 def resolve_lan_access_ports(wait_for_proxy: bool = False, timeout_s: float = 10.0) -> Tuple[int, int]:
     """Return (access_port, frontend_port) that LAN clients actually reach.
 

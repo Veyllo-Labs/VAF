@@ -27,9 +27,9 @@ REPO = Path(__file__).resolve().parents[1]
     ("image/jpg", "image/jpeg"),
     ("image/vnd.microsoft.icon", "image/x-icon"),
     ("image/png, text/html", None),
-    # a second type after a parameter: the base matches, but what is SERVED is the canonical
-    # value alone - the joined remainder never reaches the browser
-    ("image/png; q=1, text/html", "image/png"),
+    # a second type hidden behind a parameter: refused before the parameter is cut off, or it
+    # would lose its second type with it and pass as a plain PNG
+    ("image/png; q=1, text/html", None),
     ("image/svg+xml", None),
     ("image/svg+xml; charset=utf-8", None),
     ("text/html", None),

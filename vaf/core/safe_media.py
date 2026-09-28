@@ -34,9 +34,13 @@ _RASTER_IMAGE_TYPES = {
 
 def raster_image_type(content_type: Optional[str]) -> Optional[str]:
     """The canonical type to serve these bytes as, or None when they must not be served as an
-    image: SVG, or anything that is not a raster format. The match is exact, so a joined value
-    (``image/png, text/html``) is no key; and whatever matched, what goes out is this table's
-    value, never the incoming string - so a parameter part (``; charset=...``) is dropped and no
-    second type can ride along."""
+    image: several types joined into one value, SVG, or anything that is not a raster format.
+
+    The comma is refused BEFORE the parameters are cut off: ``image/png; q=1, text/html`` would
+    otherwise lose its second type with the parameter part and pass as a plain PNG. A response
+    that names two types is ambiguous at best and crafted at worst, so it is not an image. What
+    goes out is this table's value, never the incoming string."""
     raw = (content_type or "").strip().lower()
+    if "," in raw:
+        return None
     return _RASTER_IMAGE_TYPES.get(raw.split(";", 1)[0].strip())

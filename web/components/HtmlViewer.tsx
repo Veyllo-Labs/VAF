@@ -162,7 +162,7 @@ export default function HtmlViewer({ isOpen, filePath, title, initialContent, on
             // allow-same-origin let it read the parent's token and call /api as the viewer -
             // it could even remove its own sandbox. Without allow-same-origin the page runs
             // under an opaque origin: charts and CDN scripts still work, the parent, its
-            // storage and cookies do not, and a request to /api carries Origin "null", which
+            // storage and cookies do not, and a fetch or form to /api carries Origin "null", which
             // the backend's origin guard refuses. Nothing here reads the frame's document.
             sandbox="allow-scripts allow-forms"
             allow="microphone 'none'; camera 'none'"

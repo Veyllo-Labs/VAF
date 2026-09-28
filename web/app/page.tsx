@@ -7741,7 +7741,13 @@ function VAFDashboardContent() {
                     // innerHTML on an element of THIS document fires an <img onerror> as the app.
                     // A parsed document is inert - no handler runs, nothing loads.
                     const parsed = new DOMParser().parseFromString(documentEditorState.content || '', 'text/html');
-                    return { name: documentEditorState.title || 'Document', content: (parsed.body?.textContent || '').trim() };
+                    // textContent joins adjacent blocks without a separator (<p>a</p><p>b</p> reads
+                    // "ab"), and the editor writes blocks without whitespace between them.
+                    parsed.body?.querySelectorAll('p, div, li, br, tr, h1, h2, h3, h4, h5, h6, blockquote, pre, ul, ol, table, section, article, header, footer')
+                        .forEach((el) => el.after('\n'));
+                    parsed.body?.querySelectorAll('td, th').forEach((el) => el.after('\t'));
+                    const text = (parsed.body?.textContent || '').replace(/\n{3,}/g, '\n\n');
+                    return { name: documentEditorState.title || 'Document', content: text.trim() };
                 })()
                 : undefined;
         const editorSelectionsPayload =

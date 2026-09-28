@@ -177,6 +177,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The agent reads an open document with its paragraphs apart.** The text of a document open
+  in the editor, which the agent gets with your message, ran paragraphs, list items and
+  table cells together ("first paragraph.Second paragraph"). They are now separated by line
+  breaks and tabs.
 - **After connecting a mail account or an MCP service, you land back in VAF even when the
   Web UI runs on another port.** When port 3000 was taken, the Web UI moved to the next free
   port, but the sign-in sent you back to 3000, where nothing answered. It now returns to the

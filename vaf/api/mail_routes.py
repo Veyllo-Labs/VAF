@@ -163,9 +163,10 @@ async def message_part(message_pk: int, part_ref: str,
     if att is None:
         raise HTTPException(status_code=404, detail="Attachment not found")
     filename, ctype, payload = att
-    ctype_l = (ctype or "").lower()
-    serve_type = ctype_l if (ctype_l.startswith("image/") and ctype_l != "image/svg+xml") \
-        else "application/octet-stream"
+    # The sender chose this type; only a raster image keeps an image type, as the canonical
+    # value (vaf/core/safe_media.py), and everything else is served as opaque bytes.
+    from vaf.core.safe_media import raster_image_type
+    serve_type = raster_image_type(ctype) or "application/octet-stream"
     safe_name = "".join(c for c in (filename or "attachment") if c.isalnum() or c in "._- ")[:120]
     return Response(
         content=payload,
@@ -574,8 +575,11 @@ async def image_proxy(url: str, _user: Dict[str, Any] = Depends(_get_current_use
         try:
             r = pool.request("GET", target, headers=headers, redirect=False,
                              preload_content=False, decode_content=False)
-            ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-            if r.status != 200 or not ctype.startswith("image/") or ctype == "image/svg+xml":
+            # Two Content-Type headers arrive joined ("image/png, text/html") and passed the
+            # old "starts with image/" test; what goes out is the canonical raster type.
+            from vaf.core.safe_media import raster_image_type
+            ctype = raster_image_type(r.headers.get("Content-Type"))
+            if r.status != 200 or not ctype:
                 return ("error", None)
             data = r.read(5 * 1024 * 1024 + 1)
             if len(data) > 5 * 1024 * 1024:

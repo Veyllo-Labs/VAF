@@ -203,6 +203,34 @@ def is_own_frontend_origin(origin: str | None) -> bool:
     return scheme == "http" and host in _LOOPBACK_NAMES and port == frontend_port()
 
 
+def is_own_origin(origin: str | None, headers, *, scheme: str) -> bool:
+    """True when ``origin`` is a page of VAF's own, judged for the request these headers are.
+
+    Own is: this request's own origin (``scheme`` + ``Host``, with a proxy's
+    ``X-Forwarded-Proto`` taking the scheme), the origin a TLS proxy was dialled under
+    (``https://`` + ``X-Forwarded-Host``: the integrated proxy, nginx), or the Web UI on this
+    machine (:func:`is_own_frontend_origin`). ``null`` never is. This answers WHICH origin is
+    own only; whether the Host itself may be trusted is :func:`foreign_request_reason`'s first
+    step, which runs before this on every browser request. It is also the one answer for an
+    origin a page hands the API as data (an OAuth return address), so there are not two.
+    """
+    own = _origin_tuple(origin)
+    if own is None:
+        return False
+    fwd_proto = (headers.get("x-forwarded-proto") or "").strip().lower()
+    scope_scheme = {"ws": "http", "wss": "https"}.get(scheme, scheme)
+    this_scheme = fwd_proto if fwd_proto in _DEFAULT_PORTS else scope_scheme
+    dialled = _host_and_port(headers.get("host"))
+    if dialled and this_scheme in _DEFAULT_PORTS:
+        if own == (this_scheme, dialled[0], dialled[1] or _DEFAULT_PORTS[this_scheme]):
+            return True
+    if fwd_proto == "https":
+        proxied = _host_and_port(headers.get("x-forwarded-host"))
+        if proxied and own == ("https", proxied[0], proxied[1] or 443):
+            return True
+    return is_own_frontend_origin(origin)
+
+
 def foreign_request_reason(headers, *, scheme: str, method: str) -> Optional[str]:
     """Why a browser request comes from a page that is not VAF's own, or None when it may pass.
 
@@ -242,20 +270,7 @@ def foreign_request_reason(headers, *, scheme: str, method: str) -> Optional[str
         return "host"
 
     if origin is not None:
-        own = _origin_tuple(origin)
-        if own is None:
-            return "origin"
-        scope_scheme = {"ws": "http", "wss": "https"}.get(scheme, scheme)
-        this_scheme = fwd_proto if fwd_proto in _DEFAULT_PORTS else scope_scheme
-        dialled = _host_and_port(host)
-        if dialled and this_scheme in _DEFAULT_PORTS:
-            if own == (this_scheme, dialled[0], dialled[1] or _DEFAULT_PORTS[this_scheme]):
-                return None
-        if fwd_proto == "https":
-            proxied = _host_and_port(fwd_host)
-            if proxied and own == ("https", proxied[0], proxied[1] or 443):
-                return None
-        return None if is_own_frontend_origin(origin) else "origin"
+        return None if is_own_origin(origin, headers, scheme=scheme) else "origin"
 
     if site in ("same-origin", "none"):
         return None

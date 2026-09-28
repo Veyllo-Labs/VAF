@@ -9,6 +9,7 @@ config holds only account metadata keyed by username.
 """
 
 import asyncio
+import html
 import logging
 import time
 import uuid
@@ -22,6 +23,7 @@ from pydantic import BaseModel
 from vaf.core.config import Config
 from vaf.core.platform import Platform
 from vaf.network.binding import frontend_port
+from vaf.network.oauth_redirect import own_redirect_base
 
 from vaf.cloud.oauth_cloud import (
     get_authorization_url,
@@ -211,7 +213,7 @@ async def oauth_start(
         auth_url, state = get_authorization_url(
             provider,
             redirect_uri,
-            redirect_base=redirect_base,
+            redirect_base=own_redirect_base(redirect_base, request),
             username=_username,
             user_scope_id=_user_scope_id,
         )
@@ -873,7 +875,7 @@ def _redirect_error(message: str, redirect_base: Optional[str] = None) -> HTMLRe
     <body style="font-family:sans-serif;max-width:480px;margin:2rem auto;padding:1rem;">
     <h2>Cloud connection failed</h2>
     <p>{msg_escaped}</p>
-    <p><a href="{url}">Back to Settings</a></p>
+    <p><a href="{html.escape(url, quote=True)}">Back to Settings</a></p>
     </body></html>
     """
     return HTMLResponse(content=html_content, status_code=200)

@@ -374,6 +374,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   text is cleaned where the agent writes it, and again before it is shown or printed; the saved
   report file no longer carries markup from its title or source links either.
 
+- **Files, sign-in pages and images from outside are delivered as data, not as pages.** An
+  old download address served an HTML or SVG file straight into the browser as part of VAF,
+  and checked no owner; it had no remaining use and is gone. Two routes that turn Office files
+  into something the editor can show checked only the folders, so on a shared installation
+  one account could read another's project documents through them; they now check the owner
+  like the file route does. After a GitHub or cloud sign-in, VAF followed any return address a
+  sign-in was started with, and the error page put it into a link unescaped; only VAF's own
+  address is accepted now. Remote mail images, mail attachments and WhatsApp profile pictures
+  are only passed on as real picture formats; a sender could get HTML through by naming two
+  types at once.
+
 - **Another web page can no longer use VAF as you.** VAF treats a request from your own
   computer as coming from you, so the app works without logging in, and it allowed web pages
   from any local or home-network address to read its answers. A web page from such an address,

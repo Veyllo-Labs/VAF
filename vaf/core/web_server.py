@@ -3349,57 +3349,11 @@ async def get_file(request: Request, path: str = Query(..., description="Absolut
     FOUR roots, not three - the output dir is easy to miss and this docstring said three until
     2026-07-30. The list matters beyond this endpoint: `document_editor` carries no access check
     of its own precisely because the decision lives here, so anything added to it becomes
-    reachable by a tool that never looks at a path. Pinned in tests/test_api_file_allowed_roots.py.
+    reachable by a tool that never looks at a path. The decision itself is `_allowed_file_path`,
+    shared with the other two read routes. Pinned in tests/test_api_file_allowed_roots.py.
     Used by Web UI."""
-    from vaf.core.platform import Platform
     import mimetypes
-    try:
-        target = Platform.normalize_path(path)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid path")
-    if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-    allowed_roots = [
-        Platform.documents_dir().resolve(),
-        Platform.downloads_dir().resolve(),
-        Platform.data_dir().resolve(),
-        Platform.get_vaf_output_dir().resolve(),
-    ]
-    if not any(target.is_relative_to(root) for root in allowed_roots):
-        raise HTTPException(status_code=403, detail="Access denied")
-    # User isolation for generated projects: VAF_Projects/<uid[:8]>/... folders
-    # belong to one user — only that user (or the local admin) may download
-    # from them. Legacy flat projects (no user prefix) stay accessible.
-    import re as _re_iso
-    _projects_root = (Platform.documents_dir() / "VAF_Projects").resolve()
-    if target.is_relative_to(_projects_root):
-        _rel = target.relative_to(_projects_root)
-        _first_seg = _rel.parts[0] if _rel.parts else ""
-        if _re_iso.fullmatch(r"[0-9a-f]{8}", _first_seg):
-            # FAIL-CLOSED: if ownership cannot be verified, deny (never serve a per-user file on error).
-            try:
-                from vaf.api.config_routes import get_current_user_or_local_admin
-                from vaf.core.config import is_admin_identity
-                _user = get_current_user_or_local_admin(request) or {}
-                _scope = str(_user.get("user_scope_id") or "")
-                _is_admin = is_admin_identity(_user.get("role"), _scope)
-                _allowed = _is_admin or _scope.replace("-", "").lower().startswith(_first_seg)
-                if not _allowed:
-                    # The one path into another account's tree that is not another
-                    # account's business: the shared folder of a room this account was
-                    # admitted to. The agent's file tools got the same exception, and
-                    # without it here a member could write a file into the room and
-                    # then be refused when it clicked its own link.
-                    from vaf.tools.filesystem import _shared_room_roots
-                    _allowed = any(
-                        target == Path(_r).resolve() or target.is_relative_to(Path(_r).resolve())
-                        for _r in _shared_room_roots(_scope))
-            except HTTPException:
-                raise
-            except Exception:
-                _allowed = False
-            if not _allowed:
-                raise HTTPException(status_code=403, detail="Access denied")
+    target = _allowed_file_path(path, request)
     mime_type, _ = mimetypes.guess_type(str(target))
     return FileResponse(
         path=str(target),
@@ -3433,30 +3387,11 @@ async def describe_image(request: Request):
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
 
-    # Scope to the user's own VAF_Projects/<uid8> subtree (fail-closed), mirroring /api/file.
-    import re as _re_id
+    # Only a file of a per-account project folder can be described, and only by whoever may
+    # read it there - the same rule the file routes answer (_project_path_allowed).
     _projects_root = (Platform.documents_dir() / "VAF_Projects").resolve()
-    _resolved = target.resolve()
-    if not _resolved.is_relative_to(_projects_root):
+    if not target.resolve().is_relative_to(_projects_root) or not _project_path_allowed(request, target):
         raise HTTPException(status_code=403, detail="Access denied")
-    _rel_parts = _resolved.relative_to(_projects_root).parts
-    _first = _rel_parts[0] if _rel_parts else ""
-    if _re_id.fullmatch(r"[0-9a-f]{8}", _first):
-        try:
-            from vaf.api.config_routes import get_current_user_or_local_admin
-            from vaf.core.config import is_admin_identity
-            _user = get_current_user_or_local_admin(request) or {}
-            _scope = str(_user.get("user_scope_id") or "")
-            # Role-aware, exactly like the session check 25 lines below: this function used to
-            # answer "is this an admin" two different ways within one request.
-            _is_admin = is_admin_identity(_user.get("role"), _scope)
-            _allowed = _is_admin or _scope.replace("-", "").lower().startswith(_first)
-        except HTTPException:
-            raise
-        except Exception:
-            _allowed = False
-        if not _allowed:
-            raise HTTPException(status_code=403, detail="Access denied")
 
     from vaf.core.session import SessionManager
     sm = SessionManager()
@@ -3527,8 +3462,51 @@ async def describe_image(request: Request):
     return {"name": target.name, "description": desc}
 
 
-def _allowed_file_path(path_str: str):
-    """Resolve path and check it is under allowed roots. Returns Path or raises HTTPException."""
+def _project_path_allowed(request: Request, target) -> bool:
+    """Whether the caller may touch ``target`` as far as per-account project folders go.
+
+    ``VAF_Projects/<uid8>/...`` belongs to one account: that account, an admin, or a member of
+    a room whose shared folder it is (the agent's file tools make the same exception, and
+    without it a member could write a file into the room and then be refused its own link).
+    A path outside such a folder is not this check's business. FAIL-CLOSED: an identity that
+    cannot be resolved is refused. One answer for every route that reads a project file -
+    the file routes and the image description used to carry their own copies, and only one
+    of them knew the room exception.
+    """
+    import re as _re
+    from pathlib import Path as _P
+    from vaf.core.platform import Platform
+    projects_root = (Platform.documents_dir() / "VAF_Projects").resolve()
+    resolved = target.resolve()
+    if not resolved.is_relative_to(projects_root):
+        return True
+    parts = resolved.relative_to(projects_root).parts
+    first = parts[0] if parts else ""
+    if not _re.fullmatch(r"[0-9a-f]{8}", first):
+        return True  # legacy flat projects (no account prefix) stay accessible
+    try:
+        from vaf.api.config_routes import get_current_user_or_local_admin
+        from vaf.core.config import is_admin_identity
+        user = get_current_user_or_local_admin(request) or {}
+        scope = str(user.get("user_scope_id") or "")
+        if is_admin_identity(user.get("role"), scope) or scope.replace("-", "").lower().startswith(first):
+            return True
+        from vaf.tools.filesystem import _shared_room_roots
+        return any(resolved == _P(r).resolve() or resolved.is_relative_to(_P(r).resolve())
+                   for r in _shared_room_roots(scope))
+    except HTTPException:
+        raise
+    except Exception:
+        return False
+
+
+def _allowed_file_path(path_str: str, request: Request):
+    """The one read decision for a local file (``/api/file``, ``/api/file/as-html``,
+    ``/api/file/docx-model``): under one of the four roots, and a per-account project file
+    only for whoever may read it. Returns the Path or raises HTTPException.
+
+    The two converters used to check the roots only, so any account could read another's
+    project files through them; /api/file alone carried the ownership check."""
     from vaf.core.platform import Platform
     try:
         target = Platform.normalize_path(path_str)
@@ -3543,6 +3521,8 @@ def _allowed_file_path(path_str: str):
         Platform.get_vaf_output_dir().resolve(),
     ]
     if not any(target.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not _project_path_allowed(request, target):
         raise HTTPException(status_code=403, detail="Access denied")
     return target
 
@@ -3667,9 +3647,9 @@ def _pptx_to_html(target) -> str:
 
 
 @app.get("/api/file/as-html")
-async def get_file_as_html(path: str = Query(..., description="Path to .docx, .xlsx or .pptx to convert to HTML for editing")):
+async def get_file_as_html(request: Request, path: str = Query(..., description="Path to .docx, .xlsx or .pptx to convert to HTML for editing")):
     """Convert Word (.docx), Excel (.xlsx) or PowerPoint (.pptx) to HTML so the Document Editor can display and edit it."""
-    target = _allowed_file_path(path)
+    target = _allowed_file_path(path, request)
     suf = target.suffix.lower()
     if suf not in (".docx", ".xlsx", ".pptx"):
         raise HTTPException(status_code=400, detail="Only .docx, .xlsx and .pptx can be converted to HTML here")
@@ -3690,9 +3670,9 @@ async def get_file_as_html(path: str = Query(..., description="Path to .docx, .x
 
 
 @app.get("/api/file/docx-model")
-async def get_file_as_docx_model(path: str = Query(..., description="Path to .docx to convert to VAF's native DOCX model")):
+async def get_file_as_docx_model(request: Request, path: str = Query(..., description="Path to .docx to convert to VAF's native DOCX model")):
     """Convert a DOCX file into the native editor model."""
-    target = _allowed_file_path(path)
+    target = _allowed_file_path(path, request)
     if target.suffix.lower() != ".docx":
         raise HTTPException(status_code=400, detail="Only .docx files are supported")
     try:
@@ -3984,43 +3964,6 @@ async def get_sound(filename: str):
         path=str(path),
         media_type=mime_type or "audio/mpeg",
         filename=filename,
-    )
-
-
-@app.get("/api/download")
-async def download_file(request: Request, path: str = Query(..., description="Absolute path to local file")):
-    from vaf.core.platform import Platform
-    from pathlib import Path
-    import mimetypes
-
-    try:
-        target = Platform.normalize_path(path)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid path")
-
-    if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-
-    allowed_roots = [
-        Platform.documents_dir().resolve(),
-        Platform.downloads_dir().resolve(),
-        Platform.data_dir().resolve(),
-        Platform.get_vaf_output_dir().resolve(),
-    ]
-
-    if not any(target.is_relative_to(root) for root in allowed_roots):
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    mime_type, _ = mimetypes.guess_type(str(target))
-
-    # Local users (127.0.0.1 / ::1) get inline serving — browser opens HTML, PDF, images directly.
-    # Remote/LAN users get Content-Disposition: attachment so a download dialog appears.
-    client_host = request.client.host if request.client else ""
-    is_local = client_host in ("127.0.0.1", "::1", "localhost", "")
-    return FileResponse(
-        path=str(target),
-        media_type=mime_type or "application/octet-stream",
-        filename=None if is_local else target.name,
     )
 
 

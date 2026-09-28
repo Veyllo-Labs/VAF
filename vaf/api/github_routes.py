@@ -8,6 +8,7 @@ Credentials stored via vaf.github.credential_github; config holds only
 account metadata (github_config for local admin, github_config_by_user for others).
 """
 
+import html
 import logging
 from typing import Any, Dict, Optional
 
@@ -17,6 +18,7 @@ from pydantic import BaseModel
 
 from vaf.core.config import Config
 from vaf.network.binding import frontend_port
+from vaf.network.oauth_redirect import own_redirect_base
 from vaf.api.config_routes import get_current_user_or_local_admin
 from vaf.github.oauth import (
     get_authorization_url,
@@ -118,7 +120,7 @@ def _redirect_error(message: str, redirect_base: Optional[str] = None) -> HTMLRe
     <body style="font-family:sans-serif;max-width:480px;margin:2rem auto;padding:1rem;">
     <h2>GitHub connection failed</h2>
     <p>{msg_escaped}</p>
-    <p><a href="{url}">Back to Settings</a></p>
+    <p><a href="{html.escape(url, quote=True)}">Back to Settings</a></p>
     </body></html>
     """
     return HTMLResponse(content=html_content, status_code=200)
@@ -147,7 +149,7 @@ async def oauth_start(
     try:
         auth_url, state = get_authorization_url(
             redirect_uri,
-            redirect_base=redirect_base,
+            redirect_base=own_redirect_base(redirect_base, request),
             scope=scope_param,
             username=_user.get("username"),
             user_scope_id=_user.get("user_scope_id"),

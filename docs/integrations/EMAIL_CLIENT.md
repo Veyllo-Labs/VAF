@@ -752,7 +752,7 @@ requests it from VAF's own origin, and the backend fetches the image.
 real User-Agent, no Accept-Language, no DNT. The handler takes no `Request` object,
 so it cannot forward one by accident. Also: SSRF-guarded (resolve once, pin the IP,
 ports 80/443 only, private and metadata addresses refused), redirects not followed,
-`Content-Type` must be `image/*`, SVG refused, 5 MB cap, `nosniff` on the response.
+`Content-Type` must be a single raster type from the allowlist in `vaf/core/safe_media.py` (png, jpeg, gif, webp, avif, bmp, ico) and the response carries that table's canonical type, never the sender's string - a check on "starts with `image/`, is not SVG" passed `image/png, text/html` (two headers joined), and browsers take the last type of such a list. 5 MB cap, `nosniff` on the response. Inline parts (`/api/mail/messages/{pk}/parts/{ref}`) use the same allowlist and serve anything else as `application/octet-stream`.
 
 **NOT protected, and this is structural rather than a gap to be fixed:**
 

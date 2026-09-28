@@ -1045,8 +1045,15 @@ async def get_whatsapp_avatar(request: Request, chat_id: str):
     if not result:
         raise HTTPException(status_code=404, detail="no picture")
     data, mime = result
-    return Response(content=data, media_type=mime or "image/jpeg",
-                    headers={"Cache-Control": "private, max-age=3600"})
+    # The CDN chose this type. A picture is a raster image; anything else (SVG, several
+    # types joined) is not served as one (vaf/core/safe_media.py). Nothing recorded: jpeg.
+    from vaf.core.safe_media import raster_image_type
+    media_type = raster_image_type(mime or "image/jpeg")
+    if not media_type:
+        raise HTTPException(status_code=404, detail="no picture")
+    return Response(content=data, media_type=media_type,
+                    headers={"Cache-Control": "private, max-age=3600",
+                             "X-Content-Type-Options": "nosniff"})
 
 
 @router.post("/contacts/resync")

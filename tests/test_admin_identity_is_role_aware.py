@@ -198,18 +198,28 @@ def test_the_jailed_tools_read_the_role_from_the_injected_argument():
 # ── Consumers 2+3: the HTTP file gates that had drifted ──────────────────────
 
 def test_the_project_file_gates_use_the_shared_definition():
-    """Both ``VAF_Projects/<uid8>`` ownership checks in web_server (GET /api/file and
-    POST /api/image/describe) must go through is_admin_identity. Pinned as source
-    because reconstructing the comparison inline is exactly how they drifted."""
+    """The ``VAF_Projects/<uid8>`` ownership check in web_server goes through is_admin_identity,
+    and there is ONE of it. GET /api/file and POST /api/image/describe used to carry a copy
+    each, the copies drifted (one decided "admin" scope-only, only one knew the shared-room
+    exception), and the two converters under /api/file had none. They all call
+    ``_project_path_allowed`` now. Pinned as source because reconstructing the comparison
+    inline is exactly how they drifted."""
     import vaf.core.web_server as ws_mod
 
     src = Path(ws_mod.__file__).read_text(encoding="utf-8")
-    # Anchor on the uid8 prefix comparison - the expression unique to these two gates.
+    # Anchor on the uid8 prefix comparison - the expression unique to this gate.
     gates = list(re.finditer(r'\.replace\("-", ""\)\.lower\(\)\.startswith\(', src))
-    assert len(gates) == 2, f"expected the two VAF_Projects ownership gates, found {len(gates)}"
-    for g in gates:
-        preceding = src[max(0, g.start() - 400):g.start()]
-        assert "is_admin_identity(" in preceding, (
-            "a VAF_Projects ownership gate decides 'is admin' on its own instead of using "
-            "the shared definition - that is exactly how these two drifted"
-        )
+    assert len(gates) == 1, f"expected the one shared VAF_Projects ownership gate, found {len(gates)}"
+    preceding = src[max(0, gates[0].start() - 400):gates[0].start()]
+    assert "is_admin_identity(" in preceding, (
+        "the VAF_Projects ownership gate decides 'is admin' on its own instead of using "
+        "the shared definition - that is exactly how the two copies drifted"
+    )
+    gate_fn = src[src.index("def _project_path_allowed("):]
+    assert gates[0].start() > src.index("def _project_path_allowed(")
+    assert gates[0].start() < src.index("def _project_path_allowed(") + len(gate_fn.split("\ndef ", 1)[0])
+    describe = src[src.index("async def describe_image("):]
+    # The function ends at the next line that is not indented (the next top-level statement);
+    # cutting at the next route instead took in the module functions between them.
+    describe = describe[:re.search(r"\n(?=\S)", describe[1:]).start() + 1]
+    assert "_project_path_allowed(request, target)" in describe

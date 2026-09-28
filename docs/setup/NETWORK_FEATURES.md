@@ -106,6 +106,7 @@ OAuth start/callback endpoints for Email, Cloud, and GitHub enforce a strict act
 - OAuth start requires an authenticated user session (`request.state.user`).
 - OAuth callback validates that the authenticated actor matches the identity encoded in OAuth `state` (username and/or `user_scope_id`).
 - Mismatched callbacks are rejected with HTTP 403.
+- The page a finished GitHub or cloud sign-in returns to (`redirect_base`, the Web UI's own `window.location.origin`) is kept only when it is an origin of VAF's own for the request that started the sign-in (`own_redirect_base` in `vaf/network/oauth_redirect.py`, the origin guard's `is_own_origin`); anything else falls back to the Web UI's address. It used to be any string: an open redirect, and on the callback's error page an unescaped `href`, so one account could hand another a callback link carrying its own markup. The error page escapes the link as well.
 
 This avoids accidental or malicious cross-user credential binding in multi-user deployments.
 

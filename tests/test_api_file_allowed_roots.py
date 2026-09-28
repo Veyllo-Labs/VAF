@@ -37,15 +37,35 @@ EXPECTED_ROOTS = (
 FORBIDDEN_ROOTS = ("Platform.home()", "Path.home()", "expanduser", "vaf_dir()")
 
 
-def _allowlist_source() -> str:
-    """The `allowed_roots` literal from the endpoint, as source."""
+def _decision_source() -> str:
+    """The one read decision (`_allowed_file_path`) as source. /api/file and the two
+    converters under it all call it, so its roots are the roots of all three (pinned below)."""
     import vaf.core.web_server as ws
 
     src = Path(inspect.getfile(ws)).read_bytes().decode()
-    start = src.index('@app.get("/api/file")')
-    block = re.search(r"allowed_roots\s*=\s*\[(.*?)\]", src[start:start + 4000], re.S)
-    assert block, "the /api/file endpoint no longer builds an allowed_roots list"
+    start = src.index("def _allowed_file_path(")
+    return src[start:start + 3000].split("\n@app.", 1)[0]
+
+
+def _allowlist_source() -> str:
+    """The `allowed_roots` literal from the decision, as source."""
+    block = re.search(r"allowed_roots\s*=\s*\[(.*?)\]", _decision_source(), re.S)
+    assert block, "_allowed_file_path no longer builds an allowed_roots list"
     return block.group(1)
+
+
+def test_every_read_route_asks_the_one_decision():
+    """/api/file, /api/file/as-html and /api/file/docx-model: the converters used to check the
+    roots only, so any account read another's project files through them."""
+    import vaf.core.web_server as ws
+
+    src = Path(inspect.getfile(ws)).read_bytes().decode()
+    for route in ('@app.get("/api/file")', '@app.get("/api/file/as-html")', '@app.get("/api/file/docx-model")'):
+        body = src[src.index(route):]
+        body = body[:body.index("\n@app.", 1)]
+        assert "_allowed_file_path(path, request)" in body, route
+    assert '@app.get("/api/download")' not in src, (
+        "/api/download is back: it served .html/.svg inline on the app's origin and checked no owner")
 
 
 def test_the_allowlist_is_exactly_these_four_roots():
@@ -73,11 +93,7 @@ def test_a_path_outside_every_root_is_refused():
     """The rule itself, not its spelling: the check is `is_relative_to` against the four,
     with a 403 otherwise."""
     src = _allowlist_source()
-    import vaf.core.web_server as ws
-
-    whole = Path(inspect.getfile(ws)).read_bytes().decode()
-    start = whole.index('@app.get("/api/file")')
-    body = whole[start:start + 4000]
+    body = _decision_source()
     assert "is_relative_to" in body, "the containment check changed shape"
     assert "403" in body, "a path outside every root no longer yields 403"
     assert src.count("Platform.") == 4
@@ -90,15 +106,18 @@ def test_project_ownership_is_checked_on_top_of_the_roots():
     import vaf.core.web_server as ws
 
     whole = Path(inspect.getfile(ws)).read_bytes().decode()
-    start = whole.index('@app.get("/api/file")')
-    body = whole[start:start + 4000]
-    # Not a substring check on the folder name: "VAF_Projects_DISABLED" contains
-    # "VAF_Projects", so renaming the guard out of existence would pass. What is pinned is
-    # that a SECOND refusal exists after the roots, and that it consults an identity.
-    assert re.search(r'VAF_Projects["\'/\s)]', body), "the project-folder guard is gone"
+    body = _decision_source()
+    # What is pinned is that a SECOND refusal exists after the roots, and that the function
+    # it asks consults an identity about the project folder.
     assert body.count("403") >= 2, "the ownership refusal disappeared; only the roots remain"
-    assert re.search(r"_scope|user_scope_id|_is_admin", body), (
-        "the second refusal no longer consults an identity, so it cannot be an ownership check"
+    assert "_project_path_allowed(request, target)" in body, "the ownership check is not asked"
+    gate = whole[whole.index("def _project_path_allowed("):]
+    gate = gate[:gate.index("\ndef ", 1)]
+    # Not a substring check on the folder name: "VAF_Projects_DISABLED" contains
+    # "VAF_Projects", so renaming the guard out of existence would pass.
+    assert re.search(r'VAF_Projects["\'/\s)]', gate), "the project-folder guard is gone"
+    assert re.search(r"user_scope_id|is_admin_identity", gate), (
+        "the ownership check no longer consults an identity"
     )
 
 

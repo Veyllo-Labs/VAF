@@ -458,7 +458,7 @@ _INTERCEPT_JS = """
     // button - the user is stranded. Let these fall through to pywebview, which
     // routes them to the system browser / native download instead.
     function _isFileEndpoint(u) {
-        return u.pathname === '/api/file' || u.pathname === '/api/download';
+        return u.pathname === '/api/file';
     }
 
     // Intercept window.open() — redirect localhost URLs into the same window,

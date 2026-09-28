@@ -62,3 +62,22 @@ def frontend_base_url() -> str:
     if network_on and tls_on:
         return f"https://localhost{effective_https_suffix()}"
     return f"http://localhost:{frontend_port()}"
+
+
+def own_redirect_base(redirect_base, request) -> "str | None":
+    """The page origin a finished sign-in may send the browser back to, or None.
+
+    The Web UI passes its own ``window.location.origin`` to the start of a GitHub or cloud
+    sign-in, and the callback later redirects there and links to it from its error page. It was
+    taken as any string: an open redirect, and - on the error page, where it went into an href
+    unescaped - markup of any account's choosing, delivered to whoever it sent the callback
+    link. It is kept only when it is an origin of VAF's own for the request that started the
+    sign-in (``binding.is_own_origin``, the rule the origin guard uses); otherwise the caller
+    falls back to the Web UI's own address.
+    """
+    from vaf.network.binding import is_own_origin
+
+    base = (redirect_base or "").strip().rstrip("/")
+    if not base:
+        return None
+    return base if is_own_origin(base, request.headers, scheme=request.url.scheme) else None

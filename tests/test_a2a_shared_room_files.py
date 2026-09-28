@@ -141,10 +141,12 @@ def test_the_download_lane_lets_a_member_fetch_what_it_put_there():
     """
     from pathlib import Path as _P
     src = (_P(__file__).resolve().parents[1] / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
-    block = src.split('_re_iso.fullmatch(r"[0-9a-f]{8}", _first_seg)', 1)[1][:1400]
+    # The ownership rule is one function now, shared by every read route (/api/file, the two
+    # converters, the image description); behaviour pinned in test_file_read_routes_ownership.
+    block = src.split("def _project_path_allowed(", 1)[1].split("\ndef ", 1)[0]
     assert "_shared_room_roots" in block, (
         "the download lane cannot see a room this account was admitted to")
     assert "is_relative_to" in block, "membership must be checked against the folder"
-    assert block.index("_allowed = _is_admin") < block.index("_shared_room_roots"), (
+    assert block.index("is_admin_identity(") < block.index("_shared_room_roots"), (
         "the ordinary ownership answer has to be tried first")
-    assert "_allowed = False" in block, "the lane must still fail closed on an error"
+    assert "except Exception:\n        return False" in block, "the lane must still fail closed on an error"

@@ -69,3 +69,13 @@ def test_a_file_outside_every_root_is_refused(tmp_path, monkeypatch):
 def test_the_download_route_is_gone():
     from vaf.core.web_server import app
     assert not [r for r in app.routes if getattr(r, "path", "") == "/api/download"]
+
+
+def test_a_stale_download_link_does_not_strand_the_desktop_window():
+    """Links to the removed route survive in old chats. The desktop window pulls localhost
+    links into itself, and it has no back button: a file endpoint's bare-JSON answer (here the
+    404) must go to the system browser, as it did while the route existed."""
+    from vaf.core.desktop_window import _INTERCEPT_JS
+    check = _INTERCEPT_JS.split("function _isFileEndpoint(u) {", 1)[1].split("}", 1)[0]
+    assert "u.pathname === '/api/file'" in check
+    assert "u.pathname === '/api/download'" in check

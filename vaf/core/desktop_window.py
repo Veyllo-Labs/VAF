@@ -457,8 +457,10 @@ _INTERCEPT_JS = """
     // JSON (e.g. {"detail":"Access denied"}), and the desktop window has no back
     // button - the user is stranded. Let these fall through to pywebview, which
     // routes them to the system browser / native download instead.
+    // /api/download no longer exists (it served files inline on the app's origin),
+    // but links to it survive in old chats; its 404 must not strand the window either.
     function _isFileEndpoint(u) {
-        return u.pathname === '/api/file';
+        return u.pathname === '/api/file' || u.pathname === '/api/download';
     }
 
     // Intercept window.open() — redirect localhost URLs into the same window,

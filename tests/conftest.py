@@ -176,6 +176,33 @@ def _isolated_data_keyring(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_imap_server(monkeypatch):
+    """No test dials a real IMAP server.
+
+    The mail tools deliver a queued send right away and open an IMAP session for it, to the
+    account's host or the provider default (a real one, imap.gmail.com). Tests patch the
+    sender and forget the session, and the session is optional by design (the send goes out
+    without it), so nothing failed - the tests only waited. Where the network half works (an
+    address with no route) that is the full connect timeout per address, minutes per test,
+    and the suite looked hung; measured twice in one run (send_mail, reply_mail). Refused
+    here for every test: the code under test treats it as "no session", which is what these
+    tests assume. A test that needs a client patches it itself, which overrides this."""
+    import imaplib
+
+    def _refuse(*args, **kwargs):
+        raise ConnectionRefusedError("tests never dial a real IMAP server (tests/conftest.py)")
+
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", _refuse)
+    try:
+        import imapclient
+    except ImportError:
+        pass
+    else:
+        monkeypatch.setattr(imapclient, "IMAPClient", _refuse)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolated_provider_keys(tmp_path, monkeypatch):
     """A provider-key store per TEST, not per session.
 

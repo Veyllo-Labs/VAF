@@ -160,6 +160,19 @@ def _strip_answer_artifacts(s: str) -> str:
     s = re.sub(r"(?im)^\s*answer\s*$", "", s or "")
     return s.strip()
 
+def _clean_section_html(html: str) -> str:
+    """A section as it may be shown anywhere: the document policy of the shared sanitizer.
+
+    Every section is model output written from web pages, so a page it read can steer it,
+    and the web UI puts it into the app's own document. Cleaned where it enters the section
+    list, which feeds the live paper, the saved report and the Markdown export alike -
+    including sections resumed from a checkpoint file and the fallbacks that carry the
+    planned title.
+    """
+    from vaf.core.html_sanitize import sanitize_html
+    return sanitize_html(html)
+
+
 def _strip_untrusted_links(html: str, allowed: Sequence[str]) -> str:
     """
     Remove/harden links not in allowed sources (prevents example.com hallucinations).
@@ -850,7 +863,9 @@ class ResearchAgentTool(BaseTool):
                     if not isinstance(r, dict):
                         continue
                     url = r.get("href") or r.get("link") or ""
-                    if not url or url in known:
+                    # The web UI renders this as a link's href; only web addresses, never a
+                    # javascript: or data: target a search result could carry.
+                    if not url or url in known or urlparse(url).scheme.lower() not in ("http", "https"):
                         continue
                     known.add(url)
                     _rs_state["sources"].append({
@@ -972,7 +987,7 @@ class ResearchAgentTool(BaseTool):
                     _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: (resumed from cache)", style="dim")
                     try:
                         section_html = section_checkpoint.read_text(encoding="utf-8")
-                        rendered_sections.append(section_html)
+                        rendered_sections.append(_clean_section_html(section_html))
                         tui.set_section(idx, len(specs), spec.title)
                         tui.set_word_progress(_visible_word_count(section_html), min_words_target, min_words_ok)
                         _rs_set_section(idx - 1, "done", words=_visible_word_count(section_html))
@@ -1058,7 +1073,7 @@ class ResearchAgentTool(BaseTool):
                                 f"<h2>{spec.title}</h2>"
                                 f"<p><em>{'Keine ausreichenden Suchergebnisse für diesen Abschnitt gefunden.' if lang == 'de' else 'No sufficient search results found for this section.'}</em></p>"
                             )
-                        rendered_sections.append(placeholder)
+                        rendered_sections.append(_clean_section_html(placeholder))
                         tui.set_word_progress(0, min_words_target, min_words_ok)
                         _rs_set_section(idx - 1, "error", words=0)
                         if _debug_lg:
@@ -1269,7 +1284,7 @@ class ResearchAgentTool(BaseTool):
                         )
                         word_count = _visible_word_count(section_html)
                         tui.set_word_progress(word_count, min_words_target, min_words_ok)
-                    rendered_sections.append(section_html)
+                    rendered_sections.append(_clean_section_html(section_html))
                     _rs_set_section(idx - 1, "done", words=word_count)
 
                     try:
@@ -1292,7 +1307,7 @@ class ResearchAgentTool(BaseTool):
                         f"<h2>{spec.title}</h2>"
                         f"<p><em>{'Fehler beim Generieren dieses Abschnitts.' if lang == 'de' else 'Error generating this section.'}</em></p>"
                     )
-                    rendered_sections.append(placeholder)
+                    rendered_sections.append(_clean_section_html(placeholder))
                     _rs_set_section(idx - 1, "error", words=0)
 
             total_elapsed = time.time() - _loop_start
@@ -2245,9 +2260,14 @@ class ResearchAgentTool(BaseTool):
             return f"<h2>{title}</h2><p><strong>Error:</strong> {type(e).__name__}: {e}</p>"
 
     def _assemble_html(self, topic: str, sections: Sequence[str], sources: Sequence[str], lang: str, quality_warning: str = "") -> str:
+        import html as _html
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        # topic is what the person typed and each source a URL a search result named: both go
+        # into markup, so both are escaped (a quote in a URL used to end the href).
+        topic = _html.escape(topic or "", quote=True)
         # Ordered list: the numbers match the [n] citation markers in the sections.
-        source_items = "\n".join(f'<li><a href="{u}">{u}</a></li>' for u in sources[:50])
+        source_items = "\n".join(
+            f'<li><a href="{_html.escape(u, quote=True)}">{_html.escape(u)}</a></li>' for u in sources[:50])
         sections_html = "\n\n".join(sections)
         # Remove any standalone "Answer" artifacts that slipped through.
         sections_html = _strip_answer_artifacts(sections_html)

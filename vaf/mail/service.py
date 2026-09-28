@@ -429,7 +429,7 @@ class MailService:
 
     def _sanitize_html(self, dirty: str, message_pk: int,
                        allow_remote: bool = False) -> Tuple[str, int]:
-        import nh3
+        from vaf.core.html_sanitize import sanitize_html
         blocked = {"n": 0}
 
         def _attr_filter(element: str, attribute: str, value: str):
@@ -489,7 +489,9 @@ class MailService:
                 return v
             return value
 
-        clean = nh3.clean(
+        # The shared sanitizer with the MAIL policy: mail keeps inline styles and images,
+        # which a document fragment does not, and gates them in the filter above.
+        clean = sanitize_html(
             dirty,
             tags=_ALLOWED_TAGS,
             attributes=_ALLOWED_ATTRS,

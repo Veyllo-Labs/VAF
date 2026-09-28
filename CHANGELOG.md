@@ -371,7 +371,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   which the agent writes from web pages, went into the app unfiltered, and its print ran
   unprotected. Pages in the HTML viewer still run their scripts (charts keep working), but
   walled off from the app; the editor and the prints run no code from the file at all; research
-  text is cleaned before it is shown or printed.
+  text is cleaned where the agent writes it, and again before it is shown or printed; the saved
+  report file no longer carries markup from its title or source links either.
 
 - **Another web page can no longer use VAF as you.** VAF treats a request from your own
   computer as coming from you, so the app works without logging in, and it allowed web pages

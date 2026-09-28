@@ -721,7 +721,9 @@ the kind of error a reviewer is entitled to catch rather than inherit.
 
 ### Two layers, and which one is the trust boundary
 
-1. **The sanitizer** (`MailService._sanitize_html`) is the trust boundary. Tag and
+1. **The sanitizer** (`MailService._sanitize_html`, which hands the mail allowlists and its
+   attribute filter to the shared `sanitize_html` in `vaf/core/html_sanitize.py`, the one
+   nh3 call in the tree) is the trust boundary. Tag and
    attribute allowlists kill every classic remote vector - `srcset`,
    `picture`/`source`, `video poster`, `iframe`, `object`/`embed`, `link rel`,
    `@font-face`, `form action`, `base href`, `meta refresh`, external SVG refs,

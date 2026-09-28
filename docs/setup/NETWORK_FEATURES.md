@@ -364,7 +364,7 @@ CORS uses one static origin regex, `_CORS_ORIGIN_REGEX`, passed to FastAPI's `CO
 - **Host**: `localhost`, `127.0.0.1`, or any RFC 1918 private address (`10.x.x.x`, `172.16.x.x`-`172.31.x.x`, `192.168.x.x`)
 - **Port**: any, or none
 
-The middleware is registered with `allow_credentials=True`, `allow_methods=["*"]` and `allow_headers=["*"]`, so browsers on network devices can make credentialed requests to the API without CORS errors. Allowing every private origin is safe because [Layer 2](#layer-2-ip-validation-middleware) (`IPValidationMiddleware`) already rejects any client IP that is not localhost or RFC 1918.
+The middleware is registered with `allow_credentials=True`, `allow_methods=["*"]` and `allow_headers=["*"]`, so browsers on network devices can make credentialed requests to the API without CORS errors.
 
 Implementation: `_CORS_ORIGIN_REGEX` and the `CORSMiddleware` registration in `vaf/core/web_server.py`
 

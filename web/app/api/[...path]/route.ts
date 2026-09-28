@@ -17,11 +17,20 @@ function buildBackendUrl(path: string[], searchParams: string): string {
 
 function copyForwardHeaders(request: Request): HeadersInit {
   const out: Record<string, string> = {};
-  const toForward = ['cookie', 'content-type', 'authorization', 'accept', 'accept-language'];
+  // origin and sec-fetch-site are what the backend's origin guard judges a browser request by
+  // (ForeignOriginGuard, vaf/auth/middleware.py). Without them every request through this door
+  // reached the backend as a tokenless local client, i.e. as the owner, whichever page sent it.
+  // sec-fetch-mode is left out on purpose: Node's fetch overwrites it with "cors" (measured).
+  const toForward = ['cookie', 'content-type', 'authorization', 'accept', 'accept-language',
+    'origin', 'sec-fetch-site'];
   for (const name of toForward) {
     const v = request.headers.get(name);
     if (v) out[name] = v;
   }
+  // The host the browser dialled, so a DNS name rebound to 127.0.0.1 is refused like it is on
+  // the backend's own ports: this fetch replaces Host with the backend's address.
+  const dialled = request.headers.get('host');
+  if (dialled) out['x-forwarded-host'] = dialled;
   return out;
 }
 

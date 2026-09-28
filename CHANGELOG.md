@@ -363,6 +363,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **Another web page can no longer use VAF as you.** VAF treats a request from your own
+  computer as coming from you, so the app works without logging in, and it allowed web pages
+  from any local or home-network address to read its answers. A web page from such an address,
+  open in a browser on the VAF computer, could therefore read your data and send requests in
+  your name. A page from elsewhere could still send requests, and a page on another local port
+  could open the app's live connection with your login. VAF now checks where the browser says a
+  request comes from, and refuses anything from a page that is not VAF's own. This covers every
+  mode, including the default one without network access, and also the live connection. The app,
+  other devices through VAF's HTTPS address, and the command line work as before. If you run
+  VAF behind your own Nginx, update the forwarding headers from the Nginx guide: a host name
+  must now be passed as `X-Forwarded-Host`, and the guide's old example also let a device on the
+  network pass itself off as the VAF computer.
+
 - **A dangerous command wrapped in another command is refused like the command itself.** A few
   catastrophic commands are refused on your computer even after you confirm them, such as
   deleting the whole disk or piping a download straight into a shell. The check only looked at

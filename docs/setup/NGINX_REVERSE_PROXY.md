@@ -22,7 +22,7 @@ If you want to run VAF in network mode with **HTTPS** (e.g. accessing it from ot
 ## VAF Settings
 
 - **Local Network:** enabled. VAF then binds only to 127.0.0.1 – access **only** via Nginx (https://your-IP).
-- **SSL/TLS in VAF:** **off** (Nginx handles TLS). Backend and frontend run over HTTP.
+- **SSL/TLS in VAF:** always on in network mode (the setting is forced in `vaf/core/config.py`). The backend's main port 8001 then speaks HTTPS, and VAF runs a plain HTTP channel on `127.0.0.1:8005` next to it: that channel is what Nginx forwards `/api` and `/ws` to. The integrated HTTPS proxy keeps running too; with Nginx on 443 it falls back to 8443.
 
 ---
 
@@ -68,27 +68,31 @@ server {
 
     # Backend-API
     location /api/ {
-        proxy_pass http://127.0.0.1:8001;
+        proxy_pass http://127.0.0.1:8005;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     # WebSocket (Backend)
     location /ws {
-        proxy_pass http://127.0.0.1:8001;
+        proxy_pass http://127.0.0.1:8005;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
-        proxy_set_header Host $host;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```
+
+**Why these forwarding headers.** VAF's origin guard (see [NETWORK_FEATURES.md](NETWORK_FEATURES.md#origin-guard-every-mode)) refuses a browser request whose `Host` is a DNS name, because that is what a DNS-rebinding page looks like. Keep `Host` at the upstream address (`$proxy_host`) and pass the name the browser used as `X-Forwarded-Host`, with `X-Forwarded-Proto` `https`: the browser's `Origin` then matches `https://` + `X-Forwarded-Host` and is recognised as VAF's own. `X-Forwarded-For` is set to `$remote_addr`, not `$proxy_add_x_forwarded_for`: VAF reads the FIRST hop of that header as the real client, and appending lets a device on the network write `127.0.0.1` in front of its own address and be taken for the machine itself.
 
 ---
 
@@ -119,6 +123,7 @@ The frontend detects access over port 443 and uses the same origin for the API a
 
 ## Troubleshooting
 
-- **502 Bad Gateway:** VAF (Tray) must be running; frontend on 3000, backend on 8001.
+- **502 Bad Gateway:** VAF (Tray) must be running; frontend on 3000, backend channel on 8005.
+- **403 "Request from another web origin refused":** the forwarding headers above are missing, or `Host` carries a DNS name. See "Why these forwarding headers".
 - **WebSocket closes immediately:** Make sure the `location /ws` block with `Upgrade` and `Connection` is present.
 - **Certificate warning:** For self-signed certificates, choose “Advanced” → “Proceed anyway” once in the browser.

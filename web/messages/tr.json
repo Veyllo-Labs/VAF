@@ -531,6 +531,7 @@
     "ovEvLogin": "Giriş başarısız",
     "ovEv2fa": "2FA başarısız",
     "ovEvWs": "WebSocket reddedildi",
+    "ovEvForeignOrigin": "Başka bir web sitesinden gelen istek reddedildi",
     "ovDescAudit": "Her araç çağrısı SHA-256 hash zincirine kaydedilir. Sonradan yapılan bir değişiklik ya da silme, sonraki tüm halkaları anında kırar (kurcalama belli olur).",
     "ovDescSandbox": "Yapay zekânın ürettiği kod yalnızca sertleştirilmiş bir Docker konteynerinde çalışır. Docker kullanılamıyorsa çalıştırma ana makineye kaymak yerine engellenir.",
     "ovDescFirewall": "Yerel ağın dışından gelen erişimler, geçerli kimlik doğrulaması olmayan istekler ve başarısız giriş denemeleri reddedilir ve burada kaydedilir.",

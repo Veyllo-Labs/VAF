@@ -42,6 +42,7 @@ purpose - so a reader of this document does not have to wonder which rules apply
 | Who connects | a browser, the desktop shell | an agent, possibly not VAF and possibly on another machine |
 | Credential | access token, or the `vaf_token` cookie; a tokenless localhost socket falls back to the local admin so the desktop is not locked out of its own chats | an access token or a single-use join ticket, in the query string. NO fallback: no credential means no connection |
 | Identity storage | `manager.set_connection_user`, the table every ownership check reads | nothing. A room peer is never filed where a browser is looked up |
+| Origin | judged BEFORE the credential by `ForeignOriginGuard`: a handshake whose `Origin` is not VAF's own page (a page on another localhost port gets the cookie too, as the same site) is closed with 4003 before accept, in every mode | the same guard. An agent sends no `Origin` and is not judged; a web page from another origin is refused |
 | On accept | `manager.connect()`: appended to `active_connections`, sent `state_full`, counted by the tray | `websocket.accept()` alone |
 | Carried by the proxy | `WebSocketRoute("/ws")` | `WebSocketRoute("/ws/a2a/{room_id})`, and the relay carries the PATH through against an allowlist |
 | What it speaks | the message types below | the A2A frame, see the room modules under `vaf/core/a2a/` |

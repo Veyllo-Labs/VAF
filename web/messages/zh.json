@@ -531,6 +531,7 @@
     "ovEvLogin": "登录失败",
     "ovEv2fa": "两步验证失败",
     "ovEvWs": "WebSocket 被拒绝",
+    "ovEvForeignOrigin": "已拒绝来自其他网站的请求",
     "ovDescAudit": "每一次工具调用都会写进一条 SHA-256 哈希链。事后的任何改动或删除，都会立刻打断后面所有环节（篡改可被发现）。",
     "ovDescSandbox": "AI 生成的代码只在加固过的 Docker 容器里运行。Docker 不可用时，执行会被阻止，而不是退回宿主机。",
     "ovDescFirewall": "来自本地网络之外的访问、没有有效身份认证的请求，以及失败的登录尝试，都会被拒绝并记录在这里。",

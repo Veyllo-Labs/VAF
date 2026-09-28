@@ -11,11 +11,26 @@ VAF (Veyllo Agent Framework) includes robust networking capabilities designed to
 | `/sounds/*` | `http://127.0.0.1:8005` | Notification sound files (GET/HEAD) |
 | Everything else | `http://127.0.0.1:3000` | Next.js frontend |
 
-The proxy uses **shared httpx clients with connection pooling** (max 50 connections, 20 keep-alive) for both frontend and backend targets, avoiding the overhead of opening a new TCP connection for every resource request. The desktop app window loads the frontend directly over plain HTTP at `http://127.0.0.1:3000` (it must not use the proxy URL, whose self-signed cert QtWebEngine rejects). The proxy URL (`https://<LAN-IP>:8443`, or `:443` when bindable) is for LAN/remote devices and works without an external proxy. Optional: [NGINX_REVERSE_PROXY.md](NGINX_REVERSE_PROXY.md) and `docs/nginx-vaf-https.conf.example`.
+The proxy uses **shared httpx clients with connection pooling** (max 50 connections, 20 keep-alive) for both frontend and backend targets, avoiding the overhead of opening a new TCP connection for every resource request. The desktop app window loads the frontend directly over plain HTTP at `http://127.0.0.1:3000` (it must not use the proxy URL, whose self-signed cert QtWebEngine rejects). The proxy URL (`https://<LAN-IP>:8443`, or `:443` when bindable) is for LAN/remote devices and works without an external proxy. Optional: [NGINX_REVERSE_PROXY.md](NGINX_REVERSE_PROXY.md) and `docs/setup/nginx-vaf-https.conf.example`.
 
 ## Security Model
 
-Security is the primary design constraint for VAF's network features. The system employs a **Defense in Depth** strategy with five layers:
+Security is the primary design constraint for VAF's network features. The system employs a **Defense in Depth** strategy with five network layers, plus an origin guard that runs in every mode, including single-user:
+
+### Origin Guard (every mode)
+
+A tokenless request from this machine is the owner (the desktop window, internal IPC), and the `vaf_token` cookie is sent to every port of `localhost`, because `SameSite=Lax` keys on the site and every localhost port is one site. Neither trust can tell VAF's own Web UI from another web page open in the same browser. Only the browser's own marks can, so `ForeignOriginGuard` reads them before any identity is looked at and refuses what they name as foreign: HTTP with 403, a WebSocket handshake with close code 4003 before accept.
+
+- **Not a web page, not judged.** A request with neither `Origin` nor `Sec-Fetch-Site` (CLI, sub-agent IPC, the tray, a script, `curl`) passes unchanged.
+- **Host.** The `Host` the browser dialled must be `localhost` or an IP address. DNS rebinding needs a name the attacker controls, so a name is refused. `X-Forwarded-Host` is held to the same rule unless `X-Forwarded-Proto` is `https` (a TLS door cannot be rebound: the certificate would not match). The real `Host` is always checked, so forwarding headers a page adds itself change nothing.
+- **Origin.** When present it must be the request's own origin, the origin a TLS proxy was dialled under (`https://` + `X-Forwarded-Host`: the integrated proxy, nginx), or the Web UI on this machine: plain `http` on `localhost`, `127.0.0.1` or `[::1]` at the port the frontend really runs on (`frontend_port()` in `vaf/network/binding.py`, the port file the frontend writes, else `local_network_port_frontend`). `null` is never own.
+- **No Origin.** `Sec-Fetch-Site` `same-origin` or `none` (typed, bookmarked) passes, and so does a GET top-level navigation (`Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`), a link the person followed, which is how OAuth callbacks arrive. A cross-site image, script, frame or form from someone else's page is refused.
+- **Every door carries the marks.** The HTTPS proxy forwards all client headers on HTTP and, on its WebSocket relay, the `Origin`, the dialled host (`X-Forwarded-Host`), `X-Forwarded-Proto: https` and `Sec-Fetch-Site`. The Next.js `/api` route forwards `origin`, `sec-fetch-site` and the browser's `host` as `x-forwarded-host` (it leaves `sec-fetch-mode` out: Node's fetch overwrites it with `cors`).
+- **Recorded** as `foreign_origin_blocked` in the security event log (`detail`: the reason `origin`, `site` or `host`, and the origin or host).
+
+Named boundaries: a browser that sends no fetch metadata (Safari before 16.4) is judged on `Origin` and `Host` alone, so its plain cross-site GET passes. GET navigations from other pages pass, as they do for `SameSite=Lax` cookies, so a GET must not change state (an OAuth callback is protected by its `state`). The API serves no other web origin, even with a token. Another operating-system user on the same machine can reach the backend without a browser; that is the existing boundary of the tokenless localhost trust and not something an origin check can see.
+
+Implementation: `ForeignOriginGuard` in `vaf/auth/middleware.py`, the decision in `foreign_request_reason` (`vaf/network/binding.py`), registered unconditionally in `vaf/core/web_server.py`. Pinned by `tests/test_foreign_origin_guard.py`.
 
 ### Layer 1: OS Firewall Automation
 
@@ -51,7 +66,7 @@ Implementation: `vaf/auth/middleware.py` -> `IPValidationMiddleware`
 Network clients must authenticate via JWT tokens. The `AuthMiddleware` enforces this:
 
 - **Token First, IP Second**: A presented access token is validated **before** any peer-IP branching. If a request carries a valid JWT (`Authorization: Bearer <token>` header or `vaf_token` cookie), the authenticated user's identity and scope are applied regardless of the source IP. This matters when a LAN user is proxied over loopback (the request arrives from `127.0.0.1` but belongs to a remote user): they get **their own** scope, not the local admin's.
-- **Localhost Bypass (tokenless only)**: A **tokenless** request from `127.0.0.1` is allowed without authentication (internal IPC and single-user desktop mode). This bypass applies only when no token is presented. A present-but-invalid token rejects a network client with HTTP 401, while a localhost client with an invalid token falls through to the tokenless localhost path.
+- **Localhost Bypass (tokenless only)**: A **tokenless** request from `127.0.0.1` is allowed without authentication (internal IPC and single-user desktop mode). A web page that is not VAF's own never reaches this bypass: the [Origin Guard](#origin-guard-every-mode) refuses it first. This bypass applies only when no token is presented. A present-but-invalid token rejects a network client with HTTP 401, while a localhost client with an invalid token falls through to the tokenless localhost path.
 - **Network Clients**: Must present a valid JWT via `Authorization: Bearer <token>` header or `vaf_token` cookie.
 - **Auth-Exempt Paths**: Login, bootstrap, and static asset endpoints are accessible without a token.
 - **2FA Enforcement**: If `local_network_require_2fa` is enabled, tokens from users who haven't completed 2FA setup are rejected with HTTP 403.
@@ -139,17 +154,19 @@ Implementation: `_SecurityHeadersMiddleware` in `vaf/core/web_server.py`
 
 ### Middleware Execution Order
 
-Requests pass through middleware from outermost to innermost:
+Requests pass through middleware from outermost to innermost. Starlette puts the middleware added LAST outermost, so this is the reverse of the `add_middleware` order in `vaf/core/web_server.py` (measured on `app.user_middleware`):
 
 ```
-Request -> RateLimitMiddleware -> IPValidationMiddleware -> AuthMiddleware -> SecurityHeaders -> Route Handler
+Request -> SecurityHeaders -> ForeignOriginGuard -> AuthMiddleware -> IPValidationMiddleware -> RateLimitMiddleware -> OwnOriginCORSMiddleware -> Route Handler
 ```
+
+`AuthMiddleware`, `IPValidationMiddleware` and `RateLimitMiddleware` are registered only in network mode; the guard and CORS always. The guard sits outside CORS, so a preflight from a foreign page is refused before CORS could answer it.
 
 ### Security Event Log
 
 Rejections from the layers above are recorded in an always-on security event log (independent of `debug_logs_enabled`; the writer never raises and never slows the request path):
 
-- **Recorded kinds** (`vaf/core/security_events.py`): `ip_blocked` (Layer 2 403), `unauthenticated_blocked` and `token_rejected` (Layer 3 401s), `login_failed` and `twofa_failed` (failed login/2FA attempts), and `ws_rejected` (rejected WebSocket handshakes). The messenger pairing kinds and the rest of the registry are listed in [SECURITY_DASHBOARD.md](../security/SECURITY_DASHBOARD.md); a messenger sender the agent refused to answer is channel traffic, recorded in that channel's inbound log, not here.
+- **Recorded kinds** (`vaf/core/security_events.py`): `ip_blocked` (Layer 2 403), `unauthenticated_blocked` and `token_rejected` (Layer 3 401s), `login_failed` and `twofa_failed` (failed login/2FA attempts), `ws_rejected` (rejected WebSocket handshakes), and `foreign_origin_blocked` (the origin guard, every mode). The messenger pairing kinds and the rest of the registry are listed in [SECURITY_DASHBOARD.md](../security/SECURITY_DASHBOARD.md); a messenger sender the agent refused to answer is channel traffic, recorded in that channel's inbound log, not here.
 - **Sinks**: each event is appended to `security_events_<date>.jsonl` (structured) and mirrored human-readably to `security_<date>.log` (the "security" domain in the Logs file rail).
 - **Throttle**: a per-source throttle (kind + ip + username + channel, 5s) prevents floods without letting distinct sources swallow each other's events.
 - **Never logged**: passwords, 2FA codes, or tokens - only the event kind, source, and a short detail.
@@ -327,7 +344,7 @@ When TLS is active, the following changes take effect across the stack:
 | Backend API | `http://host:8001` | LAN: via proxy `https://<LAN-IP>:8443`; desktop: internal plain `http://127.0.0.1:8005` |
 | WebSocket | `ws://host:8001/ws` | LAN: same-origin `wss://<LAN-IP>:8443/ws` (via proxy); desktop: plain `ws://127.0.0.1:8005/ws` |
 | Auth Cookies | `httponly`, `samesite=lax` | `httponly`, `samesite=lax`, **`secure`** |
-| CORS Origins | `http://` + `https://` on localhost and RFC 1918 hosts (one static regex, see [CORS Configuration](#cors-configuration)) | Unchanged |
+| CORS Origins | the Web UI on this machine only (see [CORS Configuration](#cors-configuration)) | Unchanged |
 | Security Headers | Standard set | Standard set + **HSTS** (`max-age=31536000`) |
 | Frontend Proxy | `http://127.0.0.1:8001` | `http://127.0.0.1:8005` (internal plain channel) |
 
@@ -358,15 +375,13 @@ Implementation: `vaf/network/ssl_utils.py`
 
 ## CORS Configuration
 
-CORS uses one static origin regex, `_CORS_ORIGIN_REGEX`, passed to FastAPI's `CORSMiddleware` as `allow_origin_regex`. It is not rebuilt per mode: the same rule applies in localhost, network and TLS mode. An origin is allowed when it matches:
+CORS admits exactly one origin: the Web UI on this machine, `http://` on `localhost`, `127.0.0.1` or `[::1]` at the port the frontend really runs on. It is the only page that calls the backend cross-origin (its WebSocket, and `/api/version` while the Next.js server rebuilds after an update). Every other browser path is same-origin and needs no CORS: the desktop and a local browser go through the Next.js `/api` route, LAN browsers through the integrated HTTPS proxy.
 
-- **Scheme**: `http://` or `https://`
-- **Host**: `localhost`, `127.0.0.1`, or any RFC 1918 private address (`10.x.x.x`, `172.16.x.x`-`172.31.x.x`, `192.168.x.x`)
-- **Port**: any, or none
+`OwnOriginCORSMiddleware` (a `CORSMiddleware` subclass in `vaf/auth/middleware.py`) answers `is_allowed_origin` with `is_own_frontend_origin` from `vaf/network/binding.py`, the same function the [Origin Guard](#origin-guard-every-mode) uses. It keeps `allow_credentials=True`, `allow_methods=["*"]` and `allow_headers=["*"]` for that one origin.
 
-The middleware is registered with `allow_credentials=True`, `allow_methods=["*"]` and `allow_headers=["*"]`, so browsers on network devices can make credentialed requests to the API without CORS errors.
+This replaced one static regex that admitted every `localhost` and RFC 1918 origin with credentials, in every mode. A page from any of those addresses, open in a browser on the VAF machine, could read the owner's answers. LAN browsers never needed it: they reach the API same-origin through the proxy.
 
-Implementation: `_CORS_ORIGIN_REGEX` and the `CORSMiddleware` registration in `vaf/core/web_server.py`
+Implementation: `OwnOriginCORSMiddleware` in `vaf/auth/middleware.py`, registered in `vaf/core/web_server.py`
 
 ---
 
@@ -421,14 +436,14 @@ Auto-generated TLS certificates carry the machine's hostname and FQDN as DNS SAN
 ```
 vaf/
   auth/
-    middleware.py        # AuthMiddleware + IPValidationMiddleware
+    middleware.py        # ForeignOriginGuard, OwnOriginCORSMiddleware, AuthMiddleware, IPValidationMiddleware
     rate_limit.py        # RateLimitMiddleware (brute-force protection)
     crypto.py            # Argon2, JWT, AES-256-GCM for TOTP
     models.py            # SQLAlchemy models (LocalUser, UserSession)
     database.py          # Auth DB session (shared with memory DB)
     user_config.py       # Per-user config directories
   network/
-    binding.py           # IP detection, RFC 1918 validation
+    binding.py           # IP detection, RFC 1918 validation, real client, foreign-origin decision, frontend port
     firewall.py          # OS firewall automation (Windows/macOS/Linux)
     https_proxy.py       # Integrated HTTPS reverse proxy (/api, /ws -> 8005; rest -> 3000)
     connection_tracker.py # Real-time connection monitoring
@@ -457,7 +472,7 @@ Integrated HTTPS proxy (0.0.0.0:8443 or 443)  [connection-pooled httpx clients]
     |
     v (for /api, /sounds, and /ws)
 Uvicorn + FastAPI (127.0.0.1:8005)
-    +-- SecurityHeadersMiddleware, RateLimitMiddleware, IPValidationMiddleware, AuthMiddleware
+    +-- SecurityHeaders, ForeignOriginGuard, AuthMiddleware, IPValidationMiddleware, RateLimitMiddleware, OwnOriginCORSMiddleware
     v
 Route Handler (reads request.state.user for identity & scoping)
 ```

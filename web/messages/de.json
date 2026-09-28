@@ -531,6 +531,7 @@
     "ovEvLogin": "Login fehlgeschlagen",
     "ovEv2fa": "2FA fehlgeschlagen",
     "ovEvWs": "WebSocket abgewiesen",
+    "ovEvForeignOrigin": "Anfrage einer fremden Webseite abgewiesen",
     "ovDescAudit": "Jeder Tool-Aufruf wird SHA-256-verkettet protokolliert. Eine nachträgliche Änderung oder Löschung bricht sofort alle folgenden Glieder (manipulations-evident).",
     "ovDescSandbox": "KI-generierter Code läuft ausschließlich in einem gehärteten Docker-Container. Ist Docker nicht verfügbar, wird die Ausführung blockiert statt auf den Host auszuweichen.",
     "ovDescFirewall": "Zugriffe von außerhalb des lokalen Netzes, Anfragen ohne gültige Anmeldung und gescheiterte Login-Versuche werden abgewiesen und hier protokolliert.",

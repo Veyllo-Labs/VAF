@@ -114,6 +114,158 @@ def effective_client_ip(peer_ip: str | None, forwarded_for: str | None) -> str:
     return first_hop or peer
 
 
+# ---------------------------------------------------------------------------
+# Which requests come from a web page that is not VAF's own
+# ---------------------------------------------------------------------------
+#
+# A tokenless request from this machine is the owner (the desktop, internal IPC), and the
+# vaf_token cookie is ambient: SameSite=Lax keys on the SITE, and every port of localhost is
+# one site. Both trusts were therefore available to ANY web page open in a browser on this
+# machine: the CORS rule let every localhost and RFC 1918 origin read the answers, and a page
+# from anywhere could send simple requests, rebind a DNS name to 127.0.0.1, or open the
+# WebSocket with the cookie attached. The browser says where a request comes from (Origin,
+# Sec-Fetch-Site, the Host it dialled); these functions read that and nothing else, so a
+# client that sends none of it (CLI, sub-agent IPC, the tray, a script) is not judged at all.
+
+_LOOPBACK_NAMES = frozenset({"localhost", "127.0.0.1", "::1"})
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _host_and_port(value: str | None) -> Optional[Tuple[str, Optional[int]]]:
+    """``host``, ``host:port``, ``[v6]`` or ``[v6]:port`` as (lowercase host, port or None).
+
+    None when the value is empty or does not parse: the callers treat that as foreign.
+    """
+    from urllib.parse import urlsplit
+
+    raw = (value or "").strip()
+    if not raw or any(c in raw for c in "/?#@ "):
+        return None
+    try:
+        parts = urlsplit("//" + raw)
+        port = parts.port
+    except ValueError:
+        return None
+    host = (parts.hostname or "").lower()
+    return (host, port) if host else None
+
+
+def _origin_tuple(origin: str | None) -> Optional[Tuple[str, str, int]]:
+    """An Origin header as (scheme, host, port), the default port filled in. None when it is
+    ``null``, not http(s), or carries anything an origin cannot carry."""
+    from urllib.parse import urlsplit
+
+    raw = (origin or "").strip()
+    if not raw or raw == "null":
+        return None
+    try:
+        parts = urlsplit(raw)
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    if scheme not in _DEFAULT_PORTS or parts.path not in ("", "/") or parts.query or parts.fragment:
+        return None
+    if parts.username is not None or not parts.hostname:
+        return None
+    return scheme, parts.hostname.lower(), port or _DEFAULT_PORTS[scheme]
+
+
+def _cannot_be_rebound(hostport: str | None) -> bool:
+    """True when a browser that dialled this Host cannot have been pointed at us by DNS.
+
+    DNS rebinding needs a NAME the attacker controls; ``localhost`` and a literal IP address
+    never resolve through the attacker's DNS. A reverse proxy that passes the browser's own IP
+    as Host (the documented nginx setup) therefore stays valid, and a DNS name does not.
+    """
+    parsed = _host_and_port(hostport)
+    if parsed is None:
+        return False
+    host = parsed[0]
+    if host == "localhost":
+        return True
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def is_own_frontend_origin(origin: str | None) -> bool:
+    """True for the Web UI served on this machine: plain http on a loopback name, on the port
+    the frontend really runs on (:func:`frontend_port`). This is the one origin that reaches the
+    backend CROSS-origin (the WebSocket and ``/api/version`` while the Next server rebuilds),
+    so it is also the whole CORS allow list."""
+    parts = _origin_tuple(origin)
+    if parts is None:
+        return False
+    scheme, host, port = parts
+    return scheme == "http" and host in _LOOPBACK_NAMES and port == frontend_port()
+
+
+def foreign_request_reason(headers, *, scheme: str, method: str) -> Optional[str]:
+    """Why a browser request comes from a page that is not VAF's own, or None when it may pass.
+
+    ``headers`` is a case-insensitive mapping (Starlette ``Headers``); ``scheme`` is the ASGI
+    scope's (``ws``/``wss`` count as ``http``/``https``). The reasons are ``"host"``,
+    ``"origin"`` and ``"site"``.
+
+    1. No ``Origin`` and no ``Sec-Fetch-Site``: not a web page, not judged.
+    2. The ``Host`` the browser dialled must be ``localhost`` or an IP address (DNS rebinding).
+       ``X-Forwarded-Host`` is held to the same rule unless ``X-Forwarded-Proto`` is https: the
+       Next.js /api door forwards the browser's Host that way, and a TLS door cannot be rebound
+       (the certificate does not match the attacker's name). The real Host is always checked, so
+       forwarding headers a same-origin page adds itself buy it nothing.
+    3. With an ``Origin``: it must be this request's own origin, the origin a TLS proxy was
+       dialled under (``https://`` + X-Forwarded-Host), or the Web UI (:func:`is_own_frontend_origin`).
+       ``null`` is never own.
+    4. Without one: ``Sec-Fetch-Site`` same-origin or none (typed, bookmarked) passes, and so does
+       a top-level GET navigation, a link the person followed (how OAuth callbacks arrive; an
+       OAuth callback is protected by its ``state``). A cross-site image, script, frame or form
+       from someone else's page does not.
+
+    Named boundaries: a browser that sends no fetch metadata (Safari before 16.4) is judged on
+    Origin and Host alone, so its plain cross-site GET is not refused; GET navigations from other
+    pages pass, as they do for SameSite=Lax cookies, so a GET must not change state.
+    """
+    origin = headers.get("origin")
+    site = (headers.get("sec-fetch-site") or "").strip().lower()
+    if origin is None and not site:
+        return None
+
+    host = headers.get("host")
+    if not _cannot_be_rebound(host):
+        return "host"
+    fwd_proto = (headers.get("x-forwarded-proto") or "").strip().lower()
+    fwd_host = headers.get("x-forwarded-host")
+    if fwd_host is not None and fwd_proto != "https" and not _cannot_be_rebound(fwd_host):
+        return "host"
+
+    if origin is not None:
+        own = _origin_tuple(origin)
+        if own is None:
+            return "origin"
+        scope_scheme = {"ws": "http", "wss": "https"}.get(scheme, scheme)
+        this_scheme = fwd_proto if fwd_proto in _DEFAULT_PORTS else scope_scheme
+        dialled = _host_and_port(host)
+        if dialled and this_scheme in _DEFAULT_PORTS:
+            if own == (this_scheme, dialled[0], dialled[1] or _DEFAULT_PORTS[this_scheme]):
+                return None
+        if fwd_proto == "https":
+            proxied = _host_and_port(fwd_host)
+            if proxied and own == ("https", proxied[0], proxied[1] or 443):
+                return None
+        return None if is_own_frontend_origin(origin) else "origin"
+
+    if site in ("same-origin", "none"):
+        return None
+    if ((method or "").upper() in ("GET", "HEAD")
+            and (headers.get("sec-fetch-mode") or "").strip().lower() == "navigate"
+            and (headers.get("sec-fetch-dest") or "").strip().lower() == "document"):
+        return None
+    return "site"
+
+
 def assert_safe_remote_host(host: str, *, allow_private: bool = False) -> None:
     """SSRF guard for user-supplied OUTBOUND targets (e.g. an IMAP/SMTP server a user types
     into the email wizard). Resolves the host and raises ValueError if ANY resolved address is

@@ -63,6 +63,10 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "login_failed": "Wrong username or password on /api/auth/login",
     "twofa_failed": "Wrong or expired 2FA code or temp token",
     "ws_rejected": "Rejected network WebSocket handshake (IP/token)",
+    "foreign_origin_blocked": "A request or WebSocket that a browser marked as coming from "
+                              "another web page (Origin, Sec-Fetch-Site, or a DNS name as "
+                              "Host) was refused (403 / 4003), in every mode. `detail` the "
+                              "reason (origin, site, host) and the origin or host",
     # messenger pairing: who may talk to the agent (the drops themselves are channel traffic)
     "channel_paired": "A sender was given access on a messenger channel: an owner number, a "
                       "Telegram whitelist or relay entry, the Discord admin, or a LID bound to "

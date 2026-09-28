@@ -249,6 +249,22 @@ async def _forward_websocket(websocket: WebSocket) -> None:
     # LAN device instead of 127.0.0.1 (this proxy). The backend reads X-Forwarded-For for the WS too.
     if websocket.client and websocket.client.host:
         extra_headers.append(("X-Forwarded-For", websocket.client.host))
+    # What the backend's origin guard judges a browser handshake by (ForeignOriginGuard in
+    # vaf/auth/middleware.py): the page's Origin, the host it dialled and its fetch metadata.
+    # This relay used to carry only the cookie, so a relayed socket looked like a script and
+    # passed unjudged - and a page on another port of the same host is same-site, so the cookie
+    # rode along and opened the owner's socket through this door. The HTTP half needs nothing:
+    # it forwards every client header and authors X-Forwarded-Host/-Proto itself.
+    from starlette.datastructures import Headers
+    _client_headers = Headers(scope=websocket.scope)
+    _origin = _client_headers.get("origin")
+    _dialled = _client_headers.get("host")
+    if _dialled:
+        extra_headers.append(("X-Forwarded-Host", _dialled))
+    extra_headers.append(("X-Forwarded-Proto", "https"))
+    _site = _client_headers.get("sec-fetch-site")
+    if _site:
+        extra_headers.append(("Sec-Fetch-Site", _site))
     # What the client is told when this relay ends. A relayed socket used to end with a
     # bare `close()`, so every application close code the backend sent (a refused
     # credential, a room that does not exist, a peer that is already writing) reached
@@ -271,7 +287,7 @@ async def _forward_websocket(websocket: WebSocket) -> None:
         # end does not answer protocol pings after exactly 40 seconds of quiet. The
         # WebUI's own socket answers, a relayed VNC stream does not.
         async with websockets.connect(backend_uri, additional_headers=extra_headers or None,
-                                      subprotocols=_sub, max_size=None,
+                                      origin=_origin, subprotocols=_sub, max_size=None,
                                       ping_interval=None) as backend_ws:
             async def from_backend():
                 try:

@@ -531,6 +531,7 @@
     "ovEvLogin": "Login failed",
     "ovEv2fa": "2FA failed",
     "ovEvWs": "WebSocket rejected",
+    "ovEvForeignOrigin": "Request from another website refused",
     "ovDescAudit": "Every tool call is logged into a SHA-256 hash chain. A later modification or deletion instantly breaks all following links (tamper-evident).",
     "ovDescSandbox": "AI-generated code runs exclusively in a hardened Docker container. If Docker is unavailable, execution is blocked instead of falling back to the host.",
     "ovDescFirewall": "Requests from outside the local network, requests without valid authentication, and failed login attempts are rejected and recorded here.",

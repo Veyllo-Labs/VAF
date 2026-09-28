@@ -2,11 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
-Authentication & IP validation middleware for local network mode.
+Authentication, IP validation and origin middleware for the web server.
 
-Middleware stack (outermost -> innermost):
-  RateLimitMiddleware  ->  IPValidationMiddleware  ->  AuthMiddleware  ->  route handler
+Middleware stack as ``vaf/core/web_server.py`` registers it (outermost -> innermost; Starlette
+puts the LAST ``add_middleware`` call outermost):
+  SecurityHeaders -> ForeignOriginGuard -> AuthMiddleware -> IPValidationMiddleware
+    -> RateLimitMiddleware -> OwnOriginCORSMiddleware -> route handler
+The three in the middle exist only in network mode; the guard and CORS always.
 
+ForeignOriginGuard refuses what a browser marks as coming from another web page (HTTP and
+WebSocket alike), before any identity is looked at.
 IPValidationMiddleware rejects any client IP that is not RFC 1918 or localhost.
 AuthMiddleware enforces JWT authentication for non-localhost clients.
 Public paths (login, bootstrap, needs-setup, static assets) are exempt from auth.
@@ -15,9 +20,12 @@ Public paths (login, bootstrap, needs-setup, static assets) are exempt from auth
 import logging
 from typing import Callable
 
+from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.websockets import WebSocketClose
 
 from vaf.core.config import Config
 
@@ -72,6 +80,79 @@ def _is_auth_exempt(path: str) -> bool:
     if path in AUTH_EXEMPT_PATHS:
         return True
     return path.startswith(AUTH_EXEMPT_PREFIXES)
+
+
+# ---------------------------------------------------------------------------
+# Origin guard (always on, every mode)
+# ---------------------------------------------------------------------------
+
+class ForeignOriginGuard:
+    """Refuse a request a browser marks as coming from a page that is not VAF's own.
+
+    Why this is a door and not a route check: the trust it protects is handed out in many
+    places. A tokenless request from this machine is the owner (the local-admin fallback lives
+    in route helpers all over ``vaf/api``, and in single-user mode AuthMiddleware is not even
+    registered), and the ``vaf_token`` cookie rides along to every localhost port. Neither can
+    tell the desktop from another page open in the same browser; only the browser's own marks
+    can (``Origin``, ``Sec-Fetch-Site``, the ``Host`` it dialled), and those are read ONCE here,
+    by ``vaf.network.binding.foreign_request_reason``.
+
+    Pure ASGI rather than BaseHTTPMiddleware because the WebSocket handshake is the same door:
+    ``/ws`` accepts the cookie, so a page on another localhost port could open it with the
+    owner's session. A refused socket is closed before accept (4003), which the browser sees as
+    a failed handshake. A client that sends no browser marks (CLI, sub-agent IPC, the tray, a
+    script) is not judged and passes unchanged.
+
+    Named boundary: the guard is plain ASGI and depends on nothing in the web server, so a
+    second front door (an embedder serving an agent over HTTP) could mount it as it is. There is
+    one door today, so it is not on the framework surface.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        from vaf.network.binding import effective_client_ip, foreign_request_reason
+
+        headers = Headers(scope=scope)
+        reason = foreign_request_reason(headers, scheme=scope.get("scheme") or "http",
+                                        method=scope.get("method") or "GET")
+        if reason is None:
+            await self.app(scope, receive, send)
+            return
+
+        client = scope.get("client")
+        ip = effective_client_ip(client[0] if client else None, headers.get("x-forwarded-for"))
+        path = scope.get("path") or ""
+        shown = headers.get("origin") or headers.get("x-forwarded-host") or headers.get("host") or ""
+        logger.warning("Refused %s from another origin (%s: %s) %s", scope["type"], reason, shown, path)
+        _emit_security_event("foreign_origin_blocked", ip=ip, path=path, detail=f"{reason}: {shown[:120]}")
+        if scope["type"] == "websocket":
+            await WebSocketClose(code=4003, reason="Request from another web origin refused")(
+                scope, receive, send)
+            return
+        await JSONResponse(status_code=403,
+                           content={"detail": "Request from another web origin refused"})(
+            scope, receive, send)
+
+
+class OwnOriginCORSMiddleware(CORSMiddleware):
+    """CORS for the one origin that calls the backend cross-origin: the Web UI on this machine.
+
+    Everything else reaches the backend same-origin (the Next.js /api door, the HTTPS proxy)
+    and needs no CORS at all. This used to be a regex admitting every localhost and RFC 1918
+    origin WITH credentials, which let any page from those addresses read the owner's answers.
+    """
+
+    def __init__(self, app) -> None:
+        super().__init__(app, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+    def is_allowed_origin(self, origin: str) -> bool:
+        from vaf.network.binding import is_own_frontend_origin
+        return is_own_frontend_origin(origin)
 
 
 # ---------------------------------------------------------------------------

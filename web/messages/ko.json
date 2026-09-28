@@ -531,6 +531,7 @@
     "ovEvLogin": "로그인 실패",
     "ovEv2fa": "2단계 인증 실패",
     "ovEvWs": "WebSocket 거부",
+    "ovEvForeignOrigin": "다른 웹사이트의 요청 거부",
     "ovDescAudit": "도구 호출은 모두 SHA-256 해시 체인에 기록돼요. 나중에 바꾸거나 지우면 그 뒤의 고리가 바로 어긋나서, 변조를 탐지할 수 있어요.",
     "ovDescSandbox": "AI가 만든 코드는 보안을 강화한 Docker 컨테이너 안에서만 실행돼요. Docker를 쓸 수 없으면 호스트에서 돌리는 대신 실행 자체를 막아요.",
     "ovDescFirewall": "로컬 네트워크 밖에서 온 접근, 올바른 인증이 없는 요청, 실패한 로그인 시도는 거부되고 여기에 기록돼요.",

@@ -5,7 +5,6 @@ from vaf.startup_logger import log
 log("WebServer", "Module load started")
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi import HTTPException, Query
 from starlette.requests import Request
@@ -87,19 +86,19 @@ async def json_exception_handler(request, exc):
     return JSONResponse(status_code=500, content={"ok": False, "error": str(exc), "detail": str(exc)})
 
 
-# CORS: one static regex allows localhost AND every RFC 1918 private origin, with credentials,
-# so a browser on a LAN device can call the API. This is no origin check: IPValidationMiddleware
-# (Layer 2) looks at the socket peer, not at the Origin header, and runs only with
-# local_network_enabled (docs/setup/NETWORK_FEATURES.md, CORS Configuration).
-_CORS_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+|192\.168\.\d+\.\d+)(:\d+)?$"
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=_CORS_ORIGIN_REGEX,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# CORS admits exactly one origin: the Web UI on this machine, the only page that calls the
+# backend cross-origin (its WebSocket, and /api/version while the Next server rebuilds). LAN
+# browsers come through the HTTPS proxy same-origin and need no CORS. Registered first, so it
+# is the innermost layer: ForeignOriginGuard, registered further down, refuses a foreign
+# preflight before this ever answers it (docs/setup/NETWORK_FEATURES.md, CORS Configuration).
+from vaf.auth.middleware import (  # noqa: E402
+    AuthMiddleware,
+    ForeignOriginGuard,
+    IPValidationMiddleware,
+    OwnOriginCORSMiddleware,
 )
+
+app.add_middleware(OwnOriginCORSMiddleware)
 
 # The sidebar list's limit and its ONE projection both live with the store that
 # answers them (vaf/core/session.py), so a surface that is not the web server -
@@ -1287,14 +1286,13 @@ except Exception as e:
 # Add authentication middleware if local network is enabled
 if Config.get("local_network_enabled", False):
     try:
-        from vaf.auth.middleware import AuthMiddleware, IPValidationMiddleware
         from vaf.auth.rate_limit import RateLimitMiddleware
 
-        # Add rate limiting first (outermost)
+        # Starlette puts the LAST add_middleware call outermost, so the order below runs
+        # Auth -> IPValidation -> RateLimit -> CORS -> route (vaf/auth/middleware.py
+        # docstring has the whole stack).
         app.add_middleware(RateLimitMiddleware)
-        # Add IP validation
         app.add_middleware(IPValidationMiddleware)
-        # Add auth middleware (innermost - closest to route handlers)
         app.add_middleware(AuthMiddleware)
 
         log("WebServer", "Authentication middleware enabled for local network mode")
@@ -1347,6 +1345,10 @@ class _SecurityHeadersMiddleware(_BaseHM):
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
 
+# Always on, in every mode: a page that is not VAF's own gets neither the tokenless owner
+# trust nor the cookie's. Outside Auth and CORS so it decides before either, inside the
+# security headers so its 403 carries them (vaf/auth/middleware.py, ForeignOriginGuard).
+app.add_middleware(ForeignOriginGuard)
 app.add_middleware(_SecurityHeadersMiddleware)
 
 log("WebServer", "Module initialization complete")

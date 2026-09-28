@@ -254,11 +254,51 @@ def user_jail(user_scope_id, user_role=None, *, mode="write"):
             reset_librarian_scope(token)
 
 
+def jail_allows(path, *, user_scope_id, user_role=None, mode="read") -> bool:
+    """Whether this account's file jail lets it reach ``path``: the question `user_jail`
+    enforces inside a tool run, asked from outside one.
+
+    A request handler that serves or stores a file on an account's behalf needs exactly the
+    rule that account's own tools obey, and until this existed it could not ask it - the rule
+    lived in private functions, so the web file routes carried a hand copy that knew the
+    account folder but not the skills, and the save routes carried none. Tool and route now
+    ask the same function.
+
+    Same arguments, same meaning as `user_jail`: an empty scope is a direct consumer with no
+    account (no jail, True), an admin identity is not jailed (True), anyone else reaches
+    their own project tree, the shared folder of every room they were admitted to and, in
+    "read" mode, the skills visible to them. The role must come from the caller's
+    authenticated identity, never from a request body. A request lane must refuse an
+    authenticated account that carries no scope BEFORE asking, because an empty scope here
+    means "no account", not "an account that could not be identified".
+
+    Only the per-account half of `is_safe_path`: the static screens (system folders, VAF's
+    own data directory, key file names) are a separate question. It neither reads nor
+    changes the jail of the run it is called from. ``path`` is resolved, so a link inside an
+    allowed folder is judged by where it points. Fail-closed: any error is False."""
+    try:
+        if not str(user_scope_id or ""):
+            return True
+        info = compute_user_jail(user_scope_id, user_role, mode=mode)
+        if info.get("is_admin"):
+            return True
+        return _jail_info_allows(info, os.path.abspath(os.path.expanduser(str(path))))
+    except Exception:
+        return False
+
+
 def _librarian_jail_ok(abs_path) -> bool:
     """True if abs_path is allowed under the active librarian jail. Fail-closed. No jail set => True."""
     info = _librarian_scope_ctx.get()
     if not info:
         return True
+    return _jail_info_allows(info, abs_path)
+
+
+def _jail_info_allows(info, abs_path) -> bool:
+    """The jail's decision for one path, given what compute_user_jail answered. Shared by the
+    jail of a running tool (`_librarian_jail_ok`) and the question asked from outside one
+    (`jail_allows`), so the two cannot drift. Fail-closed."""
     try:
         import re as _re_j
         from vaf.core.platform import Platform

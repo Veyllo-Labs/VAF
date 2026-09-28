@@ -91,6 +91,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   a second helper of the same kind was refused while the first ran. Not in local mode, where
   one model serves everything, and never for the coding helper, which writes into the chat's
   files.
+- **`vaf.jail_allows`**: may this account reach this file? The same per-account boundary
+  the agent's file tools obey, now askable from outside a tool run, so a route, a preview or
+  a save button of your own gives the same answer as the account's tools. See
+  docs/EMBEDDING.md.
 
 ### Changed
 

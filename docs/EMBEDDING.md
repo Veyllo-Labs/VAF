@@ -810,6 +810,18 @@ Hard limits you must respect (they are architecture, not fine print):
   `_agent` to a fixed set of built-in NAMES, there is no declaration for it, and a tool
   you register never receives it. Do not reach for it; it may disappear without a
   major version. `identity_kwargs` is the surface that is kept.
+- **A surface of your own that serves or stores a file for an account asks the same
+  boundary.** A download link, a preview or an editor's save button reaches whatever
+  files you let it, unless it asks the rule the account's tools obey. Ask it with
+  `vaf.jail_allows(path, user_scope_id=..., user_role=..., mode="read")` (or
+  `mode="write"` before you store). VAF's own web file routes are why this is a
+  primitive and not an example: they carried a hand copy that knew the account's folder
+  but not its room folders or visible skills, and the account's tools and its file
+  routes disagreed about the same file. Two things it leaves to you. It answers an
+  EMPTY scope with True, exactly as `user_jail` treats it (no account, no jail), so an
+  authenticated account whose identity carries no scope must be refused before you ask.
+  And it does not look at the disk: ask before you check whether the file exists, or
+  "not found" versus "refused" tells a caller which files exist outside its boundary.
 - **Which tools an account may use at all is YOUR backend's answer.** Register
   one resolver process-wide with `set_account_allowlist_resolver` (its own
   section below) and every scoped, non-admin call is checked against it in the
@@ -1930,6 +1942,13 @@ Stable public surface (safe to build on):
   exported for tools that need the boundary around something other than a whole `run()`.
   Entering the write-mode jail needs no pre-provisioned per-user directories - the
   boundary is computed, not created, so a fresh tenant costs nothing to confine.
+- `vaf.jail_allows(path, *, user_scope_id, user_role=None, mode="read") -> bool` - the
+  same boundary asked from outside a tool run, for a route or a UI that serves or stores
+  a file on an account's behalf. It answers exactly what `user_jail` enforces for that
+  identity and mode, fail-closed, on the RESOLVED path, so a link is judged by its
+  target; it neither reads nor changes the jail of the run it is called from. It is only
+  the per-account half: it does not screen system folders or VAF's own data directory,
+  and it does not refuse a scope-less caller (see the multi-tenant section).
 - `vaf.contained_path(root, relative="", *, must_exist=False)` /
   `vaf.safe_entry_name(name, *, allow_hidden=False)` / `vaf.PathEscape` - keeping a
   path that came from OUTSIDE inside the directory it may touch. The jail above

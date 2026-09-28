@@ -21,7 +21,7 @@ if TYPE_CHECKING:
                                      set_confirmation_bypass_resolver)
     from .framework import Agent, CoreAgent
     from .tools.base import BaseTool
-    from .tools.filesystem import user_jail
+    from .tools.filesystem import jail_allows, user_jail
 
 __all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
            "NON_CONVERSATION_KINDS",
@@ -35,7 +35,8 @@ __all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
            "derive_peer_id",
            "describe_room_entry", "extract_pdf_markdown",
            "fold_room_owners", "fold_room_tasks", "fold_room_votes", "inspect_upload",
-           "install_thread_excepthook", "invited_rooms", "joined_rooms", "markers",
+           "install_thread_excepthook", "invited_rooms", "jail_allows", "joined_rooms",
+           "markers",
            "participant_key", "record_threat", "room_invitation",
            "safe_entry_name", "set_account_allowlist_resolver",
            "set_account_directory_resolver",
@@ -82,6 +83,13 @@ def __getattr__(name):
         # dispatcher to have set it. See docs/EMBEDDING.md.
         from .tools.filesystem import user_jail
         return user_jail
+    if name == "jail_allows":
+        # The same boundary asked from OUTSIDE a tool run: may this account reach this path?
+        # A route that serves or stores a file for an account needs the answer its tools
+        # get, and VAF's own file routes were the proof - they carried a hand copy that knew
+        # the account folder and not the rest, and the save routes carried none.
+        from .tools.filesystem import jail_allows
+        return jail_allows
     if name in ("VoiceTurnEngine", "TurnOutcome"):
         # The live-call turn pipeline as an object: audio bytes in, ONE decided
         # TurnOutcome back - noise gate, STT, speaker verification with the

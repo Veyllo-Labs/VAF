@@ -120,7 +120,9 @@ This is the contract. Treat it as a stable API.
   `permission_level`, `side_effect_class`, `admin_only`, `channel_restrictions`,
   `coder_only`, `identity_kwargs`, `run`)
 - `vaf.markers` - the special-return-value constants
-- `vaf.user_jail` - turning a declared identity into a file boundary
+- `vaf.user_jail` - turning a declared identity into a file boundary, and
+  `vaf.jail_allows` - asking that same boundary from outside a tool run, for a
+  route that serves or stores a file on an account's behalf
 - `vaf.ToolCaller` and `vaf.ToolRequest`, plus `set_tool_authorizer` on both
   `Agent` and `CoreAgent` - running and vetoing a tool call. Their documented
   arguments are in [EMBEDDING.md](EMBEDDING.md); `ToolCaller`'s remaining

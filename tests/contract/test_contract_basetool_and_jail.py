@@ -255,3 +255,47 @@ def test_user_jail_mode_is_keyword_only():
     with pytest.raises(TypeError):
         with vaf.user_jail(SYNTHETIC_SCOPE, "user", "write"):
             pass
+
+
+# -- 6. jail_allows ------------------------------------------------------------
+
+
+@pytest.fixture()
+def _scratch_documents(tmp_path, monkeypatch):
+    """The per-account tree lives under the home's Documents; point both home variables
+    at a scratch directory (Path.home() reads USERPROFILE on Windows, HOME elsewhere)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    return tmp_path / "Documents"
+
+
+def test_jail_allows_lets_an_account_reach_its_own_tree_in_both_modes(_scratch_documents):
+    """The documented question a route asks before serving or storing a file for an
+    account: its own project tree is inside, for reading and for writing. The file need
+    not exist yet - a save route asks before it creates."""
+    own = _scratch_documents / "VAF_Projects" / "deadbeef" / "chat" / "notes.md"
+    for mode in ("read", "write"):
+        assert vaf.jail_allows(own, user_scope_id=SYNTHETIC_SCOPE, user_role="user", mode=mode)
+
+
+def test_jail_allows_refuses_another_account_and_the_owner_home(_scratch_documents):
+    """Another account's tree and the machine owner's own documents are outside every
+    non-admin account's boundary."""
+    other = _scratch_documents / "VAF_Projects" / "ffff0000" / "report.docx"
+    owner = _scratch_documents / "taxes.pdf"
+    for target in (other, owner):
+        assert not vaf.jail_allows(target, user_scope_id=SYNTHETIC_SCOPE, user_role="user")
+
+
+def test_jail_allows_with_no_scope_is_unconfined_like_user_jail(_scratch_documents):
+    """Same meaning as user_jail's falsy scope: a direct consumer with no account. A
+    request lane refuses a scope-less account before it asks - documented, not enforced
+    here, because this function cannot tell those two cases apart."""
+    assert vaf.jail_allows(_scratch_documents / "taxes.pdf", user_scope_id="", user_role=None)
+
+
+def test_jail_allows_takes_the_identity_by_keyword_only():
+    """A positional scope or role would be one transposition away from asking about the
+    wrong account."""
+    with pytest.raises(TypeError):
+        vaf.jail_allows("/tmp/x", SYNTHETIC_SCOPE)

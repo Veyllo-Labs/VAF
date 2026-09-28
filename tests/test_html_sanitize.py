@@ -51,10 +51,28 @@ def test_every_section_the_research_agent_keeps_passes_the_sanitizer():
     """The live paper, the saved report and the Markdown export all read this list - including
     sections resumed from a checkpoint file and the fallbacks that carry the planned title."""
     src = (REPO / "vaf/tools/research_agent.py").read_text(encoding="utf-8")
-    appends = re.findall(r"rendered_sections\.append\(([^\n]*)\)", src)
-    assert len(appends) >= 4, appends
-    raw = [a for a in appends if not a.startswith("_clean_section_html(")]
+    appends = list(re.finditer(r"rendered_sections\.append\(([^\n]*)\)", src))
+    assert len(appends) >= 4, [a.group(1) for a in appends]
+    raw = []
+    for a in appends:
+        arg = a.group(1)
+        if arg.startswith("_clean_section_html("):
+            continue
+        # A bare name counts only when its LAST assignment before the append is the sanitizer.
+        assigned = list(re.finditer(rf"\b{re.escape(arg)}\s*=\s*([^\n]*)", src[:a.start()]))
+        if not (assigned and assigned[-1].group(1).startswith("_clean_section_html(")):
+            raw.append(arg)
     assert not raw, f"sections kept without the sanitizer: {raw}"
+
+
+def test_the_checkpoint_holds_the_cleaned_section():
+    """The generated section is cleaned ONCE and that value is checkpointed and counted - the
+    checkpoint file used to receive the raw model output."""
+    src = (REPO / "vaf/tools/research_agent.py").read_text(encoding="utf-8")
+    clean_at = src.index("section_html = _clean_section_html(section_html)")
+    write_at = src.index("section_checkpoint.write_text(section_html", clean_at)
+    assert src.index("rendered_sections.append(section_html)", clean_at) < write_at
+    assert "word_count = _visible_word_count(section_html)" in src[clean_at:write_at]
 
 
 def test_the_saved_report_escapes_the_topic_and_the_source_urls():

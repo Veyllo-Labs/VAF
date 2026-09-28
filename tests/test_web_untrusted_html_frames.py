@@ -67,13 +67,16 @@ def test_no_frame_gets_scripts_and_the_apps_origin_together():
 
 
 def test_a_sandbox_value_is_a_literal_this_scan_can_read():
-    """sandbox={SOMETHING} must name a constant this file defines as a literal, or the rule
-    above is blind to it."""
+    """sandbox={SOMETHING} must name a constant this file defines as a literal, AND the name must
+    carry SANDBOX: _SANDBOX_LITERAL only reads constants named so, and a literal it does not
+    read is one the rule above never examines (`const FRAME_FLAGS = 'allow-scripts
+    allow-same-origin'` passed both tests)."""
     unreadable = []
     for path, src in _web_sources():
         for m in re.finditer(r"sandbox=\{\s*([A-Za-z_]\w*)\s*\}", src):
             name = m.group(1)
-            if not re.search(rf"""const\s+{name}\s*=\s*["'][^"']*["']""", src):
+            literal = re.search(rf"""const\s+{name}\s*=\s*["'][^"']*["']""", src)
+            if not literal or not re.fullmatch(r"\w*SANDBOX\w*", name):
                 unreadable.append((_rel(path), name))
     assert not unreadable, f"sandbox values the guard cannot read: {unreadable}"
 

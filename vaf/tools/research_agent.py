@@ -1284,7 +1284,11 @@ class ResearchAgentTool(BaseTool):
                         )
                         word_count = _visible_word_count(section_html)
                         tui.set_word_progress(word_count, min_words_target, min_words_ok)
-                    rendered_sections.append(_clean_section_html(section_html))
+                    # Cleaned once, and that value is what is kept, checkpointed and counted: the
+                    # checkpoint file used to receive the raw model output.
+                    section_html = _clean_section_html(section_html)
+                    word_count = _visible_word_count(section_html)
+                    rendered_sections.append(section_html)
                     _rs_set_section(idx - 1, "done", words=word_count)
 
                     try:

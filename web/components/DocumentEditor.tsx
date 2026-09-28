@@ -10,6 +10,7 @@ import { useEditShortcuts } from '@/hooks/useEditShortcuts';
 import { X, Download, FileText, Save, Loader2, CheckCircle2, Circle, Plus, Trash2, ChevronDown, Bold, Italic, Underline, List, ListOrdered, AlignLeft, AlignCenter, AlignRight, Highlighter, Eraser, Printer, Undo2, Redo2 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import { downloadText } from '@/lib/download';
+import { sanitizeDocumentCopy } from '@/lib/sanitize';
 import { CHIP_BG_CLASSES, INSERTION_COLOR_CLASSES } from '@/components/DocumentViewer';
 import NativeDocxEditor from '@/components/NativeDocxEditor';
 import type { NativeDocxDocument } from '@/lib/docxNative';
@@ -793,6 +794,8 @@ function LegacyDocumentEditor({
             wrapper.style.background = 'white';
             wrapper.style.padding = '25mm';
             wrapper.style.boxSizing = 'border-box';
+            // Positioned content from the file is laid out inside this box, not over the app.
+            wrapper.style.contain = 'layout paint';
             const style = document.createElement('style');
             style.textContent = `
                 .pdf-export-page { width: 210mm; min-height: 297mm; background: white; padding: 0; box-sizing: border-box; }
@@ -804,10 +807,10 @@ function LegacyDocumentEditor({
             const contentDiv = document.createElement('div');
             contentDiv.className = 'pdf-export-page';
             // This copy lives in the APP's document, where an onerror attribute from the file
-            // would run as the viewer; the sanitized copy only feeds the PDF, the file itself
-            // is untouched. body IS the continuous flow.
-            const DOMPurify = (await import('dompurify')).default;
-            contentDiv.innerHTML = DOMPurify.sanitize(body.innerHTML);
+            // would run as the viewer and a position:fixed block would draw over the app; the
+            // cleaned copy (web/lib/sanitize.ts) only feeds the PDF, the file itself is untouched.
+            // body IS the continuous flow.
+            contentDiv.innerHTML = sanitizeDocumentCopy(body.innerHTML);
             wrapper.appendChild(contentDiv);
             document.body.appendChild(wrapper);
             try {

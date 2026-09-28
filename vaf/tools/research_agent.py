@@ -2265,9 +2265,19 @@ class ResearchAgentTool(BaseTool):
         # topic is what the person typed and each source a URL a search result named: both go
         # into markup, so both are escaped (a quote in a URL used to end the href).
         topic = _html.escape(topic or "", quote=True)
+        from urllib.parse import urlparse
+
+        def _source_item(u: str) -> str:
+            # Only a web address becomes a link: escaping keeps a URL inside its attribute, it
+            # does not stop a javascript: target a search result carried. Anything else stays in
+            # the list as text, because the numbers are what the [n] citations point at.
+            shown = _html.escape(u)
+            if urlparse(u).scheme.lower() in ("http", "https"):
+                return f'<li><a href="{_html.escape(u, quote=True)}">{shown}</a></li>'
+            return f"<li>{shown}</li>"
+
         # Ordered list: the numbers match the [n] citation markers in the sections.
-        source_items = "\n".join(
-            f'<li><a href="{_html.escape(u, quote=True)}">{_html.escape(u)}</a></li>' for u in sources[:50])
+        source_items = "\n".join(_source_item(u) for u in sources[:50])
         sections_html = "\n\n".join(sections)
         # Remove any standalone "Answer" artifacts that slipped through.
         sections_html = _strip_answer_artifacts(sections_html)

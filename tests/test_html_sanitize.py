@@ -86,3 +86,16 @@ def test_there_is_one_nh3_call_in_the_tree():
     assert callers == ["vaf/core/html_sanitize.py"]
     mail = (REPO / "vaf/mail/service.py").read_text(encoding="utf-8")
     assert "from vaf.core.html_sanitize import sanitize_html" in mail
+
+
+def test_the_saved_report_links_only_web_addresses_and_keeps_the_numbering():
+    """Escaping keeps a URL inside its href; it does not stop a javascript: target. A source
+    that is not a web address stays in the list as text, so the [n] citations still count right."""
+    from vaf.tools.research_agent import ResearchAgentTool
+    report = ResearchAgentTool._assemble_html(
+        None, "T", ["<h2>S</h2><p>see [2]</p>"],
+        ["https://a.example/", "javascript:alert(document.cookie)", "https://c.example/"], "en")
+    assert 'href="javascript:' not in report
+    assert "<li>javascript:alert(document.cookie)</li>" in report
+    items = re.findall(r"<li>.*?</li>", report)
+    assert len(items) == 3 and 'href="https://c.example/"' in items[2]

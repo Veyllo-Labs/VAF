@@ -27,3 +27,23 @@ export function sanitizeUntrustedHtml(html: string): string {
     if (!DOMPurify.isSupported) return '';
     return String(DOMPurify.sanitize(html, UNTRUSTED_FRAGMENT));
 }
+
+/**
+ * A copy of the user's own document placed into the app's document to be rendered (the PDF
+ * export, which html2canvas cannot render from the editor frame). Unlike a fragment, its
+ * formatting has to survive: the editor writes alignment and highlights as inline style and
+ * keeps images. What cannot survive is anything that reaches the app: id and class (the app's
+ * CSS and globals) and style/link elements. The caller also gives the copy's container
+ * `contain: layout paint`, so a position:fixed element in the file stays inside it instead of
+ * drawing over the app (measured in Chromium).
+ */
+const DOCUMENT_COPY: Config = {
+    FORBID_TAGS: ['style', 'link', 'base', 'meta'],
+    FORBID_ATTR: ['class', 'id'],
+};
+
+export function sanitizeDocumentCopy(html: string): string {
+    if (!html) return '';
+    if (!DOMPurify.isSupported) return '';
+    return String(DOMPurify.sanitize(html, DOCUMENT_COPY));
+}

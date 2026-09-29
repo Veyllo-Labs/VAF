@@ -220,6 +220,13 @@ class BrowserPool:
         self._fallback_reason = ""
         self._template: Optional[tuple] = None             # (image, network)
         self._reaper_alive = False
+        # Every container this pool STARTED or ADOPTED, healthy or not: scope -> name.
+        # `_instances` holds only the healthy ones it hands out, so a container that
+        # started and then failed its readiness probe was running and known to nobody.
+        self._owned: Dict[str, str] = {}
+        # Set by stop_known_instances: no new allocation, and one already under way
+        # stops its own container instead of handing it out after the snapshot.
+        self._closing = False
 
     # -- template ----------------------------------------------------------
     def _resolve_template(self) -> Optional[tuple]:
@@ -303,8 +310,23 @@ class BrowserPool:
         except Exception:
             return False
 
+    def _take_ownership(self, scope: str, name: str) -> bool:
+        """Record a container this pool just started or adopted. False when the pool is
+        closing: the container is stopped again here, since the quit's snapshot has
+        already been taken and would never see it."""
+        with self._lock:
+            if not self._closing:
+                self._owned[scope] = name
+                return True
+        _docker(["stop", "-t", "5", name], timeout=60)
+        self._fallback_reason = "VAF is shutting down"
+        return False
+
     def _resolve_inner(self, scope: str) -> Optional[BrowserInstance]:
         with self._lock:
+            if self._closing:
+                self._fallback_reason = "VAF is shutting down"
+                return None
             inst = self._instances.get(scope)
         name = _NAME_PREFIX + _scope_hash(scope)
 
@@ -319,6 +341,7 @@ class BrowserPool:
             _docker(["rm", "-f", name], timeout=60)
             with self._lock:
                 self._instances.pop(scope, None)
+                self._owned.pop(scope, None)
             state = None
             inst = None
 
@@ -340,6 +363,8 @@ class BrowserPool:
                                                f"{(r.stderr or '').strip()[:200]}; using shared browser")
                     self._fallback_reason = "docker start failed"
                     return None
+            if not self._take_ownership(scope, name):
+                return None
             inst = self._read_endpoints(scope, name)
         elif state is None:
             if not self._may_start_another():
@@ -465,6 +490,8 @@ class BrowserPool:
         r = _docker(args, timeout=120)
         if r.returncode != 0:
             append_domain_log("webui", f"[browser_pool] docker run failed: {(r.stderr or '').strip()[:300]}")
+            return None
+        if not self._take_ownership(scope, name):
             return None
         return self._read_endpoints(scope, name)
 
@@ -592,6 +619,7 @@ class BrowserPool:
                         pass
                     with self._lock:
                         self._instances.pop(scope, None)
+                        self._owned.pop(scope, None)
         finally:
             with self._lock:
                 self._reaper_alive = False
@@ -615,9 +643,50 @@ _pool: Optional[BrowserPool] = None
 _pool_lock = threading.Lock()
 
 
+def _in_use_by_another_process(name: str) -> bool:
+    """True when another process holds a connection to this container's CDP or stream
+    port - a `vaf run` session's browser tool that adopted the same container (the name
+    comes from the user scope, so two VAF processes can share one). The evidence is the
+    other process's own sockets, readable for this user's processes on every platform;
+    the command-line filter only narrows which processes to ask. Undecidable counts as
+    in use: a browser left running costs RAM, a browser cut mid-session costs the work."""
+    try:
+        import psutil
+        r = _docker(["port", name], timeout=20)
+        if r.returncode != 0:
+            return False
+        ports = set()
+        for line in (r.stdout or "").splitlines():
+            host = line.split("->", 1)[-1].strip()
+            if host.startswith("127.0.0.1:"):
+                ports.add(int(host.rsplit(":", 1)[1]))
+        if not ports:
+            return False
+        me = os.getpid()
+        for proc in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                if proc.info["pid"] == me or "vaf.main" not in (proc.info["cmdline"] or []):
+                    continue
+                for c in proc.net_connections(kind="tcp"):
+                    if (c.status == psutil.CONN_ESTABLISHED and c.raddr
+                            and c.raddr.port in ports):
+                        return True
+            except Exception:
+                continue
+        return False
+    except Exception:
+        return True
+
+
 def stop_known_instances(timeout_s: float = 20.0) -> int:
     """Stop every per-user browser container THIS process's pool started or adopted,
     in parallel, and forget them. Returns how many were asked to stop. For VAF's quit.
+
+    Covers the containers that never became healthy too (`_owned`, not only the ones
+    handed out), and closes the pool first: an allocation still under way when this
+    runs stops its own container instead of registering it after the snapshot. A
+    container another VAF process is connected to right now is left running
+    (_in_use_by_another_process).
 
     The containers are created with `docker run`, not compose, so the stack's `compose
     stop` never sees them, and the idle reaper that stops them lives in this process
@@ -625,28 +694,36 @@ def stop_known_instances(timeout_s: float = 20.0) -> int:
     12 days, 2 GB, an unauthenticated CDP port on loopback). Stopped, not removed - the
     container and its profile volume stay, and the next use adopts and restarts it.
 
-    Only the pool's OWN instances, never "every vaf-browser-u-* by name": the agent's
-    browser tool in a `vaf run` session uses the same pool naming, and a quit that
-    stopped containers by name would cut that session's browser. A container orphaned
-    by a crash is therefore not stopped here (named boundary, docs/agents/BROWSER_AGENT.md).
-    Without a pool in this process there is nothing to stop. Never raises."""
+    Only the pool's OWN containers, never "every vaf-browser-u-* by name": a container
+    orphaned by a crash is therefore not stopped here (named boundary,
+    docs/agents/BROWSER_AGENT.md). Without a pool in this process there is nothing to
+    stop. Never raises."""
     with _pool_lock:
         pool = _pool
     if pool is None:
         return 0
     with pool._lock:
-        instances = list(pool._instances.values())
+        pool._closing = True
+        names = set(pool._owned.values()) | {i.container_name for i in pool._instances.values()}
         pool._instances.clear()
+        pool._owned.clear()
+
+    def _stop(name: str) -> None:
+        if _in_use_by_another_process(name):
+            append_domain_log("webui", f"[browser_pool] {name} left running at quit: "
+                                       "another VAF process is using it")
+            return
+        _docker(["stop", "-t", "5", name], timeout=60)
+
     workers = []
-    for inst in instances:
-        t = threading.Thread(target=_docker, args=(["stop", "-t", "5", inst.container_name],),
-                             kwargs={"timeout": 60}, daemon=True)
+    for name in sorted(names):
+        t = threading.Thread(target=_stop, args=(name,), daemon=True)
         t.start()
         workers.append(t)
     deadline = time.monotonic() + timeout_s
     for t in workers:
         t.join(timeout=max(0.0, deadline - time.monotonic()))
-    return len(instances)
+    return len(names)
 
 
 def get_browser_pool() -> BrowserPool:

@@ -606,6 +606,15 @@ _start_cancelled = threading.Event()
 # Set once a cancel really ended a running `up`/`build`: the stop's second pass keys on
 # it, and the tray cancels at the very top of its quit, before the stop is even called.
 _start_interrupted = threading.Event()
+# Set while ensure_service_stack runs in this process. The flag check and the launch of
+# a compose step are two moments, and a cancel landing between them finds no child to
+# end while the step starts right after it; the stop therefore keeps cancelling until
+# the start has actually returned (each step re-checks the flag, so at most one late
+# step exists and the repeated scan ends it). Not a lock around the launch: the steps
+# run through subprocess.run, which gives no handle before the command has finished.
+_start_active = threading.Event()
+# How long a stop waits for a start to return before it gives up on the drain.
+_DRAIN_S = 8.0
 
 
 def cancel_start() -> int:
@@ -649,6 +658,14 @@ def ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
     # A fresh start of this process is not cancelled by an earlier stop.
     _start_cancelled.clear()
     _start_interrupted.clear()
+    _start_active.set()
+    try:
+        return _ensure_service_stack(log)
+    finally:
+        _start_active.clear()
+
+
+def _ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
     try:
         _ensure_macos_brew_path()
         # If the engine is not running, start it and wait - retrying across a
@@ -770,9 +787,12 @@ def stop_service_stack(log: Optional[Callable[[str], None]] = None,
     for a fast restart. Returns True when a stop command succeeded.
 
     The start of this process is cancelled FIRST (cancel_start), so a start still
-    running cannot bring containers up behind the stop. When it had to end one, a
+    running cannot bring containers up behind the stop, and the stop keeps cancelling
+    until that start has returned (bounded by _DRAIN_S). When it had to end a step, a
     second pass follows a moment later: the daemon may have accepted a start just
-    before. `still_ours` is asked before that pass - the caller's answer to "has a
+    before. NAMED BOUNDARY: all of this runs inside the quitting process and inside its
+    bounded wait; no stop outlives it on purpose, because a stop still running after VAF
+    exits would race a new instance starting the stack right after. `still_ours` is asked before that pass - the caller's answer to "has a
     NEW instance taken the stack over since?" (the tray's StartedAt referee); a new
     instance's containers are not ours to stop."""
     try:
@@ -783,6 +803,12 @@ def stop_service_stack(log: Optional[Callable[[str], None]] = None,
         cancel_start()
         _say(log, f"Stopping Docker stack at {project_root}")
         stopped = _compose_stop(project_root, log)
+        # Drain: a step launched between the start's flag check and our first scan is
+        # found by scanning again until the start has returned (bounded).
+        deadline = time.monotonic() + _DRAIN_S
+        while _start_active.is_set() and time.monotonic() < deadline:
+            cancel_start()
+            time.sleep(0.25)
         if _start_interrupted.is_set():
             time.sleep(2)
             if still_ours is None or still_ours():

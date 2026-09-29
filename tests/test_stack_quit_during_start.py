@@ -141,6 +141,7 @@ def test_the_quit_stops_the_pool_s_own_browsers_only(monkeypatch):
     stopped = []
     monkeypatch.setattr(bp, "_pool", pool)
     monkeypatch.setattr(bp, "_docker", lambda args, timeout=60: stopped.append(list(args)))
+    monkeypatch.setattr(bp, "_in_use_by_another_process", lambda name: False)
     assert bp.stop_known_instances() == 2
     assert sorted(a[-1] for a in stopped) == ["vaf-browser-u-aaa", "vaf-browser-u-bbb"]
     assert all(a[:3] == ["stop", "-t", "5"] for a in stopped), "stopped, never removed"
@@ -196,3 +197,110 @@ def test_the_second_pass_referee_asks_for_another_instance(monkeypatch, found, e
     monkeypatch.setattr(instance, "find_service", lambda: (
         None if pid is None else instance.Instance(pid=pid, mode="tray")))
     assert tray._no_other_instance_serves() is expected
+
+
+def test_a_container_that_never_became_healthy_is_stopped_too(monkeypatch):
+    """MUTATION: stop only `_instances` again and a started-but-unhealthy container
+    (never handed out, never cached) runs on after the quit."""
+    import vaf.core.browser_pool as bp
+    pool = bp.BrowserPool()
+    pool._owned["c"] = "vaf-browser-u-ccc"          # started, readiness failed
+    stopped = []
+    monkeypatch.setattr(bp, "_pool", pool)
+    monkeypatch.setattr(bp, "_docker", lambda args, timeout=60: stopped.append(list(args)))
+    monkeypatch.setattr(bp, "_in_use_by_another_process", lambda name: False)
+    assert bp.stop_known_instances() == 1
+    assert stopped and stopped[0][-1] == "vaf-browser-u-ccc"
+
+
+def test_an_allocation_under_way_at_quit_stops_its_own_container(monkeypatch):
+    """The quit's snapshot is taken; a `docker run` finishing after it must not register
+    a container nobody will stop. MUTATION: register without the closing check."""
+    import vaf.core.browser_pool as bp
+    pool = bp.BrowserPool()
+    stopped = []
+    monkeypatch.setattr(bp, "_docker", lambda args, timeout=60: stopped.append(list(args)))
+    pool._closing = True
+    assert pool._take_ownership("d", "vaf-browser-u-ddd") is False
+    assert stopped == [["stop", "-t", "5", "vaf-browser-u-ddd"]]
+    assert pool._owned == {}
+    assert pool._resolve_inner("e") is None, "a closing pool must not allocate"
+
+
+def test_a_browser_another_vaf_process_is_connected_to_is_left_running(monkeypatch):
+    """Real sockets: a second process (command line of a `vaf run`) holds a connection to
+    the container's published port. MUTATION: stop without asking and that session's
+    browser is cut mid-use."""
+    import socket
+    import vaf.core.browser_pool as bp
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    holder = subprocess.Popen([sys.executable, "-c",
+                               "import socket, sys, time; s = socket.create_connection(('127.0.0.1', int(sys.argv[1]))); time.sleep(30)",
+                               str(port), "vaf.main", "run"])
+    try:
+        conn, _ = srv.accept()
+        monkeypatch.setattr(bp, "_docker", lambda args, timeout=20: type(
+            "R", (), {"returncode": 0, "stdout": f"9222/tcp -> 127.0.0.1:{port}\n"})())
+        assert bp._in_use_by_another_process("vaf-browser-u-shared") is True
+        holder.kill()
+        holder.wait(timeout=10)
+        conn.close()
+        time.sleep(0.3)
+        assert bp._in_use_by_another_process("vaf-browser-u-shared") is False
+    finally:
+        holder.kill()
+        srv.close()
+
+
+def test_the_stop_drains_a_step_launched_after_its_first_scan(hermetic, monkeypatch):
+    """The start checked the flag, then the cancel scanned (nothing yet), then the start
+    launched its `up`. MUTATION: drop the drain loop and that `up` runs on after the stop."""
+    import threading
+    stack._start_active.set()
+    late = []
+
+    def launch_late():
+        time.sleep(0.3)
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)",
+                              stack.COMPOSE_FILENAME, "up", "-d"])
+        late.append(p)
+        p.wait()                      # returns once the drain ends it
+        stack._start_active.clear()   # the start sees the flag and returns
+
+    t = threading.Thread(target=launch_late, daemon=True)
+    t.start()
+    monkeypatch.setattr(stack, "_compose_stop", lambda root, log: True)
+    try:
+        stack.stop_service_stack(still_ours=lambda: True)
+        assert late and late[0].poll() is not None, "the late `up` survived the stop"
+        assert stack._start_interrupted.is_set()
+    finally:
+        for p in late:
+            try:
+                p.kill()
+            except Exception:
+                pass
+        stack._start_active.clear()
+
+
+def test_the_quit_leaves_a_browser_in_use_elsewhere_running(monkeypatch):
+    import vaf.core.browser_pool as bp
+    pool = bp.BrowserPool()
+    pool._owned["s"] = "vaf-browser-u-sss"
+    stopped = []
+    monkeypatch.setattr(bp, "_pool", pool)
+    monkeypatch.setattr(bp, "_docker", lambda args, timeout=60: stopped.append(list(args)))
+    monkeypatch.setattr(bp, "_in_use_by_another_process", lambda name: True)
+    bp.stop_known_instances()
+    assert stopped == [], "a browser another VAF process uses was stopped"
+
+
+def test_the_browsers_do_not_hold_up_the_stack_stop():
+    """The browsers may take their whole budget; the stack stop must not wait behind them
+    past the quit's bound (os._exit would then cut it off entirely)."""
+    src = (REPO / "vaf" / "tray.py").read_text(encoding="utf-8")
+    fn = src[src.index("def _stop_docker():"):]
+    assert fn.index("browsers.start()") < fn.index("stop_memory_stack(still_ours=")

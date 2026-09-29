@@ -894,10 +894,14 @@ fallback is also where the named residual of the quick scrub still applies, so a
 machine that runs the pool at capacity is not uniformly partitioned; see
 [USER_ISOLATION.md](../security/USER_ISOLATION.md). An idle instance is stopped (never
 removed: the container and its profile volume stay) and wakes on the next use, and VAF's
-quit stops the instances its pool started or adopted (`stop_known_instances`) - before, a
-running one outlived VAF for days, because the idle reaper ends with the process. Not every
-`vaf-browser-u-*` by name: a `vaf run` session uses the same pool. NAMED BOUNDARY: an
-instance orphaned by a crash runs until its scope uses the browser again and it idles out; a
+quit stops the instances its pool started or adopted (`stop_known_instances`), including
+one that started but never became healthy - before, a running one outlived VAF for days,
+because the idle reaper ends with the process. The pool closes first, so an allocation still
+under way stops its own container instead of registering it after the quit looked. Not every
+`vaf-browser-u-*` by name, and not one another VAF process is connected to right now: the
+container name comes from the user scope, so a `vaf run` session can use the same one. NAMED
+BOUNDARY: an instance orphaned by a crash runs until its scope uses the browser again and it
+idles out; a
 stopped instance keeps its port mapping, so endpoints stay stable. Budget roughly
 1-2 GB RAM per concurrently active user. Needs the same docker CLI access the stop
 watchdog already uses.

@@ -1272,12 +1272,18 @@ def quit_app(icon=None, item=None):
             # The per-user browser containers are created with `docker run`, so the
             # compose stop never sees them; this process's pool stops the ones it
             # started or adopted (vaf/core/browser_pool.py stop_known_instances).
-            try:
-                from vaf.core.browser_pool import stop_known_instances
-                stop_known_instances()
-            except Exception as e:
-                print(f"Error stopping browser instances: {e}")
+            # CONCURRENTLY with the stack stop: the browsers may take their full
+            # budget, and the stack must not wait behind them past this quit's bound.
+            def _stop_browsers():
+                try:
+                    from vaf.core.browser_pool import stop_known_instances
+                    stop_known_instances()
+                except Exception as e:
+                    print(f"Error stopping browser instances: {e}")
+            browsers = threading.Thread(target=_stop_browsers, daemon=True)
+            browsers.start()
             stop_memory_stack(still_ours=_no_other_instance_serves)
+            browsers.join(timeout=max(0.0, 18.0 - (time.monotonic() - quit_began)))
         except Exception as e:
             print(f"Error stopping memory stack: {e}")
     docker_stop = threading.Thread(target=_stop_docker, daemon=True)

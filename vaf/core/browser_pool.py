@@ -648,8 +648,11 @@ def _in_use_by_another_process(name: str) -> bool:
     port - a `vaf run` session's browser tool that adopted the same container (the name
     comes from the user scope, so two VAF processes can share one). The evidence is the
     other process's own sockets, readable for this user's processes on every platform;
-    the command-line filter only narrows which processes to ask. Undecidable counts as
-    in use: a browser left running costs RAM, a browser cut mid-session costs the work."""
+    the command-line filter only narrows which processes to ask. This process's own
+    descendants do not count: the quit that asks ends them too, so a sub-agent of this
+    instance would otherwise keep the container alive past the quit that killed it.
+    Undecidable counts as in use: a browser left running costs RAM, a browser cut
+    mid-session costs the work."""
     try:
         import psutil
         r = _docker(["port", name], timeout=20)
@@ -663,9 +666,10 @@ def _in_use_by_another_process(name: str) -> bool:
         if not ports:
             return False
         me = os.getpid()
+        ours = {me} | {c.pid for c in psutil.Process(me).children(recursive=True)}
         for proc in psutil.process_iter(["pid", "cmdline"]):
             try:
-                if proc.info["pid"] == me or "vaf.main" not in (proc.info["cmdline"] or []):
+                if proc.info["pid"] in ours or "vaf.main" not in (proc.info["cmdline"] or []):
                     continue
                 for c in proc.net_connections(kind="tcp"):
                     if (c.status == psutil.CONN_ESTABLISHED and c.raddr

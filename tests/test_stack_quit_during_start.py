@@ -227,23 +227,36 @@ def test_an_allocation_under_way_at_quit_stops_its_own_container(monkeypatch):
     assert pool._resolve_inner("e") is None, "a closing pool must not allocate"
 
 
+_HOLDER = ("import socket, sys, time; "
+           "s = socket.create_connection(('127.0.0.1', int(sys.argv[1]))); time.sleep(30)")
+
+
+def _published_port(monkeypatch, bp, port):
+    monkeypatch.setattr(bp, "_docker", lambda args, timeout=20: type(
+        "R", (), {"returncode": 0, "stdout": f"9222/tcp -> 127.0.0.1:{port}\n"})())
+
+
 def test_a_browser_another_vaf_process_is_connected_to_is_left_running(monkeypatch):
-    """Real sockets: a second process (command line of a `vaf run`) holds a connection to
-    the container's published port. MUTATION: stop without asking and that session's
-    browser is cut mid-use."""
+    """Real sockets: a process that is NOT ours (its launcher exited, as a `vaf run` in
+    another terminal) with a `vaf run` command line holds a connection to the container's
+    published port. MUTATION: stop without asking and that session's browser is cut
+    mid-use."""
     import socket
     import vaf.core.browser_pool as bp
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.bind(("127.0.0.1", 0))
     srv.listen(1)
     port = srv.getsockname()[1]
-    holder = subprocess.Popen([sys.executable, "-c",
-                               "import socket, sys, time; s = socket.create_connection(('127.0.0.1', int(sys.argv[1]))); time.sleep(30)",
-                               str(port), "vaf.main", "run"])
+    launcher = subprocess.run(
+        [sys.executable, "-c",
+         "import subprocess, sys; p = subprocess.Popen([sys.executable, '-c', sys.argv[1], "
+         "sys.argv[2], 'vaf.main', 'run'], stdout=subprocess.DEVNULL, "
+         "stderr=subprocess.DEVNULL); print(p.pid)", _HOLDER, str(port)],
+        capture_output=True, text=True, timeout=30)
+    holder = psutil.Process(int(launcher.stdout.strip()))
     try:
         conn, _ = srv.accept()
-        monkeypatch.setattr(bp, "_docker", lambda args, timeout=20: type(
-            "R", (), {"returncode": 0, "stdout": f"9222/tcp -> 127.0.0.1:{port}\n"})())
+        _published_port(monkeypatch, bp, port)
         assert bp._in_use_by_another_process("vaf-browser-u-shared") is True
         holder.kill()
         holder.wait(timeout=10)
@@ -251,7 +264,32 @@ def test_a_browser_another_vaf_process_is_connected_to_is_left_running(monkeypat
         time.sleep(0.3)
         assert bp._in_use_by_another_process("vaf-browser-u-shared") is False
     finally:
-        holder.kill()
+        try:
+            holder.kill()
+        except psutil.NoSuchProcess:
+            pass
+        srv.close()
+
+
+def test_a_connection_from_our_own_descendant_does_not_keep_the_browser(monkeypatch):
+    """A sub-agent this instance started is ended by the same quit, so its connection is
+    no reason to leave the container running. MUTATION: count only this process as ours
+    and the browser outlives the quit that killed its only user."""
+    import socket
+    import vaf.core.browser_pool as bp
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    child = subprocess.Popen([sys.executable, "-c", _HOLDER, str(port), "vaf.main", "subagent"])
+    try:
+        conn, _ = srv.accept()
+        _published_port(monkeypatch, bp, port)
+        assert bp._in_use_by_another_process("vaf-browser-u-shared") is False
+        conn.close()
+    finally:
+        child.kill()
+        child.wait(timeout=10)
         srv.close()
 
 

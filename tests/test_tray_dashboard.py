@@ -44,6 +44,11 @@ def _wire(monkeypatch, tmp_path, running=None, tty=True):
     monkeypatch.setattr(main_mod.os, "isatty", lambda fd: tty)
     monkeypatch.delenv("VAF_NATIVE_WRAPPER", raising=False)
     monkeypatch.delenv("VAF_LOG_TO_JOURNAL", raising=False)
+    # "Is VAF up?" is the framework's strict answer (the singleton port); the pid file and
+    # the wide finder no longer decide it (test_tray_start_decision.py has why).
+    from vaf.core import instance
+    monkeypatch.setattr(instance, "find_service", lambda: (
+        instance.Instance(pid=running, mode="tray", recorded=True) if running else None))
     monkeypatch.setattr(service_mod, "_running_pid", lambda: running)
     monkeypatch.setattr(service_mod, "_find_vaf_processes", lambda: [])
     monkeypatch.setattr(service_mod, "_pid_file", lambda: tmp_path / "server.pid")

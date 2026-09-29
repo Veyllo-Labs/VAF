@@ -11,6 +11,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+
+- **Starting VAF from its icon on a Mac starts it again after it had stopped.** Every icon
+  start on a Mac opens a Terminal window with the live dashboard. When VAF stopped and that
+  window stayed open, the next start took the old dashboard for a running VAF: it only
+  attached to it, opened no window and said nothing. VAF now counts as running only while
+  it really answers, so the start goes ahead. `vaf top` no longer shows such a dashboard as
+  the service either. And one faulty connection to a running VAF can no longer stop it from
+  hearing a second start, which then opened the browser instead of VAF's window.
 ## [0.1.0a30] - 2026-09-29
 
 ### Added

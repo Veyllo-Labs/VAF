@@ -245,3 +245,56 @@ def test_the_cli_finder_reads_through_the_framework(monkeypatch):
     monkeypatch.setattr(instance, "locate_processes", lambda: sentinel)
     assert svc._find_vaf_processes() is sentinel
     assert svc.TRAY_SINGLETON_PORT == instance.TRAY_SINGLETON_PORT
+
+
+# ── "is VAF up?": the strict answer ──────────────────────────────────────────
+
+_DASHBOARD = [sys.executable, "-m", "vaf.main", "tray"]
+
+
+def test_find_service_needs_the_singleton_port(home, monkeypatch):
+    """The macOS lockout: the service had exited, a dashboard from its start kept
+    running with the same command line, and the wide finder named it. Nothing
+    accepts on the port, so nothing runs - whatever the process table holds, and
+    even with a record whose pid a dashboard reused."""
+    _fake_table(monkeypatch, [FakeProc(45, _DASHBOARD)])
+    monkeypatch.setattr(instance, "singleton_listening", lambda timeout=0.5: False)
+    assert instance.locate_processes(), "the wide finder does name the dashboard"
+    assert instance.find_service() is None
+
+    instance.register(instance.MODE_TRAY)
+    monkeypatch.setattr(instance, "_is_live_vaf_pid", lambda pid: True)
+    assert instance.find_service() is None
+
+
+def test_find_service_names_the_recorded_instance_while_the_port_answers(home, monkeypatch):
+    monkeypatch.setattr(instance, "singleton_listening", lambda timeout=0.5: True)
+    instance.register(instance.MODE_TRAY)
+    monkeypatch.setattr(instance, "_is_live_vaf_pid", lambda pid: True)
+    found = instance.find_service()
+    assert found is not None and found.pid == os.getpid() and found.recorded
+
+
+def test_find_service_without_a_record_prefers_the_detached_service(home, monkeypatch):
+    """A version that kept no record: the table names it, and of a dashboard and
+    the `--no-top` child it started, the child is the service."""
+    monkeypatch.setattr(instance, "singleton_listening", lambda timeout=0.5: True)
+    _fake_table(monkeypatch, [FakeProc(45, _DASHBOARD), FakeProc(46, _TRAY)])
+    found = instance.find_service()
+    assert found is not None and found.pid == 46 and not found.recorded
+
+
+def test_singleton_listening_connects_and_never_binds(monkeypatch):
+    """A real listener on a free port stands in for the tray's: the probe finds
+    it, and finds nothing once it is gone."""
+    import socket
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    monkeypatch.setattr(instance, "TRAY_SINGLETON_PORT", port)
+    try:
+        assert instance.singleton_listening() is True
+    finally:
+        srv.close()
+    assert instance.singleton_listening() is False

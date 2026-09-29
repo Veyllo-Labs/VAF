@@ -60,14 +60,13 @@ def _bar(percent: Optional[float], width: int = 22) -> str:
 
 
 def _service_pid() -> Optional[int]:
-    """The running VAF service, found through the existing service helpers."""
+    """The running VAF service, by the framework's strict answer (the singleton
+    port). The wide finder `vaf stop` uses also matches a dashboard, this one
+    included when it runs in another terminal, and showed it as the service."""
     try:
-        from vaf.cli.cmd.service import _running_pid, _find_vaf_processes
-        pid = _running_pid()
-        if pid:
-            return pid
-        procs = _find_vaf_processes()
-        return procs[0].pid if procs else None
+        from vaf.core.instance import find_service
+        running = find_service()
+        return running.pid if running is not None else None
     except Exception:
         return None
 

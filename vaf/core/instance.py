@@ -12,7 +12,10 @@ and how to start it again so it comes back the way it was.
 WHICH process is answered by locate_processes(): the owner of the tray's
 singleton port (an identity no command line can fake), or failing that every
 `vaf.main tray` process matched on exact argv elements. This is the one
-implementation of that rule; the CLI's finder reads through it.
+implementation of that rule; the CLI's finder reads through it. It is the
+answer for "what to stop", deliberately wide. "Is VAF up?" is a different
+question with a strict answer, find_service(): only the singleton port counts,
+because argv cannot tell the service from a terminal dashboard watching it.
 
 HOW it was started is answered by the record the instance writes for itself
 in `<vaf dir>/instance.json` once its singleton check passes: pid, mode,
@@ -218,23 +221,64 @@ def scan_processes() -> List[Instance]:
     process's environment. Never raises."""
     found: List[Instance] = []
     for proc in locate_processes():
-        try:
-            # No interpreter: argv[0] of a running process is not what to start
-            # it with. A macOS venv python re-executes the framework binary, so
-            # argv[0] names an interpreter that cannot see the venv. A relaunch
-            # of a scanned instance uses the caller's interpreter instead; only
-            # a record carries sys.executable.
-            found.append(Instance(
-                pid=int(proc.pid),
-                mode=_mode_of(proc),
-                python="",
-                cwd=_safe_call(proc.cwd, ""),
-                started_at="",
-                recorded=False,
-            ))
-        except Exception:
-            continue
+        inst = _as_instance(proc)
+        if inst is not None:
+            found.append(inst)
     return found
+
+
+def singleton_listening(timeout: float = 0.5) -> bool:
+    """True when something accepts connections on the tray's singleton port.
+
+    A connect, not a psutil lookup of the port's owner: listing sockets needs
+    root on macOS, so there the owner lookup in locate_processes() always comes
+    back empty. Connecting needs no privilege on any platform. The probe sends
+    nothing, and the tray's listener acts only on an ACTIVATE it receives, so
+    it opens no window. Never binds the port: holding it even for a moment
+    would make a tray starting at that instant believe another one runs."""
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", TRAY_SINGLETON_PORT), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def find_service() -> Optional[Instance]:
+    """The running SERVICE, strictly, or None: the answer for "is VAF up?".
+
+    find_running() and locate_processes() answer "what to stop", and there a
+    wide net is right: `vaf stop` must also catch a hung tray that lost its
+    port. As an answer to "is VAF up?" the same net is wrong, because its
+    argv half cannot tell the service from a terminal dashboard watching it
+    (both run "-m vaf.main tray"), and a dashboard outlives its service - the
+    dashboard's loop has no reason to end. Measured on macOS: the service
+    exited, its dashboard ran on for a day and a half, and every start from
+    the app icon since then "attached" to that dashboard as if VAF were
+    running, opened no window and said nothing.
+
+    So only the singleton port decides, the one identity no command line can
+    fake: nothing accepts on it, nothing runs. While something does, the
+    instance's own record names it, and without a record (a version that kept
+    none) the process table does, preferring the detached `--no-top` service
+    over a dashboard. A wrong "not running" costs nothing: the tray started
+    next fails its own singleton check and exits. A wrong "running" locks the
+    person out without a word. Never raises."""
+    try:
+        if not singleton_listening():
+            return None
+        recorded = read_record()
+        if recorded is not None:
+            return recorded
+        procs = locate_processes()
+        detached = [p for p in procs if "--no-top" in (_safe_call(p.cmdline, []) or [])]
+        for proc in detached or procs:
+            inst = _as_instance(proc)
+            if inst is not None:
+                return inst
+    except Exception:
+        pass
+    return None
 
 
 def is_tray_entry(argv) -> bool:
@@ -259,6 +303,26 @@ def is_tray_entry(argv) -> bool:
 
 
 # ── internals ────────────────────────────────────────────────────────────────
+
+def _as_instance(proc) -> Optional[Instance]:
+    """An unrecorded Instance for a found process, or None when it vanished."""
+    try:
+        # No interpreter: argv[0] of a running process is not what to start
+        # it with. A macOS venv python re-executes the framework binary, so
+        # argv[0] names an interpreter that cannot see the venv. A relaunch
+        # of a scanned instance uses the caller's interpreter instead; only
+        # a record carries sys.executable.
+        return Instance(
+            pid=int(proc.pid),
+            mode=_mode_of(proc),
+            python="",
+            cwd=_safe_call(proc.cwd, ""),
+            started_at="",
+            recorded=False,
+        )
+    except Exception:
+        return None
+
 
 def _mode_of(proc) -> str:
     try:

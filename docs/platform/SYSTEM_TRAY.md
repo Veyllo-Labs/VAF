@@ -40,7 +40,10 @@ detached child writing the service log, and the terminal shows the live
 dashboard (`vaf top`) following that log. Ctrl+C on the dashboard stops VAF -
 the contract the foreground tray always had - while closing the terminal window
 leaves VAF running (`vaf stop` ends it). Attaching to an already running VAF
-only opens the dashboard and stops nothing on exit.
+only opens the dashboard and stops nothing on exit. "Already running" means the
+singleton port answers (`instance.find_service()`), never that some process runs
+`vaf.main tray`: a dashboard left open by an earlier start has exactly that command
+line, and counting it made every later start attach to it and start nothing.
 
 Every non-interactive lane keeps the classic direct run: no TTY (the shell
 launchers, `vaf start`, the crash supervisor), an explicit `vaf tray --no-top`,
@@ -204,9 +207,12 @@ Quit**, all via Spotlight. Notes:
   clean way to quit is the tray **Quit**.
 - A self-update (Update now in the web UI, or `vaf update` in another terminal)
   stops this VAF and starts it again detached, window and menu-bar icon
-  included. The dashboard in the minimised Terminal window ends with the old
-  process (the tray's shutdown sweep reaches it); reattach with `vaf top` or
-  close that window. Quit keeps working from the tray.
+  included. The dashboard in the minimised Terminal window usually ends with the
+  old process (the tray's shutdown sweep reaches it); reattach with `vaf top` or
+  close that window. Quit keeps working from the tray. A dashboard can also
+  outlive its service (measured: a day and a half after the service had exited);
+  it then shows the service as not running, and the next start from the icon
+  starts VAF instead of attaching to the dashboard.
 
 **Alternative (built, not wired into the installer):** the native Swift menu-bar
 app `scripts/macos/VAFTray` (+ `scripts/macos/build_app.sh`) owns the main thread
@@ -226,7 +232,14 @@ not `build_app.sh`.
   `vaf tray --no-top`). `vaf stop`, `vaf status`, `vaf restart` and the
   self-updater address that process and start it again in the same mode. The
   identity rule (the singleton-port owner, else `vaf.main tray` by exact argv
-  elements) lives in `vaf/core/instance.py` and serves the CLI's finder too.
+  elements) lives in `vaf/core/instance.py` and serves the CLI's finder too;
+  it is the wide answer for "what to stop". "Is VAF up?" has a strict one,
+  `find_service()`: only the singleton port accepting a connection counts
+  (a connect, since listing a port's owner needs root on macOS), and the record
+  or the process table only names the process. The terminal start and
+  `vaf top` ask that one. The listener on that port (`command_listener` in
+  `vaf/tray.py`) therefore sees connections that send nothing; a reset or a
+  silent client costs it that one connection, never the thread.
 - Prefer `vaf.core.platform.Platform` helpers for OS checks and paths (instead of direct `platform.system()` checks in new code).
 - Tray callbacks accept `(icon, item)` (pystray convention) on all platforms.
 - Desktop window API: `vaf.core.desktop_window` - `init()`, `start()`, `show()`, `hide()`, `navigate()`, `destroy()`.

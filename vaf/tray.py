@@ -318,20 +318,32 @@ def command_listener(lock_socket):
         try:
             lock_socket.settimeout(1.0)
             conn, addr = lock_socket.accept()
+        except socket.timeout:
+            continue
+        except Exception as e:
+            # The LISTENING socket failed (closed on shutdown, or gone): nothing more
+            # can arrive, so this is the only error that ends the thread.
+            if not tray_context.should_exit:
+                logger.error(f"[Tray] Command listener error: {e}")
+                log("Tray", f"Command listener error: {e}")
+            break
+        # One client's trouble is that client's alone. A reset connection used to
+        # end this thread for good, and a client that connected and sent nothing held
+        # it forever in a blocking recv (an accepted socket does not inherit the
+        # listener's timeout); either way every later ACTIVATE was lost and a second
+        # start fell back to the browser. The port is also asked "is VAF up?" by
+        # instance.find_service(), so it sees connections that send nothing.
+        try:
             with conn:
+                conn.settimeout(1.0)
                 data = conn.recv(1024)
                 if b"ACTIVATE" in data:
                     logger.info("[Tray] Received ACTIVATE signal. Opening Web UI.")
                     log("Tray", "Received ACTIVATE signal")
                     # Run opening in a thread to not block the listener
                     threading.Thread(target=open_webui, args=(None,), daemon=True).start()
-        except socket.timeout:
+        except Exception:
             continue
-        except Exception as e:
-            if not tray_context.should_exit:
-                logger.error(f"[Tray] Command listener error: {e}")
-                log("Tray", f"Command listener error: {e}")
-            break
 
 def start_uvicorn(wait_for_db: bool = True):
     """Start uvicorn server in a separate thread.

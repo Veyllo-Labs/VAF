@@ -505,14 +505,18 @@ def _run_tray_with_dashboard() -> None:
     `vaf stop` ends it.
     """
     from pathlib import Path
-    from vaf.cli.cmd.service import _running_pid, _find_vaf_processes, _pid_file
+    from vaf.cli.cmd.service import _pid_file
     from vaf.cli.cmd.top import cmd_top
     from vaf.cli.ui import UI
+    from vaf.core import instance
 
-    existing = _running_pid()
-    if not existing:
-        procs = _find_vaf_processes()
-        existing = procs[0].pid if procs else None
+    # The strict answer (the singleton port), not the wide finder `vaf stop` uses:
+    # the wide one also matches a dashboard left behind by an earlier start, whose
+    # command line is this very one, and a start from the app icon then attached
+    # to it, opened no window and said nothing (measured on macOS, where every
+    # icon start runs through a terminal).
+    running = instance.find_service()
+    existing = running.pid if running is not None else None
     if existing:
         UI.info(f"VAF is already running (PID {existing}) - attaching the dashboard "
                 "(Ctrl+C detaches, VAF keeps running).")

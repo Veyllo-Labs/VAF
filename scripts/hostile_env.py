@@ -35,6 +35,14 @@ locally, in the time the suite already takes:
                   routes' ownership tests, 403 from the roots check) because
                   here HOME was the home. Set USERPROFILE too, or patch
                   Path.home, which every OS honours.
+  LINKED HOME     the scratch home is reached through a symlink, so a resolved
+                  path and the spelling HOME gives differ. On macOS that is the
+                  normal case for a scratch home (/var is a link to /private/var)
+                  and it failed only there: is_safe_path compared an unresolved
+                  path with the resolved data dir and refused every skill file.
+                  A home moved to another disk and linked back is the same case
+                  on any OS. Where the host cannot create a link the real
+                  directory is used and the axis says so.
 
 WHAT IT CANNOT DO. Real Windows file semantics - ACLs, MoveFileEx sharing
 violations, the read-only-flag-only chmod - need a real Windows machine. Those
@@ -124,8 +132,14 @@ def main() -> int:
     args = sys.argv[1:] or ["tests/", "--ignore=tests/test_gpu_inference.py", "-q"]
 
     with tempfile.TemporaryDirectory(prefix="vaf-hostile-") as tmp:
+        real_home = Path(tmp) / "home-real"
+        (real_home / ".vaf").mkdir(parents=True)
         home = Path(tmp) / "home"
-        (home / ".vaf").mkdir(parents=True)
+        try:
+            home.symlink_to(real_home, target_is_directory=True)
+            linked = True
+        except OSError:
+            home, linked = real_home, False
         site = Path(tmp) / "site"
         site.mkdir()
         (site / "sitecustomize.py").write_text(
@@ -147,6 +161,8 @@ def main() -> int:
         print(f"  no extras       {', '.join(OPTIONAL_PACKAGES)}")
         print(f"  scratch home    {home}")
         print(f"  windows home    '~' reads USERPROFILE, not HOME")
+        print(f"  linked home     " + (f"{home} -> {real_home}" if linked
+                                     else "not available here (no symlinks)"))
         print()
         return subprocess.run([sys.executable, "-m", "pytest", *args],
                               cwd=str(ROOT), env=env).returncode

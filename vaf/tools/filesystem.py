@@ -514,15 +514,26 @@ def is_safe_path(path):
         #                custom tools in data_dir/custom_tools, which this block never
         #                touched because they live outside ~/.vaf
         # Fail-closed: if the data dir cannot be resolved, nothing under .vaf is allowed.
+        #
+        # BOTH spellings of the data dir, like _TEMP_ROOTS: `norm` is not resolved
+        # here, so under a home reached through a symlink (macOS /var ->
+        # /private/var, a home moved to another disk and linked back) it never
+        # starts with the RESOLVED root, and every skill file was refused. The
+        # link-following recheck at the end of this function never ran, because
+        # the refusal came first.
         if ".vaf" in components:
             _content_ok = False
             try:
                 from vaf.core.platform import Platform as _PlatFS
-                _vaf_root = Path(_PlatFS.vaf_dir()).resolve()
-                for _sub in ("skills", "workflows"):
-                    _root = str(_vaf_root / _sub).replace("\\", "/")
-                    if norm == _root or norm.startswith(_root + "/"):
-                        _content_ok = True
+                _vaf_dir = Path(_PlatFS.vaf_dir())
+                for _vaf_root in dict.fromkeys((Path(os.path.abspath(str(_vaf_dir))),
+                                                _vaf_dir.resolve())):
+                    for _sub in ("skills", "workflows"):
+                        _root = str(_vaf_root / _sub).replace("\\", "/")
+                        if norm == _root or norm.startswith(_root + "/"):
+                            _content_ok = True
+                            break
+                    if _content_ok:
                         break
             except Exception:
                 _content_ok = False

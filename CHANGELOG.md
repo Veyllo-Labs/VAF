@@ -20,6 +20,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it really answers, so the start goes ahead. `vaf top` no longer shows such a dashboard as
   the service either. And one faulty connection to a running VAF can no longer stop it from
   hearing a second start, which then opened the browser instead of VAF's window.
+- **The agent can read skill files when your home folder is reached through a link.** A home
+  moved to another disk and linked back (or a folder under /var on a Mac) made every file of
+  a skill look like part of VAF's protected data folder, so the agent was refused them.
+
 ## [0.1.0a30] - 2026-09-29
 
 ### Added

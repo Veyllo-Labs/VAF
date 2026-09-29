@@ -306,10 +306,23 @@ def _wait_for_db_ready(max_wait: float = 25.0) -> bool:
         return False
 
 
-def stop_memory_stack():
+def stop_memory_stack(still_ours=None):
     """Stop the stack with 'stop' (containers and data survive) - see
     vaf/core/service_stack.py."""
-    stop_service_stack(log=lambda m: log("Tray", m))
+    stop_service_stack(log=lambda m: log("Tray", m), still_ours=still_ours)
+
+
+def _no_other_instance_serves() -> bool:
+    """True unless ANOTHER VAF instance holds the service port: the referee for the
+    stack stop's second pass. Asked by process, not by container start time: our own
+    start, cut short by this quit, can bring a container up after the quit began, and a
+    start-time referee reads that as a new instance and stands down."""
+    try:
+        from vaf.core.instance import find_service
+        other = find_service()
+        return other is None or other.pid == os.getpid()
+    except Exception:
+        return True
 
 def command_listener(lock_socket):
     """Listens for 'ACTIVATE' signals from other instances."""
@@ -1171,6 +1184,8 @@ def quit_app(icon=None, item=None):
         except (ValueError, OSError):
             pass
 
+    quit_began = time.monotonic()
+
     # Hard timeout: if cleanup hangs longer than 25s, force exit.
     # 25s gives Docker enough time to stop containers (can take 10-20s).
     def force_exit():
@@ -1181,6 +1196,16 @@ def quit_app(icon=None, item=None):
 
     print("Shutting down...")
     tray_context.should_exit = True
+
+    # Cancel our own stack start before anything else looks at the stack: a start
+    # still running would otherwise bring containers up behind the stop, and a
+    # container it starts after this point would read as a NEW instance to the
+    # StartedAt referee below (vaf/core/service_stack.py cancel_start).
+    try:
+        from vaf.core.service_stack import cancel_start
+        cancel_start()
+    except Exception:
+        pass
 
     # What this instance started, taken NOW: the Docker stop below runs as a child
     # too and must outlive this process, so it must not be on the list.
@@ -1244,10 +1269,19 @@ def quit_app(icon=None, item=None):
             if _stack_restarted_since_shutdown():
                 print("Docker stack stop skipped: a new VAF instance restarted the stack")
                 return
-            stop_memory_stack()
+            # The per-user browser containers are created with `docker run`, so the
+            # compose stop never sees them; this process's pool stops the ones it
+            # started or adopted (vaf/core/browser_pool.py stop_known_instances).
+            try:
+                from vaf.core.browser_pool import stop_known_instances
+                stop_known_instances()
+            except Exception as e:
+                print(f"Error stopping browser instances: {e}")
+            stop_memory_stack(still_ours=_no_other_instance_serves)
         except Exception as e:
             print(f"Error stopping memory stack: {e}")
-    threading.Thread(target=_stop_docker, daemon=True).start()
+    docker_stop = threading.Thread(target=_stop_docker, daemon=True)
+    docker_stop.start()
 
     # Stop Web UI (Next.js)
     try:
@@ -1293,8 +1327,12 @@ def quit_app(icon=None, item=None):
     _stop_what_we_started(started_by_us)
     _end_the_dashboard_that_started_us()
 
-    # Small pause to let the Docker background thread and SIGTERM propagate.
-    time.sleep(2)
+    # Wait for the Docker stop, bounded well inside the 25 s force_exit. It used to be
+    # left to a 2 s sleep, which was enough only because the `compose stop` child
+    # outlives this process: a step after it in the same thread (the second pass, the
+    # browser instances) would have been cut off by os._exit. A stop still running at
+    # the bound keeps going as its own process, as before.
+    docker_stop.join(timeout=max(2.0, 18.0 - (time.monotonic() - quit_began)))
 
     os._exit(0)
 

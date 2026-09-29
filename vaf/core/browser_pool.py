@@ -615,6 +615,40 @@ _pool: Optional[BrowserPool] = None
 _pool_lock = threading.Lock()
 
 
+def stop_known_instances(timeout_s: float = 20.0) -> int:
+    """Stop every per-user browser container THIS process's pool started or adopted,
+    in parallel, and forget them. Returns how many were asked to stop. For VAF's quit.
+
+    The containers are created with `docker run`, not compose, so the stack's `compose
+    stop` never sees them, and the idle reaper that stops them lives in this process
+    and ends with it: a container running at quit ran on for days (measured on macOS:
+    12 days, 2 GB, an unauthenticated CDP port on loopback). Stopped, not removed - the
+    container and its profile volume stay, and the next use adopts and restarts it.
+
+    Only the pool's OWN instances, never "every vaf-browser-u-* by name": the agent's
+    browser tool in a `vaf run` session uses the same pool naming, and a quit that
+    stopped containers by name would cut that session's browser. A container orphaned
+    by a crash is therefore not stopped here (named boundary, docs/agents/BROWSER_AGENT.md).
+    Without a pool in this process there is nothing to stop. Never raises."""
+    with _pool_lock:
+        pool = _pool
+    if pool is None:
+        return 0
+    with pool._lock:
+        instances = list(pool._instances.values())
+        pool._instances.clear()
+    workers = []
+    for inst in instances:
+        t = threading.Thread(target=_docker, args=(["stop", "-t", "5", inst.container_name],),
+                             kwargs={"timeout": 60}, daemon=True)
+        t.start()
+        workers.append(t)
+    deadline = time.monotonic() + timeout_s
+    for t in workers:
+        t.join(timeout=max(0.0, deadline - time.monotonic()))
+    return len(instances)
+
+
 def get_browser_pool() -> BrowserPool:
     global _pool
     with _pool_lock:

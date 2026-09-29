@@ -252,7 +252,10 @@ not `build_app.sh`.
   workflow children, MCP servers) is stopped with its tree and process group
   (`_stop_what_we_started` in `vaf/tray.py`, via `Platform.terminate_process_tree`),
   on every platform. The list is taken when quit begins, so the Docker stop that
-  runs on in the background is not on it. This replaced `pkill -f
+  runs on in the background is not on it. The quit also cancels its own stack start
+  first and waits for the Docker stop, bounded inside its 25 s force exit; the stop
+  covers the per-user browser containers of its pool
+  ([DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md), "How the quit stops it"). This replaced `pkill -f
   "python.*vaf.main"` and `pkill -f "node.*VAF"`, which matched by name: they also
   ended a `vaf run` chat in another terminal and any shell whose command mentioned
   `vaf.main`, and missed the WhatsApp bridge on installs without an upper-case

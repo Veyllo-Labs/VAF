@@ -38,6 +38,7 @@ import os
 import platform
 import re
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -589,10 +590,65 @@ def find_stack_root() -> Optional[Path]:
     return None
 
 
+# ── start/stop coordination ─────────────────────────────────────────────────
+#
+# The start runs in a background thread (the tray starts it and keeps going) and
+# takes minutes on a first run: engine boot, the core `up`, a possible cache-less
+# browser rebuild, then `up --build` for tts and vaf-browser. A quit in that window
+# used to race it: `compose stop` enumerates the containers when it starts, the
+# still-running `up` then created tts and vaf-browser behind it (measured live:
+# "Up 51 seconds" beside "Exited 53 seconds ago"), and nothing stopped them again.
+# The stop now cancels the start first: this flag makes every later phase a no-op,
+# and the `up`/`build` already running is ended. A daemon that had already accepted
+# a start can still complete it, so a stop that had to cancel one makes a second
+# pass.
+_start_cancelled = threading.Event()
+# Set once a cancel really ended a running `up`/`build`: the stop's second pass keys on
+# it, and the tray cancels at the very top of its quit, before the stop is even called.
+_start_interrupted = threading.Event()
+
+
+def cancel_start() -> int:
+    """Stop the stack start of THIS process: no further phase runs, and every compose
+    `up`/`build` this process is still running is ended. Returns how many were ended.
+
+    Found by PARENTAGE, not by name: children of this process whose command line names
+    this compose file with an `up` or `build` verb - another program's compose command,
+    or another VAF process's, is never touched. Never raises."""
+    _start_cancelled.set()
+    ended = 0
+    try:
+        import psutil
+        for child in psutil.Process().children(recursive=True):
+            try:
+                argv = child.cmdline()
+                if COMPOSE_FILENAME in argv and ("up" in argv or "build" in argv):
+                    child.terminate()
+                    ended += 1
+            except Exception:
+                continue
+    except Exception:
+        pass
+    if ended:
+        _start_interrupted.set()
+    return ended
+
+
+def _start_was_cancelled(log) -> bool:
+    if _start_cancelled.is_set():
+        _say(log, "Service stack start cancelled: VAF is shutting down")
+        return True
+    return False
+
+
 def ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
     """Bring the service stack up (idempotent). Returns True when the CORE
     stack came up (or already ran); False when the engine never became ready,
-    no compose file exists, or compose failed."""
+    no compose file exists, compose failed, or a stop cancelled the start
+    (cancel_start: every phase checks it before it begins)."""
+    # A fresh start of this process is not cancelled by an earlier stop.
+    _start_cancelled.clear()
+    _start_interrupted.clear()
     try:
         _ensure_macos_brew_path()
         # If the engine is not running, start it and wait - retrying across a
@@ -601,6 +657,8 @@ def ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
         if not is_docker_daemon_running():
             engine_ready = False
             for attempt in range(1, 4):
+                if _start_was_cancelled(log):
+                    return False
                 launched = attempt_docker_daemon_start(log)
                 if not launched:
                     _say(log, f"No container runtime found yet (attempt {attempt}/3); retrying in 30s...")
@@ -609,6 +667,8 @@ def ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
                 _say(log, f"Waiting for the container engine to be ready (attempt {attempt}/3, max 300s; first run is slow)...")
                 deadline = time.time() + 300
                 while time.time() < deadline:
+                    if _start_cancelled.is_set():
+                        break
                     if is_docker_daemon_running():
                         engine_ready = True
                         break
@@ -623,6 +683,8 @@ def ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
 
         project_root = find_stack_root()
         if project_root is None:
+            return False
+        if _start_was_cancelled(log):
             return False
         _warn_about_default_db_password(log)
         _write_compose_env_file(project_root, log)
@@ -645,6 +707,8 @@ def ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
                 if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
                     kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
                 result = subprocess.run(base + list(CORE_SERVICES), timeout=600, **kwargs)
+                if _start_was_cancelled(log):
+                    return False
                 if result.returncode == 0:
                     _say(log, "Core service stack (DB/Redis/Sandbox/STT/Gotenberg) started")
                     try:  # optional build services: best-effort, never block the core
@@ -667,6 +731,8 @@ def ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
                         # loud (security event) but never blocks the start - the old
                         # browser still beats none.
                         _maybe_rebuild_stale_browser_image(base, kwargs, log)
+                        if _start_was_cancelled(log):
+                            return True
                         opt = subprocess.run(base + ["--build"] + list(OPTIONAL_SERVICES),
                                              timeout=600, **kwargs)
                         if opt.returncode != 0:
@@ -698,18 +764,46 @@ def ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
         return False
 
 
-def stop_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
+def stop_service_stack(log: Optional[Callable[[str], None]] = None,
+                       still_ours: Optional[Callable[[], bool]] = None) -> bool:
     """Stop the stack with 'stop' (never 'down'): containers and data survive
-    for a fast restart. Returns True when a stop command succeeded."""
+    for a fast restart. Returns True when a stop command succeeded.
+
+    The start of this process is cancelled FIRST (cancel_start), so a start still
+    running cannot bring containers up behind the stop. When it had to end one, a
+    second pass follows a moment later: the daemon may have accepted a start just
+    before. `still_ours` is asked before that pass - the caller's answer to "has a
+    NEW instance taken the stack over since?" (the tray's StartedAt referee); a new
+    instance's containers are not ours to stop."""
     try:
         project_root = find_stack_root()
         if project_root is None:
             _say(log, f"{COMPOSE_FILENAME} not found, skipping Docker stop")
             return False
+        cancel_start()
         _say(log, f"Stopping Docker stack at {project_root}")
+        stopped = _compose_stop(project_root, log)
+        if _start_interrupted.is_set():
+            time.sleep(2)
+            if still_ours is None or still_ours():
+                _say(log, "A stack start was cut short - stopping again")
+                stopped = _compose_stop(project_root, log) or stopped
+        return stopped
+    except Exception as e:
+        _say(log, f"Service stack stop failed: {e}")
+        return False
+
+
+def _compose_stop(project_root: Path, log) -> bool:
+    """One `compose stop` of the whole project, with the same docker binary and env file
+    the start uses: the stop used to call a bare `docker` without --env-file, which fails
+    where the start had to resolve Rancher's docker.exe off PATH."""
+    try:
+        docker = resolve_docker_exe()
+        env_args = ["--env-file", str(compose_env_file())] if compose_env_file().exists() else []
         for cmd in (
-            ["docker", "compose", "-f", COMPOSE_FILENAME, "stop"],
-            ["docker-compose", "-f", COMPOSE_FILENAME, "stop"],
+            [docker, "compose", *env_args, "-f", COMPOSE_FILENAME, "stop"],
+            ["docker-compose", *env_args, "-f", COMPOSE_FILENAME, "stop"],
         ):
             try:
                 kwargs = {"cwd": str(project_root), "capture_output": True, "text": True}

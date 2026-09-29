@@ -119,7 +119,7 @@ def test_the_tray_delegates_to_the_engine(monkeypatch):
     monkeypatch.setattr(tray, "ensure_service_stack",
                         lambda log=None: started.append(True))
     monkeypatch.setattr(tray, "stop_service_stack",
-                        lambda log=None: stopped.append(True))
+                        lambda log=None, still_ours=None: stopped.append(True))
     tray.ensure_memory_stack_up()
     tray.stop_memory_stack()
     assert started == [True] and stopped == [True], (

@@ -5,8 +5,8 @@
 # Start (from project root):
 #   docker compose -f docker-compose.memory.yml up -d
 #
-# Stop:
-#   docker compose -f docker-compose.memory.yml down
+# Stop (what VAF's quit does - containers and data stay for a fast restart):
+#   docker compose -f docker-compose.memory.yml stop
 #
 # See: docs/setup/DOCKER_SERVICES.md
 #
@@ -101,6 +101,11 @@ services:
     image: python:3.11-slim
     container_name: vaf-sandbox
     restart: unless-stopped
+    # docker-init as PID 1. `sleep` as PID 1 installs no SIGTERM handler, and the
+    # kernel applies no default action to PID 1, so every stop waited out the 10 s
+    # grace and ended in SIGKILL (exit 137). The init forwards the signal and also
+    # reaps the orphans `docker exec` runs leave behind, which `sleep` never did.
+    init: true
     command: sleep infinity
     working_dir: /workspace
     volumes:
@@ -142,6 +147,9 @@ services:
     image: vaf-tts-multilang:latest
     container_name: vaf-tts
     restart: unless-stopped
+    # docker-init as PID 1: the Flask server as PID 1 has no SIGTERM handler (Python
+    # installs one only for SIGINT), so a stop always ended in SIGKILL after 10 s.
+    init: true
     ports:
       - "127.0.0.1:${TTS_PORT:-5002}:5000"
     environment:

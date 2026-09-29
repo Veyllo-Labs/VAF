@@ -75,7 +75,7 @@ docker compose -f docker-compose.memory.yml up -d
 | Resource | Detail |
 |----------|--------|
 | **Image** | python:3.11-slim |
-| **Container** | vaf-sandbox (persistent) |
+| **Container** | vaf-sandbox (persistent), `sleep infinity` behind docker-init (`init: true`): the init forwards SIGTERM, so a stop takes a moment instead of the 10 s grace and a SIGKILL, and it reaps the orphans `docker exec` runs leave behind |
 | **Memory** | 512MB |
 | **CPU** | 0.5 Cores |
 | **Network** | `vaf-sandbox-network` (isolated bridge). Cannot reach postgres/redis/gotenberg/tts/stt by hostname. Outbound internet (pip install) and Tool Bridge back-channel (`host.docker.internal`) still work. |

@@ -66,8 +66,11 @@ CONTAINER ID   IMAGE                      PORTS                          NAMES
 ### Stop Services
 
 ```bash
-docker compose -f docker-compose.memory.yml down
+docker compose -f docker-compose.memory.yml stop
 ```
+
+`stop` is what VAF's own quit runs: containers and volumes stay for a fast restart.
+`down` also removes the containers (the volumes survive); the next start recreates them.
 
 ---
 
@@ -232,6 +235,11 @@ All data is preserved across container restarts:
 
 **Stop containers without removing data:**
 ```bash
+docker compose -f docker-compose.memory.yml stop
+```
+
+**Remove the containers but keep the data (volumes):**
+```bash
 docker compose -f docker-compose.memory.yml down
 ```
 
@@ -310,7 +318,16 @@ When a runtime is present (or has just been set up), the installer manages the s
 
 When you start VAF (Desktop shortcut, `vaf tray`, or the terminal app `vaf run`), it brings up the Docker stack if Docker is available. The lifecycle lives in one place, `vaf/core/service_stack.py`: engine bootstrap (macOS starts Docker Desktop or Colima, Windows starts Rancher/Docker Desktop), then a two-phase compose up - core registry-image services first (postgres, redis, sandbox, stt, gotenberg), the locally built ones (tts, vaf-browser) best-effort afterwards, so a failed local build can never take the database down with it. `vaf run` starts the stack in the background so booting the model never waits on a compose up.
 
-Note that quitting the TRAY stops the stack (containers and data survive for a fast restart) - which is exactly why the terminal app starts it too: a terminal-only session after a tray quit used to run against a dead memory database. Without a compose file (a pip install ships none) or without Docker, the start is skipped and the memory tools name the unreachable database instead of pretending the memory is empty.
+Note that quitting the TRAY stops the stack (containers and data survive for a fast restart) - and the terminal app starts it as well (see below).
+
+**How the quit stops it** (`quit_app` in `vaf/tray.py`, `stop_service_stack` in `vaf/core/service_stack.py`):
+
+- The quit first cancels its own stack start (`cancel_start`). A start still running used to race the stop: `compose stop` picks its containers when it begins, and the start's `up --build` then created tts and vaf-browser behind it, which nothing stopped again. Now every later start phase is skipped, and a compose `up`/`build` this process is still running is ended - found by parentage (our own children naming this compose file), never by name. When one was cut short, the stop makes a second pass two seconds later, unless another VAF instance holds the service port by then.
+- The per-user browser containers (`vaf-browser-u-*`, created with `docker run`, so `compose stop` never sees them) are stopped too: the ones this process's pool started or adopted, never every container by name, since a `vaf run` session uses the same pool. NAMED BOUNDARY: one orphaned by a crash keeps running until its scope uses the browser again and it idles out.
+- tts and the sandbox run behind docker-init (`init: true`), like vaf-browser. As PID 1, `sleep` and the Flask server had no SIGTERM handler, the kernel applies no default action to PID 1, and every stop waited out the 10 s grace and ended in SIGKILL (exit 137).
+- The quit waits for this stop, bounded inside its 25 s force exit; a stop still running at the bound carries on as its own process.
+
+Why the terminal app starts it too: a terminal-only session after a tray quit used to run against a dead memory database. Without a compose file (a pip install ships none) or without Docker, the start is skipped and the memory tools name the unreachable database instead of pretending the memory is empty.
 
 ### If Docker Wasn't Running During Install
 

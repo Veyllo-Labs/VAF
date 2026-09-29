@@ -494,6 +494,41 @@ def _stop_spawned_tray(proc) -> None:
         pass
 
 
+#: How long a spawned tray may take to reach its singleton check (imports, config).
+#: Past it the dashboard takes over anyway, saying the service has not answered yet.
+SPAWN_ANSWER_TIMEOUT_S = 60.0
+
+
+def _await_spawned_tray(proc, log):
+    """Wait until the spawned tray holds the singleton port. Returns the running
+    service (ours, or another start's that won the race), or None after
+    reporting why nothing runs. On timeout: a stand-in for our child, with a
+    warning, so a slow first start still gets its dashboard."""
+    import time
+    from vaf.cli.ui import UI
+    from vaf.core import instance
+    deadline = time.monotonic() + SPAWN_ANSWER_TIMEOUT_S
+    UI.info("Starting VAF...")
+    while time.monotonic() < deadline:
+        running = instance.find_service()
+        if running is not None:
+            return running
+        code = proc.poll()
+        if code is not None:
+            running = instance.find_service()
+            if running is not None:
+                return running
+            if instance.port_held_by_another():
+                UI.error(f"VAF could not start: port {instance.TRAY_SINGLETON_PORT} is taken "
+                         "by another program.")
+            else:
+                UI.error(f"VAF exited while starting (exit code {code}). Log: {log}")
+            return None
+        time.sleep(0.5)
+    UI.warning("VAF has not answered yet - the dashboard follows it while it starts.")
+    return instance.Instance(pid=proc.pid, mode=instance.MODE_TRAY, recorded=False)
+
+
 def _run_tray_with_dashboard() -> None:
     """`vaf tray` in a terminal: the real tray runs as a detached child writing
     the service log, and THIS process becomes the live dashboard following it.
@@ -522,6 +557,10 @@ def _run_tray_with_dashboard() -> None:
                 "(Ctrl+C detaches, VAF keeps running).")
         cmd_top(interval=2.0, once=False, logs=True)
         return
+    if instance.port_held_by_another():
+        UI.error(f"Port {instance.TRAY_SINGLETON_PORT} is taken by another program, not VAF - "
+                 "VAF cannot start until it is freed.")
+        return
 
     log = Path.home() / ".vaf" / "logs" / "vaf_run.log"
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -535,6 +574,18 @@ def _run_tray_with_dashboard() -> None:
         _pid_file().write_text(str(proc.pid))
     except Exception:
         pass
+    # "Started" only once the child holds the singleton port. A child that fails its
+    # singleton check exits at once, and the dashboard used to take over anyway,
+    # claiming a VAF that did not exist.
+    started = _await_spawned_tray(proc, log)
+    if started is None:
+        return
+    if started.pid != proc.pid:
+        # Another start won the race; ours exited on its singleton check.
+        UI.info(f"VAF is already running (PID {started.pid}) - attaching the dashboard "
+                "(Ctrl+C detaches, VAF keeps running).")
+        cmd_top(interval=2.0, once=False, logs=True)
+        return
     UI.success(f"VAF tray started (PID {proc.pid}) - dashboard takes over; Ctrl+C stops VAF.")
     try:
         cmd_top(interval=2.0, once=False, logs=True)

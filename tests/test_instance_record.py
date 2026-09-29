@@ -27,8 +27,10 @@ def home(monkeypatch, tmp_path):
 
 
 class FakeProc:
-    def __init__(self, pid, argv, env=None, status="running", cwd="/work", env_error=None):
+    def __init__(self, pid, argv, env=None, status="running", cwd="/work", env_error=None,
+                 listens=False):
         self.pid = pid
+        self._listens = listens
         self.info = {"pid": pid, "cmdline": list(argv)}
         self._argv = list(argv)
         self._env = env or {}
@@ -49,6 +51,14 @@ class FakeProc:
 
     def cwd(self):
         return self._cwd
+
+    def net_connections(self, kind="tcp"):
+        """The process's OWN sockets - readable without root even on macOS."""
+        if not self._listens:
+            return []
+        import psutil
+        return [type("C", (), {"status": psutil.CONN_LISTEN,
+                               "laddr": type("A", (), {"port": instance.TRAY_SINGLETON_PORT})()})()]
 
 
 def _fake_table(monkeypatch, procs, port_owner=None):
@@ -267,18 +277,32 @@ def test_find_service_needs_the_singleton_port(home, monkeypatch):
     assert instance.find_service() is None
 
 
-def test_find_service_names_the_recorded_instance_while_the_port_answers(home, monkeypatch):
+def test_find_service_names_the_recorded_instance_while_it_holds_the_port(home, monkeypatch):
     monkeypatch.setattr(instance, "singleton_listening", lambda timeout=0.5: True)
     instance.register(instance.MODE_TRAY)
     monkeypatch.setattr(instance, "_is_live_vaf_pid", lambda pid: True)
+    _fake_table(monkeypatch, [FakeProc(os.getpid(), _TRAY, listens=True)])
     found = instance.find_service()
     assert found is not None and found.pid == os.getpid() and found.recorded
+
+
+def test_a_record_alone_is_no_evidence(home, monkeypatch):
+    """MUTATION: return the record without asking whether its process listens. A pid
+    the dead service left in its record can be reused by a dashboard (same command
+    line), and with another program on the port that dashboard would be the service."""
+    monkeypatch.setattr(instance, "singleton_listening", lambda timeout=0.5: True)
+    instance.register(instance.MODE_TRAY)
+    monkeypatch.setattr(instance, "_is_live_vaf_pid", lambda pid: True)
+    _fake_table(monkeypatch, [FakeProc(os.getpid(), _DASHBOARD, listens=False)])
+    assert instance.find_service() is None
+    assert instance.port_held_by_another() is True
 
 
 def test_find_service_without_a_record_names_only_a_vaf_port_owner(home, monkeypatch):
     """Without a record the port's owner names the service - when it IS one."""
     monkeypatch.setattr(instance, "singleton_listening", lambda timeout=0.5: True)
-    _fake_table(monkeypatch, [FakeProc(45, _DASHBOARD), FakeProc(46, _TRAY)], port_owner=46)
+    _fake_table(monkeypatch, [FakeProc(45, _DASHBOARD), FakeProc(46, _TRAY, listens=True)],
+                port_owner=46)
     found = instance.find_service()
     assert found is not None and found.pid == 46 and not found.recorded
 
@@ -292,13 +316,21 @@ def test_another_program_on_the_port_is_not_vaf(home, monkeypatch):
     assert instance.find_service() is None
 
 
-def test_an_owner_that_cannot_be_seen_is_not_guessed(home, monkeypatch):
-    """macOS without root: the owner is invisible, and the table cannot tell a
-    dashboard from the service, so without a record the answer is "not running" -
-    the harmless direction (the next tray fails its own singleton check)."""
+def test_an_owner_that_cannot_be_seen_is_found_by_its_own_sockets(home, monkeypatch):
+    """macOS without root: the machine-wide owner lookup is empty, but each process's
+    OWN sockets are readable. The one that listens is the service; the dashboard with
+    the same command line does not listen."""
+    monkeypatch.setattr(instance, "singleton_listening", lambda timeout=0.5: True)
+    _fake_table(monkeypatch, [FakeProc(45, _DASHBOARD), FakeProc(46, _TRAY, listens=True)])
+    found = instance.find_service()
+    assert found is not None and found.pid == 46
+
+
+def test_nobody_listening_among_the_candidates_is_not_guessed(home, monkeypatch):
     monkeypatch.setattr(instance, "singleton_listening", lambda timeout=0.5: True)
     _fake_table(monkeypatch, [FakeProc(45, _DASHBOARD), FakeProc(46, _TRAY)])
     assert instance.find_service() is None
+    assert instance.port_held_by_another() is True
 
 
 def test_singleton_listening_connects_and_never_binds(monkeypatch):
@@ -315,3 +347,20 @@ def test_singleton_listening_connects_and_never_binds(monkeypatch):
     finally:
         srv.close()
     assert instance.singleton_listening() is False
+
+
+def test_a_process_can_read_its_own_listener_on_every_platform(monkeypatch):
+    """The evidence find_service() relies on, measured on the real OS: a process's OWN
+    sockets include its listener. Runs on the macOS CI runner too, where the machine-wide
+    owner lookup needs root and this per-process read must work without it."""
+    import socket
+    import psutil
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    monkeypatch.setattr(instance, "TRAY_SINGLETON_PORT", srv.getsockname()[1])
+    try:
+        assert instance._listens_on_singleton(psutil.Process()) is True
+    finally:
+        srv.close()
+    assert instance._listens_on_singleton(psutil.Process()) is False

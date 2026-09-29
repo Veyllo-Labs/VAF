@@ -66,6 +66,9 @@ def mac_picture(monkeypatch, tmp_path):
     monkeypatch.setattr(main_mod.subprocess, "Popen", _popen)
     monkeypatch.setattr(top, "cmd_top", lambda **kw: dashboards.append(kw))
     monkeypatch.setattr(main_mod, "_stop_spawned_tray", lambda proc: None)
+    monkeypatch.setattr(main_mod, "_await_spawned_tray",
+                        lambda proc, log: instance.Instance(pid=proc.pid, mode="tray",
+                                                            recorded=False))
     return main_mod, spawned, dashboards
 
 
@@ -91,3 +94,61 @@ def test_the_dashboard_does_not_show_a_dashboard_as_the_service(mac_picture):
     """`vaf top` showed the left-over dashboard as "Service PID 45156"."""
     import vaf.cli.cmd.top as top
     assert top._service_pid() is None
+
+
+# -- "started" means the child holds the port ------------------------------------------------
+
+
+class _Child:
+    def __init__(self, pid=777, exits_with=None):
+        self.pid = pid
+        self._code = exits_with
+
+    def poll(self):
+        return self._code
+
+
+@pytest.fixture
+def quick(monkeypatch):
+    import vaf.main as main_mod
+    import vaf.cli.ui as ui
+    said = []
+    for level in ("info", "success", "warning", "error"):
+        monkeypatch.setattr(ui.UI, level, lambda msg, _l=level: said.append((_l, msg)))
+    monkeypatch.setattr(main_mod, "SPAWN_ANSWER_TIMEOUT_S", 2.0)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    return main_mod, said
+
+
+def test_a_child_that_exits_is_reported_not_announced(quick, monkeypatch, tmp_path):
+    """MUTATION: announce "VAF tray started" right after spawning again and a child that
+    failed its singleton check is shown as a running VAF."""
+    main_mod, said = quick
+    monkeypatch.setattr(instance, "find_service", lambda: None)
+    monkeypatch.setattr(instance, "port_held_by_another", lambda: False)
+    assert main_mod._await_spawned_tray(_Child(exits_with=1), tmp_path / "vaf_run.log") is None
+    assert any(l == "error" and "exited while starting" in m for l, m in said), said
+
+
+def test_a_port_held_by_another_program_is_named(quick, monkeypatch, tmp_path):
+    main_mod, said = quick
+    monkeypatch.setattr(instance, "find_service", lambda: None)
+    monkeypatch.setattr(instance, "port_held_by_another", lambda: True)
+    assert main_mod._await_spawned_tray(_Child(exits_with=0), tmp_path / "vaf_run.log") is None
+    assert any(l == "error" and "another program" in m for l, m in said), said
+
+
+def test_the_child_answering_is_the_success(quick, monkeypatch, tmp_path):
+    main_mod, said = quick
+    monkeypatch.setattr(instance, "find_service",
+                        lambda: instance.Instance(pid=777, mode="tray", recorded=True))
+    found = main_mod._await_spawned_tray(_Child(), tmp_path / "vaf_run.log")
+    assert found is not None and found.pid == 777
+    assert not any(l == "error" for l, _ in said)
+
+
+def test_the_start_refuses_up_front_when_another_program_holds_the_port(mac_picture, monkeypatch):
+    main_mod, spawned, dashboards = mac_picture
+    monkeypatch.setattr(instance, "port_held_by_another", lambda: True)
+    main_mod._run_tray_with_dashboard()
+    assert spawned == [] and dashboards == []

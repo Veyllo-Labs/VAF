@@ -235,9 +235,13 @@ not `build_app.sh`.
   elements) lives in `vaf/core/instance.py` and serves the CLI's finder too;
   it is the wide answer for "what to stop". "Is VAF up?" has a strict one,
   `find_service()`: only the singleton port accepting a connection counts
-  (a connect, since listing a port's owner needs root on macOS). The record
-  names the process; without one only the port's owner does, and only when it
-  runs a tray entry point, so another program holding the port is not VAF. The terminal start and
+  (a connect, since listing a port's owner needs root on macOS). A process is
+  named only with evidence that it is the listener: its OWN sockets (readable
+  without root on macOS too) include the port, and it runs a tray entry point.
+  The record, a command line or a pid alone prove nothing; another program on
+  the port is not VAF, and the terminal start then says the port is taken
+  instead of starting. After spawning, the start reports "started" only once
+  the child holds the port, and an error when the child exits instead. The terminal start and
   `vaf top` ask that one. The listener on that port (`command_listener` in
   `vaf/tray.py`) therefore sees connections that send nothing; a reset or a
   silent client costs it that one connection, never the thread.

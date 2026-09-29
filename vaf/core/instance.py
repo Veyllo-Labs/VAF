@@ -253,29 +253,47 @@ def find_service() -> Optional[Instance]:
     running, opened no window and said nothing.
 
     So only the singleton port decides, the one identity no command line can
-    fake: nothing accepts on it, nothing runs. While something does, the
-    instance's own record names it; without a record, only the port's owner
-    does, and only when it runs a tray entry point - something else holding the
-    port is not VAF. A wrong "not running" costs nothing: the tray started
-    next fails its own singleton check and exits. A wrong "running" locks the
-    person out without a word. Never raises."""
+    fake: nothing accepts on it, nothing runs. While something does, a process
+    is named only with EVIDENCE that it is the one listening, and it must run a
+    tray entry point: the recorded instance, the port's owner, or a `vaf.main
+    tray` process - each only when its own sockets include the listener. A
+    process's own sockets can be read without root on macOS too, where the
+    machine-wide owner lookup cannot; a record or a command line alone proves
+    nothing (a recorded pid can be reused by a dashboard, whose command line
+    matches). Something else holding the port is not VAF: the answer is None,
+    and a caller that is about to start VAF says so (port_held_by_another()).
+    A wrong "not running" costs nothing: the tray started next fails its own
+    singleton check and exits. A wrong "running" locks the person out without
+    a word. Never raises."""
     try:
         if not singleton_listening():
             return None
+        import psutil
         recorded = read_record()
-        if recorded is not None:
+        if recorded is not None and _listens_on_singleton(_safe_call(
+                lambda: psutil.Process(recorded.pid), None)):
             return recorded
-        # No record: only the port's owner may be named, and only when it runs a
-        # tray entry point. NOT the argv scan: another program on the port plus a
-        # left-over dashboard would name that dashboard again. Where the owner
-        # cannot be seen (macOS without root) the answer is "not running", the
-        # harmless direction; every current VAF writes its record anyway.
+        candidates = []
         owner = _port_owner()
-        if owner is not None and _is_live_vaf_pid(int(owner.pid)):
-            return _as_instance(owner)
+        if owner is not None:
+            candidates.append(owner)
+        candidates.extend(locate_processes())
+        for proc in candidates:
+            if _is_live_vaf_pid(int(proc.pid)) and _listens_on_singleton(proc):
+                return _as_instance(proc)
     except Exception:
         pass
     return None
+
+
+def port_held_by_another() -> bool:
+    """True when the singleton port answers but no VAF process can be shown to
+    hold it: another program is sitting on VAF's port, and a tray started now
+    would fail its singleton check. Never raises."""
+    try:
+        return singleton_listening() and find_service() is None
+    except Exception:
+        return False
 
 
 def is_tray_entry(argv) -> bool:
@@ -316,6 +334,21 @@ def _port_owner():
     except Exception:
         pass
     return None
+
+
+def _listens_on_singleton(proc) -> bool:
+    """True when `proc`'s OWN sockets include a listener on the singleton port.
+    Readable for one's own processes on every platform, macOS included, where
+    the machine-wide lookup in _port_owner() needs root. Never raises."""
+    if proc is None:
+        return False
+    try:
+        import psutil
+        read = getattr(proc, "net_connections", None) or getattr(proc, "connections")
+        return any(c.status == psutil.CONN_LISTEN and c.laddr
+                   and c.laddr.port == TRAY_SINGLETON_PORT for c in read(kind="tcp"))
+    except Exception:
+        return False
 
 
 def _as_instance(proc) -> Optional[Instance]:

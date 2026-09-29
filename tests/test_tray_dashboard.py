@@ -49,6 +49,11 @@ def _wire(monkeypatch, tmp_path, running=None, tty=True):
     from vaf.core import instance
     monkeypatch.setattr(instance, "find_service", lambda: (
         instance.Instance(pid=running, mode="tray", recorded=True) if running else None))
+    monkeypatch.setattr(instance, "port_held_by_another", lambda: False)
+    # The spawned child "answers" at once (its own contract: test_tray_start_decision.py).
+    monkeypatch.setattr(main_mod, "_await_spawned_tray",
+                        lambda proc, log: instance.Instance(pid=proc.pid, mode="tray",
+                                                            recorded=False))
     monkeypatch.setattr(service_mod, "_running_pid", lambda: running)
     monkeypatch.setattr(service_mod, "_find_vaf_processes", lambda: [])
     monkeypatch.setattr(service_mod, "_pid_file", lambda: tmp_path / "server.pid")

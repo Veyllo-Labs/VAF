@@ -289,7 +289,12 @@ def find_service() -> Optional[Instance]:
 def port_held_by_another() -> bool:
     """True when the singleton port answers but no VAF process can be shown to
     hold it: another program is sitting on VAF's port, and a tray started now
-    would fail its singleton check. Never raises."""
+    would fail its singleton check. Also true for a VAF running under ANOTHER
+    user account: its sockets are unreadable to us (measured on macOS: a
+    process of the same user reads fine without root, another user's gives
+    AccessDenied), and the right words for both are "the port is taken", said
+    out loud rather than "not running". Server mode is unaffected: its unit is
+    `systemctl --user`, the same account. Never raises."""
     try:
         return singleton_listening() and find_service() is None
     except Exception:

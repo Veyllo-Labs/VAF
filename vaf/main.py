@@ -520,7 +520,7 @@ def _await_spawned_tray(proc, log):
                 return running
             if instance.port_held_by_another():
                 UI.error(f"VAF could not start: port {instance.TRAY_SINGLETON_PORT} is taken "
-                         "by another program.")
+                         "by another program (or by a VAF of another user account).")
             else:
                 UI.error(f"VAF exited while starting (exit code {code}). Log: {log}")
             return None
@@ -558,8 +558,8 @@ def _run_tray_with_dashboard() -> None:
         cmd_top(interval=2.0, once=False, logs=True)
         return
     if instance.port_held_by_another():
-        UI.error(f"Port {instance.TRAY_SINGLETON_PORT} is taken by another program, not VAF - "
-                 "VAF cannot start until it is freed.")
+        UI.error(f"Port {instance.TRAY_SINGLETON_PORT} is taken by another program (or by a VAF "
+                 "of another user account) - VAF cannot start until it is freed.")
         return
 
     log = Path.home() / ".vaf" / "logs" / "vaf_run.log"

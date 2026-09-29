@@ -1777,12 +1777,6 @@ def _workspace_has_real_content(path: Path) -> bool:
     walk error is treated as "has content" (fail toward keeping the folder,
     never toward deleting something we could not fully inspect).
 
-    ONE dot folder counts: `DRAFTS_DIR`, where the editor keeps the draft of a
-    text the user asked for. It is hidden from the listing, not throwaway - the
-    user may have edited and saved it, and deleting the chat must not delete
-    that. Every other dot entry (the workspace label, tool caches) still does
-    not count.
-
     onerror=raise is what makes that fail-safe REAL: os.walk's default
     (onerror=None) silently SKIPS unreadable subdirectories instead of
     raising, so a permission-denied subtree full of files classified the
@@ -1795,7 +1789,7 @@ def _workspace_has_real_content(path: Path) -> bool:
 
     try:
         for _root, dirs, files in _os.walk(path, onerror=_walk_error):
-            dirs[:] = [d for d in dirs if not d.startswith(".") or d == DRAFTS_DIR]
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
             if any(not f.startswith(".") for f in files):
                 return True
         return False
@@ -1888,10 +1882,11 @@ def resolve_agent_output_dir(default: Path, session_id: Optional[str] = None) ->
 
 WORKSPACE_LABEL_FILE = ".vaf_workspace.json"
 
-#: The editor's drafts inside a chat's workspace (headless_runner writes them). A dot folder
-#: so the workspace listing hides it; still content when the chat is deleted
-#: (`_workspace_has_real_content`).
-DRAFTS_DIR = ".drafts"
+#: The editor's drafts inside a chat's workspace (headless_runner writes them). Deliberately
+#: NOT a dot folder: the user may have edited and saved a draft, so it must show in the
+#: workspace window and its search, survive deleting the chat like any other file, and stay
+#: findable in the folder a deleted chat leaves behind.
+DRAFTS_DIR = "drafts"
 
 
 def get_user_projects_root(user_scope_id: Optional[str]) -> Optional[Path]:

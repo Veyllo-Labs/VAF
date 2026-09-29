@@ -519,12 +519,12 @@ def _maybe_open_draft_in_editor(
     save it to a draft file and open the Document Editor so the user can edit or save.
     Only runs for Web UI (source == 'web').
 
-    The draft goes into the chat's own workspace (``.drafts/entwurf.md``), because the editor
+    The draft goes into the chat's own workspace (``drafts/entwurf.md``), because the editor
     reads and saves it through the file routes, and those answer an account without admin
     rights only inside its own tree. It lived in the data directory, which worked only while
-    the routes served that directory to every account. The dot folder keeps it out of the
-    workspace listing; deleting the chat keeps the folder when it holds a draft, like any
-    other file (`session.DRAFTS_DIR`).
+    the routes served that directory to every account. It is an ordinary folder there
+    (`session.DRAFTS_DIR`): the workspace window lists it, and deleting the chat keeps it
+    like any other file.
     ``user_scope_id`` is the turn's own, so the workspace is found without reading the session
     back off disk.
     """

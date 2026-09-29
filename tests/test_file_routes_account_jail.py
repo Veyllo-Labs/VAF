@@ -193,8 +193,9 @@ def test_the_internal_event_gate_admits_the_local_process_and_refuses_an_account
 
 def test_the_editor_draft_lands_where_the_account_may_read_and_save_it(tree, monkeypatch):
     """It was written to the data directory so the file routes could reach it - which only
-    worked because they reached everything. Now in the chat's workspace, hidden from the
-    listing by its dot folder."""
+    worked because they reached everything. Now in the chat's workspace, in a folder the
+    workspace window lists: no path component is hidden, so it stays findable after the chat
+    is deleted too."""
     import vaf.core.web_interface as wi
     from vaf.core.headless_runner import _maybe_open_draft_in_editor
     from vaf.tools.filesystem import jail_allows
@@ -204,7 +205,10 @@ def test_the_editor_draft_lands_where_the_account_may_read_and_save_it(tree, mon
                                 user_scope_id=TENANT)
     assert len(opened) == 1
     draft = opened[0]
-    assert draft.replace("\\", "/").endswith("VAF_Projects/ab12cd34/chat1/.drafts/entwurf.md")
+    assert draft.replace("\\", "/").endswith("VAF_Projects/ab12cd34/chat1/drafts/entwurf.md")
+    from pathlib import Path
+    workspace = tree["own"].parents[1] / "chat1"
+    assert not any(part.startswith(".") for part in Path(draft).resolve().relative_to(workspace.resolve()).parts)
     for mode in ("read", "write"):
         assert jail_allows(draft, user_scope_id=TENANT, user_role="user", mode=mode)
 

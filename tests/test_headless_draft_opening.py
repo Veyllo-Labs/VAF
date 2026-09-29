@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """The editor draft of a text the user asked for. It lives in the chat's workspace
-(`.drafts/entwurf.md`), where the file routes let the chat's account read and save it; the
+(`drafts/entwurf.md`), where the file routes let the chat's account read and save it; the
 data directory it used to live in is served to admins only."""
 from pathlib import Path
 
@@ -52,7 +52,7 @@ def test_maybe_open_draft_in_editor_creates_draft_when_editor_empty(monkeypatch,
         user_scope_id=SCOPE,
     )
 
-    draft_path = tmp_path / "VAF_Projects" / "ab12cd34" / "sess-2" / ".drafts" / "entwurf.md"
+    draft_path = tmp_path / "VAF_Projects" / "ab12cd34" / "sess-2" / "drafts" / "entwurf.md"
     assert draft_path.exists()
     assert draft_path.read_text(encoding="utf-8") == content.strip()
     assert created == [("sess-2", str(draft_path.resolve()), "Entwurf")]

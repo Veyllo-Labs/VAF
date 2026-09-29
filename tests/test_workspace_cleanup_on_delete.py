@@ -53,18 +53,19 @@ def test_delete_ignores_dotfiles_when_deciding_empty(session):
 
 
 def test_delete_keeps_a_workspace_that_holds_a_draft(session):
-    """The editor keeps the draft of a text the user asked for in a hidden `.drafts` folder.
-    The user may have edited and saved it, so it is content; any other dot folder is not.
-    MUTATION: prune `.drafts` with the other dot folders and the draft goes with the chat."""
+    """The editor keeps the draft of a text the user asked for in the chat's `drafts` folder.
+    The user may have edited and saved it, so it is content like any other file.
+    MUTATION: make DRAFTS_DIR a dot folder again and the draft goes with the chat."""
+    from vaf.core.session import DRAFTS_DIR
     mgr, sess, chat_dir = session
-    (chat_dir / ".drafts").mkdir(parents=True)
-    (chat_dir / ".drafts" / "entwurf.md").write_text("my edited text")
+    (chat_dir / DRAFTS_DIR).mkdir(parents=True)
+    (chat_dir / DRAFTS_DIR / "entwurf.md").write_text("my edited text")
     (chat_dir / ".cache").mkdir()
     (chat_dir / ".cache" / "x.bin").write_text("tool cache")
 
     mgr.delete(sess.id)
 
-    assert (chat_dir / ".drafts" / "entwurf.md").read_text() == "my edited text"
+    assert (chat_dir / DRAFTS_DIR / "entwurf.md").read_text() == "my edited text"
 
 
 def test_delete_still_removes_a_workspace_with_only_other_dot_folders(session):

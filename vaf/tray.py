@@ -1095,10 +1095,72 @@ def toggle_persistence(icon=None, item=None):
     if item is not None and hasattr(item, "state"):
         item.state = new_state
 
+def _own_children() -> list:
+    """This process's direct children (psutil.Process objects), or [] without psutil."""
+    try:
+        import psutil
+        return psutil.Process().children(recursive=False)
+    except Exception:
+        return []
+
+
+def _stop_what_we_started(children) -> None:
+    """Stop each child this instance started, with its whole tree and group.
+
+    Replaces `pkill -f "python.*vaf.main"` and `pkill -f "node.*VAF"`, which
+    matched by NAME: they also ended a `vaf run` chat in another terminal,
+    `vaf a2a session` processes, any shell whose command line mentioned
+    vaf.main, and `vaf stop` itself - while missing the WhatsApp bridge
+    whenever the install path had no upper-case "VAF" (every pip install).
+    Parentage cannot be faked: what we started is ours. Each tree is stopped
+    in parallel with Platform.terminate_process_tree (SIGTERM, grace, SIGKILL,
+    the process group included), so the wait is one grace period, not one per
+    child. Never raises."""
+    from vaf.core.platform import Platform
+    workers = []
+    for child in children or []:
+        try:
+            if not child.is_running():
+                continue
+            t = threading.Thread(target=Platform.terminate_process_tree,
+                                 args=(int(child.pid),), kwargs={"grace": 1.5}, daemon=True)
+            t.start()
+            workers.append(t)
+        except Exception:
+            continue
+    deadline = time.monotonic() + 5.0
+    for t in workers:
+        t.join(timeout=max(0.0, deadline - time.monotonic()))
+
+
+def _end_the_dashboard_that_started_us() -> None:
+    """Close the terminal dashboard (`vaf tray` in a terminal) that started this
+    instance, so it ends with the service instead of watching nothing. Only our
+    own PARENT, and only when it is that dashboard (the tray entry point without
+    --no-top): a shell, systemd, the `vaf start` launcher or a dashboard merely
+    attached from another terminal is left alone. SIGTERM, as the old sweep
+    sent: NOT SIGINT, because the dashboard answers Ctrl+C by stopping the
+    tray's whole process group (main._stop_spawned_tray), and that group holds
+    the Docker stop still running in the background. Never raises."""
+    try:
+        import psutil
+        from vaf.core.instance import is_tray_entry
+        parent = psutil.Process().parent()
+        if parent is None:
+            return
+        argv = parent.cmdline()
+        if not is_tray_entry(argv) or "--no-top" in argv:
+            return
+        parent.terminate()
+    except Exception:
+        pass
+
+
 def quit_app(icon=None, item=None):
     """Handle quit action. Pystray passes (icon, item)."""
-    # Disarm signal handlers so that a SIGTERM we send ourselves during cleanup
-    # (the POSIX pkill below) does not re-enter quit_app(). signal.signal() only
+    # Disarm signal handlers so that a SIGTERM arriving during cleanup (a
+    # `vaf stop` racing this quit, say) does not re-enter quit_app().
+    # signal.signal() only
     # works in the main thread, and pystray invokes quit_app() from a worker
     # thread (notably on Windows), so guard against that to avoid a ValueError.
     import signal as _signal
@@ -1119,6 +1181,10 @@ def quit_app(icon=None, item=None):
 
     print("Shutting down...")
     tray_context.should_exit = True
+
+    # What this instance started, taken NOW: the Docker stop below runs as a child
+    # too and must outlive this process, so it must not be on the list.
+    started_by_us = _own_children()
 
     # The record is this process's; a clean exit takes it along. (A killed
     # process cannot, which is why readers verify the pid and the stopper
@@ -1221,17 +1287,11 @@ def quit_app(icon=None, item=None):
     except Exception:
         pass
 
-    # Kill any remaining Node.js / Python VAF processes.
-    # Use SIGTERM first (allows graceful shutdown), then the force_exit
-    # timer acts as the SIGKILL backstop after 25s.
-    if platform.system() != "Windows":
-        try:
-            subprocess.run(["pkill", "-TERM", "-f", "node.*VAF"],
-                           stderr=subprocess.DEVNULL, timeout=2)
-            subprocess.run(["pkill", "-TERM", "-f", "python.*vaf.main"],
-                           stderr=subprocess.DEVNULL, timeout=2)
-        except Exception:
-            pass
+    # What is still running of what this instance started (the WhatsApp bridge,
+    # sub-agent and workflow children, MCP servers), and the dashboard that
+    # started this instance.
+    _stop_what_we_started(started_by_us)
+    _end_the_dashboard_that_started_us()
 
     # Small pause to let the Docker background thread and SIGTERM propagate.
     time.sleep(2)

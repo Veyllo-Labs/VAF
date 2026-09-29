@@ -207,9 +207,10 @@ Quit**, all via Spotlight. Notes:
   clean way to quit is the tray **Quit**.
 - A self-update (Update now in the web UI, or `vaf update` in another terminal)
   stops this VAF and starts it again detached, window and menu-bar icon
-  included. The dashboard in the minimised Terminal window usually ends with the
-  old process (the tray's shutdown sweep reaches it); reattach with `vaf top` or
-  close that window. Quit keeps working from the tray. A dashboard can also
+  included. The dashboard in the minimised Terminal window ends with the old
+  process: on quit the tray closes the dashboard that started it (its own
+  parent, never a dashboard merely attached from elsewhere); reattach with
+  `vaf top` or close that window. Quit keeps working from the tray. A dashboard can also
   outlive its service (measured: a day and a half after the service had exited);
   it then shows the service as not running, and the next start from the icon
   starts VAF instead of attaching to the dashboard.
@@ -245,6 +246,17 @@ not `build_app.sh`.
   `vaf top` ask that one. The listener on that port (`command_listener` in
   `vaf/tray.py`) therefore sees connections that send nothing; a reset or a
   silent client costs it that one connection, never the thread.
+- **Quit stops what this instance started, nothing else.** After the frontend,
+  llama-server and the agent's background commands are stopped by name, every
+  process the tray still has as a direct child (the WhatsApp bridge, sub-agent and
+  workflow children, MCP servers) is stopped with its tree and process group
+  (`_stop_what_we_started` in `vaf/tray.py`, via `Platform.terminate_process_tree`),
+  on every platform. The list is taken when quit begins, so the Docker stop that
+  runs on in the background is not on it. This replaced `pkill -f
+  "python.*vaf.main"` and `pkill -f "node.*VAF"`, which matched by name: they also
+  ended a `vaf run` chat in another terminal and any shell whose command mentioned
+  `vaf.main`, and missed the WhatsApp bridge on installs without an upper-case
+  "VAF" in the path.
 - Prefer `vaf.core.platform.Platform` helpers for OS checks and paths (instead of direct `platform.system()` checks in new code).
 - Tray callbacks accept `(icon, item)` (pystray convention) on all platforms.
 - Desktop window API: `vaf.core.desktop_window` - `init()`, `start()`, `show()`, `hide()`, `navigate()`, `destroy()`.

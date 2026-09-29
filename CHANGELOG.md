@@ -21,6 +21,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the service either. And one faulty connection to a running VAF can no longer stop it from
   hearing a second start, which then opened the browser instead of VAF's window. When
   another program holds VAF's port, the start now says so instead of claiming it started.
+- **Quitting VAF no longer ends other programs that merely carry its name.** On quit, VAF
+  stopped every process whose command line contained "vaf.main" or "node ... VAF": a
+  `vaf run` chat open in another terminal, other VAF tools and even the terminal command
+  that asked it to stop. It now stops exactly what it started itself, with everything those
+  started in turn. That also covers the WhatsApp bridge, which survived the quit on installs
+  whose folder name was not "VAF" (every pip install), and it now happens on Windows too.
 - **The agent can read skill files when your home folder is reached through a link.** A home
   moved to another disk and linked back (or a folder under /var on a Mac) made every file of
   a skill look like part of VAF's protected data folder, so the agent was refused them.

@@ -129,14 +129,16 @@ def _describe(inst: Instance) -> str:
 def _surviving_the_shutdown():
     """Ignore SIGTERM while VAF shuts down, and restore the disposition after.
 
-    The tray's quit broadcasts `pkill -TERM -f "python.*vaf.main"` to sweep
-    up its children, and that pattern matches the process doing the stopping
-    as well: `vaf stop`, `vaf restart` and the self-updater are all
-    `python -m vaf.main <verb>`. Measured with pgrep against a process started
-    the way the updater is: it is on the list. Without this, the stop step
-    would kill the updater in the middle of its own update, with VAF down and
-    nothing left to start it again. POSIX only; there is no pkill on Windows,
-    and the broadcast is skipped there.
+    A tray of an EARLIER version broadcasts `pkill -TERM -f "python.*vaf.main"`
+    on quit, and that pattern matches the process doing the stopping as well:
+    `vaf stop`, `vaf restart` and the self-updater are all `python -m vaf.main
+    <verb>`. Measured with pgrep against a process started the way the updater
+    is: it is on the list. Without this, the stop step would kill the updater
+    in the middle of its own update, with VAF down and nothing left to start it
+    again. The current tray stops only what it started (vaf/tray.py
+    _stop_what_we_started); NAMED BOUNDARY: the shield stays anyway, because the
+    updater of this version stops the tray of the version BEFORE it, which still
+    broadcasts. POSIX only; there is no pkill on Windows.
     """
     if platform.system() == "Windows":
         yield

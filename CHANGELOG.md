@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a30] - 2026-09-29
+
 ### Added
 
 - **Your agent can work on your servers over SSH.** Tell it "my server is user@host, the

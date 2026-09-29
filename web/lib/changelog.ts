@@ -31,6 +31,39 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a30',
+    date: '2026-09-29',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'Your agent can work on your servers over SSH: tell it the address and the password once, and it updates, sets up or copies files, with every call confirmed in the chat (not on Windows yet). Each account has its own key and its own list of servers, and a server that later shows a different key is refused.',
+          'Give the agent a password right in the chat and it keeps it safe: it goes into your own encrypted credential store under a name and is removed from the conversation, the saved chat and the logs.',
+          'The agent can run a command in the background, keep working and pick the chat up again when the command is done, and it can ask you a question with answers to pick as buttons.',
+          'Every account can sign in to an MCP server with its own access, and pair its own Telegram with a one-time code.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'A workflow runs in the background and the chat carries on when it is done; a message the agent writes for you stops at a draft you can change before it goes.',
+          'The agent can read a web page for one question, download files into the chat, and start several reviewers at once.',
+          'Long conversations keep more when they are compressed, and a chat reads the VAF.md of its own project.',
+          'Sender verification for mail is on by default.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'On an installation shared by several people, an account opens and saves only its own files, the way its agent does; another account can no longer take over your Telegram or Discord.',
+          'An HTML file you open in VAF, or another web page, can no longer act as you.',
+          '"Allow once" means once, and there is a new "For this chat".',
+          'Remote MCP servers work, their keys are no longer stored in plaintext; timed automations run again.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a29',
     date: '2026-09-20',
     sections: [

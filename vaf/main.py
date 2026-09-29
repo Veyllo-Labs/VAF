@@ -494,6 +494,24 @@ def _stop_spawned_tray(proc) -> None:
         pass
 
 
+def _reconcile_pid_file(proc, started) -> None:
+    """After the start decision, the pid file names the service that runs. Our child
+    failed: its pid goes. Another start won: the winner's pid replaces ours. Either
+    only while the file still holds OUR child's pid - another launcher may have
+    written it since, and that record is not ours to touch."""
+    try:
+        from vaf.cli.cmd.service import _pid_file
+        pf = _pid_file()
+        if pf.read_text().strip() != str(proc.pid):
+            return
+        if started is None:
+            pf.unlink(missing_ok=True)
+        elif started.pid != proc.pid:
+            pf.write_text(str(started.pid))
+    except Exception:
+        pass
+
+
 #: How long a spawned tray may take to reach its singleton check (imports, config).
 #: Past it the dashboard takes over anyway, saying the service has not answered yet.
 SPAWN_ANSWER_TIMEOUT_S = 60.0
@@ -578,6 +596,7 @@ def _run_tray_with_dashboard() -> None:
     # singleton check exits at once, and the dashboard used to take over anyway,
     # claiming a VAF that did not exist.
     started = _await_spawned_tray(proc, log)
+    _reconcile_pid_file(proc, started)
     if started is None:
         return
     if started.pid != proc.pid:

@@ -58,10 +58,11 @@ class FakeProc:
             return []
         import psutil
         return [type("C", (), {"status": psutil.CONN_LISTEN,
-                               "laddr": type("A", (), {"port": instance.TRAY_SINGLETON_PORT})()})()]
+                               "laddr": type("A", (), {"ip": "127.0.0.1",
+                                                       "port": instance.TRAY_SINGLETON_PORT})()})()]
 
 
-def _fake_table(monkeypatch, procs, port_owner=None):
+def _fake_table(monkeypatch, procs, port_owner=None, owner_ip="127.0.0.1"):
     """psutil as the finder sees it: the singleton-port owner (when given),
     then the process table."""
     import psutil as real
@@ -76,7 +77,8 @@ def _fake_table(monkeypatch, procs, port_owner=None):
     conns = []
     if port_owner is not None:
         conns = [type("C", (), {"status": real.CONN_LISTEN, "pid": port_owner,
-                                "laddr": type("A", (), {"port": instance.TRAY_SINGLETON_PORT})()})()]
+                                "laddr": type("A", (), {"ip": owner_ip,
+                                                        "port": instance.TRAY_SINGLETON_PORT})()})()]
     monkeypatch.setattr(real, "net_connections", lambda kind="tcp": conns)
     monkeypatch.setattr(real, "process_iter", lambda attrs=None: iter(procs))
     monkeypatch.setattr(real, "Process", process)
@@ -364,3 +366,15 @@ def test_a_process_can_read_its_own_listener_on_every_platform(monkeypatch):
     finally:
         srv.close()
     assert instance._listens_on_singleton(psutil.Process()) is False
+
+
+def test_a_listener_on_another_address_is_not_the_probed_one(monkeypatch):
+    """MUTATION: match the port alone again and a process on a LAN address at 8002 is
+    taken for the owner of the loopback listener the probe reached."""
+    lan = FakeProc(88, _TRAY)
+    _fake_table(monkeypatch, [lan], port_owner=88, owner_ip="192.0.2.10")
+    assert instance._port_owner() is None
+    for ip, answers in (("127.0.0.1", True), ("0.0.0.0", True), ("::", True),
+                        ("192.0.2.10", False), ("10.0.0.5", False)):
+        laddr = type("A", (), {"ip": ip, "port": instance.TRAY_SINGLETON_PORT})()
+        assert instance._answers_probe(laddr) is answers, ip

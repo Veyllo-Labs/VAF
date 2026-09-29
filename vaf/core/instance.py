@@ -332,9 +332,8 @@ def _port_owner():
         import psutil
         me = os.getpid()
         for conn in psutil.net_connections(kind="tcp"):
-            if (conn.status == psutil.CONN_LISTEN and conn.laddr
-                    and conn.laddr.port == TRAY_SINGLETON_PORT and conn.pid
-                    and conn.pid != me):
+            if (conn.status == psutil.CONN_LISTEN and _answers_probe(conn.laddr)
+                    and conn.pid and conn.pid != me):
                 return psutil.Process(conn.pid)
     except Exception:
         pass
@@ -350,8 +349,24 @@ def _listens_on_singleton(proc) -> bool:
     try:
         import psutil
         read = getattr(proc, "net_connections", None) or getattr(proc, "connections")
-        return any(c.status == psutil.CONN_LISTEN and c.laddr
-                   and c.laddr.port == TRAY_SINGLETON_PORT for c in read(kind="tcp"))
+        return any(c.status == psutil.CONN_LISTEN and _answers_probe(c.laddr)
+                   for c in read(kind="tcp"))
+    except Exception:
+        return False
+
+
+#: The listener addresses that answer the probe's connect to 127.0.0.1: loopback itself
+#: and the wildcards. The tray binds 127.0.0.1; a process on another address at the same
+#: port (a LAN interface) does not answer the probe and is not its listener.
+_PROBE_ANSWERING_IPS = frozenset({"127.0.0.1", "0.0.0.0", "::", "::ffff:127.0.0.1",
+                                  "::ffff:0.0.0.0"})
+
+
+def _answers_probe(laddr) -> bool:
+    """True when a listening address is the one singleton_listening() connects to."""
+    try:
+        return (bool(laddr) and laddr.port == TRAY_SINGLETON_PORT
+                and str(laddr.ip) in _PROBE_ANSWERING_IPS)
     except Exception:
         return False
 

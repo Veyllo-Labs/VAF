@@ -218,7 +218,8 @@ def test_the_singleton_port_owner_is_the_service_not_a_viewer(monkeypatch):
     mk = lambda pid, cmdline: type("P", (), {"pid": pid,
                                              "info": {"pid": pid, "cmdline": cmdline}})()
     conn = type("C", (), {"status": psutil.CONN_LISTEN, "pid": 4242,
-                          "laddr": type("A", (), {"port": service_mod.TRAY_SINGLETON_PORT})()})()
+                          "laddr": type("A", (), {"ip": "127.0.0.1",
+                                                  "port": service_mod.TRAY_SINGLETON_PORT})()})()
     monkeypatch.setattr(psutil, "net_connections", lambda kind="tcp": [conn])
     monkeypatch.setattr(psutil, "Process", lambda pid: mk(pid, ["python", "-m", "vaf.main", "tray", "--no-top"]))
     monkeypatch.setattr(psutil, "process_iter",

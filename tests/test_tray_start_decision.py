@@ -152,3 +152,36 @@ def test_the_start_refuses_up_front_when_another_program_holds_the_port(mac_pict
     monkeypatch.setattr(instance, "port_held_by_another", lambda: True)
     main_mod._run_tray_with_dashboard()
     assert spawned == [] and dashboards == []
+
+
+# -- the pid file names the service that runs -----------------------------------------------
+
+
+@pytest.mark.parametrize("started_pid,file_before,file_after", [
+    (None, "777", None),          # our child failed: its pid goes
+    (4242, "777", "4242"),        # another start won: the winner's pid
+    (777, "777", "777"),          # ours runs: unchanged
+    (None, "999", "999"),         # someone else wrote it since: not ours to touch
+])
+def test_the_pid_file_is_reconciled_after_the_start(tmp_path, monkeypatch, started_pid,
+                                                    file_before, file_after):
+    """MUTATION: drop _reconcile_pid_file and a failed start leaves its dead child in the
+    file, a lost race overwrites the winner's pid with it."""
+    import vaf.cli.cmd.service as svc
+    import vaf.main as main_mod
+    pf = tmp_path / "vaf.pid"
+    pf.write_text(file_before)
+    monkeypatch.setattr(svc, "_pid_file", lambda: pf)
+    started = None if started_pid is None else instance.Instance(pid=started_pid, mode="tray")
+    main_mod._reconcile_pid_file(_Child(pid=777), started)
+    assert (pf.read_text() if pf.exists() else None) == file_after
+
+
+def test_the_start_flow_reconciles_the_pid_file(mac_picture, monkeypatch, tmp_path):
+    """The flow, not only the helper: a failed start leaves no pid of its dead child."""
+    main_mod, spawned, dashboards = mac_picture
+    monkeypatch.setattr(main_mod, "_await_spawned_tray", lambda proc, log: None)
+    main_mod._run_tray_with_dashboard()
+    assert spawned, "the start did spawn"
+    assert not (tmp_path / "vaf.pid").exists()
+    assert dashboards == []

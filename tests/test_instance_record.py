@@ -275,13 +275,30 @@ def test_find_service_names_the_recorded_instance_while_the_port_answers(home, m
     assert found is not None and found.pid == os.getpid() and found.recorded
 
 
-def test_find_service_without_a_record_prefers_the_detached_service(home, monkeypatch):
-    """A version that kept no record: the table names it, and of a dashboard and
-    the `--no-top` child it started, the child is the service."""
+def test_find_service_without_a_record_names_only_a_vaf_port_owner(home, monkeypatch):
+    """Without a record the port's owner names the service - when it IS one."""
     monkeypatch.setattr(instance, "singleton_listening", lambda timeout=0.5: True)
-    _fake_table(monkeypatch, [FakeProc(45, _DASHBOARD), FakeProc(46, _TRAY)])
+    _fake_table(monkeypatch, [FakeProc(45, _DASHBOARD), FakeProc(46, _TRAY)], port_owner=46)
     found = instance.find_service()
     assert found is not None and found.pid == 46 and not found.recorded
+
+
+def test_another_program_on_the_port_is_not_vaf(home, monkeypatch):
+    """MUTATION: fall back to the argv scan (or skip the owner's tray check) and the
+    left-over dashboard is named as the service again - the lockout, one step removed."""
+    monkeypatch.setattr(instance, "singleton_listening", lambda timeout=0.5: True)
+    stranger = FakeProc(77, ["/usr/bin/some-daemon", "--port", "8002"])
+    _fake_table(monkeypatch, [FakeProc(45, _DASHBOARD), stranger], port_owner=77)
+    assert instance.find_service() is None
+
+
+def test_an_owner_that_cannot_be_seen_is_not_guessed(home, monkeypatch):
+    """macOS without root: the owner is invisible, and the table cannot tell a
+    dashboard from the service, so without a record the answer is "not running" -
+    the harmless direction (the next tray fails its own singleton check)."""
+    monkeypatch.setattr(instance, "singleton_listening", lambda timeout=0.5: True)
+    _fake_table(monkeypatch, [FakeProc(45, _DASHBOARD), FakeProc(46, _TRAY)])
+    assert instance.find_service() is None
 
 
 def test_singleton_listening_connects_and_never_binds(monkeypatch):

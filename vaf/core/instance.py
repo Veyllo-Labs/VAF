@@ -191,14 +191,9 @@ def locate_processes() -> list:
         return []
 
     me = os.getpid()
-    try:
-        for conn in psutil.net_connections(kind="tcp"):
-            if (conn.status == psutil.CONN_LISTEN and conn.laddr
-                    and conn.laddr.port == TRAY_SINGLETON_PORT and conn.pid
-                    and conn.pid != me):
-                return [psutil.Process(conn.pid)]
-    except Exception:
-        pass
+    owner = _port_owner()
+    if owner is not None:
+        return [owner]
 
     found = []
     try:
@@ -259,9 +254,9 @@ def find_service() -> Optional[Instance]:
 
     So only the singleton port decides, the one identity no command line can
     fake: nothing accepts on it, nothing runs. While something does, the
-    instance's own record names it, and without a record (a version that kept
-    none) the process table does, preferring the detached `--no-top` service
-    over a dashboard. A wrong "not running" costs nothing: the tray started
+    instance's own record names it; without a record, only the port's owner
+    does, and only when it runs a tray entry point - something else holding the
+    port is not VAF. A wrong "not running" costs nothing: the tray started
     next fails its own singleton check and exits. A wrong "running" locks the
     person out without a word. Never raises."""
     try:
@@ -270,12 +265,14 @@ def find_service() -> Optional[Instance]:
         recorded = read_record()
         if recorded is not None:
             return recorded
-        procs = locate_processes()
-        detached = [p for p in procs if "--no-top" in (_safe_call(p.cmdline, []) or [])]
-        for proc in detached or procs:
-            inst = _as_instance(proc)
-            if inst is not None:
-                return inst
+        # No record: only the port's owner may be named, and only when it runs a
+        # tray entry point. NOT the argv scan: another program on the port plus a
+        # left-over dashboard would name that dashboard again. Where the owner
+        # cannot be seen (macOS without root) the answer is "not running", the
+        # harmless direction; every current VAF writes its record anyway.
+        owner = _port_owner()
+        if owner is not None and _is_live_vaf_pid(int(owner.pid)):
+            return _as_instance(owner)
     except Exception:
         pass
     return None
@@ -303,6 +300,23 @@ def is_tray_entry(argv) -> bool:
 
 
 # ── internals ────────────────────────────────────────────────────────────────
+
+def _port_owner():
+    """The psutil.Process listening on the singleton port, or None - also where
+    the platform does not let us see socket owners (macOS without root). Never
+    raises."""
+    try:
+        import psutil
+        me = os.getpid()
+        for conn in psutil.net_connections(kind="tcp"):
+            if (conn.status == psutil.CONN_LISTEN and conn.laddr
+                    and conn.laddr.port == TRAY_SINGLETON_PORT and conn.pid
+                    and conn.pid != me):
+                return psutil.Process(conn.pid)
+    except Exception:
+        pass
+    return None
+
 
 def _as_instance(proc) -> Optional[Instance]:
     """An unrecorded Instance for a found process, or None when it vanished."""

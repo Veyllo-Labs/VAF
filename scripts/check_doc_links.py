@@ -19,6 +19,13 @@ same run would have failed in CI, which is a 27-minute way to learn it.
 External links (http/https/mailto/tel), pure in-page anchors (``#section``) and link
 targets inside fenced code blocks are ignored. Stdlib only.
 
+Files git IGNORES are not scanned as sources: they are local notes (an agent's rules
+file, working drafts) that no clone will ever have, and their links answer to their
+own machine. Scanning them made this check fail on every other machine for a link
+between two local-only files (measured on macOS: CLAUDE.md -> a gitignored doc that
+exists on one workstation only). Untracked files that are NOT ignored are still
+scanned - a new doc not yet added is exactly what the check must see before commit.
+
 Run:
     python scripts/check_doc_links.py
 """
@@ -81,14 +88,30 @@ def tracked_paths():
     return {os.path.normpath(p) for p in out.split("\0") if p}
 
 
+def ignored_paths():
+    """Every file git ignores, as normalized relative paths, or an empty set where
+    git cannot answer (then nothing is skipped)."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "ls-files", "-z", "--others", "--ignored",
+                              "--exclude-standard"], capture_output=True,
+                             check=True, timeout=60).stdout.decode("utf-8", "ignore")
+    except Exception:
+        return set()
+    return {os.path.normpath(p) for p in out.split("\0") if p}
+
+
 def main():
     broken = []        # (file, raw_target)
     untracked = []     # (file, raw_target) - resolves here, dead in a clone
     line_anchors = []  # (file, raw_target)
     checked = 0
     tracked = tracked_paths()
+    ignored = ignored_paths()
 
     for f in iter_markdown_files():
+        if os.path.normpath(f) in ignored:
+            continue
         base = os.path.dirname(f)
         text = open(f, encoding="utf-8", errors="replace").read()
         for raw in iter_link_targets(text):

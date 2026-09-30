@@ -143,7 +143,7 @@ def is_own_message(row: Dict[str, Any], own_addresses: Optional[set] = None) -> 
         return False
     if not own_addresses:
         return False
-    from email.utils import parseaddr
+    from vaf.mail.addressing import parseaddr
     _name, addr = parseaddr(row.get("from_addr") or row.get("from") or "")
     return addr.strip().lower() in {a.strip().lower() for a in own_addresses if a}
 

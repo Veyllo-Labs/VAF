@@ -11,6 +11,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Security
+
+- **A mail's sender is read the same way on every supported Python.** Python 3.10 and
+  3.11 as installed on Windows and macOS (3.10.11 and 3.11.9, the last installers of those
+  series) predate the standard library's stricter address parsing. There, a From line
+  such as `me@example.com <stranger@example.org>` counted as mail from the address in the
+  display name: a stranger could look like your own mail, which is never answered, or like
+  one of your contacts when VAF matched the sender to the contact book. VAF now parses
+  every address header the way the patched standard library does, on every version, and
+  refuses such a line as unreadable.
+
 ### Fixed
 
 - **Starting VAF from its icon on a Mac starts it again after it had stopped.** Every icon

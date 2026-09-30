@@ -167,7 +167,15 @@ Deliberately deferred, listed so nobody looks for them in the code:
   counterpart `header_addresses` (the complete lowercased mailboxes named in one
   header string), which the per-address queries of both mail stores and the
   contact timeline's direction rule use so that `ann@example.com` never matches
-  `joann@example.com`. `writeback._op_send` is the only caller of `sender.send`;
+  `joann@example.com`. The same module is the one place an address header is parsed:
+  its `getaddresses` and `parseaddr` are the standard library's, strict by default,
+  and on a Python whose stdlib predates the strict parsing (3.10.11 and 3.11.9, the
+  last Windows and macOS installers of those series) it applies the fix's checks
+  itself, so `me@example.com <stranger@example.org>` never reads as mail from the
+  address in the display name. `strict=False` is the lenient parse, used by the case
+  token scan so one bad mailbox does not hide a good one beside it.
+  `tests/test_mail_addressing_strict.py` compares the emulation with the stdlib's own
+  strict parser and refuses a direct `email.utils` parse anywhere else in `vaf/`. `writeback._op_send` is the only caller of `sender.send`;
   the tools reach it through the outbox.
 - Libraries: IMAPClient (BSD-3) as the IMAP driver, stdlib `smtplib` for SMTP
   submission (every caller is synchronous, so an async SMTP client buys nothing;
@@ -1001,6 +1009,8 @@ Mailspring + Mailspring-Sync (GPL-3.0), Geary (LGPL-2.1+), Evolution/EDS
 (LGPL-2.1), K-9 Mail / Thunderbird for Android (Apache-2.0), Nextcloud Mail
 (AGPL-3.0), Roundcube (GPL-3.0+), Cypht (LGPL-2.1), jmap-perl (MIT), Dovecot
 (MIT/LGPL-2.1), Notmuch and isync/mbsync (GPL, read-only inspiration).
+The strict address checks in `vaf/mail/addressing.py` follow the behaviour of
+CPython's fix for CVE-2023-27043 (PSF-2.0), written anew for the older runtimes.
 Protocol algorithms come from IETF RFCs (freely implementable): 2177 (IDLE),
 3676 (format=flowed), 4315 (UIDPLUS), 4549 (offline sync), 5256 (threading),
 6154 (SPECIAL-USE), 6851 (MOVE), 7162 (CONDSTORE/QRESYNC), 8621 (JMAP data

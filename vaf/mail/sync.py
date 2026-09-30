@@ -287,7 +287,7 @@ class ImapSyncEngine:
             own_addrs = {str(a).lower() for a in (policy.get("own_addresses") or [])}
             if not (own or own_addrs):
                 return
-            from email.utils import parseaddr
+            from vaf.mail.addressing import parseaddr
             _name, addr = parseaddr(parsed.from_addr or "")
             addr = addr.strip().lower()
             domain = addr.rsplit("@", 1)[-1] if "@" in addr else ""

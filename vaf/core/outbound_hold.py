@@ -441,7 +441,7 @@ def recipient_name(channel: str, recipient: str, username: str,
         if channel == "whatsapp":
             return (contacts_store.get_contact_name_by_phone(raw, username, user_scope_id) or "").strip()
         if channel == "mail":
-            from email.utils import getaddresses
+            from vaf.mail.addressing import getaddresses
             pairs = [(n, a) for n, a in getaddresses([raw]) if a]
             if not pairs:
                 return ""
@@ -827,7 +827,7 @@ def _recipient_key(channel: str, recipient: str) -> Tuple[str, ...]:
     digits of a number, the lowercased addresses of a mail (display names left out)."""
     raw = str(recipient or "")
     if channel == "mail":
-        from email.utils import getaddresses
+        from vaf.mail.addressing import getaddresses
         return tuple(sorted({a.strip().lower() for _, a in getaddresses([raw]) if a.strip()}))
     return (re.sub(r"\D", "", raw),)
 

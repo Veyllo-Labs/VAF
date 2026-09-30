@@ -16,8 +16,10 @@ from dataclasses import dataclass, field
 from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
-from email.utils import getaddresses, parsedate_to_datetime
+from email.utils import parsedate_to_datetime
 from typing import List, Optional
+
+from vaf.mail.addressing import getaddresses
 
 _WS_ENCODED_WORD_GAP = re.compile(r"(=\?[^?]+\?[BbQq]\?[^?]*\?=) (?==\?)")
 

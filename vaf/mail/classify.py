@@ -48,7 +48,7 @@ invitation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from email.utils import getaddresses
+from vaf.mail.addressing import getaddresses
 from typing import Callable, Iterable, List, Optional, Set, Union
 
 from vaf.core.inbox import _BULK_CATEGORIES, is_automated_sender

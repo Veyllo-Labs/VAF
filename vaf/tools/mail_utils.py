@@ -3,7 +3,7 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Shared helpers for mail tools (multi-user scoping + safety filters)."""
 
-from email.utils import parseaddr
+from vaf.mail.addressing import parseaddr
 from typing import List, Optional, Tuple
 
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username

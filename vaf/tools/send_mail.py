@@ -9,7 +9,7 @@ Supports optional file attachments (e.g. invoices, documents).
 
 import mimetypes
 import re
-from email.utils import parseaddr
+from vaf.mail.addressing import parseaddr
 
 from vaf.core.config import Config, get_local_admin_scope_id
 from vaf.core.email_accounts import SHARED_MAIL_DOMAINS

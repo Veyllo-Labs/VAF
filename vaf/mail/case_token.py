@@ -36,7 +36,7 @@ import hashlib
 import hmac
 import re
 import secrets
-from email.utils import getaddresses
+from vaf.mail.addressing import getaddresses
 from typing import Iterable, List, Optional, Tuple
 
 # The keyring entry every case key is derived from. One secret per machine account.
@@ -298,10 +298,7 @@ def _mailboxes(entry: str) -> List[str]:
     """The addresses in one header value, leniently: a bad mailbox in the list must
     not hide a good one beside it, which the strict parser of newer Pythons does by
     returning nothing at all for the whole value."""
-    try:
-        pairs = getaddresses([entry], strict=False)
-    except TypeError:  # a Python without the keyword parses leniently anyway
-        pairs = getaddresses([entry])
+    pairs = getaddresses([entry], strict=False)
     return [addr for _name, addr in pairs if addr]
 
 

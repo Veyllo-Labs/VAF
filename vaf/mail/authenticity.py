@@ -42,7 +42,7 @@ boundary rule: one malformed message must never abort a folder sync).
 import re
 from collections import Counter
 from dataclasses import dataclass
-from email.utils import getaddresses
+from vaf.mail.addressing import getaddresses
 from typing import Iterable, List, Optional, Tuple
 
 from vaf.mail.parser import ParsedMessage

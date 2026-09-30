@@ -409,7 +409,7 @@ def is_automated_sender(from_addr: str, category: Optional[str] = None) -> bool:
     "Max Info" and "Status Meier" are people."""
     if (category or "").strip().lower() in _AUTOMATED_CATEGORIES:
         return True
-    from email.utils import parseaddr
+    from vaf.mail.addressing import parseaddr
     name, addr = parseaddr(str(from_addr or "").strip())
     if not addr and "@" not in (from_addr or ""):
         name = str(from_addr or "")

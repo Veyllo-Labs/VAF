@@ -11,8 +11,10 @@ normalized so "Re:" never stacks (German AW:/WG: variants recognized)."""
 import re
 from datetime import datetime, timezone
 from email.message import EmailMessage
-from email.utils import formatdate, make_msgid, parseaddr
+from email.utils import formatdate, make_msgid
 from typing import Dict, Iterable, List, Optional
+
+from vaf.mail.addressing import parseaddr
 
 _RE_PREFIX = re.compile(r"^\s*((re|aw|antw|sv)(\[\d+\])?:\s*)+", re.IGNORECASE)
 _FWD_PREFIX = re.compile(r"^\s*((fw|fwd|wg)(\[\d+\])?:\s*)+", re.IGNORECASE)
@@ -126,7 +128,6 @@ def message_id_domain(from_addr: str) -> str:
     """The domain half of a Message-ID VAF mints: the sending address's own domain, so
     the id looks ordinary to the correspondent and never carries the machine's hostname
     (which `make_msgid()` would use)."""
-    from email.utils import parseaddr
     _name, addr = parseaddr(from_addr or "")
     domain = addr.rsplit("@", 1)[-1].strip().lower() if "@" in addr else ""
     return domain or "vaf.invalid"

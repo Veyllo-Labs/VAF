@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from email.utils import parseaddr
+from vaf.mail.addressing import parseaddr
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from vaf.mail.parser import ParsedMessage

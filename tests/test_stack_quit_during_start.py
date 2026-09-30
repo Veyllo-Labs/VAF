@@ -220,11 +220,27 @@ def test_an_allocation_under_way_at_quit_stops_its_own_container(monkeypatch):
     pool = bp.BrowserPool()
     stopped = []
     monkeypatch.setattr(bp, "_docker", lambda args, timeout=60: stopped.append(list(args)))
+    monkeypatch.setattr(bp, "_in_use_by_another_process", lambda name: False)
     pool._closing = True
     assert pool._take_ownership("d", "vaf-browser-u-ddd") is False
     assert stopped == [["stop", "-t", "5", "vaf-browser-u-ddd"]]
     assert pool._owned == {}
     assert pool._resolve_inner("e") is None, "a closing pool must not allocate"
+
+
+def test_an_adoption_finishing_at_quit_spares_a_browser_in_use_elsewhere(monkeypatch):
+    """The allocation adopted a running container a `vaf run` session is using, and the
+    pool closed meanwhile. MUTATION: stop without the quit's in-use rule and that
+    session's browser is cut mid-use."""
+    import vaf.core.browser_pool as bp
+    pool = bp.BrowserPool()
+    stopped = []
+    monkeypatch.setattr(bp, "_docker", lambda args, timeout=60: stopped.append(list(args)))
+    monkeypatch.setattr(bp, "_in_use_by_another_process", lambda name: True)
+    pool._closing = True
+    assert pool._take_ownership("f", "vaf-browser-u-fff") is False
+    assert stopped == [], "an adopted browser another VAF process uses was stopped"
+    assert pool._owned == {}
 
 
 _HOLDER = ("import socket, sys, time; "

@@ -313,12 +313,13 @@ class BrowserPool:
     def _take_ownership(self, scope: str, name: str) -> bool:
         """Record a container this pool just started or adopted. False when the pool is
         closing: the container is stopped again here, since the quit's snapshot has
-        already been taken and would never see it."""
+        already been taken and would never see it - by the quit's own rule, so an
+        adopted container another VAF process is using stays up."""
         with self._lock:
             if not self._closing:
                 self._owned[scope] = name
                 return True
-        _docker(["stop", "-t", "5", name], timeout=60)
+        _stop_at_quit(name)
         self._fallback_reason = "VAF is shutting down"
         return False
 
@@ -682,6 +683,17 @@ def _in_use_by_another_process(name: str) -> bool:
         return True
 
 
+def _stop_at_quit(name: str) -> None:
+    """The quit's one rule for a pool container: stopped, unless another VAF process is
+    using it right now. Shared by the quit's snapshot and an allocation that finishes
+    after it, so neither can cut a `vaf run` session's browser the other would spare."""
+    if _in_use_by_another_process(name):
+        append_domain_log("webui", f"[browser_pool] {name} left running at quit: "
+                                   "another VAF process is using it")
+        return
+    _docker(["stop", "-t", "5", name], timeout=60)
+
+
 def stop_known_instances(timeout_s: float = 20.0) -> int:
     """Stop every per-user browser container THIS process's pool started or adopted,
     in parallel, and forget them. Returns how many were asked to stop. For VAF's quit.
@@ -712,16 +724,9 @@ def stop_known_instances(timeout_s: float = 20.0) -> int:
         pool._instances.clear()
         pool._owned.clear()
 
-    def _stop(name: str) -> None:
-        if _in_use_by_another_process(name):
-            append_domain_log("webui", f"[browser_pool] {name} left running at quit: "
-                                       "another VAF process is using it")
-            return
-        _docker(["stop", "-t", "5", name], timeout=60)
-
     workers = []
     for name in sorted(names):
-        t = threading.Thread(target=_stop, args=(name,), daemon=True)
+        t = threading.Thread(target=_stop_at_quit, args=(name,), daemon=True)
         t.start()
         workers.append(t)
     deadline = time.monotonic() + timeout_s

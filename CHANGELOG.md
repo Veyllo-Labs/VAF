@@ -29,7 +29,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   whose folder name was not "VAF" (every pip install), and it now happens on Windows too.
 - **Quitting VAF stops all of its Docker containers, and quickly.** Three gaps, all on quit:
   the speech (TTS) and code sandbox containers ignored the stop signal, so every quit waited
-  ten seconds for them and then killed them; a per-user browser container kept running after
+  ten seconds for them and then killed them (speech recognition did the same while it was
+  still loading); a per-user browser container kept running after
   VAF had quit (for days, measured on a Mac), because only the shared browser was part of
   the stop; and quitting while VAF was still starting could leave the speech and browser
   containers running, because the start went on after the stop. VAF now cancels its own

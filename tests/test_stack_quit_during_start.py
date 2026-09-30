@@ -168,12 +168,41 @@ def _service_block(name):
     return text[start:nxt if nxt != -1 else len(text)]
 
 
-@pytest.mark.parametrize("service", ["sandbox", "tts", "vaf-browser"])
-def test_these_services_run_behind_an_init(service):
-    """`sleep` and the Flask server as PID 1 ignore SIGTERM (no handler, and the kernel
-    applies no default action to PID 1): every stop waited 10 s and ended in SIGKILL, exit
-    137. MUTATION: remove `init: true` from either."""
-    assert "\n    init: true" in _service_block(service), service
+# Services whose own PID 1 handles SIGTERM, each with the reason. Everything else runs
+# behind docker-init.
+_OWN_SIGNAL_HANDLING = {
+    "postgres": "docker-entrypoint.sh execs postgres, which handles SIGTERM as PID 1",
+    "redis": "docker-entrypoint.sh execs redis-server, which handles SIGTERM as PID 1",
+    "gotenberg": "the image's entrypoint is tini",
+}
+
+
+def _compose_services():
+    """The keys of the top-level `services:` block, which ends at the next top-level key."""
+    import re
+    text = (REPO / "docker-compose.memory.yml").read_text(encoding="utf-8")
+    body = text[text.index("\nservices:\n") + len("\nservices:\n"):]
+    nxt = re.search(r"^[A-Za-z]", body, flags=re.M)
+    body = body[:nxt.start()] if nxt else body
+    return re.findall(r"^  ([a-z][a-z0-9-]*):\s*$", body, flags=re.M)
+
+
+def test_the_service_list_is_read():
+    assert {"postgres", "sandbox", "tts", "stt", "vaf-browser"} <= set(_compose_services())
+
+
+@pytest.mark.parametrize("service", _compose_services())
+def test_every_service_runs_behind_an_init_or_says_why_not(service):
+    """A PID-1 process without a SIGTERM handler ignores the stop (the kernel applies no
+    default action to PID 1): `sleep`, the Flask server and the Whisper service while it
+    loads its model all waited out the grace and ended in SIGKILL, exit 137. The rule is
+    per service, so the next one added without an init fails here. MUTATION: remove
+    `init: true` from any of them."""
+    if service in _OWN_SIGNAL_HANDLING:
+        return
+    assert "\n    init: true" in _service_block(service), (
+        f"{service} runs without docker-init; add `init: true` or list it in "
+        "_OWN_SIGNAL_HANDLING with the reason its PID 1 handles SIGTERM")
 
 
 # -- the quit's order ---------------------------------------------------------------------------

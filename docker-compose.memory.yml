@@ -211,6 +211,10 @@ services:
     image: onerahmet/openai-whisper-asr-webservice:latest
     container_name: vaf-stt
     restart: unless-stopped
+    # docker-init as PID 1: the webservice installs its SIGTERM handler only once uvicorn
+    # runs, and loading the model comes first; a stop during that load was ignored by the
+    # PID-1 process and ended in SIGKILL (exit 137, measured on macOS quitting mid-start).
+    init: true
     ports:
       - "127.0.0.1:${STT_PORT:-5003}:9000"
     volumes:

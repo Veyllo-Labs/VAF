@@ -11,16 +11,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
-### Security
+### Changed
 
-- **A mail's sender is read the same way on every supported Python.** Python 3.10 and
-  3.11 as installed on Windows and macOS (3.10.11 and 3.11.9, the last installers of those
-  series) predate the standard library's stricter address parsing. There, a From line
-  such as `me@example.com <stranger@example.org>` counted as mail from the address in the
-  display name: a stranger could look like your own mail, which is never answered, or like
-  one of your contacts when VAF matched the sender to the contact book. VAF now parses
-  every address header the way the patched standard library does, on every version, and
-  refuses such a line as unreadable.
+- **When your agent installs a missing program, it picks the source with care and tells
+  you.** It still installs on its own when a task needs a tool your computer lacks, but it
+  now looks at what is already installed first, prefers the package manager or the
+  project's official download at a fixed version, checks a published checksum, keeps the
+  program in your home folder and names what it installed and where in its answer.
 
 ### Fixed
 
@@ -50,6 +47,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **The agent can read skill files when your home folder is reached through a link.** A home
   moved to another disk and linked back (or a folder under /var on a Mac) made every file of
   a skill look like part of VAF's protected data folder, so the agent was refused them.
+
+### Security
+
+- **A mail's sender is read the same way on every supported Python.** Python 3.10 and
+  3.11 as installed on Windows and macOS (3.10.11 and 3.11.9, the last installers of those
+  series) predate the standard library's stricter address parsing. There, a From line
+  such as `me@example.com <stranger@example.org>` counted as mail from the address in the
+  display name: a stranger could look like your own mail, which is never answered, or like
+  one of your contacts when VAF matched the sender to the contact book. VAF now parses
+  every address header the way the patched standard library does, on every version, and
+  refuses such a line as unreadable.
 
 ## [0.1.0a30] - 2026-09-29
 

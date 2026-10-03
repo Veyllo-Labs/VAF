@@ -54,7 +54,12 @@ class HostBashTool(BaseTool):
         "Telegram/WhatsApp/Discord). Prefer safer tools when host access is not actually "
         "required. With background=true the command keeps running after the call returns "
         "(a local server, a long upload or build): you get its id at once, read or stop it "
-        "with host_process, and this chat gets a new turn when it ends."
+        "with host_process, and this chat gets a new turn when it ends. If the task needs a "
+        "program the host lacks, you may install it yourself: first check what is already "
+        "installed (another tool or encoder may do the job), then prefer the system's package "
+        "manager or the project's official site or repository at a fixed version, never an "
+        "unknown mirror; verify the checksum when the project publishes one; keep it under the "
+        "user's home; and say in your answer what you installed and where."
     )
     parameters = {
         "type": "object",

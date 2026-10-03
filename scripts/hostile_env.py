@@ -43,6 +43,14 @@ locally, in the time the suite already takes:
                   A home moved to another disk and linked back is the same case
                   on any OS. Where the host cannot create a link the real
                   directory is used and the axis says so.
+  OLD MAIL PARSER email.utils as Python 3.10.11 and 3.11.9 ship it, the last
+                  Windows and macOS installers of those series and what
+                  setup-python runs there: getaddresses and parseaddr without
+                  the `strict` keyword and with the lenient pre-CVE-2023-27043
+                  parse. The nightly matrix failed on exactly those versions for
+                  thirteen nights (a display name read as the sender) and then
+                  again on a test fixture that passed `strict=False`; every
+                  local run had a patched stdlib and stayed green.
 
 WHAT IT CANNOT DO. Real Windows file semantics - ACLs, MoveFileEx sharing
 violations, the read-only-flag-only chmod - need a real Windows machine. Those
@@ -125,6 +133,27 @@ def _windows_expanduser(path):
 
 
 _posixpath.expanduser = _windows_expanduser
+
+
+import email.utils as _email_utils
+
+_patched_getaddresses = _email_utils.getaddresses
+_patched_parseaddr = _email_utils.parseaddr
+
+
+def _old_getaddresses(fieldvalues):
+    """The unpatched signature and parse: no strict keyword, the legacy result."""
+    return _patched_getaddresses(fieldvalues, strict=False)
+
+
+def _old_parseaddr(addr):
+    return _patched_parseaddr(addr, strict=False)
+
+
+if getattr(_email_utils, "supports_strict_parsing", False):
+    _email_utils.getaddresses = _old_getaddresses
+    _email_utils.parseaddr = _old_parseaddr
+    del _email_utils.supports_strict_parsing
 '''
 
 
@@ -163,6 +192,7 @@ def main() -> int:
         print(f"  windows home    '~' reads USERPROFILE, not HOME")
         print(f"  linked home     " + (f"{home} -> {real_home}" if linked
                                      else "not available here (no symlinks)"))
+        print(f"  old mail parser email.utils without strict parsing (3.10.11, 3.11.9)")
         print()
         return subprocess.run([sys.executable, "-m", "pytest", *args],
                               cwd=str(ROOT), env=env).returncode

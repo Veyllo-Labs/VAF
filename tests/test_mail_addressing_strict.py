@@ -62,7 +62,12 @@ CORPUS = [
 
 @pytest.fixture
 def unpatched(monkeypatch):
-    """This interpreter, made to behave like 3.11.9: no strict parsing in the stdlib."""
+    """This interpreter, made to behave like 3.11.9: no strict parsing in the stdlib.
+    On an interpreter that IS unpatched (the nightly's 3.10.11 and 3.11.9, the hostile
+    run's old-mail-parser axis) nothing is replaced: the module already parses with the
+    real legacy parser, which takes no `strict` keyword at all."""
+    if not getattr(email.utils, "supports_strict_parsing", False):
+        return
     monkeypatch.setattr(addressing, "_STDLIB_STRICT", False)
     monkeypatch.setattr(addressing, "_legacy_getaddresses",
                         lambda values: email.utils.getaddresses(values, strict=False))

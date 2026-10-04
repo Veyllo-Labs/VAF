@@ -1948,6 +1948,20 @@ class TaskManager:
                 self.state.current_task_idx = idx
             self.pm.save_state(self.state)
 
+    def append_task(self, title: str, description: str = "") -> int:
+        """Add one task at the end of the plan. The code audit round uses it: what the audit
+        found becomes one more task of the same run, worked with the same gates as every
+        other. A finished plan's cursor stands at its end, which is exactly the new task, so
+        it is current at once. Returns its index, -1 without a plan."""
+        if not self.state or not self.pm:
+            return -1
+        idx = len(self.state.tasks)
+        self.state.tasks.append(Task(id=idx + 1, title=str(title), status="pending",
+                                     description=(description or None)))
+        self.pm.save_state(self.state)
+        set_run_progress(*self.progress_counts())
+        return idx
+
     def failed_tasks(self) -> List[Dict]:
         """All tasks in status 'failed' (legacy dict format, like .todos)."""
         return [t for t in self.todos if t["status"] == "failed"]
@@ -2440,6 +2454,66 @@ def _sibling_file_note(path: str, base_dir: str, max_entries: int = 4000) -> "Op
         )
     except Exception:
         return None
+
+
+def _audit_round_refusal(*, enabled: bool, content_only: bool, rounds_done: int,
+                         max_rounds: int) -> str:
+    """Code audit after a commit, the question before it runs: '' when another round may
+    start, else why not. Every round - the loop's own after a commit and one the model asks
+    for - counts toward `max_rounds`."""
+    if not enabled:
+        return "code audit is switched off (coder_audit_enabled)"
+    if content_only:
+        return "content-only run: there is no project to audit"
+    if rounds_done >= max(0, int(max_rounds)):
+        return f"the audit limit of {max_rounds} round(s) is reached"
+    return ""
+
+
+def _audit_attempted(finding, attempted: "List[Dict]") -> bool:
+    """Whether an earlier fix task of this run was already pointed at this finding.
+
+    Not by id alone. A model reports one problem with a different title, a different quoted
+    line or a different category from round to round - measured on a live loop, the same
+    three bugs in an unchanged file came back as new findings for four rounds. So a finding
+    also counts as attempted when it sits on the lines an attempted one sat on (two lines of
+    slack), in the same file. `attempted` holds {"id", "file", "start", "end"} records; a
+    failed check is {"id": "check:<name>"}."""
+    fid = getattr(finding, "id", "")
+    for a in attempted:
+        if a.get("id") == fid:
+            return True
+        if (a.get("file") and a.get("file") == getattr(finding, "file", None)
+                and finding.start_line <= a.get("end", 0) + 2
+                and a.get("start", 0) <= finding.end_line + 2):
+            return True
+    return False
+
+
+def _audit_round_outcome(status: str, open_count: int, fresh_count: int) -> str:
+    """What the loop does after an audit round, from its status, how many verified
+    problems it found, and how many of them no earlier fix task of the run was pointed at
+    (`_audit_attempted`):
+      "fix"          - something no fix task has seen yet: one more task, the run goes on.
+                       A finding is proven before it gets here, so it is fixed even when the
+                       review around it could not cover every file;
+      "no_progress"  - findings remain, but every one of them was already given to a fix
+                       task: each finding gets ONE attempt, so a fix that does not take (or a
+                       finding the task explicitly ruled out) ends the loop instead of
+                       repeating until the limit;
+      "incomplete"   - nothing found, but the audit could not review everything: never
+                       read as clean, reported in the summary;
+      "clean"        - a complete review with nothing to fix, the run may end.
+    Measured on a live run before the one-attempt rule: every fix writes new code, the next
+    review finds something in it, and the run oscillated (fix, revert, fix) until it was
+    stopped by hand."""
+    if fresh_count:
+        return "fix"
+    if open_count:
+        return "no_progress"
+    if status != "complete":
+        return "incomplete"
+    return "clean"
 
 
 def _active_lint_failure_files(history: "List[Dict]", window: int = 30) -> "List[str]":
@@ -3891,6 +3965,24 @@ Thumbs.db
         from vaf.tools.render_check import RenderCheckTool
         self.local_tools["render_check"] = RenderCheckTool(base_dir)
 
+        # Code audit of this run's change with this run's model (vaf.core.code_audit). The loop
+        # runs a round by itself once the tasks are done (_maybe_start_audit_round); the model
+        # may ask for one sooner, and both count toward one limit. Registered unconditionally
+        # and per run: a content-only run is refused in the runner, and a registration left by
+        # an earlier run would answer with that run's project. A plain object, not a BaseTool
+        # subclass: tool discovery instantiates every BaseTool class in this module.
+        class _CoderAuditTool:
+            name = "code_audit"
+            category = "code"
+            # The funnel waits this long: one round is several model calls (a reasoning
+            # model thinks for about two minutes over one batch).
+            timeout_seconds = 1800
+
+            def run(self, **kwargs):
+                return _audit_on_request()
+
+        self.local_tools["code_audit"] = _CoderAuditTool()
+
         # Re-bind codesearch to the project workspace: search DEFAULTS TO and is JAILED WITHIN
         # base_dir, never the backend process cwd (= VAF's own repo). base_dir is only defined
         # above, so the early registration is a placeholder rebound here.
@@ -5153,6 +5245,21 @@ Task {task_idx + 1}: {current_task}
                             }
                         }
                     },
+                    # Review of this run's change so far: the loop runs one by itself once the
+                    # tasks are done; this is for asking sooner (same limit, same engine).
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "code_audit",
+                            "description": (
+                                "Review this run's change so far like a code reviewer: real bugs, "
+                                "security problems and risky changes, each proven against the code, "
+                                "with a fix prompt. The run audits itself after the tasks anyway; "
+                                "call it sooner when a risky change should be checked before going on."
+                            ),
+                            "parameters": {"type": "object", "properties": {}, "required": []}
+                        }
+                    },
                     # Code navigation IN task context: locate definitions/usages/patterns fast, then
                     # read the whole file — far better than blind read_file sweeps on a large repo.
                     {
@@ -5434,6 +5541,174 @@ Task {task_idx + 1}: {current_task}
                 })
             return True
 
+        # ── Code audit rounds (vaf.core.code_audit; docs/agents/CODE_AUDIT.md) ──────────
+        # Once the tasks are done the run commits, reviews its own change with its own model
+        # and turns every verified problem into one more task; then it commits and reviews
+        # again. It ends on a clean round, an incomplete one, only already-attempted findings, or
+        # coder_audit_max_rounds rounds (the model's own requests included).
+        _audit_enabled = bool(Config.get("coder_audit_enabled", True))
+        try:
+            _audit_max = int(Config.get("coder_audit_max_rounds", 50))
+        except (TypeError, ValueError):
+            _audit_max = 50
+        # attempted: what fix tasks were already pointed at (_audit_attempted); finished: a
+        # round ended the loop (clean, incomplete, no progress), and the next all-done exit
+        # point must not review again - one exit can pass through two of them.
+        _audit_state = {"rounds": 0, "attempted": [], "note": "", "finished": False}
+
+        def _coder_audit_ask(messages, max_tokens):
+            """The review and verification calls, on the coder's own model and endpoint
+            (the `_llm_verify_call` lane, with the per-model body shape of the main call)."""
+            from vaf.core.api_backend import openai_request_params
+            from vaf.core.completion import strip_think_blocks
+            _au_headers = {"Content-Type": "application/json"}
+            if _llm_api_key:
+                _au_headers["Authorization"] = f"Bearer {_llm_api_key}"
+            _au_model = _llm_model or "user-model"
+            _au_body = {"model": _au_model, "messages": messages, "stream": False}
+            _au_body.update(openai_request_params(_provider, _au_model, temperature=0.0,
+                                                  max_tokens=max_tokens, has_tools=False))
+            _au_resp = requests.post(_llm_chat_url, headers=_au_headers, json=_au_body,
+                                     timeout=600)
+            _au_resp.raise_for_status()
+            _au_data = _au_resp.json()
+            _record_coder_usage(_au_data)
+            _au_msg = (_au_data.get("choices") or [{}])[0].get("message") or {}
+            # The answer only: a reasoning model's thinking may hold a draft of the JSON.
+            return strip_think_blocks(_au_msg.get("content") or "")
+
+        def _audit_now(scope: str):
+            from vaf.core.code_audit import BATCH_CHARS, EMPTY_TREE, code_audit
+            _au_batch = BATCH_CHARS
+            if _provider == "local":
+                # One review call must fit the local window with room for the answer.
+                try:
+                    _au_batch = max(6000, min(BATCH_CHARS, int(Config.get("n_ctx", 8192)) * 6 // 5))
+                except (TypeError, ValueError):
+                    _au_batch = 6000
+
+            def _au_progress(line: str):
+                tui.set_action(f"🔎 Code audit: {line}"[:80])
+                _emit_coder_state()
+
+            return code_audit(base_dir, scope=scope, base=_run_start_sha or EMPTY_TREE,
+                              ask=_coder_audit_ask, batch_chars=_au_batch,
+                              progress=_au_progress)
+
+        def _audit_refusal() -> str:
+            return _audit_round_refusal(enabled=_audit_enabled, content_only=bool(skip_template),
+                                        rounds_done=_audit_state["rounds"],
+                                        max_rounds=_audit_max)
+
+        def _audit_on_request() -> str:
+            """The model asked for an audit of the work so far (committed or not)."""
+            refusal = _audit_refusal()
+            if refusal:
+                return f"Code audit not run: {refusal}."
+            _audit_state["rounds"] += 1
+            report = _audit_now("changes")
+            _guard_event("note", f"Code audit on request: {report.status}",
+                         f"{len(report.actionable())} finding(s) to fix")
+            try:
+                if lg:
+                    lg.event("code_audit", trigger="request", round=_audit_state["rounds"],
+                             status=report.status, findings=len(report.actionable()))
+            except Exception:
+                pass
+            return report.to_prompt()
+
+        def _maybe_start_audit_round() -> bool:
+            """Commit, review the run's change, and when there is something to fix make it
+            the next task. True when a fix task was started - the caller must `continue`
+            the loop instead of breaking, exactly like _maybe_start_final_retry."""
+            if _audit_state["finished"]:
+                return False
+            refusal = _audit_refusal()
+            if refusal:
+                if _audit_state["rounds"] and not _audit_state["note"]:
+                    _audit_state["note"] = f"Code audit stopped: {refusal}"
+                return False
+            if is_unsafe_project_dir(base_dir) or not os.path.isdir(os.path.join(base_dir, ".git")):
+                return False
+            k = _audit_state["rounds"] + 1
+            _set_phase("audit")
+            tui.append_stream(f"[AUDIT] Round {k}: committing and reviewing this run's change...")
+            _au_commit = _final_commit(
+                base_dir, f"VAF Coder: {' '.join(task.split())[:60]}\n\n"
+                          f"Code audit round {k}: the state under review")
+            _audit_state["rounds"] = k
+            report = _audit_now("committed")
+            found = report.actionable()
+            failed_checks = report.failed_checks()
+            # Only what no fix task has seen yet is handed over: each finding gets one attempt.
+            to_fix = [f for f in found if not _audit_attempted(f, _audit_state["attempted"])]
+            checks_to_fix = [c for c in failed_checks
+                             if {"id": f"check:{c.name}"} not in _audit_state["attempted"]]
+            open_count = len(found) + len(failed_checks)
+            fresh_count = len(to_fix) + len(checks_to_fix)
+            outcome = _audit_round_outcome(report.status, open_count, fresh_count)
+            if outcome != "fix":
+                _audit_state["finished"] = True
+            try:
+                if lg:
+                    lg.event("code_audit", trigger="commit", round=k, commit=_au_commit,
+                             status=report.status, outcome=outcome, findings=len(found),
+                             failed_checks=len(failed_checks), seconds=report.duration_s)
+            except Exception:
+                pass
+            if outcome == "clean":
+                _guard_event("note", f"Code audit round {k}: clean")
+                _audit_state["note"] = f"Code audit: clean after {k} round(s)"
+                return False
+            if outcome == "incomplete":
+                _guard_event("note", f"Code audit round {k}: {report.status}", report.status_reason)
+                _audit_state["note"] = (f"Code audit round {k} {report.status}: "
+                                        f"{report.status_reason}")
+                return False
+            if outcome == "no_progress":
+                titles = "; ".join(f.title for f in found[:5])
+                _guard_event("loop", f"Code audit round {k}: no progress", titles)
+                _audit_state["note"] = (f"Code audit: {open_count} finding(s) still open after "
+                                        f"{k} round(s), a fix round left them open: {titles}")
+                return False
+
+            _audit_state["attempted"] += (
+                [{"id": f.id, "file": f.file, "start": f.start_line, "end": f.end_line}
+                 for f in to_fix] + [{"id": f"check:{c.name}"} for c in checks_to_fix])
+            lines = [f"CODE AUDIT ROUND {k} - the review of this run's change found "
+                     f"{fresh_count} verified problem(s) to fix."]
+            if to_fix:
+                # Bounded like the main agent's hand-over: what is left out is named, and the
+                # next round reports it again.
+                import dataclasses as _dc
+                lines += ["", _dc.replace(report, findings=to_fix).fix_prompt(max_chars=20_000)]
+            for c in checks_to_fix:
+                lines.append(f"\nFailed repository check '{c.name}': {c.reason}")
+            lines.append("\nFix each one in the project files, then call task_done. What the "
+                         "original task explicitly asked for stays in force: when a finding "
+                         "asks for something the task ruled out, leave it and say why in "
+                         "task_done. The run commits and reviews again afterwards.")
+            title = f"Fix the code audit findings (round {k})"
+            idx = task_mgr.append_task(title, description=f"{fresh_count} finding(s)")
+            if idx < 0:
+                return False
+            _guard_event("gate", f"Code audit round {k}: {fresh_count} to fix",
+                         "; ".join(f.title for f in to_fix[:3]))
+            tui.append_stream(f"[AUDIT] Round {k}: {fresh_count} finding(s) - fixing them")
+            _set_phase("build")
+            if switch_to_task_context(idx, title):
+                history.append({"role": "system", "content": "\n".join(lines)})
+            return True
+
+        def _next_round() -> str:
+            """At an all-done exit point: '' when the run may end, else what was started
+            (the final retry for failed tasks first, then a code audit round)."""
+            if _maybe_start_final_retry():
+                return "final verification retry round"
+            if _maybe_start_audit_round():
+                return "code audit fix round"
+            return ""
+
         # WebUI live state: file tree, git, progress for the VS-Code-style SubAgent
         # window. Dedup-only, no clock: the payload IS the change signal, and "activity"
         # is what keeps it moving in phases with no file or diff change. A time window
@@ -5465,21 +5740,30 @@ Task {task_idx + 1}: {current_task}
         # Run lifecycle for the window's phase stepper: the Tasks section shows
         # WHAT is being built, this shows WHERE the run is - previously the
         # documentation pass and the final commit were invisible as steps.
-        # ORIENT is part of "plan" (its scan feeds the planner's prompt).
-        _PHASE_ORDER = ("plan", "build", "document", "commit")
-        _phases = {"plan": "running", "build": "pending",
-                   "document": "pending", "commit": "pending"}
+        # ORIENT is part of "plan" (its scan feeds the planner's prompt). "audit" exists while
+        # the code audit rounds may run; build and audit alternate while findings are fixed.
+        _PHASE_ORDER = (("plan", "build", "audit", "document", "commit")
+                        if _audit_enabled and not skip_template
+                        else ("plan", "build", "document", "commit"))
+        _phases = {p: "pending" for p in _PHASE_ORDER}
+        _phases["plan"] = "running"
 
         def _set_phase(name: str):
-            """Mark `name` running and everything before it done. Idempotent."""
+            """Mark `name` running, everything before it done, and a later phase that was
+            running pending again (an audit round sends the run back to build). Idempotent."""
             try:
-                if _phases.get(name) == "running":
+                if name not in _phases or _phases.get(name) == "running":
                     return
+                seen = False
                 for p in _PHASE_ORDER:
                     if p == name:
                         _phases[p] = "running"
-                        break
-                    _phases[p] = "done"
+                        seen = True
+                    elif not seen:
+                        if _phases[p] != "skipped":
+                            _phases[p] = "done"
+                    elif _phases[p] == "running":
+                        _phases[p] = "pending"
                 _emit_coder_state()
             except Exception:
                 pass
@@ -5709,7 +5993,7 @@ Task {task_idx + 1}: {current_task}
             # PROACTIVE AUTO-EXIT CHECK - Break immediately if all tasks done
             # ═══════════════════════════════════════════════════════════════
             if task_mgr and task_mgr.is_all_done():
-                if _maybe_start_final_retry():
+                if _next_round():
                     continue
                 tui.append_stream("🎉 [AUTO-EXIT] All tasks completed!")
                 _trace(f"[AUTO-EXIT] Loop {loop.loop_count}: is_all_done=True, breaking immediately")
@@ -8246,7 +8530,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         tui.append_stream(f"🔄 Fresh context created for Task {task_idx + 1}: {next_task[:40]}")
                         result = f"✅ Task auto-completed.\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
                     elif task_mgr.is_all_done():
-                        if _maybe_start_final_retry():
+                        if _next_round():
                             continue
                         result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
                         tui.append_stream("🎉 All tasks done (auto-complete)!")
@@ -8333,7 +8617,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                     # Normal mode: exit the loop — the common post-loop summary
                     # handles status (COMPLETE vs. PARTIAL incl. failed tasks) and
                     # the final commit for every exit path identically.
-                    if _maybe_start_final_retry():
+                    if _next_round():
                         continue
                     tui.append_stream("Completion signal accepted - finishing run")
                     break
@@ -9336,17 +9620,17 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 result = f"✅ Task completed!\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
                                 tui.append_stream(f"Next: {next_task[:40]}")
                             elif task_mgr.is_all_done():
-                                if _maybe_start_final_retry():
+                                _round = _next_round()
+                                if _round:
                                     # Answer the task_done tool_call in the OLD (dispatch-time)
-                                    # context before _maybe_start_final_retry switches `history`
-                                    # to a fresh one — else the old context is left with a
-                                    # dangling task_done tool_call (latent 400 if it is ever
-                                    # re-sent).
+                                    # context before _next_round switches `history` to a fresh
+                                    # one - else the old context is left with a dangling
+                                    # task_done tool_call (latent 400 if it is ever re-sent).
                                     _history_at_dispatch.append({
                                         "role": "tool",
                                         "tool_call_id": tc['id'],
                                         "name": fn_name,
-                                        "content": "✅ Task marked done. Starting final verification retry round."
+                                        "content": f"✅ Task marked done. Starting the {_round}."
                                     })
                                     continue
                                 result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
@@ -9361,17 +9645,17 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             # CRITICAL FIX: Check if all tasks are done BEFORE trying to complete
                             # This handles the case where current_task_idx is out of bounds
                             if task_mgr.current_task_idx >= len(task_mgr.todos) and task_mgr.is_all_done():
-                                if _maybe_start_final_retry():
+                                _round = _next_round()
+                                if _round:
                                     # Answer the task_done tool_call in the OLD (dispatch-time)
-                                    # context before _maybe_start_final_retry switches `history`
-                                    # to a fresh one — else the old context is left with a
-                                    # dangling task_done tool_call (latent 400 if it is ever
-                                    # re-sent).
+                                    # context before _next_round switches `history` to a fresh
+                                    # one - else the old context is left with a dangling
+                                    # task_done tool_call (latent 400 if it is ever re-sent).
                                     _history_at_dispatch.append({
                                         "role": "tool",
                                         "tool_call_id": tc['id'],
                                         "name": fn_name,
-                                        "content": "✅ Task marked done. Starting final verification retry round."
+                                        "content": f"✅ Task marked done. Starting the {_round}."
                                     })
                                     continue
                                 result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
@@ -9410,17 +9694,17 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 result = f"✅ Task completed!\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
                                 tui.append_stream(f"➡️ Next: {next_task[:40]}")
                             elif task_mgr.is_all_done():
-                                if _maybe_start_final_retry():
+                                _round = _next_round()
+                                if _round:
                                     # Answer the task_done tool_call in the OLD (dispatch-time)
-                                    # context before _maybe_start_final_retry switches `history`
-                                    # to a fresh one — else the old context is left with a
-                                    # dangling task_done tool_call (latent 400 if it is ever
-                                    # re-sent).
+                                    # context before _next_round switches `history` to a fresh
+                                    # one - else the old context is left with a dangling
+                                    # task_done tool_call (latent 400 if it is ever re-sent).
                                     _history_at_dispatch.append({
                                         "role": "tool",
                                         "tool_call_id": tc['id'],
                                         "name": fn_name,
-                                        "content": "✅ Task marked done. Starting final verification retry round."
+                                        "content": f"✅ Task marked done. Starting the {_round}."
                                     })
                                     continue
                                 result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
@@ -10385,6 +10669,10 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
         # skip the final commit below. Gated to real projects (not CONTENT_ONLY).
         # ═══════════════════════════════════════════════════════════════
         if not skip_template:
+            # An audit that never ran (the run ended with open tasks, or the review was not
+            # possible here) must not read as a passed step.
+            if "audit" in _phases and not _audit_state["rounds"]:
+                _phases["audit"] = "skipped"
             _set_phase("document")
             try:
                 _doc_note = self._run_document_phase(base_dir, _run_start_sha, tui)
@@ -10428,6 +10716,10 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
             except Exception:
                 final_commit_note = ""
         git_line = f"**💾 {final_commit_note}**\n" if final_commit_note else ""
+        # How the code audit rounds ended - clean, incomplete, stuck on attempted findings, or
+        # at the limit - so the caller never reads an unreviewed run as a reviewed one.
+        if _audit_state["note"]:
+            git_line += f"**🔎 {_audit_state['note']}**\n"
 
         # Edits count as outcomes: an empty create-bookkeeping is re-checked
         # against git before it may declare the run failed.

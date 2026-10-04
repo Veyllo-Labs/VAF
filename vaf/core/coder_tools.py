@@ -88,6 +88,9 @@ _EXECUTE = {
     # that wants it out sets `coder_tool_allowlist` without it.
     "browser_agent",
     "repair_report",
+    # Review of the run's own change: the loop runs it after every commit by itself, the
+    # model may ask for one sooner (vaf.core.code_audit; both count toward one limit).
+    "code_audit",
 }
 
 # ── The project's own history ─────────────────────────────────────────────────

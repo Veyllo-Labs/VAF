@@ -54,6 +54,8 @@ FIXED_URL = {
         "a session used only for the DuckDuckGo HTML endpoint",
     ("vaf/tools/coder.py", "CodingAgentTool.run._llm_verify_call", "requests.post", "_llm_chat_url"):
         "the configured model endpoint (admin configuration)",
+    ("vaf/tools/coder.py", "CodingAgentTool.run._coder_audit_ask", "requests.post", "_llm_chat_url"):
+        "the configured model endpoint (admin configuration): the code audit's review calls",
     ("vaf/tools/coder.py", "CodingAgentTool.run", "requests.get", "_llm_models_url"):
         "the configured model endpoint (admin configuration)",
     ("vaf/tools/coder.py", "CodingAgentTool.run", "requests.post", "_llm_chat_url"):

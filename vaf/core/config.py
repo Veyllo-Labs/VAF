@@ -349,6 +349,15 @@ class Config:
                 "coder_tool_allowlist": "",
                 "coder_tool_allowlist_extra": "",
 
+                # Code audit inside the coding agent's loop (vaf.core.code_audit): after the
+                # run's tasks are done the coder commits, reviews its own change with its own
+                # model and works every verified problem as one more task, round after round,
+                # until a round is clean, only findings it already tried remain, or this many rounds
+                # ran. Both admin-only: every round is a set of model calls the instance
+                # pays for.
+                "coder_audit_enabled": True,
+                "coder_audit_max_rounds": 50,
+
                 # Out-of-order drift nudge: when the agent marks a later task done while an earlier
                 # one is still pending, update_working_memory appends a soft "did you skip it?" hint
                 # to its result (a reminder, never a block).
@@ -1054,6 +1063,8 @@ class Config:
         # in the outside world under the instance's credentials. `coder_` is not a
         # global prefix, so both spellings need an explicit entry.
         "coder_tool_allowlist", "coder_tool_allowlist_extra",
+        # Every audit round is model calls on the instance's account: a spend decision.
+        "coder_audit_enabled", "coder_audit_max_rounds",
         # How long one reply may be is measured in tokens the instance pays for, so
         # it belongs beside the other spend decisions rather than in a per-user
         # preference (the api_ prefix carries no admin gate of its own).

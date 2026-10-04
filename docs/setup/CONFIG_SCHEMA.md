@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (354 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (356 keys).
 
 ## How configuration is set
 
@@ -212,6 +212,8 @@ These are sent only on the local path; cloud APIs ignore them.
 | `tool_timeout_seconds` | `120` | Hard cap for an in-process tool call whose tool declares no budget of its own (`BaseTool.timeout_seconds` / `budget_seconds`). |
 | `coder_tool_allowlist` | `""` | Admin-only. WHICH tools the coding agent is offered, as a comma-separated list of tool names. Empty = the built-in whitelist in [vaf/core/coder_tools.py](../../vaf/core/coder_tools.py) (`CODER_ALLOWED_TOOLS`): files, code, git, shell, tests and lookups, deliberately without mail, messengers, calendars or contacts. A non-empty value REPLACES that set. The names a run cannot work without (`set_todos`, `write_file`, `read_file`, `edit_file`, `list_files`, `task_done`, `ask_user`, `request_clarification`) are added back regardless, so a typo costs optional tools rather than the coder. Admin-only because it decides what a build step may reach for, and `coder_` is not a global prefix. |
 | `coder_tool_allowlist_extra` | `""` | Admin-only. Tool names ADDED to whichever allow-list is in force, same format. This is the key to reach for when the coder should gain one specific tool; it survives changes to the built-in list. |
+| `coder_audit_enabled` | `True` | Admin-only. Code audit inside the coding agent's loop: once the run's tasks are done, the coder commits, reviews its own change with its own model ([CODE_AUDIT.md](../agents/CODE_AUDIT.md)) and works every verified problem as one more task, then commits and reviews again. Off: the run ends after its tasks as before. Admin-only because every round is model calls on the instance's account. |
+| `coder_audit_max_rounds` | `50` | Admin-only. The most audit rounds one coder run may take, its own after each commit and the ones the model asks for together. The loop also ends earlier: on a clean round, on an incomplete one (never read as clean, never a reason to change code on half a review), and when every finding a round reports was already given to a fix task (each finding gets one attempt). |
 | `librarian_timeout_seconds` | `60` | Hard cap for the filesystem/document agent (its declared `budget_seconds`). |
 | `browser_timeout_seconds` | `1800` | Worst-case browser cap (liveness is the real guard); applies where a lane bounds the self-supervised browser anyway, a workflow step. |
 | `tool_stop_poll_seconds` | `0.5` | How often the bounded wait checks stop/deadline. |

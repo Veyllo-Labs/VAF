@@ -79,7 +79,8 @@ def redacted_uvicorn_log_config() -> Dict[str, Any]:
 # "tools" is what BaseTool.log() writes to, so a tool - ours or a third party's - never has
 # to pick a domain. An unknown domain is a silent no-op below, which is a fine failure mode
 # for in-tree code that can be grepped and a terrible one for a public method.
-ALLOWED_DOMAINS = ("rag", "memory", "webui", "prompt", "headless", "backend", "attach", "tools", "usage")
+ALLOWED_DOMAINS = ("rag", "memory", "webui", "prompt", "headless", "backend", "attach", "tools", "usage",
+                   "egress")
 
 
 def is_debug_logging_enabled() -> bool:

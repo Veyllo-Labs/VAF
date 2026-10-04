@@ -190,3 +190,14 @@ def test_a_stored_webdav_url_on_this_machine_is_never_fetched(monkeypatch, _quie
         "url": "http://127.0.0.1:9", "webdav_username": "u", "password": "p"})
     assert NextcloudProvider("alice", "nextcloud_x").authenticate() is False
     assert _quiet and _quiet[0][0] == "egress_blocked"
+
+def test_the_egress_log_is_a_log_the_writer_accepts(monkeypatch, tmp_path):
+    """The allowed home-network fetch is noted under the domain `egress`, and the domain writer
+    drops any domain it does not list - silently. tests/test_egress_session.py stubs the writer, so the live
+    run found it: nothing was written. MUTATION: take `egress` out of ALLOWED_DOMAINS."""
+    from vaf.core import log_helper
+    monkeypatch.setattr(log_helper, "is_debug_logging_enabled", lambda: True)
+    monkeypatch.setattr(log_helper, "get_dated_log_path",
+                        lambda domain, ext: tmp_path / f"{domain}.{ext}")
+    log_helper.append_domain_log("egress", "[egress] alice fetched nas.lan -> 192.168.1.20 (private)")
+    assert "nas.lan" in (tmp_path / "egress.log").read_text(encoding="utf-8")

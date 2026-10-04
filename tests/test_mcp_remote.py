@@ -137,12 +137,21 @@ def test_one_session_serves_every_call(remote, manifest):
     assert len(ids) == 1, ids
 
 
-def test_the_raw_mcp_call_reaches_a_remote_server(remote):
+def test_the_raw_mcp_call_cannot_reach_this_machine(remote, manifest):
+    """The server_url of a raw mcp_call is the MODEL's, so it gets the instance policy, and on
+    this machine a tokenless request is the owner: refused, with the reason. The same server
+    REGISTERED by an administrator is reached (its host is trusted). MUTATION: let the pool
+    default to a policy that admits loopback, and the raw call goes through."""
+    import vaf.core.mcp_registry as reg
     from vaf.tools.mcp_client import get_mcp_client
     out = get_mcp_client().run(transport="http", server_url=remote.urls["http"], tool_name="echo",
                                arguments={"text": "raw"})
-    assert out == "echo:raw"
+    assert out.startswith("Error:") and "Only internet addresses are fetched" in out, out
     assert "server_url is required" in get_mcp_client().run(transport="http", tool_name="echo")
+    manifest.write({"local": {"transport": "http", "url": remote.urls["http"]}})
+    tools, status = reg.discover_mcp_tools(timeout_seconds=15)
+    assert status["local"]["connected"] is True, status
+    assert tools["mcp_local_echo"].run(text="registered") == "echo:registered"
 
 
 # -- the token -------------------------------------------------------------------------------

@@ -62,7 +62,6 @@ FIXED_URL = {
 
 # Fetch paths converted onto vaf.network.egress later in this round. EMPTY when done.
 PENDING = {
-    ("vaf/core/mcp_oauth.py", "_revoke", "httpx.post", "endpoint"),
     ("vaf/cloud/nextcloud.py", "NextcloudProvider._propfind", "requests.request", "url"),
     ("vaf/cloud/nextcloud.py", "NextcloudProvider.ensure_sync_folder", "requests.request", "url"),
     ("vaf/cloud/nextcloud.py", "NextcloudProvider.upload_file", "requests.put", "url"),

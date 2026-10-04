@@ -139,3 +139,24 @@ def test_the_page_reader_still_reads_a_page(monkeypatch):
     assert fetch_page_text("https://example.org/", limit=12) == "Title Body t"
     assert fetch_page_html("https://example.org/", selector="div.x") == (
         '<div class="x">one</div>\n<div class="x">two</div>')
+
+
+def test_registering_a_server_at_the_metadata_service_is_refused_at_once(monkeypatch):
+    """A registered server's own host may be on this machine or the LAN, never an address
+    that is never fetched. Said when it is saved, not at the first call. MUTATION: drop the
+    save-time check in upsert_server."""
+    import socket
+
+    import vaf.core.mcp_registry as reg
+    from vaf.network import binding
+    real = socket.getaddrinfo
+
+    def fake(host, port, *a, **k):
+        if host == "meta.example":
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("169.254.169.254", port or 0))]
+        return real(host, port, *a, **k)
+
+    monkeypatch.setattr(binding.socket, "getaddrinfo", fake)
+    monkeypatch.setattr(reg, "load_mcp_manifest", lambda: {}, raising=False)
+    with pytest.raises(ValueError, match="forbidden"):
+        reg.upsert_server("meta", transport="http", url="http://meta.example/mcp")

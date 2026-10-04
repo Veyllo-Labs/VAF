@@ -42,12 +42,14 @@ module can wrap.
 """
 from __future__ import annotations
 
+import asyncio
 import socket
 import threading
 from dataclasses import dataclass, replace
 from typing import Iterable, Optional, Tuple
 from urllib.parse import urlsplit
 
+import httpx
 import requests
 from requests.adapters import HTTPAdapter
 
@@ -275,6 +277,76 @@ class _EgressAdapter(HTTPAdapter):
             except Exception:
                 pass
         super().close()
+
+
+class _EgressAsyncTransport(httpx.AsyncBaseTransport):
+    """The same judgement for httpx, which the MCP SDK speaks. httpx calls this once per hop,
+    redirects included. The request goes to the checked address with `sni_hostname` set, so
+    httpcore verifies the certificate against the NAME; one inner transport per hostname, so
+    a connection opened for one name is never reused for another that shares its address."""
+
+    def __init__(self, policy: EgressPolicy, username: str = ""):
+        self._policy = policy
+        self._username = username
+        self._inner: dict = {}
+
+    def _transport(self, key: str, **kwargs) -> httpx.AsyncHTTPTransport:
+        transport = self._inner.get(key)
+        if transport is None:
+            transport = self._inner[key] = httpx.AsyncHTTPTransport(**kwargs)
+        return transport
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        scheme, host, port = _split(str(request.url), self._policy)
+        proxy = binding.system_proxy_for(scheme, host)
+        try:
+            addresses = await asyncio.get_running_loop().run_in_executor(None, _resolve, host, port)
+        except OSError:
+            addresses = []
+        if proxy:
+            # Same rule as the requests adapter: a local answer is still judged, an unknown
+            # name is the proxy's.
+            if addresses:
+                kind = _judge(host, addresses, self._policy, self._username)
+                _record_private(host, addresses[0], kind, self._username)
+            return await self._transport("proxy " + proxy, proxy=proxy).handle_async_request(request)
+        if not addresses:
+            raise httpx.ConnectError(f"Cannot resolve host: {host}", request=request)
+        kind = _judge(host, addresses, self._policy, self._username)
+        _record_private(host, addresses[0], kind, self._username)
+        # The Host header was built from the URL already; only the connection target moves.
+        request.url = request.url.copy_with(host=addresses[0])
+        request.extensions = {**request.extensions, "sni_hostname": host}
+        return await self._transport(host.lower()).handle_async_request(request)
+
+    async def aclose(self) -> None:
+        transports, self._inner = list(self._inner.values()), {}
+        for transport in transports:
+            try:
+                await transport.aclose()
+            except Exception:
+                pass
+
+
+def egress_httpx_client(headers=None, timeout=None, auth=None, *,
+                        policy: Optional[EgressPolicy] = None,
+                        username: str = "") -> httpx.AsyncClient:
+    """An httpx.AsyncClient behind the destination guard, with the MCP SDK's client factory
+    signature (headers, timeout, auth) and its defaults: redirects followed (each one judged),
+    30 s with a 300 s read timeout for event streams. A transport of its own means httpx reads
+    no proxy from the environment; the site proxy comes from system_proxy_for."""
+    policy = policy or EgressPolicy.from_config()
+    kwargs = {
+        "follow_redirects": True,
+        "max_redirects": policy.max_redirects,
+        "timeout": timeout if timeout is not None else httpx.Timeout(30.0, read=300.0),
+        "transport": _EgressAsyncTransport(policy, username),
+    }
+    if headers is not None:
+        kwargs["headers"] = headers
+    if auth is not None:
+        kwargs["auth"] = auth
+    return httpx.AsyncClient(**kwargs)
 
 
 def egress_session(policy: Optional[EgressPolicy] = None, *, username: str = "") -> requests.Session:

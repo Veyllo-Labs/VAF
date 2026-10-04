@@ -187,8 +187,10 @@ def make_mcp_tool(server_name: str, server_cfg: Dict[str, Any], tool_meta: Dict[
                         auth = auth_for(server_name, server_cfg, user_scope_id)
                     except McpSignInRequired as exc:
                         return f"Error: {exc}"
+                from vaf.core.mcp_remote import registered_egress
                 return client.call_remote(transport, server_url, real_tool, kwargs,
-                                          headers=server_headers(server_name, server_cfg), auth=auth)
+                                          headers=server_headers(server_name, server_cfg), auth=auth,
+                                          egress=registered_egress(server_url))
             return f"Error: Unsupported MCP transport '{transport}'"
         except Exception as exc:
             return f"Error calling MCP tool '{real_tool}': {exc}"
@@ -323,7 +325,10 @@ def _list_tools(name: str, cfg: Dict[str, Any], client, *, token: Optional[str] 
             headers.update(bearer_headers(token))
         if auth is None and discover and uses_sign_in(cfg) and name:
             auth = discovery_auth(name, cfg)
-        return client.list_server_tools("", transport, str(cfg.get("url", "")), headers=headers, auth=auth)
+        from vaf.core.mcp_remote import registered_egress
+        url = str(cfg.get("url", ""))
+        return client.list_server_tools("", transport, url, headers=headers, auth=auth,
+                                        egress=registered_egress(url))
     return client.list_server_tools(str(cfg.get("command", "")), "stdio", "",
                                     (env if env is not None else effective_env(name, cfg)) or None)
 
@@ -441,6 +446,18 @@ def upsert_server(name: str, *, command: str = "", transport: str = "stdio", url
         raise ValueError("A command is required for stdio transport.")
     if transport in REMOTE_TRANSPORTS and not url.lower().startswith(("http://", "https://")):
         raise ValueError("A remote server needs an http:// or https:// URL.")
+    if transport in REMOTE_TRANSPORTS:
+        # Said at once rather than at the first call: a server's own host may be on this
+        # machine or the LAN, but never the cloud metadata service or another address that
+        # is never fetched. A name that does not resolve yet is not refused here; the
+        # connection judges it again.
+        from vaf.core.mcp_remote import registered_egress
+        from vaf.network.egress import EgressRefused, check_destination
+        try:
+            check_destination(url, registered_egress(url))
+        except EgressRefused as exc:
+            if exc.address:
+                raise ValueError(str(exc)) from None
     permission = str(permission_level or "write").strip().lower()
     if permission not in _PERMISSIONS:
         permission = "write"

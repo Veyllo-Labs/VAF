@@ -433,8 +433,10 @@ def start_sign_in(server: str, *, user_scope_id: Optional[str], redirect_uri: st
         _pending[key] = pending
     auth = RemoteAuth(_sign_in_pool_account(server, account),
                       lambda: _build(server, cfg, account, redirect_uri, pending.username, fresh=True))
+    from vaf.core.mcp_remote import registered_egress
     pending.connect = pool.open(str(cfg.get("transport")), str(cfg.get("url") or ""), server_headers(server, cfg),
-                                auth=auth, connect_timeout=SIGN_IN_SECONDS + FINISH_WAIT_SECONDS)
+                                auth=auth, connect_timeout=SIGN_IN_SECONDS + FINISH_WAIT_SECONDS,
+                                egress=registered_egress(str(cfg.get("url") or "")))
     pending.connect.add_done_callback(lambda fut: _settle(pending, fut))
 
     concurrent.futures.wait([pending.url_future, pending.connect], timeout=URL_WAIT_SECONDS,
@@ -528,8 +530,10 @@ def _revoke(server: str, cfg: Dict[str, Any], record: Dict[str, Any],
     """Tell the service to invalidate the sign-in (RFC 7009), where it offers that. True when it
     confirmed, False when it did not, None when there is nothing to ask. Best effort: the local
     record is already gone either way. `preregistered_secret` is the admin's client secret read
-    before a removal took it out of the ring."""
-    import httpx
+    before a removal took it out of the ring. The endpoint comes from the service's own
+    metadata, so it is reached through the destination guard like any URL VAF did not choose."""
+    from vaf.core.mcp_remote import registered_egress
+    from vaf.network.egress import egress_session
     endpoint = str(record.get("revocation_endpoint") or "")
     tokens = record.get("tokens") if isinstance(record.get("tokens"), dict) else {}
     token = tokens.get("refresh_token") or tokens.get("access_token")
@@ -553,7 +557,8 @@ def _revoke(server: str, cfg: Dict[str, Any], record: Dict[str, Any],
         if secret:
             data["client_secret"] = secret
     try:
-        response = httpx.post(endpoint, data=data, headers=headers, timeout=REVOKE_TIMEOUT_SECONDS)
+        with egress_session(registered_egress(str(cfg.get("url") or ""))) as http:
+            response = http.post(endpoint, data=data, headers=headers, timeout=REVOKE_TIMEOUT_SECONDS)
         return response.status_code == 200
     except Exception as exc:  # noqa: BLE001
         logger.info("MCP server %s: revoking a sign-in failed: %s", server, exc)

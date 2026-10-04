@@ -219,17 +219,24 @@ class RemotePool:
 
     @staticmethod
     def _key(transport: str, url: str, headers: Optional[Dict[str, str]],
-             auth: Optional[RemoteAuth] = None) -> Tuple[str, str, str, str]:
+             auth: Optional[RemoteAuth] = None, egress=None) -> Tuple:
+        """The policy is part of the key: a session opened for a server an administrator
+        registered (allowed on this machine) must never answer a call that came with the
+        model's own URL and the strict policy."""
         digest = hashlib.sha256(json.dumps(headers or {}, sort_keys=True).encode("utf-8")).hexdigest()[:16]
-        return (transport, url, digest, auth.account if auth is not None else "")
+        return (transport, url, digest, auth.account if auth is not None else "", egress)
 
     async def _run_session(self, entry: _Session, transport: str, url: str,
                            headers: Dict[str, str], ready: "asyncio.Future",
-                           auth: Optional[RemoteAuth] = None) -> None:
+                           auth: Optional[RemoteAuth] = None, egress=None) -> None:
         """Hold one session open until `entry.closed` is set; the SDK's contexts are entered and
-        left in this one task."""
+        left in this one task. Every request of the session - the transport, a sign-in's
+        discovery and token calls, each redirect - goes through the destination guard."""
+        from functools import partial
+
         from mcp import ClientSession
         from mcp.types import Implementation
+        from vaf.network.egress import egress_httpx_client
         from vaf.version import __version__
 
         info = Implementation(name="VAF", version=__version__)
@@ -238,7 +245,9 @@ class RemotePool:
             if transport == "sse":
                 from mcp.client.sse import sse_client
                 async with sse_client(url, headers=headers or None, timeout=CONNECT_TIMEOUT_SECONDS,
-                                      auth=http_auth) as (read, write):
+                                      auth=http_auth,
+                                      httpx_client_factory=partial(egress_httpx_client, policy=egress)
+                                      ) as (read, write):
                     async with ClientSession(read, write, client_info=info) as session:
                         await session.initialize()
                         entry.session = session
@@ -246,8 +255,7 @@ class RemotePool:
                         await entry.closed.wait()
             else:
                 from mcp.client.streamable_http import streamable_http_client
-                from mcp.shared._httpx_utils import create_mcp_http_client
-                async with create_mcp_http_client(headers=headers or None, auth=http_auth) as http:
+                async with egress_httpx_client(headers=headers or None, auth=http_auth, policy=egress) as http:
                     async with streamable_http_client(url, http_client=http) as (read, write, _session_id):
                         async with ClientSession(read, write, client_info=info) as session:
                             await session.initialize()
@@ -267,10 +275,14 @@ class RemotePool:
 
     async def _session(self, transport: str, url: str, headers: Dict[str, str],
                        auth: Optional[RemoteAuth] = None,
-                       connect_timeout: float = CONNECT_TIMEOUT_SECONDS):
+                       connect_timeout: float = CONNECT_TIMEOUT_SECONDS, egress=None):
         """The open session's entry for this key, or a new one. `connect_timeout` bounds opening
-        it, which for a sign-in includes the person finishing it in their browser."""
-        key = self._key(transport, url, headers, auth)
+        it, which for a sign-in includes the person finishing it in their browser. `egress` is
+        the destination policy (vaf.network.egress.EgressPolicy); None means the instance's."""
+        if egress is None:
+            from vaf.network.egress import EgressPolicy
+            egress = EgressPolicy.from_config()
+        key = self._key(transport, url, headers, auth, egress)
         lock = self._key_locks.setdefault(key, asyncio.Lock())
         async with lock:
             entry = self._sessions.get(key)
@@ -288,7 +300,8 @@ class RemotePool:
             entry.closed = asyncio.Event()
             entry.ended = asyncio.Event()
             ready = asyncio.get_running_loop().create_future()
-            entry.task = asyncio.create_task(self._run_session(entry, transport, url, headers, ready, auth))
+            entry.task = asyncio.create_task(self._run_session(entry, transport, url, headers, ready, auth,
+                                                               egress))
             try:
                 await asyncio.wait_for(ready, timeout=connect_timeout)
             except BaseException:
@@ -312,32 +325,32 @@ class RemotePool:
 
     def list_tools(self, transport: str, url: str, headers: Optional[Dict[str, str]] = None,
                    timeout: float = CONNECT_TIMEOUT_SECONDS,
-                   auth: Optional[RemoteAuth] = None) -> List[Dict[str, Any]]:
+                   auth: Optional[RemoteAuth] = None, egress=None) -> List[Dict[str, Any]]:
         """The server's tools as plain dicts (name, description, inputSchema, execution...)."""
         async def _go():
-            entry = await self._session(transport, url, dict(headers or {}), auth)
+            entry = await self._session(transport, url, dict(headers or {}), auth, egress=egress)
             result = await entry.run(entry.session.list_tools())
             return [t.model_dump(mode="json", by_alias=True, exclude_none=True) for t in result.tools]
         return self._submit(_go(), timeout)
 
     def call_tool(self, transport: str, url: str, tool: str, arguments: Optional[Dict[str, Any]] = None,
                   headers: Optional[Dict[str, str]] = None, timeout: float = CALL_TIMEOUT_SECONDS,
-                  auth: Optional[RemoteAuth] = None) -> str:
+                  auth: Optional[RemoteAuth] = None, egress=None) -> str:
         """One `tools/call`, rendered as text. Never retried (see the module docstring)."""
         async def _go():
-            entry = await self._session(transport, url, dict(headers or {}), auth)
+            entry = await self._session(transport, url, dict(headers or {}), auth, egress=egress)
             result = await entry.run(entry.session.call_tool(tool, arguments or {}))
             return render_result(result)
         return self._submit(_go(), timeout)
 
     def open(self, transport: str, url: str, headers: Optional[Dict[str, str]] = None, *,
              auth: Optional[RemoteAuth] = None,
-             connect_timeout: float = CONNECT_TIMEOUT_SECONDS) -> "concurrent.futures.Future":
+             connect_timeout: float = CONNECT_TIMEOUT_SECONDS, egress=None) -> "concurrent.futures.Future":
         """Start opening a session without waiting for it: a sign-in, whose session is ready
         only once the person finished signing in. The future completes when it is open (the
         result is not for the caller) or fails with the transport's error."""
         async def _go():
-            await self._session(transport, url, dict(headers or {}), auth, connect_timeout)
+            await self._session(transport, url, dict(headers or {}), auth, connect_timeout, egress)
         return asyncio.run_coroutine_threadsafe(_go(), self._ensure_loop())
 
     def close(self, url: Optional[str] = None, account: Optional[str] = None) -> None:
@@ -358,6 +371,17 @@ class RemotePool:
 
 _pool: Optional[RemotePool] = None
 _pool_lock = threading.Lock()
+
+
+def registered_egress(url: str):
+    """The destination policy for a server an administrator registered: its own host may be
+    on this machine or the LAN (a local MCP server is an ordinary setup), while a redirect
+    elsewhere and any other host its sign-in discovers are judged by the instance policy.
+    A URL the MODEL passes to mcp_call gets the instance policy alone (the pool's default)."""
+    from urllib.parse import urlsplit
+
+    from vaf.network.egress import EgressPolicy
+    return EgressPolicy.from_config(trusted_host=urlsplit(str(url or "")).hostname or None)
 
 
 def get_remote_pool() -> RemotePool:

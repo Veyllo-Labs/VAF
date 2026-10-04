@@ -255,5 +255,5 @@ closed.
 | Tool | Perm | What it does |
 |------|------|--------------|
 | `cloud_storage` | write | Google Drive / OneDrive access (prefer `search_all`). |
-| `mcp_call` | write | Call external tools via Model Context Protocol: a local server (`stdio`, `server_command`) or a remote one (`http` for Streamable HTTP, `sse`, `server_url`, without a login; a server that needs a token or a sign-in per account is registered instead, and its `mcp_<server>_<tool>` tools run as the calling account). |
+| `mcp_call` | write | Call external tools via Model Context Protocol: a local server (`stdio`, `server_command`) or a remote one (`http` for Streamable HTTP, `sse`, `server_url`, without a login; a server that needs a token or a sign-in per account is registered instead, and its `mcp_<server>_<tool>` tools run as the calling account). A `server_url` the model passes gets the instance destination policy (`vaf/network/egress.py`): never a server on this machine, where a tokenless request is the owner. A server an administrator registered may be on this machine or the LAN (`mcp_remote.registered_egress`); its redirects and sign-in hosts are judged normally, and a host at the cloud metadata service is refused when it is saved. |
 | `thinking_note_add` | system | Save a note for the next background thinking run. |

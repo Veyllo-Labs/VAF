@@ -23,6 +23,8 @@ export default function StandingGrantsSection({ endpoint, own }: { endpoint: str
     const t = useTranslations('grants');
     const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
     const [data, setData] = useState<Grants | null>(null);
+    // The list could not be fetched: said, with a retry, instead of a section that vanishes.
+    const [loadFailed, setLoadFailed] = useState(false);
     const [failed, setFailed] = useState(false);
 
     // The list on screen is always THIS endpoint's: cleared when the account changes, on a
@@ -39,10 +41,13 @@ export default function StandingGrantsSection({ endpoint, own }: { endpoint: str
         } catch {
             next = null;
         }
-        if (endpointRef.current === requested) setData(next);
+        if (endpointRef.current === requested) {
+            setData(next);
+            setLoadFailed(next === null);
+        }
     }, [apiBase, endpoint]);
 
-    useEffect(() => { setData(null); void load(); }, [load]);
+    useEffect(() => { setData(null); setLoadFailed(false); void load(); }, [load]);
 
     const revoke = async (body: { tools?: string[]; dirs?: string[]; everything?: boolean }) => {
         setFailed(false);
@@ -60,7 +65,21 @@ export default function StandingGrantsSection({ endpoint, own }: { endpoint: str
         void load();
     };
 
-    if (!data) return null;
+    if (!data) {
+        if (!loadFailed) return null;
+        return (
+            <div className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 mt-6">
+                <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>
+                <div className="flex items-center gap-3">
+                    <p className="text-sm text-red-600 flex-1">{t('loadFailed')}</p>
+                    <button type="button" onClick={() => void load()}
+                        className="text-xs font-medium text-gray-700 hover:text-gray-900 hover:underline">
+                        {t('retry')}
+                    </button>
+                </div>
+            </div>
+        );
+    }
     const tools = Object.entries(data.tools);
     const empty = tools.length === 0 && data.dirs.length === 0;
     const rowClass = 'flex items-center gap-3 px-3 py-2 rounded-lg border border-gray-200 bg-white';

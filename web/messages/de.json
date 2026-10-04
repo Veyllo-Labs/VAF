@@ -2463,7 +2463,9 @@
     "folder": "vertrauenswürdiger Ordner",
     "revoke": "Widerrufen",
     "revokeAll": "Alle widerrufen",
-    "failed": "Das hat nicht geklappt."
+    "failed": "Das hat nicht geklappt.",
+    "loadFailed": "Die Freigaben konnten nicht geladen werden.",
+    "retry": "Erneut versuchen"
   },
   "editorFile": {
     "separator": "; ",

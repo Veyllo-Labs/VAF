@@ -423,6 +423,59 @@ def test_an_automation_of_an_account_without_access_does_not_run(monkeypatch, tm
     assert out.startswith("[SKIPPED]") and taken == []
 
 
+def test_a_workflow_automation_stops_and_delivers_nothing_once_revoked(monkeypatch, tmp_path):
+    """The workflow lane delivered and returned on its own, before the revocation check, and
+    ran its steps with no stop check at all. MUTATION: drop check_stop from engine.execute, or
+    the revocation check in front of its delivery."""
+    import vaf.core.agent as agent_mod
+    import vaf.workflows.engine as engine_mod
+    from vaf.core import automation
+    from vaf.core.lock_manager import LockManager
+
+    class _Agent:
+        tools = {}
+        _current_username = "alice"
+        _tool_authorizer = None
+
+        def __init__(self, *a, **k):
+            pass
+
+        def load_model(self):
+            pass
+
+        def init_chat(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    seen = {}
+
+    class _Engine:
+        def __init__(self, *a, **k):
+            pass
+
+        def execute(self, steps, variables=None, check_stop=None, **k):
+            revocation.revoke_account(SCOPE)          # taken away while the steps run
+            seen["stop"] = check_stop() if check_stop else None
+            return SimpleNamespace(success=True, paused=False, final_output="", error=None)
+
+    pushed = []
+    monkeypatch.setattr(agent_mod, "Agent", _Agent)
+    monkeypatch.setattr(engine_mod, "WorkflowEngine", _Engine)
+    monkeypatch.setattr(automation, "bind_identity", lambda *a, **k: None)
+    monkeypatch.setattr(automation, "resolve_scope_identity", lambda *a, **k: None)
+    monkeypatch.setattr(automation, "_push_result_to_web_ui", lambda *a, **k: pushed.append(a))
+    monkeypatch.setattr(LockManager, "acquire", lambda lock_id: True)
+    monkeypatch.setattr(LockManager, "release", lambda lock_id: None)
+    manager = automation.AutomationManager(storage_dir=str(tmp_path))
+    task = automation.AutomationTask(name="report", user_scope_id=SCOPE,
+                                     workflow_steps=[{"tool": "write_file", "args": {"path": "r.md"}}])
+    out = manager.run_task(task, new_terminal=False)
+    assert seen["stop"] is True
+    assert out.startswith("[REVOKED]") and pushed == []
+
+
 # ── standing grants ──────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -517,10 +570,15 @@ def test_only_an_admin_reads_or_revokes_another_accounts_grants(_trust_dir, monk
 def test_the_grants_list_never_shows_another_accounts_grants():
     """Switching accounts in the user editor left the previous one's list - and its revoke
     buttons - on screen until the next answer, and a failed fetch kept it for good.
-    MUTATION: keep the old list on a failed fetch, or accept a late answer for another account."""
+    A failed fetch says so, with a retry, instead of hiding the section.
+    MUTATION: keep the old list on a failed fetch, accept a late answer for another account,
+    or hide the section when the list could not be loaded."""
     from pathlib import Path
     src = (Path(__file__).resolve().parents[1] / "web" / "components" / "settings"
            / "StandingGrantsSection.tsx").read_text(encoding="utf-8")
-    assert "if (endpointRef.current === requested) setData(next);" in src
+    assert "if (endpointRef.current === requested) {\n            setData(next);" in src
     assert "next = null;" in src
-    assert "useEffect(() => { setData(null); void load(); }, [load]);" in src
+    assert "useEffect(() => { setData(null); setLoadFailed(false); void load(); }, [load]);" in src
+    empty = src[src.index("if (!data) {"):src.index("const tools = Object.entries")]
+    assert "if (!loadFailed) return null;" in empty and "t('loadFailed')" in empty
+    assert "onClick={() => void load()}" in empty

@@ -2463,7 +2463,9 @@
     "folder": "trusted folder",
     "revoke": "Revoke",
     "revokeAll": "Revoke all",
-    "failed": "That did not work."
+    "failed": "That did not work.",
+    "loadFailed": "The grants could not be loaded.",
+    "retry": "Try again"
   },
   "editorFile": {
     "separator": "; ",

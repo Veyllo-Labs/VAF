@@ -31,8 +31,9 @@ An automation runs a real agent **in the background**. It must be invisible to w
 `revocation.account_stands(task.user_scope_id)`: an account revoked in this process, or one the
 account directory lists as inactive or no longer lists (deleted), is skipped with a
 `[SKIPPED]` line in the backend log, so a deactivated account's schedule stays silent after a
-restart too. A prompt run that is already going when the account is revoked is stopped at once
-(its bounded run polls the mark), and its result is not delivered. See "Taking access away" in
+restart too. A run that is already going when the account is revoked is stopped at once - the prompt
+lane's bounded run and the workflow engine's stop check both poll the mark - and its result
+is not delivered, on either lane. See "Taking access away" in
 [USER_ISOLATION.md](../security/USER_ISOLATION.md#taking-access-away-reaches-work-already-running).
 
 ## Short in-chat timers (`set_timer`) vs automations

@@ -2463,7 +2463,9 @@
     "folder": "신뢰하는 폴더",
     "revoke": "취소",
     "revokeAll": "모두 취소",
-    "failed": "실패했어요."
+    "failed": "실패했어요.",
+    "loadFailed": "상시 허용 목록을 불러오지 못했어요.",
+    "retry": "다시 시도"
   },
   "editorFile": {
     "separator": "; ",

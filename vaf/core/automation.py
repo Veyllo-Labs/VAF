@@ -567,6 +567,15 @@ def _last_effective_completion_local_date(task: AutomationTask) -> Optional[date
     return _parse_last_run_local_date(task.last_run)
 
 
+def _revoked_run_note(task) -> str:
+    """What a run of an account whose access was taken away mid-run answers: logged, and
+    nothing is delivered (vaf.core.revocation). One text for both lanes of run_task."""
+    msg = (f"[REVOKED] Automation '{task.name}' ({task.id}) stopped: its account's "
+           f"access was taken away; nothing is delivered.")
+    append_domain_log_always("backend", msg)
+    return msg
+
+
 def _stamp_successful_run(task: AutomationTask) -> None:
     """Record completion time and local calendar day (survives restarts via _save_task)."""
     from vaf.core.user_time import user_now
@@ -1862,7 +1871,11 @@ vaf automation delete <id>   # Delete task
                 if trigger is not None:
                     from vaf.core.automation_triggers import trigger_variables
                     variables.update(trigger_variables(trigger))
-                workflow_result = engine.execute(steps, variables=variables)
+                # Stopped like the prompt lane when the account's access is taken away
+                # mid-run: between steps and inside a step's bounded wait.
+                workflow_result = engine.execute(
+                    steps, variables=variables,
+                    check_stop=lambda: is_revoked(task.user_scope_id))
 
                 if getattr(workflow_result, "paused", False):
                     # PAUSED, NOT FAILED: a step handed off to an async sub-agent, so the run
@@ -1922,6 +1935,9 @@ vaf automation delete <id>   # Delete task
                 agent.shutdown()
                 
                 # Skip legacy output saving if workflow already saved the file
+                if workflow_saved_file and is_revoked(task.user_scope_id):
+                    # This branch delivers and returns on its own, before the check below.
+                    return _revoked_run_note(task)
                 if workflow_saved_file:
                     # Workflow's write_file step already saved the output.
                     _stamp_successful_run(task)
@@ -2325,10 +2341,7 @@ vaf automation delete <id>   # Delete task
                 os.environ["VAF_NONINTERACTIVE"] = _prior_noninteractive
         
         if is_revoked(task.user_scope_id):
-            msg = (f"[REVOKED] Automation '{task.name}' ({task.id}) stopped: its account's "
-                   f"access was taken away; nothing is delivered.")
-            append_domain_log_always("backend", msg)
-            return msg
+            return _revoked_run_note(task)
 
         # Deliver result to user via Web UI chat + messenger.
         # Only one delivery path — no duplicate notification + chat message.

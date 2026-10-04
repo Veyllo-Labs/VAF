@@ -2463,7 +2463,9 @@
     "folder": "güvenilen klasör",
     "revoke": "Geri al",
     "revokeAll": "Tümünü geri al",
-    "failed": "Bu işe yaramadı."
+    "failed": "Bu işe yaramadı.",
+    "loadFailed": "Kalıcı izinler yüklenemedi.",
+    "retry": "Tekrar dene"
   },
   "editorFile": {
     "separator": "; ",

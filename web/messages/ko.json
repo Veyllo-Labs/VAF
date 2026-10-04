@@ -679,6 +679,7 @@
     "ovUnitsHint": "세션별 · 실시간 감시",
     "ovEvMailSend": "위험한 메일 차단",
     "ovEvMailImage": "외부 이미지 차단",
+    "ovEvEgress": "내부 주소로의 요청 차단",
     "ovEvMailSpoof": "메일이 내 도메인을 사칭함",
     "ovEvMailToken": "메일에 다른 곳의 사건 토큰",
     "ovEvMailCapped": "자동 메일 답장 한도 도달",

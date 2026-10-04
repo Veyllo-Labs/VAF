@@ -575,6 +575,24 @@ What an embedded agent can and cannot do on the host - the short version of
   `python_sandbox(with_vaf_tools=True)` opens a temporary tool-bridge port on
   `0.0.0.0` (random ephemeral port, per-run token auth) for the duration of
   that call.
+- **Fetches whose URL someone else chose go through `vaf.egress_session()`.**
+  On the machine VAF runs on, a request from `127.0.0.1` without a token is the
+  owner (the "Localhost Bypass" in
+  [NETWORK_FEATURES.md](setup/NETWORK_FEATURES.md)), so a tool that fetches a
+  URL a model, a web page or a mail handed it must never dial loopback: one
+  that did returned the owner's contacts, accounts and configuration. VAF's own
+  fetch tools use `vaf.egress_session(policy=None, *, username="")`, a
+  `requests.Session` that resolves each host once, refuses loopback and
+  forbidden addresses (link-local and the cloud metadata service, multicast,
+  reserved) and, unless `egress_allow_private_hosts` is off, admits the LAN;
+  the connection goes to the address it checked, TLS is still verified against
+  the name, and every redirect hop is judged again. A refusal raises
+  `vaf.EgressRefused`, which is both a `requests` `ConnectionError` and a
+  `ValueError`, and is logged as the security event `egress_blocked`.
+  `vaf.EgressPolicy(allow_private, trusted_host, ports, max_redirects)` narrows
+  or widens one call; `trusted_host` lets one host an administrator registered
+  be on this machine or the LAN. A tool YOU write that takes a URL from the
+  model needs the same: use the session instead of `requests.get`.
 - **Admin-only tools stay off - but a bare agent still acts as the machine
   owner.** Without `user_scope`, an embedded agent has no admin identity
   (`admin_only` tools are blocked), yet in local mode its memory tools
@@ -1949,6 +1967,10 @@ Stable public surface (safe to build on):
   target; it neither reads nor changes the jail of the run it is called from. It is only
   the per-account half: it does not screen system folders or VAF's own data directory,
   and it does not refuse a scope-less caller (see the multi-tenant section).
+- `vaf.egress_session(policy=None, *, username="")` / `vaf.EgressPolicy` /
+  `vaf.EgressRefused` - fetching a URL that someone else chose without reaching this
+  machine, its cloud metadata service or (when switched off) the LAN. See "Security
+  posture" above.
 - `vaf.contained_path(root, relative="", *, must_exist=False)` /
   `vaf.safe_entry_name(name, *, allow_hidden=False)` / `vaf.PathEscape` - keeping a
   path that came from OUTSIDE inside the directory it may touch. The jail above

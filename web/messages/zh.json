@@ -679,6 +679,7 @@
     "ovUnitsHint": "按会话划分 · 实时看门狗",
     "ovEvMailSend": "高风险邮件已拦截",
     "ovEvMailImage": "外部图片已拦截",
+    "ovEvEgress": "已拦截对内部地址的访问",
     "ovEvMailSpoof": "邮件冒充你自己的域名",
     "ovEvMailToken": "邮件中出现他人的事务令牌",
     "ovEvMailCapped": "自动邮件回复已达上限",

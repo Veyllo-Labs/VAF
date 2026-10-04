@@ -20,10 +20,12 @@ if TYPE_CHECKING:
                                      set_account_directory_resolver,
                                      set_confirmation_bypass_resolver)
     from .framework import Agent, CoreAgent
+    from .network.egress import EgressPolicy, EgressRefused, egress_session
     from .tools.base import BaseTool
     from .tools.filesystem import jail_allows, user_jail
 
 __all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
+           "EgressPolicy", "EgressRefused",
            "NON_CONVERSATION_KINDS",
            "PathEscape", "RemoteRefused",
            "RemoteRoom", "Room", "RoomError", "RoomTriggerWatch",
@@ -33,7 +35,7 @@ __all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
            "UploadVerdict", "VoiceTurnEngine",
            "account_allows_tool", "build_capability_addendum", "contained_path",
            "derive_peer_id",
-           "describe_room_entry", "extract_pdf_markdown",
+           "describe_room_entry", "egress_session", "extract_pdf_markdown",
            "fold_room_owners", "fold_room_tasks", "fold_room_votes", "inspect_upload",
            "install_thread_excepthook", "invited_rooms", "jail_allows", "joined_rooms",
            "markers",
@@ -158,6 +160,18 @@ def __getattr__(name):
         # means: nobody has it. Stdlib-only underneath. See docs/EMBEDDING.md.
         from .core.tool_dispatch import set_confirmation_bypass_resolver
         return set_confirmation_bypass_resolver
+    if name in ("EgressPolicy", "EgressRefused", "egress_session"):
+        # Fetch a URL that someone else chose - a model, a web page, a mail - without
+        # letting it reach this machine. On the machine VAF runs on, a tokenless request
+        # from 127.0.0.1 is the owner, so a fetch tool that dials loopback hands the owner's
+        # data to whoever chose the URL; the same request reaches the cloud metadata service
+        # and the LAN. VAF's own fetch tools were the proof: nine of them dialled whatever
+        # they were given. A tool an embedder registers that takes a URL from the model has
+        # the same exposure next to the harness. requests is a base dependency, so the slim
+        # base is unaffected. See docs/EMBEDDING.md.
+        from .network.egress import EgressPolicy, EgressRefused, egress_session
+        return {"EgressPolicy": EgressPolicy, "EgressRefused": EgressRefused,
+                "egress_session": egress_session}[name]
     if name in ("UploadVerdict", "inspect_upload", "record_threat"):
         # Content arriving from someone else, judged once and remembered. `inspect_upload`
         # is the question a lane asks before it accepts bytes (hash them, look them up,

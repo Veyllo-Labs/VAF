@@ -758,6 +758,12 @@ class Config:
         # SSRF guard for IMAP/SMTP: when False (default), refuse mail hosts resolving to
         # loopback/RFC-1918/link-local addresses. Admin-only (GLOBAL_CONFIG_KEYS).
         "email_allow_private_hosts": False,
+        # Destination guard for the agent's own fetches (webfetch, download_file, web
+        # search page reads, MCP, WebDAV): may they reach PRIVATE (LAN) addresses? On by
+        # default - a home network is where a personal agent works - and every such fetch
+        # is logged. Loopback and the cloud metadata service are refused regardless.
+        # Admin-only (GLOBAL_CONFIG_KEYS). See vaf/network/egress.py.
+        "egress_allow_private_hosts": True,
         # Agent-facing phishing filter (prompt-injection defense): suspicious mail is hidden
         # from mail tools while the Web UI still shows it with a warning. Instance-global,
         # admin-only (email_agent_ prefix in GLOBAL_CONFIG_KEY_PREFIXES). See vaf/tools/mail_utils.py.
@@ -1087,6 +1093,9 @@ class Config:
         # loopback/RFC-1918/metadata addresses for the whole instance - a LAN
         # user must never be able to do that.
         "email_allow_private_hosts",
+        # Same reasoning for the agent's fetches: switching the LAN off (or on) is a
+        # decision about the instance's network position, never one account's.
+        "egress_allow_private_hosts",
         # Mail engine write flag + retention: instance-wide policy.
         "mail_engine_write_enabled",
         "mail_case_lock_days",

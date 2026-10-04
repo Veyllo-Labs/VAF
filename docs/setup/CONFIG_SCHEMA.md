@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (353 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (354 keys).
 
 ## How configuration is set
 
@@ -440,6 +440,7 @@ Most of these are populated by the setup wizard / Connections UI, not hand-edite
 | `email_oauth_*_client_id` | `""` | Email OAuth client IDs (Google/Microsoft). |
 | `email_oauth_*_client_secret` | `""` | Email OAuth client secrets (Google/Microsoft). Read-redacted for non-admins. |
 | `email_allow_private_hosts` | `False` | SSRF guard for IMAP/SMTP. When false (default), VAF refuses to connect to a mail host that resolves to loopback, RFC-1918 private, or link-local addresses (incl. the `169.254.169.254` cloud-metadata endpoint); set true only to use a legitimate LAN / self-hosted mail server. Multicast/reserved addresses are always refused. Admin-only. |
+| `egress_allow_private_hosts` | `True` | Destination guard for the agent's own fetches (`webfetch`, `download_file`, web search page reads, MCP servers, WebDAV): when true (default), a fetch may reach PRIVATE network addresses (RFC 1918, `100.64.0.0/10`, `198.18.0.0/15`, `fc00::/7`) and each such fetch is written to the `egress` log; when false, only internet addresses are fetched. Loopback (this machine, where VAF's own backend listens), link-local including the `169.254.169.254` cloud-metadata endpoint, multicast and reserved addresses are refused either way and logged as `egress_blocked`. Separate from `email_allow_private_hosts`, which also admits loopback for a mail bridge. Admin-only. See `vaf/network/egress.py`. |
 | `email_agent_phishing_filter_enabled` | `True` | Hide suspicious (phishing-like) mail from the agent's mail tools while the Web UI still shows it with a warning (prompt-injection defense). Admin-only. |
 | `email_agent_phishing_score_threshold` | `3` | Risk score (1-10) at/above which a message is hidden from the agent. Admin-only. |
 | `email_agent_trusted_sender_domains` | `None` | List of sender From-domains that bypass the phishing filter. Note: the From header is not authenticated; use sparingly. Admin-only. |

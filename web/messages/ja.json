@@ -679,6 +679,7 @@
     "ovUnitsHint": "セッション単位 · ライブ監視",
     "ovEvMailSend": "リスクの高いメールをブロック",
     "ovEvMailImage": "外部画像をブロック",
+    "ovEvEgress": "内部アドレスへの取得をブロック",
     "ovEvMailSpoof": "メールが自分のドメインを名乗っています",
     "ovEvMailToken": "メールに他所の案件トークン",
     "ovEvMailCapped": "自動メール返信が上限に達しました",

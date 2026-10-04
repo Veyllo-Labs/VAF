@@ -679,6 +679,7 @@
     "ovUnitsHint": "oturum kapsamlı · canlı bekçi",
     "ovEvMailSend": "Riskli posta engellendi",
     "ovEvMailImage": "Dış kaynaklı görsel engellendi",
+    "ovEvEgress": "İç adrese yapılan istek engellendi",
     "ovEvMailSpoof": "Posta kendi alan adın gibi görünüyor",
     "ovEvMailToken": "Bir postada yabancı vaka belirteci",
     "ovEvMailCapped": "Otomatik posta yanıtları sınırlandı",

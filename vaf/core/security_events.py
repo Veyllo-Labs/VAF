@@ -87,6 +87,12 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     # mail
     "mail_high_risk_send_blocked": "Outgoing mail stopped as high-risk before sending",
     "mail_image_proxy_blocked": "Remote image proxy refused a host",
+    # outbound fetches
+    "egress_blocked": "One of the agent's fetches (webfetch, download_file, a web search page "
+                      "read, an MCP server, WebDAV) was refused because its host resolves to "
+                      "this machine, the cloud metadata service or another address that is "
+                      "never fetched (or to the LAN while egress_allow_private_hosts is off). "
+                      "`username` the account, `detail` host, address and class",
     "mail_spoofed_own_domain": "A mail claiming one of the account's own domains, or the "
                                "owner's own address, did not authenticate with the provider "
                                "(DMARC fail or no aligned pass): somebody writes as the owner. "

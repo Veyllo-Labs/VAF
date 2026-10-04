@@ -229,6 +229,50 @@ Use this only when you need host filesystem/network access and trust the code so
 
 ---
 
+## Fetching from the network: the destination guard (`vaf/network/egress.py`)
+
+The sandbox keeps CODE away from the host. The agent's FETCHES are the other way in: a
+URL a model, a web page, a search result or a mail hands the agent is fetched by the VAF
+process itself. On this machine a request from `127.0.0.1` without a token is the owner
+(the "Localhost Bypass" in [NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md)), so an
+unguarded fetch of `http://127.0.0.1:8005/api/contacts` returned the owner's contacts -
+measured, together with the account list and the configuration, before this guard
+existed. The same request reaches the cloud metadata service at `169.254.169.254` and
+every device on the LAN.
+
+Every fetch whose URL VAF does not choose itself goes through `egress_session()`:
+
+| Destination (`binding.classify_address`) | Fetched? | Logged |
+|---|---|---|
+| Internet (public) | yes | no |
+| LAN / overlay (RFC 1918, `100.64.0.0/10`, `198.18.0.0/15`, `fc00::/7`) | yes while `egress_allow_private_hosts` is on (default) | each fetch in the `egress` log |
+| This machine (loopback, in every spelling: `::ffff:127.0.0.1`, NAT64 `64:ff9b::7f00:1`, 6to4, Teredo, `::7f00:1`) | never | security event `egress_blocked` |
+| Link-local incl. the metadata service, multicast, documentation, reserved, unspecified | never | security event `egress_blocked` |
+
+How it holds:
+- The host is resolved ONCE and every answer is judged; one refused address refuses the
+  fetch. The connection goes to the checked address and TLS still verifies the
+  certificate against the NAME, so a name that answers differently a moment later (DNS
+  rebinding) cannot move the connection.
+- Every redirect hop is judged like the first request; at most five hops.
+- Only `http` and `https`. The site egress proxy comes from `system_proxy_for`, never from
+  the request library's own environment merge (the uppercase `HTTP_PROXY` is not trusted).
+- `EgressPolicy(trusted_host=...)` lets one host an administrator registered (an MCP
+  server on this machine) be local; a redirect elsewhere is judged normally.
+- `tests/test_egress_static_guard.py` refuses a raw `requests`/`httpx`/`urllib` call
+  with an outside URL in the agent's tools, the WebDAV client and the MCP lane.
+
+NAMED BOUNDARIES:
+- Behind a site proxy the proxy resolves the name, so nothing can be pinned. A name
+  that resolves LOCALLY to a refused address is still refused; a name the local resolver
+  does not know (split horizon) is the proxy's to judge.
+- A shell command (`host_bash`, `curl`) is the person's grant, not an HTTP client this
+  guard wraps.
+- VAF's own fixed internal calls (sub-agent and workflow IPC to its backend) and the A2A
+  rooms (their own `wss` client with a pinned CA) are not fetches of an outside URL.
+- The receiving side still treats a tokenless loopback request as the owner; replacing
+  that with a per-start IPC token is a separate change.
+
 ## Shell execution surfaces
 
 Beyond the Python sandbox there are three shell-execution surfaces, each with a distinct

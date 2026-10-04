@@ -679,6 +679,7 @@
     "ovUnitsHint": "session-scoped · live watchdog",
     "ovEvMailSend": "High-risk mail blocked",
     "ovEvMailImage": "Remote image blocked",
+    "ovEvEgress": "Fetch to an internal address blocked",
     "ovEvMailSpoof": "Mail claims your own domain",
     "ovEvMailToken": "Foreign case token in a mail",
     "ovEvMailCapped": "Automatic mail replies capped",

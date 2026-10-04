@@ -22,6 +22,7 @@ import { useEscapeLayer } from '@/hooks/useEscapeLayer';
 import { copyText } from '@/lib/clipboard';
 import { downloadText } from '@/lib/download';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
+import type { EditorFileInfo } from '@/lib/editorFile';
 import { loadSessionCache, trimSessionCache, saveSessionCache } from '@/lib/sessionCache';
 import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
 import { AgentAvatar, SPECIALIST_SKIN, SUBAGENT_ACCENT, type AvatarMode, type SubAgentKind } from '@/components/AgentAvatar';
@@ -288,6 +289,13 @@ type SessionEditorDocumentState = {
     title: string;
     content?: string;
     docxModel?: NativeDocxDocument | null;
+    /** The file as the editor loaded it (revision, loss report, edit copy): web/lib/editorFile.ts. */
+    fileInfo?: EditorFileInfo | null;
+    /** The draft has unsaved changes: an agent rewrite of the file then keeps it and says so. */
+    dirty?: boolean;
+    externalChange?: boolean;
+    /** Bumped to load the file afresh (the agent rewrote it and nothing was unsaved). */
+    loadNonce?: number;
 };
 
 /** Replace plain-text range [start, end] in HTML with newText; returns new HTML. */
@@ -5987,14 +5995,24 @@ function VAFDashboardContent() {
                                 setDocumentEditorStateForSession(sid, (prev) => ({ ...prev, isOpen: false }));
                             }
                         } else {
-                            // Document files → DocumentEditor as before
-                            setDocumentEditorStateForSession(sid, {
-                                isOpen: true,
-                                filePath: fp,
-                                title: data.title || 'Document',
-                                content: undefined,
-                                docxModel: null,
-                            });
+                            // Document files → DocumentEditor. The agent rewrote a file this chat
+                            // has open with UNSAVED changes: the draft stays and the editor says
+                            // so, instead of being thrown away for the new file.
+                            setDocumentEditorStateForSession(sid, (prev) => (
+                                prev.isOpen && prev.filePath === fp && prev.dirty
+                                    ? { ...prev, externalChange: true }
+                                    : {
+                                        isOpen: true,
+                                        filePath: fp,
+                                        title: data.title || 'Document',
+                                        content: undefined,
+                                        docxModel: null,
+                                        fileInfo: null,
+                                        dirty: false,
+                                        externalChange: false,
+                                        loadNonce: prev.filePath === fp ? (prev.loadNonce ?? 0) + 1 : 0,
+                                    }
+                            ));
                             if (sid === activeSid) {
                                 setShowSubAgentPanel(true);
                                 setDocumentViewerStateForSession(sid, (prev) => ({ ...prev, isOpen: false }));
@@ -11183,7 +11201,7 @@ function VAFDashboardContent() {
                                 />
                             ) : documentEditorState.isOpen ? (
                                 <DocumentEditor
-                                    key={`${currentSessionId ?? 'default'}-ed-${documentEditorState.filePath || 'nofile'}`}
+                                    key={`${currentSessionId ?? 'default'}-ed-${documentEditorState.filePath || 'nofile'}-${documentEditorState.loadNonce ?? 0}`}
                                     isOpen={documentEditorState.isOpen}
                                     onClose={() => setDocumentEditorState(prev => ({ ...prev, isOpen: false }))}
                                     filePath={documentEditorState.filePath}
@@ -11192,6 +11210,22 @@ function VAFDashboardContent() {
                                     initialDocxModel={documentEditorState.docxModel ?? null}
                                     onContentChange={(content) => setDocumentEditorState(prev => ({ ...prev, content }))}
                                     onDocxModelChange={(docxModel) => setDocumentEditorState(prev => ({ ...prev, docxModel }))}
+                                    initialFileInfo={documentEditorState.fileInfo ?? null}
+                                    onFileInfo={(fileInfo) => setDocumentEditorState(prev => ({ ...prev, fileInfo }))}
+                                    // A save went to the edit copy: the editor (and so the agent's
+                                    // view of it) works on in the copy, with the draft as saved.
+                                    onRetarget={(path, fileInfo) => setDocumentEditorState(prev => ({
+                                        ...prev, filePath: path, title: path.split(/[\\/]/).pop() || prev.title,
+                                        fileInfo, dirty: false, externalChange: false,
+                                    }))}
+                                    onOpenFile={(path) => setDocumentEditorState(prev => ({
+                                        ...prev, filePath: path, title: path.split(/[\\/]/).pop() || prev.title,
+                                        content: undefined, docxModel: null, fileInfo: null, dirty: false, externalChange: false,
+                                    }))}
+                                    initialDirty={!!documentEditorState.dirty}
+                                    onDirtyChange={(dirty) => setDocumentEditorState(prev => prev.dirty === dirty ? prev : ({ ...prev, dirty }))}
+                                    externalChange={!!documentEditorState.externalChange}
+                                    onExternalChangeHandled={() => setDocumentEditorState(prev => prev.externalChange ? ({ ...prev, externalChange: false }) : prev)}
                                     onInsertSelection={(text, range) => setInsertedSelections(prev => [...prev, { text, ...range }])}
                                     insertedSelectionsCount={insertedSelections.length}
                                     insertedSelections={insertedSelections}

@@ -10,6 +10,8 @@ import remarkGfm from 'remark-gfm';
 import { useTranslations } from 'next-intl';
 import { useEditShortcuts } from '@/hooks/useEditShortcuts';
 import type { editor as monacoEditor } from 'monaco-editor';
+import EditorFileBanner from '@/components/EditorFileBanner';
+import { saveEditorFile, type SaveConflict } from '@/lib/editorFile';
 
 // Monaco is heavy — load it only on client side
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
@@ -127,6 +129,11 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
   const tc = useTranslations('common');
   const shortcuts = useEditShortcuts(tc('ctrlKey'));
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The revision the text in the editor was loaded or saved at. A save names it, so a file
+  // that changed on disk meanwhile is not overwritten (web/lib/editorFile.ts); the live poll
+  // notices the change while there are unsaved edits, and the banner says so.
+  const revisionRef = useRef<string | null>(null);
+  const [conflict, setConflict] = useState<SaveConflict | null>(null);
   const language = detectLanguage(filePath);
   const isMarkdown = language === 'markdown';
   const fileName = filePath.split('/').pop() ?? filePath;
@@ -138,11 +145,17 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
       const res = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`);
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
       const text = await res.text();
+      const revision = res.headers.get('X-VAF-Revision');
       if (!silent || !isDirty) {
         setContent(text);
+        revisionRef.current = revision;
+        setConflict(null);
         setLastFetched(new Date());
         setLoadError(null);
         onContentLoad?.(text);
+      } else if (revision && revisionRef.current && revision !== revisionRef.current) {
+        // Changed on disk under unsaved edits: said now, not at the next save.
+        setConflict(prev => prev ?? { code: 'conflict', path: filePath, currentRevision: revision });
       }
     } catch (err) {
       if (!silent) setLoadError(String(err));
@@ -174,16 +187,23 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
   }, [isOpen, liveRefresh, fetchContent]);
 
   // ── Save ────────────────────────────────────────────────────────────────────
-  const handleSave = useCallback(async () => {
-    if (!filePath || !isDirty) return;
+  // Raw text, as it is in the editor: the Markdown preview is a view, never what is saved.
+  const handleSave = useCallback(async (opts: { overwrite?: boolean; asCopy?: boolean } = {}) => {
+    if (!filePath || (!isDirty && !opts.asCopy && !opts.overwrite)) return;
     setIsSaving(true);
     try {
-      const res = await fetch('/api/file/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: filePath, content }),
+      const outcome = await saveEditorFile('/api/file/save', {
+        path: filePath,
+        content,
+        base_revision: opts.overwrite ? (conflict?.currentRevision ?? null) : revisionRef.current,
+        as_copy: Boolean(opts.asCopy),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!outcome.ok) {
+        if (outcome.conflict) { setConflict(outcome.conflict); return; }
+        throw new Error(outcome.error || 'Save failed');
+      }
+      setConflict(null);
+      if (!outcome.redirected) revisionRef.current = outcome.revision;
       setIsDirty(false);
       setSavedAt(new Date());
     } catch (err) {
@@ -191,7 +211,7 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
     } finally {
       setIsSaving(false);
     }
-  }, [filePath, content, isDirty]);
+  }, [filePath, content, isDirty, conflict]);
 
   // Ctrl+S to save, Esc to close
   useEffect(() => {
@@ -294,7 +314,7 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
 
         {/* Save button */}
         <button
-          onClick={handleSave}
+          onClick={() => void handleSave()}
           disabled={!isDirty || isSaving}
           className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
           title="Save (Ctrl+S)"
@@ -344,6 +364,14 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
+
+      <EditorFileBanner
+        info={null}
+        conflict={conflict}
+        onReload={() => { setIsDirty(false); setConflict(null); void fetchContent(); }}
+        onSaveAsCopy={() => void handleSave({ asCopy: true })}
+        onOverwrite={() => void handleSave({ overwrite: true })}
+      />
 
       {/* ── Editor area ────────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-hidden">

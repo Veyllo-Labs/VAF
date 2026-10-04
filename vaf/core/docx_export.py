@@ -4,9 +4,6 @@
 from __future__ import annotations
 
 import base64
-import os
-import shutil
-import tempfile
 from io import BytesIO
 from pathlib import Path
 
@@ -44,10 +41,9 @@ _SECTION_START_MAP = {
 }
 
 
-def export_native_docx(document_model: NativeDocxDocument, file_path: str | Path) -> Path:
-    target = Path(file_path).resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
-
+def render_native_docx(document_model: NativeDocxDocument) -> bytes:
+    """The .docx bytes for a native model, written nowhere: a caller that must decide WHERE
+    and WHETHER to write (the editor's save, under a revision check) gets the bytes first."""
     doc = Document()
     _apply_title(doc, document_model.title)
 
@@ -65,20 +61,15 @@ def export_native_docx(document_model: NativeDocxDocument, file_path: str | Path
         for block in section.blocks:
             _write_block(doc, block)
 
-    fd, tmp_path = tempfile.mkstemp(prefix="vaf_docx_native_", suffix=".docx", dir=str(target.parent))
-    try:
-        os.close(fd)
-        doc.save(tmp_path)
-        if target.exists():
-            target.unlink()
-        shutil.move(tmp_path, str(target))
-    finally:
-        if os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+    buffer = BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
 
+
+def export_native_docx(document_model: NativeDocxDocument, file_path: str | Path) -> Path:
+    from vaf.core.secure_store import atomic_write_bytes
+    target = Path(file_path).resolve()
+    atomic_write_bytes(target, render_native_docx(document_model), keep_mode=True)
     return target
 
 

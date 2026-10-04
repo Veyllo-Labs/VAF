@@ -107,7 +107,7 @@ The native DOCX editor currently supports these concepts directly:
 - inline paragraph editing (click-to-edit directly in the page preview)
 - undo and redo over the document model (a bounded snapshot history, see "Undo And Redo")
 
-Unsupported or partially supported OOXML content is not silently discarded in the editor model. Instead, it is represented as a warning or an `unsupported` block so the limitation is visible.
+Unsupported or partially supported OOXML content is not silently discarded in the editor model. Instead, it is represented as a warning or an `unsupported` block so the limitation is visible. It cannot be written back, though: the export writes a placeholder paragraph for an `unsupported` block, and comments and tracked changes have no place in the model at all. So a document holding any of these is never saved over - the first save goes to one copy, `<name> (bearbeitet).docx`, and the editor works on in it (see "A save never overwrites silently" in [WEB_UI.md](../web-ui/WEB_UI.md)). Every save names the revision the model was loaded from (`base_revision`), and a load that fails leaves the editor without a model and with Save locked, never with an empty document that would erase the file.
 
 ## Pagination
 

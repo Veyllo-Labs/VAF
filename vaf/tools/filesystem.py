@@ -1054,6 +1054,15 @@ For semantic analysis across many files, consider librarian_agent instead."""
         return block
 
 class WriteFileTool(BaseTool):
+    """Write one file whole.
+
+    NAMED BOUNDARY: the agent's own write names no revision - it is the author of the
+    change, and a model that re-reads before every write gains nothing a revision would add.
+    What protects the person is the other side: the editors' saves name the revision they
+    were edited from (`vaf.core.file_revision`), so the person's next save after this write
+    is refused instead of erasing it, and an editor holding unsaved changes shows the
+    rewrite as a banner rather than being reloaded over (web/app/page.tsx, document_ready).
+    """
     name = "write_file"
     category    = "files"
     identity_kwargs = ("user_role", "user_scope_id")

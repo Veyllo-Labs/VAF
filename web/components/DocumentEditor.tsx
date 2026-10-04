@@ -13,6 +13,8 @@ import { downloadText } from '@/lib/download';
 import { sanitizeDocumentCopy } from '@/lib/sanitize';
 import { CHIP_BG_CLASSES, INSERTION_COLOR_CLASSES } from '@/components/DocumentViewer';
 import NativeDocxEditor from '@/components/NativeDocxEditor';
+import EditorFileBanner from '@/components/EditorFileBanner';
+import { fileInfoFromResponse, saveEditorFile, type EditorFileInfo, type SaveConflict } from '@/lib/editorFile';
 import type { NativeDocxDocument } from '@/lib/docxNative';
 
 const PdfWithHighlights = dynamic(() => import('@/components/PdfWithHighlights'), { ssr: false });
@@ -80,6 +82,21 @@ export type DocumentEditorProps = {
     onInsertSelection?: (text: string, range: { start: number; end: number; documentId: string; pageNumber?: number; itemIndices?: number[] }) => void;
     insertedSelectionsCount?: number;
     insertedSelections?: InsertedSelectionRange[];
+    /** What the editor knew about its file when it was last mounted (restored per chat). */
+    initialFileInfo?: EditorFileInfo | null;
+    /** The file's revision, loss report and edit copy changed (load, save). */
+    onFileInfo?: (info: EditorFileInfo) => void;
+    /** A save went to the edit copy: the editor and the agent work on in `path` from now on. */
+    onRetarget?: (path: string, info: EditorFileInfo) => void;
+    /** Open another file in this editor (the edit copy). */
+    onOpenFile?: (path: string) => void;
+    /** Unsaved changes appeared or were saved. */
+    onDirtyChange?: (dirty: boolean) => void;
+    /** The restored draft already had unsaved changes. */
+    initialDirty?: boolean;
+    /** The agent rewrote the file while this draft had unsaved changes. */
+    externalChange?: boolean;
+    onExternalChangeHandled?: () => void;
 };
 
 const FILE_ACCEPT = '.pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv';
@@ -89,7 +106,7 @@ const BINARY_DOCUMENT_EXTENSIONS = /\.pdf$/i;
 function isBinaryDocumentPath(path: string): boolean {
     return Boolean(path && BINARY_DOCUMENT_EXTENSIONS.test(path));
 }
-/** Office formats: load via as-html, save via save-docx / save-xlsx / save-pptx. */
+/** Office formats: load via as-html, save via save-xlsx / save-pptx (.docx opens in the native editor). */
 function isDocxPath(path: string): boolean {
     return Boolean(path && /\.docx?$/i.test(path));
 }
@@ -324,6 +341,14 @@ export default function DocumentEditor(props: DocumentEditorProps) {
                         : undefined
                 }
                 insertedSelections={props.insertedSelections}
+                initialFileInfo={props.initialFileInfo}
+                onFileInfo={props.onFileInfo}
+                onRetarget={props.onRetarget}
+                onOpenFile={props.onOpenFile}
+                onDirtyChange={props.onDirtyChange}
+                initialDirty={props.initialDirty}
+                externalChange={props.externalChange}
+                onExternalChangeHandled={props.onExternalChangeHandled}
             />
         );
     }
@@ -351,6 +376,14 @@ function LegacyDocumentEditor({
     onInsertSelection,
     insertedSelectionsCount = 0,
     insertedSelections = [],
+    initialFileInfo = null,
+    onFileInfo,
+    onRetarget,
+    onOpenFile,
+    onDirtyChange,
+    initialDirty = false,
+    externalChange = false,
+    onExternalChangeHandled,
 }: DocumentEditorProps) {
     const tc = useTranslations('common');
     const shortcuts = useEditShortcuts(tc('ctrlKey'));
@@ -371,6 +404,20 @@ function LegacyDocumentEditor({
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [saveMessage, setSaveMessage] = useState<string | null>(null);
+    // The file as the editor loaded it: the revision a save names, what a save would lose,
+    // and the content last loaded or saved, which is what "unsaved changes" is measured from.
+    const [fileInfo, setFileInfo] = useState<EditorFileInfo | null>(initialFileInfo);
+    const [conflict, setConflict] = useState<SaveConflict | null>(null);
+    // A restored draft that was already dirty has no known baseline: it stays dirty until saved.
+    const savedContentRef = useRef<string | null>(initialContent && !initialDirty ? initialContent : null);
+    const dirtyRef = useRef(initialDirty);
+    useEffect(() => {
+        const dirty = savedContentRef.current === null ? dirtyRef.current : content !== savedContentRef.current;
+        if (dirty !== dirtyRef.current) {
+            dirtyRef.current = dirty;
+            onDirtyChange?.(dirty);
+        }
+    }, [content, onDirtyChange]);
     /** Current selection format so toolbar reflects it (like Word). */
     const [selectionFormat, setSelectionFormat] = useState<{
         fontName: string;
@@ -693,6 +740,7 @@ function LegacyDocumentEditor({
                 const detail = text || response.statusText || 'Failed to load document';
                 throw new Error(detail);
             }
+            const info = fileInfoFromResponse(response);
             if (isMarkdownPath(filePath)) {
                 // Render Markdown (research/document reports) instead of showing raw
                 // source text; saving converts the edited HTML back to Markdown on
@@ -700,8 +748,13 @@ function LegacyDocumentEditor({
                 const { marked } = await import('marked');
                 text = await marked.parse(text, { gfm: true, breaks: false });
             }
+            savedContentRef.current = text;
             setContent(text);
             onContentChangeRef.current?.(text);
+            setFileInfo(info);
+            onFileInfo?.(info);
+            setConflict(null);
+            onExternalChangeHandled?.();
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Failed to load document');
         } finally {
@@ -709,26 +762,47 @@ function LegacyDocumentEditor({
         }
     };
 
-    const saveDocument = async () => {
+    /** Save the draft. It names the revision it was edited from, so a file that changed on
+     *  disk meanwhile is not overwritten: the server answers 409 and the banner offers the
+     *  choice. `overwrite` names the CURRENT revision instead (the person chose to); `asCopy`
+     *  writes the edit copy. A lossy office file is saved to the copy by the server itself. */
+    const saveDocument = async (opts: { overwrite?: boolean; asCopy?: boolean } = {}) => {
         setIsSaving(true);
         setError(null);
         setSaveMessage(null);
         try {
             const base = getApiBase();
-            const endpoint = isDocxPath(filePath)
-                ? '/api/file/save-docx'
-                : isXlsxPath(filePath)
-                    ? '/api/file/save-xlsx'
-                    : isPptxPath(filePath)
-                        ? '/api/file/save-pptx'
-                        : '/api/file/save';
-            const response = await fetch(`${base}${endpoint}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path: filePath, content }),
+            const endpoint = isXlsxPath(filePath)
+                ? '/api/file/save-xlsx'
+                : isPptxPath(filePath)
+                    ? '/api/file/save-pptx'
+                    : '/api/file/save';
+            const outcome = await saveEditorFile(`${base}${endpoint}`, {
+                path: filePath,
+                content,
+                base_revision: opts.overwrite ? (conflict?.currentRevision ?? null) : (fileInfo?.revision ?? null),
+                // The Markdown file is shown as HTML here; the server turns it back into
+                // Markdown only because this says so.
+                format: isMarkdownPath(filePath) ? 'html' : undefined,
+                as_copy: Boolean(opts.asCopy),
             });
-            if (!response.ok) throw new Error('Failed to save document');
-            setSaveMessage(filePath || 'Saved.');
+            if (!outcome.ok) {
+                if (outcome.conflict) { setConflict(outcome.conflict); return; }
+                throw new Error(outcome.error || 'Failed to save document');
+            }
+            setConflict(null);
+            savedContentRef.current = content;
+            dirtyRef.current = false;
+            onDirtyChange?.(false);
+            const info: EditorFileInfo = { revision: outcome.revision, loss: [], editCopy: null };
+            if (outcome.redirected && outcome.path) {
+                onRetarget?.(outcome.path, info);
+            } else {
+                const next = { ...(fileInfo || info), revision: outcome.revision };
+                setFileInfo(next);
+                onFileInfo?.(next);
+            }
+            setSaveMessage(outcome.path || filePath || 'Saved.');
             setTimeout(() => setSaveMessage(null), 5000);
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Failed to save document');
@@ -736,6 +810,19 @@ function LegacyDocumentEditor({
             setIsSaving(false);
         }
     };
+
+    const fileBanner = (
+        <EditorFileBanner
+            info={fileInfo}
+            conflict={conflict}
+            externalChange={externalChange}
+            onReload={() => { setConflict(null); void loadDocument(); }}
+            onSaveAsCopy={() => void saveDocument({ asCopy: true })}
+            onOverwrite={() => void saveDocument({ overwrite: true })}
+            onOpenCopy={onOpenFile}
+            onDismiss={() => onExternalChangeHandled?.()}
+        />
+    );
 
     // Native bridges exposed by the desktop window (QtWebEngine). Undefined in a
     // real browser, where the iframe's own print dialog / html2pdf are used.
@@ -929,7 +1016,7 @@ function LegacyDocumentEditor({
             <span className="w-px h-5 bg-gray-300 mx-0.5" />
             <button type="button" onClick={() => execEditorCommand('removeFormat')} className="p-1.5 rounded hover:bg-gray-200" title="Clear formatting"><Eraser size={16} /></button>
             <span className="w-px h-5 bg-gray-300 mx-0.5" />
-            <button type="button" onClick={saveDocument} disabled={isSaving} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100 disabled:opacity-50" title="Save">
+            <button type="button" onClick={() => void saveDocument()} disabled={isSaving} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100 disabled:opacity-50" title="Save">
                 {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                 Save
             </button>
@@ -1236,6 +1323,7 @@ function LegacyDocumentEditor({
                             ) : (
                                 <>
                                     {toolbar}
+                                    {fileBanner}
                                     <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
                                         <div className="flex-1 min-h-0 min-w-0 overflow-auto bg-[#e5e7eb] w-full scrollbar-hide">
                                             <iframe
@@ -1390,6 +1478,7 @@ function LegacyDocumentEditor({
                         ) : (
                             <>
                                 {toolbar}
+                                {fileBanner}
                                 <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
                                     <div className="flex-1 min-h-0 min-w-0 overflow-auto bg-[#e5e7eb] w-full scrollbar-hide">
                                         <iframe

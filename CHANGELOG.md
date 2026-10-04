@@ -92,6 +92,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **A stopped tool call no longer looks finished.** When you press Stop or a tool runs out of
   time, its bubble says the outcome is unknown instead of showing a green check, because a
   message may have left or a file may be half written.
+- **Saving in an editor never overwrites a change you did not see.** When the agent, another
+  tab or another program changed a file while you had it open, your save used to replace that
+  change without a word. Now the save is refused and a notice offers to reload, keep your
+  version as a copy, or overwrite on purpose; your unsaved text stays. If the agent rewrites
+  a file you are editing, your draft is kept and the editor tells you. A Word document that
+  fails to load can no longer be saved as an empty file.
+- **Excel, PowerPoint and Word files are never saved with less than they had.** The editor
+  can only write back what it shows, so saving a workbook with formulas, numbers, pictures or
+  formatting, a deck with pictures or layouts, or a document with comments or unsupported
+  content used to drop all of that from the original. Such a file now stays untouched: the
+  editor tells you what it cannot keep, saves into one copy named "(bearbeitet)", and you
+  and the agent go on working in that copy. A Markdown file that contains a table is no
+  longer rewritten when you save it from the code view.
 - **A mail's sender is read the same way on every supported Python.** Python 3.10 and
   3.11 as installed on Windows and macOS (3.10.11 and 3.11.9, the last installers of those
   series) predate the standard library's stricter address parsing. There, a From line

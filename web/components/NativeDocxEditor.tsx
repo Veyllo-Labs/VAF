@@ -12,6 +12,8 @@ import { useTranslations } from 'next-intl';
 import { useEditShortcuts } from '@/hooks/useEditShortcuts';
 
 import { cn, getApiBase } from '@/lib/utils';
+import EditorFileBanner from '@/components/EditorFileBanner';
+import { fileInfoFromResponse, saveEditorFile, type EditorFileInfo, type SaveConflict } from '@/lib/editorFile';
 import {
   EditHistory, canRedo, canUndo, createEditHistory, historyShortcut, recordStep, redoStep, undoStep,
 } from '@/lib/editHistory';
@@ -50,6 +52,15 @@ type NativeDocxEditorProps = {
   onContentChange?: (content: string) => void;
   onInsertSelection?: (text: string, range: SelectionRangePayload) => void;
   insertedSelections?: EditorInsertedSelection[];
+  // The file as the editor knows it, and what follows a save (see web/lib/editorFile.ts).
+  initialFileInfo?: EditorFileInfo | null;
+  onFileInfo?: (info: EditorFileInfo) => void;
+  onRetarget?: (path: string, info: EditorFileInfo) => void;
+  onOpenFile?: (path: string) => void;
+  onDirtyChange?: (dirty: boolean) => void;
+  initialDirty?: boolean;
+  externalChange?: boolean;
+  onExternalChangeHandled?: () => void;
 };
 
 const MARK_COLORS = [
@@ -736,7 +747,8 @@ function paragraphMarginTopBottomPx(block: NativeDocxParagraph): { top: number; 
 export default function NativeDocxEditor({
   isOpen = true, onClose, canClose = true, filePath, title,
   initialModel = null, onModelChange, onContentChange, onInsertSelection,
-  insertedSelections = [],
+  insertedSelections = [], initialFileInfo = null, onFileInfo, onRetarget, onOpenFile,
+  onDirtyChange, initialDirty = false, externalChange = false, onExternalChangeHandled,
 }: NativeDocxEditorProps) {
   const tc = useTranslations('common');
   const shortcuts = useEditShortcuts(tc('ctrlKey'));
@@ -762,6 +774,16 @@ export default function NativeDocxEditor({
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [selectedBlock, setSelectedBlock] = useState<SelectedBlock>(null);
   const [showWarnings, setShowWarnings] = useState(false);
+  // The revision a save names, what a save would lose, a refused save, and a load that
+  // failed: then there is no model, and Save stays locked - an empty model saved over the
+  // file would erase it.
+  const [fileInfo, setFileInfo] = useState<EditorFileInfo | null>(initialFileInfo);
+  const [conflict, setConflict] = useState<SaveConflict | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  // The model last loaded or saved: edits clone, so "unsaved" is a reference comparison.
+  // A restored draft that was already dirty has no known baseline and stays dirty until saved.
+  const savedModelRef = useRef<NativeDocxDocument | null>(initialModel && !initialDirty ? initialModel : null);
+  const dirtyRef = useRef(initialDirty);
   const previewRef = useRef<HTMLDivElement>(null);
   const onModelChangeRef = useRef(onModelChange);
   const onContentChangeRef = useRef(onContentChange);
@@ -786,22 +808,50 @@ export default function NativeDocxEditor({
     }
   }, [documentModel]);
 
+  // Through refs: the parent hands new callbacks on every render, and the load must not
+  // start again because of that.
+  const onFileInfoRef = useRef(onFileInfo);
+  const onExternalChangeHandledRef = useRef(onExternalChangeHandled);
+  useEffect(() => { onFileInfoRef.current = onFileInfo; }, [onFileInfo]);
+  useEffect(() => { onExternalChangeHandledRef.current = onExternalChangeHandled; }, [onExternalChangeHandled]);
+  const loadModel = useCallback(async (isCancelled: () => boolean = () => false) => {
+    if (!filePath) return;
+    setIsLoading(true); setError(null);
+    try {
+      const res = await fetch(`${getApiBase()}/api/file/docx-model?path=${encodeURIComponent(filePath.replace(/\\/g, '/'))}`);
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.detail || 'Failed to load DOCX model');
+      if (isCancelled()) return;
+      const info = fileInfoFromResponse(res);
+      const model = payload as NativeDocxDocument;
+      savedModelRef.current = model;
+      adoptModel(model);
+      setFileInfo(info);
+      onFileInfoRef.current?.(info);
+      setConflict(null);
+      setLoadFailed(false);
+      onExternalChangeHandledRef.current?.();
+    } catch (e) {
+      // Never an empty model in place of the file: saved, it would erase the document.
+      if (!isCancelled()) { setError(e instanceof Error ? e.message : 'Load failed'); setLoadFailed(true); }
+    } finally { if (!isCancelled()) setIsLoading(false); }
+  }, [filePath, adoptModel]);
+
   useEffect(() => {
     if (documentModel || !filePath) return;
     let cancelled = false;
-    (async () => {
-      setIsLoading(true); setError(null);
-      try {
-        const res = await fetch(`${getApiBase()}/api/file/docx-model?path=${encodeURIComponent(filePath.replace(/\\/g, '/'))}`);
-        const payload = await res.json();
-        if (!res.ok) throw new Error(payload?.detail || 'Failed to load DOCX model');
-        if (!cancelled) adoptModel(payload as NativeDocxDocument);
-      } catch (e) {
-        if (!cancelled) { setError(e instanceof Error ? e.message : 'Load failed'); adoptModel(createEmptyNativeDocx(filePath, title)); }
-      } finally { if (!cancelled) setIsLoading(false); }
-    })();
+    void loadModel(() => cancelled);
     return () => { cancelled = true; };
-  }, [documentModel, filePath, title, adoptModel]);
+  }, [documentModel, filePath, loadModel]);
+
+  useEffect(() => {
+    if (!documentModel) return;
+    const dirty = savedModelRef.current === null ? dirtyRef.current : documentModel !== savedModelRef.current;
+    if (dirty !== dirtyRef.current) {
+      dirtyRef.current = dirty;
+      onDirtyChange?.(dirty);
+    }
+  }, [documentModel, onDirtyChange]);
 
   const blockRanges = useMemo(() => (documentModel ? collectBlockRanges(documentModel) : []), [documentModel]);
 
@@ -907,16 +957,33 @@ export default function NativeDocxEditor({
     if (!active || active === document.body) rootRef.current?.focus({ preventScroll: true });
   };
 
-  const saveDocument = async () => {
-    if (!documentModel) return;
+  /** Save the model, naming the revision it was edited from (see web/lib/editorFile.ts). */
+  const saveDocument = async (opts: { overwrite?: boolean; asCopy?: boolean } = {}) => {
+    if (!documentModel || loadFailed) return;
     setIsSaving(true); setError(null);
     try {
-      const res = await fetch(`${getApiBase()}/api/file/save-docx-native`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: filePath, document: documentModel }),
+      const outcome = await saveEditorFile(`${getApiBase()}/api/file/save-docx-native`, {
+        path: filePath, document: documentModel,
+        base_revision: opts.overwrite ? (conflict?.currentRevision ?? null) : (fileInfo?.revision ?? null),
+        as_copy: Boolean(opts.asCopy),
       });
-      if (!res.ok) { const p = await res.json(); throw new Error(p?.detail || 'Save failed'); }
-      setSaveMessage(filePath); setTimeout(() => setSaveMessage(null), 5000);
+      if (!outcome.ok) {
+        if (outcome.conflict) { setConflict(outcome.conflict); return; }
+        throw new Error(outcome.error || 'Save failed');
+      }
+      setConflict(null);
+      savedModelRef.current = documentModel;
+      dirtyRef.current = false;
+      onDirtyChange?.(false);
+      const info: EditorFileInfo = { revision: outcome.revision, loss: [], editCopy: null };
+      if (outcome.redirected && outcome.path) {
+        onRetarget?.(outcome.path, info);
+      } else {
+        const next = { ...(fileInfo || info), revision: outcome.revision };
+        setFileInfo(next);
+        onFileInfo?.(next);
+      }
+      setSaveMessage(outcome.path || filePath); setTimeout(() => setSaveMessage(null), 5000);
     } catch (e) { setError(e instanceof Error ? e.message : 'Save failed'); }
     finally { setIsSaving(false); }
   };
@@ -1227,7 +1294,7 @@ export default function NativeDocxEditor({
         <button type="button" onClick={() => addBlock('table')} className="px-2 py-1 rounded text-xs text-gray-600 hover:bg-gray-200" title="Add table">Table</button>
         <button type="button" onClick={() => addBlock('page_break')} className="px-2 py-1 rounded text-xs text-gray-600 hover:bg-gray-200" title="Page break">Break</button>
         <span className="ml-auto" />
-        <button type="button" onClick={saveDocument} disabled={isSaving} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100 disabled:opacity-50" title="Save">
+        <button type="button" onClick={() => void saveDocument()} disabled={isSaving || loadFailed || !documentModel} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100 disabled:opacity-50" title="Save">
           {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
         </button>
         <button type="button" onClick={printDocument} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100" title="Print">
@@ -1237,6 +1304,17 @@ export default function NativeDocxEditor({
           {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} PDF
         </button>
       </div>
+      <EditorFileBanner
+        info={fileInfo}
+        conflict={conflict}
+        externalChange={externalChange}
+        loadFailed={loadFailed}
+        onReload={() => { setConflict(null); void loadModel(); }}
+        onSaveAsCopy={() => void saveDocument({ asCopy: true })}
+        onOverwrite={() => void saveDocument({ overwrite: true })}
+        onOpenCopy={onOpenFile}
+        onDismiss={() => onExternalChangeHandled?.()}
+      />
 
       {/* Warnings banner */}
       {documentModel.warnings.length > 0 && (

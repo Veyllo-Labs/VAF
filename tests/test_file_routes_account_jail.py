@@ -151,7 +151,6 @@ def test_an_admin_still_saves_under_the_four_roots(tree):
 
 
 @pytest.mark.parametrize("route,body", [
-    ("save_file_as_docx", lambda p: {"path": p + ".docx", "content": "<p>x</p>"}),
     ("save_file_as_docx_native", lambda p: {"path": p + ".docx", "document": {}}),
     ("save_file_as_xlsx", lambda p: {"path": p + ".xlsx", "content": "<table></table>"}),
     ("save_file_as_pptx", lambda p: {"path": p + ".pptx", "content": "<h2>x</h2>"}),

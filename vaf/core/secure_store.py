@@ -171,10 +171,24 @@ def _replace_with_retry(tmp: str, path: Path) -> None:
             time.sleep(_REPLACE_BACKOFF_S * (attempt + 1))
 
 
-def _atomic_write_bytes(path: Path, data: bytes) -> None:
-    """Write bytes atomically: temp file (mode 0600 via mkstemp) + fsync + os.replace."""
+def atomic_write_bytes(path: Path, data: bytes, *, keep_mode: bool = False) -> None:
+    """Write bytes atomically: temp file + fsync + os.replace, so a reader sees the old file
+    or the new one, never half of it.
+
+    The temp file is created 0600 (mkstemp), which is what a secret wants and what every
+    store here gets by default. ``keep_mode=True`` is for a file that is not a secret - a
+    document the person edits: it keeps the mode the file had (0644 for a new one), so a
+    save does not quietly hide it from the person's other programs or the group it was
+    shared with."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    mode = None
+    if keep_mode:
+        try:
+            import stat
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+        except OSError:
+            mode = 0o644
     # No .json suffix on the temp file: the session, archive and migration globs
     # match "*.json", and a crashed write would otherwise leave something they
     # try to parse as a record.
@@ -184,6 +198,11 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
+        if mode is not None:
+            try:
+                os.chmod(tmp, mode)
+            except OSError:
+                pass
         _replace_with_retry(tmp, path)
     except Exception:
         try:
@@ -191,6 +210,10 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
         except OSError:
             pass
         raise
+
+
+# The stores' own name for it: always a secret, so always the 0600 default.
+_atomic_write_bytes = atomic_write_bytes
 
 
 # ---------------------------------------------------------------------------

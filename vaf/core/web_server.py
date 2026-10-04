@@ -3381,6 +3381,7 @@ async def get_file(request: Request, path: str = Query(..., description="Absolut
         path=str(target),
         media_type=mime_type or "application/octet-stream",
         filename=target.name,
+        headers=_editor_headers(target),
     )
 
 
@@ -3481,7 +3482,7 @@ async def describe_image(request: Request):
 def _allowed_file_path(path_str: str, request: Request, *, mode: str = "read",
                        must_exist: bool = True):
     """The one decision for a local file a route reads or writes for the caller: the three read
-    routes (``/api/file``, ``/as-html``, ``/docx-model``), the image description and the five
+    routes (``/api/file``, ``/as-html``, ``/docx-model``), the image description and the four
     save routes. Returns the resolved Path or raises HTTPException.
 
     1. Under one of the served roots (``Platform.served_file_roots``), for everyone.
@@ -3602,16 +3603,22 @@ def _docx_to_html(target) -> str:
     return "".join(parts) if parts else "<p></p>"
 
 
+# What the editor shows of an office file, and therefore all it can write back: the HTML
+# converters below stop here, and `_office_loss_report` counts anything beyond as lost.
+XLSX_MAX_SHEETS, XLSX_MAX_ROWS, XLSX_MAX_COLS = 10, 500, 30
+PPTX_MAX_SLIDES = 50
+
+
 def _xlsx_to_html(target) -> str:
     import openpyxl
     wb = openpyxl.load_workbook(target, read_only=True, data_only=True)
     parts = []
-    for sheet_name in wb.sheetnames[:10]:
+    for sheet_name in wb.sheetnames[:XLSX_MAX_SHEETS]:
         sheet = wb[sheet_name]
         parts.append(f"<h2>Sheet: {_escape_html(sheet_name)}</h2>")
         parts.append("<table border=\"1\" cellpadding=\"4\" cellspacing=\"0\">")
-        max_row = min(sheet.max_row, 500)
-        max_col = min(sheet.max_column, 30)
+        max_row = min(sheet.max_row, XLSX_MAX_ROWS)
+        max_col = min(sheet.max_column, XLSX_MAX_COLS)
         for row in sheet.iter_rows(min_row=1, max_row=max_row, max_col=max_col, values_only=True):
             parts.append("<tr>")
             for cell in row:
@@ -3627,12 +3634,113 @@ def _pptx_to_html(target) -> str:
     from pptx import Presentation
     prs = Presentation(str(target))
     parts = []
-    for i, slide in enumerate(prs.slides[:50], 1):
+    for i, slide in enumerate(list(prs.slides)[:PPTX_MAX_SLIDES], 1):
         parts.append(f"<h2>Slide {i}</h2>")
         for shape in slide.shapes:
             if hasattr(shape, "text") and shape.text.strip():
                 parts.append(f"<p>{_escape_html(shape.text.strip())}</p>")
     return "".join(parts) if parts else "<p></p>"
+
+
+def _office_loss_report(target) -> list:
+    """What saving this office file from the editor would LOSE, as reason codes; [] when
+    nothing. The editor shows an office file as HTML (or, for .docx, as its native model)
+    and writes back only what it shows, so a workbook with formulas, numbers, merged cells,
+    pictures or formatting, a deck with anything but plain text boxes, or a document with
+    content the model cannot hold would be overwritten with less than it had. Such a file is
+    never overwritten: the save goes to ONE copy (`file_revision.edit_copy_path`). A file
+    that cannot be read counts as lossy - the safe answer. What the editor wrote itself has
+    no reasons, so the copy is saved in place from then on."""
+    suf = target.suffix.lower()
+    reasons: list = []
+    try:
+        if suf == ".xlsx":
+            if target.stat().st_size > 5 * 1024 * 1024:
+                return ["too_large"]
+            import openpyxl
+            wb = openpyxl.load_workbook(target, data_only=False)
+            try:
+                if len(wb.sheetnames) > XLSX_MAX_SHEETS:
+                    reasons.append("too_large")
+                for i, ws in enumerate(wb.worksheets):
+                    if ws.title != f"Sheet{i + 1}":
+                        reasons.append("sheet_names")
+                    if ws.max_row > XLSX_MAX_ROWS or ws.max_column > XLSX_MAX_COLS:
+                        reasons.append("too_large")
+                    if ws.merged_cells.ranges:
+                        reasons.append("merged_cells")
+                    if getattr(ws, "_images", None) or getattr(ws, "_charts", None):
+                        reasons.append("images_or_charts")
+                    for row in ws.iter_rows(max_row=XLSX_MAX_ROWS, max_col=XLSX_MAX_COLS):
+                        for cell in row:
+                            if cell.data_type == "f":
+                                reasons.append("formulas")
+                            elif cell.value is not None and not isinstance(cell.value, str):
+                                reasons.append("numbers")
+                            if cell.has_style and cell.style_id:
+                                reasons.append("formatting")
+            finally:
+                wb.close()
+        elif suf == ".pptx":
+            from pptx import Presentation
+            from pptx.enum.shapes import MSO_SHAPE_TYPE
+            prs = Presentation(str(target))
+            slides = list(prs.slides)
+            if len(slides) > PPTX_MAX_SLIDES:
+                reasons.append("too_large")
+            for slide in slides:
+                shapes = list(slide.shapes)
+                if any(s.shape_type != MSO_SHAPE_TYPE.TEXT_BOX for s in shapes):
+                    reasons.append("non_text_shapes")
+                if len(shapes) > 2 or any(s.is_placeholder for s in shapes):
+                    reasons.append("layout")
+        elif suf == ".docx":
+            import zipfile
+            from vaf.core.docx_import import import_docx_to_native_model
+            reasons.extend(w.kind for w in import_docx_to_native_model(target).warnings)
+            with zipfile.ZipFile(target) as z:
+                names = set(z.namelist())
+                if "word/comments.xml" in names:
+                    reasons.append("comments")
+                body = z.read("word/document.xml") if "word/document.xml" in names else b""
+                if b"<w:ins " in body or b"<w:del " in body:
+                    reasons.append("tracked_changes")
+    except Exception:
+        return ["unreadable"]
+    return sorted(set(reasons))
+
+
+# The editor's view of a file it opened: the revision its save must name, what a save would
+# lose, and the edit copy a lossy file already has. Headers, because the body is the file
+# (or its HTML, or its model) itself; the Next proxy forwards them same-origin.
+REVISION_HEADER = "X-VAF-Revision"
+LOSS_HEADER = "X-VAF-Loss"
+EDIT_COPY_HEADER = "X-VAF-Edit-Copy"
+_REVISION_MAX_BYTES = 20 * 1024 * 1024
+
+
+def _editor_headers(target, *, office: bool = False) -> dict:
+    """Revision first, content after: if the file changes in between, the editor holds newer
+    content than its revision, and its save is refused rather than overwriting anything."""
+    from urllib.parse import quote
+
+    from vaf.core.file_revision import edit_copy_path, revision_of
+    headers: dict = {}
+    try:
+        if target.stat().st_size <= _REVISION_MAX_BYTES:
+            rev = revision_of(target)
+            if rev:
+                headers[REVISION_HEADER] = rev
+    except OSError:
+        return headers
+    if office:
+        reasons = _office_loss_report(target)
+        if reasons:
+            headers[LOSS_HEADER] = json.dumps(reasons)
+            copy = edit_copy_path(target)
+            if copy.exists():
+                headers[EDIT_COPY_HEADER] = quote(str(copy))
+    return headers
 
 
 @app.get("/api/file/as-html")
@@ -3643,6 +3751,7 @@ async def get_file_as_html(request: Request, path: str = Query(..., description=
     if suf not in (".docx", ".xlsx", ".pptx"):
         raise HTTPException(status_code=400, detail="Only .docx, .xlsx and .pptx can be converted to HTML here")
     try:
+        headers = _editor_headers(target, office=True)
         if suf == ".docx":
             body = _docx_to_html(target)
         elif suf == ".xlsx":
@@ -3651,7 +3760,7 @@ async def get_file_as_html(request: Request, path: str = Query(..., description=
             body = _pptx_to_html(target)
         html = "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/></head><body>" + body + "</body></html>"
         from fastapi.responses import HTMLResponse
-        return HTMLResponse(html)
+        return HTMLResponse(html, headers=headers)
     except ImportError as e:
         raise HTTPException(status_code=503, detail=f"Support not installed: {e}")
     except Exception as e:
@@ -3665,10 +3774,13 @@ async def get_file_as_docx_model(request: Request, path: str = Query(..., descri
     if target.suffix.lower() != ".docx":
         raise HTTPException(status_code=400, detail="Only .docx files are supported")
     try:
+        from fastapi.responses import JSONResponse
+
         from vaf.core.docx_import import import_docx_to_native_model
 
+        headers = _editor_headers(target, office=True)
         model = import_docx_to_native_model(target)
-        return model.to_dict()
+        return JSONResponse(model.to_dict(), headers=headers)
     except ImportError as e:
         raise HTTPException(status_code=503, detail=f"DOCX support not installed: {e}")
     except Exception as e:
@@ -3676,21 +3788,26 @@ async def get_file_as_docx_model(request: Request, path: str = Query(..., descri
 
 
 class FileSaveRequest(BaseModel):
-    """Request body for saving a file."""
+    """Request body for saving a file.
+
+    ``base_revision`` is the revision the editor loaded (the ``X-VAF-Revision`` header); a
+    file no longer at it is not written (409). None means a new file. ``format="html"`` says
+    the content is the Document Editor's HTML of a Markdown file, which is converted back;
+    anything else is written as it is. ``as_copy`` writes the edit copy instead of the file
+    (the conflict banner's "keep mine as a copy")."""
     path: str
     content: str
-
-
-class FileSaveDocxRequest(BaseModel):
-    """Request body for saving HTML content back as .docx."""
-    path: str
-    content: str  # HTML from the editor
+    base_revision: Optional[str] = None
+    format: Optional[str] = None
+    as_copy: bool = False
 
 
 class FileSaveDocxNativeRequest(BaseModel):
     """Request body for saving native DOCX model content back as .docx."""
     path: str
     document: dict
+    base_revision: Optional[str] = None
+    as_copy: bool = False
 
 
 def _strip_html_to_text(html_fragment: str) -> str:
@@ -3701,52 +3818,44 @@ def _strip_html_to_text(html_fragment: str) -> str:
     return " ".join(t.split()).strip()
 
 
-@app.post("/api/file/save-docx")
-async def save_file_as_docx(body: FileSaveDocxRequest, request: Request):
-    """Save editor content (HTML) back to a Word (.docx) file. Creates/overwrites the file."""
-    import re
-    target = _allowed_save_path(body.path, ".docx", request)
+def _save_editor_file(target, data: bytes, base_revision: Optional[str], request: Request, *,
+                      office: bool, as_copy: bool = False) -> dict:
+    """The one way an editor save reaches the disk.
+
+    - Only while the file is at the revision the editor loaded (`file_revision`): a change
+      made meanwhile - by the agent, another tab, another program - is never overwritten
+      silently; the answer is 409 with the current revision, and the editor's draft stays.
+    - An office file the save would lose content of (`_office_loss_report`) is never
+      overwritten: the save goes to ONE copy, `<name> (bearbeitet)<ext>`, and the answer
+      names it (`redirected`), so the editor and the agent work on in the copy. A copy that
+      already exists is never written over from the original either (409 `copy_exists`):
+      the person opens it instead.
+    """
+    from vaf.core.file_revision import (RevisionConflict, edit_copy_path, revision_of,
+                                        write_if_revision)
+    dest, base, redirected = target, base_revision, False
+    lossy = office and target.exists() and bool(_office_loss_report(target))
+    if as_copy or lossy:
+        dest, base, redirected = edit_copy_path(target), None, True
+        dest = _allowed_file_path(str(dest), request, mode="write", must_exist=False)
+        if dest.exists():
+            raise HTTPException(status_code=409, detail={
+                "code": "copy_exists", "path": str(dest), "current_revision": revision_of(dest),
+                "message": "An edited copy of this file already exists; open it instead."})
+        if lossy and not as_copy and (base_revision or None) != revision_of(target):
+            raise HTTPException(status_code=409, detail={
+                "code": "conflict", "path": str(target),
+                "current_revision": revision_of(target),
+                "message": "The file changed on disk since it was opened."})
     try:
-        from docx import Document
-        doc = Document()
-        html = body.content or ""
-        body_match = re.search(r"<body[^>]*>(.*?)</body>", html, re.DOTALL | re.IGNORECASE)
-        if body_match:
-            html = body_match.group(1)
-        # Find all block elements in order: h1, h2, h3, p, table
-        pattern = r"<(h[1-3]|p|table)[^>]*>(.*?)</\1>"
-        for m in re.finditer(pattern, html, re.DOTALL | re.IGNORECASE):
-            tag, inner = m.group(1).lower(), m.group(2)
-            text = _strip_html_to_text(inner)
-            if tag.startswith("h") and len(tag) == 2:
-                level = int(tag[1])
-                if text:
-                    doc.add_heading(text, level=level)
-            elif tag == "p" and text:
-                doc.add_paragraph(text)
-            elif tag == "table":
-                rows_html = re.findall(r"<tr[^>]*>(.*?)</tr>", inner, re.DOTALL | re.IGNORECASE)
-                if rows_html:
-                    all_cells = [re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, re.DOTALL | re.IGNORECASE) for r in rows_html]
-                    nrows = len(all_cells)
-                    ncols = max(len(c) for c in all_cells) if all_cells else 0
-                    if ncols > 0:
-                        table = doc.add_table(rows=nrows, cols=ncols)
-                        for ri, cells in enumerate(all_cells):
-                            for ci, cell_html in enumerate(cells):
-                                if ci < ncols:
-                                    table.rows[ri].cells[ci].text = _strip_html_to_text(cell_html)
-        # If no structured blocks found, add whole body as one paragraph
-        if len(doc.paragraphs) == 0 and not doc.tables:
-            text = _strip_html_to_text(html)
-            if text:
-                doc.add_paragraph(text)
-        doc.save(str(target))
-        return {"status": "ok", "path": str(target)}
-    except ImportError:
-        raise HTTPException(status_code=503, detail="Word support not installed. Run: pip install python-docx")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save docx: {e}")
+        revision = write_if_revision(dest, data, base)
+    except RevisionConflict as conflict:
+        raise HTTPException(status_code=409, detail={
+            "code": "conflict", "path": str(dest), "current_revision": conflict.current,
+            "message": "The file changed on disk since it was opened."})
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
+    return {"status": "ok", "path": str(dest), "revision": revision, "redirected": redirected}
 
 
 @app.post("/api/file/save-docx-native")
@@ -3754,22 +3863,16 @@ async def save_file_as_docx_native(body: FileSaveDocxNativeRequest, request: Req
     """Save VAF's native DOCX editor model back as a .docx file."""
     target = _allowed_save_path(body.path, ".docx", request)
     try:
-        from vaf.core.docx_export import export_native_docx
+        from vaf.core.docx_export import render_native_docx
         from vaf.core.docx_native_model import NativeDocxDocument
 
-        document = NativeDocxDocument.from_dict(body.document or {})
-        saved_path = export_native_docx(document, target)
-        return {"status": "ok", "path": str(saved_path)}
+        data = render_native_docx(NativeDocxDocument.from_dict(body.document or {}))
     except ImportError as e:
         raise HTTPException(status_code=503, detail=f"DOCX support not installed: {e}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save native docx: {e}")
-
-
-class FileSaveOfficeRequest(BaseModel):
-    """Request body for saving HTML content back as .xlsx or .pptx."""
-    path: str
-    content: str  # HTML from the editor
+    return _save_editor_file(target, data, body.base_revision, request, office=True,
+                             as_copy=body.as_copy)
 
 
 def _allowed_save_path(path_str: str, required_suffix: str, request: Request):
@@ -3781,124 +3884,127 @@ def _allowed_save_path(path_str: str, required_suffix: str, request: Request):
     return target
 
 
-@app.post("/api/file/save-xlsx")
-async def save_file_as_xlsx(body: FileSaveOfficeRequest, request: Request):
-    """Save editor content (HTML tables) back to an Excel (.xlsx) file. First table = first sheet."""
+def _html_body(content: str) -> str:
     import re
-    target = _allowed_save_path(body.path, ".xlsx", request)
-    html = body.content or ""
+    html = content or ""
     body_match = re.search(r"<body[^>]*>(.*?)</body>", html, re.DOTALL | re.IGNORECASE)
-    if body_match:
-        html = body_match.group(1)
+    return body_match.group(1) if body_match else html
+
+
+def _render_xlsx(html: str) -> bytes:
+    """The editor's HTML tables as workbook bytes: first table = first sheet."""
+    import io
+    import re
+
+    from openpyxl import Workbook
+    wb = Workbook()
+    wb.remove(wb.active)
+    tables = re.findall(r"<table[^>]*>(.*?)</table>", html, re.DOTALL | re.IGNORECASE)
+    for ti, table_html in enumerate(tables[:20]):
+        rows_html = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, re.DOTALL | re.IGNORECASE)
+        if not rows_html:
+            continue
+        all_cells = [re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, re.DOTALL | re.IGNORECASE) for r in rows_html]
+        ncols = max(len(c) for c in all_cells) if all_cells else 0
+        if ncols == 0:
+            continue
+        ws = wb.create_sheet(f"Sheet{ti + 1}", ti)
+        for ri, cells in enumerate(all_cells):
+            for ci, cell_html in enumerate(cells):
+                if ci < ncols:
+                    ws.cell(row=ri + 1, column=ci + 1, value=_strip_html_to_text(cell_html))
+    if not wb.sheetnames:
+        ws = wb.create_sheet("Sheet1")
+        ws.cell(row=1, column=1, value="")
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def _render_pptx(html: str) -> bytes:
+    """The editor's HTML as deck bytes: an h2 starts a slide, the text after it is its body."""
+    import io
+    import re
+
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    prs = Presentation()
+    prs.slide_width = Inches(10)
+    prs.slide_height = Inches(7.5)
+    slide_sections = re.split(r"<h2[^>]*>", html, flags=re.IGNORECASE)
+    for i, section in enumerate(slide_sections):
+        if i == 0 and not re.search(r"</h2>", section, re.IGNORECASE):
+            continue
+        parts = re.split(r"</h2>", section, maxsplit=1, flags=re.IGNORECASE)
+        title_html = parts[0] if len(parts) > 1 else ""
+        body_html = parts[1] if len(parts) > 1 else section
+        title = _strip_html_to_text(title_html) or f"Slide {i}"
+        body_text = _strip_html_to_text(body_html)
+        if not title and not body_text:
+            continue
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        tb = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(9), Inches(0.8))
+        p = tb.text_frame.paragraphs[0]
+        p.text = title
+        p.font.size = Pt(24)
+        if body_text:
+            tb2 = slide.shapes.add_textbox(Inches(0.5), Inches(1.5), Inches(9), Inches(5.5))
+            tb2.text_frame.text = body_text
+    if len(prs.slides) == 0:
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(9), Inches(1)).text_frame.text = "Untitled"
+    buffer = io.BytesIO()
+    prs.save(buffer)
+    return buffer.getvalue()
+
+
+@app.post("/api/file/save-xlsx")
+async def save_file_as_xlsx(body: FileSaveRequest, request: Request):
+    """Save editor content (HTML tables) back to an Excel (.xlsx) file."""
+    target = _allowed_save_path(body.path, ".xlsx", request)
     try:
-        import openpyxl
-        from openpyxl import Workbook
-        wb = Workbook()
-        wb.remove(wb.active)
-        tables = re.findall(r"<table[^>]*>(.*?)</table>", html, re.DOTALL | re.IGNORECASE)
-        for ti, table_html in enumerate(tables[:20]):
-            rows_html = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, re.DOTALL | re.IGNORECASE)
-            if not rows_html:
-                continue
-            all_cells = [re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, re.DOTALL | re.IGNORECASE) for r in rows_html]
-            ncols = max(len(c) for c in all_cells) if all_cells else 0
-            if ncols == 0:
-                continue
-            sheet_name = f"Sheet{ti + 1}" if ti > 0 else "Sheet1"
-            ws = wb.create_sheet(sheet_name, ti)
-            for ri, cells in enumerate(all_cells):
-                for ci, cell_html in enumerate(cells):
-                    if ci < ncols:
-                        val = _strip_html_to_text(cell_html)
-                        ws.cell(row=ri + 1, column=ci + 1, value=val)
-        if not wb.sheetnames:
-            ws = wb.create_sheet("Sheet1")
-            ws.cell(row=1, column=1, value="")
-        wb.save(str(target))
-        return {"status": "ok", "path": str(target)}
+        data = _render_xlsx(_html_body(body.content))
     except ImportError:
         raise HTTPException(status_code=503, detail="Excel support not installed. Run: pip install openpyxl")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save xlsx: {e}")
+    return _save_editor_file(target, data, body.base_revision, request, office=True,
+                             as_copy=body.as_copy)
 
 
 @app.post("/api/file/save-pptx")
-async def save_file_as_pptx(body: FileSaveOfficeRequest, request: Request):
+async def save_file_as_pptx(body: FileSaveRequest, request: Request):
     """Save editor content (HTML: h2 = slide title, p = body) back to a PowerPoint (.pptx) file."""
-    import re
     target = _allowed_save_path(body.path, ".pptx", request)
-    html = body.content or ""
-    body_match = re.search(r"<body[^>]*>(.*?)</body>", html, re.DOTALL | re.IGNORECASE)
-    if body_match:
-        html = body_match.group(1)
     try:
-        from pptx import Presentation
-        from pptx.util import Inches, Pt
-        prs = Presentation()
-        prs.slide_width = Inches(10)
-        prs.slide_height = Inches(7.5)
-        slide_sections = re.split(r"<h2[^>]*>", html, flags=re.IGNORECASE)
-        for i, section in enumerate(slide_sections):
-            if i == 0 and not re.search(r"</h2>", section, re.IGNORECASE):
-                continue
-            parts = re.split(r"</h2>", section, maxsplit=1, flags=re.IGNORECASE)
-            title_html = parts[0] if len(parts) > 1 else ""
-            body_html = parts[1] if len(parts) > 1 else section
-            title = _strip_html_to_text(title_html) or f"Slide {i}"
-            body_text = _strip_html_to_text(body_html)
-            if not title and not body_text:
-                continue
-            blank = prs.slide_layouts[6]
-            slide = prs.slides.add_slide(blank)
-            left = Inches(0.5)
-            top = Inches(0.5)
-            width = Inches(9)
-            height = Inches(0.8)
-            tb = slide.shapes.add_textbox(left, top, width, height)
-            tf = tb.text_frame
-            p = tf.paragraphs[0]
-            p.text = title
-            p.font.size = Pt(24)
-            if body_text:
-                tb2 = slide.shapes.add_textbox(left, Inches(1.5), width, Inches(5.5))
-                tf2 = tb2.text_frame
-                tf2.text = body_text
-        if len(prs.slides) == 0:
-            blank = prs.slide_layouts[6]
-            slide = prs.slides.add_slide(blank)
-            slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(9), Inches(1)).text_frame.text = "Untitled"
-        prs.save(str(target))
-        return {"status": "ok", "path": str(target)}
+        data = _render_pptx(_html_body(body.content))
     except ImportError:
         raise HTTPException(status_code=503, detail="PowerPoint support not installed. Run: pip install python-pptx")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save pptx: {e}")
+    return _save_editor_file(target, data, body.base_revision, request, office=True,
+                             as_copy=body.as_copy)
 
 
 @app.post("/api/file/save")
 async def save_file(body: FileSaveRequest, request: Request):
-    """Save content to a local file, where `_allowed_file_path` lets the caller write."""
-    target = _allowed_file_path(body.path, request, mode="write", must_exist=False)
+    """Save content to a local file, where `_allowed_file_path` lets the caller write.
 
-    import re
+    Written as it is, unless the caller SAYS it sends the Document Editor's HTML of a
+    Markdown file (`format="html"`), which is converted back to Markdown. The content used to
+    be sniffed for tags instead, so a Markdown file that merely contained a `<table>` - saved
+    from the Code Viewer as plain text - was rewritten."""
+    target = _allowed_file_path(body.path, request, mode="write", must_exist=False)
     content = body.content
-    # Markdown files are rendered to HTML for the Document Editor; convert the
-    # edited HTML back to Markdown so a .md file never ends up containing HTML.
-    if target.suffix.lower() in (".md", ".mdx", ".markdown") and re.search(r"<\s*(?:html|body|div|p|h[1-6]|ul|ol|table)\b", content[:2000], re.IGNORECASE):
+    if body.format == "html" and target.suffix.lower() in (".md", ".mdx", ".markdown"):
+        import re
         try:
             from markdownify import markdownify as md
             content = re.sub(r"\n{3,}", "\n\n", md(content, heading_style="ATX")).strip() + "\n"
         except Exception:
             pass  # fall back to writing the raw editor content
-
-    try:
-        # Ensure parent directory exists
-        target.parent.mkdir(parents=True, exist_ok=True)
-        # Write content
-        target.write_text(content, encoding='utf-8')
-        return {"status": "ok", "path": str(target)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+    return _save_editor_file(target, content.encode("utf-8"), body.base_revision, request,
+                             office=False, as_copy=body.as_copy)
 
 
 @app.get("/sounds/{filename}")

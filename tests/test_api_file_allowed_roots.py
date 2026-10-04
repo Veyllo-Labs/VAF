@@ -82,7 +82,7 @@ def test_every_read_route_asks_the_one_decision():
 
 
 def test_every_save_route_asks_the_one_decision_in_write_mode():
-    """The five save routes built their own roots list and asked no identity at all: any
+    """The save routes built their own roots list and asked no identity at all: any
     account could overwrite another's files, or write into the data directory, whose
     custom_tools/ folder is loaded as code."""
     import vaf.core.web_server as ws
@@ -93,7 +93,6 @@ def test_every_save_route_asks_the_one_decision_in_write_mode():
     assert '_allowed_file_path(path_str, request, mode="write", must_exist=False)' in helper
     for route, needle in (
         ('@app.post("/api/file/save")', '_allowed_file_path(body.path, request, mode="write", must_exist=False)'),
-        ('@app.post("/api/file/save-docx")', '_allowed_save_path(body.path, ".docx", request)'),
         ('@app.post("/api/file/save-docx-native")', '_allowed_save_path(body.path, ".docx", request)'),
         ('@app.post("/api/file/save-xlsx")', '_allowed_save_path(body.path, ".xlsx", request)'),
         ('@app.post("/api/file/save-pptx")', '_allowed_save_path(body.path, ".pptx", request)'),

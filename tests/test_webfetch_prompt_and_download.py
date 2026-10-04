@@ -71,7 +71,7 @@ def web(monkeypatch, tmp_path):
     served = {}
     monkeypatch.setattr(egress, "egress_session", lambda *a, **k: _Session(served))
     monkeypatch.setattr("vaf.tools.webfetch.MIN_DELAY", 0)
-    monkeypatch.setattr(WebFetchTool, "_get_cached_data", lambda self, url, ttl: None)
+    monkeypatch.setattr(WebFetchTool, "_get_cached_data", lambda self, *a, **k: None)
     monkeypatch.setattr(WebFetchTool, "_save_to_cache", lambda self, *a: None)
     ws = tmp_path / "ws"
     ws.mkdir()

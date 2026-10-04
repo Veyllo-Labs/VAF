@@ -66,3 +66,30 @@ def test_a_github_download_url_is_judged_too():
     from vaf.tools.github_tools import _download_raw
     with pytest.raises(EgressRefused):
         _download_raw(LOOPBACK, "alice")
+
+
+def test_the_webfetch_cache_belongs_to_one_account(monkeypatch, tmp_path):
+    """One folder keyed on the URL alone served a page one account fetched to every other
+    account asking for the same URL. MUTATION: key the cache on the URL alone again."""
+    from vaf.core.config import Config
+    from vaf.tools.webfetch import WebFetchTool
+    monkeypatch.setattr(Config, "APP_DIR", tmp_path)
+    tool = WebFetchTool()
+    tool._save_to_cache("https://example.org/a", "alice's page", "text/html", "scope-alice")
+    assert tool._get_cached_data("https://example.org/a", 3600, "scope-alice")["content"] == "alice's page"
+    assert tool._get_cached_data("https://example.org/a", 3600, "scope-bob") is None
+
+
+def test_without_an_account_a_shared_instance_caches_nothing(monkeypatch, tmp_path):
+    """The rule web_search already had (vaf.tools.search.web_cache_scope), now shared."""
+    from vaf.core.config import Config
+    from vaf.tools.search import web_cache_scope
+    from vaf.tools.webfetch import WebFetchTool
+    monkeypatch.setattr(Config, "APP_DIR", tmp_path)
+    monkeypatch.setattr(Config, "get", classmethod(
+        lambda cls, k, d=None: True if k == "local_network_enabled" else d))
+    assert web_cache_scope("") == ""
+    tool = WebFetchTool()
+    tool._save_to_cache("https://example.org/a", "page", "text/html", web_cache_scope(""))
+    assert not list((tmp_path / "tmp" / "webfetch_cache").glob("*.json"))
+    assert web_cache_scope(" scope-x ") == "scope-x"

@@ -416,6 +416,32 @@ def _search_internal_knowledge(query: str, max_results: int, *,
     return results
 
 
+def web_cache_scope(user_scope_id) -> str:
+    """WHOSE cache entry a web result is, or "" for "do not cache".
+
+    An entry keyed on an EMPTY scope is a bucket every unscoped caller reads from and
+    writes to, and the files hold the URL or query and the result in clear text - so on a
+    shared instance one person's fetch would be served to another. Resolved exactly the
+    way the memory lane resolves a missing scope (vaf/memory/rag.py): nothing when more
+    than one identity can reach this machine, the local admin when only one can.
+    Deliberately the same rule and not a second one, so the lanes cannot drift apart; the
+    web search cache and the webfetch cache both ask here."""
+    scope = str(user_scope_id or "").strip()
+    if scope:
+        return scope
+    try:
+        shared_instance = bool(Config.get("local_network_enabled", False))
+    except Exception:
+        shared_instance = True              # cannot tell -> treat as shared
+    if shared_instance:
+        return ""
+    try:
+        from vaf.core.config import get_local_admin_scope_id
+        return str(get_local_admin_scope_id() or "").strip()
+    except Exception:
+        return ""
+
+
 class WebSearchTool(BaseTool):
     name = "web_search"
     category    = "web"
@@ -527,25 +553,7 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
 
             # ── result cache lookup: serve identical queries from the cache ──
             _cache_ttl = int(Config.get("web_search_cache_ttl_seconds", 900) or 0)
-            # WHOSE cache entry this is. An entry keyed on an EMPTY scope is a bucket every
-            # unscoped caller reads from and writes to, and the files hold the query and the
-            # result in clear text - so on a shared instance one person's search would be served
-            # to another. Resolved exactly the way the memory lane already resolves a missing
-            # scope (vaf/memory/rag.py): refuse when more than one identity can reach this
-            # machine, fall back to the local admin when only one can. Deliberately the same
-            # rule and not a second one, so the two cannot drift apart.
-            _cache_scope = str(kwargs.get("user_scope_id") or "").strip()
-            if not _cache_scope:
-                try:
-                    _shared_instance = bool(Config.get("local_network_enabled", False))
-                except Exception:
-                    _shared_instance = True     # cannot tell -> treat as shared
-                if not _shared_instance:
-                    try:
-                        from vaf.core.config import get_local_admin_scope_id
-                        _cache_scope = str(get_local_admin_scope_id() or "").strip()
-                    except Exception:
-                        _cache_scope = ""
+            _cache_scope = web_cache_scope(kwargs.get("user_scope_id"))
             _cache_eligible = (
                 bool(Config.get("web_search_cache_enabled", True))
                 and not return_raw

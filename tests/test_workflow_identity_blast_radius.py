@@ -139,8 +139,9 @@ NEWLY_IDENTIFIED = {
     # +username with the destination guard: it labels the egress log line and a refusal's
     # security event, so a refused fetch names the account that asked for it.
     "download_file": ('user_role', 'user_scope_id', 'username'),
-    # Added with the destination guard, for the same label (vaf/network/egress.py).
-    "webfetch": ('username',),
+    # Added with the destination guard, for the same label (vaf/network/egress.py); the
+    # scope keys its page cache, which one account's fetch used to fill for every account.
+    "webfetch": ('user_scope_id', 'username'),
     "browser_agent": ('user_scope_id',),
     "create_automation": ('user_role', 'user_scope_id'),
     "create_skill": ('user_scope_id', 'username'),

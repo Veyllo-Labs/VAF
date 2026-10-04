@@ -246,7 +246,7 @@ KWARGS_BASELINE = {
     "update_working_memory":     ("chat", ["user_scope_id"]),
     "use_skill":                 ("chat", ["user_scope_id"]),
     "web_search":                ("chat", ["user_scope_id"]),
-    "webfetch":                  ("chat", ["username"]),
+    "webfetch":                  ("chat", ["user_scope_id", "username"]),
     "whatsapp_call":             ("chat", ["user_scope_id", "username"]),
     "inbox":                     ("chat", ["user_scope_id", "username"]),
     "write_file":                ("chat", ["_session_id", "_session_workspace", "user_role", "user_scope_id"]),

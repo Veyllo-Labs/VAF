@@ -28,8 +28,9 @@ class WebFetchTool(BaseTool):
     category    = "web"
     permission_level = "read"
     side_effect_class = "none"
-    # The account labels the egress log line and a refusal's security event.
-    identity_kwargs = ("username",)
+    # The account labels the egress log line and a refusal's security event; the scope keys
+    # the page cache, which used to be one folder for everybody.
+    identity_kwargs = ("username", "user_scope_id")
     description = (
         "Retrieves content from a URL and converts it to readable Markdown. "
         "To learn something specific from a page, pass `prompt` (e.g. 'Which versions are listed "
@@ -73,14 +74,19 @@ class WebFetchTool(BaseTool):
         except (TypeError, ValueError):
             return 120
 
-    def _get_cache_path(self, url: str) -> Path:
+    def _get_cache_path(self, url: str, scope: str) -> Path:
+        """One entry per account and URL. The key used to be the URL alone, in one folder,
+        so a page one account fetched was served from the cache to every other account that
+        asked for the same URL."""
         cache_dir = Config.APP_DIR / "tmp" / "webfetch_cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        url_hash = hashlib.md5(url.encode()).hexdigest()
+        url_hash = hashlib.md5(f"{scope}\0{url}".encode()).hexdigest()
         return cache_dir / f"{url_hash}.json"
 
-    def _get_cached_data(self, url: str, ttl: int) -> Optional[Dict]:
-        cache_path = self._get_cache_path(url)
+    def _get_cached_data(self, url: str, ttl: int, scope: str = "") -> Optional[Dict]:
+        if not scope:
+            return None
+        cache_path = self._get_cache_path(url, scope)
         if cache_path.exists():
             try:
                 with open(cache_path, "r", encoding="utf-8") as f:
@@ -90,9 +96,11 @@ class WebFetchTool(BaseTool):
             except Exception: pass
         return None
 
-    def _save_to_cache(self, url: str, content: str, content_type: str):
+    def _save_to_cache(self, url: str, content: str, content_type: str, scope: str = ""):
+        if not scope:
+            return          # no account to file it under: a shared instance caches nothing
         try:
-            with open(self._get_cache_path(url), "w", encoding="utf-8") as f:
+            with open(self._get_cache_path(url, scope), "w", encoding="utf-8") as f:
                 json.dump({"url": url, "timestamp": time.time(), "content": content, "type": content_type}, f, ensure_ascii=False)
         except Exception: pass
 
@@ -126,7 +134,9 @@ class WebFetchTool(BaseTool):
         # 3. Fetch (with Cache)
         full_text = ""
         content_type = "text/html"
-        cached_data = self._get_cached_data(url, cache_ttl) if use_cache else None
+        from vaf.tools.search import web_cache_scope
+        cache_scope = web_cache_scope(kwargs.get("user_scope_id"))
+        cached_data = self._get_cached_data(url, cache_ttl, cache_scope) if use_cache else None
         
         if cached_data:
             full_text = cached_data["content"]
@@ -157,7 +167,7 @@ class WebFetchTool(BaseTool):
                 if res.status_code != 200: return f"Error: Site returned status {res.status_code}"
                 full_text = res.text
                 content_type = res.headers.get("Content-Type", "")
-                self._save_to_cache(url, full_text, content_type)
+                self._save_to_cache(url, full_text, content_type, cache_scope)
             except Exception as e: return f"Error fetching {url}: {e}"
 
         # 4. Processing

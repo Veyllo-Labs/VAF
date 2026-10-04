@@ -98,7 +98,8 @@ class EgressPolicy:
         allow_private = True
         try:
             from vaf.core.config import Config
-            allow_private = bool(Config.get("egress_allow_private_hosts", True))
+            # get_bool: a flag stored as the text "false" must switch the LAN off.
+            allow_private = Config.get_bool("egress_allow_private_hosts", True)
         except Exception:
             pass
         return replace(cls(allow_private=allow_private), **overrides)
@@ -319,10 +320,15 @@ class _EgressAsyncTransport(httpx.AsyncBaseTransport):
             raise httpx.ConnectError(f"Cannot resolve host: {host}", request=request)
         kind = _judge(host, addresses, self._policy, self._username)
         _record_private(host, addresses[0], kind, self._username)
-        # The Host header was built from the URL already; only the connection target moves.
-        request.url = request.url.copy_with(host=addresses[0])
-        request.extensions = {**request.extensions, "sni_hostname": host}
-        return await self._transport(host.lower()).handle_async_request(request)
+        # A COPY goes to the checked address; the caller's request keeps its URL, because httpx
+        # resolves a relative redirect, the cookie jar and response.request against it - an
+        # address there would make the next hop lose the name (virtual hosts, trusted_host).
+        # The Host header was built from the name already and travels with the copy.
+        pinned = httpx.Request(
+            request.method, request.url.copy_with(host=addresses[0]),
+            headers=request.headers, stream=request.stream,
+            extensions={**request.extensions, "sni_hostname": host})
+        return await self._transport(host.lower()).handle_async_request(pinned)
 
     async def aclose(self) -> None:
         transports, self._inner = list(self._inner.values()), {}

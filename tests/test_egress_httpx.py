@@ -47,6 +47,15 @@ def test_a_redirect_is_judged_like_the_first_request(server):
     assert len(server.hits) == 1
 
 
+def test_a_relative_redirect_stays_on_the_name(server):
+    """httpx resolves a relative Location against the request it sent. MUTATION: rewrite the
+    caller's request to the pinned address, and the second hop goes to the address - the
+    server then sees the address as its Host."""
+    r = _get(f"http://public.test:{server.port}/redir//ok")
+    assert r.text == f"host=public.test:{server.port}"
+    assert str(r.request.url).startswith("http://public.test:")
+
+
 def test_a_trusted_host_is_admitted(server):
     """A registered MCP server on this machine: past the judgement (the connection then fails
     only because nothing listens at the fake address)."""

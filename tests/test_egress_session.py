@@ -230,6 +230,10 @@ def test_the_policy_reads_the_admin_key(monkeypatch):
     assert EgressPolicy.from_config().allow_private is False
     monkeypatch.setattr(Config, "get", classmethod(lambda cls, k, d=None: d))
     assert EgressPolicy.from_config().allow_private is True, "the LAN is allowed by default"
+    # Stored as text (a settings form, a hand-edited file): "false" means off. MUTATION:
+    # bool(Config.get(...)), which reads every non-empty string as on.
+    monkeypatch.setattr(Config, "get", classmethod(lambda cls, k, d=None: "false" if k == "egress_allow_private_hosts" else d))
+    assert EgressPolicy.from_config().allow_private is False
 
 
 def test_tls_is_verified_against_the_name_not_the_pinned_address(tmp_path, monkeypatch):

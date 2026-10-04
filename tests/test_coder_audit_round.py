@@ -22,7 +22,8 @@ _REPO = Path(__file__).resolve().parents[1]
 
 
 def _coder_src() -> str:
-    return (_REPO / "vaf" / "tools" / "coder.py").read_bytes().decode("utf-8")
+    # read_text: one needle spans a line break, which a Windows checkout writes as \r\n.
+    return (_REPO / "vaf" / "tools" / "coder.py").read_text(encoding="utf-8")
 
 
 # ── before a round ────────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import hashlib
 import time
 import json
 from pathlib import Path
+from typing import Optional
 from urllib.parse import quote_plus, unquote, parse_qs, urlparse
 
 from bs4 import BeautifulSoup
@@ -416,6 +417,55 @@ def _search_internal_knowledge(query: str, max_results: int, *,
     return results
 
 
+_PAGE_READER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+
+
+def fetch_page_text(url: str, *, timeout: float = 4, limit: int = 5000,
+                    username: str = "") -> Optional[str]:
+    """The visible text of one result page, cut to `limit`, or None when it cannot be read.
+
+    A search result is a URL a stranger chose - and an indexed page can redirect anywhere -
+    so it is fetched through the destination guard (vaf/network/egress.py): never this
+    machine, where a tokenless request is the owner, or the cloud metadata service. One
+    reader for web_search, the research agent and the coder's deep search, which used to
+    carry three copies of it, each with its own raw requests.get."""
+    try:
+        from vaf.network.egress import egress_session
+        with egress_session(username=username) as http:
+            r = http.get(url, timeout=timeout, headers={"User-Agent": _PAGE_READER_UA})
+            if r.status_code != 200:
+                return None
+            html = r.text
+        html = re.sub(r'<(script|style|noscript)[^>]*>.*?</\1>', ' ', html, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<[^>]+>', ' ', html)
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text[:limit]
+    except Exception:
+        return None
+
+
+def fetch_page_html(url: str, *, selector: str = "", timeout: float = 10, limit: int = 3000,
+                    username: str = "") -> str:
+    """The HTML of one page, or of the first five elements `selector` picks, cut to `limit`.
+    The coder's web_fetch. Through the destination guard like every outside URL; raises on
+    a refused destination or an error status, so the caller reports why."""
+    from vaf.network.egress import egress_session
+    with egress_session(username=username) as http:
+        resp = http.get(url, headers={"User-Agent": "Mozilla/5.0 VAF-Coder/1.0"}, timeout=timeout)
+        resp.raise_for_status()
+        html = resp.text
+    if selector:
+        try:
+            from bs4 import BeautifulSoup
+            elements = BeautifulSoup(html, "html.parser").select(selector)
+            return ("\n".join(str(e) for e in elements[:5]) if elements
+                    else f"No elements found for selector: {selector}")
+        except ImportError:
+            pass
+    return html[:limit] + "..." if len(html) > limit else html
+
+
 def web_cache_scope(user_scope_id) -> str:
     """WHOSE cache entry a web result is, or "" for "do not cache".
 
@@ -666,26 +716,8 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
                     title += f"*{fallback_hint}*\n\n"
             title += f"Query: {query}\n\n"
             
-            # Helper to fetch text
             def fetch_text(url):
-                try:
-                    # Chrome User-Agent
-                    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
-                    r = requests.get(url, timeout=4, headers=headers)
-                    if r.status_code != 200: return None
-                    
-                    html = r.text
-                    # 1. Remove Script and Style elements completely
-                    html = re.sub(r'<(script|style|noscript)[^>]*>.*?</\1>', ' ', html, flags=re.DOTALL | re.IGNORECASE)
-                    
-                    # 2. Basic strip tags
-                    text = re.sub(r'<[^>]+>', ' ', html)
-                    
-                    # 3. Clean whitespace
-                    text = re.sub(r'\s+', ' ', text).strip()
-                    
-                    return text[:5000]  # Increased for better context
-                except: return None
+                return fetch_page_text(url, limit=5000)
 
             def answer_question_with_page(user_question: str, page_title: str, page_content: str, page_url: str) -> str:
                 """Use separate LLM context to answer user question based on single page."""

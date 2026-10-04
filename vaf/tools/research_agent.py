@@ -2328,20 +2328,10 @@ class ResearchAgentTool(BaseTool):
         preview_count = 0
         preview_limit = min(len(results), 10) if deep else 0
         
-        # Helper to fetch text (same as in web_search)
+        from vaf.tools.search import fetch_page_text
+
         def fetch_text(url):
-            try:
-                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
-                r = requests.get(url, timeout=4, headers=headers)
-                if r.status_code != 200:
-                    return None
-                html = r.text
-                html = re.sub(r'<(script|style|noscript)[^>]*>.*?</\1>', ' ', html, flags=re.DOTALL | re.IGNORECASE)
-                text = re.sub(r'<[^>]+>', ' ', html)
-                text = re.sub(r'\s+', ' ', text).strip()
-                return text[:3000]
-            except:
-                return None
+            return fetch_page_text(url, limit=3000)
         
         for i, res in enumerate(results, 1):
             page_title = res.get("title", "").strip()

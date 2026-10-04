@@ -9446,26 +9446,10 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                     live.update(tui.render())
                     
                     try:
-                        headers = {"User-Agent": "Mozilla/5.0 VAF-Coder/1.0"}
-                        resp = requests.get(url, headers=headers, timeout=10)
-                        resp.raise_for_status()
-                        html = resp.text
-                        
-                        # If selector provided, try to extract
-                        if selector:
-                            try:
-                                from bs4 import BeautifulSoup
-                                soup = BeautifulSoup(html, 'html.parser')
-                                elements = soup.select(selector)
-                                if elements:
-                                    html = "\n".join(str(e) for e in elements[:5])
-                                else:
-                                    html = f"No elements found for selector: {selector}"
-                            except ImportError:
-                                html = html[:3000] + "..." if len(html) > 3000 else html
-                        else:
-                            html = html[:3000] + "..." if len(html) > 3000 else html
-                        
+                        # The URL is the model's: through the destination guard, which also
+                        # covers the coder when it runs as its own process.
+                        from vaf.tools.search import fetch_page_html
+                        html = fetch_page_html(url, selector=selector)
                         result = f"Fetched {len(html)} chars from {url}\n\n{html}"
                         tui.append_stream(f"Fetched {url[:30]}")
                     except Exception as e:
@@ -9501,25 +9485,11 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         # Only build summary if we have results
                         if results:
                             # Helper to fetch and summarize page content (context-aware, limited)
+                            from vaf.tools.search import fetch_page_text
+
                             def fetch_summary(url):
-                                try:
-                                    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-                                    r = requests.get(url, timeout=5, headers=headers)
-                                    if r.status_code != 200:
-                                        return None
-
-                                    html = r.text
-                                    # Remove scripts, styles
-                                    html = re.sub(r'<(script|style|noscript)[^>]*>.*?</\1>', ' ', html, flags=re.DOTALL | re.IGNORECASE)
-                                    # Strip tags
-                                    text = re.sub(r'<[^>]+>', ' ', html)
-                                    # Clean whitespace
-                                    text = re.sub(r'\s+', ' ', text).strip()
-
-                                    # Limit to 1500 chars per result to keep context small
-                                    return text[:1500]
-                                except:
-                                    return None
+                                # 1500 chars per result keeps the coder's context small.
+                                return fetch_page_text(url, timeout=5, limit=1500)
 
                             # Build summarized results
                             summary = f"### Deep Search Results: {query}\n\n"

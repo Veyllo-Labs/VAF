@@ -62,10 +62,6 @@ FIXED_URL = {
 
 # Fetch paths converted onto vaf.network.egress later in this round. EMPTY when done.
 PENDING = {
-    ("vaf/tools/search.py", "WebSearchTool.run.fetch_text", "requests.get", "url"),
-    ("vaf/tools/research_agent.py", "ResearchAgentTool._format_search_results.fetch_text", "requests.get", "url"),
-    ("vaf/tools/coder.py", "CodingAgentTool.run", "requests.get", "url"),
-    ("vaf/tools/coder.py", "CodingAgentTool.run.fetch_summary", "requests.get", "url"),
     ("vaf/core/mcp_oauth.py", "_revoke", "httpx.post", "endpoint"),
     ("vaf/cloud/nextcloud.py", "NextcloudProvider._propfind", "requests.request", "url"),
     ("vaf/cloud/nextcloud.py", "NextcloudProvider.ensure_sync_folder", "requests.request", "url"),

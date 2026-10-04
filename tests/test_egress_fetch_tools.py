@@ -93,3 +93,49 @@ def test_without_an_account_a_shared_instance_caches_nothing(monkeypatch, tmp_pa
     tool._save_to_cache("https://example.org/a", "page", "text/html", web_cache_scope(""))
     assert not list((tmp_path / "tmp" / "webfetch_cache").glob("*.json"))
     assert web_cache_scope(" scope-x ") == "scope-x"
+
+
+def test_the_shared_page_reader_skips_a_result_on_this_machine(_quiet):
+    """web_search, the research agent and the coder's deep search read result pages through
+    one reader. A search result is a URL a stranger chose; one on this machine is skipped,
+    not read. MUTATION: give fetch_page_text a raw requests.get."""
+    from vaf.tools.search import fetch_page_text
+    assert fetch_page_text(LOOPBACK, timeout=2) is None
+    assert _quiet and _quiet[0][0] == "egress_blocked"
+
+
+def test_the_coders_web_fetch_reports_the_refusal():
+    """The coder's web_fetch: the model's URL, and the refusal is what it reads back."""
+    from vaf.network.egress import EgressRefused
+    from vaf.tools.search import fetch_page_html
+    with pytest.raises(EgressRefused, match="Only internet addresses"):
+        fetch_page_html(LOOPBACK, timeout=2)
+
+
+def test_the_page_reader_still_reads_a_page(monkeypatch):
+    """The conversion kept the reader's job: scripts out, tags out, whitespace folded, cut."""
+    import vaf.network.egress as egress
+    from vaf.tools.search import fetch_page_html, fetch_page_text
+
+    class _R:
+        status_code = 200
+        text = ("<html><script>evil()</script><body><h1>Title</h1>\n\n<p>Body  text</p>"
+                "<div class='x'>one</div><div class='x'>two</div></body></html>")
+
+        def raise_for_status(self):
+            pass
+
+    class _S:
+        def get(self, url, **kw):
+            return _R()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(egress, "egress_session", lambda *a, **k: _S())
+    assert fetch_page_text("https://example.org/", limit=12) == "Title Body t"
+    assert fetch_page_html("https://example.org/", selector="div.x") == (
+        '<div class="x">one</div>\n<div class="x">two</div>')

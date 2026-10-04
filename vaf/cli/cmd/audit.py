@@ -8,6 +8,7 @@ Exit codes are a contract a script can rely on: 0 nothing at or above `--fail-on
 findings (or a failed check in error mode), 2 the audit did not complete - a run that could
 not review everything never exits 0.
 """
+import contextlib
 import os
 import sys
 from typing import List, Optional
@@ -72,11 +73,14 @@ def run(
     ask = None if no_llm else ask_via_complete(provider=provider, model=model, caller="cli:audit")
     if fmt == "text":
         UI.info(f"Auditing {os.path.abspath(path)} ({scope}) ...")
-    # Where a long run is, on stderr: stdout stays the report a script parses.
-    report = code_audit(os.path.abspath(path), scope=scope, base=base, paths=only or None,
-                        include_untracked=untracked, profile=profile, ask=ask,
-                        max_files=max_files, parallel=parallel or parallel_for(provider),
-                        progress=lambda line: sys.stderr.write(f"  {line}\n"))
+    # stdout carries the report and nothing else, so `--format json` can be piped: progress
+    # goes to stderr, and so does whatever the model lane prints while it runs (a provider
+    # error is printed by the backend; measured, 70 such lines once made the JSON unreadable).
+    with contextlib.redirect_stdout(sys.stderr):
+        report = code_audit(os.path.abspath(path), scope=scope, base=base, paths=only or None,
+                            include_untracked=untracked, profile=profile, ask=ask,
+                            max_files=max_files, parallel=parallel or parallel_for(provider),
+                            progress=lambda line: sys.stderr.write(f"  {line}\n"))
     if fmt == "json":
         sys.stdout.write(report.to_json() + "\n")
     elif fmt == "prompt":

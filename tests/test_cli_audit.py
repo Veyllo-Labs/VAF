@@ -77,6 +77,22 @@ def test_json_is_machine_readable_and_carries_the_fix_prompt(repo, model):
     assert ca.UNTRUSTED_PREAMBLE in data["fix_prompt"]
 
 
+def test_what_the_model_lane_prints_never_reaches_the_json(repo, model):
+    """A provider error is printed by the backend while the audit runs; measured, 70 such
+    lines once made `--format json` unparseable. MUTATION: let the audit write to stdout."""
+    inner = model["model"]
+
+    def noisy(messages, max_tokens):
+        print("[WARN] complete(cli:audit): backend error: 402 insufficient credits")
+        return inner(messages, max_tokens)
+
+    model["model"] = noisy
+    _change(repo, "app.py", BUGGY)
+    result = _run(repo, "--format", "json")
+    assert json.loads(result.stdout)["status"] == "complete"
+    assert "insufficient credits" in result.stderr
+
+
 def test_prompt_format_starts_with_the_status(repo, model):
     """An agent reading the prompt must see an incomplete run as incomplete before any
     finding. MUTATION: drop the status line."""

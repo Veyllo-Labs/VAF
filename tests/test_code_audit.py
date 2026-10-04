@@ -443,6 +443,65 @@ def test_an_unreadable_verification_of_several_findings_is_asked_again_in_halves
     assert len(report.findings) == 2 and report.unverified == []
 
 
+def test_a_change_too_large_for_one_answer_is_reviewed_in_parts(repo):
+    """Three changes far apart in one long file, a budget that fits one at a time: every
+    change is shown to the reviewer, none is cut off, and a problem in the last one is found.
+    MUTATION: review the file whole and cut what does not fit."""
+    base = "".join(f"value_{i} = {i}  # a long enough line of ordinary code\n" for i in range(600))
+    _change(repo, "big.py", base)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "big")
+    lines = base.splitlines(keepends=True)
+    for n in (10, 300, 590):
+        lines[n] = f"value_{n} = compute_{n}(value_{n - 1}) / 0  # changed\n"
+    _change(repo, "big.py", "".join(lines))
+    last = dict(OFF_BY_ONE, file="big.py", title="Division by zero in the last change",
+                evidence="value_590 = compute_590(value_589) / 0  # changed")
+
+    class _Reviewer(_Model):
+        def __call__(self, messages, max_tokens):
+            user = messages[-1]["content"]
+            if "verify code review findings" not in messages[0]["content"]:
+                self.seen.append(user)
+                found = [last] if "compute_590" in user else []
+                return json.dumps({"summary": "s", "files": {}, "effort": 1, "findings": found})
+            return super().__call__(messages, max_tokens)
+
+    model = _Reviewer([])
+    report = ca.code_audit(str(repo), scope="uncommitted", ask=model, remember=False,
+                           batch_chars=4_000)
+    assert report.status == "complete", report.status_reason
+    shown = "\n".join(model.seen)
+    assert all(f"compute_{n}" in shown for n in (10, 300, 590))
+    assert "(cut:" not in shown and "part 1/" in shown
+    assert [f.start_line for f in report.findings if f.source == "review"] == [591]
+
+
+def test_one_file_the_model_cannot_answer_for_is_asked_again_in_smaller_parts(repo):
+    """A reasoning model that runs out of room on one file answers on half of it.
+    MUTATION: give up on a single file instead of splitting it further."""
+    base = "".join(f"value_{i} = {i}  # a long enough line of ordinary code\n" for i in range(600))
+    _change(repo, "big.py", base)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "big")
+    lines = base.splitlines(keepends=True)
+    for n in (10, 590):
+        lines[n] = f"value_{n} = {n} + 1  # changed\n"
+    _change(repo, "big.py", "".join(lines))
+
+    class _OnlyHalves(_Model):
+        def __call__(self, messages, max_tokens):
+            user = messages[-1]["content"]
+            if "verify code review findings" not in messages[0]["content"] \
+                    and "value_10 = 10 + 1" in user and "value_590 = 590 + 1" in user:
+                self.seen.append(user)
+                return "<think>too much at once"
+            return super().__call__(messages, max_tokens)
+
+    report = ca.code_audit(str(repo), scope="uncommitted", ask=_OnlyHalves([]), remember=False)
+    assert report.status == "complete", report.status_reason
+
+
 def test_one_file_the_model_cannot_review_leaves_the_run_incomplete(repo):
     _change(repo, "app.py", BUGGY)
     report = ca.code_audit(str(repo), scope="uncommitted", remember=False,

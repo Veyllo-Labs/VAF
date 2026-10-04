@@ -42,12 +42,16 @@ contract a failed run cannot pass.
    that govern the changed paths (`AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `GEMINI.md`,
    `.github/copilot-instructions.md`, nearest first) and the repository's path instructions.
    Everything is redacted with VAF's credential patterns before it reaches the provider.
-4. **One review call per batch** (about 40,000 characters). The model answers JSON in a fixed
+4. **One review call per batch** (about 40,000 characters). A file whose change does not fit
+   is reviewed in parts of whole hunks, each with its own numbered windows, instead of being
+   cut: a cut view hides the later hunks while the run reads as complete. The model answers JSON in a fixed
    schema: `type` (issue, refactor, nitpick), `severity` (critical, major, minor, trivial),
    `category` (correctness, security, data_integrity, performance, stability,
    maintainability), `effort`, and the `evidence`: a quote of the code the finding is about.
-   An answer that is not readable JSON for several files is asked again in halves, down to
-   one file; a file that still gets no readable answer is listed as not reviewed.
+   An answer that is not readable JSON for several files is asked again in halves, and one
+   file again in smaller parts, until a part that cannot be split; what still gets no readable
+   answer is listed as not reviewed. Measured on a live run over 131 files: the two largest
+   changes (329 and 109 changed lines) got no readable answer as a whole.
 5. **Verification before anything is reported.** The quote must be in the current file: a
    wrong line is moved to where the quote is, an invented quote drops the finding. Then a
    second call per four findings answers CONFIRMED or REJECTED for each; an unreadable answer

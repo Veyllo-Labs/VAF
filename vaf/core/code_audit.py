@@ -403,6 +403,8 @@ class _File:
     diff: str = ""
     text: str = ""
     changed: List[int] = field(default_factory=list)
+    part: str = ""                  # "part 2/3" when the file is reviewed in parts
+    refs: bool = True               # carries the cross-file references (the first part only)
 
 
 def _hunk_lines(diff: str) -> List[int]:
@@ -424,6 +426,66 @@ def _hunk_lines(diff: str) -> List[int]:
         elif new_line:
             new_line += 1
     return changed
+
+
+def _hunks(diff: str) -> Tuple[str, List[Tuple[List[int], str]]]:
+    """A unified diff split into its header and its hunks, each with the new-side lines it
+    adds or changes."""
+    head: List[str] = []
+    hunks: List[List[str]] = []
+    cur: Optional[List[str]] = None
+    for line in diff.splitlines(keepends=True):
+        if line.startswith("@@"):
+            if cur is not None:
+                hunks.append(cur)
+            cur = [line]
+        elif cur is None:
+            head.append(line)
+        else:
+            cur.append(line)
+    if cur is not None:
+        hunks.append(cur)
+    return "".join(head), [(_hunk_lines("".join(h)), "".join(h)) for h in hunks]
+
+
+def _parts(f: _File, budget: int) -> List[_File]:
+    """The file as it is reviewed: whole when its diff and numbered code fit `budget`, else in
+    parts of whole hunks that each do. Cutting it instead left the rest of a large change
+    unreviewed while the run read as complete: measured, the two largest files of a live run
+    (396 and 139 changed lines) got no readable answer at all, and a cut view would have hidden
+    the later hunks without saying so."""
+    def size(lines: List[int], diffs: List[str]) -> int:
+        return sum(len(d) for d in diffs) + len(_numbered(f.text, lines, budget=10 ** 9))
+
+    if size(f.changed, [f.diff]) <= budget:
+        return [f]
+    head, hunks = (_hunks(f.diff) if f.diff and f.status not in ("untracked", "whole")
+                   else ("", []))
+    if not hunks:                   # a new file or a whole file: slices of its lines
+        hunks = [(f.changed[i:i + 120], "") for i in range(0, len(f.changed), 120)]
+    groups: List[Tuple[List[int], List[str]]] = []
+    lines: List[int] = []
+    diffs: List[str] = []
+    for hunk_lines, text in hunks:
+        if not hunk_lines:
+            continue                # a hunk that only removes lines: nothing new to read
+        if len(text) > budget // 2:
+            text = ""               # the numbered code shows what such a hunk adds
+        pieces = ([(hunk_lines, text)] if size(hunk_lines, [text]) <= budget
+                  else [(hunk_lines[i:i + 120], "") for i in range(0, len(hunk_lines), 120)])
+        for piece_lines, piece_text in pieces:
+            extra = [piece_text] if piece_text else []
+            if lines and size(lines + piece_lines, diffs + extra) > budget:
+                groups.append((lines, diffs))
+                lines, diffs = [], []
+            lines, diffs = lines + piece_lines, diffs + extra
+    if lines:
+        groups.append((lines, diffs))
+    n = len(groups)
+    return [_File(path=f.path, status=f.status, text=f.text, changed=g_lines,
+                  diff=(head + "".join(g_diffs)) if g_diffs else "",
+                  part=f"part {i}/{n}" if n > 1 else "", refs=(i == 1))
+            for i, (g_lines, g_diffs) in enumerate(groups, 1)]
 
 
 def _load_config(top: str) -> dict:
@@ -892,7 +954,7 @@ def _batches(files: List[_File], contexts: Dict[str, str],
     current: List[_File] = []
     size = 0
     for f in files:
-        n = len(contexts[f.path])
+        n = len(contexts[(f.path, f.part)])
         if current and size + n > budget:
             out.append(current)
             current, size = [], 0
@@ -904,11 +966,13 @@ def _batches(files: List[_File], contexts: Dict[str, str],
 
 
 def _file_context(top: str, f: _File) -> str:
-    parts = [f"=== FILE {f.path} ({'new' if f.status in ('A', 'untracked') else f.status}) ==="]
+    kind = "new" if f.status in ("A", "untracked") else f.status
+    parts = [f"=== FILE {f.path} ({kind}{', ' + f.part if f.part else ''}) ==="]
     if f.status not in ("untracked", "whole") and f.diff:
-        parts.append("Diff:\n" + f.diff[:8_000])
-    parts.append("Current code (numbered):\n" + _numbered(f.text, f.changed))
-    refs = _references(top, f)
+        parts.append("Diff:\n" + f.diff)
+    # Bounded by _parts already: a view cut here would hide changed lines unannounced.
+    parts.append("Current code (numbered):\n" + _numbered(f.text, f.changed, budget=10 ** 9))
+    refs = _references(top, f) if f.refs else ""
     if refs:
         parts.append("Where its symbols are used elsewhere:\n" + refs)
     return _redact("\n".join(parts))
@@ -1237,7 +1301,9 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
     if ask is None:
         incomplete.append("no model was available, only the analyzers ran")
     else:
-        contexts = {f.path: _file_context(top, f) for f in files}
+        # A file whose change is too large for one answer is reviewed in parts (_parts).
+        items = [part for f in files for part in _parts(f, max(3_000, batch_chars * 3 // 4))]
+        contexts = {(f.path, f.part): _file_context(top, f) for f in items}
         guidelines = _redact(_guidelines(top, files))
         instructions = _path_instructions(config, files)
         reviewed_any = False
@@ -1251,22 +1317,35 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
         if evidence_lines:
             head.append("Static analysis already reported (do not repeat these):\n"
                         + "\n".join(evidence_lines[:60]))
-        batches = _batches(files, contexts, batch_chars)
+        batches = _batches(items, contexts, batch_chars)
         import threading
         done, done_lock = [0], threading.Lock()
+
+        def _context(f: _File) -> str:
+            return contexts.get((f.path, f.part)) or _file_context(top, f)
 
         def _review(batch: List[_File]) -> List[Tuple[List[_File], Optional[dict]]]:
             """The review of one batch; an unreadable answer for several files is asked
             again in halves - a reasoning model that ran out of room on many files usually
-            answers on fewer - until one file alone could not be reviewed."""
+            answers on fewer - and one file alone again in smaller parts, until a part that
+            cannot be split could not be reviewed. Measured: one 19,000-character file got
+            no readable answer in two live runs while every other file did."""
             answer = _ask_text(ask, _REVIEW_SYSTEM,
-                               "\n\n".join(head + ["\n\n".join(contexts[f.path] for f in batch)]),
+                               "\n\n".join(head + ["\n\n".join(_context(f) for f in batch)]),
                                REVIEW_TOKENS)
             data = _json_from(answer, "{")
-            if not isinstance(data, dict) and len(batch) > 1:
+            if isinstance(data, dict):
+                return [(batch, data)]
+            if len(batch) > 1:
                 mid = len(batch) // 2
                 return _review(batch[:mid]) + _review(batch[mid:])
-            return [(batch, data if isinstance(data, dict) else None)]
+            smaller = _parts(batch[0], len(_context(batch[0])) // 2)
+            if len(smaller) > 1:
+                prefix = f"{batch[0].part}, " if batch[0].part else ""
+                for piece in smaller:
+                    piece.part = prefix + piece.part
+                return [r for piece in smaller for r in _review([piece])]
+            return [(batch, None)]
 
         def _review_counted(batch: List[_File]):
             out = _review(batch)
@@ -1275,14 +1354,17 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
                 _tell(progress, f"reviewed {done[0]}/{len(batches)}")
             return out
 
-        _tell(progress, f"reviewing {len(files)} file(s) in {len(batches)} batch(es)")
+        _tell(progress, f"reviewing {len(files)} file(s)"
+                        + (f" ({len(items)} parts)" if len(items) > len(files) else "")
+                        + f" in {len(batches)} batch(es)")
         unreadable: List[str] = []
         reviews = [item for part in _parallel_map(_review_counted, batches, parallel)
                    for item in part]
         for batch, data in reviews:
             if not isinstance(data, dict):
                 unreadable += [f.path for f in batch]
-                report.files_skipped += [(f.path, "no readable review") for f in batch]
+                report.files_skipped += [(f.path, "no readable review"
+                                          + (f" ({f.part})" if f.part else "")) for f in batch]
                 continue
             reviewed_any = True
             if data.get("summary"):
@@ -1323,7 +1405,7 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
                 found.append(f)
         report.summary = " ".join(summaries)
         if unreadable:
-            incomplete.append(f"no readable review for {len(unreadable)} file(s)")
+            incomplete.append(f"no readable review for {len(set(unreadable))} file(s)")
         if not reviewed_any:
             report.status, report.status_reason = "failed", "the model reviewed nothing"
             return

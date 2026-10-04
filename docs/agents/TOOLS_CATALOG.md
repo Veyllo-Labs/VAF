@@ -2,7 +2,7 @@
 
 The tools the **main agent** loads by default, grouped by area. Generated from the live
 tool registry (`Agent.tools`, populated by `_load_tools()` in
-[vaf/core/agent.py](../../vaf/core/agent.py)); 130 tools, counted from a freshly
+[vaf/core/agent.py](../../vaf/core/agent.py)); 131 tools, counted from a freshly
 constructed chat agent rather than from this list's own history. The **Coder sub-agent**
 additionally loads `coder_only` file/shell tools (e.g. `bash`, `move_file`,
 `codesearch`) that are not in this list. Some tools only do anything once their
@@ -87,6 +87,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | Tool | Perm | What it does |
 |------|------|--------------|
 | `coding_agent` | write | Autonomous code-generation sub-agent. |
+| `code_audit` | read | Review a project's code change like a code reviewer: real bugs, security problems and risky changes, each proven against the code before it is reported, with a fix prompt. Read-only and inside the account's file jail; the result tells the agent to show the findings and ASK whether the coder should fix them, and to change nothing before a yes. The coder runs the same review after every commit in its own loop. See [CODE_AUDIT.md](CODE_AUDIT.md). |
 | `create_agent_tool` | system | Create/update a Python tool the agent can use immediately. |
 | `python_sandbox` | write | Run Python in a Docker-isolated sandbox; `export_files` copies produced artifacts (images, PDFs) into the chat workspace after the run. |
 | `python_exec` | dangerous | Run Python on the host (no sandbox) - confirmed in the chat: "only this time" runs that one call (the funnel hands the confirmation over as `_call_confirmed`, `accepts_call_confirmation`), "for this chat" and "always" keep it allowed. The tool re-checks on its own because a workflow step and the coder run it without the gate; there only a stored "always" or the person's "for this chat" grant for that chat lets it run. Stored credentials as `os.environ["VAF_SECRET_<NAME>"]`, like `host_bash`. Refused on messaging channels in the chat, like `host_bash`, also with `channel_tools_unrestricted` on. See the host-execution line in [EMBEDDING.md](../EMBEDDING.md). |

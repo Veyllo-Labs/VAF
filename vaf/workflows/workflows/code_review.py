@@ -2,17 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
-Code Review Workflow
+Code Improvement Workflow (id `code_review`, kept so stored references still resolve)
 
-Read a file, review it, and save improvements.
+Read a file, rewrite it improved and save it. It CHANGES the file, so it answers only to
+"improve" and "optimize". A request to review or check code is a request for findings, and
+goes to the code_audit tool, which reads, reports and asks before anything is changed.
 """
 
 WORKFLOW = {
-    "name": "Code Review",
-    "description": "Read a file, review it, and save improvements",
+    "name": "Code Improvement",
+    "description": "Rewrite a file improved and save it (to only review code, use code_audit)",
     "triggers": [
-        "review diesen code",
-        "review this code",
         "verbessere diese datei",
         "improve this file",
         "optimiere den code",
@@ -20,8 +20,6 @@ WORKFLOW = {
         "prüfe und verbessere",
     ],
     "trigger_patterns": [
-        r"review.*code",
-        r"review.*datei",
         r"verbess.*code",
         r"improv.*file",
         r"optimi.*code",

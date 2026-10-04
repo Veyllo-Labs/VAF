@@ -220,7 +220,7 @@ Check the existing workflows in `workflows/` for examples:
 - `youtube_summary.py` - Summarize a YouTube video from its captions (sandbox yt-dlp, no video download)
 - `research_and_document.py` - Research + document creation
 - `analyze_website.py` - Fetch and analyze web content
-- `code_review.py` - Review code files
+- `code_review.py` - Improve a file and save it (reviewing without changes is the `code_audit` tool)
 - `deep_research.py` - Multi-query research
 - `generate_docs.py` - Generate documentation
 - `create_document.py` - Create a document

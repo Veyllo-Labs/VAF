@@ -15,7 +15,7 @@ Each `.py` file here defines a `WORKFLOW` dictionary that includes:
 - **research_and_code.py**: Research + code generation pipeline.
 - **youtube_summary.py**: Summarizes a YouTube video from its captions (yt-dlp in the sandbox, honest no-subs/rate-limit handling, validated summary step).
 - **research_and_document.py**: Research + document creation pipeline.
-- **code_review.py**: Analyzes and suggests improvements for code.
+- **code_review.py**: Rewrites a file improved and saves it. A review that only reports findings is the `code_audit` tool.
 - **generate_docs.py**: Creates project documentation.
 - **create_document.py**: Creates a document from user intent.
 - **create_file.py**: Generates and creates a new file.

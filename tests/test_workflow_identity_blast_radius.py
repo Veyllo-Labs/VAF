@@ -111,6 +111,10 @@ NEWLY_IDENTIFIED = {
     # the path pointed - codesearch previously returned file CONTENT from any absolute
     # path when constructed without a base_dir, which is how the main agent has it.
     "codesearch": ('user_role', 'user_scope_id'),
+    # Added with the tool itself (code audit). In the workflow lane a step reviews only a
+    # project inside the workflow owner's tree (the jail question before anything is read),
+    # and Stop in the owner's chat ends it before its next model call.
+    "code_audit": ('session_id', 'user_role', 'user_scope_id'),
     # Added with the per-user trust store: this tool reads its own trust policy
     # (vaf/tools/python_exec.py) and without the declaration it read the local
     # ADMIN's bucket for every caller, so one machine-wide "always" answered for

@@ -8217,7 +8217,15 @@ class Agent:
             if "git_status" in self.tools:
                  forced_tools.add("git_status")
                  forced_tools.add("git_add_commit")
-        
+
+        # Reviewing code is reading it: code_audit reports and asks, coding_agent changes.
+        if any(kw in u_lower for kw in [
+            "code audit", "code review", "review", "audit", "prüf den code", "prüfe den code",
+            "überprüf", "code prüfen", "code checken", "check my code", "check the code"
+        ]):
+            if "code_audit" in self.tools:
+                forced_tools.add("code_audit")
+
         # Git Heuristics
         if any(kw in u_lower for kw in ["git", "commit", "push", "pull", "repo", "branch"]):
             if "git_status" in self.tools:

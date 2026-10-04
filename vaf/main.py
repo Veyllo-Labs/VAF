@@ -338,7 +338,7 @@ def _a2a_credential_verifier(credential: str):
 _set_credential_verifier(_a2a_credential_verifier)
 
 import typer
-from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup, a2a, repair, usage, top, inbox, outbox, secrets, ssh
+from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup, a2a, repair, usage, top, inbox, outbox, secrets, ssh, audit
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -365,6 +365,9 @@ app.add_typer(run.app, name="run", help="Start the agent")
 app.add_typer(models.app, name="models", help="Manage models")
 
 app.add_typer(usage.app, name="usage", help="Token usage and spend records")
+
+# Review a code change: findings, proven, with a fix prompt each (vaf.core.code_audit)
+app.add_typer(audit.app, name="audit", help="Review a code change: findings with fix prompts")
 
 # Project templates
 app.add_typer(scaffold.app, name="scaffold", help="Create project templates")

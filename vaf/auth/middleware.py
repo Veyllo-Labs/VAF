@@ -196,6 +196,20 @@ class IPValidationMiddleware(BaseHTTPMiddleware):
 # Layer 3: JWT Authentication Middleware
 # ---------------------------------------------------------------------------
 
+async def token_account_stands(payload: dict) -> bool:
+    """Whether the account behind a decoded access token still stands.
+
+    A valid signature is not enough: the account must still exist, be active and hold the
+    role the token was issued with, or a deactivation would leave a day of access and a
+    demotion would leave admin rights for the token's whole lifetime. Both lanes ask this
+    one function - the HTTP middleware below and the WebSocket handshake
+    (`vaf/core/web_server.py`). An auth store that cannot be asked keeps the token
+    (`permissions.token_still_stands`: the desktop default)."""
+    from vaf.auth.permissions import account_standing_async, token_still_stands
+    return token_still_stands(await account_standing_async(payload.get("user_scope_id")),
+                              payload.get("role"))
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     """
     Enforce JWT authentication for non-localhost network clients.
@@ -257,6 +271,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 payload = decode_token(token)
             except Exception as e:
                 logger.warning("Auth middleware token decode error for %s: %s", client_ip, e)
+                payload = None
+
+            if payload and payload.get("type") == "access" and not await token_account_stands(payload):
                 payload = None
 
             if payload and payload.get("type") == "access":

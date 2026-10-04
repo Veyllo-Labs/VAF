@@ -27,10 +27,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from starlette.concurrency import run_in_threadpool
 
-from vaf.api.user_routes import require_admin
+from vaf.api.user_routes import GrantRevokeRequest, require_admin
 from vaf.core.channels import CHAT_CHANNELS
 from vaf.core.security_events import read_security_events
 from vaf.core.service_health import inspect_containers
@@ -587,9 +587,10 @@ def derive_guardrails_status(flags: Dict[str, bool],
     }
 
 
-def collect_guardrails_status() -> Dict[str, Any]:
+def collect_guardrails_status(user_scope_id: Optional[str] = None) -> Dict[str, Any]:
     """Read gate flags (config), the LIVE agent tool registry (permission-level
-    inventory) and the persisted trust store (standing permissions)."""
+    inventory) and the CALLER's standing grants (the trust store is per account; without
+    a scope it read the local admin's, whoever was looking)."""
     flags: Dict[str, bool] = {}
     try:
         from vaf.core.config import Config
@@ -620,11 +621,11 @@ def collect_guardrails_status() -> Dict[str, Any]:
         pass
     trust: Dict[str, Any] = {}
     try:
-        from vaf.core.trust import load_trust_state
-        state = load_trust_state()
+        from vaf.core.trust import list_standing_grants
+        grants = list_standing_grants(user_scope_id)
         trust = {
-            "trusted_dirs": sorted(state.trusted_dirs),
-            "allow_always_tools": sorted(t for t, p in state.tool_policies.items() if p == "allow"),
+            "trusted_dirs": grants["dirs"],
+            "allow_always_tools": [t for t, how in grants["tools"].items() if how["always"]],
         }
     except Exception:
         pass
@@ -987,8 +988,28 @@ async def quarantined_skill_restore(skill_id: str,
     return {"ok": True, "restored": sid}
 
 
+@router.get("/grants")
+async def my_grants(request: Request) -> Dict[str, Any]:
+    """The caller's OWN standing grants, for any signed-in account: tools set to "always" or
+    allowed for a chat, and trusted folders - each skips the confirmation dialog."""
+    from vaf.api.config_routes import get_current_scope_id
+    from vaf.core.trust import list_standing_grants
+    return await run_in_threadpool(list_standing_grants, get_current_scope_id(request))
+
+
+@router.post("/grants/revoke")
+async def revoke_my_grants(request: Request, data: GrantRevokeRequest) -> Dict[str, Any]:
+    """Take the caller's own standing grants back: the next call asks again."""
+    from vaf.api.config_routes import get_current_scope_id
+    from vaf.core.trust import revoke_standing_grants
+    scope = get_current_scope_id(request)
+    removed = await run_in_threadpool(lambda: revoke_standing_grants(
+        scope, tools=data.tools, dirs=data.dirs, everything=data.everything))
+    return {"removed": removed}
+
+
 @router.get("/overview")
-async def security_overview(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+async def security_overview(admin: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Aggregated protection-module status for the Overview dashboard (admin only).
 
     Blocking probes (docker subprocesses, file walks) run in the threadpool;
@@ -1027,7 +1048,7 @@ async def security_overview(_: Dict[str, Any] = Depends(require_admin)) -> Dict[
     except Exception:
         isolation = None
     channels = await run_in_threadpool(collect_channels_status)
-    guardrails = await run_in_threadpool(collect_guardrails_status)
+    guardrails = await run_in_threadpool(collect_guardrails_status, admin.get("user_scope_id"))
     skills = await run_in_threadpool(collect_skills_status)
     content = await run_in_threadpool(collect_content_status)
     # Newest security-event timestamp today: lets the window's log badge be

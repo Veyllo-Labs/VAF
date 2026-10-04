@@ -439,9 +439,13 @@ can only skip the human question - `admin_only`, the account allowlist and an
 authorizer's `ask()` are decided earlier and are never widened - and every use
 is announced as a `gate_bypassed` event.
 
-Pinned semantics: no row, no `"tools"` key or an EMPTY stored list mean UNRESTRICTED -
-`[]` is the API model's creation default, and "block every tool" is deliberately not
-expressible here (deactivate the account instead). Admins are never restricted. A
+Pinned semantics: no ACTIVE account with the scope (deleted, deactivated) means NOTHING is
+allowed - a missing row used to read as "no restriction", so a deleted account's live turn
+had every tool and deactivating did not touch the tools at all. For an active account, no
+`"tools"` key or an EMPTY stored list mean UNRESTRICTED - `[]` is the API model's creation
+default, and "block every tool" is deliberately not expressible here (deactivate the
+account instead). The machine owner is unaffected: the local-admin scope is an admin
+identity and never consults the list. Admins are never restricted. A
 REGISTERED resolver that raises refuses the call (fail-closed; a broken guard must not
 quietly become no guard) - the harness resolver itself never raises: it catches its own
 DB errors and resolves unreachable as unrestricted, and on the desktop that is correct
@@ -465,6 +469,43 @@ TOOL permission of the lane that builds them. The rollback switch
 (`workflow_identity_injection` = legacy/off) restores the entire pre-funnel step lane -
 identity name list and absence of per-step policy alike; the start gate is not behind the
 switch.
+
+### Taking access away reaches work already running
+
+Deactivating, deleting or narrowing an account used to change the store and nothing else.
+Now each of the three takes effect at once (`vaf/core/revocation.py`, called by the admin
+routes in `vaf/api/user_routes.py` AFTER the commit, with the permission cache cleared
+there too - cleared before the commit, a lookup in between re-cached the old answer):
+
+- **The token stops working.** The HTTP middleware and the WebSocket handshake check that the
+  token's account still exists, is active and still holds the token's role
+  (`permissions.account_standing_async`, cached a few seconds and cleared with the
+  allowlists). A network client then gets 401 (a socket: close code 4001, and a
+  `ws_rejected` event); the real localhost client falls back to the tokenless lane as
+  before. An unreachable auth store keeps the token: the same desktop default as the
+  allowlist lookup.
+- **Running work stops.** Deactivation and deletion call `revoke_account`; a demotion or a
+  narrowed tool, workflow or hands-off grant calls `stop_account_work`. Both stop every chat
+  the account has queued or running (generation, queued follow-ups, a waiting confirmation,
+  sub-agents), end its background host commands - which the Stop button spares - and close
+  its sockets, which carry the old role.
+- **Nothing more runs.** While the mark stands, the tool funnel refuses the account's calls
+  BEFORE the admin exemption (a turn queued before a demotion still carries the old role),
+  a tool call already running ends through the funnel's own stop check, and the runner drops
+  the account's queued turns. Queued turns and automations also ask `account_stands`, which
+  reads the account directory, so a deactivated account's paired messenger and scheduled
+  automations stay silent after a restart as well.
+- **Standing grants can be taken back.** "Always" and "for this chat" skip the question
+  before any event is emitted, so a grant nobody can see only grows. Each account lists and
+  revokes its own under Settings, Connections (`GET /api/security/grants`,
+  `POST /api/security/grants/revoke`); an admin does it for another account in the user
+  editor (`/api/users/<id>/grants`); `vaf trust --list` and `--revoke-tool` on the command
+  line. The overview's list shows the CALLER's grants (it showed the local admin's,
+  whoever looked).
+
+NAMED BOUNDARY: the revoked mark lives in the process that revoked. Another VAF process on
+the machine (a `vaf run` session) learns of it through its own permission lookup, which
+answers "nothing" for a missing or inactive account within the cache lifetime.
 
 ### Cloud credentials are addressed by scope
 

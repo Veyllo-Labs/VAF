@@ -559,11 +559,11 @@
     "ovGrTotal": "toplam araç",
     "ovGrAdminOnly": "yalnızca yönetici",
     "ovGrChannelBlocked": "kanallarda engelli",
-    "ovGrStanding": "Kalıcı izinler (trust.json)",
+    "ovGrStanding": "Kalıcı izinler",
     "ovGrNoStanding": "Kalıcı izin verilmedi",
     "ovGrAllowAlways": "her zaman izinli",
     "ovGrTrustedDir": "güvenilir dizin",
-    "ovGrStandingNote": "Bu izinleri \"Her zaman izin ver\" ile sen verdin; trust.json temizlenene kadar geçerli kalırlar.",
+    "ovGrStandingNote": "Bu izinleri \"Her zaman izin ver\" ile verdin. Ayarlar'da Bağlantılar altında geri alabilirsin.",
     "ovGatePlan": "Plan kapısı",
     "ovGateConfirm": "Onay kapısı",
     "ovGateIncident": "Olay kapıları",
@@ -2450,6 +2450,18 @@
     "servers": "Onayladığın sunucular",
     "noServers": "Henüz yok.",
     "forget": "Kaldır; sonraki bağlantı yine sorar",
+    "failed": "Bu işe yaramadı."
+  },
+  "grants": {
+    "title": "Kalıcı izinler",
+    "intro": "Tek bir çağrının ötesinde izin verdiklerin. İzin sürdükçe ajan bu araçtan önce sormaz; geri alırsan bir dahaki sefere yine sorar.",
+    "introOther": "Bu hesabın tek bir çağrının ötesinde izin verdikleri. Geri alırsan ajan bir dahaki sefere yine sorar.",
+    "none": "Kalıcı izin yok.",
+    "always": "her zaman izinli",
+    "chats": "{count, plural, one {# sohbette} other {# sohbette}} izinli",
+    "folder": "güvenilen klasör",
+    "revoke": "Geri al",
+    "revokeAll": "Tümünü geri al",
     "failed": "Bu işe yaramadı."
   },
   "inbox": {

@@ -188,10 +188,17 @@ def test_browser_agent_really_is_cut_off_and_not_just_declared_so():
 def test_the_engines_own_stop_callback_is_the_one_used():
     """The chat lane polls the task queue by session; this lane is handed a callback and must
     use THAT one, or the Stop button stops the wrong thing - or nothing."""
+    asked = []
+
     def _my_stop():
+        asked.append(1)
         return False
 
-    assert _captured_call("web_search", check_stop=_my_stop)["stop_check"] is _my_stop
+    # The funnel puts its own check in front (an account whose access was taken away), so the
+    # callback is asked through it rather than handed over as the same object.
+    stop_check = _captured_call("web_search", check_stop=_my_stop)["stop_check"]
+    before = len(asked)
+    assert stop_check() is False and len(asked) == before + 1
 
 
 def test_a_step_stops_when_the_callback_says_so():

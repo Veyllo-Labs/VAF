@@ -348,6 +348,16 @@ class TaskQueue:
                 for item in heap:
                     yield item[3]
 
+    def sessions_for_scope(self, user_scope_id: str) -> set:
+        """The sessions with an in-flight or queued task of this account (exact scope).
+        For stopping everything one account runs (vaf.core.revocation)."""
+        key = str(user_scope_id or "").strip()
+        if not key:
+            return set()
+        with self._cv:
+            return {str(task.session_id) for task in self._iter_all_tasks()
+                    if self._task_scope(task) == key and task.session_id}
+
     def is_busy_for_scope(self, target_key: str, canonicalize: Callable[[Any], str]) -> bool:
         """True if any in-flight OR queued task belongs to the same user as `target_key`.
 

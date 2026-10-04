@@ -50,7 +50,7 @@ def test_the_overview_reports_the_number_the_log_actually_holds(monkeypatch):
                  "collect_guardrails_status", "collect_skills_status"):
         monkeypatch.setattr(security_routes, name, lambda *a, **k: None, raising=False)
 
-    payload = asyncio.run(security_routes.security_overview(_={"role": "admin"}))
+    payload = asyncio.run(security_routes.security_overview(admin={"role": "admin"}))
 
     assert payload["security_events_today"] == 2, (
         "the window would derive 0 from the module counters and mark nothing")

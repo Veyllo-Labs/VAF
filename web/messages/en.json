@@ -559,11 +559,11 @@
     "ovGrTotal": "tools total",
     "ovGrAdminOnly": "admin-only",
     "ovGrChannelBlocked": "blocked on channels",
-    "ovGrStanding": "Standing permissions (trust.json)",
+    "ovGrStanding": "Standing grants",
     "ovGrNoStanding": "No standing grants issued",
     "ovGrAllowAlways": "always allowed",
     "ovGrTrustedDir": "trusted directory",
-    "ovGrStandingNote": "You granted these via \"Allow always\"; they persist until trust.json is cleaned up.",
+    "ovGrStandingNote": "You granted these via \"Allow always\". Revoke them in Settings under Connections.",
     "ovGatePlan": "Plan gate",
     "ovGateConfirm": "Confirmation gate",
     "ovGateIncident": "Incident gates",
@@ -2450,6 +2450,18 @@
     "servers": "Servers you confirmed",
     "noServers": "None yet.",
     "forget": "Remove; the next connection asks again",
+    "failed": "That did not work."
+  },
+  "grants": {
+    "title": "Standing grants",
+    "intro": "What you allowed beyond a single call. While a grant stands, the agent does not ask before that tool; once revoked, it asks again next time.",
+    "introOther": "What this account allowed beyond a single call. Once revoked, the agent asks again next time.",
+    "none": "No standing grants.",
+    "always": "always allowed",
+    "chats": "allowed in {count, plural, one {# chat} other {# chats}}",
+    "folder": "trusted folder",
+    "revoke": "Revoke",
+    "revokeAll": "Revoke all",
     "failed": "That did not work."
   },
   "inbox": {

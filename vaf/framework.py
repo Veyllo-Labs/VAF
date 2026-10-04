@@ -27,9 +27,10 @@ Design notes
   an explicit caller still wins). That makes the tool-confirmation gates return
   an error instead of blocking on stdin/WebSocket — an embedded library must
   never hang waiting for a human. Grant specific tools via the trust mechanisms
-  (`mark_trusted_dir`, `set_tool_policy`; persisted in trust.json under the
-  platform config dir, e.g. ~/.config/vaf/ on Linux) when you want dangerous
-  tools to run unattended.
+  (`vaf.mark_trusted_dir`, `vaf.set_tool_policy`; persisted per account in
+  trust/<scope>.json under the platform config dir, e.g. ~/.config/vaf/ on Linux,
+  and read back and revoked with `vaf.list_standing_grants` /
+  `vaf.revoke_standing_grants`) when you want dangerous tools to run unattended.
 - Stateful across calls: one façade `Agent` keeps one conversation. Repeated
   `run()` calls continue the same history (multi-turn). Create a new `Agent`
   for an independent conversation.

@@ -559,11 +559,11 @@
     "ovGrTotal": "Tools gesamt",
     "ovGrAdminOnly": "nur Admin",
     "ovGrChannelBlocked": "auf Kanälen gesperrt",
-    "ovGrStanding": "Stehende Berechtigungen (trust.json)",
+    "ovGrStanding": "Dauerhafte Freigaben",
     "ovGrNoStanding": "Keine dauerhaften Freigaben erteilt",
     "ovGrAllowAlways": "immer erlaubt",
     "ovGrTrustedDir": "vertrauenswürdiges Verzeichnis",
-    "ovGrStandingNote": "Diese Freigaben hast du per \"Immer erlauben\" erteilt; sie gelten dauerhaft, bis trust.json bereinigt wird.",
+    "ovGrStandingNote": "Diese Freigaben hast du per \"Immer erlauben\" erteilt. Widerrufen kannst du sie in den Einstellungen unter Verbindungen.",
     "ovGatePlan": "Plan-Gate",
     "ovGateConfirm": "Bestätigungs-Gate",
     "ovGateIncident": "Vorfall-Gates",
@@ -2450,6 +2450,18 @@
     "servers": "Von dir bestätigte Server",
     "noServers": "Noch keine.",
     "forget": "Entfernen; die nächste Verbindung fragt wieder",
+    "failed": "Das hat nicht geklappt."
+  },
+  "grants": {
+    "title": "Dauerhafte Freigaben",
+    "intro": "Was du über einen einzelnen Aufruf hinaus erlaubt hast. Solange eine Freigabe besteht, fragt der Agent vor diesem Werkzeug nicht nach; nach dem Widerrufen fragt er beim nächsten Mal wieder.",
+    "introOther": "Was dieses Konto über einen einzelnen Aufruf hinaus erlaubt hat. Nach dem Widerrufen fragt der Agent beim nächsten Mal wieder.",
+    "none": "Keine dauerhaften Freigaben.",
+    "always": "immer erlaubt",
+    "chats": "in {count, plural, one {# Chat} other {# Chats}} erlaubt",
+    "folder": "vertrauenswürdiger Ordner",
+    "revoke": "Widerrufen",
+    "revokeAll": "Alle widerrufen",
     "failed": "Das hat nicht geklappt."
   },
   "inbox": {

@@ -177,7 +177,12 @@ Rejections from the layers above are recorded in an always-on security event log
 ### Authentication Details
 
 - **Password Hashing**: Argon2id (time_cost=2, memory_cost=64MB)
-- **JWT Tokens**: HS256, configurable expiry (default 24h), refresh tokens (7 days)
+- **JWT Tokens**: HS256, configurable expiry (default 24h), refresh tokens (7 days). A valid
+  signature is not enough: the HTTP middleware and the WebSocket handshake also check that the
+  token's account still exists, is active and holds the token's role (cached a few seconds,
+  cleared by the admin routes), so a deactivation, a deletion or a demotion ends the token at
+  once instead of at its expiry. See "Taking access away" in
+  [USER_ISOLATION.md](../security/USER_ISOLATION.md).
 - **2FA**: TOTP (RFC 6238), secrets encrypted at rest with AES-256-GCM
 - **Session Tracking**: Token hashes (SHA-256) stored in PostgreSQL, no plaintext tokens in DB
 - **Cookies**: `vaf_token` cookie with `httponly`, `samesite=lax`, and `secure` flag (when TLS active). The cookie's `max-age` is always derived from the token's own `exp` claim at the single set point (`_cookie_max_age_for` in `auth_routes.py`), so the cookie can never outlive the JWT it carries. The login form's `remember_me` flag does NOT extend the session - a longer session requires raising `local_network_jwt_expiry_hours` or wiring the existing `/api/auth/refresh` flow into the frontend. Do not reintroduce a hardcoded longer cookie lifetime: a present-but-expired cookie desyncs the server-side route gate from the bearer token and causes a login redirect loop (live incident 2026-07-22).

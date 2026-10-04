@@ -107,6 +107,11 @@ def load_trust_state(user_scope_id: Optional[str] = None) -> TrustState:
         return TrustState(trusted_dirs=set(), tool_policies={})
 
 
+# One read-modify-write at a time: a grant given in one lane and a revocation in another
+# must not overwrite each other with a stale copy of the file.
+_store_lock = threading.RLock()
+
+
 def save_trust_state(state: TrustState, user_scope_id: Optional[str] = None) -> None:
     path = _trust_file(user_scope_id)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -147,19 +152,21 @@ def is_trusted_dir(cwd: Path, user_scope_id: Optional[str] = None) -> bool:
 
 
 def mark_trusted_dir(cwd: Path, user_scope_id: Optional[str] = None) -> None:
-    state = load_trust_state(user_scope_id)
-    state.trusted_dirs.add(_norm_dir(cwd))
-    save_trust_state(state, user_scope_id)
+    with _store_lock:
+        state = load_trust_state(user_scope_id)
+        state.trusted_dirs.add(_norm_dir(cwd))
+        save_trust_state(state, user_scope_id)
 
 
 def set_tool_policy(tool_name: str, policy: Literal["allow", "deny", "ask"],
                     user_scope_id: Optional[str] = None) -> None:
-    state = load_trust_state(user_scope_id)
     # We intentionally do NOT persist "deny" (use cancel instead)
     if policy == "deny":
         policy = "ask"
-    state.tool_policies[tool_name] = policy
-    save_trust_state(state, user_scope_id)
+    with _store_lock:
+        state = load_trust_state(user_scope_id)
+        state.tool_policies[tool_name] = policy
+        save_trust_state(state, user_scope_id)
 
 
 def get_tool_policy(tool_name: str, user_scope_id: Optional[str] = None) -> str:
@@ -246,3 +253,63 @@ def explain_gate(tool_name: str) -> str:
     return "This action is considered risky."
 
 
+# ── Seeing and taking back what was allowed ──────────────────────────────────
+#
+# A standing grant skips the question before any event is emitted, so a grant nobody can
+# see or take back is a permission that only grows. These two are the read and the undo,
+# for the person themselves and for an admin acting on an account.
+
+def list_standing_grants(user_scope_id: Optional[str] = None) -> dict:
+    """What this person allowed beyond a single call.
+
+    ``{"tools": {name: {"always": bool, "chats": int}}, "dirs": [path, ...]}``: a tool set
+    to "allow always", and in how many of this process's chats it is allowed for the rest
+    of the chat; the trusted directories (each silences the folder-bound gated tools in its
+    whole subtree). A grant a sub-agent inherited lives in that child and ends with it."""
+    state = load_trust_state(user_scope_id)
+    tools: dict = {name: {"always": True, "chats": 0}
+                   for name, policy in state.tool_policies.items() if policy == "allow"}
+    scope = _scope_key(user_scope_id)
+    with _chat_grants_lock:
+        for (owner, _session), names in _chat_grants.items():
+            if owner != scope:
+                continue
+            for name in names:
+                tools.setdefault(name, {"always": False, "chats": 0})["chats"] += 1
+    return {"tools": dict(sorted(tools.items())), "dirs": sorted(state.trusted_dirs)}
+
+
+def revoke_standing_grants(user_scope_id: Optional[str] = None, *, tools=(), dirs=(),
+                           everything: bool = False) -> dict:
+    """Take grants back: each tool in ``tools`` loses its "always" AND its chat grants,
+    each directory in ``dirs`` stops being trusted; ``everything`` takes all of them. The
+    next call of such a tool asks again. Returns what was actually removed."""
+    removed = {"tools": [], "dirs": []}
+    wanted_tools = set(tools or ())
+    wanted_dirs = {str(d) for d in (dirs or ())}
+    scope = _scope_key(user_scope_id)
+    with _store_lock:
+        state = load_trust_state(user_scope_id)
+        changed = False
+        for name in [n for n in state.tool_policies if everything or n in wanted_tools]:
+            if state.tool_policies.pop(name, None) == "allow":
+                removed["tools"].append(name)
+            changed = True
+        for path in [d for d in state.trusted_dirs if everything or d in wanted_dirs]:
+            state.trusted_dirs.discard(path)
+            removed["dirs"].append(path)
+            changed = True
+        if changed:
+            save_trust_state(state, user_scope_id)
+    with _chat_grants_lock:
+        for key in [k for k in _chat_grants if k[0] == scope]:
+            names = _chat_grants[key]
+            for name in [n for n in names if everything or n in wanted_tools]:
+                names.discard(name)
+                if name not in removed["tools"]:
+                    removed["tools"].append(name)
+            if not names:
+                _chat_grants.pop(key, None)
+    removed["tools"].sort()
+    removed["dirs"].sort()
+    return removed

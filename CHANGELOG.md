@@ -62,6 +62,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   A page one account fetched is also no longer served from the cache to another account. A
   remote MCP server an admin registered may still run on this computer. If you connected a
   Nextcloud on the same computer as `localhost`, connect it again with its network address.
+- **Deactivating, deleting or restricting an account takes effect at once.** Before, it
+  changed the user list and nothing else: the account stayed signed in for up to a day, a
+  demoted admin kept admin rights until the next sign-in, what the account had started ran
+  on, its automations kept firing, and a deleted account's running chat could use every
+  tool. Now its sign-in ends at the next request, everything it has running stops (chats,
+  waiting confirmations, sub-agents, background commands), and its queued messages and
+  automations no longer run. Restricting its tools stops what is already running, so
+  nothing finishes with the old rights. The Stop button now also closes an open
+  confirmation and ends a command the agent runs on your computer, including what that
+  command started, instead of letting it run on in the background.
+- **You can see and take back what you allowed "always".** Settings, Connections now lists
+  every tool you allowed always or for a chat and every trusted folder, each with a button
+  to take it back; the agent then asks again. An admin can do the same for another account
+  in the user editor, and `vaf trust --list` and `vaf trust --revoke-tool` do it on the
+  command line. The security overview now shows the grants of the admin looking at it.
 - **A mail's sender is read the same way on every supported Python.** Python 3.10 and
   3.11 as installed on Windows and macOS (3.10.11 and 3.11.9, the last installers of those
   series) predate the standard library's stricter address parsing. There, a From line

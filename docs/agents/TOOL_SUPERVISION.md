@@ -145,18 +145,40 @@ of the process tree (`Platform.terminate_process_tree`) (`Platform.stop_webui_su
 `Platform.stop_webui_subagent_process_by_task(task_id)` for one unit). On kill the IPC task is failed
 so any waiter unblocks.
 
-## Stopping work (`cancel_session`)
+## Stopping work (`stop_session`, `revoke_account`)
 
-The Stop button cancels everything for a session through two cooperating calls
-(`vaf/core/web_server.py`):
+The Stop button is one framework function, `vaf.core.revocation.stop_session(session_id)`
+(the WebSocket handler in `vaf/core/web_server.py` calls it; it is on the facade as
+`vaf.stop_session`):
 
 1. `TaskQueue.request_stop(session_id)` - sets a stop flag that the in-process bounded waits and the
    engine's subprocess wait both poll, so in-flight work aborts within roughly the poll interval.
-2. `Platform.stop_webui_subagent_processes(session_id)` - kill-tree of that session's child
-   processes.
+2. `TaskQueue.drop_queued_tasks_for_session` - queued (not yet running) follow-ups are dropped.
+3. A confirmation dialog the session is waiting on is answered "cancel"
+   (`WebInterfaceManager.cancel_gate`). The wait itself runs in half-second slices and checks
+   the stop flag and a revoked account too, so it never holds a stopped turn for its five
+   minutes.
+4. `Platform.stop_webui_subagent_processes(session_id)` - kill-tree of that session's child
+   processes, and their IPC tasks are failed - unless sub-agents are running and the Stop was
+   not the explicit "all" (`include_subagents=False`): then the generation stops and the
+   sub-agents keep working.
 
-Queued (not yet running) tasks for the session are dropped with
-`TaskQueue.drop_queued_tasks_for_session`.
+A command the agent runs in the FOREGROUND (`host_bash`, `python_exec`) goes through
+`vaf.core.processes.run_foreground`: its own process group, a wait in half-second slices, and
+on Stop - or at its timeout - the whole tree is ended, not only the shell. `ssh` keeps its own
+wait (it streams uploads and downloads under a byte cap) and ends its process group the same way
+(`bounded_run.cancel_check`). Background commands (`host_process`) are spared by Stop, as above.
+
+Taking an account's access away (`revoke_account(user_scope_id)`, called by the admin routes on
+deactivation and deletion; `stop_account_work` on a demotion or a narrowed allowlist) runs
+`stop_session` for every session the account has queued or running, ends its background
+commands as well, and tells the registered listeners (the web server closes the account's
+sockets, which carry the old role). While an account is marked revoked, the tool funnel refuses
+its calls BEFORE the admin exemption (a queued turn still carries its old role), the funnel's
+own stop check ends a tool call already running in any lane, the runner drops its queued turns,
+and automations neither start nor deliver. The lanes that start work without a token in hand
+(queued turns, automations) also ask `account_stands`, which reads the application's account
+directory, so a deactivation outlives a restart.
 
 ## Watchdog: live status and per-unit kill
 

@@ -96,6 +96,7 @@ from vaf.auth.middleware import (  # noqa: E402
     ForeignOriginGuard,
     IPValidationMiddleware,
     OwnOriginCORSMiddleware,
+    token_account_stands,
 )
 
 app.add_middleware(OwnOriginCORSMiddleware)
@@ -4174,6 +4175,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.close(code=4003, reason="2FA verification required")
                             return
                     
+                    # The account must still stand: deactivated, deleted or demoted since
+                    # the token was issued is refused, like the HTTP lane (middleware).
+                    if not await token_account_stands(payload):
+                        log("API", f"WebSocket rejected: account no longer stands for {payload.get('username')}")
+                        _emit_sec_ws("revoked account", ip=client_ip)
+                        await websocket.close(code=4001, reason="Account access changed")
+                        return
+
                     user_context = {
                         "user_id": payload.get("sub"),
                         "user_scope_id": payload.get("user_scope_id"),
@@ -8712,9 +8721,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "stop_generation":
                     # Stop the current generation by setting a flag
-                    from vaf.core.task_queue import TaskQueue
-                    from vaf.core.platform import Platform
-                    tq = TaskQueue()
                     session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
                     # OWNERSHIP. The id comes straight from the payload, and below it stops the
                     # generation for that session and cancels its in-flight attachment indexing.
@@ -8734,7 +8740,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # With no active sub-agent, behavior is unchanged.
                     stop_scope = str(cmd.get("scope") or "").strip().lower()
                     if session_id:
-                        tq.request_stop(session_id)
+                        # The Stop button as a framework function (vaf.core.revocation): the
+                        # generation, queued follow-ups, a waiting confirmation and - with the
+                        # explicit scope "all" or no sub-agent running - the sub-agents.
+                        from vaf.core.revocation import stop_session
+                        stopped = stop_session(str(session_id), include_subagents=(stop_scope == "all"))
                         # Cancel any in-flight attachment indexing for this session — the kill
                         # switch must stop the background RAG indexing too, not just generation.
                         try:
@@ -8742,43 +8752,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 _idx_task.cancel()
                         except Exception:
                             pass
-                        dropped = 0
-                        try:
-                            # Also drop already queued follow-up tasks for this session.
-                            # Otherwise users may need to press stop multiple times.
-                            dropped = tq.drop_queued_tasks_for_session(str(session_id))
-                        except Exception:
-                            dropped = 0
-                        _has_active_subagents = False
-                        try:
-                            from vaf.core.subagent_ipc import get_ipc
-                            ipc = get_ipc()
-                            _has_active_subagents = bool(ipc.get_active_tasks(session_id=str(session_id)))
-                        except Exception:
-                            _has_active_subagents = False
-                        killed = 0
-                        subagents_kept = False
-                        if _has_active_subagents and stop_scope != "all":
-                            # Scoped stop: generation halted, the sub-agent keeps working.
-                            subagents_kept = True
-                        else:
-                            try:
-                                # Hard-stop any running sub-agent processes for this chat session.
-                                killed = Platform.stop_webui_subagent_processes(str(session_id))
-                            except Exception:
-                                killed = 0
-                            # Also convert active sub-agent tasks into failed results immediately.
-                            try:
-                                from vaf.core.subagent_ipc import get_ipc
-                                ipc = get_ipc()
-                                active = ipc.get_active_tasks(session_id=str(session_id))
-                                for t in active:
-                                    try:
-                                        ipc.fail_task(t.task_id, "[USER_CANCELLED] Stopped/Cancelled by user via stop button.")
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
+                        dropped = stopped["dropped"]
+                        killed = stopped["killed"]
+                        subagents_kept = stopped["subagents_kept"]
                         log("WebServer", f"Stop requested for session {session_id}; scope={stop_scope or 'default'}; killed_subagents={killed}; subagents_kept={subagents_kept}; dropped_queued={dropped}")
                         await websocket.send_json({
                             "type": "generation_stopped",

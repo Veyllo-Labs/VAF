@@ -1669,6 +1669,13 @@ vaf automation delete <id>   # Delete task
         """
         if trigger is not None:
             new_terminal = False
+        # Nothing runs on a schedule for an account without access - deactivated, deleted,
+        # or revoked in this process (vaf.core.revocation.account_stands).
+        from vaf.core.revocation import account_stands, is_revoked
+        if not account_stands(task.user_scope_id):
+            msg = f"[SKIPPED] Automation '{task.name}' ({task.id}): its account has no access."
+            append_domain_log_always("backend", msg)
+            return msg
         from vaf.cli.ui import UI
         from vaf.core.platform import Platform
         from vaf.core.lock_manager import LockManager
@@ -2067,7 +2074,9 @@ vaf automation delete <id>   # Delete task
                         _chat_done["done"] = True
                         return True
 
-                    _bounded_ret = _run_bounded(_do_chat, timeout=_auto_to, label="automation_prompt_run")
+                    _bounded_ret = _run_bounded(
+                        _do_chat, timeout=_auto_to, label="automation_prompt_run",
+                        stop_check=lambda: is_revoked(task.user_scope_id))
                     # The old code ignored this return value entirely - a timed-out run was
                     # indistinguishable from a finished one, so the half stream became the
                     # "result" while the abandoned worker delivered again later.
@@ -2091,7 +2100,8 @@ vaf automation delete <id>   # Delete task
                                 f"delivering an honest timeout note (no partial result, no file wrap).",
                             )
                     elif isinstance(_bounded_ret, str) and _bounded_ret.startswith(_ST_PREFIX):
-                        # User-initiated stop: no grace wait, but the same honest handling.
+                        # The account's access was taken away mid-run: no grace wait, no
+                        # partial result (and no delivery, below).
                         prompt_timeout_unresolved = True
                 except Exception:
                     # Fallback to a plain call if run_bounded is unavailable for any reason.
@@ -2314,6 +2324,12 @@ vaf automation delete <id>   # Delete task
             else:
                 os.environ["VAF_NONINTERACTIVE"] = _prior_noninteractive
         
+        if is_revoked(task.user_scope_id):
+            msg = (f"[REVOKED] Automation '{task.name}' ({task.id}) stopped: its account's "
+                   f"access was taken away; nothing is delivered.")
+            append_domain_log_always("backend", msg)
+            return msg
+
         # Deliver result to user via Web UI chat + messenger.
         # Only one delivery path — no duplicate notification + chat message.
         try:

@@ -16,11 +16,16 @@ SEMANTICS, pinned by tests because each choice has a failure mode on the other s
 
 - The stored list is an ALLOWLIST - the tools the user MAY use. That is what the admin UI
   builds (its presets expand to lists of permitted tool names).
-- No DB row, no `permissions` dict, no `"tools"` key, or an EMPTY list -> UNRESTRICTED.
-  Empty must mean unrestricted because `[]` is the API model's creation default - a user
-  created through the route without the picker would otherwise be locked out of every tool.
-  "Block everything" is not expressible here on purpose; the lever for that is deactivating
-  the account.
+- No ACTIVE account with this scope (deleted, deactivated, never existed) -> NOTHING.
+  It used to be the opposite: a missing row read as "no restriction", so a deleted account
+  whose token or running turn was still alive was handed every tool, and deactivating an
+  account - documented as THE lever to block everything - did not touch its tools at all.
+  The machine owner is not affected: the local-admin scope is an admin identity and never
+  consults this list, with or without a row.
+- An active account with no `permissions` dict, no `"tools"` key, or an EMPTY list ->
+  UNRESTRICTED. Empty must mean unrestricted because `[]` is the API model's creation
+  default - a user created through the route without the picker would otherwise be locked
+  out of every tool.
 - Admins are never restricted (same `is_admin_identity` rule as every other gate).
 - DB unreachable -> UNRESTRICTED, and on the desktop that is CORRECT rather than merely
   safe: the auth DB lives in the Docker stack, a stopped stack means no tenant can
@@ -38,13 +43,17 @@ import time
 from typing import Optional
 
 _TTL_SECONDS = 10.0
+# What the row lookup answers when no ACTIVE account has the scope: nothing is allowed.
+_NO_ACCOUNT = object()
 _cache: dict = {}          # tools:     scope -> (monotonic_ts, frozenset | None)
 _wf_cache: dict = {}       # workflows: scope -> (monotonic_ts, frozenset | None)
 _cache_lock = threading.Lock()
 
 
 def _fetch_permissions_row(user_scope_id: str):
-    """One DB read of the raw permissions dict (or None)."""
+    """One DB read: the permissions dict of the ACTIVE account with this scope, or
+    `_NO_ACCOUNT` when there is none (deleted, deactivated, never existed). An unreachable
+    DB raises; the caller decides what that means."""
     from sqlalchemy import select
 
     from vaf.auth.database import get_auth_db
@@ -53,10 +62,13 @@ def _fetch_permissions_row(user_scope_id: str):
     async def _query():
         async with get_auth_db() as session:
             result = await session.execute(
-                select(LocalUser.permissions).where(LocalUser.user_scope_id == user_scope_id)
+                select(LocalUser.permissions, LocalUser.is_active)
+                .where(LocalUser.user_scope_id == user_scope_id)
             )
-            row = result.scalar_one_or_none()
-            return row
+            row = result.first()
+            if row is None or not row[1]:
+                return _NO_ACCOUNT
+            return row[0]
 
     return asyncio.run(_query())
 
@@ -87,10 +99,13 @@ def _lookup_allowed_workflows(user_scope_id: str) -> Optional[frozenset]:
 def _entries_from_permissions(perms, key: str) -> Optional[frozenset]:
     """The pinned semantics as a pure function, so tests hold the rules without a DB.
 
-    Identical for tools and workflows: non-dict, absent key, non-list or EMPTY list all
-    mean UNRESTRICTED - `[]` is the API model's creation default for BOTH keys, and a
-    user created without the picker must not be locked out of everything.
+    Identical for tools and workflows: no active account means NOTHING; for an active one,
+    non-dict, absent key, non-list or EMPTY list all mean UNRESTRICTED - `[]` is the API
+    model's creation default for BOTH keys, and a user created without the picker must not
+    be locked out of everything.
     """
+    if perms is _NO_ACCOUNT:
+        return frozenset()          # no active account: nothing, not everything
     if not isinstance(perms, dict):
         return None
     entries = perms.get(key)
@@ -226,6 +241,61 @@ def list_accounts() -> list:
         return []
 
 
+_standing_cache: dict = {}   # scope -> (monotonic_ts, (standing, role))
+
+
+async def account_standing_async(user_scope_id: Optional[str]) -> tuple:
+    """Whether the account behind a token still stands, for the request path (async).
+
+    Returns ``(standing, role)``: "active" with the role stored now, "inactive", "missing"
+    (deleted, or never existed), or "unknown" when the store cannot be asked - which the
+    caller treats like the permission lookup treats an unreachable DB (the desktop default).
+    Cached for the same few seconds as the allowlists and cleared with them, so a
+    deactivation reaches the next request at once. Never raises."""
+    scope = str(user_scope_id or "").strip()
+    if not scope:
+        return ("unknown", "")
+    now = time.monotonic()
+    with _cache_lock:
+        hit = _standing_cache.get(scope)
+        if hit and now - hit[0] < _TTL_SECONDS:
+            return hit[1]
+    try:
+        from sqlalchemy import select
+
+        from vaf.auth.database import get_auth_db
+        from vaf.auth.models import LocalUser
+        async with get_auth_db() as session:
+            row = (await session.execute(
+                select(LocalUser.is_active, LocalUser.role)
+                .where(LocalUser.user_scope_id == scope))).first()
+        if row is None:
+            answer = ("missing", "")
+        else:
+            answer = ("active" if row[0] else "inactive", str(row[1] or "").strip().lower())
+    except Exception:
+        return ("unknown", "")
+    with _cache_lock:
+        _standing_cache[scope] = (now, answer)
+        if len(_standing_cache) > 256:
+            cutoff = now - _TTL_SECONDS
+            for key in [k for k, v in _standing_cache.items() if v[0] < cutoff]:
+                _standing_cache.pop(key, None)
+    return answer
+
+
+def token_still_stands(standing: tuple, token_role: Optional[str]) -> bool:
+    """A valid signature is not enough: the account must still exist, be active and hold
+    the role the token was issued with (a demoted admin's token would keep admin rights for
+    its whole lifetime otherwise). An unreachable store keeps the token (see above)."""
+    state, role = standing
+    if state == "unknown":
+        return True
+    if state != "active":
+        return False
+    return not role or role == str(token_role or "").strip().lower()
+
+
 def invalidate_permissions_cache(user_scope_id: Optional[str] = None) -> None:
     """Called by the admin update route so a revocation beats the TTL. Clears BOTH
     allowlists: the route writes tools and workflows in one save."""
@@ -234,7 +304,9 @@ def invalidate_permissions_cache(user_scope_id: Optional[str] = None) -> None:
             _cache.clear()
             _wf_cache.clear()
             _bypass_cache.clear()
+            _standing_cache.clear()
         else:
             _cache.pop(str(user_scope_id).strip(), None)
             _wf_cache.pop(str(user_scope_id).strip(), None)
             _bypass_cache.pop(str(user_scope_id).strip(), None)
+            _standing_cache.pop(str(user_scope_id).strip(), None)

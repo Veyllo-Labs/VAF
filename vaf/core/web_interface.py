@@ -127,6 +127,13 @@ class WebInterfaceManager:
         self.agent_instance = None  # Reference to the active Agent
         self._server_loop = None
         self._last_log_push_time = 0.0
+        # An account whose access was taken away loses its open sockets: they carry the role
+        # and identity of the token they were opened with (vaf.core.revocation).
+        try:
+            from vaf.core.revocation import add_revocation_listener
+            add_revocation_listener(self._on_account_revoked)
+        except Exception:
+            pass
         # Pending trust-gate confirmations: session_id → {"event": Event, "decision": list[str|None]}
         self._pending_gates: Dict[str, Dict] = {}
 
@@ -147,6 +154,11 @@ class WebInterfaceManager:
             pending["event"].set()
             return True
         return False
+
+    def cancel_gate(self, session_id: str) -> bool:
+        """Answer a waiting confirmation of this session with "cancel" (Stop, a revoked
+        account). True when one was waiting."""
+        return self.resolve_gate(session_id, "cancel")
 
     def register_agent(self, agent):
         """Register the active agent instance to allow control from Web UI."""
@@ -199,6 +211,30 @@ class WebInterfaceManager:
             del self.connection_usernames[websocket]
         if websocket in self.connection_roles:
             del self.connection_roles[websocket]
+
+    async def close_scope_connections(self, user_scope_id: str) -> int:
+        """Close every socket of one account. Returns how many were closed."""
+        key = str(user_scope_id or "").strip()
+        targets = [ws for ws, scope in list(self.connection_users.items())
+                   if key and str(scope or "").strip() == key]
+        for ws in targets:
+            try:
+                await ws.close(code=4001, reason="Account access changed")
+            except Exception:
+                pass
+            self.disconnect(ws)
+        return len(targets)
+
+    def _on_account_revoked(self, user_scope_id: str) -> None:
+        """Revocation listener; runs on whatever thread revoked, so the close is handed to
+        the server's loop."""
+        loop = self._server_loop
+        if loop is None or loop.is_closed() or not loop.is_running():
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self.close_scope_connections(user_scope_id), loop)
+        except Exception:
+            pass
 
     def set_connection_user(self, websocket: WebSocket, user_id: str, username: Optional[str] = None, role: Optional[str] = None) -> None:
         """Store user id (and optionally username/role) for this connection (e.g. for RAG scope and User identity block)."""

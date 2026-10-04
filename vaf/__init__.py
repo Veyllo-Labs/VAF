@@ -13,8 +13,13 @@ if TYPE_CHECKING:
     from .core.log_helper import install_thread_excepthook
     from .core.automation_triggers import RoomTriggerWatch
     from .core.pdf_extract import extract_pdf_markdown
+    from .core.revocation import (add_revocation_listener, remove_revocation_listener,
+                                  restore_account, revoke_account, stop_account_work,
+                                  stop_session)
     from .core.system_prompt import SOUL_CONTINUITY_ADDENDUM, build_capability_addendum
     from .core.threat_db import UploadVerdict, inspect_upload, record_threat
+    from .core.trust import (list_standing_grants, mark_trusted_dir, revoke_standing_grants,
+                             set_tool_policy)
     from .core.tool_dispatch import (ToolCallHooks, ToolCaller, ToolRequest,
                                      set_account_allowlist_resolver,
                                      set_account_directory_resolver,
@@ -33,16 +38,18 @@ __all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
            "StoreError", "ToolCallHooks", "ToolCaller", "ToolRequest", "TurnOutcome",
            "UnsafeName",
            "UploadVerdict", "VoiceTurnEngine",
-           "account_allows_tool", "build_capability_addendum", "contained_path",
-           "derive_peer_id",
+           "account_allows_tool", "add_revocation_listener", "build_capability_addendum",
+           "contained_path", "derive_peer_id",
            "describe_room_entry", "egress_session", "extract_pdf_markdown",
            "fold_room_owners", "fold_room_tasks", "fold_room_votes", "inspect_upload",
            "install_thread_excepthook", "invited_rooms", "jail_allows", "joined_rooms",
-           "markers",
-           "participant_key", "record_threat", "room_invitation",
+           "list_standing_grants", "mark_trusted_dir", "markers",
+           "participant_key", "record_threat", "remove_revocation_listener",
+           "restore_account", "revoke_account", "revoke_standing_grants", "room_invitation",
            "safe_entry_name", "set_account_allowlist_resolver",
            "set_account_directory_resolver",
-           "set_confirmation_bypass_resolver", "unread_counts", "user_jail"]
+           "set_confirmation_bypass_resolver", "set_tool_policy", "stop_account_work",
+           "stop_session", "unread_counts", "user_jail"]
 
 
 def __getattr__(name):
@@ -172,6 +179,24 @@ def __getattr__(name):
         from .network.egress import EgressPolicy, EgressRefused, egress_session
         return {"EgressPolicy": EgressPolicy, "EgressRefused": EgressRefused,
                 "egress_session": egress_session}[name]
+    if name in ("revoke_account", "restore_account", "stop_account_work", "stop_session",
+                "add_revocation_listener", "remove_revocation_listener"):
+        # Taking an account's access away so that it reaches work ALREADY running: its turns
+        # stop, its queued follow-ups and sub-agents and background commands end, the tool
+        # funnel refuses it before any admin exemption, and the listeners hear of it (VAF's
+        # web server closes the account's sockets that way). Your auth decides WHEN; these
+        # make it take effect. VAF's own admin routes and its Stop button are the callers that
+        # replaced their hand code with them. Stdlib-only underneath. See docs/EMBEDDING.md.
+        from .core import revocation
+        return getattr(revocation, name)
+    if name in ("mark_trusted_dir", "set_tool_policy", "list_standing_grants",
+                "revoke_standing_grants"):
+        # Standing grants: what lets a gated tool run without asking, per account, and the
+        # read and the undo for it. A grant skips the question before any event is emitted,
+        # so one nobody can list or take back only ever grows; VAF's settings and its
+        # `vaf trust` command are built on these four. Stdlib-only. See docs/EMBEDDING.md.
+        from .core import trust
+        return getattr(trust, name)
     if name in ("UploadVerdict", "inspect_upload", "record_threat"):
         # Content arriving from someone else, judged once and remembered. `inspect_upload`
         # is the question a lane asks before it accepts bytes (hash them, look them up,

@@ -509,14 +509,21 @@ where a standing grant would have skipped it.
 To let specific dangerous tools run unattended for good, use the trust mechanisms
 instead of disabling the gate:
 
-- mark a working directory trusted (`mark_trusted_dir`),
-- set a per-tool policy to allow (`set_tool_policy`),
-- both persist in `trust.json` under the platform config dir
+- mark a working directory trusted (`vaf.mark_trusted_dir(path, user_scope_id)`),
+- set a per-tool policy to allow (`vaf.set_tool_policy(name, "allow", user_scope_id)`),
+- both persist per ACCOUNT in `trust/<scope>.json` under the platform config dir
   (Linux `~/.config/vaf/`, macOS `~/Library/Application Support/vaf/` - an
   explicitly set `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_CACHE_HOME` wins on
   macOS too, which is how a test harness isolates the store there,
-  Windows `%APPDATA%/vaf/`) - per OS user across all projects, not per
-  project.
+  Windows `%APPDATA%/vaf/`; the local admin, and a call without a scope, is
+  `default.json`) - across all projects, not per project.
+- `vaf.list_standing_grants(user_scope_id)` reads them back
+  (`{"tools": {name: {"always", "chats"}}, "dirs": [...]}`, chat grants of this
+  process included) and `vaf.revoke_standing_grants(user_scope_id, tools=...,
+  dirs=..., everything=False)` takes them back; the next call asks again. A grant
+  skips the question before any event is emitted, so give your users this read
+  and this undo wherever they can grant - VAF's settings and `vaf trust` are built
+  on exactly these two.
 
 Two semantics worth knowing before you grant anything:
 
@@ -1389,8 +1396,13 @@ The contract, each choice against its failure mode:
   event sink's: a broken guard must not quietly become no guard. If you want
   fail-open for an unreachable backend, catch inside your resolver and return
   `None`; VAF's own product resolver does exactly that for its auth database.
-- **Consulted per call, not cached.** Revocation latency is your resolver's own
-  business - cache inside it if lookups are expensive.
+- **Consulted per call, not cached.** How fast a changed answer reaches the NEXT
+  call is your resolver's own business - cache inside it if lookups are expensive.
+  Work ALREADY running is not your resolver's to reach: a turn that started before
+  the change keeps its tools, a waiting confirmation keeps waiting. Call
+  `vaf.revoke_account(scope)` when an account loses its access (deactivated,
+  deleted) and `vaf.stop_account_work(scope)` when it loses part of it (a demotion,
+  a narrowed list); see "Taking access away" below.
 
 **Asking the same question without making a call: `account_allows_tool`.** A
 surface that LISTS tools - a command palette, a picker, a row of shortcuts -
@@ -1464,16 +1476,57 @@ paired sender, for one, lets an admin account ride the bot's own switch. Without
 account but the owner's is read as an ordinary user, which is the restrictive answer.
 
 A LOOKUP, not a guard, so the polarity differs from the allowlist: a raising
-resolver is read as an empty directory rather than a refusal, because the only thing
-built on it is finding somebody to invite, and "nobody found" is already the safe
-outcome. Names are compared case-insensitively; an inactive account is listed but
+resolver is read as an empty directory rather than a refusal, because what is built on
+it either finds somebody to invite, where "nobody found" is already the safe outcome, or
+asks whether an account still stands, where "nobody known" keeps the open default. Names are compared case-insensitively; an inactive account is listed but
 never resolved for an invitation; nothing is cached here. Unregistered means no
 directory: `Room.invite_account` still works with a scope you resolved yourself, and
 the name-based lanes (`vaf a2a invite --account`, the agent's `room_invite` with
 `account`) answer "no such account" for every name but the owner's.
 
+The directory is also how work that starts WITHOUT a token in hand - a queued turn, a
+scheduled automation - learns whether its account still stands: an account the directory
+lists as inactive, or no longer lists at all, starts nothing (see the next section). An
+empty directory - nothing registered, or a resolver that raised - knows nobody and stops
+nobody, the same open default as an unreachable store.
+
 Runnable demonstration: part 6 of
 [examples/07_tool_caller_and_authorizer.py](../examples/07_tool_caller_and_authorizer.py).
+
+---
+
+## Taking access away: `vaf.revoke_account`
+
+Your auth decides WHEN an account loses its access; the resolvers above answer the next
+question asked. Neither reaches work that already started: a turn keeps the role it was
+queued with, a waiting confirmation keeps waiting, a host command keeps running. These
+make the change take effect at once:
+
+```python
+import vaf
+
+vaf.revoke_account(scope)       # deactivated or deleted: stop everything, refuse everything
+vaf.restore_account(scope)      # reactivated: lift the mark
+vaf.stop_account_work(scope)    # demoted or narrowed: stop what runs, keep the account
+vaf.stop_session(session_id)    # your Stop button for one chat
+```
+
+- `stop_session(session_id, *, include_subagents=True)` stops the generation at the next
+  check, drops the chat's queued follow-ups, answers a waiting confirmation "cancel" and -
+  unless you pass `include_subagents=False` while sub-agents run - ends the sub-agent
+  processes and reports their tasks cancelled. Returns what it did; never raises.
+- `stop_account_work(scope)` runs that for every chat the account has queued or running,
+  ends its background host commands too (Stop deliberately spares those), and calls each
+  listener registered with `add_revocation_listener(fn)` as `fn(scope)` - VAF's web server
+  closes the account's sockets there, because they carry the old role. A listener must not
+  raise (it is swallowed) and runs on the revoking thread.
+- `revoke_account(scope)` marks the account revoked in this process, then stops its work.
+  While marked, `ToolCaller` refuses the account's calls BEFORE the admin exemption, a call
+  already running ends through the caller's own stop check (a foreground host command and
+  what it started included), and queued turns of the account are dropped.
+- The mark is process-local. Another process learns of the change through its own
+  resolvers: an account your directory resolver no longer lists as active starts no queued
+  turn and no automation there.
 
 ---
 
@@ -1967,6 +2020,14 @@ Stable public surface (safe to build on):
   target; it neither reads nor changes the jail of the run it is called from. It is only
   the per-account half: it does not screen system folders or VAF's own data directory,
   and it does not refuse a scope-less caller (see the multi-tenant section).
+- `vaf.revoke_account(scope)` / `vaf.restore_account(scope)` /
+  `vaf.stop_account_work(scope)` / `vaf.stop_session(session_id, *,
+  include_subagents=True)` / `vaf.add_revocation_listener(fn)` /
+  `vaf.remove_revocation_listener(fn)` - making an access change reach work already
+  running. See "Taking access away" below.
+- `vaf.mark_trusted_dir` / `vaf.set_tool_policy` / `vaf.list_standing_grants` /
+  `vaf.revoke_standing_grants` - standing grants, per account, and their read and
+  undo. See "Headless safety: tool confirmation" above.
 - `vaf.egress_session(policy=None, *, username="")` / `vaf.EgressPolicy` /
   `vaf.EgressRefused` - fetching a URL that someone else chose without reaching this
   machine, its cloud metadata service or (when switched off) the LAN. See "Security

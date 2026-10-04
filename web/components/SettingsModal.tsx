@@ -32,6 +32,7 @@ import UpdateRepairModal from './settings/UpdateRepairModal';
 import LanguagePicker from './settings/LanguagePicker';
 import SecretsSection from './settings/SecretsSection';
 import SshSection from './settings/SshSection';
+import StandingGrantsSection from './settings/StandingGrantsSection';
 import { PickerSelect } from '@/components/ui/PickerDialog';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { groupToolsIntoBundles, bundleColor, bundleLabel, bundleIconKey } from '@/lib/toolBundles';
@@ -4616,6 +4617,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             like the connections above it, so not admin-only. */}
                         {activeTab === 'connections' && <SecretsSection />}
                         {activeTab === 'connections' && <SshSection />}
+                        {activeTab === 'connections' && <StandingGrantsSection endpoint="/api/security/grants" own />}
 
                         {activeTab === 'local_network' && currentUser?.role === 'admin' && (
                             <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
@@ -7728,6 +7730,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         checked={editingUser.confirmation_bypass ?? false}
                                         onChange={(v: boolean) => setEditingUser({ ...editingUser, confirmation_bypass: v })}
                                     />
+                                    <StandingGrantsSection endpoint={`/api/users/${editingUser.id}/grants`} own={false} />
                                 </div>
                             </Section>
 

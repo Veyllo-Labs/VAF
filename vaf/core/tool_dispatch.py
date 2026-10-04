@@ -1205,6 +1205,14 @@ class ToolCaller:
             # arguments to put to the gate or the authorizer, so it answers before them.
             return malformed
 
+        # An account whose access was taken away runs nothing more, BEFORE the policy and its
+        # admin exemption: a turn queued earlier still carries the role it was queued with,
+        # so a demoted or deleted admin would otherwise keep every tool (vaf.core.revocation).
+        from vaf.core.revocation import is_revoked
+        if is_revoked(self.user_scope_id):
+            return ("Security Error: this account's access was changed by an administrator; "
+                    "nothing more runs in this turn.")
+
         decision = self._policy(name, tool)
         if decision.blocked:
             return f"Security Error: {decision.reason}"
@@ -1426,8 +1434,16 @@ class ToolCaller:
             return "Tool Error: invalid arguments for '%s': %s" % (name, "; ".join(errors))
         return run_tool_bounded(
             tool, tool_args, tool_name=name, timeout_for=self.timeout_for,
-            self_supervised=self.self_supervised, stop_check=self.stop_check, poll=self.poll,
+            self_supervised=self.self_supervised, stop_check=self._stop_or_revoked, poll=self.poll,
         )
+
+    def _stop_or_revoked(self) -> bool:
+        """The caller's Stop, or the account's access taken away while the call runs
+        (vaf.core.revocation): a host command it started ends with it, in every lane."""
+        from vaf.core.revocation import is_revoked
+        if is_revoked(self.user_scope_id):
+            return True
+        return bool(self.stop_check()) if self.stop_check is not None else False
 
     def _truncate(self, result):
         limit = self.max_result_chars

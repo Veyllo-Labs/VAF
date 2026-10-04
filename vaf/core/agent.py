@@ -13133,10 +13133,22 @@ class Agent:
         _session = getattr(self, "current_session_id", None)
         if _session:
             try:
+                from vaf.core.revocation import is_revoked
+                from vaf.core.task_queue import TaskQueue
                 from vaf.core.web_interface import get_web_interface as _gwi
                 _gate_event, _decision_box = _gwi().register_gate(_session)
-                _granted = _gate_event.wait(timeout=300)  # 5-minute user timeout
-                return _decision_box[0] if _granted else "cancel"
+                # Waited in slices, not in one 5-minute block: Stop and a revoked account end
+                # the wait at once (the dialog used to hold the turn until it was answered or
+                # timed out, whatever the person pressed meanwhile).
+                _tq = TaskQueue()
+                _scope = getattr(self, "_current_user_scope_id", None)
+                _deadline = time.monotonic() + 300  # 5-minute user timeout
+                while not _gate_event.wait(timeout=0.5):
+                    if (_tq.should_stop(_session) or is_revoked(_scope)
+                            or time.monotonic() >= _deadline):
+                        _gwi().cancel_gate(_session)
+                        return "cancel"
+                return _decision_box[0]
             except Exception:
                 return "cancel"
         UI.event("Security", f"Tool '{name}' requires confirmation. {reason}", style="warning")

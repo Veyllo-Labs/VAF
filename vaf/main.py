@@ -1012,33 +1012,42 @@ def prompt_command(
 @app.command(name="trust")
 def trust_command(
     path: str = typer.Argument(".", help="Folder to trust (default: current directory)"),
-    list_trusted: bool = typer.Option(False, "--list", "-l", help="List trusted folders"),
+    list_trusted: bool = typer.Option(False, "--list", "-l", help="List standing grants: tools allowed always, and trusted folders"),
     remove: str = typer.Option(None, "--remove", "-r", help="Remove a trusted folder by exact path"),
+    revoke_tool: str = typer.Option(None, "--revoke-tool", help="Take back a tool's \"always\"; it asks again (a chat grant lives in the running app and is revoked there)"),
     status: bool = typer.Option(False, "--status", help="Show whether current folder is trusted"),
 ):
     """
-    Manage trusted folders (used by the once/always/cancel gate for risky tools).
+    Manage standing grants (the once/chat/always/cancel gate for risky tools) and trusted folders.
     """
     from pathlib import Path
     from vaf.cli.ui import UI
-    from vaf.core.trust import load_trust_state, save_trust_state, mark_trusted_dir, is_trusted_dir
-
-    state = load_trust_state()
+    from vaf.core.trust import (is_trusted_dir, list_standing_grants, mark_trusted_dir,
+                                revoke_standing_grants)
 
     if list_trusted:
-        if not state.trusted_dirs:
-            UI.print("No trusted folders configured.")
+        grants = list_standing_grants()
+        if not grants["tools"] and not grants["dirs"]:
+            UI.print("No standing grants.")
             raise typer.Exit(0)
-        UI.print("Trusted folders:")
-        for p in sorted(state.trusted_dirs):
-            UI.print(f"- {p}")
+        for name, how in grants["tools"].items():
+            where = ["always"] if how["always"] else []
+            if how["chats"]:
+                where.append(f"{how['chats']} chat(s)")
+            UI.print(f"- tool {name}: {', '.join(where)}")
+        for p in grants["dirs"]:
+            UI.print(f"- folder {p}")
+        raise typer.Exit(0)
+
+    if revoke_tool:
+        if revoke_standing_grants(tools=[revoke_tool.strip()])["tools"]:
+            UI.success(f"Revoked: {revoke_tool.strip()} asks again.")
+        else:
+            UI.warning("That tool had no standing grant.")
         raise typer.Exit(0)
 
     if remove:
-        before = set(state.trusted_dirs)
-        if remove in state.trusted_dirs:
-            state.trusted_dirs.remove(remove)
-            save_trust_state(state)
+        if revoke_standing_grants(dirs=[remove])["dirs"]:
             UI.success("Removed trusted folder.")
         else:
             UI.warning("Path not found in trusted folders.")

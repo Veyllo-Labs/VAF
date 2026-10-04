@@ -559,11 +559,11 @@
     "ovGrTotal": "ツール合計",
     "ovGrAdminOnly": "管理者のみ",
     "ovGrChannelBlocked": "チャンネルでブロック",
-    "ovGrStanding": "常時の権限（trust.json）",
+    "ovGrStanding": "常時の権限",
     "ovGrNoStanding": "常時の権限はまだありません",
     "ovGrAllowAlways": "常に許可",
     "ovGrTrustedDir": "信頼済みディレクトリ",
-    "ovGrStandingNote": "これらは「常に許可」で与えた権限で、「trust.json」を整理するまで有効なままです。",
+    "ovGrStandingNote": "これらは「常に許可」で与えた権限です。設定の「連携」で取り消せます。",
     "ovGatePlan": "計画のゲート",
     "ovGateConfirm": "確認のゲート",
     "ovGateIncident": "インシデントのゲート",
@@ -2450,6 +2450,18 @@
     "servers": "確認済みのサーバー",
     "noServers": "まだありません。",
     "forget": "削除（次の接続でまた確認します）",
+    "failed": "うまくいきませんでした。"
+  },
+  "grants": {
+    "title": "常時の権限",
+    "intro": "1回の呼び出しを超えて許可したものです。権限がある間、エージェントはそのツールの前に確認しません。取り消すと、次回からまた確認します。",
+    "introOther": "このアカウントが1回の呼び出しを超えて許可したものです。取り消すと、エージェントは次回からまた確認します。",
+    "none": "常時の権限はありません。",
+    "always": "常に許可",
+    "chats": "{count, plural, other {#件のチャット}}で許可",
+    "folder": "信頼済みフォルダー",
+    "revoke": "取り消す",
+    "revokeAll": "すべて取り消す",
     "failed": "うまくいきませんでした。"
   },
   "inbox": {

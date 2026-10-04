@@ -358,6 +358,40 @@ async def get_user(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
         )
 
 
+def _narrowed(before, after) -> bool:
+    """Whether an allowlist change TAKES something away. Empty means unrestricted, so a list
+    replacing nothing narrows, and an empty list replacing one widens."""
+    old, new = set(before or []), set(after or [])
+    if not new:
+        return False
+    if not old:
+        return True
+    return bool(old - new)
+
+
+async def _apply_access_change(scope: str, *, revoke: bool = False, restore: bool = False,
+                               stop: bool = False) -> None:
+    """After the commit: clear the permission cache (before it, a lookup could re-cache the
+    old answer for the cache's lifetime) and make the change reach work already running
+    (vaf.core.revocation). The stopping kills processes, so it runs off the event loop."""
+    try:
+        from vaf.auth.permissions import invalidate_permissions_cache
+        invalidate_permissions_cache(scope)
+    except Exception:
+        pass
+    try:
+        import asyncio
+        from vaf.core import revocation
+        if revoke:
+            await asyncio.to_thread(revocation.revoke_account, scope)
+        elif restore:
+            revocation.restore_account(scope)
+        elif stop:
+            await asyncio.to_thread(revocation.stop_account_work, scope)
+    except Exception as e:
+        logger.warning(f"Applying an access change to running work failed: {e}")
+
+
 @router.put("/{user_id}")
 async def update_user(user_id: str, data: UserUpdate, admin: Dict[str, Any] = Depends(require_admin)):
     """Update a user's details (admin only)."""
@@ -390,6 +424,13 @@ async def update_user(user_id: str, data: UserUpdate, admin: Dict[str, Any] = De
                 if reason:
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
 
+            # What the change takes away decides what happens to work already running.
+            old_permissions = dict(user.permissions or {})
+            was_active = bool(user.is_active)
+            demoted = (data.role is not None
+                       and is_admin_identity(user.role, user.user_scope_id)
+                       and not is_admin_identity(data.role, user.user_scope_id))
+
             # Update fields
             if data.role is not None:
                 user.role = data.role.lower()
@@ -407,18 +448,24 @@ async def update_user(user_id: str, data: UserUpdate, admin: Dict[str, Any] = De
             if data.confirmation_bypass is not None:
                 permissions["confirmation_bypass"] = bool(data.confirmation_bypass)
             user.permissions = permissions
-            # A revocation must beat the resolver's TTL: the funnel caches the allowlist
-            # for a few seconds per scope, and "the admin just unticked it" is exactly the
-            # moment that cache would lie.
-            try:
-                from vaf.auth.permissions import invalidate_permissions_cache
-                invalidate_permissions_cache(str(user.user_scope_id))
-            except Exception:
-                pass
-
             user.updated_at = _utc_now_naive()
+            scope = str(user.user_scope_id)
+            narrowed = (
+                (data.tools is not None and _narrowed(old_permissions.get("tools"), data.tools))
+                or (data.workflows is not None
+                    and _narrowed(old_permissions.get("workflows"), data.workflows))
+                or (data.confirmation_bypass is False and old_permissions.get("confirmation_bypass") is True)
+            )
 
             await db.commit()
+
+            # A revocation must beat the resolver's TTL and reach what already runs.
+            await _apply_access_change(
+                scope,
+                revoke=(data.is_active is False and was_active),
+                restore=(data.is_active is True and not was_active),
+                stop=bool(demoted or narrowed),
+            )
 
             return {"message": "User updated successfully"}
 
@@ -459,6 +506,47 @@ async def reset_password(user_id: str, _: Dict[str, Any] = Depends(require_admin
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to reset password: {str(e)}"
         )
+
+
+class GrantRevokeRequest(BaseModel):
+    """Which standing grants to take back (vaf.core.trust.revoke_standing_grants)."""
+    tools: List[str] = []
+    dirs: List[str] = []
+    everything: bool = False
+
+
+async def _scope_of_user(user_id: str) -> str:
+    try:
+        wanted = uuid_module.UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    async with get_auth_db() as db:
+        user = (await db.execute(select(LocalUser).where(LocalUser.id == wanted))).scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return str(user.user_scope_id or "")
+
+
+@router.get("/{user_id}/grants")
+async def user_grants(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
+    """What this account allowed beyond a single call (admin only): tools set to "always" or
+    allowed for a chat, and trusted folders. Each skips the confirmation dialog for them."""
+    import asyncio
+    from vaf.core.trust import list_standing_grants
+    scope = await _scope_of_user(user_id)
+    return await asyncio.to_thread(list_standing_grants, scope)
+
+
+@router.post("/{user_id}/grants/revoke")
+async def revoke_user_grants(user_id: str, data: GrantRevokeRequest,
+                             _: Dict[str, Any] = Depends(require_admin)):
+    """Take an account's standing grants back (admin only): the next call asks again."""
+    import asyncio
+    from vaf.core.trust import revoke_standing_grants
+    scope = await _scope_of_user(user_id)
+    removed = await asyncio.to_thread(lambda: revoke_standing_grants(
+        scope, tools=data.tools, dirs=data.dirs, everything=data.everything))
+    return {"removed": removed}
 
 
 @router.post("/{user_id}/reset-2fa")
@@ -521,8 +609,13 @@ async def delete_user(user_id: str, admin: Dict[str, Any] = Depends(require_admi
             if reason:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
 
+            scope = str(user.user_scope_id)
             await db.delete(user)
             await db.commit()
+
+            # The token, the queued turns, the sub-agents and the sockets of a deleted account
+            # end now, not when the token expires.
+            await _apply_access_change(scope, revoke=True)
 
             return {"message": "User deleted successfully"}
 

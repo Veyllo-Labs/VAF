@@ -559,11 +559,11 @@
     "ovGrTotal": "전체 도구",
     "ovGrAdminOnly": "관리자 전용",
     "ovGrChannelBlocked": "채널에서 차단됨",
-    "ovGrStanding": "상시 허용(trust.json 파일)",
+    "ovGrStanding": "상시 허용",
     "ovGrNoStanding": "상시 허용을 준 적이 없어요",
     "ovGrAllowAlways": "항상 허용",
     "ovGrTrustedDir": "신뢰할 수 있는 디렉터리",
-    "ovGrStandingNote": "‘항상 허용’으로 준 권한이라, trust.json 파일을 정리할 때까지 계속 살아 있어요.",
+    "ovGrStandingNote": "‘항상 허용’으로 준 권한이에요. 설정의 ‘연결’에서 취소할 수 있어요.",
     "ovGatePlan": "계획 관문",
     "ovGateConfirm": "확인 관문",
     "ovGateIncident": "사고 관문",
@@ -2450,6 +2450,18 @@
     "servers": "확인한 서버",
     "noServers": "아직 없어요.",
     "forget": "삭제 (다음 연결 때 다시 물어봐요)",
+    "failed": "실패했어요."
+  },
+  "grants": {
+    "title": "상시 허용",
+    "intro": "한 번의 호출을 넘어 허용한 항목이에요. 허용이 유지되는 동안 에이전트는 그 도구를 쓰기 전에 묻지 않아요. 취소하면 다음부터 다시 물어봐요.",
+    "introOther": "이 계정이 한 번의 호출을 넘어 허용한 항목이에요. 취소하면 에이전트가 다음부터 다시 물어봐요.",
+    "none": "상시 허용이 없어요.",
+    "always": "항상 허용",
+    "chats": "{count, plural, other {채팅 #개}}에서 허용",
+    "folder": "신뢰하는 폴더",
+    "revoke": "취소",
+    "revokeAll": "모두 취소",
     "failed": "실패했어요."
   },
   "inbox": {

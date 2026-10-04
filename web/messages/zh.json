@@ -559,11 +559,11 @@
     "ovGrTotal": "工具总数",
     "ovGrAdminOnly": "仅管理员",
     "ovGrChannelBlocked": "在渠道中拦截",
-    "ovGrStanding": "长期授权（trust.json）",
+    "ovGrStanding": "长期授权",
     "ovGrNoStanding": "尚未授予任何长期授权",
     "ovGrAllowAlways": "始终允许",
     "ovGrTrustedDir": "受信任的目录",
-    "ovGrStandingNote": "这些授权是你通过“始终允许”给出的，会一直有效，直到 trust.json 被清理。",
+    "ovGrStandingNote": "这些授权是你通过“始终允许”给出的，可以在设置的“连接”中撤销。",
     "ovGatePlan": "计划关卡",
     "ovGateConfirm": "确认关卡",
     "ovGateIncident": "事件关卡",
@@ -2451,6 +2451,18 @@
     "noServers": "还没有。",
     "forget": "移除（下次连接会再次询问）",
     "failed": "没有成功。"
+  },
+  "grants": {
+    "title": "长期授权",
+    "intro": "你在单次调用之外允许的操作。授权有效期间，智能体使用该工具前不会询问；撤销后，下次会再次询问。",
+    "introOther": "此账户在单次调用之外允许的操作。撤销后，智能体下次会再次询问。",
+    "none": "没有长期授权。",
+    "always": "始终允许",
+    "chats": "在 {count, plural, other {# 个对话}}中允许",
+    "folder": "受信任的文件夹",
+    "revoke": "撤销",
+    "revokeAll": "全部撤销",
+    "failed": "操作失败。"
   },
   "inbox": {
     "title": "收件箱",

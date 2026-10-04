@@ -160,3 +160,33 @@ def test_registering_a_server_at_the_metadata_service_is_refused_at_once(monkeyp
     monkeypatch.setattr(reg, "load_mcp_manifest", lambda: {}, raising=False)
     with pytest.raises(ValueError, match="forbidden"):
         reg.upsert_server("meta", transport="http", url="http://meta.example/mcp")
+
+
+def test_a_webdav_account_on_this_machine_is_refused_when_it_is_saved(monkeypatch):
+    """Any account can store a WebDAV URL, and VAF fetches it. MUTATION: drop the save-time
+    check in connect_webdav, and the URL is stored (the store is stubbed here)."""
+    import asyncio
+
+    from fastapi import HTTPException
+
+    import vaf.api.cloud_routes as cr
+    stored = []
+    monkeypatch.setattr(cr, "set_cloud_webdav_credentials", lambda **kw: stored.append(kw))
+    monkeypatch.setattr(cr, "_get_cloud_config", lambda u: {})
+    monkeypatch.setattr(cr, "_save_cloud_config", lambda cc, u: None)
+    body = cr.WebDavConnectRequest(url=LOOPBACK, username="u", password="p")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(cr.connect_webdav(request=None, body=body, _username="alice", _scope=None))
+    assert e.value.status_code == 400 and REFUSAL in str(e.value.detail)
+    assert stored == []
+
+
+def test_a_stored_webdav_url_on_this_machine_is_never_fetched(monkeypatch, _quiet):
+    """A URL stored before the check existed is refused at request time. MUTATION: give the
+    WebDAV client a raw requests call again."""
+    import vaf.cloud.credential_cloud as cc
+    from vaf.cloud.nextcloud import NextcloudProvider
+    monkeypatch.setattr(cc, "get_cloud_credentials", lambda *a, **k: {
+        "url": "http://127.0.0.1:9", "webdav_username": "u", "password": "p"})
+    assert NextcloudProvider("alice", "nextcloud_x").authenticate() is False
+    assert _quiet and _quiet[0][0] == "egress_blocked"

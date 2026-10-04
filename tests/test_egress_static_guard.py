@@ -60,15 +60,6 @@ FIXED_URL = {
         "the configured model endpoint (admin configuration)",
 }
 
-# Fetch paths converted onto vaf.network.egress later in this round. EMPTY when done.
-PENDING = {
-    ("vaf/cloud/nextcloud.py", "NextcloudProvider._propfind", "requests.request", "url"),
-    ("vaf/cloud/nextcloud.py", "NextcloudProvider.ensure_sync_folder", "requests.request", "url"),
-    ("vaf/cloud/nextcloud.py", "NextcloudProvider.upload_file", "requests.put", "url"),
-    ("vaf/cloud/nextcloud.py", "NextcloudProvider._ensure_parents", "requests.request", "url"),
-    ("vaf/cloud/nextcloud.py", "NextcloudProvider.download_file", "requests.get", "url"),
-    ("vaf/cloud/nextcloud.py", "NextcloudProvider.delete_file", "requests.delete", "url"),
-}
 
 
 def _aliases(tree):
@@ -151,7 +142,7 @@ def _open_sites():
 
 def test_no_fetch_path_dials_a_url_it_did_not_choose():
     """MUTATION: write `requests.get(url)` with a model's URL into any tool, and this names it."""
-    unexplained = sorted(_open_sites() - set(FIXED_URL) - PENDING)
+    unexplained = sorted(_open_sites() - set(FIXED_URL))
     assert unexplained == [], (
         "fetch through vaf.network.egress.egress_session(), or - if the destination is VAF's "
         f"own choice - add the site to FIXED_URL with the reason: {unexplained}")
@@ -160,7 +151,7 @@ def test_no_fetch_path_dials_a_url_it_did_not_choose():
 def test_the_lists_name_only_sites_that_still_exist():
     """An entry for code that moved or was converted would silently allow its next occupant."""
     sites = _open_sites()
-    stale = sorted((set(FIXED_URL) | PENDING) - sites)
+    stale = sorted(set(FIXED_URL) - sites)
     assert stale == [], f"remove these entries, they no longer match a raw call: {stale}"
 
 

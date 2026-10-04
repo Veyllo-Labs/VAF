@@ -38,7 +38,7 @@ VAF has a calendar of its own (the calendar window in the sidebar footer; design
 | Microsoft OneDrive | Available | Browse and sync files via Microsoft Graph; OAuth2 |
 | Apple iCloud | Coming Soon | Access iCloud Drive files on macOS |
 | Dropbox | Coming Soon | Sync and access Dropbox files |
-| Nextcloud | Coming Soon | Connect to self-hosted Nextcloud via WebDAV |
+| Nextcloud | Available | Connect a self-hosted Nextcloud via WebDAV with an app password (Settings, Cloud setup). VAF fetches the URL itself, so it is checked when it is saved and on every request (`vaf/network/egress.py`): a server on the LAN is fine while `egress_allow_private_hosts` is on, one on this machine or at the cloud metadata service is refused. A Nextcloud on the same computer is entered with its LAN address, not `localhost`. |
 
 ### MCP services
 

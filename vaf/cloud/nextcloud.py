@@ -60,10 +60,23 @@ class NextcloudProvider(CloudProvider):
         self._webdav_username: Optional[str] = None
         self._password: Optional[str] = None
         self._dav_base: Optional[str] = None
+        self._session: Optional[requests.Session] = None
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @property
+    def _http(self) -> requests.Session:
+        """Every WebDAV request goes through the destination guard: the server URL is whatever
+        an account typed, so it must not reach this machine (where a tokenless request is the
+        owner) or the cloud metadata service; a LAN server is fine while
+        egress_allow_private_hosts is on. NAMED BOUNDARY: a Nextcloud on this very machine is
+        reached by its LAN address, not by localhost."""
+        if self._session is None:
+            from vaf.network.egress import egress_session
+            self._session = egress_session(username=self.username or "")
+        return self._session
 
     def _auth(self) -> requests.auth.HTTPBasicAuth:
         return requests.auth.HTTPBasicAuth(self._webdav_username, self._password)
@@ -78,7 +91,7 @@ class NextcloudProvider(CloudProvider):
 
     def _propfind(self, url: str, depth: str = "1") -> ET.Element:
         """Execute a PROPFIND request and return the parsed XML root."""
-        resp = requests.request(
+        resp = self._http.request(
             "PROPFIND",
             url,
             auth=self._auth(),
@@ -233,7 +246,7 @@ class NextcloudProvider(CloudProvider):
 
         # Create via MKCOL
         try:
-            resp = requests.request(
+            resp = self._http.request(
                 "MKCOL",
                 url,
                 auth=self._auth(),
@@ -270,7 +283,7 @@ class NextcloudProvider(CloudProvider):
 
         try:
             with open(local_path, "rb") as fh:
-                resp = requests.put(
+                resp = self._http.put(
                     url,
                     auth=self._auth(),
                     data=fh,
@@ -307,7 +320,7 @@ class NextcloudProvider(CloudProvider):
                 self._propfind(url, depth="0")
             except requests.HTTPError:
                 try:
-                    requests.request("MKCOL", url, auth=self._auth(), timeout=15).raise_for_status()
+                    self._http.request("MKCOL", url, auth=self._auth(), timeout=15).raise_for_status()
                     logger.debug("Created intermediate folder %s", current)
                 except requests.RequestException:
                     pass  # May already exist due to race condition
@@ -319,7 +332,7 @@ class NextcloudProvider(CloudProvider):
         url = file_id if file_id.startswith("http") else self._dav_url(file_id)
 
         try:
-            resp = requests.get(url, auth=self._auth(), stream=True, timeout=120)
+            resp = self._http.get(url, auth=self._auth(), stream=True, timeout=120)
             resp.raise_for_status()
 
             with open(local_path, "wb") as fh:
@@ -337,7 +350,7 @@ class NextcloudProvider(CloudProvider):
         url = file_id if file_id.startswith("http") else self._dav_url(file_id)
 
         try:
-            resp = requests.delete(url, auth=self._auth(), timeout=15)
+            resp = self._http.delete(url, auth=self._auth(), timeout=15)
             resp.raise_for_status()
             logger.info("Deleted %s", file_id)
             return True

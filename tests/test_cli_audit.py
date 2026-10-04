@@ -69,7 +69,8 @@ def test_a_run_without_a_model_never_exits_0(repo, model):
 def test_json_is_machine_readable_and_carries_the_fix_prompt(repo, model):
     _change(repo, "app.py", BUGGY)
     result = _run(repo, "--format", "json")
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)          # progress lines go to stderr, never in here
+    assert "reviewed 1/1" in result.stderr
     assert data["status"] == "complete"
     [finding] = data["findings"]
     assert finding["start_line"] == 3 and finding["fix_prompt"]
@@ -81,7 +82,7 @@ def test_prompt_format_starts_with_the_status(repo, model):
     finding. MUTATION: drop the status line."""
     _change(repo, "app.py", BUGGY)
     result = _run(repo, "--format", "prompt")
-    assert result.output.startswith("Code audit complete. 1 verified finding(s).")
+    assert result.stdout.startswith("Code audit complete. 1 verified finding(s).")
     assert "In @app.py:" in result.output
 
 
@@ -94,7 +95,7 @@ def test_bad_arguments_exit_2(repo, model):
 def test_dismiss_then_rerun_reports_nothing_and_show_prints_the_last_audit(repo, model):
     """MUTATION: dismiss writes nowhere the next run reads."""
     _change(repo, "app.py", BUGGY)
-    first = json.loads(_run(repo, "--format", "json").output)
+    first = json.loads(_run(repo, "--format", "json").stdout)
     finding_id = first["findings"][0]["id"]
 
     dismissed = runner.invoke(audit_cmd.app, ["dismiss", finding_id, "--reason",

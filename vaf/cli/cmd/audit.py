@@ -55,9 +55,12 @@ def run(
     provider: Optional[str] = typer.Option(None, "--provider",
                                            help="Model provider (default: the configured one)"),
     model: Optional[str] = typer.Option(None, "--model", help="Model (default: configured)"),
+    parallel: Optional[int] = typer.Option(None, "--parallel",
+                                           help="Model calls at once (default: 4 for an API "
+                                                "provider, 1 for the local server)"),
 ) -> None:
     """Audit the change in PATH and print the findings."""
-    from vaf.core.code_audit import ask_via_complete, code_audit
+    from vaf.core.code_audit import ask_via_complete, code_audit, parallel_for
 
     if fmt not in ("text", "json", "prompt"):
         UI.error("--format is text, json or prompt.")
@@ -69,9 +72,11 @@ def run(
     ask = None if no_llm else ask_via_complete(provider=provider, model=model, caller="cli:audit")
     if fmt == "text":
         UI.info(f"Auditing {os.path.abspath(path)} ({scope}) ...")
+    # Where a long run is, on stderr: stdout stays the report a script parses.
     report = code_audit(os.path.abspath(path), scope=scope, base=base, paths=only or None,
                         include_untracked=untracked, profile=profile, ask=ask,
-                        max_files=max_files)
+                        max_files=max_files, parallel=parallel or parallel_for(provider),
+                        progress=lambda line: sys.stderr.write(f"  {line}\n"))
     if fmt == "json":
         sys.stdout.write(report.to_json() + "\n")
     elif fmt == "prompt":

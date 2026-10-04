@@ -686,6 +686,50 @@ in [SECURITY_DASHBOARD.md](security/SECURITY_DASHBOARD.md).
 
 ---
 
+## Reviewing a code change: `vaf.code_audit`
+
+A review of a change in any git repository, with your model: findings that are proven
+against the code before they are reported, each with a prompt a coding agent can act on.
+VAF's coding agent runs it after every commit inside its own loop, the main agent's
+`code_audit` tool and `vaf audit` are the other two callers; all three use this function.
+
+```python
+import vaf
+
+def ask(messages, max_tokens):          # your model: OpenAI-style messages in, text out
+    return my_client.complete(messages, max_tokens=max_tokens, temperature=0)
+
+report = vaf.code_audit("/path/to/repo", base="origin/main", ask=ask)
+if report.status != "complete":
+    print("not fully reviewed:", report.status_reason)    # never read this as clean
+for f in report.findings:                                   # verified only
+    print(f.severity, f.where(), f.title)
+print(report.fix_prompt())              # every finding, grouped by file, for a coding agent
+exit(report.exit_code("minor"))         # 0 clean, 1 findings, 2 incomplete
+```
+
+`scope` is `"changes"` (base to the working tree, the default), `"committed"` (base to
+HEAD), `"uncommitted"` or `"files"` (whole files, narrowed with `paths`). Without `ask` only
+the deterministic analyzers run (secret rules, ruff on changed lines) and the report says
+`incomplete`. Each `AuditFinding` carries four separate labels (`type`, `severity`,
+`category`, `effort`), the quoted `evidence`, a stable `id` and `fix_prompt()`; an
+`AuditReport` adds the walkthrough (`summary`, `file_summaries`, `effort` 1-5), the
+`unverified` findings (listed apart, never with a fix prompt), what was skipped and why,
+and `to_text()` / `to_json()` / `to_prompt()`.
+
+**What you are responsible for.** The function reads what you point it at and sends it to
+your `ask`: decide whose repository that may be (VAF's own tool asks the account's file
+jail first, `vaf.jail_allows`). What reaches `ask` is redacted with VAF's credential
+patterns, and the reading stays inside the repository (no symlink out, no file git does not
+track, no guideline file git ignores), but the code itself is what a review is for. Size
+`batch_chars` to your model's window, pass `parallel` > 1 only for an API that serves
+concurrent requests, and give it a `should_stop` if a person can cancel. A repository can
+tune it with `.vaf/code-audit.json` (profile, path filters, path instructions, plain-language
+checks); the pipeline, the budgets and the named boundaries are in
+[CODE_AUDIT.md](agents/CODE_AUDIT.md).
+
+---
+
 ## Sub-agents as a library
 
 VAF's heavy sub-agents (`coding_agent`, `research_agent`, `document_agent`,
@@ -2050,6 +2094,13 @@ Stable public surface (safe to build on):
   host, and its answer for a driveless rooted path changed in Python 3.13 on Windows,
   so a fragment carrying the SENDER's convention would otherwise be read as plain
   relative text and joined onto your root.
+- `vaf.code_audit(root, *, scope=, base=, paths=, include_untracked=, profile=, ask=,
+  checks=, max_files=, remember=, batch_chars=, progress=, parallel=, should_stop=)` /
+  `vaf.AuditReport` / `vaf.AuditFinding` - reviewing a code change with your model. The
+  promise is the `ask(messages, max_tokens) -> str` shape, the completion contract
+  (`status` is `complete` only when everything in scope was reviewed, and `exit_code()`
+  never returns 0 otherwise) and the fields named in "Reviewing a code change"; the prompts,
+  the budgets and the finding ids' hashing are not.
 - `vaf.ToolCaller` - running a tool with the agent's own policy, gate, identity
   and bounds, without an agent. Its **documented arguments** (the table under
   "Running a tool yourself") and `execute(name, args) -> str` are the promise;

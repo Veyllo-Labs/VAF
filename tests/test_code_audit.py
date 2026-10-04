@@ -177,6 +177,21 @@ def test_ruff_reports_only_on_changed_lines(repo):
     assert [f.start_line for f in ruff] == [6] and "count_new" in ruff[0].title
 
 
+@pytest.mark.skipif(shutil.which("ruff") is None and not (Path(__import__("sys").executable).parent / "ruff").exists(),
+                    reason="needs ruff")
+def test_ruff_leaves_test_data_and_fixture_imports_alone(repo):
+    """Binding to 0.0.0.0 is a finding in a server and test data in a test; a fixture
+    imported and taken as an argument is F811 to ruff and the pytest idiom to everyone else.
+    MUTATION: report the bandit rules in test files."""
+    _change(repo, "tests/test_net.py", 'HOST = "0.0.0.0"\n')
+    _change(repo, "server.py", 'HOST = "0.0.0.0"\n')
+    report = ca.code_audit(str(repo), ask=None, scope="uncommitted", remember=False)
+    ruff = [f for f in report.findings if f.source == "ruff"]
+    assert [(f.file, f.title.split(":")[0]) for f in ruff] == [("server.py", "S104")]
+    # Not merged in as a second location of the same title either.
+    assert all(not loc[0].startswith("tests/") for f in ruff for loc in f.locations)
+
+
 def test_scope_committed_ignores_the_working_tree(repo):
     """MUTATION: diff against the working tree for "committed"."""
     _change(repo, "app.py", BUGGY)
@@ -188,6 +203,72 @@ def test_scope_committed_ignores_the_working_tree(repo):
     assert uncommitted.files_reviewed == ["extra.py"]
 
 
+def test_scope_committed_reviews_what_head_holds(repo):
+    """The committed file is edited again in the working tree: the review sees the commit.
+    MUTATION: read the working-tree file for the committed scope."""
+    _change(repo, "app.py", BUGGY)
+    _git(repo, "commit", "-qam", "bug")
+    _change(repo, "app.py", BUGGY + "\nWORKING_TREE_ONLY = 1\n")
+    model = _Model([])
+    ca.code_audit(str(repo), scope="committed", ask=model, remember=False)
+    assert any("range(1, len(items))" in s for s in model.seen)
+    assert not any("WORKING_TREE_ONLY" in s for s in model.seen)
+
+
+def _symlink(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+
+
+def test_a_symlink_out_of_the_repository_is_never_read(repo, tmp_path):
+    """A tracked symlink to a file outside the repository (a key, another account's file) is
+    skipped, and its content never reaches the model. MUTATION: follow the link."""
+    secret = tmp_path / "outside.txt"
+    secret.write_text("OUTSIDE_CONTENT_MARKER\n", encoding="utf-8")
+    _symlink(repo / "notes.txt", secret)
+    _symlink(repo / "AGENTS.md", secret)
+    _change(repo, "app.py", BUGGY)
+    model = _Model([])
+    report = ca.code_audit(str(repo), scope="uncommitted", ask=model, remember=False)
+    assert ("notes.txt", "points outside the repository") in report.files_skipped
+    assert not any("OUTSIDE_CONTENT_MARKER" in s for s in model.seen)
+
+
+def test_a_finding_in_a_file_git_does_not_track_is_dropped(repo, tmp_path):
+    """The model may point outside the diff, but only at a tracked file of this repository:
+    the change under review can ask for an ignored .env or an absolute path to be quoted.
+    MUTATION: read whatever path the model names."""
+    (repo / ".gitignore").write_text(".env\n", encoding="utf-8")
+    (repo / ".env").write_text("DB_PASSWORD=ENV_FILE_MARKER\n", encoding="utf-8")
+    outside = tmp_path / "elsewhere.py"
+    outside.write_text("ABSOLUTE_PATH_MARKER = 1\n", encoding="utf-8")
+    _change(repo, "app.py", BUGGY)
+    asks = [dict(OFF_BY_ONE, file=".env", evidence="DB_PASSWORD=ENV_FILE_MARKER"),
+            dict(OFF_BY_ONE, file=str(outside), evidence="ABSOLUTE_PATH_MARKER = 1"),
+            dict(OFF_BY_ONE, file="../elsewhere.py", evidence="ABSOLUTE_PATH_MARKER = 1")]
+    model = _Model(asks)
+    report = ca.code_audit(str(repo), scope="uncommitted", ask=model, remember=False)
+    assert report.findings == [] and report.rejected == 3
+    shown = model.seen[1:]                       # everything after the review call
+    assert not any("ENV_FILE_MARKER" in s or "ABSOLUTE_PATH_MARKER" in s for s in shown)
+
+
+@pytest.mark.skipif(__import__("os").name == "nt", reason="a shell script as the hook")
+def test_reading_a_change_starts_no_program_the_repository_configures(repo, tmp_path):
+    """core.fsmonitor in the repository's own config names a program git would run on every
+    diff. MUTATION: drop `-c core.fsmonitor=false`."""
+    marker = tmp_path / "ran"
+    hook = tmp_path / "hook.sh"
+    hook.write_text(f"#!/bin/sh\ntouch '{marker}'\n", encoding="utf-8")
+    hook.chmod(0o755)
+    _git(repo, "config", "core.fsmonitor", str(hook))
+    _change(repo, "app.py", BUGGY)
+    ca.code_audit(str(repo), ask=None, remember=False)
+    assert not marker.exists()
+
+
 def test_generated_and_lock_files_are_skipped_and_listed(repo):
     """MUTATION: review everything the diff names."""
     _change(repo, "node_modules/lib/index.js", "x\n")
@@ -196,6 +277,17 @@ def test_generated_and_lock_files_are_skipped_and_listed(repo):
     report = ca.code_audit(str(repo), scope="uncommitted", ask=None, remember=False)
     assert report.files_reviewed == ["src/real.py"]
     assert {p for p, _ in report.files_skipped} >= {"package-lock.json"}
+
+
+def test_vafs_own_bookkeeping_in_a_project_is_not_reviewed(repo):
+    """The coder keeps its task list under .vaf/ in the project; reviewing it fed the task
+    text to the reviewer. MUTATION: drop the .vaf/ filter."""
+    _change(repo, ".vaf/tasks.json", '{"task": "TASK_TEXT_MARKER"}\n')
+    _change(repo, "app.py", BUGGY)
+    model = _Model([])
+    report = ca.code_audit(str(repo), scope="uncommitted", ask=model, remember=False)
+    assert (".vaf/tasks.json", "VAF bookkeeping (.vaf/)") in report.files_skipped
+    assert not any("TASK_TEXT_MARKER" in s for s in model.seen)
 
 
 def test_one_root_cause_in_two_places_is_one_finding(repo):
@@ -226,6 +318,18 @@ def test_ids_are_stable_and_addressed_findings_are_noticed(repo):
     assert first.findings[0].id == again.findings[0].id
     fixed = ca.code_audit(str(repo), ask=_Model([]))
     assert [a["id"] for a in fixed.addressed] == [first.findings[0].id]
+
+
+def test_the_same_problem_worded_differently_keeps_its_id(repo):
+    """A model words one finding differently on every run; the id follows the code it
+    quotes, so a dismissal holds and a loop recognises a finding it already worked on.
+    MUTATION: build the id from the title."""
+    _change(repo, "app.py", BUGGY)
+    first = ca.code_audit(str(repo), ask=_Model([OFF_BY_ONE]), remember=False)
+    reworded = dict(OFF_BY_ONE, title="Index 0 is never summed",
+                    evidence="    for i in range(1, len(items)):")
+    again = ca.code_audit(str(repo), ask=_Model([reworded]), remember=False)
+    assert first.findings[0].id == again.findings[0].id
 
 
 def test_a_dismissed_finding_is_not_reported_again(repo):
@@ -262,6 +366,128 @@ def test_the_guidelines_of_the_changed_path_reach_the_model(repo):
     model = _Model([])
     ca.code_audit(str(repo), ask=model, remember=False)
     assert any("Never use floats for money." in s for s in model.seen)
+
+
+def test_a_guideline_file_git_ignores_stays_private(repo):
+    """A CLAUDE.md the repository ignores is someone's own notes, not the project's rules.
+    MUTATION: read every guideline file on disk."""
+    (repo / ".gitignore").write_text("CLAUDE.md\n", encoding="utf-8")
+    (repo / "CLAUDE.md").write_text("PRIVATE_NOTES_MARKER\n", encoding="utf-8")
+    (repo / "AGENTS.md").write_text("PROJECT_RULES_MARKER\n", encoding="utf-8")
+    _change(repo, "app.py", BUGGY)
+    model = _Model([])
+    ca.code_audit(str(repo), scope="uncommitted", ask=model, remember=False)
+    assert any("PROJECT_RULES_MARKER" in s for s in model.seen)
+    assert not any("PRIVATE_NOTES_MARKER" in s for s in model.seen)
+
+
+def test_a_small_context_budget_splits_the_review_and_says_where_it_is(repo):
+    """A model with a small window gets one file per call; `progress` hears each step.
+    MUTATION: ignore batch_chars."""
+    filler = "".join(f"VALUE_{i} = {i}  # a line that makes the file long enough\n"
+                     for i in range(60))
+    _change(repo, "app.py", BUGGY + filler)
+    _change(repo, "other.py", "def avg(items):\n    return sum(items) / len(items)\n" + filler)
+    model, lines = _Model([]), []
+    ca.code_audit(str(repo), scope="uncommitted", ask=model, remember=False,
+                  batch_chars=4_000, progress=lines.append)
+    reviews = [s for s in model.seen if "Profile: chill." in s]
+    assert len(reviews) == 2
+    assert lines[:3] == ["reviewing 2 file(s) in 2 batch(es)", "reviewed 1/2", "reviewed 2/2"]
+
+
+class _OutOfRoom(_Model):
+    """A reasoning model that runs out of room on more than one file at a time: its answer
+    for a larger batch is nothing but thinking."""
+
+    def __call__(self, messages, max_tokens):
+        user = messages[-1]["content"]
+        if "verify code review findings" not in messages[0]["content"] \
+                and user.count("=== FILE ") > 1:
+            self.seen.append(user)
+            return "<think>so much to consider"
+        return super().__call__(messages, max_tokens)
+
+
+def test_an_unreadable_review_of_several_files_is_asked_again_in_halves(repo):
+    """MUTATION: give up on the batch instead of splitting it."""
+    _change(repo, "app.py", BUGGY)
+    _change(repo, "other.py", "def avg(items):\n    return sum(items) / len(items)\n")
+    model = _OutOfRoom([OFF_BY_ONE])
+    report = ca.code_audit(str(repo), scope="uncommitted", ask=model, remember=False)
+    assert report.status == "complete", report.status_reason
+    assert [f.title for f in report.findings] == [OFF_BY_ONE["title"]]
+    assert not [p for p, r in report.files_skipped if r == "no readable review"]
+
+
+class _VerifierOutOfRoom(_Model):
+    """A verifier that answers nothing (only thinking) for more than one finding at once."""
+
+    def __call__(self, messages, max_tokens):
+        if "verify code review findings" in messages[0]["content"] \
+                and messages[-1]["content"].count("--- finding f") > 1:
+            self.seen.append(messages[-1]["content"])
+            return "<think>weighing every claim at once"
+        return super().__call__(messages, max_tokens)
+
+
+def test_an_unreadable_verification_of_several_findings_is_asked_again_in_halves(repo):
+    """Measured: eight findings per verification call left 81 of 101 unanswered with a
+    reasoning model. MUTATION: give up on the chunk instead of splitting it."""
+    _change(repo, "app.py", BUGGY)
+    second = dict(OFF_BY_ONE, title="Returns an accumulator nobody resets", category="stability",
+                  start_line=5, end_line=5, evidence="    return result")
+    report = ca.code_audit(str(repo), ask=_VerifierOutOfRoom([OFF_BY_ONE, second]),
+                           remember=False)
+    assert report.status == "complete", report.status_reason
+    assert len(report.findings) == 2 and report.unverified == []
+
+
+def test_one_file_the_model_cannot_review_leaves_the_run_incomplete(repo):
+    _change(repo, "app.py", BUGGY)
+    report = ca.code_audit(str(repo), scope="uncommitted", remember=False,
+                           ask=_Model([], review_raw="<think>still thinking"))
+    assert report.status == "failed" and ("app.py", "no readable review") in report.files_skipped
+
+
+def test_parallel_sends_the_review_calls_at_once(repo):
+    """Two batches, a model that answers only while both calls are open at the same time.
+    MUTATION: ignore `parallel` and call one after the other."""
+    import threading
+    barrier = threading.Barrier(2, timeout=5)
+
+    class _Together(_Model):
+        def __call__(self, messages, max_tokens):
+            if "verify code review findings" not in messages[0]["content"]:
+                try:
+                    barrier.wait()
+                except threading.BrokenBarrierError:
+                    return "no answer alone"
+            return super().__call__(messages, max_tokens)
+
+    filler = "".join(f"VALUE_{i} = {i}  # a line that makes the file long enough\n"
+                     for i in range(60))
+    _change(repo, "app.py", BUGGY + filler)
+    _change(repo, "other.py", "def avg(items):\n    return sum(items) / len(items)\n" + filler)
+    report = ca.code_audit(str(repo), scope="uncommitted", ask=_Together([]), remember=False,
+                           batch_chars=4_000, parallel=2)
+    assert report.status == "complete", report.status_reason
+
+
+def test_stop_ends_the_audit_before_the_next_model_call(repo):
+    """Stop pressed while the review runs: no verification call follows and the report says
+    so. MUTATION: never ask should_stop."""
+    _change(repo, "app.py", BUGGY)
+    model = _Model([OFF_BY_ONE])
+    stop = {"now": False}
+
+    def ask(messages, max_tokens):
+        stop["now"] = True                       # the person presses Stop during the review
+        return model(messages, max_tokens)
+
+    report = ca.code_audit(str(repo), ask=ask, remember=False, should_stop=lambda: stop["now"])
+    assert (report.status, report.status_reason) == ("failed", "stopped before it finished")
+    assert len(model.seen) == 1 and report.findings == []
 
 
 def test_the_json_parser_survives_prose_and_fences():

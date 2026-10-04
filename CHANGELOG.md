@@ -11,6 +11,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+
+- **Code Audit: VAF reviews code changes and proves what it finds.** It finds real bugs,
+  security holes and risky changes in what was changed, checks every finding against the
+  code before reporting it (an invented one is dropped, a doubtful one is listed apart) and
+  gives each one a prompt the coding agent can work from. The coding agent now runs it on its
+  own work: when its tasks are done it saves a version, reviews it and fixes what the review
+  found, then reviews again, until nothing is left (at most 50 rounds, switchable by an
+  admin). Ask your agent "review the code of project X" and it shows you the findings and
+  asks whether the coding agent should fix them; nothing changes before you say yes. On the
+  command line, `vaf audit run` reviews any git repository with your configured model
+  (`--format json` for scripts, exit code 0 clean, 1 findings, 2 not fully reviewed).
+
 ### Changed
 
 - **When your agent installs a missing program, it picks the source with care and tells

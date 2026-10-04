@@ -48,6 +48,14 @@ NAMED BOUNDARIES:
 - No code graph and no embeddings index: references come from `git grep` on the names a
   change defines.
 - No sequence diagrams: a text walkthrough (summary, one line per file, effort 1-5).
+- What is read goes to a model provider, so reading stays inside the repository: a symlink
+  out of it is skipped and listed, and a file the model names outside the change is read
+  only when git tracks it there (never an ignored .env, never an absolute path).
+- git runs with the repository's fsmonitor hook, external diff driver and textconv filters
+  switched off. Clean filters a repository's config defines still run on a working-tree
+  diff: they cannot be switched off without knowing their names, and that config is local
+  to the clone (git never transfers it), so it is config the same account already runs git
+  under in that directory.
 """
 from __future__ import annotations
 
@@ -96,8 +104,22 @@ _BINARY_SUFFIXES = {
     ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".mp4", ".wav", ".ogg", ".webm",
     ".mov", ".sqlite", ".db", ".pyc", ".docx", ".xlsx", ".pptx",
 }
-MAX_FILE_BYTES = 200 * 1024
-BATCH_CHARS = 60_000
+# A file is READ up to this size; what reaches the model is bounded separately (the numbered
+# windows around the changes), so a large source file is reviewed by its diff, not skipped.
+MAX_FILE_BYTES = 2 * 1024 * 1024
+# git's empty tree: the base of a repository whose first commit is under review.
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+BATCH_CHARS = 40_000
+# Output budgets. A reasoning model spends most of them thinking before the JSON: measured on
+# one 43k-character batch, 16k tokens ended inside the reasoning and 32k answered after 130 s
+# with 113k characters of it. A provider that refuses a figure this large is retried by the
+# API backend with its safe cap (BaseAIProvider.SAFE_RESPONSE_TOKENS).
+REVIEW_TOKENS = 32_000
+VERIFY_TOKENS = 32_000
+# Findings per verification call: few enough that a reasoning model answers before its
+# budget ends (eight per call left 81 of 101 findings unanswered on a live run).
+VERIFY_CHUNK = 4
+CHECKS_TOKENS = 8_000
 GUIDELINE_FILES = ("AGENTS.md", "CLAUDE.md", ".cursorrules", "GEMINI.md",
                    ".github/copilot-instructions.md")
 GUIDELINE_CHARS = 6_000
@@ -105,9 +127,12 @@ CONFIG_FILE = ".vaf/code-audit.json"
 
 # ruff: what the review cares about (pyflakes, bugbear, bandit, blind except, syntax), minus
 # what is noise in a review - unused imports and variables, line length, asserts, the
-# subprocess rules every build script trips, and FastAPI's call-in-default idiom.
+# subprocess rules every build script trips, FastAPI's call-in-default idiom, and F811, which
+# is how pytest fixtures are imported (four of the 34 diagnostics on a live run, none a bug).
+# In test files the bandit rules are skipped as a whole: binding to 0.0.0.0 or a hash of a
+# literal is test data there (_ruff_findings).
 RUFF_SELECT = "F,B,S,BLE,E9"
-RUFF_IGNORE = ("F401,F841,E501,W291,S101,S603,S607,S311,S108,B008,B904,S110,S112,BLE001,"
+RUFF_IGNORE = ("F401,F811,F841,E501,W291,S101,S603,S607,S311,S108,B008,B904,S110,S112,BLE001,"
                "S105,S106,S107")
 _RUFF_MAJOR = ("E9", "F63", "F7", "F821", "F822", "F823")
 
@@ -214,12 +239,24 @@ class AuditReport:
             return 1
         return 0
 
-    def fix_prompt(self) -> str:
+    def fix_prompt(self, max_chars: Optional[int] = None) -> str:
         """Every verified finding as one prompt for a coding agent, grouped by file, after
-        the preamble that keeps the findings data rather than instructions."""
-        verified = [f for f in self.findings if f.verified]
+        the preamble that keeps the findings data rather than instructions. `max_chars`
+        bounds it by whole findings (most severe first); the ones left out are named at the
+        end, for a caller that has to hand the prompt on unchanged."""
+        verified = sorted((f for f in self.findings if f.verified), key=_rank)
         if not verified:
             return ""
+        rest: List[AuditFinding] = []
+        if max_chars:
+            size, kept = len(UNTRUSTED_PREAMBLE), []
+            for f in verified:
+                size += len(f.fix_prompt()) + len(f.file) + 12
+                if kept and size > max_chars:
+                    rest = verified[len(kept):]
+                    break
+                kept.append(f)
+            verified = kept
         out = [UNTRUSTED_PREAMBLE, ""]
         by_file: Dict[str, List[AuditFinding]] = {}
         for f in verified:
@@ -229,6 +266,9 @@ class AuditReport:
             for f in items:
                 out.append("- " + f.fix_prompt().replace("\n", "\n  "))
             out.append("")
+        if rest:
+            out.append(f"Also found, left out of this prompt for its length ({len(rest)}): "
+                       + "; ".join(f"{f.where()} {f.title}" for f in rest[:20]))
         return "\n".join(out).strip()
 
     # -- formats ---------------------------------------------------------------
@@ -252,7 +292,9 @@ class AuditReport:
 
     def to_text(self, *, show_unverified: bool = True) -> str:
         lines = [f"Code Audit - {self.root}",
-                 f"Scope: {self.scope}" + (f" against {self.base[:12]}" if self.base else "")
+                 f"Scope: {self.scope}" + ((" against the empty tree (everything is new)"
+                                           if self.base == EMPTY_TREE else
+                                           f" against {self.base[:12]}") if self.base else "")
                  + f" | profile {self.profile} | {len(self.files_reviewed)} file(s) reviewed"
                  + f" | {self.duration_s:.0f}s",
                  f"Status: {self.status.upper()}" + (f" - {self.status_reason}"
@@ -311,7 +353,10 @@ def _rank(f: AuditFinding):
 
 def _git(root: str, *args: str, timeout: float = 60) -> Tuple[int, str]:
     from vaf.core.git_runner import run_git
-    code, out, err = run_git(list(args), cwd=root, timeout=timeout)
+    # A repository's own config can name programs that git runs on a read: an fsmonitor
+    # hook on every status or diff, an external diff driver, a textconv filter. Reading a
+    # change must not start any of them (see NAMED BOUNDARIES for the clean filters).
+    code, out, err = run_git(["-c", "core.fsmonitor=false", *args], cwd=root, timeout=timeout)
     return code, out if code == 0 else (err or out)
 
 
@@ -328,7 +373,17 @@ def _default_base(top: str) -> str:
     code, out = _git(top, "rev-parse", "--verify", "--quiet", "HEAD~1")
     if code == 0 and out.strip():
         return out.strip()
-    return "4b825dc642cb6eb9a060e54bf8d69288fbee4904"   # git's empty tree
+    return EMPTY_TREE
+
+
+def _inside(top: str, rel: str) -> Optional[Path]:
+    """The file `rel` names inside the repository, or None when it is rooted, walks upwards
+    or is a symlink that resolves outside it: whatever is read here goes to a model provider."""
+    from vaf.core.path_jail import PathEscape, contained_path
+    try:
+        return contained_path(top, rel)
+    except (PathEscape, OSError, ValueError):
+        return None
 
 
 def _read_text(path: Path) -> Optional[str]:
@@ -372,8 +427,11 @@ def _hunk_lines(diff: str) -> List[int]:
 
 
 def _load_config(top: str) -> dict:
+    path = _inside(top, CONFIG_FILE)
+    if path is None:
+        return {}
     try:
-        data = json.loads((Path(top) / CONFIG_FILE).read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -382,6 +440,12 @@ def _load_config(top: str) -> dict:
 def _excluded(path: str, config: dict) -> Optional[str]:
     if Path(path).suffix.lower() in _BINARY_SUFFIXES:
         return "binary file"
+    if path == ".vaf" or path.startswith(".vaf/"):
+        # VAF's bookkeeping in a project (the coder's task list, codex, memory): not the
+        # project's code, and reviewing it put the coder's own task text into the review -
+        # measured on a live loop, the reviewer then argued against the fixes it had asked
+        # for, and the coder reverted them.
+        return "VAF bookkeeping (.vaf/)"
     for pattern in _DEFAULT_EXCLUDES:
         if fnmatch.fnmatch(path, pattern):
             return "generated, vendored or lock file"
@@ -397,6 +461,32 @@ def _excluded(path: str, config: dict) -> Optional[str]:
     if includes and not any(fnmatch.fnmatch(path, p) for p in includes):
         return "not in path_filters"
     return None
+
+
+def _worktree_text(top: str, rel: str) -> Tuple[Optional[str], str]:
+    full = _inside(top, rel)
+    if full is None:
+        return None, "points outside the repository"
+    try:
+        size = full.stat().st_size
+    except OSError:
+        return None, "not readable"
+    if size > MAX_FILE_BYTES:
+        return None, f"larger than {MAX_FILE_BYTES // 1024} KB"
+    text = _read_text(full)
+    return (text, "") if text is not None else (None, "binary or not readable")
+
+
+def _head_text(top: str, rel: str) -> Tuple[Optional[str], str]:
+    code, size = _git(top, "cat-file", "-s", f"HEAD:{rel}")
+    if code != 0:
+        return None, "not in HEAD"
+    if int(size.strip() or 0) > MAX_FILE_BYTES:
+        return None, f"larger than {MAX_FILE_BYTES // 1024} KB"
+    code, text = _git(top, "cat-file", "blob", f"HEAD:{rel}")
+    if code != 0 or "\x00" in text[:8192]:
+        return None, "binary or not readable"
+    return text, ""
 
 
 def _collect(top: str, scope: str, base: str, paths: Optional[Sequence[str]],
@@ -423,7 +513,8 @@ def _collect(top: str, scope: str, base: str, paths: Optional[Sequence[str]],
             diff_args = ["HEAD"]
         else:
             diff_args = [base]
-        code, out = _git(top, "diff", "--name-status", "-M", *diff_args)
+        code, out = _git(top, "diff", "--no-ext-diff", "--no-textconv", "--name-status", "-M",
+                         *diff_args)
         if code != 0:
             return [], [], f"git diff failed: {out.strip()[:200]}"
         for line in out.splitlines():
@@ -452,18 +543,13 @@ def _collect(top: str, scope: str, base: str, paths: Optional[Sequence[str]],
         if reason:
             skipped.append((rel, reason))
             continue
-        full = Path(top) / rel
-        try:
-            size = full.stat().st_size
-        except OSError:
-            skipped.append((rel, "not readable"))
-            continue
-        if size > MAX_FILE_BYTES:
-            skipped.append((rel, f"larger than {MAX_FILE_BYTES // 1024} KB"))
-            continue
-        text = _read_text(full)
+        if scope == "committed":
+            # The committed change is what HEAD holds; the working tree may differ.
+            text, reason = _head_text(top, rel)
+        else:
+            text, reason = _worktree_text(top, rel)
         if text is None:
-            skipped.append((rel, "binary or not readable"))
+            skipped.append((rel, reason))
             continue
         if len(files) >= max_files:
             skipped.append((rel, f"over the file budget ({max_files})"))
@@ -474,7 +560,8 @@ def _collect(top: str, scope: str, base: str, paths: Optional[Sequence[str]],
             if status == "untracked":
                 item.diff = "(new file, not yet tracked)"
         else:
-            code, diff = _git(top, "diff", "-U3", "-M", *diff_args, "--", rel)
+            code, diff = _git(top, "diff", "--no-ext-diff", "--no-textconv", "-U3", "-M",
+                              *diff_args, "--", rel)
             item.diff = diff if code == 0 else ""
             item.changed = _hunk_lines(item.diff)
             if not item.changed:
@@ -482,6 +569,21 @@ def _collect(top: str, scope: str, base: str, paths: Optional[Sequence[str]],
                 continue
         files.append(item)
     return files, skipped, None
+
+
+def _tracked_text(top: str, rel: str, config: dict) -> Optional[str]:
+    full = _inside(top, rel)
+    if full is None or not full.is_file() or _excluded(rel, config):
+        return None
+    code, out = _git(top, "ls-files", "--", rel)
+    if code != 0 or not out.strip():
+        return None
+    try:
+        if full.stat().st_size > MAX_FILE_BYTES:
+            return None
+    except OSError:
+        return None
+    return _read_text(full)
 
 
 # ── deterministic evidence ────────────────────────────────────────────────────
@@ -505,6 +607,12 @@ def _secret_findings(files: Iterable[_File]) -> List[AuditFinding]:
     return out
 
 
+def _is_test_file(rel: str) -> bool:
+    name = rel.rsplit("/", 1)[-1]
+    return (name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py"
+            or "/tests/" in f"/{rel}" or rel.startswith("tests/"))
+
+
 def _ruff_findings(top: str, files: Iterable[_File]) -> Tuple[List[AuditFinding], str]:
     py = [f for f in files if f.path.endswith(".py")]
     if not py:
@@ -517,25 +625,36 @@ def _ruff_findings(top: str, files: Iterable[_File]) -> Tuple[List[AuditFinding]
     if not exe:
         return [], "skipped (ruff not installed)"
     changed = {f.path: set(f.changed) for f in py}
-    try:
-        proc = subprocess.run(
-            [exe, "check", "--isolated", "--no-cache", "--output-format", "json",
-             "--select", RUFF_SELECT, "--ignore", RUFF_IGNORE, *[f.path for f in py]],
-            cwd=top, capture_output=True, text=True, timeout=120, encoding="utf-8",
-            errors="replace")
-        diagnostics = json.loads(proc.stdout or "[]")
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        return [], f"failed ({exc})"
+    # ruff reads the REVIEWED text, written to a scratch tree: for the committed scope that
+    # is HEAD, not the working tree, and a symlink in the repository is never followed.
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="vaf-audit-") as scratch:
+        root = os.path.realpath(scratch)
+        for f in py:
+            target = Path(root, *f.path.split("/"))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(f.text.encode("utf-8"))
+        try:
+            proc = subprocess.run(
+                [exe, "check", "--isolated", "--no-cache", "--output-format", "json",
+                 "--select", RUFF_SELECT, "--ignore", RUFF_IGNORE, *[f.path for f in py]],
+                cwd=root, capture_output=True, text=True, timeout=120, encoding="utf-8",
+                errors="replace")
+            diagnostics = json.loads(proc.stdout or "[]")
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            return [], f"failed ({exc})"
     out: List[AuditFinding] = []
     for d in diagnostics:
         try:
-            rel = os.path.relpath(d["filename"], top).replace("\\", "/")
+            rel = os.path.relpath(os.path.realpath(d["filename"]), root).replace("\\", "/")
             row = int(d["location"]["row"])
             end = int((d.get("end_location") or {}).get("row") or row)
             rule = str(d.get("code") or "")
         except (KeyError, TypeError, ValueError):
             continue
         if row not in changed.get(rel, set()):
+            continue
+        if rule.startswith("S") and _is_test_file(rel):
             continue
         if rule.startswith(_RUFF_MAJOR):
             severity, category = "major", "correctness"
@@ -617,15 +736,24 @@ def _references(top: str, f: _File, budget: int = 2_500) -> str:
 
 def _guidelines(top: str, files: Iterable[_File]) -> str:
     """The guideline files that govern the changed paths: each directory's own, up to the
-    repository root, nearest first."""
+    repository root, nearest first. Only the project's own: a guideline file git ignores is
+    someone's private notes, not the project's rules, and a symlink out of the repository is
+    not one either - both would otherwise travel to the provider with every review."""
     found: List[Path] = []
     top_path = Path(top)
+    ignored: Dict[str, bool] = {}
     for f in files:
         d = (top_path / f.path).parent
         while True:
             for name in GUIDELINE_FILES:
                 cand = d / name
-                if cand.is_file() and cand not in found:
+                if not cand.is_file() or cand in found:
+                    continue
+                rel = cand.relative_to(top_path).as_posix()
+                if rel not in ignored:
+                    ignored[rel] = (_inside(top, rel) is None
+                                    or _git(top, "check-ignore", "-q", "--", rel)[0] == 0)
+                if not ignored[rel]:
                     found.append(cand)
             if d == top_path or top_path not in d.parents:
                 break
@@ -758,13 +886,14 @@ def _finding_from(raw: dict) -> Optional[AuditFinding]:
         evidence=str(raw.get("evidence") or "").strip()[:600])
 
 
-def _batches(files: List[_File], contexts: Dict[str, str]) -> List[List[_File]]:
+def _batches(files: List[_File], contexts: Dict[str, str],
+             budget: int = BATCH_CHARS) -> List[List[_File]]:
     out: List[List[_File]] = []
     current: List[_File] = []
     size = 0
     for f in files:
         n = len(contexts[f.path])
-        if current and size + n > BATCH_CHARS:
+        if current and size + n > budget:
             out.append(current)
             current, size = [], 0
         current.append(f)
@@ -798,8 +927,8 @@ def _locate(f: AuditFinding, text: str) -> Optional[Tuple[int, int]]:
         return None
     # Anchor on the most distinctive line of the quote: a short one ("}", "return None")
     # would match anywhere and move the finding to the wrong place.
-    k = max(range(len(quote_lines)), key=lambda i: len(quote_lines[i]))
-    anchor = quote_lines[k]
+    anchor = _anchor(f.evidence)
+    k = quote_lines.index(anchor)
     if len(anchor) < 4:
         return None
     src = [_norm(x) for x in text.splitlines()]
@@ -820,34 +949,68 @@ def _excerpt(text: str, start: int, end: int, radius: int = 20) -> str:
     return _redact("\n".join(f"{i:5}| {src[i - 1]}" for i in range(a, b + 1)))
 
 
-def _verify_with_model(found: List[AuditFinding], texts: Dict[str, str], ask: Ask
+def _parallel_map(fn: Callable, items: Sequence, parallel: int) -> list:
+    """`[fn(x) for x in items]`, `parallel` at a time, results in input order. Only the
+    model calls run in threads; everything they return is folded in by the caller."""
+    if parallel <= 1 or len(items) <= 1:
+        return [fn(x) for x in items]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(parallel, len(items))) as pool:
+        return list(pool.map(fn, items))
+
+
+class _Stopped(Exception):
+    """The caller's `should_stop` said stop: no further model call is made."""
+
+
+def _ask_text(ask: Ask, system: str, user: str, max_tokens: int) -> str:
+    try:
+        return ask([{"role": "system", "content": system},
+                    {"role": "user", "content": user}], max_tokens) or ""
+    except _Stopped:
+        raise
+    except Exception:                                            # noqa: BLE001
+        return ""
+
+
+def _verify_with_model(found: List[AuditFinding], texts: Dict[str, str], ask: Ask,
+                       parallel: int = 1
                        ) -> Tuple[List[AuditFinding], List[AuditFinding], int, bool]:
     """(confirmed, unconfirmed, rejected_count, model_answered_every_batch)."""
     confirmed: List[AuditFinding] = []
     unconfirmed: List[AuditFinding] = []
     rejected = 0
     all_answered = True
-    for i in range(0, len(found), 8):
-        chunk = found[i:i + 8]
+    chunks = [found[i:i + VERIFY_CHUNK] for i in range(0, len(found), VERIFY_CHUNK)]
+
+    def _call(chunk: List[AuditFinding]) -> str:
         body = []
         for n, f in enumerate(chunk):
             body.append(f"--- finding f{n} ---\nfile: {f.file} lines {f.start_line}-{f.end_line}\n"
                         f"claim ({f.severity}, {f.category}): {f.title}\n{f.explanation}\n"
                         f"code:\n{_excerpt(texts.get(f.file, ''), f.start_line, f.end_line)}")
-        try:
-            answer = ask([{"role": "system", "content": _VERIFY_SYSTEM},
-                          {"role": "user", "content": "\n\n".join(body)}], 1500)
-        except Exception:
-            answer = ""
-        verdicts = _json_from(answer, "[")
+        return _ask_text(ask, _VERIFY_SYSTEM, "\n\n".join(body), VERIFY_TOKENS)
+
+    def _verdicts(chunk: List[AuditFinding]) -> List[Optional[dict]]:
+        """One verdict per finding (None: no answer). An unreadable answer for several
+        findings is asked again in halves, like the review: a reasoning model that ran out
+        of room on eight findings answered nothing for 81 of 101 on a live run."""
+        verdicts = _json_from(_call(chunk), "[")
         if not isinstance(verdicts, list):
-            all_answered = False
-            unconfirmed += chunk
-            continue
+            if len(chunk) > 1:
+                mid = len(chunk) // 2
+                return _verdicts(chunk[:mid]) + _verdicts(chunk[mid:])
+            return [None]
         by_id = {str(v.get("id")): v for v in verdicts if isinstance(v, dict)}
-        for n, f in enumerate(chunk):
-            v = by_id.get(f"f{n}")
-            verdict = str((v or {}).get("verdict") or "").upper()
+        return [by_id.get(f"f{n}", {}) for n in range(len(chunk))]
+
+    for chunk, answers in zip(chunks, _parallel_map(_verdicts, chunks, parallel)):
+        for f, v in zip(chunk, answers):
+            if v is None:
+                all_answered = False
+                unconfirmed.append(f)
+                continue
+            verdict = str(v.get("verdict") or "").upper()
             if verdict == "CONFIRMED":
                 f.verified, f.verification = True, str(v.get("reason") or "confirmed")[:300]
                 confirmed.append(f)
@@ -860,8 +1023,22 @@ def _verify_with_model(found: List[AuditFinding], texts: Dict[str, str], ask: As
 
 # ── deduplication, identity, memory ───────────────────────────────────────────
 
+def _anchor(evidence: str) -> str:
+    """The most distinctive line of a quote, whitespace-normalised: the part of a finding
+    that stays the same while the code does."""
+    lines = [_norm(x) for x in (evidence or "").splitlines() if _norm(x)]
+    return max(lines, key=len) if lines else ""
+
+
 def _finding_id(f: AuditFinding) -> str:
-    key = "|".join((f.file, f.category, _norm(f.title).lower()[:120], _norm(f.evidence)[:200]))
+    """Stable across runs for the same problem in the same code: file, category and the
+    quoted line. Not the title: a model words the same finding differently every time (a
+    live loop of four rounds never produced one title twice), and an id built on it made
+    a dismissed finding come back and a fixed-again finding look new. The title is the key
+    only for a finding without a quote (a tool's diagnostic)."""
+    anchor = _anchor(f.evidence)
+    key = "|".join((f.file, f.category, anchor[:200] if anchor
+                    else _norm(f.title).lower()[:120] + f"|{f.start_line}"))
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
 
 
@@ -958,12 +1135,8 @@ def _run_checks(config: dict, files: List[_File], summary: str, ask: Ask) -> Lis
         return []
     listing = "\n".join(f"- {c['name']}: {c['instructions']}" for c in checks)
     change = _redact("\n\n".join(f"=== {f.path} ===\n{(f.diff or f.text)[:6_000]}" for f in files))[:40_000]
-    try:
-        answer = ask([{"role": "system", "content": _CHECKS_SYSTEM},
-                      {"role": "user", "content": f"Checks:\n{listing}\n\nChange summary: "
-                                                  f"{summary}\n\nChange:\n{change}"}], 1200)
-    except Exception:
-        answer = ""
+    answer = _ask_text(ask, _CHECKS_SYSTEM, f"Checks:\n{listing}\n\nChange summary: "
+                                            f"{summary}\n\nChange:\n{change}", CHECKS_TOKENS)
     verdicts = _json_from(answer, "[")
     by_name = {str(v.get("name")): v for v in verdicts if isinstance(v, dict)} \
         if isinstance(verdicts, list) else {}
@@ -982,21 +1155,41 @@ def _run_checks(config: dict, files: List[_File], summary: str, ask: Ask) -> Lis
 def code_audit(root: str, *, scope: str = "changes", base: Optional[str] = None,
                paths: Optional[Sequence[str]] = None, include_untracked: bool = True,
                profile: str = "chill", ask: Optional[Ask] = None, checks: bool = True,
-               max_files: int = 60, remember: bool = True) -> AuditReport:
+               max_files: int = 60, remember: bool = True, batch_chars: int = BATCH_CHARS,
+               progress: Optional[Callable[[str], None]] = None,
+               parallel: int = 1,
+               should_stop: Optional[Callable[[], bool]] = None) -> AuditReport:
     """Audit the code change in the git repository at `root` (see the module docstring).
 
     `scope`: "changes" (base to the working tree, the default), "committed" (base to HEAD),
     "uncommitted" (HEAD to the working tree) or "files" (whole files; `paths` narrows them).
     `base` defaults to the merge base with the upstream, else the previous commit.
     Without `ask` only the deterministic analyzers run, and the report says `incomplete`.
-    `remember=False` leaves the repository's audit memory alone. Never raises."""
+    `remember=False` leaves the repository's audit memory alone. `batch_chars` bounds one
+    review call's context (a model with a small window passes less); `progress` hears one
+    line per step ("reviewed 2/5"), for a caller that shows where a long run is.
+    `parallel` > 1 sends that many model calls at once - for an API provider only: a local
+    server runs one inference at a time, and a second request only queues behind the first.
+    `should_stop` is asked before every model call; once it says yes no further call is
+    made and the report is `failed` ("stopped") - a review nobody waits for costs nothing
+    more. Never raises."""
     started = time.monotonic()
     scope = scope if scope in SCOPES else "changes"
     profile = profile if profile in PROFILES else "chill"
     report = AuditReport(root=str(root), scope=scope, profile=profile)
+    if ask is not None and should_stop is not None:
+        inner = ask
+
+        def ask(messages: List[dict], max_tokens: int) -> str:     # noqa: F811
+            if should_stop():
+                raise _Stopped()
+            return inner(messages, max_tokens)
     try:
         _run(report, root, scope, base, paths, include_untracked, profile, ask, checks,
-             max_files, remember)
+             max_files, remember, max(4_000, int(batch_chars)), progress or (lambda _m: None),
+             max(1, min(8, int(parallel or 1))), started)
+    except _Stopped:
+        report.status, report.status_reason = "failed", "stopped before it finished"
     except Exception as exc:                                   # noqa: BLE001
         report.status, report.status_reason = "failed", f"the audit stopped: {exc}"
     report.duration_s = round(time.monotonic() - started, 1)
@@ -1005,7 +1198,9 @@ def code_audit(root: str, *, scope: str = "changes", base: Optional[str] = None,
 
 def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
          paths: Optional[Sequence[str]], include_untracked: bool, profile: str,
-         ask: Optional[Ask], checks: bool, max_files: int, remember: bool) -> None:
+         ask: Optional[Ask], checks: bool, max_files: int, remember: bool,
+         batch_chars: int, progress: Callable[[str], None], parallel: int,
+         started: float) -> None:
     top = _repo_top(root)
     if not top:
         report.status, report.status_reason = "failed", f"{root} is not a git repository"
@@ -1047,26 +1242,46 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
         instructions = _path_instructions(config, files)
         reviewed_any = False
         summaries: List[str] = []
-        for batch in _batches(files, contexts):
-            user = []
-            if guidelines:
-                user.append("Repository guidelines:\n" + guidelines)
-            if instructions:
-                user.append("Path instructions:\n" + instructions)
-            user.append(f"Profile: {profile}.")
-            if evidence_lines:
-                user.append("Static analysis already reported (do not repeat these):\n"
-                            + "\n".join(evidence_lines[:60]))
-            user.append("\n\n".join(contexts[f.path] for f in batch))
-            try:
-                answer = ask([{"role": "system", "content": _REVIEW_SYSTEM},
-                              {"role": "user", "content": "\n\n".join(user)}], 4000)
-            except Exception:
-                answer = ""
+        head = []
+        if guidelines:
+            head.append("Repository guidelines:\n" + guidelines)
+        if instructions:
+            head.append("Path instructions:\n" + instructions)
+        head.append(f"Profile: {profile}.")
+        if evidence_lines:
+            head.append("Static analysis already reported (do not repeat these):\n"
+                        + "\n".join(evidence_lines[:60]))
+        batches = _batches(files, contexts, batch_chars)
+        import threading
+        done, done_lock = [0], threading.Lock()
+
+        def _review(batch: List[_File]) -> List[Tuple[List[_File], Optional[dict]]]:
+            """The review of one batch; an unreadable answer for several files is asked
+            again in halves - a reasoning model that ran out of room on many files usually
+            answers on fewer - until one file alone could not be reviewed."""
+            answer = _ask_text(ask, _REVIEW_SYSTEM,
+                               "\n\n".join(head + ["\n\n".join(contexts[f.path] for f in batch)]),
+                               REVIEW_TOKENS)
             data = _json_from(answer, "{")
+            if not isinstance(data, dict) and len(batch) > 1:
+                mid = len(batch) // 2
+                return _review(batch[:mid]) + _review(batch[mid:])
+            return [(batch, data if isinstance(data, dict) else None)]
+
+        def _review_counted(batch: List[_File]):
+            out = _review(batch)
+            with done_lock:
+                done[0] += 1
+                _tell(progress, f"reviewed {done[0]}/{len(batches)}")
+            return out
+
+        _tell(progress, f"reviewing {len(files)} file(s) in {len(batches)} batch(es)")
+        unreadable: List[str] = []
+        reviews = [item for part in _parallel_map(_review_counted, batches, parallel)
+                   for item in part]
+        for batch, data in reviews:
             if not isinstance(data, dict):
-                incomplete.append("the model gave no readable review for "
-                                  + ", ".join(f.path for f in batch))
+                unreadable += [f.path for f in batch]
                 report.files_skipped += [(f.path, "no readable review") for f in batch]
                 continue
             reviewed_any = True
@@ -1085,8 +1300,11 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
                 if f is None:
                     continue
                 if f.file not in texts:
-                    full = Path(top) / f.file
-                    text = _read_text(full) if full.is_file() else None
+                    # A file the change does not touch, named by the model: read only one git
+                    # tracks, inside the repository, that the filters would have reviewed. A
+                    # quote is all it takes to have a file read and shown to the verifier, and
+                    # the change under review can ask for one (an ignored .env, a key file).
+                    text = _tracked_text(top, f.file, config)
                     if text is None:
                         report.rejected += 1
                         continue
@@ -1104,13 +1322,17 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
                                   or not any(f.start_line <= n <= f.end_line for n in changed))
                 found.append(f)
         report.summary = " ".join(summaries)
+        if unreadable:
+            incomplete.append(f"no readable review for {len(unreadable)} file(s)")
         if not reviewed_any:
             report.status, report.status_reason = "failed", "the model reviewed nothing"
             return
 
         to_verify = [f for f in found if not f.verified]
         if to_verify:
-            confirmed, unconfirmed, rejected, answered = _verify_with_model(to_verify, texts, ask)
+            _tell(progress, f"verifying {len(to_verify)} finding(s)")
+            confirmed, unconfirmed, rejected, answered = _verify_with_model(to_verify, texts, ask,
+                                                                            parallel)
             report.rejected += rejected
             report.unverified += unconfirmed
             if not answered:
@@ -1137,6 +1359,7 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
         report.status, report.status_reason = "incomplete", "; ".join(incomplete)
 
     if remember:
+        report.duration_s = round(time.monotonic() - started, 1)   # the saved text says it
         last = _load_state(top, "last.json")
         scope_key = f"{scope}:{report.base}"
         previous = (last.get("open") or {}) if last.get("scope_key") == scope_key else {}
@@ -1153,12 +1376,32 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
         })
 
 
+def _tell(progress: Callable[[str], None], line: str) -> None:
+    try:
+        progress(line)
+    except Exception:                                            # noqa: BLE001
+        pass
+
+
 def ask_via_complete(*, provider: Optional[str] = None, model: Optional[str] = None,
-                     caller: str = "code_audit", timeout: float = 240) -> Ask:
+                     caller: str = "code_audit", timeout: float = 600) -> Ask:
     """`ask` through the `complete()` primitive: the configured model unless `provider` and
-    `model` say otherwise. Deterministic (temperature 0)."""
+    `model` say otherwise. Deterministic (temperature 0). The timeout fits a reasoning
+    model's review call (130 s measured for one 40k-character batch)."""
     def _ask(messages: List[dict], max_tokens: int) -> str:
         from vaf.core.completion import complete
         return complete(messages, provider=provider, model=model, max_tokens=max_tokens,
                         temperature=0, timeout=timeout, caller=caller) or ""
     return _ask
+
+
+def parallel_for(provider: Optional[str] = None) -> int:
+    """How many review calls `ask_via_complete` may send at once: one for the local server
+    (one inference at a time), four for an API provider."""
+    if provider is None:
+        try:
+            from vaf.core.config import Config
+            provider = Config.get("provider", "local") or "local"
+        except Exception:                                        # noqa: BLE001
+            provider = "local"
+    return 1 if provider == "local" else 4

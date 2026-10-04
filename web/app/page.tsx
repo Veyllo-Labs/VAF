@@ -75,7 +75,7 @@ type Message = {
     // Extra fields for tools
     toolId?: string;
     toolName?: string;
-    toolStatus?: 'running' | 'completed' | 'error';
+    toolStatus?: 'running' | 'completed' | 'error' | 'unknown';
     toolArgs?: any;
     toolStartTime?: number;
     toolEndTime?: number;
@@ -3278,9 +3278,18 @@ function VAFDashboardContent() {
     const [rawVersion, setRawVersion] = useState<string | null>(null);
     const [lastSeenVersion, setLastSeenVersion] = useState<string | null>(null);
     const [personaLoaded, setPersonaLoaded] = useState(false);
-    const [gateRequest, setGateRequest] = useState<{ tool: string; cwd: string; reason: string; args_preview: string;
+    const [gateRequest, setGateRequest] = useState<{ gate_id: string; sessionId: string; tool: string; cwd: string; reason: string; args_preview: string;
         args_preview_truncated?: boolean; args_preview_neutralized?: number; args_preview_redacted?: number;
         command_categories?: string[]; offer_standing?: boolean; always_trusts_folder?: boolean } | null>(null);
+    // One answer for one question: the dialog's own id and chat travel with it, and the server
+    // drops an answer whose question is no longer open.
+    const answerGate = (decision: 'cancel' | 'allow_once' | 'allow_chat' | 'allow_always') => {
+        if (gateRequest) {
+            ws?.send(JSON.stringify({ type: 'gate_response', decision,
+                gate_id: gateRequest.gate_id, sessionId: gateRequest.sessionId }));
+        }
+        setGateRequest(null);
+    };
     // The main agent avatar briefly FLASHES a tool's outcome (success / error); a pending risky-tool
     // confirmation (gateRequest) shows `permission`. The flash auto-clears after ~one cycle so we
     // never leave an infinite reaction running on the avatar.
@@ -5210,7 +5219,9 @@ function VAFDashboardContent() {
                             newMessages[resolvedIdx] = {
                                 ...newMessages[resolvedIdx],
                                 toolId: toolId, // restore toolId in case it was lost
-                                toolStatus: subType === 'error' ? 'error' : 'completed',
+                                // Stopped or out of time: abandoned, not finished - say so
+                                // instead of a green check (a send may have left).
+                                toolStatus: data.aborted ? 'unknown' : subType === 'error' ? 'error' : 'completed',
                                 content: eventData,
                                 toolEndTime: Date.now()
                             };
@@ -5318,6 +5329,9 @@ function VAFDashboardContent() {
                     // Field by field on purpose, and ALL of them: a field left out here is
                     // silently dropped, which is how the redaction notes never reached the dialog.
                     setGateRequest({
+                        // The answer names the question it answers: the server ignores one
+                        // without the id, so a stale dialog cannot approve a later command.
+                        gate_id: String(data.gate_id || ''), sessionId: String(data.sessionId || ''),
                         tool: data.tool, cwd: data.cwd || '', reason: data.reason || '',
                         args_preview: data.args_preview || '',
                         args_preview_truncated: !!data.args_preview_truncated,
@@ -5330,8 +5344,10 @@ function VAFDashboardContent() {
                         always_trusts_folder: data.always_trusts_folder !== false,
                     });
                 }
-                else if (data.type === 'gate_decision') {
-                    setGateRequest(null);
+                else if (data.type === 'gate_decision' || data.type === 'gate_expired') {
+                    // Answered in another tab, cancelled by Stop, or no longer open: close the
+                    // dialog of THAT question only, never a newer one.
+                    setGateRequest(prev => (prev && (!data.gate_id || prev.gate_id === data.gate_id)) ? null : prev);
                 }
                 else if (data.type === 'context_status') {
                     // The gauge describes the context of the view that is OPEN, and
@@ -9868,7 +9884,7 @@ function VAFDashboardContent() {
                                                         return {
                                                             key: `tl-tool-${mIdx}`,
                                                             kind: 'tool' as const,
-                                                            state: (st === 'running' ? 'pending' : st === 'error' ? 'error' : 'done') as TimelineAction['state'],
+                                                            state: (st === 'running' ? 'pending' : (st === 'error' || st === 'unknown') ? 'error' : 'done') as TimelineAction['state'],
                                                             node: (
                                                                 <div className={cn("max-w-[95%] rounded-lg transition-[outline] duration-150", stopHovered && m.toolStatus === 'running' ? "outline outline-2 outline-red-400/60" : "")}>
                                                                     <ToolMessage
@@ -13169,27 +13185,27 @@ function VAFDashboardContent() {
                         {/* Actions */}
                         <div className="grid grid-cols-2 gap-2 p-5 pt-0">
                             <button
-                                onClick={() => { ws?.send(JSON.stringify({ type: 'gate_response', decision: 'cancel' })); setGateRequest(null); }}
+                                onClick={() => answerGate('cancel')}
                                 className="px-4 py-2 rounded-lg border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-100 transition-colors"
                             >
                                 {tCommon('cancel')}
                             </button>
                             <button
-                                onClick={() => { ws?.send(JSON.stringify({ type: 'gate_response', decision: 'allow_once' })); setGateRequest(null); }}
+                                onClick={() => answerGate('allow_once')}
                                 className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium transition-colors"
                             >
                                 {tMain('gateAllowOnce')}
                             </button>
                             {gateRequest.offer_standing !== false && (<>
                             <button
-                                onClick={() => { ws?.send(JSON.stringify({ type: 'gate_response', decision: 'allow_chat' })); setGateRequest(null); }}
+                                onClick={() => answerGate('allow_chat')}
                                 title={tMain('gateAllowChatHint')}
                                 className="px-4 py-2 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 text-sm font-medium transition-colors"
                             >
                                 {tMain('gateAllowChat')}
                             </button>
                             <button
-                                onClick={() => { ws?.send(JSON.stringify({ type: 'gate_response', decision: 'allow_always' })); setGateRequest(null); }}
+                                onClick={() => answerGate('allow_always')}
                                 title={gateRequest.always_trusts_folder === false ? tMain('gateAllowAlwaysToolHint') : tMain('gateAllowAlwaysHint')}
                                 className="px-4 py-2 rounded-lg bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                             >

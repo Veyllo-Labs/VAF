@@ -15,7 +15,7 @@ the gate responder.
 
 THE GATE RESPONDER, and the long-standing gap it closes: the agent's
 `_ask_user_about_gate` (the decide hook the tool caller is built with) waits on
-`web_interface.register_gate(session_id)` for up to 300 seconds whenever a
+`web_interface.wait_gate(session_id, ...)` for up to 300 seconds whenever a
 session id is bound - which the interactive lane always has. With no browser
 watching, every confirmation silently timed out to "cancel". The TUI
 subscribes to the `gate_required` sink event, shows its gate screen, and

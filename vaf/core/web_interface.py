@@ -7,6 +7,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from typing import List, Dict, Any, Optional
 
 # Throttle log pushes to WebUI so typing and UI stay responsive (max ~3 log updates/sec)
@@ -134,26 +135,82 @@ class WebInterfaceManager:
             add_revocation_listener(self._on_account_revoked)
         except Exception:
             pass
-        # Pending trust-gate confirmations: session_id → {"event": Event, "decision": list[str|None]}
+        # Open confirmations, one per session: session_id -> {"gate_id", "event", "decision",
+        # "payload"}. The payload is the gate_required event, kept to show the dialog again to
+        # a tab that loads the chat later.
         self._pending_gates: Dict[str, Dict] = {}
+        self._gate_lock = threading.RLock()
 
-    def register_gate(self, session_id: str) -> tuple:
-        """Register a pending trust-gate for session_id. Returns (event, decision_box).
-        The agent thread blocks on event.wait(); the WebSocket handler calls resolve_gate()."""
-        event = threading.Event()
-        decision_box: list = [None]
-        self._pending_gates[session_id] = {"event": event, "decision": decision_box}
-        return event, decision_box
+    def open_gate(self, session_id: str, payload: Optional[dict] = None) -> str:
+        """Open the confirmation a session is about to be asked, and return its id.
 
-    def resolve_gate(self, session_id: str, decision: str) -> bool:
-        """Signal a waiting gate with the user's decision (one of ``vaf.core.trust.Decision``).
-        Returns True if a pending gate was found and signalled."""
-        pending = self._pending_gates.pop(session_id, None)
-        if pending:
-            pending["decision"][0] = decision
-            pending["event"].set()
-            return True
-        return False
+        Called BEFORE the dialog is pushed: an answer that arrives before the agent starts
+        waiting is kept, not lost (it used to be dropped, and the turn waited its five
+        minutes for an answer that had already been given)."""
+        payload = dict(payload or {})
+        gate_id = str(payload.get("gate_id") or "") or uuid.uuid4().hex
+        payload.update(gate_id=gate_id, sessionId=session_id)
+        with self._gate_lock:
+            self._pending_gates[session_id] = {"gate_id": gate_id, "event": threading.Event(),
+                                               "decision": [None], "payload": payload,
+                                               "answered": False}
+        return gate_id
+
+    def wait_gate(self, session_id: str, gate_id: Optional[str] = None, *,
+                  should_cancel=None, timeout: float = 300.0) -> str:
+        """Wait for the answer to this session's open confirmation (opened here if nobody
+        opened it). In half-second slices: ``should_cancel()`` (Stop, a revoked account) and
+        the deadline answer "cancel" at once instead of at the end of the wait."""
+        with self._gate_lock:
+            gate = self._pending_gates.get(session_id)
+            if gate is None or (gate_id and gate["gate_id"] != gate_id):
+                self.open_gate(session_id, {"gate_id": gate_id} if gate_id else None)
+                gate = self._pending_gates[session_id]
+        deadline = time.monotonic() + max(1.0, float(timeout))
+        while not gate["event"].wait(timeout=0.5):
+            try:
+                cancel = bool(should_cancel()) if should_cancel is not None else False
+            except Exception:
+                cancel = False
+            if cancel or time.monotonic() >= deadline:
+                # Whoever answered first wins: a click that raced the cancel is the answer.
+                self.resolve_gate(session_id, "cancel", gate_id=gate["gate_id"])
+                break
+        with self._gate_lock:
+            if self._pending_gates.get(session_id) is gate:
+                self._pending_gates.pop(session_id, None)
+        return gate["decision"][0] or "cancel"
+
+    def resolve_gate(self, session_id: str, decision: str, gate_id: Optional[str] = None) -> bool:
+        """Answer this session's open confirmation (one of ``vaf.core.trust.Decision``). True
+        when it was open. With ``gate_id`` only THAT question is answered: an answer from a
+        dialog that is no longer open - another tab answered, Stop, a later question - changes
+        nothing. Every tab of the session is told, so each closes its dialog."""
+        with self._gate_lock:
+            gate = self._pending_gates.get(session_id)
+            if (gate is None or gate["answered"]
+                    or (gate_id is not None and gate["gate_id"] != gate_id)):
+                return False
+            # Kept until the waiter takes it: an answer faster than the wait is still there.
+            gate["answered"] = True
+            gate["decision"][0] = decision
+        gate["event"].set()
+        if self._get_dispatch_loop() is not None:
+            try:
+                self._push_session_update(session_id, {"type": "gate_decision",
+                                                       "gate_id": gate["gate_id"],
+                                                       "tool": gate["payload"].get("tool"),
+                                                       "decision": decision})
+            except Exception:
+                pass
+        return True
+
+    def pending_gate(self, session_id: str) -> Optional[dict]:
+        """The open confirmation of this session as its gate_required event, or None - for a
+        tab that loads the chat after the dialog was pushed."""
+        with self._gate_lock:
+            gate = self._pending_gates.get(session_id)
+            return dict(gate["payload"]) if gate and not gate["answered"] else None
 
     def cancel_gate(self, session_id: str) -> bool:
         """Answer a waiting confirmation of this session with "cancel" (Stop, a revoked
@@ -487,20 +544,26 @@ class WebInterfaceManager:
             "turnId": _current_turn_id(),
         })
 
-    def emit_tool_update(self, event_type: str, tool_name: str, tool_id: str, data: str = None, session_id: str = None):
+    def emit_tool_update(self, event_type: str, tool_name: str, tool_id: str, data: str = None,
+                         session_id: str = None, aborted: Optional[str] = None):
         """
         Emit a tool execution update.
         event_type: 'start', 'end', 'error'
         data: arguments (for start) or result (for end/error)
+        aborted: "stopped" / "timeout" on an end whose call was abandoned - its outcome is
+        unknown, and the bubble says so instead of a green check
         """
-        self._push_session_update(session_id, {
+        payload = {
             "type": "tool_update",
             "subType": event_type,
             "toolId": tool_id,
             "name": tool_name,
             "data": data,
             "timestamp": __import__("datetime").datetime.now().isoformat()
-        })
+        }
+        if aborted:
+            payload["aborted"] = aborted
+        self._push_session_update(session_id, payload)
 
     def emit_agent_state(self, msg_type: str, state: dict, session_id: str = None):
         """Emit one live agent-view state object under its own wire type.

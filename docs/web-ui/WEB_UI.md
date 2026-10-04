@@ -504,6 +504,17 @@ question it was given to.
 The server accepts exactly the answers the trust module defines (`vaf.core.trust.Decision`).
 All strings come from `main.gate*` in `web/messages/*.json`.
 
+Each dialog answers ONE question: its buttons send the question's `gate_id` and chat
+(`answerGate` in `page.tsx`), and the server ignores an answer whose question is no longer
+open - a second tab's old dialog cannot approve a later command. When one tab answers, every
+other tab of the chat closes the same dialog (`gate_decision`), a stale click closes its own
+(`gate_expired`), Stop answers an open dialog "cancel", and a tab that opens the chat while a
+question waits shows it.
+
+A tool call that was stopped or ran out of time is not shown as finished: its bubble says
+**Outcome unknown** in amber instead of a green check, live and after a reload - a send may have
+left, a write may be half done.
+
 ### 5. Message Features
 
 **Thinking Details**:

@@ -77,6 +77,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   to take it back; the agent then asks again. An admin can do the same for another account
   in the user editor, and `vaf trust --list` and `vaf trust --revoke-tool` do it on the
   command line. The security overview now shows the grants of the admin looking at it.
+- **A confirmation answers only the question it was shown for.** The dialog was tied to the
+  chat, not to the command, so an old dialog left open in a second tab could approve a later,
+  different command with "Always". Each dialog now carries its own id, and an answer to a
+  question that is no longer open changes nothing. When one tab answers, the dialog closes in
+  every other tab too, a chat opened later still shows a question that is waiting, and an
+  answer given faster than the agent started waiting is no longer lost.
+- **A WhatsApp message that may already have arrived is never sent a second time.** When the
+  bridge did not confirm a send in time, the draft counted as failed and its Send button
+  stayed, so one more click could deliver the message twice. Such a draft is now marked as
+  uncertain: you can only drop it after checking the chat. Pressing Send again on a message
+  that already went out answers that it was sent, for mails too, instead of saying the draft
+  is gone.
+- **A stopped tool call no longer looks finished.** When you press Stop or a tool runs out of
+  time, its bubble says the outcome is unknown instead of showing a green check, because a
+  message may have left or a file may be half written.
 - **A mail's sender is read the same way on every supported Python.** Python 3.10 and
   3.11 as installed on Windows and macOS (3.10.11 and 3.11.9, the last installers of those
   series) predate the standard library's stricter address parsing. There, a From line

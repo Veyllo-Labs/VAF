@@ -355,6 +355,7 @@
     "subAgentBrowserName": "Tarayıcı",
     "subAgentBrowserDesc": "Gerçek bir tarayıcıyı sürer: sayfalarda gezinir, formları doldurur ve girişleri geçer.",
     "subAgentContextChipTitle": "{agent} penceresi açık - bir sonraki mesajın onunla ilgili sayılır ve ajan işi {agent} ajanına devredebileceğini bilir",
+    "toolOutcomeUnknown": "Sonuç bilinmiyor",
     "gateTitle": "Güvenlik onayı",
     "gateSubtitle": "Ajan, onayını gerektiren bir araç çalıştırmak istiyor",
     "gateTool": "Araç",

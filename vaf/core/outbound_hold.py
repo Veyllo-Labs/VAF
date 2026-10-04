@@ -597,32 +597,31 @@ def resolve_tool(tool_name: str) -> Optional[Any]:
     return None
 
 
-# What a delivered message looks like, per tool. The classification runs the SAFE way round:
-# a draft is consumed only on a result this code RECOGNISES as a delivery, and anything else
-# keeps it waiting with the text on it. The two mistakes are not equal - a draft kept costs
-# one more click, a draft consumed loses the message - and the first shape of this test made
-# the expensive one: it looked for failure prose ("failed", "error", ...) and `send_whatsapp`
-# has six returns that match none of it ("WhatsApp bridge is not running.", "WhatsApp could
-# not deliver the message: ...", "No delivery confirmation ...", "Message was blocked ...",
-# "Access denied: outside your own data", "[TOOL BLOCKED] ..."), so a bridge that was down
-# reported success and ate the draft.
-# NAMED BOUNDARY: one tool can be parked as a call today (`send_whatsapp` with `to_phone`), so
-# one list is the whole rule. A second holdable messenger tool is the moment this belongs on
-# the tool itself (a declared success marker or a structured result), not in a second entry
-# here; the mail lane already has that in its op state and does not pass through this.
-_DELIVERED: Dict[str, Tuple[str, ...]] = {
-    "send_whatsapp": ("message sent via whatsapp", "voice message sent via whatsapp",
-                      "document sent via whatsapp"),
-}
-
-
-def delivery_succeeded(tool_name: str, result: str) -> bool:
-    """Did this result say the message left? Unknown tool, unknown wording: no."""
-    markers = _DELIVERED.get(str(tool_name or "").strip())
-    if not markers:
-        return False
+# What a delivered message looks like is the TOOL's declaration (`delivery_markers`, on
+# `SendWhatsAppTool`), read the SAFE way round: a draft is used up only by a result the tool
+# says is a delivery, and anything else keeps it waiting with the text on it. The two
+# mistakes are not equal - a draft kept costs one more click, a draft consumed loses the
+# message - and the first shape of this test made the expensive one: it looked for failure
+# prose ("failed", "error", ...) and `send_whatsapp` has six returns that match none of it
+# ("WhatsApp bridge is not running.", "WhatsApp could not deliver the message: ...", "No
+# delivery confirmation ...", "Message was blocked ...", "Access denied: outside your own
+# data", "[TOOL BLOCKED] ..."), so a bridge that was down reported success and ate the draft.
+# The third outcome is the one between: the bridge did not confirm in time, or the send was
+# stopped or ran out of time here. The message may have left, so the draft is `ambiguous` -
+# a second click could deliver it twice, and nobody may make that call for the person.
+def delivery_outcome(tool, result) -> str:
+    """"sent", "unconfirmed" or "failed": what a re-sent call's result says became of the
+    message. A tool without `delivery_markers`, or words it did not declare: "failed"."""
+    from vaf.core.bounded_run import is_abort_sentinel
+    if is_abort_sentinel(result):
+        return "unconfirmed"
+    markers = getattr(tool, "delivery_markers", None) or {}
     head = str(result or "").strip().lower()
-    return head.startswith(markers)
+    for outcome in ("sent", "unconfirmed"):
+        prefixes = tuple(str(m).lower() for m in (markers.get(outcome) or ()))
+        if prefixes and head.startswith(prefixes):
+            return outcome
+    return "failed"
 
 
 def approve_call(entry_id: int, *, username: str, user_scope_id: Optional[str],
@@ -639,14 +638,22 @@ def approve_call(entry_id: int, *, username: str, user_scope_id: Optional[str],
     an op, so two clicks cannot send the same draft twice. A send that fails puts the draft
     back with the error on it: a bridge that is down must not consume the draft. A draft whose
     last attempt FAILED is claimable again, because the tool answered and the message did not
-    leave. One left AMBIGUOUS is not: the worker died between the bridge and the bookkeeping,
-    so a second attempt could be a second delivery, and nobody may make that choice on the
+    leave. One left AMBIGUOUS is not: the bridge did not confirm in time, the send was stopped
+    or ran out of time, or the worker died between the bridge and the bookkeeping - so a
+    second attempt could be a second delivery, and nobody may make that choice on the
     person's behalf. They see it with the reason and drop it, or ask the agent again.
+
+    The call runs BOUNDED (`run_tool_bounded`, the tool's own budget), so an approval cannot
+    hang the request that made it. What the tool answered is kept with the row: a second
+    Send of a draft that already left - another tab, a retried request - answers that, and
+    sends nothing.
     """
     from vaf.core import channel_message_store as store
 
     row = store.held_send(entry_id, username, user_scope_id)
     was = str((row or {}).get("state") or "")
+    if was == "sent":
+        return {"ok": True, "result": str(row.get("result") or "") or "Already sent."}
     if was == "ambiguous":
         return {"ok": False, "result": (
             "The last attempt was interrupted and this message may already have been sent. "
@@ -668,13 +675,16 @@ def approve_call(entry_id: int, *, username: str, user_scope_id: Optional[str],
     if not store.settle_held_send(entry_id, username, "sending", user_scope_id, expect=was):
         return {"ok": False, "result": "This draft is not waiting any more."}
     try:
-        result = str(tool.run(**args))
+        from vaf.core.tool_dispatch import run_tool_bounded
+        result = str(run_tool_bounded(tool, args, tool_name=tool_name))
     except Exception as exc:                                   # noqa: BLE001
         result = f"Failed to send: {exc}"
-    ok = delivery_succeeded(tool_name, result)
-    store.settle_held_send(entry_id, username, "sent" if ok else "failed", user_scope_id,
-                           error="" if ok else result[:300], expect="sending")
-    return {"ok": ok, "result": result}
+    outcome = delivery_outcome(tool, result)
+    state = {"sent": "sent", "unconfirmed": "ambiguous"}.get(outcome, "failed")
+    store.settle_held_send(entry_id, username, state, user_scope_id,
+                           error="" if state == "sent" else result[:300], expect="sending",
+                           result=result[:2000])
+    return {"ok": state == "sent", "result": result, "state": state}
 
 
 def discard_call(entry_id: int, *, username: str, user_scope_id: Optional[str]) -> bool:
@@ -724,6 +734,10 @@ def send_draft(kind: str, entry_id: int, *, username: str, user_scope_id: Option
     if kind == "call":
         from vaf.core import channel_message_store as store
         before = str((store.held_send(int(entry_id), username, user_scope_id) or {}).get("state") or "")
+        if before == "sent":
+            # Sent already (another tab, a retried request): the answer it got, nothing sent
+            # again, and no second wake.
+            return {"ok": True, "state": "sent", "error": "", "repeat": True}
         if before not in _ACTIONABLE:
             # The mail lane's word for it, so every surface reads one answer for "no such
             # draft" (another identity's id included: the lookup is keyed on the name).
@@ -731,7 +745,8 @@ def send_draft(kind: str, entry_id: int, *, username: str, user_scope_id: Option
         res = approve_call(int(entry_id), username=username, user_scope_id=user_scope_id,
                            user_role=user_role, tools=tools)
         ok = bool(res.get("ok"))
-        state = "sent" if ok else ("ambiguous" if before == "ambiguous" else "failed")
+        state = str(res.get("state") or "") or (
+            "sent" if ok else ("ambiguous" if before == "ambiguous" else "failed"))
         out = {"ok": ok, "state": state, "error": "" if ok else str(res.get("result") or "")}
     elif kind == "mail":
         svc = _mail_service(user_scope_id)
@@ -752,7 +767,7 @@ def send_draft(kind: str, entry_id: int, *, username: str, user_scope_id: Option
             _close_quietly(svc)
     else:
         raise ValueError(f"unknown draft kind {kind!r}")
-    if out.get("ok") and wake:
+    if out.get("ok") and wake and not out.get("repeat"):
         try:
             wake_after_send(kind, int(entry_id), username=username,
                             user_scope_id=user_scope_id, user_role=user_role)

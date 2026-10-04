@@ -363,7 +363,10 @@ def test_every_answer_the_web_dialog_sends_is_one_the_engine_accepts():
     from vaf.core.trust import Decision
 
     page = (Path(__file__).resolve().parent.parent / "web" / "app" / "page.tsx").read_bytes().decode("utf-8")
-    sent = set(re.findall(r"type: 'gate_response', decision: '([a-z_]+)'", page))
+    # The dialog's buttons answer through answerGate('<decision>'), which sends the
+    # gate_response with the dialog's own id and chat.
+    sent = set(re.findall(r"answerGate\('([a-z_]+)'\)", page))
+    assert "type: 'gate_response', decision," in page
     assert sent == set(get_args(Decision)), sent
 
 
@@ -418,8 +421,8 @@ def test_a_forced_question_offers_no_standing_answer_and_never_widens(trust):
     assert offered == [("allow_once", "cancel")]
     assert trust["writes"] == [], "a forced question wrote a standing answer"
     assert events[0]["offer_standing"] is False
-    assert events[-1] == {"type": "gate_decision", "tool": "remote_probe",
-                          "decision": "allow_once"}
+    assert events[-1] == {"type": "gate_decision", "gate_id": events[0]["gate_id"],
+                          "tool": "remote_probe", "decision": "allow_once"}
 
 
 def test_a_decider_without_choices_keeps_working(trust):

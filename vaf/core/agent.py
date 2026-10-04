@@ -11773,8 +11773,11 @@ class Agent:
                         # A background run (scheduled automation) stays silent — see the Tool Start note:
                         # its tool bubbles must not broadcast into the active web user's chat. Mark it
                         # "emitted" so the later not-yet-emitted fallback also stays silent.
+                        # Stopped or out of time: abandoned, not finished - its outcome is unknown.
+                        from vaf.core.tool_dispatch import abort_kind as _abort_kind
+                        _aborted = _abort_kind(r_str)
                         if not getattr(self, '_background_run', False):
-                            get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=_r_ui, session_id=_tool_session)
+                            get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=_r_ui, session_id=_tool_session, aborted=_aborted)
                         else:
                             # append_domain_log is module-level imported — no local re-import (see the note
                             # on the 'start' branch above; a local import makes the name function-local and
@@ -11783,7 +11786,7 @@ class Agent:
                         _tool_end_emitted = True
                         log_timeline_event('tool_end', tool=function_name, call_id=_tl_call_id,
                                            session=str(_tool_session or ''),
-                                           status='error' if is_err else 'ok',
+                                           status='unknown' if _aborted else ('error' if is_err else 'ok'),
                                            duration_s=round(time.time() - _tl_start, 2),
                                            result=r_str[:300])
                         if is_err and "Error executing tool" not in r_str:
@@ -13125,7 +13128,7 @@ class Agent:
             return gate_msg
         return None
 
-    def _ask_user_about_gate(self, name, reason, preview=None, choices=None):
+    def _ask_user_about_gate(self, name, reason, preview=None, choices=None, gate_id=None):
         """How THIS lane reaches a human. Prefer the WebSocket gate when a web session is
         live (pywebview / browser), else prompt the terminal."""
         from vaf.cli.ui import UI
@@ -13136,19 +13139,15 @@ class Agent:
                 from vaf.core.revocation import is_revoked
                 from vaf.core.task_queue import TaskQueue
                 from vaf.core.web_interface import get_web_interface as _gwi
-                _gate_event, _decision_box = _gwi().register_gate(_session)
-                # Waited in slices, not in one 5-minute block: Stop and a revoked account end
-                # the wait at once (the dialog used to hold the turn until it was answered or
-                # timed out, whatever the person pressed meanwhile).
+                # The answer to THIS question (gate_id). Stop and a revoked account end the
+                # wait at once; the dialog used to hold the turn for its five minutes,
+                # whatever the person pressed meanwhile.
                 _tq = TaskQueue()
                 _scope = getattr(self, "_current_user_scope_id", None)
-                _deadline = time.monotonic() + 300  # 5-minute user timeout
-                while not _gate_event.wait(timeout=0.5):
-                    if (_tq.should_stop(_session) or is_revoked(_scope)
-                            or time.monotonic() >= _deadline):
-                        _gwi().cancel_gate(_session)
-                        return "cancel"
-                return _decision_box[0]
+                return _gwi().wait_gate(
+                    _session, gate_id,
+                    should_cancel=lambda: _tq.should_stop(_session) or is_revoked(_scope),
+                    timeout=300)
             except Exception:
                 return "cancel"
         UI.event("Security", f"Tool '{name}' requires confirmation. {reason}", style="warning")
@@ -13177,9 +13176,13 @@ class Agent:
 
     def _push_gate_to_websocket(self, evt):
         """The web UI's dialog does not arrive through _event_sink - that is None in the web
-        context - so the gate request is pushed to the session directly."""
+        context - so the gate request is pushed to the session directly. The question is
+        OPENED first, so an answer faster than the agent's wait is kept."""
         from vaf.core.web_interface import get_web_interface as _gwi2
-        _gwi2()._push_session_update(getattr(self, "current_session_id", None), evt)
+        _session = getattr(self, "current_session_id", None)
+        if _session:
+            _gwi2().open_gate(_session, evt)
+        _gwi2()._push_session_update(_session, evt)
 
     def _chat_session_plumbing(self, name, tool_args):
         """Session-scoped kwargs a chat turn owns, plus the anti-re-delegation guard.

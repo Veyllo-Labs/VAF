@@ -54,7 +54,11 @@ def scratch(monkeypatch, tmp_path):
 
 
 class _FakeTool:
-    """A send tool: records the call, answers like the real one."""
+    """A send tool: records the call, answers like the real one, and reads its answers the
+    way the real one declares them."""
+
+    from vaf.tools.send_whatsapp import SendWhatsAppTool as _Real
+    delivery_markers = _Real.delivery_markers
 
     def __init__(self, answer="Message sent via WhatsApp."):
         self.answer = answer
@@ -216,9 +220,10 @@ def test_a_second_click_cannot_send_twice(scratch):
                                        user_role="user", tools={"send_whatsapp": tool})
     second = outbound_hold.approve_call(entry_id, username=USER, user_scope_id=SCOPE,
                                         user_role="user", tools={"send_whatsapp": tool})
-    assert first["ok"] is True and second["ok"] is False
+    # The second click is answered with what the first one got, and nothing is sent again.
+    assert first["ok"] is True and second["ok"] is True
     assert len(tool.calls) == 1
-    assert "not waiting" in second["result"]
+    assert second["result"] == first["result"]
 
 
 def test_a_send_that_did_not_say_it_left_keeps_the_draft(scratch):
@@ -230,9 +235,10 @@ def test_a_send_that_did_not_say_it_left_keeps_the_draft(scratch):
     called all of them a success: the bridge was down, the card reported "sent", and the draft
     was gone with the message never written.
     """
+    # "No delivery confirmation ..." is not here: the message may have left, so that draft
+    # is ambiguous, not failed (tests/test_outbox_send_outcome.py).
     for answer in ("WhatsApp bridge is not running. Start it in Settings.",
                    "WhatsApp could not deliver the message: timeout",
-                   "No delivery confirmation from the WhatsApp bridge within the time limit.",
                    "Message was blocked (contained internal system content).",
                    "Access denied: outside your own data",
                    "[TOOL BLOCKED] You are handling a contact's message.",

@@ -1004,7 +1004,16 @@ def release_held_draft(scope: str, username: str, op_id: int,
     """
     svc = service or MailService(scope)
     op = svc.store.get_op(int(op_id))
-    if not op or op.get("kind") != "send" or op.get("state") != "held":
+    if not op or op.get("kind") != "send":
+        return {"ok": False, "state": "", "error": "not waiting"}
+    if op.get("state") != "held":
+        # A second Send of a draft that already left - another tab, a retried request - is
+        # answered from the draft's state, not with "no such draft": the first click did
+        # send it. Nothing is released or drained again.
+        settled = svc.chat_draft(op).get("state")
+        if settled in ("sent", "sending"):
+            return {"ok": True, "state": "done" if settled == "sent" else "pending",
+                    "delivery": "", "error": "", "repeat": True}
         return {"ok": False, "state": "", "error": "not waiting"}
     if svc.draft_state(op)[0] == "ambiguous":
         return {"ok": False, "state": "ambiguous", "error": AMBIGUOUS_DRAFT}

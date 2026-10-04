@@ -151,7 +151,14 @@ call's `message` argument and the preview together, `channel_message_store.revis
 `outward_send_hold` (see [`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py)). The park
 stores the CALL, never an outbound message row, because a message row is a message that left, for a message
 nobody has agreed to send, and the approval runs the tool again with the approving person's
-identity so the file jail and the bridge path stay the tool's own. A send without `to_phone` goes to
+identity so the file jail and the bridge path stay the tool's own. What the send answered decides
+what becomes of the draft, read from the tool's own declaration (`SendWhatsAppTool.delivery_markers`,
+the bridge's words in `whatsapp_bridge.SENT_TEXTS` / `SEND_UNCONFIRMED`): sent uses it up; a
+refusal leaves it waiting with the reason, sendable again; no delivery confirmation in time - or an
+approval that was stopped or ran past its budget, since it runs bounded - makes it **ambiguous**:
+the message may have left, so it is never sent again with one click, only dropped after a look at
+the chat. A second Send of a draft that already left answers what the first one got and sends
+nothing. A send without `to_phone` goes to
 the registered owner number and is never parked, and neither are the Front Office answers, the
 automations, the workflow steps or a timer the person scheduled: anything that runs while
 nobody is watching sends as before.

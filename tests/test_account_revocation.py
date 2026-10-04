@@ -359,11 +359,13 @@ def test_a_waiting_confirmation_is_answered_cancel_when_the_account_is_revoked()
 def test_stop_answers_a_waiting_confirmation_at_once():
     """The Stop button left the dialog open. MUTATION: drop cancel_gate from stop_session."""
     from vaf.core.web_interface import get_web_interface
-    event, decision = get_web_interface().register_gate("web_chat-stop")
+    web = get_web_interface()
+    web.open_gate("web_chat-stop", {"tool": "host_bash"})
+    gate = web._pending_gates["web_chat-stop"]
     try:
         result = revocation.stop_session("web_chat-stop")
         assert result["gate_cancelled"] is True
-        assert event.is_set() and decision[0] == "cancel"
+        assert gate["event"].is_set() and gate["decision"][0] == "cancel"
     finally:
         get_web_interface().cancel_gate("web_chat-stop")
 

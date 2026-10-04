@@ -169,6 +169,11 @@ on Stop - or at its timeout - the whole tree is ended, not only the shell. `ssh`
 wait (it streams uploads and downloads under a byte cap) and ends its process group the same way
 (`bounded_run.cancel_check`). Background commands (`host_process`) are spared by Stop, as above.
 
+A call that was stopped or ran out of time is not reported as finished: the funnel's
+`tool_end` carries `aborted: "stopped" | "timeout"` (`tool_dispatch.abort_kind` reads the
+sentinel), the timeline records `status="unknown"` and the chat bubble says the outcome is
+unknown - the worker thread was abandoned, so a send may have left and a write may be half done.
+
 Taking an account's access away (`revoke_account(user_scope_id)`, called by the admin routes on
 deactivation and deletion; `stop_account_work` on a demotion or a narrowed allowlist) runs
 `stop_session` for every session the account has queued or running, ends its background

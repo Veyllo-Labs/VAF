@@ -16,6 +16,8 @@ would do nothing, or would fire where nobody can answer it:
 import json
 from pathlib import Path
 
+from vaf.tools.send_whatsapp import SendWhatsAppTool
+
 ROOT = Path(__file__).resolve().parents[1]
 AGENT = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
 PAGE = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
@@ -232,7 +234,7 @@ def test_the_cli_prints_and_decides(monkeypatch, tmp_path):
     sent = []
     import vaf.core.outbound_hold as oh
     monkeypatch.setattr(oh, "resolve_tool", lambda name: SimpleNamespace(
-        run=lambda **kw: sent.append(kw) or "Message sent via WhatsApp."))
+        delivery_markers=SendWhatsAppTool.delivery_markers, run=lambda **kw: sent.append(kw) or "Message sent via WhatsApp."))
     ok = runner.invoke(cmd.app, ["send", "call", str(second)])
     assert ok.exit_code == 0, ok.output
     assert len(sent) == 1 and sent[0]["to_phone"] == "+49170"
@@ -290,7 +292,7 @@ def test_the_cli_edits_through_the_same_function(monkeypatch, tmp_path):
     sent = []
     import vaf.core.outbound_hold as oh
     monkeypatch.setattr(oh, "resolve_tool", lambda name: SimpleNamespace(
-        run=lambda **kw: sent.append(kw) or "Message sent via WhatsApp."))
+        delivery_markers=SendWhatsAppTool.delivery_markers, run=lambda **kw: sent.append(kw) or "Message sent via WhatsApp."))
     assert runner.invoke(cmd.app, ["send", "call", str(entry_id)]).exit_code == 0
     assert sent[0]["message"] == "Hallo Uwe" and woken == []
     assert runner.invoke(cmd.app, ["edit", "call", str(entry_id), "--text", "zu spät"]).exit_code == 1

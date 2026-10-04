@@ -198,10 +198,12 @@ def init_store(username: Optional[str] = None, user_scope_id: Optional[str] = No
         conn.execute("CREATE INDEX IF NOT EXISTS idx_held_sends_state "
                      "ON held_sends(username, state, created_ts)")
         # What happened to a draft besides its state: the person changed its words before
-        # sending (`edited`), or a newer draft to the same person took its place
-        # (`replaced_by`, a draft ref such as `call:13`). Added idempotently for stores that
-        # predate them.
-        for _col in ("edited INTEGER NOT NULL DEFAULT 0", "replaced_by TEXT NOT NULL DEFAULT ''"):
+        # sending (`edited`), a newer draft to the same person took its place (`replaced_by`,
+        # a draft ref such as `call:13`), and what the send answered (`result`, so a second
+        # Send of a draft that left answers that instead of sending again). Added
+        # idempotently for stores that predate them.
+        for _col in ("edited INTEGER NOT NULL DEFAULT 0", "replaced_by TEXT NOT NULL DEFAULT ''",
+                     "result TEXT NOT NULL DEFAULT ''"):
             try:
                 conn.execute(f"ALTER TABLE held_sends ADD COLUMN {_col}")
             except sqlite3.OperationalError:
@@ -530,7 +532,8 @@ def revise_held_send(entry_id: int, username: str, args_json: str, preview: str,
 
 def settle_held_send(entry_id: int, username: str, state: str,
                      user_scope_id: Optional[str] = None, error: str = "",
-                     expect: Any = "held", replaced_by: str = "") -> bool:
+                     expect: Any = "held", replaced_by: str = "",
+                     result: Optional[str] = None) -> bool:
     """Move a parked call from `expect` to `state`. False when it was not in `expect` any
     more, which is what makes a double click harmless: the guard is in the WHERE, so two
     approvals cannot both claim the same draft. The states are the mail outbox's vocabulary:
@@ -538,16 +541,18 @@ def settle_held_send(entry_id: int, username: str, state: str,
     message did not leave), ambiguous (a worker died mid-send; nobody knows). `expect` may be several
     states, because a draft the person may act on is either waiting or one whose last attempt
     failed, and both are theirs to send or drop. `replaced` is the one more: a newer draft to
-    the same person took its place, and `replaced_by` names it."""
+    the same person took its place, and `replaced_by` names it. `result` keeps what the send
+    answered (None leaves it as it was)."""
     init_store(username, user_scope_id)
     expected = (expect,) if isinstance(expect, str) else tuple(expect or ())
     expected = tuple(e for e in expected if e) or ("held",)
     conn = _get_conn(username, user_scope_id)
     try:
         cur = conn.execute(
-            "UPDATE held_sends SET state = ?, decided_ts = ?, error = ?, replaced_by = ? "
+            "UPDATE held_sends SET state = ?, decided_ts = ?, error = ?, replaced_by = ?, "
+            "result = COALESCE(?, result) "
             f"WHERE id = ? AND username = ? AND state IN ({','.join('?' for _ in expected)})",
-            (state, time.time(), error or "", replaced_by or "", int(entry_id),
+            (state, time.time(), error or "", replaced_by or "", result, int(entry_id),
              (username or "").strip() or "", *expected),
         )
         conn.commit()
@@ -731,7 +736,8 @@ def scrub_values(env: Dict[str, str], *, username: Optional[str] = None,
     conn = _get_conn(username, user_scope_id)
     changed = 0
     try:
-        for table, cols in (("channel_messages", ("body",)), ("held_sends", ("args", "preview"))):
+        for table, cols in (("channel_messages", ("body",)),
+                            ("held_sends", ("args", "preview", "result"))):
             for form in {f for value in env.values() for f in forms(value)}:
                 for col in cols:
                     rows = conn.execute(

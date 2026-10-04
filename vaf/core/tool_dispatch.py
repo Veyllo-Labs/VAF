@@ -413,6 +413,12 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
     (``BaseTool.trusted_dir_grants``): a trusted directory does not silence it, and
     ``allow_always`` stores only the tool policy. ``gate_required`` says so in
     ``always_trusts_folder``, so no dialog promises a folder it does not trust.
+
+    Every question carries its own ``gate_id``, in ``gate_required`` and ``gate_decision``
+    and - for a decider that accepts the keyword - in the call to ``decide``. An answer is an
+    answer to ONE question: a surface that can show a dialog late or twice (a second browser
+    tab, a reconnect) must send the id back, so a stale "always" from an old dialog cannot
+    approve a later, different command.
     """
     from vaf.core.trust import (get_tool_policy, grant_tool_for_chat, has_chat_grant,
                                 is_trusted_dir, mark_trusted_dir, set_tool_policy)
@@ -446,7 +452,9 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
     except Exception:
         _pv = {"text": "", "truncated": False, "neutralized": 0, "redacted": 0}
     preview = _pv.get("text", "")
-    event = {"type": "gate_required", "tool": tool_name, "cwd": str(trust_dir),
+    import uuid as _uuid
+    gate_id = _uuid.uuid4().hex
+    event = {"type": "gate_required", "gate_id": gate_id, "tool": tool_name, "cwd": str(trust_dir),
              "reason": reason, "args_preview": preview,
              "args_preview_truncated": bool(_pv.get("truncated")),
              "args_preview_neutralized": int(_pv.get("neutralized") or 0),
@@ -503,17 +511,20 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
             _extra["preview"] = dict(_pv)
         if "choices" in _params:
             _extra["choices"] = choices
+        if "gate_id" in _params:
+            _extra["gate_id"] = gate_id
         choice = decide(tool_name, reason, **_extra)
     if not offer_standing and choice in ("allow_chat", "allow_always"):
         choice = "allow_once"       # never widen: this question offered no standing answer
     if choice == "allow_once":
         # This call and nothing else: remembering it anywhere would silently widen a single
         # approval into a standing one.
-        emit_event(emit, {"type": "gate_decision", "tool": tool_name, "decision": "allow_once"})
+        emit_event(emit, {"type": "gate_decision", "gate_id": gate_id, "tool": tool_name,
+                          "decision": "allow_once"})
         return None
     if choice == "allow_chat":
         _granted = grant_tool_for_chat(tool_name, user_scope_id, session_id)
-        emit_event(emit, {"type": "gate_decision", "tool": tool_name,
+        emit_event(emit, {"type": "gate_decision", "gate_id": gate_id, "tool": tool_name,
                           "decision": "allow_chat" if _granted else "allow_once"})
         return None
     if choice == "allow_always":
@@ -523,9 +534,11 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
         if trust_folder:
             mark_trusted_dir(trust_dir, user_scope_id)
         set_tool_policy(tool_name, "allow", user_scope_id)
-        emit_event(emit, {"type": "gate_decision", "tool": tool_name, "decision": "allow_always"})
+        emit_event(emit, {"type": "gate_decision", "gate_id": gate_id, "tool": tool_name,
+                          "decision": "allow_always"})
         return None
-    emit_event(emit, {"type": "gate_decision", "tool": tool_name, "decision": "cancel"})
+    emit_event(emit, {"type": "gate_decision", "gate_id": gate_id, "tool": tool_name,
+                          "decision": "cancel"})
     return f"[CANCELLED] Tool '{tool_name}' cancelled by user."
 
 
@@ -564,6 +577,18 @@ def clip_middle(text: str, limit: int, *, marker: str) -> str:
     tail = limit - head
     note = marker.format(total=len(text), left_out=len(text) - head - tail)
     return f"{text[:head]}\n{note}\n{text[len(text) - tail:]}"
+
+
+def abort_kind(result) -> str | None:
+    """"stopped" or "timeout" when ``result`` is a bounded run's abort sentinel, else None:
+    the call was abandoned before it finished, so its outcome is unknown."""
+    from vaf.core.bounded_run import STOPPED_PREFIX, TIMEOUT_PREFIX
+    text = str(result or "")
+    if text.startswith(STOPPED_PREFIX):
+        return "stopped"
+    if text.startswith(TIMEOUT_PREFIX):
+        return "timeout"
+    return None
 
 
 def run_tool_bounded(tool: Any, args: dict, *, tool_name: str,
@@ -1286,13 +1311,19 @@ class ToolCaller:
         if callable(self.hooks.after_dispatch):
             result = self.hooks.after_dispatch(name, args, result)
 
-        emit_event(self.on_event, {
+        end_event = {
             "type": "tool_end", "tool": name,
             "duration_ms": int((time.monotonic() - started) * 1000),
             "ok": not (isinstance(result, str) and (
                 result.startswith("Tool Error:") or result.startswith("Error: Unknown tool"))),
             "result": event_result(result),
-        })
+        }
+        aborted = abort_kind(result)
+        if aborted:
+            # Stopped or out of time: the call was abandoned, not finished, so what it did is
+            # unknown - a send may have left, a write may be half done. Said, not implied.
+            end_event["aborted"] = aborted
+        emit_event(self.on_event, end_event)
         if callable(self.hooks.after_emit):
             self.hooks.after_emit(name, result)
         if getattr(tool, "result_is_deliverable", False):

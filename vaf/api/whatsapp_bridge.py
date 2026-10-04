@@ -252,6 +252,27 @@ def _dequeue_external_send_request() -> Optional[Tuple[Any, ...]]:
     return None
 
 
+# What a send answers, in one place for both send paths below. The outward hold reads the
+# outcome from these words (`SendWhatsAppTool.delivery_markers`, pinned to them by
+# tests/test_outbox_send_outcome.py): SENT consumes a draft, UNCONFIRMED makes it ambiguous,
+# because the message may or may not have left - a second click could deliver it twice.
+SENT_TEXTS = ("Message sent via WhatsApp.", "Voice message sent via WhatsApp.",
+              "Document sent via WhatsApp.")
+SEND_UNCONFIRMED = (
+    "No delivery confirmation from the WhatsApp bridge within the time limit. "
+    "If the message appeared in WhatsApp, it was delivered; otherwise check Settings → "
+    "Connections → WhatsApp (bridge running, linked)."
+)
+
+
+def _sent_text(voice_path: Optional[str], document_path: Optional[str]) -> str:
+    if document_path:
+        return SENT_TEXTS[2]
+    if voice_path:
+        return SENT_TEXTS[1]
+    return SENT_TEXTS[0]
+
+
 def _wait_for_external_send_result(
     response_path: Path,
     *,
@@ -275,17 +296,10 @@ def _wait_for_external_send_result(
             except Exception:
                 pass
             if bool(data.get("success")):
-                if document_path:
-                    return "Document sent via WhatsApp."
-                if voice_path:
-                    return "Voice message sent via WhatsApp."
-                return "Message sent via WhatsApp."
+                return _sent_text(voice_path, document_path)
             return f"WhatsApp could not deliver the message: {data.get('error', '')}"
         time.sleep(0.1)
-    return (
-        "No delivery confirmation from the WhatsApp bridge within the time limit. "
-        "If the message appeared in WhatsApp, it was delivered; otherwise check Settings → Connections → WhatsApp (bridge running, linked)."
-    )
+    return SEND_UNCONFIRMED
 
 
 def _wa_bridge_path() -> Path:
@@ -1034,19 +1048,12 @@ def send_whatsapp_with_confirmation(
     try:
         success, error = result_queue.get(timeout=timeout)
         if success:
-            if document_path:
-                return "Document sent via WhatsApp."
-            if voice_path:
-                return "Voice message sent via WhatsApp."
-            return "Message sent via WhatsApp."
+            return _sent_text(voice_path, document_path)
         return f"WhatsApp could not deliver the message: {error}"
     except queue.Empty:
         with _pending_sends_lock:
             _pending_sends.pop(req_id, None)
-        return (
-            "No delivery confirmation from the WhatsApp bridge within the time limit. "
-            "If the message appeared in WhatsApp, it was delivered; otherwise check Settings → Connections → WhatsApp (bridge running, linked)."
-        )
+        return SEND_UNCONFIRMED
 
 
 def _read_user_process(

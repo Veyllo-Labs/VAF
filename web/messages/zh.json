@@ -355,6 +355,7 @@
     "subAgentBrowserName": "浏览器智能体",
     "subAgentBrowserDesc": "操作真实浏览器：点开网页、填写表单、搞定登录。",
     "subAgentContextChipTitle": "你开着{agent}窗口，下一条消息默认就是在说它，智能体也知道可以把活儿交给{agent}",
+    "toolOutcomeUnknown": "结果未知",
     "gateTitle": "安全确认",
     "gateSubtitle": "智能体要运行一个需要你批准的工具",
     "gateTool": "工具",

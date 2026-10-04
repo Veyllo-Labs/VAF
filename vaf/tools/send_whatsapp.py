@@ -27,6 +27,16 @@ class SendWhatsAppTool(BaseTool):
     file_access = "write"
     permission_level = "write"
     side_effect_class = "irreversible"
+    # What a result says became of the message, for a draft the outward hold sends again
+    # (vaf/core/outbound_hold.py): "sent" uses the draft up, "unconfirmed" leaves it
+    # ambiguous because it may have left, anything else is a failure and the draft waits.
+    # Lower-case prefixes of the bridge's own words (whatsapp_bridge.SENT_TEXTS and
+    # SEND_UNCONFIRMED), kept in step by tests/test_outbox_send_outcome.py.
+    delivery_markers = {
+        "sent": ("message sent via whatsapp", "voice message sent via whatsapp",
+                 "document sent via whatsapp"),
+        "unconfirmed": ("no delivery confirmation",),
+    }
     description = (
         "Send content via WhatsApp from the agent's own linked number: text, voice message (voice_lang), or document (file_path). "
         "Default (no to_phone): sends to the account owner's registered main-user number. To send to a contact (e.g. Alice) or any number, use to_phone with the contact's WhatsApp number from get_contact(name='...'). "

@@ -5,7 +5,7 @@
 
 A Textual application that drives the SAME in-process engine as the classic
 interactive lane, through the same seams (`chat_step`, `set_event_sink`, the
-gate's `register_gate`/`resolve_gate` contract, `load_session_context`) - no
+gate's `wait_gate`/`resolve_gate` contract, `load_session_context`) - no
 second implementation of a turn exists here. Textual is imported lazily by the
 command body only, so `import vaf` and `vaf --version` stay slim.
 

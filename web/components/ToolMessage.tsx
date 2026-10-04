@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Check, AlertCircle, Terminal, ChevronRight, Activity, Skull, Loader2 } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { cn, getApiBase } from '@/lib/utils';
 
 /** A sub-agent (librarian/research/document/coding/browser) — these run as supervised units. */
@@ -41,7 +42,7 @@ export interface ToolMessageProps {
     id: string;
     name: string;
     result?: string;
-    status: 'running' | 'completed' | 'error';
+    status: 'running' | 'completed' | 'error' | 'unknown';
     startTime?: number;
     endTime?: number;
     args?: string;
@@ -232,7 +233,8 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
 
     // visualStatus lags behind the real status by 450ms on completion so the
     // cursor return-to-avatar animation finishes before the green checkmark appears
-    const [visualStatus, setVisualStatus] = useState<'running' | 'completed' | 'error'>(status);
+    const tMain = useTranslations('main');
+    const [visualStatus, setVisualStatus] = useState<'running' | 'completed' | 'error' | 'unknown'>(status);
 
     useEffect(() => {
         if (status === 'running') {
@@ -248,7 +250,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
         // Keep the bubble open while the sub-agent's subprocess is still alive, so its watchdog
         // row stays visible even though the tool call itself already "completed" (delegated).
         if (liveUnit) { setIsExpanded(true); return; }
-        if (visualStatus === 'completed' || visualStatus === 'error') {
+        if (visualStatus === 'completed' || visualStatus === 'error' || visualStatus === 'unknown') {
             const t = setTimeout(() => setIsExpanded(false), 1500);
             return () => clearTimeout(t);
         }
@@ -256,7 +258,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
 
     // While a live sub-agent unit exists, present the bubble as "running" (the delegated tool call
     // reads as completed, but the actual work is still going).
-    const headerStatus: 'running' | 'completed' | 'error' = liveUnit ? 'running' : visualStatus;
+    const headerStatus: 'running' | 'completed' | 'error' | 'unknown' = liveUnit ? 'running' : visualStatus;
 
     // Right-aligned status/result label (mockup ".stat"): "running…" while running, the sub-agent
     // runtime, or a result counter once done. Keeps the existing duration logic, just presented
@@ -265,6 +267,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
     const statText =
         headerStatus === 'running'   ? (rt != null ? `running… ${fmtDuration(rt)}` : 'running…')
         : headerStatus === 'error'   ? 'Error'
+        : headerStatus === 'unknown' ? tMain('toolOutcomeUnknown')
         : (isSubAgent && rt != null  ? fmtDuration(rt) : resultStat(result));
 
     return (
@@ -283,6 +286,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                     "tool-message-card relative overflow-hidden rounded-[11px] border bg-white transition-colors",
                     headerStatus === 'running' ? "border-[#dbe6ff]"
                         : headerStatus === 'error' ? "border-destructive/50"
+                        : headerStatus === 'unknown' ? "border-amber-300"
                         : "border-border"
                 )}
             >
@@ -323,6 +327,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                             </span>
                         )}
                         {headerStatus === 'error' && <AlertCircle className="h-[15px] w-[15px] text-destructive" />}
+                        {headerStatus === 'unknown' && <AlertCircle className="h-[15px] w-[15px] text-amber-500" />}
                     </span>
 
                     <span className="shrink-0 text-[12.5px] font-semibold leading-none text-[#2b303b] dark:text-gray-100">{name}</span>
@@ -338,6 +343,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                         "ml-auto shrink-0 text-[11px]",
                         headerStatus === 'completed' ? "font-semibold text-green-600"
                             : headerStatus === 'error' ? "text-destructive"
+                            : headerStatus === 'unknown' ? "text-amber-600"
                             : "text-muted-foreground"
                     )}>
                         {statText}

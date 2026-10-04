@@ -16,6 +16,8 @@ the discard test goes red.
 import asyncio
 from types import SimpleNamespace
 
+from vaf.tools.send_whatsapp import SendWhatsAppTool
+
 import pytest
 from fastapi import HTTPException
 
@@ -94,7 +96,7 @@ def test_another_identity_cannot_send_or_drop_my_draft(world):
     sent = []
     import vaf.core.outbound_hold as oh
     world.setattr(oh, "resolve_tool", lambda name: SimpleNamespace(
-        run=lambda **kw: sent.append(kw) or "Message sent via WhatsApp."))
+        delivery_markers=SendWhatsAppTool.delivery_markers, run=lambda **kw: sent.append(kw) or "Message sent via WhatsApp."))
     out = asyncio.run(orr.send_entry("call", entry_id, _request(username="bob")))
     assert out["ok"] is False and sent == []
 
@@ -104,7 +106,7 @@ def test_sending_a_call_runs_it_with_the_callers_identity(world):
     calls = []
     import vaf.core.outbound_hold as oh
     world.setattr(oh, "resolve_tool", lambda name: SimpleNamespace(
-        run=lambda **kw: calls.append(kw) or "Message sent via WhatsApp."))
+        delivery_markers=SendWhatsAppTool.delivery_markers, run=lambda **kw: calls.append(kw) or "Message sent via WhatsApp."))
     out = asyncio.run(orr.send_entry("call", entry_id, _request()))
     assert out["ok"] is True
     assert calls and calls[0]["username"] == "alice" and calls[0]["user_scope_id"] == SCOPE
@@ -115,7 +117,7 @@ def test_a_failed_send_answers_with_the_reason_and_keeps_the_draft(world):
     entry_id = _park()
     import vaf.core.outbound_hold as oh
     world.setattr(oh, "resolve_tool", lambda name: SimpleNamespace(
-        run=lambda **kw: "Failed to send WhatsApp message: bridge is not running"))
+        delivery_markers=SendWhatsAppTool.delivery_markers, run=lambda **kw: "Failed to send WhatsApp message: bridge is not running"))
     out = asyncio.run(orr.send_entry("call", entry_id, _request()))
     assert out["ok"] is False and "bridge is not running" in out["error"]
     assert asyncio.run(orr.list_outbox(_request()))["count"] == 1

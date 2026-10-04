@@ -940,8 +940,11 @@ def _history_projection(loaded, sid) -> list:
                 entry["toolName"] = tool_name
             if tool_id is not None:
                 entry["toolId"] = tool_id
-            # Content present means the tool answered.
-            entry["toolStatus"] = tool_status or ("completed" if content else "running")
+            # Content present means the tool answered - unless the answer is a bounded run's
+            # abort sentinel: stopped or out of time, its outcome is unknown.
+            from vaf.core.tool_dispatch import abort_kind as _abort_kind
+            entry["toolStatus"] = tool_status or (
+                ("unknown" if _abort_kind(content) else "completed") if content else "running")
         out.append(entry)
 
     if sid and str(sid).startswith("thinking_"):
@@ -4977,6 +4980,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         artifact_payload = _build_artifact_payload(loaded, sid)
                         if artifact_payload:
                             await websocket.send_json(artifact_payload)
+                        # A confirmation this chat is waiting on, for a tab that opens it after
+                        # the dialog was pushed (a reload, a second window).
+                        _open_gate = manager.pending_gate(sid)
+                        if _open_gate:
+                            await websocket.send_json(_open_gate)
 
                         # Restore sidebar documents from session — without base64 data (too large).
                         # The frontend can re-show attached document names from the saved slim entries.
@@ -5765,10 +5773,23 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     from typing import get_args as _get_args
                     from vaf.core.trust import Decision as _GateDecision
                     decision = cmd.get("decision")
-                    if decision in _get_args(_GateDecision):
-                        _gate_session = manager.get_session_for_connection(websocket)
+                    _gate_id = str(cmd.get("gate_id") or "").strip()
+                    _gate_session = str(cmd.get("sessionId")
+                                        or manager.get_session_for_connection(websocket) or "")
+                    if decision in _get_args(_GateDecision) and _gate_session:
+                        _ok_gate, _ = _ws_session_owner_ok(websocket, _gate_session, allow_missing=True)
+                        if not _ok_gate:
+                            log("API", f"Access denied: gate_response {_gate_session} not owned by caller")
+                            continue
                         from vaf.core.web_interface import get_web_interface as _gwi
-                        _gwi().resolve_gate(_gate_session or "", decision)
+                        # An answer belongs to ONE question. Without the id of the dialog it
+                        # answers, or for one that is no longer open (another tab answered,
+                        # Stop, a later question), it changes nothing: a stale "always" must
+                        # not approve a different command. The tab is told, so it closes.
+                        if not _gate_id or not _gwi().resolve_gate(_gate_session, decision,
+                                                                     gate_id=_gate_id):
+                            await websocket.send_json({"type": "gate_expired", "gate_id": _gate_id,
+                                                       "sessionId": _gate_session})
 
                 elif type == "chat":
                     content = cmd.get("content")

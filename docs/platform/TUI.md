@@ -101,7 +101,7 @@ second turn implementation:
   suppressed while the Web UI log bridge keeps running.
 - **The confirmation gate** finally has a terminal responder: the agent's
   `_ask_user_about_gate` (the decide hook its tool caller is built with) waits
-  on `web_interface.register_gate` whenever a session id is bound, which
+  on `web_interface.wait_gate` whenever a session id is bound, which
   previously timed out (300 s, then cancel) unless a browser was watching. The
   app answers through the same `web_interface.resolve_gate` contract the web
   UI uses. The modal offers what the gate keeps: "always (tool)" instead of

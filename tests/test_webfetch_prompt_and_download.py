@@ -49,11 +49,27 @@ class _Res:
         return False
 
 
+class _Session:
+    """Stands in for vaf.network.egress.egress_session(): the tools fetch through it."""
+
+    def __init__(self, served):
+        self.served = served
+
+    def get(self, url, **kw):
+        return self.served[url]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
 @pytest.fixture
 def web(monkeypatch, tmp_path):
-    import requests
+    import vaf.network.egress as egress
     served = {}
-    monkeypatch.setattr(requests, "get", lambda url, **kw: served[url])
+    monkeypatch.setattr(egress, "egress_session", lambda *a, **k: _Session(served))
     monkeypatch.setattr("vaf.tools.webfetch.MIN_DELAY", 0)
     monkeypatch.setattr(WebFetchTool, "_get_cached_data", lambda self, url, ttl: None)
     monkeypatch.setattr(WebFetchTool, "_save_to_cache", lambda self, *a: None)

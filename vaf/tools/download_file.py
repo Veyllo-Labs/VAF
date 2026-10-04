@@ -31,7 +31,7 @@ class DownloadFileTool(BaseTool):
     category = "web"
     permission_level = "write"
     side_effect_class = "reversible"
-    identity_kwargs = ("user_role", "user_scope_id")
+    identity_kwargs = ("user_role", "user_scope_id", "username")
     file_access = "write"
     description = (
         "Download a file from a URL (an archive, an image, a PDF, a jar) and save it as-is. "
@@ -58,6 +58,7 @@ class DownloadFileTool(BaseTool):
     def run(self, **kwargs) -> str:
         import requests
         from vaf.core.subagent_ipc import get_current_session_id
+        from vaf.network.egress import EgressRefused, egress_session
         from vaf.tools._browser_headers import browser_headers
         from vaf.tools.filesystem import is_safe_path
 
@@ -66,8 +67,6 @@ class DownloadFileTool(BaseTool):
             return "Error: no URL given."
         if not urlparse(url).scheme:
             url = "https://" + url
-        if urlparse(url).scheme not in ("http", "https"):
-            return "Error: only http and https URLs can be downloaded."
         try:
             timeout = max(5, min(int(kwargs.get("timeout") or 60), 600))
         except (TypeError, ValueError):
@@ -104,8 +103,11 @@ class DownloadFileTool(BaseTool):
         written = 0
         kind = ""
         try:
-            with requests.get(url, headers=browser_headers(), timeout=timeout, stream=True,
-                              allow_redirects=True) as res:
+            # Through the destination guard: only http(s), and never this machine or the
+            # cloud metadata service, on the first request or after any redirect.
+            with egress_session(username=kwargs.get("username") or "") as http, \
+                    http.get(url, headers=browser_headers(), timeout=timeout, stream=True,
+                             allow_redirects=True) as res:
                 if res.status_code != 200:
                     return f"Error: the site answered {res.status_code}; nothing was saved."
                 try:
@@ -125,6 +127,9 @@ class DownloadFileTool(BaseTool):
                             raise ValueError(f"more than {MAX_DOWNLOAD_BYTES} bytes")
                         fh.write(chunk)
             os.replace(tmp, target)
+        except EgressRefused as e:
+            tmp.unlink(missing_ok=True)
+            return f"Error: {e} Nothing was saved."
         except requests.exceptions.SSLError as e:
             tmp.unlink(missing_ok=True)
             return (f"Error: the site's TLS certificate could not be verified, so nothing was "

@@ -28,6 +28,8 @@ class WebFetchTool(BaseTool):
     category    = "web"
     permission_level = "read"
     side_effect_class = "none"
+    # The account labels the egress log line and a refusal's security event.
+    identity_kwargs = ("username",)
     description = (
         "Retrieves content from a URL and converts it to readable Markdown. "
         "To learn something specific from a page, pass `prompt` (e.g. 'Which versions are listed "
@@ -132,15 +134,22 @@ class WebFetchTool(BaseTool):
         else:
             try:
                 import requests
+                from vaf.network.egress import EgressRefused, egress_session
                 from vaf.tools._browser_headers import browser_headers
                 # Full, consistent browser header set (not just UA + Accept) — a thin
                 # header set is itself a bot tell. Honours a caller-supplied user_agent.
                 headers = browser_headers(user_agent=kwargs.get("user_agent"))
+                # The URL is whatever the model, a page or a mail said: fetched through the
+                # destination guard, so it never reaches this machine (where a tokenless
+                # request is the owner) or the cloud metadata service.
                 # No retry without certificate verification: that fallback turned every
                 # TLS failure into a silent downgrade whose answer was then cached as if it
                 # were the real page - exactly what an interception looks like.
                 try:
-                    res = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+                    with egress_session(username=kwargs.get("username") or "") as http:
+                        res = http.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+                except EgressRefused as e:
+                    return f"Error fetching {url}: {e}"
                 except requests.exceptions.SSLError as e:
                     return (f"Error fetching {url}: the site's TLS certificate could not be "
                             f"verified, so the page was not loaded ({e}).")

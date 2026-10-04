@@ -62,10 +62,6 @@ FIXED_URL = {
 
 # Fetch paths converted onto vaf.network.egress later in this round. EMPTY when done.
 PENDING = {
-    ("vaf/tools/webfetch.py", "WebFetchTool.run", "requests.get", "url"),
-    ("vaf/tools/download_file.py", "DownloadFileTool.run", "requests.get", "url"),
-    ("vaf/tools/github_tools.py", "GitHubGetFileTool.run", "urllib.request.urlopen", "download_url"),
-    ("vaf/tools/github_tools.py", "GitHubGetFileStructureTool.run", "urllib.request.urlopen", "download_url"),
     ("vaf/tools/search.py", "WebSearchTool.run.fetch_text", "requests.get", "url"),
     ("vaf/tools/research_agent.py", "ResearchAgentTool._format_search_results.fetch_text", "requests.get", "url"),
     ("vaf/tools/coder.py", "CodingAgentTool.run", "requests.get", "url"),

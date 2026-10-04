@@ -77,6 +77,17 @@ def _no_github_message() -> str:
     )
 
 
+
+def _download_raw(download_url: str, username: str = "") -> bytes:
+    """A file too large for the contents API, from the download URL the API named. The URL
+    comes from the server's answer, and an Enterprise server is configured by the person,
+    so it goes through the destination guard like any URL VAF did not choose."""
+    from vaf.network.egress import egress_session
+    with egress_session(username=username or "") as http:
+        resp = http.get(download_url, timeout=15)
+        resp.raise_for_status()
+        return resp.content
+
 class GitHubListReposTool(BaseTool):
     """List the user's GitHub repositories."""
     name = "github_list_repos"
@@ -203,9 +214,7 @@ class GitHubGetFileTool(BaseTool):
                 # Files >1 MB: decoded_content is None — fetch via download_url
                 download_url = getattr(content_file, "download_url", None)
                 if download_url:
-                    import urllib.request
-                    with urllib.request.urlopen(download_url, timeout=15) as resp:  # noqa: S310
-                        raw = resp.read()
+                    raw = _download_raw(download_url, username)
                 else:
                     return f"File '{path}' is too large to read via API (>1 MB) and no download URL available."
 
@@ -869,9 +878,7 @@ class GitHubGetFileStructureTool(BaseTool):
             if raw is None:
                 download_url = getattr(content_file, "download_url", None)
                 if download_url:
-                    import urllib.request
-                    with urllib.request.urlopen(download_url, timeout=15) as resp:  # noqa: S310
-                        raw = resp.read()
+                    raw = _download_raw(download_url, username)
                 else:
                     return f"File '{path}' is too large to analyze (>1 MB) and no download URL available."
 

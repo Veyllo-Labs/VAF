@@ -136,7 +136,11 @@ NEWLY_IDENTIFIED = {
     # chat (session_id None), so it lists what still waits for the workflow owner.
     "list_drafts": ('session_id', 'user_scope_id', 'username'),
     # Added with the tool itself: a step's download lands in the workflow owner's own files.
-    "download_file": ('user_role', 'user_scope_id'),
+    # +username with the destination guard: it labels the egress log line and a refusal's
+    # security event, so a refused fetch names the account that asked for it.
+    "download_file": ('user_role', 'user_scope_id', 'username'),
+    # Added with the destination guard, for the same label (vaf/network/egress.py).
+    "webfetch": ('username',),
     "browser_agent": ('user_scope_id',),
     "create_automation": ('user_role', 'user_scope_id'),
     "create_skill": ('user_scope_id', 'username'),

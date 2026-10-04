@@ -286,5 +286,8 @@ def egress_session(policy: Optional[EgressPolicy] = None, *, username: str = "")
     adapter = _EgressAdapter(policy, username=username)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
+    # Every other scheme too, so file://, ftp:// and the like get the guard's answer
+    # rather than requests' "no connection adapters".
+    session.mount("", adapter)
     session.max_redirects = policy.max_redirects
     return session

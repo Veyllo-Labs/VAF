@@ -190,6 +190,14 @@ def test_only_http_and_https_to_a_named_host(url):
         check_destination(url, _public())
 
 
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://public.test/x"])
+def test_the_session_answers_every_other_scheme_itself(url):
+    """MUTATION: mount the adapter for http(s) only, and requests answers "no connection
+    adapters" instead of the refusal a tool can pass on."""
+    with egress_session(_public()) as s, pytest.raises(EgressRefused, match="only http and https"):
+        s.get(url, timeout=5)
+
+
 def test_a_trusted_host_may_be_local_but_never_forbidden():
     """An MCP server an administrator registered on this machine."""
     assert check_destination("http://loop.test/", EgressPolicy(trusted_host="loop.test")) == "127.0.0.9"

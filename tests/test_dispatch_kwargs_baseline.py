@@ -105,7 +105,7 @@ KWARGS_BASELINE = {
     # declaration - it closed its gap by declaring rather than hand-building.
     "document_writer":           ("chat", ["_session_id", "user_role", "user_scope_id"]),
     # Measured when the tool was added: the identity its file_access="write" declaration needs.
-    "download_file":             ("chat", ["user_role", "user_scope_id"]),
+    "download_file":             ("chat", ["user_role", "user_scope_id", "username"]),
     "edit_file":                 ("chat", ["user_role", "user_scope_id"]),
     "execute_workflow":          ("chat", ["_agent"]),
     "find_discord_messages":     ("chat", ["user_scope_id", "username"]),
@@ -246,7 +246,7 @@ KWARGS_BASELINE = {
     "update_working_memory":     ("chat", ["user_scope_id"]),
     "use_skill":                 ("chat", ["user_scope_id"]),
     "web_search":                ("chat", ["user_scope_id"]),
-    "webfetch":                  ("chat", []),
+    "webfetch":                  ("chat", ["username"]),
     "whatsapp_call":             ("chat", ["user_scope_id", "username"]),
     "inbox":                     ("chat", ["user_scope_id", "username"]),
     "write_file":                ("chat", ["_session_id", "_session_workspace", "user_role", "user_scope_id"]),

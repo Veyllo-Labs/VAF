@@ -331,6 +331,27 @@ def test_revoking_stops_the_accounts_background_commands_and_tells_the_listeners
         processes.terminate_all()
 
 
+def test_the_queue_finds_an_accounts_work_under_any_of_its_names(monkeypatch):
+    """The local admin's turns carry its scope or the canonical "default"; both are its work,
+    as processes.list_for_scope already reads them. MUTATION: compare the raw scope strings."""
+    import vaf.core.config as config
+    from vaf.core.task_queue import TaskQueue
+    monkeypatch.setattr(config, "get_local_admin_scope_id", lambda: "admin-scope-0001")
+    tq = TaskQueue()
+    chats = ["web_chat-q1", "web_chat-q2", "web_chat-q3", "web_chat-q4"]
+    try:
+        tq.add(session_id=chats[0], input_text="a", metadata={"user_scope_id": "admin-scope-0001"})
+        tq.add(session_id=chats[1], input_text="b", metadata={"enqueue_user_scope_id": "default"})
+        tq.add(session_id=chats[2], input_text="c", metadata={})
+        tq.add(session_id=chats[3], input_text="d", metadata={"user_scope_id": OTHER})
+        assert tq.sessions_for_scope("admin-scope-0001") >= {chats[0], chats[1]}
+        assert not tq.sessions_for_scope("admin-scope-0001") & {chats[2], chats[3]}
+        assert tq.sessions_for_scope(OTHER) == {chats[3]}
+    finally:
+        for chat in chats:
+            tq.drop_queued_tasks_for_session(chat)
+
+
 def test_a_waiting_confirmation_is_answered_cancel_when_the_account_is_revoked():
     """The dialog held the turn for five minutes whatever was pressed meanwhile. MUTATION:
     wait for the gate in one block again."""
@@ -491,3 +512,15 @@ def test_only_an_admin_reads_or_revokes_another_accounts_grants(_trust_dir, monk
     assert list(admin.get(target).json()["tools"]) == ["python_exec"]
     assert admin.post(f"{target}/revoke", json={"everything": True}).json()["removed"]["tools"] == ["python_exec"]
     assert json.loads(json.dumps(trust.list_standing_grants(SCOPE))) == {"tools": {}, "dirs": []}
+
+
+def test_the_grants_list_never_shows_another_accounts_grants():
+    """Switching accounts in the user editor left the previous one's list - and its revoke
+    buttons - on screen until the next answer, and a failed fetch kept it for good.
+    MUTATION: keep the old list on a failed fetch, or accept a late answer for another account."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "web" / "components" / "settings"
+           / "StandingGrantsSection.tsx").read_text(encoding="utf-8")
+    assert "if (endpointRef.current === requested) setData(next);" in src
+    assert "next = null;" in src
+    assert "useEffect(() => { setData(null); void load(); }, [load]);" in src

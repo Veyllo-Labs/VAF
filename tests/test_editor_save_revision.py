@@ -210,3 +210,12 @@ def test_every_editor_save_names_its_revision():
                 "web/components/CodeViewer.tsx"):
         src = _src(rel)
         assert "saveEditorFile(" in src and "base_revision:" in src, rel
+
+
+def test_the_code_viewer_follows_a_save_into_the_copy():
+    """After "keep mine as a copy" the viewer showed the original and called the edits saved:
+    the next save went against the original's revision. MUTATION: drop the retarget."""
+    viewer = _src("web/components/CodeViewer.tsx")
+    redirect = viewer[viewer.index("if (outcome.redirected) {"):viewer.index("revisionRef.current = outcome.revision;")]
+    assert "onRetarget(outcome.path)" in redirect and "setIsDirty(false)" not in redirect
+    assert "onRetarget={(path) => setCodeViewerState(" in _src("web/app/page.tsx")

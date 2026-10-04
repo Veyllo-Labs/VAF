@@ -78,7 +78,11 @@ def test_stop_session_answers_with_its_documented_keys():
                                     "gate_cancelled": False}
 
 
-def test_standing_grants_are_per_account_and_can_be_taken_back(tmp_path):
+def test_standing_grants_are_per_account_and_can_be_taken_back(tmp_path, monkeypatch):
+    # A trust store of this test's own: a failure before the revoke below cannot leave a
+    # standing grant for the next test.
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "config_dir", staticmethod(lambda: Path(tmp_path)))
     folder = Path(tmp_path) / "project"
     folder.mkdir()
     vaf.set_tool_policy("read_note", "allow", SCOPE)

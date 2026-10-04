@@ -3291,11 +3291,12 @@ function VAFDashboardContent() {
         command_categories?: string[]; offer_standing?: boolean; always_trusts_folder?: boolean } | null>(null);
     // One answer for one question: the dialog's own id and chat travel with it, and the server
     // drops an answer whose question is no longer open.
+    // The dialog closes only once the answer is on its way: with the socket down it stays,
+    // instead of vanishing while the agent goes on waiting for an answer that never left.
     const answerGate = (decision: 'cancel' | 'allow_once' | 'allow_chat' | 'allow_always') => {
-        if (gateRequest) {
-            ws?.send(JSON.stringify({ type: 'gate_response', decision,
-                gate_id: gateRequest.gate_id, sessionId: gateRequest.sessionId }));
-        }
+        if (!gateRequest || !ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type: 'gate_response', decision,
+            gate_id: gateRequest.gate_id, sessionId: gateRequest.sessionId }));
         setGateRequest(null);
     };
     // The main agent avatar briefly FLASHES a tool's outcome (success / error); a pending risky-tool
@@ -11171,6 +11172,7 @@ function VAFDashboardContent() {
                                     liveRefresh={codeViewerState.liveRefresh ?? isGenerating}
                                     onClose={() => setCodeViewerState(prev => ({ ...prev, isOpen: false }))}
                                     onContentLoad={(content) => setCodeViewerState(prev => ({ ...prev, loadedContent: content }))}
+                                    onRetarget={(path) => setCodeViewerState(prev => ({ ...prev, filePath: path, title: path.split(/[\\/]/).pop() || prev.title }))}
                                 />
                             ) : documentViewerState.isOpen ? (
                                 <DocumentViewer

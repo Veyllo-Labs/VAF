@@ -111,10 +111,12 @@ export interface CodeViewerProps {
   onClose: () => void;
   /** Called whenever the displayed content changes (used to give the agent context) */
   onContentLoad?: (content: string) => void;
+  /** "Keep mine as a copy" saved the edit copy: show and edit that file from now on. */
+  onRetarget?: (path: string) => void;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
-export default function CodeViewer({ isOpen, filePath, title, initialContent, liveRefresh = false, onClose, onContentLoad }: CodeViewerProps) {
+export default function CodeViewer({ isOpen, filePath, title, initialContent, liveRefresh = false, onClose, onContentLoad, onRetarget }: CodeViewerProps) {
   const [content, setContent] = useState('');
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -203,7 +205,14 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
         throw new Error(outcome.error || 'Save failed');
       }
       setConflict(null);
-      if (!outcome.redirected) revisionRef.current = outcome.revision;
+      if (outcome.redirected) {
+        // The edits are in the copy now. The viewer follows it (a new path loads the copy
+        // with its own revision); a host that cannot follow leaves them unsaved HERE, so the
+        // next save is not sent against the original's revision as if it were the copy.
+        if (onRetarget && outcome.path) onRetarget(outcome.path);
+        return;
+      }
+      revisionRef.current = outcome.revision;
       setIsDirty(false);
       setSavedAt(new Date());
     } catch (err) {
@@ -211,7 +220,7 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
     } finally {
       setIsSaving(false);
     }
-  }, [filePath, content, isDirty, conflict]);
+  }, [filePath, content, isDirty, conflict, onRetarget]);
 
   // Ctrl+S to save, Esc to close
   useEffect(() => {

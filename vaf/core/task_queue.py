@@ -349,14 +349,21 @@ class TaskQueue:
                     yield item[3]
 
     def sessions_for_scope(self, user_scope_id: str) -> set:
-        """The sessions with an in-flight or queued task of this account (exact scope).
-        For stopping everything one account runs (vaf.core.revocation)."""
-        key = str(user_scope_id or "").strip()
-        if not key:
+        """The sessions with an in-flight or queued task of this account. For stopping
+        everything one account runs (vaf.core.revocation). Scopes are compared by trust's
+        canonical key, as `processes.list_for_scope` does, so the local admin's aliases match;
+        scope-less housekeeping tasks never do."""
+        if not str(user_scope_id or "").strip():
             return set()
+        from vaf.core.trust import _scope_key
+        key = _scope_key(user_scope_id)
         with self._cv:
-            return {str(task.session_id) for task in self._iter_all_tasks()
-                    if self._task_scope(task) == key and task.session_id}
+            out = set()
+            for task in self._iter_all_tasks():
+                scope = self._task_scope(task)
+                if scope is not None and task.session_id and _scope_key(scope) == key:
+                    out.add(str(task.session_id))
+            return out
 
     def is_busy_for_scope(self, target_key: str, canonicalize: Callable[[Any], str]) -> bool:
         """True if any in-flight OR queued task belongs to the same user as `target_key`.

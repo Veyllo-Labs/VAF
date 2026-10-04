@@ -174,3 +174,13 @@ def test_the_socket_drops_an_answer_without_its_question(web, monkeypatch):
                                  "sessionId": SESSION, "gate_id": gate_id}))
         assert _wait(lambda: gate["event"].is_set())
     assert gate["decision"][0] == "allow_once"
+
+
+def test_the_dialog_closes_only_once_the_answer_went_out():
+    """With the socket down the answer is lost and the agent waits five minutes; the dialog
+    must stay so the person can answer again. MUTATION: clear the dialog before the check."""
+    from pathlib import Path
+    page = (Path(__file__).resolve().parents[1] / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    helper = page[page.index("const answerGate = "):]
+    helper = helper[:helper.index("};")]
+    assert helper.index("ws.readyState !== WebSocket.OPEN) return") < helper.index("setGateRequest(null)")

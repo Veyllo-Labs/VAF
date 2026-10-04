@@ -3,7 +3,7 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Folder, Wrench, X } from 'lucide-react';
 
@@ -25,15 +25,24 @@ export default function StandingGrantsSection({ endpoint, own }: { endpoint: str
     const [data, setData] = useState<Grants | null>(null);
     const [failed, setFailed] = useState(false);
 
+    // The list on screen is always THIS endpoint's: cleared when the account changes, on a
+    // failed fetch, and an answer for a previous account is dropped - its revoke buttons
+    // would otherwise post that account's grant names to the new one.
+    const endpointRef = useRef(endpoint);
+    endpointRef.current = endpoint;
     const load = useCallback(async () => {
+        const requested = endpoint;
+        let next: Grants | null = null;
         try {
-            const res = await fetch(`${apiBase}${endpoint}`, { credentials: 'include' });
-            if (!res.ok) { setData(null); return; }
-            setData(await res.json());
-        } catch { /* a section that cannot be fetched stays as it was */ }
+            const res = await fetch(`${apiBase}${requested}`, { credentials: 'include' });
+            next = res.ok ? await res.json() : null;
+        } catch {
+            next = null;
+        }
+        if (endpointRef.current === requested) setData(next);
     }, [apiBase, endpoint]);
 
-    useEffect(() => { void load(); }, [load]);
+    useEffect(() => { setData(null); void load(); }, [load]);
 
     const revoke = async (body: { tools?: string[]; dirs?: string[]; everything?: boolean }) => {
         setFailed(false);

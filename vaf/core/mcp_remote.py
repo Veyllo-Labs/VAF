@@ -93,6 +93,12 @@ def _describe(exc: BaseException) -> str:
     for cur in seen:
         if isinstance(cur, McpSignInRequired):
             return str(cur)
+    # The destination guard's refusal travels as the cause of an httpx.ConnectError: its
+    # reason, not "could not be reached".
+    from vaf.network.egress import EgressRefused
+    for cur in seen:
+        if isinstance(cur, EgressRefused):
+            return str(cur)
     for cur in seen:
         if type(cur).__name__ in ("OAuthFlowError", "OAuthTokenError", "OAuthRegistrationError"):
             return f"the sign-in failed: {cur}"

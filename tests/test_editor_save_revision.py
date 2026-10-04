@@ -195,6 +195,17 @@ def test_a_failed_word_load_never_becomes_an_empty_document():
     load = src[src.index("const loadModel = useCallback"):src.index("useEffect(() => {\n    if (documentModel || !filePath) return;")]
     assert "createEmptyNativeDocx" not in load and "setLoadFailed(true)" in load
     assert "disabled={isSaving || loadFailed || !documentModel}" in src
+    # And it is SAID, with a retry, before the spinner that would otherwise spin forever.
+    failed_view = src.index("if (loadFailed && !documentModel && !isLoading)")
+    assert failed_view < src.index("if (isLoading || !documentModel)")
+    assert "loadFailed onReload={() => void loadModel()}" in src[failed_view:failed_view + 1200]
+
+
+def test_the_code_viewer_conflict_names_the_revision_on_disk_now():
+    """A second change on disk under unsaved edits kept the first one's revision, so
+    "Overwrite" was refused again. MUTATION: keep any existing conflict."""
+    viewer = _src("web/components/CodeViewer.tsx")
+    assert "prev.currentRevision === revision" in viewer
 
 
 def test_an_agent_rewrite_keeps_a_dirty_draft():

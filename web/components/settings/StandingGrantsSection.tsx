@@ -30,10 +30,14 @@ export default function StandingGrantsSection({ endpoint, own }: { endpoint: str
     // The list on screen is always THIS endpoint's: cleared when the account changes, on a
     // failed fetch, and an answer for a previous account is dropped - its revoke buttons
     // would otherwise post that account's grant names to the new one.
+    // Only the LATEST load writes: a slow answer from before a revoke must not put a revoked
+    // grant back on screen.
     const endpointRef = useRef(endpoint);
     endpointRef.current = endpoint;
+    const loadSeqRef = useRef(0);
     const load = useCallback(async () => {
         const requested = endpoint;
+        const seq = ++loadSeqRef.current;
         let next: Grants | null = null;
         try {
             const res = await fetch(`${apiBase}${requested}`, { credentials: 'include' });
@@ -41,7 +45,7 @@ export default function StandingGrantsSection({ endpoint, own }: { endpoint: str
         } catch {
             next = null;
         }
-        if (endpointRef.current === requested) {
+        if (endpointRef.current === requested && seq === loadSeqRef.current) {
             setData(next);
             setLoadFailed(next === null);
         }

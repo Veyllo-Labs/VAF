@@ -1225,6 +1225,23 @@ export default function NativeDocxEditor({
     return (selectedBlock as any).paragraphIndex === index;
   };
 
+  // A failed load has no model to show: the notice and its retry, never an endless spinner
+  // (and never an empty document Save could write over the file).
+  if (loadFailed && !documentModel && !isLoading) {
+    return (
+      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-[#F9FAFB]">
+        <div className="flex h-12 items-center justify-between border-b border-gray-200 bg-white px-4 shrink-0">
+          <span className="truncate text-xs font-semibold text-gray-900">{title}</span>
+          {canClose && onClose && (
+            <button type="button" onClick={onClose} className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"><X size={14} /></button>
+          )}
+        </div>
+        <EditorFileBanner info={null} conflict={null} loadFailed onReload={() => void loadModel()} />
+        {error && <p className="px-4 py-3 text-xs text-red-600 break-words">{error}</p>}
+      </div>
+    );
+  }
+
   if (isLoading || !documentModel) {
     return <div className="flex h-full items-center justify-center bg-[#F9FAFB] text-sm text-gray-500"><Loader2 size={18} className="mr-2 animate-spin" />Loading...</div>;
   }

@@ -34,16 +34,27 @@ def test_a_public_host_is_reached_under_its_name(server):
 
 def test_this_machine_is_refused_before_any_connection(server):
     """MUTATION: skip the judgement in handle_async_request."""
-    with pytest.raises(EgressRefused):
+    with pytest.raises(httpx.ConnectError) as refused:
         _get(f"http://loop.test:{server.port}/api/users", EgressPolicy(allow_private=True))
+    assert isinstance(refused.value.__cause__, EgressRefused)
     assert server.hits == []
+
+
+def test_a_refusal_is_the_transport_failure_httpx_callers_handle(server):
+    """The MCP SDK handles an httpx.TransportError; a bare EgressRefused escaped its
+    handling. The reason stays the message. MUTATION: let EgressRefused leave the transport."""
+    with pytest.raises(httpx.TransportError) as refused:
+        _get(f"http://loop.test:{server.port}/x")
+    assert "Only internet addresses are fetched" in str(refused.value)
+    assert refused.value.request is not None
 
 
 def test_a_redirect_is_judged_like_the_first_request(server):
     """httpx follows redirects (the MCP SDK's default) and calls the transport per hop.
     MUTATION: judge only the first request."""
-    with pytest.raises(EgressRefused):
+    with pytest.raises(httpx.ConnectError) as refused:
         _get(f"http://public.test:{server.port}/redir/http://loop.test:{server.port}/x")
+    assert isinstance(refused.value.__cause__, EgressRefused)
     assert len(server.hits) == 1
 
 

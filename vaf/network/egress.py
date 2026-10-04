@@ -303,23 +303,26 @@ class _EgressAsyncTransport(httpx.AsyncBaseTransport):
         return transport
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        scheme, host, port = _split(str(request.url), self._policy)
-        proxy = binding.system_proxy_for(scheme, host)
+        # A refusal leaves as httpx.ConnectError, the transport failure httpx's callers (the
+        # MCP SDK) handle; the guard's reason is its message and EgressRefused its cause.
         try:
-            addresses = await asyncio.get_running_loop().run_in_executor(None, _resolve, host, port)
-        except OSError:
-            addresses = []
-        if proxy:
-            # Same rule as the requests adapter: a local answer is still judged, an unknown
-            # name is the proxy's.
+            scheme, host, port = _split(str(request.url), self._policy)
+            proxy = binding.system_proxy_for(scheme, host)
+            try:
+                addresses = await asyncio.get_running_loop().run_in_executor(None, _resolve, host, port)
+            except OSError:
+                addresses = []
+            # Same rule as the requests adapter: an address is always judged; behind a proxy a
+            # name the local resolver does not know is the proxy's.
             if addresses:
                 kind = _judge(host, addresses, self._policy, self._username)
                 _record_private(host, addresses[0], kind, self._username)
+        except EgressRefused as exc:
+            raise httpx.ConnectError(str(exc), request=request) from exc
+        if proxy:
             return await self._transport("proxy " + proxy, proxy=proxy).handle_async_request(request)
         if not addresses:
             raise httpx.ConnectError(f"Cannot resolve host: {host}", request=request)
-        kind = _judge(host, addresses, self._policy, self._username)
-        _record_private(host, addresses[0], kind, self._username)
         # A COPY goes to the checked address; the caller's request keeps its URL, because httpx
         # resolves a relative redirect, the cookie jar and response.request against it - an
         # address there would make the next hop lose the name (virtual hosts, trusted_host).

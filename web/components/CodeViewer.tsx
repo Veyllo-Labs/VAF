@@ -156,8 +156,11 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
         setLoadError(null);
         onContentLoad?.(text);
       } else if (revision && revisionRef.current && revision !== revisionRef.current) {
-        // Changed on disk under unsaved edits: said now, not at the next save.
-        setConflict(prev => prev ?? { code: 'conflict', path: filePath, currentRevision: revision });
+        // Changed on disk under unsaved edits: said now, not at the next save - and with the
+        // revision on disk NOW, so "Overwrite" names it even after a further change.
+        setConflict(prev => (prev && (prev.code !== 'conflict' || prev.currentRevision === revision))
+          ? prev
+          : { code: 'conflict', path: filePath, currentRevision: revision });
       }
     } catch (err) {
       if (!silent) setLoadError(String(err));

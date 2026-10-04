@@ -50,6 +50,17 @@ def cancel_requested() -> bool:
     ev = getattr(_thread_cancel, "event", None)
     return bool(ev is not None and ev.is_set())
 
+def cancel_check() -> Callable[[], bool]:
+    """``cancel_requested`` of THIS worker, as a callable any thread may poll.
+
+    The flag is per thread, so a helper thread that watches a child process on the worker's
+    behalf (the worker itself is blocked reading the child's output) takes this from the
+    worker first. Outside a bounded worker it never answers True.
+    """
+    ev = getattr(_thread_cancel, "event", None)
+    return ev.is_set if ev is not None else (lambda: False)
+
+
 # Sentinels returned (not raised) when a call is aborted. Kept as recognizable
 # string prefixes so callers (agent / workflow engine) can detect them in a result.
 TIMEOUT_PREFIX = "[VAF_TOOL_TIMEOUT]"

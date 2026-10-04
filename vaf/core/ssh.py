@@ -37,6 +37,9 @@ NAMED BOUNDARIES:
   installs (8.1) predates `SSH_ASKPASS_REQUIRE`, and the folder rights do not apply there.
 - No background runs yet: a detached command keeps stdin open for host_process, so a wrong
   sudo password would wait for more lines.
+- `run` keeps its own wait instead of `processes.run_foreground`: it streams an upload into
+  ssh and a download out of it under a byte cap, which a capture-everything run cannot. It
+  honours Stop the same way (`bounded_run.cancel_check`, the process group ended).
 - An account that also has host_bash can read files on this machine, the key folder included
   (vaf/tools/host_bash.py: an account permission outside the file jail).
 - Engine-internal, not on the facade: the ssh tool, `vaf ssh` and the settings route are its
@@ -51,6 +54,7 @@ import shlex
 import shutil
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -473,12 +477,24 @@ def run(target: Target, remote_command: str, *, user_scope_id: Optional[str],
         Platform.terminate_process_tree(proc.pid, grace=2.0,
                                         pgid=None if os.name == "nt" else proc.pid)
 
-    def _on_timeout() -> None:
-        state["timed_out"] = True
-        _stop()
+    # The deadline and Stop. This thread is blocked reading the output below, so a watcher
+    # polls both; the call's stop flag is per thread and is taken from this one first.
+    from vaf.core.bounded_run import cancel_check
+    cancelled = cancel_check()
+    finished = threading.Event()
 
-    timer = threading.Timer(timeout, _on_timeout)
-    timer.daemon = True
+    def _watch() -> None:
+        deadline = time.monotonic() + timeout
+        while not finished.wait(0.5):
+            if cancelled():
+                _stop()
+                return
+            if time.monotonic() >= deadline:
+                state["timed_out"] = True
+                _stop()
+                return
+
+    timer = threading.Thread(target=_watch, daemon=True)
     err_chunks: List[bytes] = []
 
     def _read_err() -> None:
@@ -522,7 +538,7 @@ def run(target: Target, remote_command: str, *, user_scope_id: Optional[str],
                 out_chunks.append(chunk)
         proc.wait()
     finally:
-        timer.cancel()
+        finished.set()
         if sink is not None:
             sink.close()
         for t in threads:

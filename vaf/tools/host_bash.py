@@ -29,7 +29,6 @@ A cheap blocklist stops the few catastrophic patterns (command_policy, host prof
 from __future__ import annotations
 
 import os
-import platform
 import subprocess
 
 from vaf.tools.base import BaseTool
@@ -112,16 +111,16 @@ class HostBashTool(BaseTool):
         if kwargs.get("background"):
             return self._start_background(command, kwargs, secret_env)
 
-        run_kwargs = {
-            "capture_output": True, "text": True, "timeout": timeout, "shell": True,
-            "env": {**os.environ, "PYTHONIOENCODING": "utf-8", **secret_env},
-        }
-        if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
-            run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        # Stop ends the command and what it started, not only the wait for it.
+        from vaf.core import processes
         try:
-            proc = subprocess.run(command, **run_kwargs)
+            proc = processes.run_foreground(
+                command, timeout=timeout,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8", **secret_env})
         except subprocess.TimeoutExpired:
             return f"[HOST] Command timed out after {timeout}s: {command}"
+        except processes.ForegroundCancelled:
+            return f"[HOST] Command stopped before it finished: {command}"
         except Exception as e:
             return f"[HOST][ERROR] {e}"
 

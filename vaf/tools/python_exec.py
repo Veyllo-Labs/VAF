@@ -60,7 +60,7 @@ class PythonExecTool(BaseTool):
         "type": "object",
         "properties": {
             "code": {"type": "string", "description": "Python code to execute via sys.executable -c"},
-            "timeout": {"type": "integer", "description": "Timeout seconds (default: 30)", "default": 30},
+            "timeout": {"type": "integer", "description": "Timeout seconds (default 30, max 600)", "default": 30},
         },
         "required": ["code"],
     }
@@ -71,16 +71,25 @@ class PythonExecTool(BaseTool):
         "code": ["task", "script"],
     }
 
-    def budget_seconds(self, args):
-        # The code's own timeout (default 30) plus a margin to collect its output.
+    # The same ceiling host_bash has. Without one the model's number was the dispatcher's
+    # wait too, so a call could hold the turn for as long as it asked.
+    MAX_TIMEOUT_SECONDS = 600
+
+    @classmethod
+    def _code_timeout(cls, args) -> int:
         try:
-            return int((args or {}).get("timeout") or 30) + 15
+            requested = int((args or {}).get("timeout") or 30)
         except (TypeError, ValueError):
-            return 45
+            requested = 30
+        return min(max(1, requested), cls.MAX_TIMEOUT_SECONDS)
+
+    def budget_seconds(self, args):
+        # The code's own timeout plus a margin to collect its output.
+        return self._code_timeout(args) + 15
 
     def run(self, **kwargs) -> str:
         code = str(kwargs.get("code") or "").strip()
-        timeout = int(kwargs.get("timeout") or 30)
+        timeout = self._code_timeout(kwargs)
 
         if not code:
             return "[ERROR] python_exec: missing code"
@@ -105,19 +114,16 @@ class PythonExecTool(BaseTool):
         # (vaf/core/user_secrets.py); the code carries the name, never the value.
         from vaf.core import user_secrets
         secret_env = user_secrets.env_for(code, user_scope_id=scope)
+        # Stop ends the code and what it started, not only the wait for it.
+        from vaf.core import processes
         try:
-            import platform
-            run_kwargs = {
-                "capture_output": True,
-                "text": True,
-                "timeout": timeout,
-                "env": {**os.environ, "PYTHONIOENCODING": "utf-8", **secret_env},
-            }
-            if platform.system() == "Windows":
-                run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-            proc = subprocess.run([sys.executable, "-c", code], **run_kwargs)
+            proc = processes.run_foreground(
+                [sys.executable, "-c", code], timeout=timeout, shell=False,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8", **secret_env})
         except subprocess.TimeoutExpired:
             return f"[ERROR] python_exec: timeout after {timeout}s"
+        except processes.ForegroundCancelled:
+            return "[ERROR] python_exec: stopped before it finished"
         except Exception as e:
             return f"[ERROR] python_exec: {e}"
 

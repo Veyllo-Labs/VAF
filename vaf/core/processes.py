@@ -28,6 +28,10 @@ Boundaries, each deliberate:
 
 The process tree is stopped with ``Platform.terminate_process_tree``, the same code that
 stops sub-agent children: a command run through a shell is only the child of that shell.
+
+``run_foreground()`` is the waiting counterpart (host_bash, python_exec): the call waits for
+the command, and Stop ends the command and everything it started instead of only freeing
+the agent.
 """
 from __future__ import annotations
 
@@ -114,6 +118,75 @@ def _open_private(path: Path):
     return os.fdopen(fd, "wb")
 
 
+def _own_group() -> Dict[str, Any]:
+    """Popen arguments that make the child lead its own process group, so stopping it
+    reaches everything it started (``Platform.terminate_process_tree``)."""
+    if os.name == "nt":
+        return {"creationflags": (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                                  | getattr(subprocess, "CREATE_NO_WINDOW", 0))}
+    return {"start_new_session": True}
+
+
+class ForegroundCancelled(subprocess.SubprocessError):
+    """``run_foreground`` ended the command because its call was stopped."""
+
+    def __init__(self, cmd, output=None, stderr=None):
+        super().__init__(f"stopped before it finished: {cmd}")
+        self.cmd, self.output, self.stderr = cmd, output, stderr
+
+
+def run_foreground(command, *, timeout: float, env: Optional[Dict[str, str]] = None,
+                   cwd: Optional[str] = None, shell: bool = True,
+                   poll: float = 0.5) -> subprocess.CompletedProcess:
+    """Run ``command`` and wait for it, as ``subprocess.run(capture_output=True, text=True)``
+    does - but so that Stop reaches it.
+
+    ``subprocess.run`` could not be stopped: Stop freed the agent (``run_bounded`` abandons
+    the worker thread) while the command ran on until its own timeout, and at that timeout
+    only the shell was killed - what the shell had started ran on. Here the command leads its
+    own process group, the wait runs in ``poll``-second slices, and the whole tree is ended
+    when the call is stopped (``bounded_run.cancel_requested``: the Stop button, an account
+    whose access was taken away, the dispatcher's deadline) or ``timeout`` passes.
+
+    stdin is empty: nobody can type into a foreground call, so a command that asks for
+    input reads end-of-file at once instead of waiting out its timeout.
+
+    Raises ``subprocess.TimeoutExpired`` at the deadline and ``ForegroundCancelled`` on a
+    stop, each after the tree is gone and carrying the output read so far.
+    """
+    from vaf.core.bounded_run import cancel_requested
+    from vaf.core.platform import Platform
+    popen = subprocess.Popen(command, shell=shell, cwd=cwd or None, env=env, text=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, **_own_group())
+    deadline = time.monotonic() + max(1.0, float(timeout))
+    while True:
+        try:
+            out, err = popen.communicate(timeout=poll)
+            return subprocess.CompletedProcess(command, popen.returncode, out, err)
+        except subprocess.TimeoutExpired:
+            pass
+        cancelled = cancel_requested()
+        if cancelled or time.monotonic() >= deadline:
+            break
+    Platform.terminate_process_tree(popen.pid, grace=1.0,
+                                    pgid=None if os.name == "nt" else popen.pid)
+    try:
+        out, err = popen.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        # Something that left the group still holds the pipes open; the tree is stopped,
+        # so stop waiting for them.
+        out = err = None
+        for stream in (popen.stdout, popen.stderr):
+            try:
+                stream.close()
+            except Exception:
+                pass
+    if cancelled:
+        raise ForegroundCancelled(command, output=out, stderr=err)
+    raise subprocess.TimeoutExpired(command, timeout, output=out, stderr=err)
+
+
 def start(command: str, *, session_id: str, user_scope_id: Any = None,
           username: Optional[str] = None, role: Optional[str] = None,
           source: str = "web", cwd: Optional[str] = None,
@@ -148,11 +221,7 @@ def start(command: str, *, session_id: str, user_scope_id: Any = None,
         "env": {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1",
                 **(secret_env or {})},
     }
-    if os.name == "nt":
-        kwargs["creationflags"] = (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                                   | getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    else:
-        kwargs["start_new_session"] = True
+    kwargs.update(_own_group())
     try:
         popen = subprocess.Popen(command, **kwargs)
     except Exception as e:
@@ -238,6 +307,15 @@ def list_for(*, session_id: Optional[str], user_scope_id: Any = None) -> List[Ba
     with _lock:
         return [p for p in _registry.values()
                 if _owner_key(p.user_scope_id, p.session_id) == owner]
+
+
+def list_for_scope(user_scope_id: Any) -> List[BackgroundProcess]:
+    """Every RUNNING background command of one account, across its chats. For stopping an
+    account whose access was taken away (vaf.core.revocation); Stop alone spares these."""
+    from vaf.core.trust import _scope_key
+    key = _scope_key(user_scope_id)
+    with _lock:
+        return [p for p in _registry.values() if _scope_key(p.user_scope_id) == key and p.running]
 
 
 def read_tail(record: BackgroundProcess, *, max_chars: int = 4000) -> str:

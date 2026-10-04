@@ -65,6 +65,9 @@ BRANCHES_WITH_CLIENT_SESSION_ID = {
     # the strict gate (no allow_missing): there is nothing to regenerate in a
     # session that does not exist.
     "regenerate_last_reply",
+    # An answer to a confirmation names the chat whose question it answers; the
+    # gate id alone is not enough to act on someone else's chat.
+    "gate_response",
 }
 
 

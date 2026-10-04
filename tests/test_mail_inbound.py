@@ -431,12 +431,23 @@ def test_a_released_draft_the_sweep_delivers_is_not_a_failure(monkeypatch):
     # Only the failed outcome goes back to held; a cancelled or discarded op is not the
     # person's any more and is left alone.
     assert restored == [("held", {"expect_state": "failed"})]
-    # And a draft that is not waiting is still "no draft with that id", not a send.
-    not_waiting = SimpleNamespace(
+    # A draft that already left is answered from its state, never sent again (a second tab, a
+    # retried request); one that was dropped is still "no draft with that id".
+    approved = []
+    already_sent = SimpleNamespace(
         store=SimpleNamespace(get_op=lambda _id: {"kind": "send", "state": "done", "payload": {}}),
-        approve_draft=lambda _id: True, draft_state=lambda op: ("held", ""),
+        approve_draft=lambda _id: approved.append(_id) or True, draft_state=lambda op: ("held", ""),
+        chat_draft=lambda op: {"state": "sent"},
         send_outcome=lambda _id: {"state": "done", "error": ""})
-    assert release_held_draft("scope", "alice", 1, service=not_waiting)["error"] == "not waiting"
+    out = release_held_draft("scope", "alice", 1, service=already_sent)
+    assert out["ok"] is True and out["repeat"] is True and approved == []
+    dropped = SimpleNamespace(
+        store=SimpleNamespace(get_op=lambda _id: {"kind": "send", "state": "discarded", "payload": {}}),
+        approve_draft=lambda _id: approved.append(_id) or True, draft_state=lambda op: ("held", ""),
+        chat_draft=lambda op: {"state": "discarded"},
+        send_outcome=lambda _id: {"state": "done", "error": ""})
+    assert release_held_draft("scope", "alice", 1, service=dropped)["error"] == "not waiting"
+    assert approved == []
 
     # No account, no release: the draft stays held and says why, instead of turning into a
     # pending op that nothing will ever drain.

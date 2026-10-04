@@ -295,15 +295,102 @@ def foreign_request_reason(headers, *, scheme: str, method: str) -> Optional[str
     return "site"
 
 
+# ---------------------------------------------------------------------------
+# What an OUTBOUND destination address is
+# ---------------------------------------------------------------------------
+#
+# One answer for every outbound check (mail servers, the mail image proxy, the agent's
+# web fetches). Explicit sets rather than ipaddress.is_global / is_private, because those
+# tables differ between the Python versions VAF supports and are wrong for the cases that
+# matter here: Python 3.13 reports the NAT64 form of 127.0.0.1 (64:ff9b::7f00:1), the
+# IPv4-compatible form (::7f00:1) and the deprecated site-local fec0::/10 as GLOBAL.
+# Addresses that carry an IPv4 inside an IPv6 are judged by the IPv4 they reach.
+
+_V4_LOOPBACK = (ipaddress.ip_network("127.0.0.0/8"),)
+_V4_PRIVATE = tuple(ipaddress.ip_network(n) for n in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+    "100.64.0.0/10",     # shared address space: carrier NAT, Tailscale
+    "198.18.0.0/15",     # benchmarking; fake-IP proxies resolve every name into it
+))
+_V4_FORBIDDEN = tuple(ipaddress.ip_network(n) for n in (
+    "0.0.0.0/8",         # "this network": 0.x reaches the local host on Linux
+    "169.254.0.0/16",    # link-local, including the 169.254.169.254 cloud metadata service
+    "192.0.0.0/24", "192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24",
+    "224.0.0.0/4",       # multicast
+    "240.0.0.0/4",       # reserved, including 255.255.255.255
+))
+_V6_PRIVATE = (ipaddress.ip_network("fc00::/7"),)      # unique local
+_V6_FORBIDDEN = tuple(ipaddress.ip_network(n) for n in (
+    "::/128", "100::/64", "2001::/23", "2001:db8::/32", "3fff::/20", "5f00::/16",
+    "fe80::/10", "fec0::/10", "ff00::/8",
+))
+_V6_GLOBAL_UNICAST = ipaddress.ip_network("2000::/3")
+_V6_IPV4_COMPATIBLE = ipaddress.ip_network("::/96")
+_V6_NAT64 = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))
+
+
+def _embedded_ipv4(addr: ipaddress.IPv6Address) -> Optional[ipaddress.IPv4Address]:
+    """The IPv4 an IPv6 address actually reaches, or None when it carries none."""
+    if addr.ipv4_mapped is not None:
+        return addr.ipv4_mapped
+    if any(addr in net for net in _V6_NAT64):
+        return ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+    if addr.sixtofour is not None:
+        return addr.sixtofour
+    if addr.teredo is not None:
+        return addr.teredo[1]
+    if addr in _V6_IPV4_COMPATIBLE and int(addr) > 1:   # not :: and not ::1
+        return ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+    return None
+
+
+def classify_address(ip: str) -> str:
+    """Classify an outbound destination: "public", "private", "loopback" or "forbidden".
+
+    - loopback: this machine (127.0.0.0/8, ::1), where VAF's own backend listens.
+    - private: a LAN or a carrier/overlay network (RFC 1918, 100.64/10, 198.18/15, fc00::/7).
+    - forbidden: never a destination - link-local and the cloud metadata service,
+      multicast, documentation, reserved and unspecified ranges.
+    - public: everything else; for IPv6 only the global unicast block 2000::/3.
+
+    An unparseable string is "forbidden". A scoped IPv6 (fe80::1%eth0) parses and is
+    judged without its scope.
+    """
+    try:
+        addr = ipaddress.ip_address(str(ip).strip())
+    except ValueError:
+        return "forbidden"
+    if isinstance(addr, ipaddress.IPv6Address):
+        inner = _embedded_ipv4(addr)
+        if inner is not None:
+            addr = inner
+        else:
+            if addr == ipaddress.IPv6Address("::1"):
+                return "loopback"
+            if any(addr in net for net in _V6_FORBIDDEN):
+                return "forbidden"
+            if any(addr in net for net in _V6_PRIVATE):
+                return "private"
+            return "public" if addr in _V6_GLOBAL_UNICAST else "forbidden"
+    if any(addr in net for net in _V4_LOOPBACK):
+        return "loopback"
+    if any(addr in net for net in _V4_FORBIDDEN):
+        return "forbidden"
+    if any(addr in net for net in _V4_PRIVATE):
+        return "private"
+    return "public"
+
+
 def assert_safe_remote_host(host: str, *, allow_private: bool = False) -> None:
     """SSRF guard for user-supplied OUTBOUND targets (e.g. an IMAP/SMTP server a user types
     into the email wizard). Resolves the host and raises ValueError if ANY resolved address is
     not globally routable.
 
-    - Multicast / reserved / unspecified / link-local (incl. the 169.254.169.254 cloud-metadata
-      endpoint) are NEVER allowed, even with the override.
-    - Loopback / RFC-1918 private addresses are allowed only when allow_private=True (so a user
-      who genuinely runs a LAN / self-hosted mail server can opt in via email_allow_private_hosts).
+    - Forbidden addresses (classify_address: link-local incl. the 169.254.169.254 cloud-metadata
+      endpoint, multicast, documentation, reserved, unspecified) are NEVER allowed, even with the
+      override.
+    - Loopback and private addresses are allowed only when allow_private=True (so a user who
+      genuinely runs a LAN / self-hosted mail server can opt in via email_allow_private_hosts).
 
     Note: there is an inherent resolve-vs-connect TOCTOU (DNS rebinding); for a mostly-static
     mail-server config the residual risk is low and accepted.
@@ -319,22 +406,17 @@ def assert_safe_remote_host(host: str, *, allow_private: bool = False) -> None:
     if not addrs:
         raise ValueError(f"Cannot resolve host: {h}")
     for ip in addrs:
-        try:
-            addr = ipaddress.ip_address(ip)
-        except ValueError as e:
-            raise ValueError(f"Invalid resolved address for host: {h}") from e
-        if addr.is_global:
+        kind = classify_address(ip)
+        if kind == "public":
             continue
-        if addr.is_multicast or addr.is_reserved or addr.is_unspecified or addr.is_link_local:
+        if kind == "forbidden":
             raise ValueError(f"Refusing to connect to non-routable address ({ip}) for host {h}")
-        if addr.is_loopback or addr.is_private:
-            if allow_private:
-                continue
-            raise ValueError(
-                f"Refusing to connect to private address ({ip}) for host {h}. "
-                "Set email_allow_private_hosts=true to allow a LAN / self-hosted server."
-            )
-        raise ValueError(f"Refusing to connect to non-public address ({ip}) for host {h}")
+        if allow_private:
+            continue
+        raise ValueError(
+            f"Refusing to connect to private address ({ip}) for host {h}. "
+            "Set email_allow_private_hosts=true to allow a LAN / self-hosted server."
+        )
 
 
 def assert_ip_safe(ip: str, *, allow_private: bool = False) -> None:
@@ -342,20 +424,17 @@ def assert_ip_safe(ip: str, *, allow_private: bool = False) -> None:
     assert_safe_remote_host, but the caller resolves the host once and then pins
     the connection to this exact IP - closing the resolve-vs-connect (DNS
     rebinding) TOCTOU that assert_safe_remote_host cannot. Raises ValueError if
-    the address is not a safe outbound target."""
-    try:
-        addr = ipaddress.ip_address(ip)
-    except ValueError as e:
-        raise ValueError(f"Invalid address: {ip}") from e
-    if addr.is_global:
+    the address is not a safe outbound target. With allow_private, loopback and
+    private addresses pass (a mail server on this machine, e.g. Proton Bridge);
+    forbidden ones never do (see classify_address)."""
+    kind = classify_address(ip)
+    if kind == "public":
         return
-    if addr.is_multicast or addr.is_reserved or addr.is_unspecified or addr.is_link_local:
+    if kind == "forbidden":
         raise ValueError(f"Refusing to connect to non-routable address ({ip})")
-    if addr.is_loopback or addr.is_private:
-        if allow_private:
-            return
-        raise ValueError(f"Refusing to connect to private address ({ip})")
-    raise ValueError(f"Refusing to connect to non-public address ({ip})")
+    if allow_private:
+        return
+    raise ValueError(f"Refusing to connect to private address ({ip})")
 
 
 def resolve_pinned_target(host: str, port: int, *, allow_private: bool = False) -> str:

@@ -50,6 +50,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **Your agent's web fetches can no longer reach VAF itself.** On the computer VAF runs on, a
+  request from that same computer counts as you. The agent's fetch tools (reading a web page,
+  downloading a file, reading search results, remote MCP servers, a Nextcloud connection)
+  fetched whatever address a web page, a mail or the model handed them, so a page could make
+  the agent read your contacts, the account list or the settings straight from VAF, or reach
+  the cloud metadata service. Every such fetch now goes through one check first: addresses on
+  this computer and the metadata service are refused, every redirect is checked again, and a
+  refusal shows up in the security log. Devices in your home network stay reachable, and each
+  such fetch is noted in the logs; an admin can switch that off (`egress_allow_private_hosts`).
+  A page one account fetched is also no longer served from the cache to another account. A
+  remote MCP server an admin registered may still run on this computer. If you connected a
+  Nextcloud on the same computer as `localhost`, connect it again with its network address.
 - **A mail's sender is read the same way on every supported Python.** Python 3.10 and
   3.11 as installed on Windows and macOS (3.10.11 and 3.11.9, the last installers of those
   series) predate the standard library's stricter address parsing. There, a From line

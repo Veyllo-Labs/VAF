@@ -34,6 +34,11 @@ connection before it is made, including every redirect hop:
 server on this machine) be loopback or private; a redirect to any other host is judged
 by the normal rules.
 
+THE MAIL IMAGE PROXY keeps its own pinned fetch (vaf/api/mail_routes.py image_proxy): it
+already resolves once, pins, never follows a redirect and never reaches the LAN, and it
+shares this module's classifier. Folding it in would only log every refused image twice
+(egress_blocked and its own mail_image_proxy_blocked). NAMED BOUNDARY.
+
 NOT IN SCOPE, NAMED BOUNDARIES: fixed internal loopback calls (sub-agent and workflow IPC
 to VAF's own backend) are VAF choosing its own destination, not a fetch; A2A rooms dial
 over their own wss client with a pinned CA (vaf/core/a2a/client.py); a shell command the

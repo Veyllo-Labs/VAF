@@ -5,11 +5,11 @@
 
 Regression cover for the Windows case where the installer downloaded MinGit but did not
 persist it to PATH, so `run_git` (["git", ...]) failed with "Git is not installed." even
-though a usable git existed.
+though a usable git existed. The resolver lives in vaf.core.git_runner; the CLI imports it.
 """
 import os
 
-import vaf.cli.cmd.git as g
+import vaf.core.git_runner as g
 
 
 def _reset_cache():
@@ -19,7 +19,7 @@ def _reset_cache():
 def test_prefers_git_on_path(monkeypatch):
     _reset_cache()
     monkeypatch.setattr(g.shutil, "which", lambda name: "/usr/bin/git")
-    assert g._resolve_git() == "/usr/bin/git"
+    assert g.resolve_git() == "/usr/bin/git"
 
 
 def test_falls_back_to_bundled_mingit_when_not_on_path(monkeypatch, tmp_path):
@@ -31,14 +31,14 @@ def test_falls_back_to_bundled_mingit_when_not_on_path(monkeypatch, tmp_path):
     mingit = local / "Veyllo" / "git" / "cmd" / "git.exe"
     mingit.parent.mkdir(parents=True)
     mingit.write_text("")
-    assert g._resolve_git() == str(mingit)
+    assert g.resolve_git() == str(mingit)
 
 
 def test_last_resort_is_plain_git(monkeypatch):
     _reset_cache()
     monkeypatch.setattr(g.shutil, "which", lambda name: None)
     monkeypatch.setattr(g.os, "name", "posix")  # no Windows fallback paths
-    assert g._resolve_git() == "git"
+    assert g.resolve_git() == "git"
 
 
 def test_result_is_memoized(monkeypatch):
@@ -48,6 +48,11 @@ def test_result_is_memoized(monkeypatch):
         calls["n"] += 1
         return "/usr/bin/git"
     monkeypatch.setattr(g.shutil, "which", which)
-    g._resolve_git(); g._resolve_git()
+    g.resolve_git(); g.resolve_git()
     assert calls["n"] == 1  # resolved once, then cached
     _reset_cache()
+
+
+def test_the_cli_uses_the_one_runner():
+    import vaf.cli.cmd.git as cli_git
+    assert cli_git.run_git is g.run_git and cli_git._resolve_git is g.resolve_git

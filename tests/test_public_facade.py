@@ -46,7 +46,8 @@ def test_facade_exports_exactly_the_documented_surface():
     none of them. Unique N for a new engine method: zero."""
     assert vaf.__version__
     assert sorted(vaf.__all__) == [
-        "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent", "EgressPolicy",
+        "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
+        "EgressPolicy",
         "EgressRefused", "NON_CONVERSATION_KINDS",
         "PathEscape", "RemoteRefused", "RemoteRoom",
         "Room", "RoomError", "RoomTriggerWatch", "SOUL_CONTINUITY_ADDENDUM", "StoreError",
@@ -55,7 +56,7 @@ def test_facade_exports_exactly_the_documented_surface():
         "VoiceTurnEngine",
         "__version__",
         "account_allows_tool", "add_revocation_listener", "build_capability_addendum",
-        "contained_path",
+        "code_audit", "contained_path",
         "derive_peer_id", "describe_room_entry", "egress_session", "extract_pdf_markdown",
         "fold_room_owners", "fold_room_tasks", "fold_room_votes", "inspect_upload",
         "install_thread_excepthook", "invited_rooms", "jail_allows", "joined_rooms",

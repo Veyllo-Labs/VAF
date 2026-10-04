@@ -6,12 +6,9 @@ VAF Git - Git Integration with AI Support
 Automated Git operations with intelligent commit messages
 """
 import typer
-import subprocess
-import os
-import shutil
 import requests
 from pathlib import Path
-from typing import Optional, List
+from typing import List
 from vaf.cli.ui import UI
 
 app = typer.Typer()
@@ -20,51 +17,9 @@ app = typer.Typer()
 # HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_GIT_EXE: Optional[str] = None
+# One resolver and one runner for the CLI and the framework (vaf.core.git_runner).
+from vaf.core.git_runner import resolve_git as _resolve_git, run_git  # noqa: E402,F401
 
-
-def _resolve_git() -> str:
-    """Resolve the git executable, memoized.
-
-    Prefer `git` on PATH. Otherwise fall back to the portable MinGit that the VAF installer
-    (bootstrap.ps1) and the patch script download on Windows but do NOT persist to PATH — without
-    this, `vaf update` (and every other git call) fails with "Git is not installed." on a machine
-    that has no system git, even though VAF already fetched one. Returns "git" as a last resort so
-    the FileNotFoundError path still reports cleanly.
-    """
-    global _GIT_EXE
-    if _GIT_EXE:
-        return _GIT_EXE
-    exe = shutil.which("git")
-    if not exe and os.name == "nt":
-        local = os.environ.get("LOCALAPPDATA", "")
-        if local:
-            for cand in (
-                os.path.join(local, "Veyllo", "git", "cmd", "git.exe"),   # bootstrap.ps1
-                os.path.join(local, "VAF", "mingit", "cmd", "git.exe"),    # patch.bat
-            ):
-                if os.path.isfile(cand):
-                    exe = cand
-                    break
-    _GIT_EXE = exe or "git"
-    return _GIT_EXE
-
-
-def run_git(args: List[str], cwd: str = ".") -> tuple[int, str, str]:
-    """Execute a git command (resolving VAF's bundled portable git if git is not on PATH)."""
-    try:
-        result = subprocess.run(
-            [_resolve_git()] + args,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
-        return result.returncode, result.stdout, result.stderr
-    except FileNotFoundError:
-        return -1, "", "Git is not installed."
-    except Exception as e:
-        return -1, "", str(e)
 
 def is_git_repo(path: str = ".") -> bool:
     """Check if a directory is a git repository."""

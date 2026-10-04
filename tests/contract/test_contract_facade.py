@@ -16,6 +16,8 @@ import vaf
 
 EXPORTED = [
     "Agent",
+    "AuditFinding",
+    "AuditReport",
     "BOOKKEEPING_KINDS",
     "BaseTool",
     "CoreAgent",
@@ -41,6 +43,7 @@ EXPORTED = [
     "account_allows_tool",
     "add_revocation_listener",
     "build_capability_addendum",
+    "code_audit",
     "contained_path",
     "derive_peer_id",
     "describe_room_entry",

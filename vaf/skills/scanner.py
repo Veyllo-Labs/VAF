@@ -221,6 +221,20 @@ def scan_skill_md_text(content: str) -> Dict[str, Any]:
     return _result(_scan_text(body, "body", "SKILL.md"))
 
 
+def hardcoded_secrets(text: str) -> List[Dict[str, Any]]:
+    """EVERY embedded credential in `text` the secret rules recognise, with its line - not
+    only the first per rule, which is enough to judge a skill but not to point at each line
+    of a code change (vaf.core.code_audit). The match itself is not returned: a finding
+    that quoted the key would carry it on."""
+    found: List[Dict[str, Any]] = []
+    for r in _COMPILED:
+        if r["cat"] != "hardcoded_secret":
+            continue
+        for m in r["rx"].finditer(text or ""):
+            found.append({"id": r["id"], "message": r["msg"], "line": _line_of(text, m.start())})
+    return found
+
+
 def scan_text_content(text: str, label: str = "content") -> Dict[str, Any]:
     """Scan arbitrary text with the CODE rules, for content that is not a skill.
 

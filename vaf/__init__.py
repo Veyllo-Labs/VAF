@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     # __getattr__ below). Paired with the vaf/py.typed marker (PEP 561).
     from .core.log_helper import install_thread_excepthook
     from .core.automation_triggers import RoomTriggerWatch
+    from .core.code_audit import AuditFinding, AuditReport, code_audit
     from .core.pdf_extract import extract_pdf_markdown
     from .core.revocation import (add_revocation_listener, remove_revocation_listener,
                                   restore_account, revoke_account, stop_account_work,
@@ -29,7 +30,8 @@ if TYPE_CHECKING:
     from .tools.base import BaseTool
     from .tools.filesystem import jail_allows, user_jail
 
-__all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
+__all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_KINDS", "BaseTool",
+           "CoreAgent",
            "EgressPolicy", "EgressRefused",
            "NON_CONVERSATION_KINDS",
            "PathEscape", "RemoteRefused",
@@ -39,7 +41,7 @@ __all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
            "UnsafeName",
            "UploadVerdict", "VoiceTurnEngine",
            "account_allows_tool", "add_revocation_listener", "build_capability_addendum",
-           "contained_path", "derive_peer_id",
+           "code_audit", "contained_path", "derive_peer_id",
            "describe_room_entry", "egress_session", "extract_pdf_markdown",
            "fold_room_owners", "fold_room_tasks", "fold_room_votes", "inspect_upload",
            "install_thread_excepthook", "invited_rooms", "jail_allows", "joined_rooms",
@@ -179,6 +181,16 @@ def __getattr__(name):
         from .network.egress import EgressPolicy, EgressRefused, egress_session
         return {"EgressPolicy": EgressPolicy, "EgressRefused": EgressRefused,
                 "egress_session": egress_session}[name]
+    if name in ("code_audit", "AuditReport", "AuditFinding"):
+        # Review a code change the way a hosted reviewer does - scope from git, linters and a
+        # secret pass as evidence, one review call that must quote the code, a verification
+        # call before anything is reported, a fix prompt per finding and a completion
+        # contract - with YOUR model: `ask(messages, max_tokens) -> str`. VAF's coding
+        # agent runs it after every commit inside its loop, the main agent's code_audit tool
+        # and `vaf audit` are the other two callers. Stdlib and git only underneath. See
+        # docs/EMBEDDING.md and docs/agents/CODE_AUDIT.md.
+        from .core import code_audit as _code_audit
+        return getattr(_code_audit, name)
     if name in ("revoke_account", "restore_account", "stop_account_work", "stop_session",
                 "add_revocation_listener", "remove_revocation_listener"):
         # Taking an account's access away so that it reaches work ALREADY running: its turns

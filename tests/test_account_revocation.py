@@ -639,3 +639,36 @@ def test_the_grants_list_never_shows_another_accounts_grants():
     revoke = src[src.index("const revoke = async"):src.index("if (!data) {")]
     assert revoke.index("if (endpointRef.current !== requested) return;") < revoke.index(
         "if (!ok) setFailed(true);") < revoke.index("void load();")
+
+
+def test_a_chat_known_only_from_a_background_command_keeps_its_next_turn(monkeypatch):
+    """Narrowing an account's tools stops its work. A chat with no turn running or queued,
+    found only through a background command, kept the stop flag, and the runner swallowed
+    that chat's next message. MUTATION: leave the flag set."""
+    from vaf.core import processes
+    from vaf.core.task_queue import TaskQueue
+    tq = TaskQueue()
+    monkeypatch.setattr(TaskQueue, "sessions_for_scope", lambda self, key: {"web_chat-run"})
+    monkeypatch.setattr(processes, "list_for_scope",
+                        lambda key: [SimpleNamespace(session_id="web_chat-idle")])
+    monkeypatch.setattr(processes, "stop", lambda record: "stopped")
+    try:
+        summary = revocation.stop_account_work(SCOPE)
+        assert summary == {"sessions": 2, "processes": 1}
+        assert tq.should_stop("web_chat-run") and not tq.should_stop("web_chat-idle")
+    finally:
+        tq.clear_stop("web_chat-run")
+        tq.clear_stop("web_chat-idle")
+
+
+def test_the_machine_owner_stands_under_any_of_its_names(monkeypatch):
+    """The owner's work may carry its scope or the canonical "default"; neither is an
+    account the directory lists. MUTATION: compare the raw scope strings."""
+    import vaf.core.config as config
+    from vaf.core import tool_dispatch
+    monkeypatch.setattr(config, "get_local_admin_scope_id", lambda: "admin-scope-0001")
+    monkeypatch.setattr(tool_dispatch, "_account_directory_resolver",
+                        lambda: [{"username": "alice", "user_scope_id": SCOPE, "active": True}])
+    assert revocation.account_stands("default") is True
+    assert revocation.account_stands("admin-scope-0001") is True
+    assert revocation.account_stands(OTHER) is False

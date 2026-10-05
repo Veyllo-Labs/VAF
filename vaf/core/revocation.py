@@ -76,8 +76,11 @@ def account_stands(user_scope_id) -> bool:
     if is_revoked(key):
         return False
     try:
-        from vaf.core.config import get_local_admin_scope_id
-        if key == str(get_local_admin_scope_id() or "").strip():
+        # trust's canonical key, as the runner and the queue compare scopes: the machine
+        # owner's scope and its aliases ("default") are "default", never an account.
+        from vaf.core.trust import _scope_key
+        canonical = _scope_key(key)
+        if canonical == "default":
             return True
         from vaf.core.tool_dispatch import resolve_account_directory
         rows = resolve_account_directory()
@@ -86,7 +89,7 @@ def account_stands(user_scope_id) -> bool:
     if not rows:
         return True
     for row in rows:
-        if row["user_scope_id"] == key:
+        if _scope_key(row["user_scope_id"]) == canonical:
             return bool(row.get("active", True))
     return False
 
@@ -165,6 +168,10 @@ def stop_account_work(user_scope_id) -> Dict:
         sessions |= TaskQueue().sessions_for_scope(key)
     except Exception:
         pass
+    # A chat known only from a background command has no turn running or queued, so the stop
+    # flag stop_session leaves would wait for that chat's NEXT turn and swallow it - for an
+    # account whose tools were only narrowed, that is the person's next message.
+    queued = set(sessions)
     try:
         from vaf.core import processes
         for record in processes.list_for_scope(key):
@@ -179,6 +186,12 @@ def stop_account_work(user_scope_id) -> Dict:
         pass
     for sid in sorted(sessions):
         stop_session(sid, include_subagents=True, reason=reason)
+        if sid not in queued:
+            try:
+                from vaf.core.task_queue import TaskQueue
+                TaskQueue().clear_stop(sid)
+            except Exception:
+                pass
     summary["sessions"] = len(sessions)
     with _lock:
         listeners = list(_listeners)

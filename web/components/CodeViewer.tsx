@@ -173,6 +173,11 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
     setIsDirty(false);
     setSavedAt(null);
     setLoadError(null);
+    // Whatever opens now is a different file or text: the previous one's revision and its
+    // conflict banner do not belong to it. Content handed in directly has no revision, so
+    // its save names none and is refused over a file that exists, never written over it.
+    revisionRef.current = null;
+    setConflict(null);
     if (initialContent !== undefined) {
       // Content supplied directly (e.g. browser-attached file without server path)
       setContent(initialContent);

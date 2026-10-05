@@ -80,6 +80,40 @@ def test_the_webfetch_cache_belongs_to_one_account(monkeypatch, tmp_path):
     assert tool._get_cached_data("https://example.org/a", 3600, "scope-bob") is None
 
 
+def test_run_files_the_page_under_the_callers_account(monkeypatch, tmp_path):
+    """The cache helpers keyed on the scope, but nothing checked that run() hands them the
+    CALLER's. MUTATION: cache under a fixed scope in run()."""
+    import contextlib
+
+    import vaf.network.egress as egress
+    from vaf.core.config import Config
+    from vaf.tools.webfetch import WebFetchTool
+    monkeypatch.setattr(Config, "APP_DIR", tmp_path)
+    monkeypatch.setattr("vaf.tools.webfetch.MIN_DELAY", 0)
+    pages = iter(["<p>alice's page</p>", "<p>bob's page</p>"])
+
+    class _Res:
+        status_code = 200
+        headers = {"Content-Type": "text/html"}
+
+        def __init__(self):
+            self.text = next(pages)
+
+    class _Http:
+        def get(self, url, **kw):
+            return _Res()
+
+    @contextlib.contextmanager
+    def _session(**kw):
+        yield _Http()
+
+    monkeypatch.setattr(egress, "egress_session", _session)
+    tool = WebFetchTool()
+    alice = tool.run(url="https://example.org/a", user_scope_id="scope-alice")
+    bob = tool.run(url="https://example.org/a", user_scope_id="scope-bob")
+    assert "alice's page" in alice and "bob's page" in bob and "alice's page" not in bob
+
+
 def test_without_an_account_a_shared_instance_caches_nothing(monkeypatch, tmp_path):
     """The rule web_search already had (vaf.tools.search.web_cache_scope), now shared."""
     from vaf.core.config import Config
@@ -179,6 +213,41 @@ def test_a_webdav_account_on_this_machine_is_refused_when_it_is_saved(monkeypatc
         asyncio.run(cr.connect_webdav(request=None, body=body, _username="alice", _scope=None))
     assert e.value.status_code == 400 and REFUSAL in str(e.value.detail)
     assert stored == []
+
+
+def test_the_webdav_check_leaves_the_event_loop_free(monkeypatch):
+    """The check resolves a name the person typed; a slow resolver on the event loop held
+    every other request. MUTATION: call check_destination directly in the route again."""
+    import asyncio
+    import time
+
+    import vaf.api.cloud_routes as cr
+    import vaf.network.egress as egress
+    monkeypatch.setattr(cr, "set_cloud_webdav_credentials", lambda **kw: None)
+    monkeypatch.setattr(cr, "_get_cloud_config", lambda u: {})
+    monkeypatch.setattr(cr, "_save_cloud_config", lambda cc, u: None)
+    monkeypatch.setattr(egress, "check_destination", lambda url, **kw: time.sleep(0.5) or "1.2.3.4")
+    body = cr.WebDavConnectRequest(url="https://cloud.example/remote.php/dav", username="u",
+                                   password="p")
+
+    async def go():
+        ticks = 0
+
+        async def ticker():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.05)
+                ticks += 1
+
+        t = asyncio.create_task(ticker())
+        try:
+            await cr.connect_webdav(request=None, body=body, _username="alice", _scope=None)
+        except Exception:
+            pass
+        t.cancel()
+        return ticks
+
+    assert asyncio.run(go()) >= 4
 
 
 def test_a_stored_webdav_url_on_this_machine_is_never_fetched(monkeypatch, _quiet):

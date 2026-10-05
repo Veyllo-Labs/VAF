@@ -313,9 +313,12 @@ async def connect_webdav(
     # Said now rather than at the first sync: the URL is fetched by VAF itself, so it may
     # not point at this machine or the cloud metadata service. A name that does not resolve
     # yet is not refused here; every request judges it again.
+    # In a worker thread: the check resolves a name the person typed, and a slow or
+    # black-holed resolver would otherwise hold the event loop - every other request - until
+    # the lookup times out.
     from vaf.network.egress import EgressRefused, check_destination
     try:
-        check_destination(url, username=_username or "")
+        await asyncio.to_thread(check_destination, url, username=_username or "")
     except EgressRefused as exc:
         if exc.address or not url.lower().startswith(("http://", "https://")):
             raise HTTPException(status_code=400, detail=str(exc)) from None

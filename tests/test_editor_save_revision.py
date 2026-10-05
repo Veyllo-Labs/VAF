@@ -134,6 +134,44 @@ def test_a_lossy_workbook_is_saved_to_one_copy_and_then_in_place(tree):
         "budget (bearbeitet).xlsx", "budget.xlsx"]
 
 
+def test_a_workbook_with_many_empty_sheets_is_judged_without_walking_them(tmp_path):
+    """The loss report runs on the event loop; it walked 500 x 30 cells of every sheet, empty
+    ones included, so 200 empty sheets held every request for seconds. MUTATION: drop the
+    early answer for too many sheets, or walk past the used range again."""
+    pytest.importorskip("openpyxl")
+    import time
+
+    import openpyxl
+
+    from vaf.core import web_server as ws
+    wb = openpyxl.Workbook()
+    for i in range(1, 60):
+        wb.create_sheet(f"Sheet{i + 1}")
+    many = tmp_path / "many.xlsx"
+    wb.save(many)
+    started = time.monotonic()
+    assert ws._office_loss_report(many) == ["too_large"]
+    assert time.monotonic() - started < 1.0
+
+    one = openpyxl.Workbook()
+    one.active.title = "Sheet1"
+    one.active["A1"] = "text"
+    small = tmp_path / "small.xlsx"
+    one.save(small)
+    seen = []
+    real_iter = openpyxl.worksheet.worksheet.Worksheet.iter_rows
+
+    def counting(self, *a, **kw):
+        for row in real_iter(self, *a, **kw):
+            seen.extend(row)
+            yield row
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(openpyxl.worksheet.worksheet.Worksheet, "iter_rows", counting)
+        assert ws._office_loss_report(small) == []
+    assert len(seen) == 1, f"walked {len(seen)} cells of a sheet that uses one"
+
+
 def test_the_original_is_not_saved_over_an_existing_copy(tree):
     """A second session on the original: the copy exists, and it is opened, not replaced.
     MUTATION: write the copy whether or not it exists."""
@@ -206,6 +244,14 @@ def test_the_code_viewer_conflict_names_the_revision_on_disk_now():
     "Overwrite" was refused again. MUTATION: keep any existing conflict."""
     viewer = _src("web/components/CodeViewer.tsx")
     assert "prev.currentRevision === revision" in viewer
+
+
+def test_the_code_viewer_forgets_the_previous_files_revision():
+    """A file handed in directly, after a server file: the save named the server file's
+    revision and its conflict banner stayed. MUTATION: drop the reset on open."""
+    viewer = _src("web/components/CodeViewer.tsx")
+    opened = viewer[viewer.index("// Initial load + live polling"):viewer.index("if (initialContent !== undefined) {")]
+    assert "revisionRef.current = null;" in opened and "setConflict(null);" in opened
 
 
 def test_an_agent_rewrite_keeps_a_dirty_draft():

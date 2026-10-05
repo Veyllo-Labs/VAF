@@ -3661,7 +3661,9 @@ def _office_loss_report(target) -> list:
             wb = openpyxl.load_workbook(target, data_only=False)
             try:
                 if len(wb.sheetnames) > XLSX_MAX_SHEETS:
-                    reasons.append("too_large")
+                    # More sheets than the editor shows: lossy whatever they hold. Walking
+                    # every one of them stalled the event loop (200 empty sheets: 5.5 s).
+                    return ["too_large"]
                 for i, ws in enumerate(wb.worksheets):
                     if ws.title != f"Sheet{i + 1}":
                         reasons.append("sheet_names")
@@ -3671,7 +3673,10 @@ def _office_loss_report(target) -> list:
                         reasons.append("merged_cells")
                     if getattr(ws, "_images", None) or getattr(ws, "_charts", None):
                         reasons.append("images_or_charts")
-                    for row in ws.iter_rows(max_row=XLSX_MAX_ROWS, max_col=XLSX_MAX_COLS):
+                    # The used range only: iter_rows makes a cell object for every position
+                    # it is asked for, an empty one included (500 x 30 per empty sheet).
+                    for row in ws.iter_rows(max_row=min(ws.max_row, XLSX_MAX_ROWS),
+                                            max_col=min(ws.max_column, XLSX_MAX_COLS)):
                         for cell in row:
                             if cell.data_type == "f":
                                 reasons.append("formulas")

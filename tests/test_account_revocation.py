@@ -477,6 +477,57 @@ def test_a_workflow_automation_stops_and_delivers_nothing_once_revoked(monkeypat
     assert out.startswith("[REVOKED]") and pushed == []
 
 
+def test_a_prompt_automation_revoked_mid_run_is_not_stamped_or_saved(monkeypatch, tmp_path):
+    """The prompt lane wrote the output file and stamped the run as successful before it
+    asked whether the account still stands. MUTATION: move the check back behind them."""
+    import vaf.core.agent as agent_mod
+    from vaf.core import automation
+    from vaf.core.lock_manager import LockManager
+
+    class _Agent:
+        tools = {}
+        history = []
+        _current_username = "alice"
+        _tool_authorizer = None
+
+        def __init__(self, *a, **k):
+            pass
+
+        def load_model(self):
+            pass
+
+        def init_chat(self):
+            pass
+
+        def chat_step(self, prompt, stream_callback=None, **k):
+            revocation.revoke_account(SCOPE)          # taken away while the prompt runs
+            if stream_callback:
+                stream_callback("the report")
+
+        def _clean_reasoning(self, text):
+            return text
+
+        def shutdown(self):
+            pass
+
+    pushed = []
+    monkeypatch.setattr(agent_mod, "Agent", _Agent)
+    monkeypatch.setattr(automation, "bind_identity", lambda *a, **k: None)
+    monkeypatch.setattr(automation, "resolve_scope_identity", lambda *a, **k: None)
+    monkeypatch.setattr(automation, "_push_result_to_web_ui", lambda *a, **k: pushed.append(a))
+    monkeypatch.setattr(LockManager, "acquire", lambda lock_id: True)
+    monkeypatch.setattr(LockManager, "release", lambda lock_id: None)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    manager = automation.AutomationManager(storage_dir=str(tmp_path / "tasks"))
+    task = automation.AutomationTask(name="report", prompt="write the report", user_scope_id=SCOPE,
+                                     output_path=str(out_dir), output_format="markdown")
+    out = manager.run_task(task, new_terminal=False)
+    assert out.startswith("[REVOKED]") and pushed == []
+    assert task.last_run is None, "a revoked run was stamped as a success"
+    assert list(out_dir.iterdir()) == [], "a revoked run wrote its output file"
+
+
 # ── standing grants ──────────────────────────────────────────────────────────
 
 @pytest.fixture

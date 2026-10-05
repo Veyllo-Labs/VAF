@@ -2146,7 +2146,13 @@ vaf automation delete <id>   # Delete task
                         result = self._extract_clean_answer(raw_result, agent.history)
 
                 agent.shutdown()
-            
+
+            # Access taken away while the prompt ran: no output file, no "ran successfully"
+            # stamp (the schedule would count it as done), no delivery. The `finally` below still
+            # releases the lock and consumes a one-time task, like the workflow lane's return.
+            if is_revoked(task.user_scope_id):
+                return _revoked_run_note(task)
+
             # Save output if path specified. NEVER on an unresolved timeout: wrapping the
             # honest error note (or a half stream) into an output file produced the junk
             # HTML attachments of 2026-07-13.

@@ -33,7 +33,8 @@ account directory lists as inactive or no longer lists (deleted), is skipped wit
 `[SKIPPED]` line in the backend log, so a deactivated account's schedule stays silent after a
 restart too. A run that is already going when the account is revoked is stopped at once - the prompt
 lane's bounded run and the workflow engine's stop check both poll the mark - and its result
-is not delivered, on either lane. See "Taking access away" in
+is not delivered, on either lane. Nor is it recorded as done: the prompt lane asks before it
+writes the output file or stamps the run as successful, so the schedule does not count it. See "Taking access away" in
 [USER_ISOLATION.md](../security/USER_ISOLATION.md#taking-access-away-reaches-work-already-running).
 
 ## Short in-chat timers (`set_timer`) vs automations

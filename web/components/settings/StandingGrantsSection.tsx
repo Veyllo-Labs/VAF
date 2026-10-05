@@ -93,8 +93,8 @@ export default function StandingGrantsSection({ endpoint, own }: { endpoint: str
     const tools = Object.entries(data.tools);
     const empty = tools.length === 0 && data.dirs.length === 0;
     const rowClass = 'flex items-center gap-3 px-3 py-2 rounded-lg border border-gray-200 bg-white';
-    const revokeButton = (onClick: () => void) => (
-        <button type="button" onClick={onClick} title={t('revoke')} aria-label={t('revoke')}
+    const revokeButton = (onClick: () => void, name: string) => (
+        <button type="button" onClick={onClick} title={t('revoke')} aria-label={t('revokeItem', { name })}
             className="p-1.5 rounded-md text-gray-500 hover:text-red-600 hover:bg-gray-100">
             <X className="w-4 h-4" />
         </button>
@@ -123,7 +123,7 @@ export default function StandingGrantsSection({ endpoint, own }: { endpoint: str
                                 {[how.always ? t('always') : null, how.chats > 0 ? t('chats', { count: how.chats }) : null]
                                     .filter(Boolean).join(' · ')}
                             </span>
-                            {revokeButton(() => void revoke({ tools: [name] }))}
+                            {revokeButton(() => void revoke({ tools: [name] }), name)}
                         </li>
                     ))}
                     {data.dirs.map(dir => (
@@ -131,7 +131,7 @@ export default function StandingGrantsSection({ endpoint, own }: { endpoint: str
                             <Folder className="w-4 h-4 text-gray-500 shrink-0" />
                             <span className="text-sm font-mono text-gray-800 flex-1 min-w-0 truncate" title={dir}>{dir}</span>
                             <span className="text-xs text-gray-500">{t('folder')}</span>
-                            {revokeButton(() => void revoke({ dirs: [dir] }))}
+                            {revokeButton(() => void revoke({ dirs: [dir] }), dir)}
                         </li>
                     ))}
                 </ul>

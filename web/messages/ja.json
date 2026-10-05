@@ -2462,6 +2462,7 @@
     "chats": "{count, plural, other {#件のチャット}}で許可",
     "folder": "信頼済みフォルダー",
     "revoke": "取り消す",
+    "revokeItem": "{name}を取り消す",
     "revokeAll": "すべて取り消す",
     "failed": "うまくいきませんでした。",
     "loadFailed": "常時の権限を読み込めませんでした。",

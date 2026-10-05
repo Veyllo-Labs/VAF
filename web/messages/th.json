@@ -2462,6 +2462,7 @@
     "chats": "อนุญาตใน {count, plural, other {# แชท}}",
     "folder": "โฟลเดอร์ที่เชื่อถือ",
     "revoke": "เพิกถอน",
+    "revokeItem": "เพิกถอน {name}",
     "revokeAll": "เพิกถอนทั้งหมด",
     "failed": "ไม่สำเร็จ",
     "loadFailed": "โหลดสิทธิ์ถาวรไม่ได้",

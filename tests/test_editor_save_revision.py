@@ -301,6 +301,28 @@ def test_the_code_viewer_follows_a_save_into_the_copy():
     assert "onRetarget={(path) => setCodeViewerState(" in _src("web/app/page.tsx")
 
 
+def test_the_document_editor_stays_unsaved_when_it_cannot_follow_the_copy():
+    """A host without onRetarget: the edits are in the copy, so the draft must not read as
+    saved against the original. MUTATION: mark the draft clean before the redirect check."""
+    src = _src("web/components/DocumentEditor.tsx")
+    save = src[src.index("setConflict(null);\n            const info: EditorFileInfo"):]
+    stay = save[:save.index("savedContentRef.current = content;")]
+    assert "outcome.redirected && outcome.path && !onRetarget" in stay and "return;" in stay
+    assert "dirtyRef.current = false" not in stay
+
+
+def test_each_revoke_button_names_what_it_revokes():
+    """A screen reader heard "Revoke" on every row. MUTATION: label the button with the
+    bare word again."""
+    import json
+    src = _src("web/components/settings/StandingGrantsSection.tsx")
+    assert "aria-label={t('revokeItem', { name })}" in src
+    assert "revoke({ tools: [name] }), name)" in src and "revoke({ dirs: [dir] }), dir)" in src
+    for lang in ("en", "de", "ja", "ko", "th", "tr", "zh"):
+        grants = json.loads(_src(f"web/messages/{lang}.json"))["grants"]
+        assert "{name}" in grants["revokeItem"], lang
+
+
 def _loop_stays_free(coro_factory):
     """Run the route while a ticker counts on the same loop: a route that blocks the loop for
     half a second lets it count nothing meanwhile."""

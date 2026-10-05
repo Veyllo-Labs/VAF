@@ -2462,6 +2462,7 @@
     "chats": "{count, plural, one {# sohbette} other {# sohbette}} izinli",
     "folder": "güvenilen klasör",
     "revoke": "Geri al",
+    "revokeItem": "{name} geri al",
     "revokeAll": "Tümünü geri al",
     "failed": "Bu işe yaramadı.",
     "loadFailed": "Kalıcı izinler yüklenemedi.",

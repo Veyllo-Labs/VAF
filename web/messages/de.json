@@ -2462,6 +2462,7 @@
     "chats": "in {count, plural, one {# Chat} other {# Chats}} erlaubt",
     "folder": "vertrauenswürdiger Ordner",
     "revoke": "Widerrufen",
+    "revokeItem": "{name} widerrufen",
     "revokeAll": "Alle widerrufen",
     "failed": "Das hat nicht geklappt.",
     "loadFailed": "Die Freigaben konnten nicht geladen werden.",

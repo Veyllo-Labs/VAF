@@ -2462,6 +2462,7 @@
     "chats": "在 {count, plural, other {# 个对话}}中允许",
     "folder": "受信任的文件夹",
     "revoke": "撤销",
+    "revokeItem": "撤销 {name}",
     "revokeAll": "全部撤销",
     "failed": "操作失败。",
     "loadFailed": "无法加载长期授权。",

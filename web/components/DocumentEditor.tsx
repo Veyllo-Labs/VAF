@@ -801,10 +801,18 @@ function LegacyDocumentEditor({
                 throw new Error(outcome.error || 'Failed to save document');
             }
             setConflict(null);
+            const info: EditorFileInfo = { revision: outcome.revision, loss: [], editCopy: null };
+            if (outcome.redirected && outcome.path && !onRetarget) {
+                // The edits are in the copy, and this host cannot follow it: the draft stays
+                // unsaved HERE, so the next save is not sent against the original's revision
+                // as if it were the copy (the code viewer does the same).
+                setSaveMessage(outcome.path);
+                setTimeout(() => setSaveMessage(null), 5000);
+                return;
+            }
             savedContentRef.current = content;
             dirtyRef.current = false;
             onDirtyChange?.(false);
-            const info: EditorFileInfo = { revision: outcome.revision, loss: [], editCopy: null };
             if (outcome.redirected && outcome.path) {
                 onRetarget?.(outcome.path, info);
             } else {

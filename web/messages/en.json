@@ -2462,6 +2462,7 @@
     "chats": "allowed in {count, plural, one {# chat} other {# chats}}",
     "folder": "trusted folder",
     "revoke": "Revoke",
+    "revokeItem": "Revoke {name}",
     "revokeAll": "Revoke all",
     "failed": "That did not work.",
     "loadFailed": "The grants could not be loaded.",

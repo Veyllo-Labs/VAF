@@ -164,7 +164,7 @@ def test_a_failing_audit_never_ends_the_run():
     assert request.index('report = _audit_now("changes")') < request.index('_audit_state["rounds"] += 1')
     assert "except Exception as exc:" in request
     rnd = src[src.index("def _maybe_start_audit_round"):src.index("def _next_round() -> str:")]
-    guarded = rnd[rnd.index('report = _audit_now("committed")'):]
+    guarded = rnd[rnd.index("report = _audit_now(_au_scope)"):]
     assert guarded.index("except Exception as exc:") < guarded.index("found = report.actionable()")
 
 
@@ -188,3 +188,14 @@ def test_the_audit_switch_turns_off_when_set_from_the_cli(monkeypatch):
     stored["coder_audit_enabled"] = "true"
     assert _audit_settings() == (True, 7)
     assert "_audit_enabled, _audit_max = _audit_settings()" in _coder_src()
+
+
+def test_the_audit_reviews_this_runs_change_and_never_an_uncommitted_tree_as_committed():
+    """Two pins on the round. The base is the snapshot of the tree at run start, so what a
+    previous run or the person left uncommitted is not reviewed as this run's change; and a
+    commit that failed or was skipped is reviewed as uncommitted work, never as a committed
+    state that does not hold it. MUTATION: base on HEAD at run start, or always "committed"."""
+    src = _coder_src()
+    assert "base=_diff_baseline_sha or EMPTY_TREE" in src
+    assert '_au_scope = "committed" if str(_au_commit or "").startswith("Git: ") else "changes"' in src
+    assert "report = _audit_now(_au_scope)" in src

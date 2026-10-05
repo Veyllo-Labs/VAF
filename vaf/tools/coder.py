@@ -5599,7 +5599,9 @@ Task {task_idx + 1}: {current_task}
                 tui.set_action(f"🔎 Code audit: {line}"[:80])
                 _emit_coder_state()
 
-            return code_audit(base_dir, scope=scope, base=_run_start_sha or EMPTY_TREE,
+            # The snapshot of the tree at run start (`git stash create`), not HEAD: what a
+            # previous run or the person left uncommitted is not this run's change.
+            return code_audit(base_dir, scope=scope, base=_diff_baseline_sha or EMPTY_TREE,
                               ask=_coder_audit_ask, batch_chars=_au_batch,
                               progress=_au_progress)
 
@@ -5650,8 +5652,11 @@ Task {task_idx + 1}: {current_task}
                 base_dir, f"VAF Coder: {' '.join(task.split())[:60]}\n\n"
                           f"Code audit round {k}: the state under review")
             _audit_state["rounds"] = k
+            # A commit that failed or was skipped left the work in the working tree, where a
+            # review of the committed state would not see it and could call it clean.
+            _au_scope = "committed" if str(_au_commit or "").startswith("Git: ") else "changes"
             try:
-                report = _audit_now("committed")
+                report = _audit_now(_au_scope)
             except Exception as exc:
                 # Never the end of the run: its cleanup, final commit and summary still come.
                 _audit_state["finished"] = True

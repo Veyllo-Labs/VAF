@@ -10,14 +10,18 @@ import type { EditorFileInfo, SaveConflict } from '@/lib/editorFile';
 /**
  * The one notice every editor shows about its file (web/lib/editorFile.ts): a save
  * that would lose content goes to a copy, the file changed on disk, the agent changed
- * it while the draft was open, or it could not be loaded. Each states what happened
- * and offers what the person can do; the draft is never thrown away without a click.
+ * it while the draft was open, the agent opened another file while this draft has unsaved
+ * changes, or it could not be loaded. Each states what happened and offers what the person
+ * can do; the draft is never thrown away without a click.
  */
 export default function EditorFileBanner({
     info,
     conflict,
     externalChange = false,
     loadFailed = false,
+    pendingFile = null,
+    onOpenPending,
+    onKeepDraft,
     onReload,
     onSaveAsCopy,
     onOverwrite,
@@ -28,6 +32,10 @@ export default function EditorFileBanner({
     conflict: SaveConflict | null;
     externalChange?: boolean;
     loadFailed?: boolean;
+    /** Another file the agent opened while this draft has unsaved changes. */
+    pendingFile?: string | null;
+    onOpenPending?: () => void;
+    onKeepDraft?: () => void;
     onReload?: () => void;
     onSaveAsCopy?: () => void;
     onOverwrite?: () => void;
@@ -63,6 +71,11 @@ export default function EditorFileBanner({
         body = t('externalBody');
         if (onReload) actions.push({ label: t('reload'), onClick: onReload });
         if (onDismiss) actions.push({ label: t('keepMine'), onClick: onDismiss, primary: true });
+    } else if (pendingFile) {
+        title = t('pendingTitle', { file: fileName(pendingFile) });
+        body = t('pendingBody');
+        if (onKeepDraft) actions.push({ label: t('keepMine'), onClick: onKeepDraft, primary: true });
+        if (onOpenPending) actions.push({ label: t('openPending'), onClick: onOpenPending });
     } else if (info && info.loss.length > 0) {
         title = t('lossTitle');
         body = info.editCopy

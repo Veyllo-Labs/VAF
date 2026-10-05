@@ -262,6 +262,29 @@ def test_an_agent_rewrite_keeps_a_dirty_draft():
     assert "externalChange: true" in ready
 
 
+def test_another_file_from_the_agent_waits_while_the_draft_is_unsaved():
+    """The agent opening another file replaced a dirty draft without a word. It is offered in
+    the editor's banner now, and the draft stays until the person says so.
+    MUTATION: replace the state for another path whatever it holds."""
+    src = _src("web/app/page.tsx")
+    ready = src[src.index("data.type === 'document_ready'"):src.index("data.type === 'editor_apply_edit'")]
+    assert "prev.isOpen && prev.dirty && prev.filePath && prev.filePath !== fp" in ready
+    assert "pendingFile: { path: fp" in ready
+    banner = _src("web/components/EditorFileBanner.tsx")
+    assert "} else if (pendingFile) {" in banner and "t('openPending')" in banner
+    for editor in ("web/components/DocumentEditor.tsx", "web/components/NativeDocxEditor.tsx"):
+        assert "pendingFile={pendingFile}" in _src(editor), editor
+
+
+def test_opening_the_same_file_again_loads_it_afresh():
+    """The editor's key changes with the path or the nonce; the same path kept the old
+    editor and its draft while the state said clean. MUTATION: leave the nonce as it was."""
+    src = _src("web/app/page.tsx")
+    opener = src[src.index("onOpenFile={(path) => setDocumentEditorState("):]
+    opener = opener[:opener.index("}))}")]
+    assert "loadNonce: prev.filePath === path ? (prev.loadNonce ?? 0) + 1 : 0" in opener
+
+
 def test_every_editor_save_names_its_revision():
     for rel in ("web/components/DocumentEditor.tsx", "web/components/NativeDocxEditor.tsx",
                 "web/components/CodeViewer.tsx"):
@@ -318,4 +341,3 @@ def test_opening_and_saving_an_office_file_leave_the_event_loop_free(tree, monke
     request = ws.FileSaveRequest(path=str(book), content="<table></table>", base_revision=None)
     assert _loop_stays_free(lambda: ws.save_file_as_xlsx(
         request, _request(TENANT, path="/api/file/save"))) >= 4
-

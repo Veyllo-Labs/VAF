@@ -296,6 +296,8 @@ type SessionEditorDocumentState = {
     externalChange?: boolean;
     /** Bumped to load the file afresh (the agent rewrote it and nothing was unsaved). */
     loadNonce?: number;
+    /** Another file the agent opened while the draft had unsaved changes: offered, not forced. */
+    pendingFile?: { path: string; title: string } | null;
 };
 
 /** Replace plain-text range [start, end] in HTML with newText; returns new HTML. */
@@ -6002,6 +6004,11 @@ function VAFDashboardContent() {
                             setDocumentEditorStateForSession(sid, (prev) => (
                                 prev.isOpen && prev.filePath === fp && prev.dirty
                                     ? { ...prev, externalChange: true }
+                                    // Another file while this draft has unsaved changes: the
+                                    // draft stays and the editor offers the new file instead of
+                                    // replacing it without a word.
+                                    : prev.isOpen && prev.dirty && prev.filePath && prev.filePath !== fp
+                                    ? { ...prev, pendingFile: { path: fp, title: data.title || 'Document' } }
                                     : {
                                         isOpen: true,
                                         filePath: fp,
@@ -11223,7 +11230,18 @@ function VAFDashboardContent() {
                                     onOpenFile={(path) => setDocumentEditorState(prev => ({
                                         ...prev, filePath: path, title: path.split(/[\\/]/).pop() || prev.title,
                                         content: undefined, docxModel: null, fileInfo: null, dirty: false, externalChange: false,
+                                        pendingFile: null,
+                                        // The same path again still loads afresh: the editor's key
+                                        // only changes with the nonce then.
+                                        loadNonce: prev.filePath === path ? (prev.loadNonce ?? 0) + 1 : 0,
                                     }))}
+                                    pendingFile={documentEditorState.pendingFile?.path ?? null}
+                                    onOpenPending={() => setDocumentEditorState(prev => prev.pendingFile ? ({
+                                        ...prev, filePath: prev.pendingFile.path, title: prev.pendingFile.title,
+                                        content: undefined, docxModel: null, fileInfo: null, dirty: false, externalChange: false,
+                                        pendingFile: null, loadNonce: 0,
+                                    }) : prev)}
+                                    onKeepDraft={() => setDocumentEditorState(prev => ({ ...prev, pendingFile: null }))}
                                     initialDirty={!!documentEditorState.dirty}
                                     onDirtyChange={(dirty) => setDocumentEditorState(prev => prev.dirty === dirty ? prev : ({ ...prev, dirty }))}
                                     externalChange={!!documentEditorState.externalChange}

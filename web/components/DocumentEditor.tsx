@@ -97,6 +97,10 @@ export type DocumentEditorProps = {
     /** The agent rewrote the file while this draft had unsaved changes. */
     externalChange?: boolean;
     onExternalChangeHandled?: () => void;
+    /** The agent opened ANOTHER file while this draft had unsaved changes: it waits here. */
+    pendingFile?: string | null;
+    onOpenPending?: () => void;
+    onKeepDraft?: () => void;
 };
 
 const FILE_ACCEPT = '.pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv';
@@ -349,6 +353,9 @@ export default function DocumentEditor(props: DocumentEditorProps) {
                 initialDirty={props.initialDirty}
                 externalChange={props.externalChange}
                 onExternalChangeHandled={props.onExternalChangeHandled}
+                pendingFile={props.pendingFile}
+                onOpenPending={props.onOpenPending}
+                onKeepDraft={props.onKeepDraft}
             />
         );
     }
@@ -384,6 +391,9 @@ function LegacyDocumentEditor({
     initialDirty = false,
     externalChange = false,
     onExternalChangeHandled,
+    pendingFile = null,
+    onOpenPending,
+    onKeepDraft,
 }: DocumentEditorProps) {
     const tc = useTranslations('common');
     const shortcuts = useEditShortcuts(tc('ctrlKey'));
@@ -816,6 +826,9 @@ function LegacyDocumentEditor({
             info={fileInfo}
             conflict={conflict}
             externalChange={externalChange}
+            pendingFile={pendingFile}
+            onOpenPending={onOpenPending}
+            onKeepDraft={onKeepDraft}
             onReload={() => { setConflict(null); void loadDocument(); }}
             onSaveAsCopy={() => void saveDocument({ asCopy: true })}
             onOverwrite={() => void saveDocument({ overwrite: true })}

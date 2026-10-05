@@ -61,6 +61,10 @@ type NativeDocxEditorProps = {
   initialDirty?: boolean;
   externalChange?: boolean;
   onExternalChangeHandled?: () => void;
+  // Another file the agent opened while this draft has unsaved changes: it waits.
+  pendingFile?: string | null;
+  onOpenPending?: () => void;
+  onKeepDraft?: () => void;
 };
 
 const MARK_COLORS = [
@@ -749,6 +753,7 @@ export default function NativeDocxEditor({
   initialModel = null, onModelChange, onContentChange, onInsertSelection,
   insertedSelections = [], initialFileInfo = null, onFileInfo, onRetarget, onOpenFile,
   onDirtyChange, initialDirty = false, externalChange = false, onExternalChangeHandled,
+  pendingFile = null, onOpenPending, onKeepDraft,
 }: NativeDocxEditorProps) {
   const tc = useTranslations('common');
   const shortcuts = useEditShortcuts(tc('ctrlKey'));
@@ -1326,6 +1331,9 @@ export default function NativeDocxEditor({
         conflict={conflict}
         externalChange={externalChange}
         loadFailed={loadFailed}
+        pendingFile={pendingFile}
+        onOpenPending={onOpenPending}
+        onKeepDraft={onKeepDraft}
         onReload={() => { setConflict(null); void loadModel(); }}
         onSaveAsCopy={() => void saveDocument({ asCopy: true })}
         onOverwrite={() => void saveDocument({ overwrite: true })}

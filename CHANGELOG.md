@@ -114,8 +114,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   tab or another program changed a file while you had it open, your save used to replace that
   change without a word. Now the save is refused and a notice offers to reload, keep your
   version as a copy, or overwrite on purpose; your unsaved text stays. If the agent rewrites
-  a file you are editing, your draft is kept and the editor tells you. A Word document that
-  fails to load can no longer be saved as an empty file.
+  a file you are editing, your draft is kept and the editor tells you; if it opens another
+  file while you have unsaved edits, the editor asks before it replaces them. A Word
+  document that fails to load can no longer be saved as an empty file.
 - **Excel, PowerPoint and Word files are never saved with less than they had.** The editor
   can only write back what it shows, so saving a workbook with formulas, numbers, pictures or
   formatting, a deck with pictures or layouts, or a document with comments or unsupported

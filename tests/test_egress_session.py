@@ -12,6 +12,7 @@ resolver maps test names onto it, and a classifier seam calls that one address p
 everything else keeps the real classification, so the loopback refusals are tested
 against the real rules."""
 import http.server
+import os
 import socket
 import threading
 
@@ -220,6 +221,12 @@ def test_behind_a_site_proxy(monkeypatch, server):
         assert not isinstance(e.value, EgressRefused), "an unknown name is the proxy's to judge"
     monkeypatch.delenv("http_proxy")
     monkeypatch.setenv("HTTP_PROXY", "http://unknown-proxy.test:3128")
+    if os.name == "nt":
+        # Windows environment variables are case-insensitive and Python mirrors that:
+        # HTTP_PROXY IS http_proxy there, so the distinction cannot exist (the PLATFORM
+        # CAVEAT in binding.system_proxy_for).
+        assert binding.system_proxy_for("http", "public.test") == "http://unknown-proxy.test:3128"
+        return
     with egress_session(_public()) as s:
         assert s.get(f"http://public.test:{server.port}/ok", timeout=5).status_code == 200
 

@@ -34,8 +34,10 @@ def _repo(tmp_path):
 
 def _ask(messages, max_tokens):
     """One answer for every call, so the test keys on no prompt wording: the review reads the
-    JSON object, the verification the first JSON array in it, which is the verdict list."""
+    JSON object, the verification the first JSON array in it, which is the verdict list, and
+    the deep check the object's own verdict."""
     return json.dumps({
+        "verdict": "CONFIRMED", "confidence": 95, "reason": "xs[len(xs)] is past the end",
         "verdicts": [{"id": f"f{n}", "verdict": "CONFIRMED", "reason": "always out of range"}
                      for n in range(8)],
         "summary": "s", "files": {}, "effort": 1, "findings": [{

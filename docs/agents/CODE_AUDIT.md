@@ -70,6 +70,34 @@ contract a failed run cannot pass.
    code the model saw, is dropped before verification. Rejected findings are dropped (and
    counted), findings nobody could confirm are listed apart as unverified, without a fix
    prompt.
+
+   **The deep check.** What the first check confirms is checked once more, one finding at a
+   time, by a verifier that may search the repository and read files before it decides
+   (`verify_steps`, default 6, `vaf audit run --verify-steps N`; 0 keeps the first check
+   only). Why: on a live run 23 of 61 confirmed findings were false when checked by hand,
+   and nearly all of them rested on a fact outside the excerpt - the called function never
+   raises, a `finally` cleans up, only one caller exists, the default is a documented
+   decision. The tools are a text protocol inside `ask`, one JSON object per turn
+   (`{"action": "search", "pattern", "path"}`, `{"action": "read", "file", "start", "end"}`
+   or the verdict), so a local model without tool calling runs it too. The search is
+   `git grep --untracked -E -e <pattern>`: code and documentation alike, never an ignored
+   file; a read goes through the same filters as the review (a file git does not track is
+   never read), and everything that comes back is redacted. The verifier is told which
+   Markdown files name the finding's file, and that a behaviour a design document or a
+   `Deliberate:` comment states as intended, with its reason, is not a defect - while the
+   code, not the document, decides what actually happens. Its verdict carries a confidence
+   (below 70 counts as rejected); a critical or major claim must name the path that reaches
+   it, else it is confirmed as minor, and the check may lower a severity but never raise
+   it. A finding it never decides on is unverified, and the run is incomplete. The first
+   check stays in front because it is cheap (four findings per call) and drops about half
+   of what the review proposes. A model that writes its tool calls in its own markup instead
+   of the JSON (a DeepSeek-served model sends `<｜｜DSML｜｜invoke ...>` blocks, several per
+   turn) is read through `vaf.core.tool_call_recovery`, each call counting as one step.
+   Measured on those 61 findings, each already judged by hand: the deep check kept 26 (13
+   real, 10 partly right, 3 false), rejected 20 of the 23 false ones and 2 of the 15 real
+   ones (two judgment calls on test style and a file mode), and left 2 undecided; all six
+   false major findings were rejected, the one real major security finding kept. It cost
+   about 1.4 EUR for the 61 (1.35 million tokens, 291 calls, 5 minutes at four in parallel).
 6. **Deduplication and the profile.** Overlapping findings of one source and category in one
    file merge, and the same title in several places becomes one finding with its locations.
    `chill` (the default) reports bugs, security and what matters; `assertive` adds nitpicks

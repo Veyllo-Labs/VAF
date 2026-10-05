@@ -15,7 +15,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 - **Code Audit: VAF reviews code changes and proves what it finds.** It finds real bugs,
   security holes and risky changes in what was changed, checks every finding against the
-  code before reporting it (an invented one is dropped, a doubtful one is listed apart) and
+  code before reporting it (an invented one is dropped, a doubtful one is listed apart; one
+  that looks right is checked again by searching the repository and its documentation, so a
+  claim that something else in the code already rules out is dropped too) and
   gives each one a prompt the coding agent can work from. The coding agent now runs it on its
   own work: when its tasks are done it saves a version, reviews it and fixes what the review
   found, then reviews again, until nothing is left (at most 50 rounds, switchable by an

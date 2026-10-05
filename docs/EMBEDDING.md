@@ -713,8 +713,13 @@ HEAD), `"uncommitted"` or `"files"` (whole files, narrowed with `paths`). `base`
 revision git resolves to a commit; only that commit's id reaches the diff, so a `base` taken
 from a model is safe to pass, and one that names no commit fails the run. Without `ask` only
 the deterministic analyzers run (secret rules, ruff on changed lines) and the report says
-`incomplete`. Each `AuditFinding` carries four separate labels (`type`, `severity`,
-`category`, `effort`), the quoted `evidence`, a stable `id` and `fix_prompt()`; an
+`incomplete`. A finding the first check confirms gets a deep check: the verifier may search
+the repository (code and Markdown) and read files, up to `verify_steps` (default 6) per
+finding, through a text protocol in the same `ask` - each turn is one more message in the
+list, and any model that answers JSON can run it, tool calling or not. It answers with a
+confidence (below 70 does not count) and may lower a severity, never raise it;
+`verify_steps=0` keeps the first check only. Each `AuditFinding` carries four separate
+labels (`type`, `severity`, `category`, `effort`), the quoted `evidence`, a stable `id` and `fix_prompt()`; an
 `AuditReport` adds the walkthrough (`summary`, `file_summaries`, `effort` 1-5), the
 `unverified` findings (listed apart, never with a fix prompt), what was skipped and why,
 and `to_text()` / `to_json()` / `to_prompt()`.
@@ -2097,7 +2102,8 @@ Stable public surface (safe to build on):
   so a fragment carrying the SENDER's convention would otherwise be read as plain
   relative text and joined onto your root.
 - `vaf.code_audit(root, *, scope=, base=, paths=, include_untracked=, profile=, ask=,
-  checks=, max_files=, remember=, batch_chars=, progress=, parallel=, should_stop=)` /
+  checks=, max_files=, remember=, batch_chars=, progress=, parallel=, should_stop=,
+  verify_steps=)` /
   `vaf.AuditReport` / `vaf.AuditFinding` - reviewing a code change with your model. The
   promise is the `ask(messages, max_tokens) -> str` shape, the completion contract
   (`status` is `complete` only when everything in scope was reviewed, and `exit_code()`

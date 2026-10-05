@@ -11,7 +11,7 @@ This directory contains the logic for individual `vaf` CLI commands. Each file t
 - **bridge_discord.py**: Discord-specific bridge helper.
 - **automate.py**: Test/build/lint automation commands.
 - **git.py**: AI-enhanced Git operations (auto-commits, status summaries).
-- **audit.py**: Code Audit (`audit run` reviews a change in any git repository with the configured model and prints verified findings with a fix prompt each; exit 0 clean, 1 findings, 2 incomplete; `audit show` prints the last audit, `audit dismiss` records a finding as not a problem). Engine: `vaf.core.code_audit`.
+- **audit.py**: Code Audit (`audit run` reviews a change in any git repository with the configured model and prints verified findings with a fix prompt each; exit 0 clean, 1 findings, 2 incomplete; `--verify-steps N` bounds the verifier's searches and reads per confirmed finding, 0 keeps the first check only; `audit show` prints the last audit, `audit dismiss` records a finding as not a problem). Engine: `vaf.core.code_audit`.
 - **models.py**: Model management commands (list, download, select).
 - **subagent.py**: Allows running specialized sub-agents (Coder, Researcher) independently.
 - **workflow.py**: Workflow execution and inspection commands.

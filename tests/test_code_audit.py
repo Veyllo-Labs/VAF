@@ -47,6 +47,10 @@ BUGGY = ("def total(items):\n"
          "    return result\n")
 
 
+def _is_review(messages) -> bool:
+    return "You are a senior code reviewer" in messages[0]["content"]
+
+
 class _Model:
     """A fake reviewer and verifier: answers the review with `findings`, the verification
     with `verdict` for every finding, and records what it was shown."""
@@ -62,6 +66,8 @@ class _Model:
             n = user.count("--- finding f")
             return json.dumps([{"id": f"f{i}", "verdict": self.verdict, "reason": "seen"}
                                for i in range(n)])
+        if "You check ONE code review finding" in system:
+            return json.dumps({"verdict": self.verdict, "confidence": 90, "reason": "deep"})
         if "evaluate repository checks" in system:
             return json.dumps([{"name": "has tests", "result": "failed", "reason": "none"}])
         if self.review_raw is not None:
@@ -548,7 +554,7 @@ class _OutOfRoom(_Model):
 
     def __call__(self, messages, max_tokens):
         user = messages[-1]["content"]
-        if "verify code review findings" not in messages[0]["content"] \
+        if _is_review(messages) \
                 and user.count("=== FILE ") > 1:
             self.seen.append(user)
             return "<think>so much to consider"
@@ -607,7 +613,7 @@ def test_a_change_too_large_for_one_answer_is_reviewed_in_parts(repo):
     class _Reviewer(_Model):
         def __call__(self, messages, max_tokens):
             user = messages[-1]["content"]
-            if "verify code review findings" not in messages[0]["content"]:
+            if _is_review(messages):
                 self.seen.append(user)
                 found = [last] if "compute_590" in user else []
                 return json.dumps({"summary": "s", "files": {}, "effort": 1, "findings": found})
@@ -638,7 +644,7 @@ def test_one_file_the_model_cannot_answer_for_is_asked_again_in_smaller_parts(re
     class _OnlyHalves(_Model):
         def __call__(self, messages, max_tokens):
             user = messages[-1]["content"]
-            if "verify code review findings" not in messages[0]["content"] \
+            if _is_review(messages) \
                     and "value_10 = 10 + 1" in user and "value_590 = 590 + 1" in user:
                 self.seen.append(user)
                 return "<think>too much at once"
@@ -663,7 +669,7 @@ def test_parallel_sends_the_review_calls_at_once(repo):
 
     class _Together(_Model):
         def __call__(self, messages, max_tokens):
-            if "verify code review findings" not in messages[0]["content"]:
+            if _is_review(messages):
                 try:
                     barrier.wait()
                 except threading.BrokenBarrierError:
@@ -732,3 +738,140 @@ def test_a_review_of_the_wrong_shape_is_unreadable_not_the_end_of_the_run(repo):
     counted = json.dumps({"summary": "s", "files": {}, "findings": 3})
     report = ca.code_audit(str(repo), ask=_Model([], review_raw=counted), remember=False)
     assert (report.status, report.status_reason) == ("failed", "the model reviewed nothing")
+
+
+# ── the deep check ────────────────────────────────────────────────────────────
+
+class _Deep(_Model):
+    """Review and first check as _Model; every deep-check turn answers with the next item of
+    `turns` (a dict, or a function of the messages so far) and records the conversation."""
+
+    def __init__(self, findings, turns):
+        super().__init__(findings)
+        self.turns, self.deep = list(turns), []
+
+    def __call__(self, messages, max_tokens):
+        if "You check ONE code review finding" not in messages[0]["content"]:
+            return super().__call__(messages, max_tokens)
+        self.deep.append([m["content"] for m in messages])
+        turn = self.turns.pop(0) if self.turns else {"action": "search", "pattern": "x"}
+        return json.dumps(turn(messages) if callable(turn) else turn)
+
+
+def test_the_deep_check_searches_the_repository_and_can_reject(repo):
+    """The first check confirms from the excerpt; the deep check searches, sees what the
+    excerpt did not show, and rejects. MUTATION: skip the deep check."""
+    _change(repo, "app.py", BUGGY)
+
+    def decide(messages):
+        assert "app.py:3:" in messages[-1]["content"]          # the search result came back
+        return {"verdict": "REJECTED", "confidence": 90, "reason": "handled elsewhere"}
+
+    model = _Deep([OFF_BY_ONE], [{"action": "search", "pattern": r"range\(1,"}, decide])
+    report = ca.code_audit(str(repo), ask=model, remember=False)
+    assert report.findings == [] and report.rejected == 1 and len(model.deep) == 2
+    assert report.status == "complete", report.status_reason
+
+
+def test_a_confirmation_below_the_confidence_floor_does_not_count(repo):
+    """MUTATION: ignore the confidence."""
+    _change(repo, "app.py", BUGGY)
+    model = _Deep([OFF_BY_ONE], [{"verdict": "CONFIRMED", "confidence": 40, "reason": "maybe"}])
+    report = ca.code_audit(str(repo), ask=model, remember=False)
+    assert report.findings == [] and report.rejected == 1
+
+
+def test_the_deep_check_may_lower_the_severity_but_never_raise_it(repo):
+    """A major claim without a path that reaches it is confirmed as minor.
+    MUTATION: take the severity the check names as it is."""
+    _change(repo, "app.py", BUGGY)
+    lower = _Deep([OFF_BY_ONE], [{"verdict": "CONFIRMED", "confidence": 85,
+                                  "severity": "minor", "reason": "no caller shown"}])
+    [f] = ca.code_audit(str(repo), ask=lower, remember=False).findings
+    assert f.severity == "minor" and "confidence 85" in f.verification
+    higher = _Deep([OFF_BY_ONE], [{"verdict": "CONFIRMED", "confidence": 85,
+                                   "severity": "critical", "reason": "worse"}])
+    [f] = ca.code_audit(str(repo), ask=higher, remember=False).findings
+    assert f.severity == "major"
+
+
+def test_a_deep_check_that_never_decides_leaves_the_finding_unverified(repo):
+    """It may search `verify_steps` times; then it must decide. MUTATION: keep the first
+    check's confirmation when the deep check gave no verdict."""
+    _change(repo, "app.py", BUGGY)
+    model = _Deep([OFF_BY_ONE], [])                       # searches for ever
+    report = ca.code_audit(str(repo), ask=model, remember=False, verify_steps=3)
+    assert report.findings == [] and len(report.unverified) == 1
+    assert report.status == "incomplete" and len(model.deep) == 4
+    assert "No tool calls left" in model.deep[-1][-1]
+
+
+def test_the_deep_check_reads_only_what_the_review_may_read(repo):
+    """An ignored .env is neither readable nor searchable, whatever the finding asks for.
+    MUTATION: read any file inside the repository."""
+    _change(repo, ".gitignore", ".env\n")
+    _change(repo, ".env", "API_PASSWORD=hunter2-very-secret\n")
+    _change(repo, "app.py", BUGGY)
+    seen = []
+
+    def look(messages):
+        seen.append(messages[-1]["content"])
+        return {"action": "search", "pattern": "hunter2"}
+
+    def decide(messages):
+        seen.append(messages[-1]["content"])
+        return {"verdict": "REJECTED", "confidence": 90, "reason": "x"}
+
+    model = _Deep([OFF_BY_ONE], [{"action": "read", "file": ".env", "start": 1, "end": 5},
+                                 look, decide])
+    ca.code_audit(str(repo), ask=model, remember=False)
+    assert "hunter2" not in seen[0] and "may be read" in seen[0]
+    assert "no match" in seen[1]
+
+
+def test_the_deep_check_is_pointed_at_the_design_documents(repo):
+    """MUTATION: drop the document pointers."""
+    _change(repo, "docs/design.md", "app.py sums the items; skipping the first is deliberate.\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "doc")
+    _change(repo, "app.py", BUGGY)
+    model = _Deep([OFF_BY_ONE], [{"verdict": "REJECTED", "confidence": 90, "reason": "doc"}])
+    ca.code_audit(str(repo), ask=model, remember=False)
+    assert "documents that name app.py: docs/design.md" in model.deep[0][1]
+
+
+def test_without_steps_only_the_first_check_runs(repo):
+    _change(repo, "app.py", BUGGY)
+    model = _Deep([OFF_BY_ONE], [])
+    report = ca.code_audit(str(repo), ask=model, remember=False, verify_steps=0)
+    assert len(report.findings) == 1 and model.deep == []
+
+
+def test_tool_calls_in_a_models_own_markup_are_run_too(repo):
+    """A DeepSeek-served model answered every deep-check turn with its own tool-call tokens,
+    two searches at once, and never with the JSON asked for: 19 of 61 checks ended without
+    a verdict. MUTATION: read the JSON protocol only."""
+    _change(repo, "app.py", BUGGY)
+    markup = ('<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name="search">\n'
+              '<｜｜DSML｜｜ parameter name="pattern" string="true">range\\(1,</｜｜DSML｜｜ parameter>\n'
+              '</｜｜DSML｜｜ invoke>\n<｜｜DSML｜｜ invoke name="read">\n'
+              '<｜｜DSML｜｜ parameter name="file" string="true">app.py</｜｜DSML｜｜ parameter>\n'
+              '<｜｜DSML｜｜ parameter name="start">1</｜｜DSML｜｜ parameter>\n'
+              '</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>')
+
+    class _Markup(_Deep):
+        def __call__(self, messages, max_tokens):
+            if "You check ONE code review finding" in messages[0]["content"] and not self.deep:
+                self.deep.append([m["content"] for m in messages])
+                return markup
+            return super().__call__(messages, max_tokens)
+
+    def decide(messages):
+        assert "app.py:3:" in messages[-1]["content"]                 # the search ran
+        assert "app.py lines 1-" in messages[-1]["content"]           # and the read
+        assert "4 tool call(s) left" in messages[-1]["content"]
+        return {"verdict": "CONFIRMED", "confidence": 90, "reason": "seen"}
+
+    model = _Markup([OFF_BY_ONE], [decide])
+    report = ca.code_audit(str(repo), ask=model, remember=False)
+    assert len(report.findings) == 1 and report.status == "complete", report.status_reason

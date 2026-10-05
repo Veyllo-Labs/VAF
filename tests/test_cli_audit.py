@@ -129,3 +129,12 @@ def test_dismiss_then_rerun_reports_nothing_and_show_prints_the_last_audit(repo,
 def test_show_without_an_audit_says_so(repo):
     result = runner.invoke(audit_cmd.app, ["show", str(repo)])
     assert result.exit_code == 1
+
+
+def test_verify_steps_zero_keeps_the_first_check_only(repo, model):
+    """MUTATION: ignore --verify-steps."""
+    from tests.test_code_audit import _Deep
+    model["model"] = deep = _Deep([OFF_BY_ONE], [])
+    _change(repo, "app.py", BUGGY)
+    assert _run(repo, "--verify-steps", "0").exit_code == 1 and deep.deep == []
+    assert _run(repo, "--verify-steps", "2").exit_code == 2 and len(deep.deep) == 3

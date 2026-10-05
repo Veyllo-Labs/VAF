@@ -59,9 +59,14 @@ def run(
     parallel: Optional[int] = typer.Option(None, "--parallel",
                                            help="Model calls at once (default: 4 for an API "
                                                 "provider, 1 for the local server)"),
+    verify_steps: Optional[int] = typer.Option(None, "--verify-steps",
+                                               help="Searches and reads the verifier may make "
+                                                    "in the repository per confirmed finding "
+                                                    "(default 6); 0: first check only "
+                                                    "(cheaper, more false findings)"),
 ) -> None:
     """Audit the change in PATH and print the findings."""
-    from vaf.core.code_audit import ask_via_complete, code_audit, parallel_for
+    from vaf.core.code_audit import VERIFY_STEPS, ask_via_complete, code_audit, parallel_for
 
     if fmt not in ("text", "json", "prompt"):
         UI.error("--format is text, json or prompt.")
@@ -80,7 +85,8 @@ def run(
         report = code_audit(os.path.abspath(path), scope=scope, base=base, paths=only or None,
                             include_untracked=untracked, profile=profile, ask=ask,
                             max_files=max_files, parallel=parallel or parallel_for(provider),
-                            progress=lambda line: sys.stderr.write(f"  {line}\n"))
+                            progress=lambda line: sys.stderr.write(f"  {line}\n"),
+                            verify_steps=VERIFY_STEPS if verify_steps is None else verify_steps)
     if fmt == "json":
         sys.stdout.write(report.to_json() + "\n")
     elif fmt == "prompt":

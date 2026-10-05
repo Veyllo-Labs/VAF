@@ -173,6 +173,26 @@ def test_a_file_with_a_non_ascii_name_is_reviewed_under_its_name(repo):
     assert "äpfel.py" in report.files_reviewed, report.files_skipped
 
 
+def test_a_line_starting_with_plus_plus_inside_a_hunk_is_an_added_line():
+    """git writes an added "++i;" as "+++i;"; taken for a file header it was dropped and
+    every later line number shifted. MUTATION: skip "+++" lines inside hunks again."""
+    diff = ("diff --git a/a.c b/a.c\n--- a/a.c\n+++ b/a.c\n@@ -1,2 +1,4 @@\n"
+            " int i;\n+++i;\n+--j;\n return;\n")
+    assert ca._hunk_lines(diff) == [2, 3]
+
+
+def test_a_file_over_the_budget_is_never_read(repo, monkeypatch):
+    """MUTATION: read the file before asking the budget."""
+    for name in ("a.py", "b.py", "c.py"):
+        _change(repo, name, "x = 1\n")
+    read = []
+    real = ca._worktree_text
+    monkeypatch.setattr(ca, "_worktree_text", lambda top, rel: read.append(rel) or real(top, rel))
+    report = ca.code_audit(str(repo), scope="uncommitted", ask=None, remember=False, max_files=1)
+    assert len(report.files_reviewed) == 1 and len(read) == 1, read
+    assert sum(1 for _p, r in report.files_skipped if r.startswith("over the file budget")) == 2
+
+
 def test_the_no_newline_marker_is_not_counted_as_a_line():
     """A hunk that adds after a line without a final newline. MUTATION: count the marker."""
     diff = ("@@ -1,2 +1,3 @@\n"
@@ -432,6 +452,50 @@ def test_a_failed_error_check_fails_the_run(repo):
     _change(repo, "app.py", BUGGY)
     report = ca.code_audit(str(repo), ask=_Model([]), remember=False)
     assert [c.result for c in report.checks] == ["failed"] and report.exit_code() == 1
+
+
+def test_a_check_without_a_verdict_leaves_the_run_incomplete(repo):
+    """The answer named no verdict for the check: shown inconclusive, and the run did not
+    check everything. MUTATION: read a missing verdict as an answer."""
+    _change(repo, ".vaf/code-audit.json", json.dumps(
+        {"checks": [{"name": "has tests", "instructions": "Every change adds a test."}]}))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "config")
+    _change(repo, "app.py", BUGGY)
+
+    class _NoVerdict(_Model):
+        def __call__(self, messages, max_tokens):
+            if "evaluate repository checks" in messages[0]["content"]:
+                return "[]"
+            return super().__call__(messages, max_tokens)
+
+    report = ca.code_audit(str(repo), ask=_NoVerdict([]), remember=False)
+    assert [c.result for c in report.checks] == ["inconclusive"]
+    assert report.status == "incomplete" and "check" in report.status_reason
+
+
+def test_what_the_analyzers_proved_survives_a_review_the_model_could_not_give(repo):
+    """The model answered nothing usable: the run fails, but a hard-coded key the secret pass
+    found is still reported. MUTATION: return as soon as no review was readable."""
+    key = "sk-" + "M1n2B3v4C5x6Z7l8K9j0H1g2"
+    _change(repo, "cfg.py", f'API_KEY = "{key}"\n')
+    report = ca.code_audit(str(repo), scope="uncommitted", remember=False,
+                           ask=_Model([], review_raw="no JSON here"))
+    assert report.status == "failed"
+    assert [f.source for f in report.findings] == ["secrets"]
+
+
+def test_a_finding_that_is_only_hidden_or_unread_is_not_addressed(repo):
+    """Gone from the list is not fixed: hidden by the profile, or in a file the model gave no
+    readable answer for this time. MUTATION: call every finding not shown "addressed"."""
+    _change(repo, "app.py", BUGGY)
+    first = ca.code_audit(str(repo), ask=_Model([OFF_BY_ONE]))
+    assert first.findings
+    as_nitpick = dict(OFF_BY_ONE, type="nitpick")
+    hidden = ca.code_audit(str(repo), ask=_Model([as_nitpick]))
+    assert hidden.findings == [] and hidden.hidden_by_profile == 1 and hidden.addressed == []
+    unread = ca.code_audit(str(repo), ask=_Model([], review_raw="nothing usable"))
+    assert unread.addressed == [] and "app.py" not in unread.files_reviewed
 
 
 def test_not_a_repository_is_a_failed_audit(tmp_path):

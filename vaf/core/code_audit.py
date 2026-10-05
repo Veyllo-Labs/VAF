@@ -414,13 +414,20 @@ def _hunk_lines(diff: str) -> List[int]:
     """The NEW-side line numbers a unified diff adds or changes."""
     changed: List[int] = []
     new_line = 0
+    in_hunk = False
     for line in diff.splitlines():
         m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
         if m:
             new_line = int(m.group(1))
+            in_hunk = True
             continue
-        if line.startswith("+++") or line.startswith("---"):
+        if line.startswith("diff --git"):
+            in_hunk = False         # the next file's header follows
             continue
+        if not in_hunk:
+            continue                # header: "--- a/x", "+++ b/x", index, rename lines
+        # Inside a hunk "+++" is an added line that starts with "++" (and "---" a removed one
+        # that starts with "--"); taking them for headers shifted every later line number.
         if line.startswith("\\"):
             continue                # "\ No newline at end of file": metadata, not a line
         if line.startswith("+"):
@@ -610,6 +617,10 @@ def _collect(top: str, scope: str, base: str, paths: Optional[Sequence[str]],
         if reason:
             skipped.append((rel, reason))
             continue
+        if len(files) >= max_files:
+            # Asked before the read: a file the budget leaves out is never opened.
+            skipped.append((rel, f"over the file budget ({max_files})"))
+            continue
         if scope == "committed":
             # The committed change is what HEAD holds; the working tree may differ.
             text, reason = _head_text(top, rel)
@@ -617,9 +628,6 @@ def _collect(top: str, scope: str, base: str, paths: Optional[Sequence[str]],
             text, reason = _worktree_text(top, rel)
         if text is None:
             skipped.append((rel, reason))
-            continue
-        if len(files) >= max_files:
-            skipped.append((rel, f"over the file budget ({max_files})"))
             continue
         item = _File(path=rel, status=status, text=text)
         if status in ("untracked", "whole"):
@@ -1254,11 +1262,15 @@ def last_report(root: str) -> Optional[str]:
 
 # ── checks ────────────────────────────────────────────────────────────────────
 
-def _run_checks(config: dict, files: List[_File], summary: str, ask: Ask) -> List[AuditCheck]:
+def _run_checks(config: dict, files: List[_File], summary: str, ask: Ask
+                ) -> Tuple[List[AuditCheck], bool]:
+    """The checks with their verdicts, and whether every check got one. An explicit
+    "inconclusive" is a verdict; a check the answer leaves out, or an answer that is not a
+    readable list, is not - it is shown inconclusive, and the run is not complete."""
     checks = [c for c in (config.get("checks") or [])
               if isinstance(c, dict) and c.get("name") and c.get("instructions")]
     if not checks:
-        return []
+        return [], True
     listing = "\n".join(f"- {c['name']}: {c['instructions']}" for c in checks)
     change = _redact("\n\n".join(f"=== {f.path} ===\n{(f.diff or f.text)[:6_000]}" for f in files))[:40_000]
     answer = _ask_text(ask, _CHECKS_SYSTEM, f"Checks:\n{listing}\n\nChange summary: "
@@ -1267,13 +1279,16 @@ def _run_checks(config: dict, files: List[_File], summary: str, ask: Ask) -> Lis
     by_name = {str(v.get("name")): v for v in verdicts if isinstance(v, dict)} \
         if isinstance(verdicts, list) else {}
     out = []
+    answered = True
     for c in checks:
         v = by_name.get(str(c["name"])) or {}
+        if str(v.get("result") or "").strip().lower() not in ("passed", "failed", "inconclusive"):
+            answered = False
         result = _clamp(v.get("result"), ("passed", "failed", "inconclusive"), "inconclusive")
         out.append(AuditCheck(name=str(c["name"]),
                               mode=_clamp(c.get("mode"), ("warning", "error"), "warning"),
                               result=result, reason=str(v.get("reason") or "")[:300]))
-    return out
+    return out, answered
 
 
 # ── the audit ─────────────────────────────────────────────────────────────────
@@ -1357,6 +1372,7 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
     evidence_lines = [f"{f.where()} [{f.source}] {f.title}" for f in found]
 
     incomplete: List[str] = []
+    failed_reason = ""
     if any(r for _, r in skipped if r.startswith("over the file budget")):
         incomplete.append("some files were over the file budget")
 
@@ -1474,9 +1490,6 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
         report.summary = " ".join(summaries)
         if unreadable:
             incomplete.append(f"no readable review for {len(set(unreadable))} file(s)")
-        if not reviewed_any:
-            report.status, report.status_reason = "failed", "the model reviewed nothing"
-            return
 
         # A heuristic linter rule (bandit's S, bugbear's B and BLE) flags a pattern, not a proven
         # problem: measured on a live run, three of eleven "major" findings were S608 on a query
@@ -1485,18 +1498,26 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
         for f in found:
             if f.source == "ruff" and f.title.split(":")[0].startswith(("S", "B")):
                 f.verified, f.verification = False, ""
-        to_verify = [f for f in found if not f.verified]
-        if to_verify:
-            _tell(progress, f"verifying {len(to_verify)} finding(s)")
-            confirmed, unconfirmed, rejected, answered = _verify_with_model(to_verify, texts, ask,
-                                                                            parallel, top)
-            report.rejected += rejected
-            report.unverified += unconfirmed
-            if not answered:
-                incomplete.append("the verifier did not answer for every finding")
-            found = [f for f in found if f.verified]
-        if checks:
-            report.checks = _run_checks(config, files, report.summary, ask)
+        if not reviewed_any:
+            # Nothing the model said can be used, so nothing is verified or checked by it; the
+            # run fails. What the analyzers proved (a hard-coded key, an undefined name) is
+            # still reported - returning here used to throw it away.
+            failed_reason = "the model reviewed nothing"
+        else:
+            to_verify = [f for f in found if not f.verified]
+            if to_verify:
+                _tell(progress, f"verifying {len(to_verify)} finding(s)")
+                confirmed, unconfirmed, rejected, answered = _verify_with_model(
+                    to_verify, texts, ask, parallel, top)
+                report.rejected += rejected
+                report.unverified += unconfirmed
+                if not answered:
+                    incomplete.append("the verifier did not answer for every finding")
+                found = [f for f in found if f.verified]
+            if checks:
+                report.checks, checks_answered = _run_checks(config, files, report.summary, ask)
+                if not checks_answered:
+                    incomplete.append("not every repository check got a verdict")
 
     found = [f for f in found if f.verified]
     for f in found + report.unverified:
@@ -1505,6 +1526,9 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
     before = len(found)
     found = [f for f in found if f.id not in dismissed]
     report.dismissed = before - len(found)
+    # Still there, whether shown or not: merged into another finding, hidden by the profile, or
+    # not confirmed. None of them may be called "addressed" below.
+    still_open = {f.id for f in found} | {f.id for f in report.unverified}
     found = _dedupe(found)
     if profile == "chill":
         shown = [f for f in found if f.type != "nitpick" and f.severity != "trivial"]
@@ -1514,16 +1538,20 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
 
     if incomplete:
         report.status, report.status_reason = "incomplete", "; ".join(incomplete)
+    if failed_reason:
+        report.status, report.status_reason = "failed", failed_reason
+    # A file the model gave no readable answer for was not reviewed, whatever was read of it.
+    unread = {p for p, r in report.files_skipped if r.startswith("no readable review")}
+    report.files_reviewed = [p for p in report.files_reviewed if p not in unread]
 
     if remember:
         report.duration_s = round(time.monotonic() - started, 1)   # the saved text says it
         last = _load_state(top, "last.json")
         scope_key = f"{scope}:{report.base}"
         previous = (last.get("open") or {}) if last.get("scope_key") == scope_key else {}
-        current = {f.id for f in report.findings}
         reviewed = set(report.files_reviewed)
         report.addressed = [dict(v, id=k) for k, v in previous.items()
-                            if k not in current and v.get("file") in reviewed
+                            if k not in still_open and v.get("file") in reviewed
                             and k not in dismissed]
         _save_state(top, "last.json", {
             "scope_key": scope_key,

@@ -2470,6 +2470,18 @@ def _audit_round_refusal(*, enabled: bool, content_only: bool, rounds_done: int,
     return ""
 
 
+def _audit_settings() -> tuple:
+    """(coder_audit_enabled, coder_audit_max_rounds). The switch is read as a flag, not with
+    bool(): `vaf models config coder_audit_enabled false` stores the text "false", and
+    bool("false") is True, so the switch could not be turned off that way."""
+    from vaf.core.config import Config
+    try:
+        max_rounds = int(Config.get("coder_audit_max_rounds", 50))
+    except (TypeError, ValueError):
+        max_rounds = 50
+    return Config.get_bool("coder_audit_enabled", True), max_rounds
+
+
 def _audit_attempted(finding, attempted: "List[Dict]") -> bool:
     """Whether an earlier fix task of this run was already pointed at this finding.
 
@@ -5546,11 +5558,7 @@ Task {task_idx + 1}: {current_task}
         # and turns every verified problem into one more task; then it commits and reviews
         # again. It ends on a clean round, an incomplete one, only already-attempted findings, or
         # coder_audit_max_rounds rounds (the model's own requests included).
-        _audit_enabled = bool(Config.get("coder_audit_enabled", True))
-        try:
-            _audit_max = int(Config.get("coder_audit_max_rounds", 50))
-        except (TypeError, ValueError):
-            _audit_max = 50
+        _audit_enabled, _audit_max = _audit_settings()
         # attempted: what fix tasks were already pointed at (_audit_attempted); finished: a
         # round ended the loop (clean, incomplete, no progress), and the next all-done exit
         # point must not review again - one exit can pass through two of them.

@@ -699,3 +699,36 @@ def test_the_json_parser_survives_prose_and_fences():
     assert ca._json_from('noise {"a": [1, {"b": "}"}]} tail', "{") == {"a": [1, {"b": "}"}]}
     assert ca._json_from("```json\n[1, 2]\n```", "[") == [1, 2]
     assert ca._json_from("no json here", "{") is None
+
+
+def test_a_base_that_reads_as_a_git_option_writes_no_file(repo, tmp_path):
+    """`base` comes from the model through the code_audit tool, and `git diff --output=<file>`
+    writes over any file the process may write. MUTATION: hand `base` to git diff as given."""
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me\n", encoding="utf-8")
+    _change(repo, "app.py", BUGGY)
+    report = ca.code_audit(str(repo), base=f"--output={victim}", ask=None, remember=False)
+    assert victim.read_text(encoding="utf-8") == "keep me\n"
+    assert report.status == "failed" and "names no commit" in report.status_reason
+
+
+def test_a_named_base_still_reviews_the_change_since_it(repo):
+    _git(repo, "branch", "start")
+    _change(repo, "app.py", BUGGY)
+    _git(repo, "commit", "-qam", "loop")
+    report = ca.code_audit(str(repo), base="start", scope="committed", ask=None,
+                           remember=False)
+    assert report.files_reviewed == ["app.py"] and report.base == "start"
+
+
+def test_a_review_of_the_wrong_shape_is_unreadable_not_the_end_of_the_run(repo):
+    """`files` as a list, `findings` as a number: the batch was not reviewed, and the run
+    does not die on it. MUTATION: walk `files` or `findings` as whatever the model sent."""
+    _change(repo, "app.py", BUGGY)
+    listed = json.dumps({"summary": "s", "files": ["app.py"], "findings": [OFF_BY_ONE]})
+    report = ca.code_audit(str(repo), ask=_Model([], review_raw=listed), remember=False)
+    assert report.status == "complete" and [f.title for f in report.findings] == [
+        OFF_BY_ONE["title"]]
+    counted = json.dumps({"summary": "s", "files": {}, "findings": 3})
+    report = ca.code_audit(str(repo), ask=_Model([], review_raw=counted), remember=False)
+    assert (report.status, report.status_reason) == ("failed", "the model reviewed nothing")

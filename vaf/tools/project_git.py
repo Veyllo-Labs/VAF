@@ -27,6 +27,7 @@ import re
 import subprocess
 from typing import List, Optional
 
+from vaf.core.git_runner import resolve_commit
 from vaf.tools.base import BaseTool
 
 
@@ -256,10 +257,9 @@ class ProjectRollbackTool(BaseTool):
         if err:
             return f"Error: {err}"
 
-        rev = _run_git(["rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}"], cwd=path)
-        if rev.returncode != 0:
+        target = resolve_commit(commit, path)
+        if not target:
             return f"Error: version '{commit}' not found in {path}. Use project_history to list valid ids."
-        target = rev.stdout.strip()
 
         head = _run_git(["rev-parse", "HEAD"], cwd=path)
         previous_head = (head.stdout or "").strip()[:7]

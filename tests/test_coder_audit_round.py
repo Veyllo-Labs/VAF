@@ -175,3 +175,16 @@ def test_findings_with_no_task_to_go_to_end_the_loop_with_a_note():
     assert tail.index('_audit_state["finished"] = True') < tail.index("return False")
     assert "no fix task could be added" in tail
 
+
+
+def test_the_audit_switch_turns_off_when_set_from_the_cli(monkeypatch):
+    """`vaf models config coder_audit_enabled false` stores the text "false".
+    MUTATION: read the switch with bool()."""
+    from vaf.core.config import Config
+    from vaf.tools.coder import _audit_settings
+    stored = {"coder_audit_enabled": "false", "coder_audit_max_rounds": "7"}
+    monkeypatch.setattr(Config, "get", classmethod(lambda cls, k, d=None: stored.get(k, d)))
+    assert _audit_settings() == (False, 7)
+    stored["coder_audit_enabled"] = "true"
+    assert _audit_settings() == (True, 7)
+    assert "_audit_enabled, _audit_max = _audit_settings()" in _coder_src()

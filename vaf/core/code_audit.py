@@ -900,6 +900,13 @@ _CHECKS_SYSTEM = """You evaluate repository checks against a code change. Each c
 Answer with ONE JSON array and nothing else: [{"name": "<check name>", "result": "passed" | "failed" | "inconclusive", "reason": "<one sentence>"}]"""
 
 
+def _readable_review(data) -> bool:
+    """A review answer the run can use: an object whose findings, when there are any, are a
+    list. `"findings": "none"` or a number would have been walked as characters or raised,
+    and the error ended the whole run with every finding gathered so far."""
+    return isinstance(data, dict) and isinstance(data.get("findings") or [], list)
+
+
 def _json_from(text: str, opener: str):
     """The first JSON value of the expected kind in a model answer, tolerant of fences and
     prose around it. None when there is none."""
@@ -1350,9 +1357,17 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
     config = _load_config(top)
     if config.get("profile") in PROFILES and profile == "chill":
         profile = report.profile = config["profile"]
+    rev = ""
     if scope != "files":
         report.base = base or _default_base(top)
-    files, skipped, error = _collect(top, scope, report.base, paths, include_untracked,
+        from vaf.core.git_runner import resolve_commit
+        # `base` can come from the model (the code_audit tool): only the commit id it names
+        # reaches `git diff`, where `--output=<file>` would write over any file.
+        rev = report.base if report.base == EMPTY_TREE else resolve_commit(report.base, top)
+        if not rev:
+            report.status, report.status_reason = "failed", f"{report.base[:80]!r} names no commit"
+            return
+    files, skipped, error = _collect(top, scope, rev, paths, include_untracked,
                                      config, max_files)
     report.files_skipped = skipped
     if error:
@@ -1412,7 +1427,7 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
                                "\n\n".join(head + ["\n\n".join(_context(f) for f in batch)]),
                                REVIEW_TOKENS)
             data = _json_from(answer, "{")
-            if isinstance(data, dict):
+            if _readable_review(data):
                 return [(batch, data)]
             if len(batch) > 1:
                 mid = len(batch) // 2
@@ -1439,7 +1454,7 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
         reviews = [item for part in _parallel_map(_review_counted, batches, parallel)
                    for item in part]
         for batch, data in reviews:
-            if not isinstance(data, dict):
+            if not _readable_review(data):
                 unreadable += [f.path for f in batch]
                 report.files_skipped += [(f.path, "no readable review"
                                           + (f" ({f.part})" if f.part else "")) for f in batch]
@@ -1447,7 +1462,8 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
             reviewed_any = True
             if data.get("summary"):
                 summaries.append(str(data["summary"]).strip())
-            for path, line in (data.get("files") or {}).items():
+            per_file = data.get("files")
+            for path, line in (per_file.items() if isinstance(per_file, dict) else ()):
                 if isinstance(line, str):
                     report.file_summaries[str(path)] = line.strip()[:300]
             try:

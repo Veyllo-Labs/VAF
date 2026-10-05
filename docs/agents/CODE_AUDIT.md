@@ -25,7 +25,10 @@ contract a failed run cannot pass.
    files git does not track yet; `committed` is base to HEAD and reads the files as HEAD holds
    them; `uncommitted` is HEAD to the working tree; `files` reviews whole files. The base
    defaults to the merge base with the upstream, else the previous commit, else git's empty
-   tree. Generated and vendored paths (`node_modules`, `dist`, `.next`, lockfiles, minified
+   tree. A given base is resolved to the commit it names before it reaches `git diff`, and
+   one that names no commit fails the run: the tool takes `base` from the model, and an
+   option-shaped value such as `--output=<file>` would make git write over that file.
+   Generated and vendored paths (`node_modules`, `dist`, `.next`, lockfiles, minified
    files), binaries and files over 2 MB are skipped and listed with the reason, never
    silently. A large source file is reviewed by its diff: only numbered windows around the
    changed lines reach the model.
@@ -52,10 +55,11 @@ contract a failed run cannot pass.
    schema: `type` (issue, refactor, nitpick), `severity` (critical, major, minor, trivial),
    `category` (correctness, security, data_integrity, performance, stability,
    maintainability), `effort`, and the `evidence`: a quote of the code the finding is about.
-   An answer that is not readable JSON for several files is asked again in halves, and one
-   file again in smaller parts, until a part that cannot be split; what still gets no readable
-   answer is listed as not reviewed. Measured on a live run over 131 files: the two largest
-   changes (329 and 109 changed lines) got no readable answer as a whole.
+   An answer that is not readable JSON for several files (or whose `findings` is not a list)
+   is asked again in halves, and one file again in smaller parts, until a part that cannot be
+   split; what still gets no readable answer is listed as not reviewed. Measured on a live run
+   over 131 files: the two largest changes (329 and 109 changed lines) got no readable answer
+   as a whole.
 5. **Verification before anything is reported.** The quote must be in the current file: a
    wrong line is moved to where the quote is, an invented quote drops the finding. Then a
    second call per four findings answers CONFIRMED or REJECTED for each; an unreadable answer

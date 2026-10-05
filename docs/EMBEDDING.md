@@ -709,7 +709,9 @@ exit(report.exit_code("minor"))         # 0 clean, 1 findings, 2 incomplete
 ```
 
 `scope` is `"changes"` (base to the working tree, the default), `"committed"` (base to
-HEAD), `"uncommitted"` or `"files"` (whole files, narrowed with `paths`). Without `ask` only
+HEAD), `"uncommitted"` or `"files"` (whole files, narrowed with `paths`). `base` may be any
+revision git resolves to a commit; only that commit's id reaches the diff, so a `base` taken
+from a model is safe to pass, and one that names no commit fails the run. Without `ask` only
 the deterministic analyzers run (secret rules, ruff on changed lines) and the report says
 `incomplete`. Each `AuditFinding` carries four separate labels (`type`, `severity`,
 `category`, `effort`), the quoted `evidence`, a stable `id` and `fix_prompt()`; an

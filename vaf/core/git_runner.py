@@ -10,6 +10,7 @@ own. The CLI imports it from here now.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from typing import List, Optional
@@ -57,3 +58,18 @@ def run_git(args: List[str], cwd: str = ".", timeout: float = 60) -> tuple[int, 
         return -1, "", "Git is not installed."
     except Exception as e:
         return -1, "", str(e)
+
+
+def resolve_commit(rev: str, cwd: str = ".") -> Optional[str]:
+    """The full id of the commit `rev` names, or None when it names none.
+
+    A revision a caller hands in goes through here before it reaches any other git command
+    line. git reads an argument that starts with a dash as an option wherever it stands, and
+    `git diff --output=<file>` writes over any file the process may write; the id that comes
+    back is hex only, so it is safe in every position."""
+    rev = (rev or "").strip()
+    if not rev or rev.startswith("-"):
+        return None
+    code, out, _err = run_git(["rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"], cwd=cwd)
+    out = out.strip()
+    return out if code == 0 and re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", out) else None

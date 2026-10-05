@@ -247,6 +247,32 @@ def test_the_channel_store_forgets_it(tmp_path):
     assert bodies == ["hier: [VAF_SECRET_FTP_PASS]"], bodies
 
 
+def test_a_store_from_before_the_result_column_forgets_it_too(tmp_path):
+    """held_sends.result came later; a store an older version wrote has no such column, and
+    the scrub read it before anything migrated the store - so it failed and forgot nothing.
+    MUTATION: drop the init_store call from scrub_values."""
+    import sqlite3
+
+    from vaf.core import channel_message_store as store
+    store.append_message(username="admin", chat_id="chat1", message_id="m1", direction="in",
+                         body=f"hier: {VALUE}", ts=1.0, channel="telegram")
+    path = store._db_path("admin")
+    conn = sqlite3.connect(str(path))
+    conn.execute("DROP TABLE held_sends")
+    # The table as the previous release created it.
+    conn.execute("CREATE TABLE held_sends (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                 "username TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL, "
+                 "chat_id TEXT NOT NULL DEFAULT '', recipient TEXT NOT NULL DEFAULT '', "
+                 "tool TEXT NOT NULL, args TEXT NOT NULL, preview TEXT NOT NULL DEFAULT '', "
+                 "session_id TEXT NOT NULL DEFAULT '', created_ts REAL NOT NULL, decided_ts REAL, "
+                 "state TEXT NOT NULL DEFAULT 'held', error TEXT NOT NULL DEFAULT '')")
+    conn.commit()
+    conn.close()
+    fs.forget({"VAF_SECRET_FTP_PASS": VALUE}, session_id=SESSION, username="admin")
+    bodies = [r["body"] for r in store.get_chat_messages("admin", "chat1", channel="telegram")]
+    assert bodies == ["hier: [VAF_SECRET_FTP_PASS]"], bodies
+
+
 def test_the_word_corpus_and_the_terminal_history_forget_it(monkeypatch, tmp_path):
     import vaf.cli.autosuggest as auto_mod
     import vaf.cli.history as hist

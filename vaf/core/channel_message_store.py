@@ -733,6 +733,9 @@ def scrub_values(env: Dict[str, str], *, username: Optional[str] = None,
     env = usable(env)
     if not env or not store_exists(username, user_scope_id):
         return 0
+    # The columns read below include ones added later (`held_sends.result`): a store written
+    # by an older version gets them here, or the first query fails and nothing is forgotten.
+    init_store(username, user_scope_id)
     conn = _get_conn(username, user_scope_id)
     changed = 0
     try:

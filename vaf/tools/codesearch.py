@@ -29,12 +29,19 @@ SKIP_DIRS = {
 
 # Symbol patterns by extension
 SYMBOL_PATTERNS = {
-    ".py": [r"^(?:async\s+)?def\s+(\w+)", r"^class\s+(\w+)"],
+    # Indented too: a method and a nested class are definitions as much as a top-level def.
+    ".py": [r"^\s*(?:async\s+)?def\s+(\w+)", r"^\s*class\s+(\w+)"],
     ".js": [r"function\s+(\w+)", r"class\s+(\w+)", r"const\s+(\w+)\s*="],
-    ".ts": [r"function\s+(\w+)", r"class\s+(\w+)", r"interface\s+(\w+)"],
+    ".ts": [r"function\s+(\w+)", r"class\s+(\w+)", r"interface\s+(\w+)",
+            r"type\s+(\w+)\s*=", r"const\s+(\w+)\s*="],
     ".rs": [r"fn\s+(\w+)", r"struct\s+(\w+)", r"enum\s+(\w+)"],
     ".go": [r"func\s+(\w+)", r"type\s+(\w+)\s+struct"],
 }
+# React and module variants define symbols the same way; without these rows they fell back to
+# def/class/function only, and an arrow component or hook (`export const useThing = () =>`)
+# was never found as a symbol.
+for _alias, _base in ((".tsx", ".ts"), (".mts", ".ts"), (".jsx", ".js"), (".mjs", ".js")):
+    SYMBOL_PATTERNS[_alias] = SYMBOL_PATTERNS[_base]
 
 
 class CodeSearchTool(BaseTool):
@@ -261,9 +268,9 @@ Examples:
             
             suffix = filepath.suffix
             patterns = SYMBOL_PATTERNS.get(suffix, [
-                rf"def\s+{query}",
-                rf"class\s+{query}",
-                rf"function\s+{query}",
+                rf"def\s+{re.escape(query)}",
+                rf"class\s+{re.escape(query)}",
+                rf"function\s+{re.escape(query)}",
             ])
             
             try:

@@ -36,6 +36,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The coding agent finds methods, React components and hooks when it searches for them.**
+  Its code search looked for Python definitions only at the start of a line, so a method
+  inside a class was never found, and in `.tsx` and `.jsx` files it missed everything
+  written as `const name = ...`, which is how most components and hooks are defined.
 - **The coding agent sees what its own steps answered.** After its first file or test step,
   the answer of every later web page fetch, web search and "task done" reached the coding
   agent as a copy of the step before it: a page it fetched or a search it ran never arrived.

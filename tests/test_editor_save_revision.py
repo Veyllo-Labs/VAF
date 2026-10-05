@@ -373,3 +373,24 @@ def test_opening_and_saving_an_office_file_leave_the_event_loop_free(tree, monke
     request = ws.FileSaveRequest(path=str(book), content="<table></table>", base_revision=None)
     assert _loop_stays_free(lambda: ws.save_file_as_xlsx(
         request, _request(TENANT, path="/api/file/save"))) >= 4
+
+
+def test_the_grants_list_shows_only_the_accounts_it_came_from():
+    """On the render where an admin switches accounts, the previous list was still drawn with
+    revoke buttons that post to the new account. MUTATION: render the loaded list whatever
+    endpoint it came from."""
+    src = _src("web/components/settings/StandingGrantsSection.tsx")
+    assert "const data = loaded && loaded.endpoint === endpoint ? loaded.grants : null;" in src
+    assert "setLoaded(next ? { endpoint: requested, grants: next } : null);" in src
+
+
+def test_a_save_without_a_revision_reads_as_none():
+    """MUTATION: turn a missing revision into an empty string."""
+    src = _src("web/lib/editorFile.ts")
+    assert "revision: payload.revision ? String(payload.revision) : null," in src
+    assert "revision: string | null; redirected: boolean" in src
+
+
+def test_the_turkish_revoke_label_needs_no_case_ending():
+    import json
+    assert json.loads(_src("web/messages/tr.json"))["grants"]["revokeItem"] == "Geri al: {name}"

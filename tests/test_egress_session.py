@@ -293,3 +293,20 @@ def test_refusals_of_two_hosts_are_two_security_events(monkeypatch):
     egress._record_refusal("a.example", "127.0.0.1", "loopback", "alice")
     egress._record_refusal("b.example", "127.0.0.1", "loopback", "alice")
     assert seen == [("egress_blocked", "a.example"), ("egress_blocked", "b.example")]
+
+
+def test_a_pinned_connection_prefers_ipv4_after_judging_every_address(monkeypatch):
+    """A pinned connection has no fallback: a name with an AAAA record on a machine without
+    an IPv6 route failed where an unpinned client tries the IPv4 address next. Every address
+    is still judged first. MUTATION: pin the first address as resolved."""
+    monkeypatch.setattr(egress, "_resolve", lambda host, port: ["2606:4700::1111", "1.1.1.1"])
+    assert check_destination("https://one.example/") == "1.1.1.1"
+    monkeypatch.setattr(egress, "_resolve", lambda host, port: ["2606:4700::1111", "127.0.0.9"])
+    with pytest.raises(EgressRefused):
+        check_destination("https://one.example/")
+    monkeypatch.setattr(egress, "_resolve", lambda host, port: ["2606:4700::1111"])
+    assert check_destination("https://one.example/") == "2606:4700::1111"
+    import inspect
+    src = inspect.getsource(egress)
+    assert "self._local.pin = (scheme, host, port, pinned)" in src
+    assert "copy_with(host=_pin_address(addresses))" in src

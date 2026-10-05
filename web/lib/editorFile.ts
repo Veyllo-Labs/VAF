@@ -31,7 +31,7 @@ export type SaveConflict = {
 };
 
 export type SaveOutcome =
-    | { ok: true; path: string; revision: string; redirected: boolean }
+    | { ok: true; path: string; revision: string | null; redirected: boolean }
     | { ok: false; conflict?: SaveConflict; error?: string };
 
 export const EMPTY_FILE_INFO: EditorFileInfo = { revision: null, loss: [], editCopy: null };
@@ -82,7 +82,8 @@ export async function saveEditorFile(endpoint: string, body: Record<string, unkn
     return {
         ok: true,
         path: String(payload.path || ''),
-        revision: String(payload.revision || ''),
+        // No revision named: null, as a load without one reads - never '' posing as one.
+        revision: payload.revision ? String(payload.revision) : null,
         redirected: Boolean(payload.redirected),
     };
 }

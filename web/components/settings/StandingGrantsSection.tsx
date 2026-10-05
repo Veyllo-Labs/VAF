@@ -22,7 +22,10 @@ interface Grants {
 export default function StandingGrantsSection({ endpoint, own }: { endpoint: string; own: boolean }) {
     const t = useTranslations('grants');
     const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
-    const [data, setData] = useState<Grants | null>(null);
+    // The list with the endpoint it came from: on the render where the account changes the
+    // previous list is not shown (its revoke buttons would post to the new account).
+    const [loaded, setLoaded] = useState<{ endpoint: string; grants: Grants } | null>(null);
+    const data = loaded && loaded.endpoint === endpoint ? loaded.grants : null;
     // The list could not be fetched: said, with a retry, instead of a section that vanishes.
     const [loadFailed, setLoadFailed] = useState(false);
     const [failed, setFailed] = useState(false);
@@ -46,12 +49,12 @@ export default function StandingGrantsSection({ endpoint, own }: { endpoint: str
             next = null;
         }
         if (endpointRef.current === requested && seq === loadSeqRef.current) {
-            setData(next);
+            setLoaded(next ? { endpoint: requested, grants: next } : null);
             setLoadFailed(next === null);
         }
     }, [apiBase, endpoint]);
 
-    useEffect(() => { setData(null); setLoadFailed(false); void load(); }, [load]);
+    useEffect(() => { setLoaded(null); setLoadFailed(false); void load(); }, [load]);
 
     const revoke = async (body: { tools?: string[]; dirs?: string[]; everything?: boolean }) => {
         const requested = endpoint;

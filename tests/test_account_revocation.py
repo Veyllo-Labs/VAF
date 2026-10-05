@@ -628,9 +628,10 @@ def test_the_grants_list_never_shows_another_accounts_grants():
     from pathlib import Path
     src = (Path(__file__).resolve().parents[1] / "web" / "components" / "settings"
            / "StandingGrantsSection.tsx").read_text(encoding="utf-8")
-    assert "if (endpointRef.current === requested && seq === loadSeqRef.current) {\n            setData(next);" in src
+    assert ("if (endpointRef.current === requested && seq === loadSeqRef.current) {\n"
+            "            setLoaded(next ? { endpoint: requested, grants: next } : null);") in src
     assert "next = null;" in src
-    assert "useEffect(() => { setData(null); setLoadFailed(false); void load(); }, [load]);" in src
+    assert "useEffect(() => { setLoaded(null); setLoadFailed(false); void load(); }, [load]);" in src
     empty = src[src.index("if (!data) {"):src.index("const tools = Object.entries")]
     assert "if (!loadFailed) return null;" in empty and "t('loadFailed')" in empty
     assert "onClick={() => void load()}" in empty

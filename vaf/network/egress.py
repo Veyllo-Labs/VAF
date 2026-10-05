@@ -155,6 +155,14 @@ def _resolve(host: str, port: int):
     return [info[4][0] for info in binding.socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)]
 
 
+def _pin_address(addresses) -> str:
+    """The one address a pinned connection goes to, chosen AFTER every address was judged.
+    IPv4 first: a pinned connection has no fallback to the next address, and a name with an
+    AAAA record on a machine without an IPv6 route would otherwise fail where an unpinned
+    client simply tries the IPv4 one next."""
+    return next((a for a in addresses if ":" not in a), addresses[0])
+
+
 def check_destination(url: str, policy: Optional[EgressPolicy] = None, *,
                       username: str = "") -> str:
     """Judge `url` now and return the address a connection would be pinned to.
@@ -171,8 +179,9 @@ def check_destination(url: str, policy: Optional[EgressPolicy] = None, *,
     if not addresses:
         raise EgressRefused(host, reason="the host name does not resolve")
     kind = _judge(host, addresses, policy, username)
-    _record_private(host, addresses[0], kind, username)
-    return addresses[0]
+    pinned = _pin_address(addresses)
+    _record_private(host, pinned, kind, username)
+    return pinned
 
 
 def _record_refusal(host: str, ip: str, kind: str, username: str) -> None:
@@ -232,8 +241,9 @@ class _EgressAdapter(HTTPAdapter):
             if not addresses:
                 raise requests.exceptions.ConnectionError(f"Cannot resolve host: {host}")
             kind = _judge(host, addresses, self._policy, self._username)
-            _record_private(host, addresses[0], kind, self._username)
-            self._local.pin = (scheme, host, port, addresses[0])
+            pinned = _pin_address(addresses)
+            _record_private(host, pinned, kind, self._username)
+            self._local.pin = (scheme, host, port, pinned)
             proxies = {}
         # The Host header carries the NAME; the connection goes to the checked address.
         request.headers["Host"] = _host_label(host, port, scheme)
@@ -329,7 +339,7 @@ class _EgressAsyncTransport(httpx.AsyncBaseTransport):
         # address there would make the next hop lose the name (virtual hosts, trusted_host).
         # The Host header was built from the name already and travels with the copy.
         pinned = httpx.Request(
-            request.method, request.url.copy_with(host=addresses[0]),
+            request.method, request.url.copy_with(host=_pin_address(addresses)),
             headers=request.headers, stream=request.stream,
             extensions={**request.extensions, "sni_hostname": host})
         return await self._transport(host.lower()).handle_async_request(pinned)

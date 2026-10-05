@@ -103,7 +103,9 @@ def test_a_stale_always_does_not_approve_a_later_command(web, trust_dir):
     assert web.pending_gate(SESSION) is not None, "the stale answer closed the question"
     assert web.resolve_gate(SESSION, "allow_once", gate_id=web.pending_gate(SESSION)["gate_id"])
     t.join(timeout=5)
-    assert box.get("out") is None
+    # The fresh answer really ended the wait - not a join that gave up with an empty box.
+    assert not t.is_alive() and "out" in box
+    assert box["out"] is None
     assert get_tool_policy("host_bash", SCOPE) == "ask"
 
 

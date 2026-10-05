@@ -76,6 +76,11 @@ def _aliases(tree):
             for a in node.names:
                 if a.name in _CALLS[node.module]:
                     out[a.asname or a.name] = (node.module, a.name)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            # `from urllib import request`: the module arrives under its own short name.
+            for a in node.names:
+                if f"{node.module}.{a.name}" in _CALLS:
+                    out[a.asname or a.name] = (f"{node.module}.{a.name}", None)
     return out
 
 
@@ -103,8 +108,9 @@ def _call_name(fn, aliases):
 
 
 def _url_argument(node, call):
-    """The URL argument: requests.request(method, url) takes it second."""
-    position = 1 if call.endswith(".request") else 0
+    """The URL argument: requests.request(method, url) and httpx.stream(method, url) take it
+    second."""
+    position = 1 if call.endswith((".request", ".stream")) else 0
     for kw in node.keywords:
         if kw.arg == "url":
             return kw.value
@@ -169,3 +175,26 @@ def test_the_guard_sees_a_raw_fetch():
     assert ("requests.request", "url") in found
     literal = [a for c, a in found if a.startswith("'https://")]
     assert literal and _is_literal_destination(ast.parse(literal[0]).body[0].value)
+
+
+def _first_call(source):
+    tree = ast.parse(source)
+    return tree, next(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+
+
+def test_the_scanner_sees_urllib_request_imported_as_a_module():
+    """`from urllib import request` then `request.urlopen(url)` was invisible to the guard.
+    MUTATION: drop the module branch from _aliases."""
+    tree, call = _first_call("from urllib import request\ndef f(u):\n    return request.urlopen(u)\n")
+    assert _call_name(call.func, _aliases(tree)) == "urllib.request.urlopen"
+
+
+def test_httpx_stream_is_judged_by_its_url_not_its_method():
+    """httpx.stream("GET", url) read "GET" as the URL, a literal, and skipped the call.
+    MUTATION: take the first argument for stream."""
+    tree, call = _first_call("import httpx\ndef f(u):\n    return httpx.stream('GET', u)\n")
+    name = _call_name(call.func, _aliases(tree))
+    assert name == "httpx.stream"
+    arg = _url_argument(call, name)
+    assert isinstance(arg, ast.Name) and not _is_literal_destination(arg)
+

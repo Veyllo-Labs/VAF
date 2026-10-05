@@ -368,6 +368,10 @@ def test_every_answer_the_web_dialog_sends_is_one_the_engine_accepts():
     sent = set(re.findall(r"answerGate\('([a-z_]+)'\)", page))
     assert "type: 'gate_response', decision," in page
     assert sent == set(get_args(Decision)), sent
+    # And no send around answerGate with a literal decision of its own: the engine ignores
+    # one it does not know, so the dialog would fail without a word.
+    direct = set(re.findall(r"type: 'gate_response',\s*decision:\s*'([a-z_]+)'", page))
+    assert direct <= set(get_args(Decision)), direct
 
 
 # ── a tool whose effect is not in a folder, and a question that must be asked ─

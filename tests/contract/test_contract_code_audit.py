@@ -33,13 +33,16 @@ def _repo(tmp_path):
 
 
 def _ask(messages, max_tokens):
-    if "verify code review findings" in messages[0]["content"]:
-        return json.dumps([{"id": "f0", "verdict": "CONFIRMED", "reason": "always out of range"}])
-    return json.dumps({"summary": "s", "files": {}, "effort": 1, "findings": [{
-        "file": "m.py", "start_line": 2, "end_line": 2, "type": "issue", "severity": "major",
-        "category": "correctness", "effort": "low", "title": "Index out of range",
-        "explanation": "len(xs) is one past the end.", "suggestion": "xs[-1]",
-        "evidence": "return xs[len(xs)]"}]})
+    """One answer for every call, so the test keys on no prompt wording: the review reads the
+    JSON object, the verification the first JSON array in it, which is the verdict list."""
+    return json.dumps({
+        "verdicts": [{"id": f"f{n}", "verdict": "CONFIRMED", "reason": "always out of range"}
+                     for n in range(8)],
+        "summary": "s", "files": {}, "effort": 1, "findings": [{
+            "file": "m.py", "start_line": 2, "end_line": 2, "type": "issue", "severity": "major",
+            "category": "correctness", "effort": "low", "title": "Index out of range",
+            "explanation": "len(xs) is one past the end.", "suggestion": "xs[-1]",
+            "evidence": "return xs[len(xs)]"}]})
 
 
 def test_a_verified_finding_comes_with_its_fix_prompt(tmp_path):

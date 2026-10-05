@@ -3377,11 +3377,13 @@ async def get_file(request: Request, path: str = Query(..., description="Absolut
     import mimetypes
     target = _allowed_file_path(path, request)
     mime_type, _ = mimetypes.guess_type(str(target))
+    # The revision is a hash of up to 20 MB: in a worker thread, not on the event loop.
+    headers = await asyncio.to_thread(_editor_headers, target)
     return FileResponse(
         path=str(target),
         media_type=mime_type or "application/octet-stream",
         filename=target.name,
-        headers=_editor_headers(target),
+        headers=headers,
     )
 
 
@@ -3755,7 +3757,9 @@ async def get_file_as_html(request: Request, path: str = Query(..., description=
     suf = target.suffix.lower()
     if suf not in (".docx", ".xlsx", ".pptx"):
         raise HTTPException(status_code=400, detail="Only .docx, .xlsx and .pptx can be converted to HTML here")
-    try:
+    def _convert():
+        # Parsing the file twice (the loss report, then the HTML) is seconds for a large one:
+        # in a worker thread, so every other request keeps being answered meanwhile.
         headers = _editor_headers(target, office=True)
         if suf == ".docx":
             body = _docx_to_html(target)
@@ -3763,6 +3767,10 @@ async def get_file_as_html(request: Request, path: str = Query(..., description=
             body = _xlsx_to_html(target)
         else:
             body = _pptx_to_html(target)
+        return headers, body
+
+    try:
+        headers, body = await asyncio.to_thread(_convert)
         html = "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/></head><body>" + body + "</body></html>"
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=headers)
@@ -3783,9 +3791,11 @@ async def get_file_as_docx_model(request: Request, path: str = Query(..., descri
 
         from vaf.core.docx_import import import_docx_to_native_model
 
-        headers = _editor_headers(target, office=True)
-        model = import_docx_to_native_model(target)
-        return JSONResponse(model.to_dict(), headers=headers)
+        def _convert():
+            return _editor_headers(target, office=True), import_docx_to_native_model(target).to_dict()
+
+        headers, model = await asyncio.to_thread(_convert)
+        return JSONResponse(model, headers=headers)
     except ImportError as e:
         raise HTTPException(status_code=503, detail=f"DOCX support not installed: {e}")
     except Exception as e:
@@ -3871,13 +3881,14 @@ async def save_file_as_docx_native(body: FileSaveDocxNativeRequest, request: Req
         from vaf.core.docx_export import render_native_docx
         from vaf.core.docx_native_model import NativeDocxDocument
 
-        data = render_native_docx(NativeDocxDocument.from_dict(body.document or {}))
+        data = await asyncio.to_thread(
+            lambda: render_native_docx(NativeDocxDocument.from_dict(body.document or {})))
     except ImportError as e:
         raise HTTPException(status_code=503, detail=f"DOCX support not installed: {e}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save native docx: {e}")
-    return _save_editor_file(target, data, body.base_revision, request, office=True,
-                             as_copy=body.as_copy)
+    return await asyncio.to_thread(_save_editor_file, target, data, body.base_revision, request,
+                                   office=True, as_copy=body.as_copy)
 
 
 def _allowed_save_path(path_str: str, required_suffix: str, request: Request):
@@ -3968,13 +3979,13 @@ async def save_file_as_xlsx(body: FileSaveRequest, request: Request):
     """Save editor content (HTML tables) back to an Excel (.xlsx) file."""
     target = _allowed_save_path(body.path, ".xlsx", request)
     try:
-        data = _render_xlsx(_html_body(body.content))
+        data = await asyncio.to_thread(lambda: _render_xlsx(_html_body(body.content)))
     except ImportError:
         raise HTTPException(status_code=503, detail="Excel support not installed. Run: pip install openpyxl")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save xlsx: {e}")
-    return _save_editor_file(target, data, body.base_revision, request, office=True,
-                             as_copy=body.as_copy)
+    return await asyncio.to_thread(_save_editor_file, target, data, body.base_revision, request,
+                                   office=True, as_copy=body.as_copy)
 
 
 @app.post("/api/file/save-pptx")
@@ -3982,13 +3993,13 @@ async def save_file_as_pptx(body: FileSaveRequest, request: Request):
     """Save editor content (HTML: h2 = slide title, p = body) back to a PowerPoint (.pptx) file."""
     target = _allowed_save_path(body.path, ".pptx", request)
     try:
-        data = _render_pptx(_html_body(body.content))
+        data = await asyncio.to_thread(lambda: _render_pptx(_html_body(body.content)))
     except ImportError:
         raise HTTPException(status_code=503, detail="PowerPoint support not installed. Run: pip install python-pptx")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save pptx: {e}")
-    return _save_editor_file(target, data, body.base_revision, request, office=True,
-                             as_copy=body.as_copy)
+    return await asyncio.to_thread(_save_editor_file, target, data, body.base_revision, request,
+                                   office=True, as_copy=body.as_copy)
 
 
 @app.post("/api/file/save")
@@ -4008,8 +4019,9 @@ async def save_file(body: FileSaveRequest, request: Request):
             content = re.sub(r"\n{3,}", "\n\n", md(content, heading_style="ATX")).strip() + "\n"
         except Exception:
             pass  # fall back to writing the raw editor content
-    return _save_editor_file(target, content.encode("utf-8"), body.base_revision, request,
-                             office=False, as_copy=body.as_copy)
+    return await asyncio.to_thread(_save_editor_file, target, content.encode("utf-8"),
+                                   body.base_revision, request, office=False,
+                                   as_copy=body.as_copy)
 
 
 @app.get("/sounds/{filename}")

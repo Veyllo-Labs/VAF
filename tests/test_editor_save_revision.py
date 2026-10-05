@@ -276,3 +276,46 @@ def test_the_code_viewer_follows_a_save_into_the_copy():
     redirect = viewer[viewer.index("if (outcome.redirected) {"):viewer.index("revisionRef.current = outcome.revision;")]
     assert "onRetarget(outcome.path)" in redirect and "setIsDirty(false)" not in redirect
     assert "onRetarget={(path) => setCodeViewerState(" in _src("web/app/page.tsx")
+
+
+def _loop_stays_free(coro_factory):
+    """Run the route while a ticker counts on the same loop: a route that blocks the loop for
+    half a second lets it count nothing meanwhile."""
+    async def go():
+        ticks = 0
+
+        async def ticker():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.05)
+                ticks += 1
+
+        t = asyncio.create_task(ticker())
+        try:
+            await coro_factory()
+        except Exception:
+            pass
+        t.cancel()
+        return ticks
+
+    return asyncio.run(go())
+
+
+def test_opening_and_saving_an_office_file_leave_the_event_loop_free(tree, monkeypatch):
+    """The loss report and the conversion parse the file on every open and save; on the event
+    loop a large one held every other request. MUTATION: call them directly in the routes."""
+    import time
+
+    from vaf.core import web_server as ws
+    monkeypatch.setattr(ws, "_office_loss_report", lambda target: time.sleep(0.5) or [])
+    monkeypatch.setattr(ws, "_xlsx_to_html", lambda target: "<table></table>")
+    book = tree["own"].with_name("slow.xlsx")
+    book.write_bytes(b"not really a workbook")
+    assert _loop_stays_free(lambda: ws.get_file_as_html(_request(TENANT), str(book))) >= 4
+
+    monkeypatch.setattr(ws, "_render_xlsx", lambda html: time.sleep(0.5) or b"x")
+    monkeypatch.setattr(ws, "_save_editor_file", lambda *a, **k: {"status": "ok"})
+    request = ws.FileSaveRequest(path=str(book), content="<table></table>", base_revision=None)
+    assert _loop_stays_free(lambda: ws.save_file_as_xlsx(
+        request, _request(TENANT, path="/api/file/save"))) >= 4
+

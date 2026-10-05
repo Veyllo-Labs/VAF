@@ -263,8 +263,9 @@ verification (3), a claim about the redaction placeholder (1), and facts that ne
 the whole repository (that a message key exists in every catalog, that a config value is
 clamped elsewhere). With the callee definitions and the placeholder rule, the verifier run
 again over the same 55 kept 12 of the 13 real findings and dropped 12 of the 21 false ones.
-What remains needs a verifier that can search the repository itself, which is a named step,
-not built: it costs a tool loop per finding.
+What remained needed a verifier that searches the repository itself: that is the deep check
+of step 5 (`_deep_check`, bounded by `verify_steps`), measured there on the 61 findings of
+the next run.
 
 ## Named boundaries
 

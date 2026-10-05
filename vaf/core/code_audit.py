@@ -1764,7 +1764,11 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
     unread = {p for p, r in report.files_skipped if r.startswith("no readable review")}
     report.files_reviewed = [p for p in report.files_reviewed if p not in unread]
 
-    if remember:
+    # Only a run in which the model reviewed is compared with the last one and becomes it: a
+    # run without a model, or one whose review failed, found only what the analyzers prove,
+    # so every earlier model finding would read as addressed, and the open list the next
+    # real run compares against would be lost.
+    if remember and ask is not None and not failed_reason:
         report.duration_s = round(time.monotonic() - started, 1)   # the saved text says it
         last = _load_state(top, "last.json")
         scope_key = f"{scope}:{report.base}"

@@ -875,3 +875,19 @@ def test_tool_calls_in_a_models_own_markup_are_run_too(repo):
     model = _Markup([OFF_BY_ONE], [decide])
     report = ca.code_audit(str(repo), ask=model, remember=False)
     assert len(report.findings) == 1 and report.status == "complete", report.status_reason
+
+
+def test_a_run_without_a_review_neither_addresses_nor_replaces_the_last_one(repo):
+    """Without a model, or with a review that failed, only the analyzers looked: every earlier
+    model finding read as addressed, and last.json lost the open list the next real run
+    compares with. MUTATION: remember every run."""
+    _change(repo, "app.py", BUGGY)
+    first = ca.code_audit(str(repo), ask=_Model([OFF_BY_ONE]))
+    [f] = first.findings
+    saved = ca._load_state(str(repo), "last.json")
+    for ask in (None, _Model([], review_raw="nothing usable")):
+        report = ca.code_audit(str(repo), ask=ask)
+        assert report.addressed == []
+        assert ca._load_state(str(repo), "last.json") == saved
+    again = ca.code_audit(str(repo), ask=_Model([]))
+    assert [a["id"] for a in again.addressed] == [f.id]

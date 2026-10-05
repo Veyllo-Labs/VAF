@@ -36,6 +36,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Project history and rollback work on Windows without a separate git.** They called
+  `git` by name, which is not found when only the git that VAF brings along is installed;
+  they now use that one, like the rest of VAF.
 - **The coding agent finds methods, React components and hooks when it searches for them.**
   Its code search looked for Python definitions only at the start of a line, so a method
   inside a class was never found, and in `.tsx` and `.jsx` files it missed everything

@@ -90,8 +90,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   waiting confirmations, sub-agents, background commands), and its queued messages and
   automations no longer run. Restricting its tools stops what is already running, so
   nothing finishes with the old rights. The Stop button now also closes an open
-  confirmation and ends a command the agent runs on your computer, including what that
-  command started, instead of letting it run on in the background.
+  confirmation and ends a command the agent is waiting on (`host_bash`, `python_exec`),
+  including what that command started, instead of letting it run on unseen. A command the
+  agent started in the background on purpose keeps running until it is stopped
+  (`host_process` with `stop`).
 - **You can see and take back what you allowed "always".** Settings, Connections now lists
   every tool you allowed always or for a chat and every trusted folder, each with a button
   to take it back; the agent then asks again. An admin can do the same for another account

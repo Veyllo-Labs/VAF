@@ -520,8 +520,9 @@ instead of disabling the gate:
 - `vaf.list_standing_grants(user_scope_id)` reads them back
   (`{"tools": {name: {"always", "chats"}}, "dirs": [...]}`, chat grants of this
   process included) and `vaf.revoke_standing_grants(user_scope_id, tools=...,
-  dirs=..., everything=False)` takes them back; the next call asks again. A grant
-  skips the question before any event is emitted, so give your users this read
+  dirs=..., everything=False)` takes them back; the next call asks again. A
+  standing grant skips the question before `gate_required` is emitted, silently
+  (a chat grant is announced as `gate_bypassed`), so give your users this read
   and this undo wherever they can grant - VAF's settings and `vaf trust` are built
   on exactly these two.
 
@@ -816,8 +817,8 @@ Hard limits you must respect (they are architecture, not fine print):
   Run one OS process per tenant.
 - **Standing grants are per user, not per machine**: `set_tool_policy(...,
   "allow")` and a trusted directory are stored under the caller's
-  `user_scope_id` (`~/.vaf/trust/<scope>.json`; the local admin collapses to
-  `default.json`). One tenant's "always" no longer arms the tool for another.
+  `user_scope_id` (`trust/<scope>.json` under the platform config dir, see
+  "both persist per ACCOUNT" above; the local admin collapses to `default.json`). One tenant's "always" no longer arms the tool for another.
   An instance that predates this keeps its old flat `trust.json` as
   `trust.json.pre-scope` and inherits nothing: those entries were granted under
   a store that could not tell tenants apart. Note the separate hands-off

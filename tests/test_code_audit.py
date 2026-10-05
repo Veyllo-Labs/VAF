@@ -113,6 +113,42 @@ def test_an_unconfirmed_finding_is_kept_apart_without_a_fix_prompt(repo):
                            remember=False)
     assert report.findings == [] and len(report.unverified) == 1
     assert report.unverified[0].fix_prompt() == ""
+    assert report.status == "incomplete"
+
+
+def test_a_finding_the_verifier_skips_leaves_the_run_incomplete(repo):
+    """The verifier answered, but not for this finding. MUTATION: read a missing id as an
+    answer."""
+    class _Skips(_Model):
+        def __call__(self, messages, max_tokens):
+            if "verify code review findings" in messages[0]["content"]:
+                return "[]"
+            return super().__call__(messages, max_tokens)
+
+    _change(repo, "app.py", BUGGY)
+    report = ca.code_audit(str(repo), ask=_Skips([OFF_BY_ONE]), remember=False)
+    assert len(report.unverified) == 1 and report.status == "incomplete"
+
+
+def test_a_file_with_a_non_ascii_name_is_reviewed_under_its_name(repo):
+    """git quotes such a path with octal escapes by default, a name no file has.
+    MUTATION: drop core.quotepath=false."""
+    _change(repo, "äpfel.py", "def zähle(items):\n    return len(items) - 1\n")
+    _git(repo, "add", "-A")
+    _change(repo, "äpfel.py", "def zähle(items):\n    return len(items) - 2\n")
+    report = ca.code_audit(str(repo), ask=None, remember=False)
+    assert "äpfel.py" in report.files_reviewed, report.files_skipped
+
+
+def test_the_no_newline_marker_is_not_counted_as_a_line():
+    """A hunk that adds after a line without a final newline. MUTATION: count the marker."""
+    diff = ("@@ -1,2 +1,3 @@\n"
+            " first\n"
+            "-last\n"
+            "\\ No newline at end of file\n"
+            "+last\n"
+            "+added\n")
+    assert ca._hunk_lines(diff) == [2, 3]
 
 
 def test_the_fix_prompt_keeps_the_findings_data(repo):

@@ -5605,8 +5605,13 @@ Task {task_idx + 1}: {current_task}
             refusal = _audit_refusal()
             if refusal:
                 return f"Code audit not run: {refusal}."
+            # The audit is an addition to the run and must never end it: a failure is an
+            # answer to this call, and only a review that ran counts toward the limit.
+            try:
+                report = _audit_now("changes")
+            except Exception as exc:
+                return f"Code audit failed: {str(exc)[:300]}. Go on without it."
             _audit_state["rounds"] += 1
-            report = _audit_now("changes")
             _guard_event("note", f"Code audit on request: {report.status}",
                          f"{len(report.actionable())} finding(s) to fix")
             try:
@@ -5637,7 +5642,14 @@ Task {task_idx + 1}: {current_task}
                 base_dir, f"VAF Coder: {' '.join(task.split())[:60]}\n\n"
                           f"Code audit round {k}: the state under review")
             _audit_state["rounds"] = k
-            report = _audit_now("committed")
+            try:
+                report = _audit_now("committed")
+            except Exception as exc:
+                # Never the end of the run: its cleanup, final commit and summary still come.
+                _audit_state["finished"] = True
+                _audit_state["note"] = f"Code audit round {k} failed: {str(exc)[:200]}"
+                _guard_event("note", f"Code audit round {k}: failed", str(exc)[:200])
+                return False
             found = report.actionable()
             failed_checks = report.failed_checks()
             # Only what no fix task has seen yet is handed over: each finding gets one attempt.
@@ -5691,6 +5703,10 @@ Task {task_idx + 1}: {current_task}
             title = f"Fix the code audit findings (round {k})"
             idx = task_mgr.append_task(title, description=f"{fresh_count} finding(s)")
             if idx < 0:
+                # The findings stand but have nowhere to go: said, and the loop ends.
+                _audit_state["finished"] = True
+                _audit_state["note"] = (f"Code audit round {k}: {fresh_count} finding(s) found, "
+                                        f"but no fix task could be added")
                 return False
             _guard_event("gate", f"Code audit round {k}: {fresh_count} to fix",
                          "; ".join(f.title for f in to_fix[:3]))

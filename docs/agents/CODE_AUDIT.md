@@ -162,7 +162,8 @@ tool result to 2,000 characters by removing its middle, which would remove exact
 question and the prompt. In return it bounds itself: the fix prompt carries findings up to
 20,000 characters, most severe first, and names the rest (`AuditReport.fix_prompt(max_chars=)`;
 the coder's own fix task is bounded the same way, and its next round reports them again). The router hints the tool
-for "review", "audit", "prüf den Code" and similar. The `code_review` workflow, which
+for phrases that name code ("code review", "prüf den Code", "check my code"), not for
+"review" or "audit" alone, which sit inside "preview" and "audit log". The `code_review` workflow, which
 rewrites a file, now answers only to "improve" and "optimize".
 
 ## On the command line: `vaf audit`

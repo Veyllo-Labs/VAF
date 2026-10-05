@@ -8219,9 +8219,11 @@ class Agent:
                  forced_tools.add("git_add_commit")
 
         # Reviewing code is reading it: code_audit reports and asks, coding_agent changes.
+        # Only phrases that name code: "review", "audit" and "überprüf" alone sit inside
+        # "preview", "audit log" and "überprüfe die Mail", and would hint it everywhere.
         if any(kw in u_lower for kw in [
-            "code audit", "code review", "review", "audit", "prüf den code", "prüfe den code",
-            "überprüf", "code prüfen", "code checken", "check my code", "check the code"
+            "code audit", "code review", "prüf den code", "prüfe den code",
+            "code prüfen", "code checken", "check my code", "check the code"
         ]):
             if "code_audit" in self.tools:
                 forced_tools.add("code_audit")

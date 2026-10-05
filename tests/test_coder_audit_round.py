@@ -153,3 +153,25 @@ def test_the_coders_audit_tool_is_not_discoverable_as_a_tool_class():
     names = {obj().name for _, obj in inspect.getmembers(coder)
              if inspect.isclass(obj) and issubclass(obj, BaseTool) and obj is not BaseTool}
     assert "code_audit" not in names
+
+
+def test_a_failing_audit_never_ends_the_run():
+    """The audit is an addition to the run: an exception inside it must leave the cleanup,
+    the final commit and the summary to come, and a request that failed counts for nothing.
+    MUTATION: drop either guard, or count the request before it ran."""
+    src = _coder_src()
+    request = src[src.index("def _audit_on_request() -> str:"):src.index("def _maybe_start_audit_round")]
+    assert request.index('report = _audit_now("changes")') < request.index('_audit_state["rounds"] += 1')
+    assert "except Exception as exc:" in request
+    rnd = src[src.index("def _maybe_start_audit_round"):src.index("def _next_round() -> str:")]
+    guarded = rnd[rnd.index('report = _audit_now("committed")'):]
+    assert guarded.index("except Exception as exc:") < guarded.index("found = report.actionable()")
+
+
+def test_findings_with_no_task_to_go_to_end_the_loop_with_a_note():
+    src = _coder_src()
+    rnd = src[src.index("def _maybe_start_audit_round"):src.index("def _next_round() -> str:")]
+    tail = rnd[rnd.index("if idx < 0:"):]
+    assert tail.index('_audit_state["finished"] = True') < tail.index("return False")
+    assert "no fix task could be added" in tail
+

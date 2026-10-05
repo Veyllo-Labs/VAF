@@ -356,7 +356,10 @@ def _git(root: str, *args: str, timeout: float = 60) -> Tuple[int, str]:
     # A repository's own config can name programs that git runs on a read: an fsmonitor
     # hook on every status or diff, an external diff driver, a textconv filter. Reading a
     # change must not start any of them (see NAMED BOUNDARIES for the clean filters).
-    code, out, err = run_git(["-c", "core.fsmonitor=false", *args], cwd=root, timeout=timeout)
+    # core.quotepath=false: a non-ASCII path is printed as itself, not as an octal-escaped
+    # quoted string the file system has never heard of.
+    code, out, err = run_git(["-c", "core.fsmonitor=false", "-c", "core.quotepath=false", *args],
+                             cwd=root, timeout=timeout)
     return code, out if code == 0 else (err or out)
 
 
@@ -418,6 +421,8 @@ def _hunk_lines(diff: str) -> List[int]:
             continue
         if line.startswith("+++") or line.startswith("---"):
             continue
+        if line.startswith("\\"):
+            continue                # "\ No newline at end of file": metadata, not a line
         if line.startswith("+"):
             changed.append(new_line)
             new_line += 1
@@ -1066,21 +1071,20 @@ def _verify_with_model(found: List[AuditFinding], texts: Dict[str, str], ask: As
                 return _verdicts(chunk[:mid]) + _verdicts(chunk[mid:])
             return [None]
         by_id = {str(v.get("id")): v for v in verdicts if isinstance(v, dict)}
-        return [by_id.get(f"f{n}", {}) for n in range(len(chunk))]
+        return [by_id.get(f"f{n}") for n in range(len(chunk))]   # a skipped id: no answer
 
     for chunk, answers in zip(chunks, _parallel_map(_verdicts, chunks, parallel)):
         for f, v in zip(chunk, answers):
-            if v is None:
-                all_answered = False
-                unconfirmed.append(f)
-                continue
-            verdict = str(v.get("verdict") or "").upper()
+            verdict = str((v or {}).get("verdict") or "").upper()
             if verdict == "CONFIRMED":
                 f.verified, f.verification = True, str(v.get("reason") or "confirmed")[:300]
                 confirmed.append(f)
             elif verdict == "REJECTED":
                 rejected += 1
             else:
+                # No verdict, a skipped id or one the contract does not know: the finding
+                # was not settled, so the run did not verify everything it found.
+                all_answered = False
                 unconfirmed.append(f)
     return confirmed, unconfirmed, rejected, all_answered
 

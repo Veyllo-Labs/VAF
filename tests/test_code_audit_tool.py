@@ -103,3 +103,34 @@ def test_a_bad_scope_is_an_error(projects, model):
 def test_the_tool_never_changes_the_code(projects, model):
     _call(projects["own"])
     assert (projects["own"] / "app.py").read_text(encoding="utf-8") == BUGGY
+
+
+@pytest.fixture
+def router_agent(monkeypatch, tmp_path):
+    """A chat agent whose router call fails, so the keyword matches are its answer."""
+    from vaf.core.platform import Platform
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
+    from vaf.core.agent import Agent
+    a = Agent(register_signals=False, run_kind="chat",
+              config_overrides={"provider": "openai", "api_key_openai": "sk-test"})
+
+    def no_router(*args, **kwargs):
+        raise RuntimeError("router unavailable")
+
+    a.api_backend.chat_completion = no_router
+    return a
+
+
+@pytest.mark.parametrize("words, hinted", [
+    ("Mach bitte ein Code Review von meinem Projekt", True),
+    ("Prüf den Code im Ordner shop", True),
+    ("Zeig mir eine Vorschau, also ein preview, der Seite", False),
+    ("Schick mir das Audit-Log von gestern", False),
+    ("Überprüfe bitte meine Mails", False),
+])
+def test_the_router_hint_names_code_not_any_review(router_agent, words, hinted):
+    """"review" sits inside "preview", "audit" inside "audit log". MUTATION: put the bare
+    words back in the keyword list."""
+    assert ("code_audit" in router_agent._route_tools(words)) is hinted
+

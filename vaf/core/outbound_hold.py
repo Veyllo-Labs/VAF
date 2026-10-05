@@ -653,7 +653,10 @@ def approve_call(entry_id: int, *, username: str, user_scope_id: Optional[str],
     row = store.held_send(entry_id, username, user_scope_id)
     was = str((row or {}).get("state") or "")
     if was == "sent":
-        return {"ok": True, "result": str(row.get("result") or "") or "Already sent."}
+        # `repeat`: a racing second click that got here after the first one settled must not
+        # queue a second wake (send_draft passes it on).
+        return {"ok": True, "result": str(row.get("result") or "") or "Already sent.",
+                "state": "sent", "repeat": True}
     if was == "ambiguous":
         return {"ok": False, "result": (
             "The last attempt was interrupted and this message may already have been sent. "
@@ -748,6 +751,8 @@ def send_draft(kind: str, entry_id: int, *, username: str, user_scope_id: Option
         state = str(res.get("state") or "") or (
             "sent" if ok else ("ambiguous" if before == "ambiguous" else "failed"))
         out = {"ok": ok, "state": state, "error": "" if ok else str(res.get("result") or "")}
+        if res.get("repeat"):
+            out["repeat"] = True
     elif kind == "mail":
         svc = _mail_service(user_scope_id)
         if svc is None:

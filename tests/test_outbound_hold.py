@@ -740,3 +740,32 @@ def test_a_long_chat_keeps_its_oldest_waiting_draft(scratch):
     refs = [r["ref"] for r in rows]
     assert f"call:{oldest}" in refs, refs
     assert sum(1 for r in rows if r["state"] == "discarded") == 3, "the decided history is bounded"
+
+
+def test_a_click_that_races_a_finished_send_wakes_nothing(scratch, monkeypatch):
+    """Two clicks: the second reads the draft as waiting, the first settles it as sent before
+    the second claims it. The second must not queue another wake. MUTATION: drop `repeat`
+    from approve_call's already-sent answer, or from send_draft's."""
+    import vaf.core.task_queue as tq
+    woken = []
+    monkeypatch.setattr(tq, "enqueue_wake_turn", lambda **kw: woken.append(kw))
+    entry_id = outbound_hold.park_messenger_call(
+        "send_whatsapp", {"to_phone": "+1", "message": "a"},
+        username=USER, user_scope_id=SCOPE, session_id="chat-r")
+    tools = {"send_whatsapp": _FakeTool()}
+    outbound_hold.send_draft("call", entry_id, username=USER, user_scope_id=SCOPE,
+                             user_role="user", tools=tools)
+    assert len(woken) == 1
+    real = store.held_send
+    reads = []
+
+    def stale_first(*a, **kw):
+        row = real(*a, **kw)
+        reads.append(1)
+        return dict(row, state="held") if len(reads) == 1 else row
+
+    monkeypatch.setattr(store, "held_send", stale_first)
+    out = outbound_hold.send_draft("call", entry_id, username=USER, user_scope_id=SCOPE,
+                                   user_role="user", tools=tools)
+    assert out["ok"] is True and out.get("repeat") is True
+    assert len(woken) == 1 and len(tools["send_whatsapp"].calls) == 1

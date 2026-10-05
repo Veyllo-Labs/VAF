@@ -36,7 +36,11 @@ contract a failed run cannot pass.
    lines; in test files the bandit rules are skipped, because binding to 0.0.0.0 or hashing a
    literal is test data there. ruff reads the reviewed text from a scratch copy, `--isolated`,
    so the repository's own configuration is never loaded. Both are findings of
-   their own and context for the model.
+   their own and context for the model. The pyflakes rules (`F`, `E9`) are facts and count
+   as proven; the heuristic ones (bandit's `S`, bugbear's `B` and `BLE`) flag a pattern, so
+   with a model present they go through the verifier like the model's own findings (measured:
+   three of eleven "major" findings were `S608` on a query built from `?` placeholders and
+   `S324` on hashes used as ids and cache keys).
 3. **Context on a budget.** Per file: the diff, numbered windows around the changes, and where
    the names the change defines are used elsewhere (`git grep`). Per batch: the guideline files
    that govern the changed paths (`AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `GEMINI.md`,
@@ -55,9 +59,13 @@ contract a failed run cannot pass.
 5. **Verification before anything is reported.** The quote must be in the current file: a
    wrong line is moved to where the quote is, an invented quote drops the finding. Then a
    second call per four findings answers CONFIRMED or REJECTED for each; an unreadable answer
-   is asked again in halves, down to one finding. Rejected findings
-   are dropped (and counted), findings nobody could confirm are listed apart as unverified,
-   without a fix prompt.
+   is asked again in halves, down to one finding. Next to the code around the quote, the
+   verifier gets the definitions of the functions the quote calls (`git grep`, up to four), and
+   is told that a claim about a call - it can raise, return nothing, skip a step - must agree
+   with that definition. A claim about `[redacted]`, the placeholder the redaction put into the
+   code the model saw, is dropped before verification. Rejected findings are dropped (and
+   counted), findings nobody could confirm are listed apart as unverified, without a fix
+   prompt.
 6. **Deduplication and the profile.** Overlapping findings of one source and category in one
    file merge, and the same title in several places becomes one finding with its locations.
    `chill` (the default) reports bugs, security and what matters; `assertive` adds nitpicks
@@ -210,6 +218,21 @@ live run over 125 files it left 81 of 101 findings unanswered, which is why it i
 now, with the same budget as a review and the same split on an unreadable answer. A provider
 that refuses a figure this large is retried by the API backend with its safe cap. Calls time out after 600 seconds. Four calls run at once for an API
 provider (`parallel_for()`), one for the local server.
+
+## How often it is right (measured)
+
+Every one of the 55 findings of the live run over 131 files was checked by hand against the
+code: 13 real (two of them fixed in between), 21 partly true (a real observation, overstated
+or with a scenario that cannot happen as described), 21 not true. CodeRabbit, over the same
+range, reported 9, of which 8 were real; the two lists shared one finding and three related
+ones. The 21 false findings had four causes: the verifier saw only the code around the quote
+and not the function the claim was about (most of them), heuristic ruff rules that skipped
+verification (3), a claim about the redaction placeholder (1), and facts that need a search of
+the whole repository (that a message key exists in every catalog, that a config value is
+clamped elsewhere). With the callee definitions and the placeholder rule, the verifier run
+again over the same 55 kept 12 of the 13 real findings and dropped 12 of the 21 false ones.
+What remains needs a verifier that can search the repository itself, which is a named step,
+not built: it costs a tool loop per finding.
 
 ## Named boundaries
 

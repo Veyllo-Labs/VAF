@@ -97,6 +97,39 @@ def test_a_quote_that_is_not_in_the_code_is_dropped(repo):
     assert report.findings == [] and report.rejected == 1
 
 
+def test_a_claim_about_the_redaction_placeholder_is_dropped(repo):
+    """The redaction replaced a value in the code the model saw, and the model reported the
+    placeholder as a bug. MUTATION: keep findings about "[redacted]"."""
+    _change(repo, "auth.py", 'HINT = {"token_type_hint": "refresh_token"}\n')
+    about_placeholder = dict(OFF_BY_ONE, file="auth.py", title="Hint sends the literal [redacted]",
+                             explanation="The revocation request sends the redacted placeholder.",
+                             evidence='HINT = {"token_type_hint": "[redacted]"}')
+    model = _Model([about_placeholder])
+    report = ca.code_audit(str(repo), scope="uncommitted", ask=model, remember=False)
+    assert any("[redacted]" in s for s in model.seen)        # the model did see the placeholder
+    assert report.findings == [] and report.unverified == [] and report.rejected == 1
+
+
+def test_the_verifier_sees_what_the_quoted_code_calls(repo):
+    """"This call can raise" is decided by the call's definition, which lives in another file.
+    Measured: three verified majors rested on such a claim and were false. MUTATION: verify
+    from the excerpt alone."""
+    _change(repo, "helpers.py", "def load_items(path):\n    try:\n        return open(path).read().split()\n"
+                                "    except OSError:\n        return []\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "helpers")
+    _change(repo, "app.py", "from helpers import load_items\n\n\ndef count(path):\n"
+                            "    items = load_items(path)\n    return len(items)\n")
+    claim = dict(OFF_BY_ONE, title="load_items can raise and crash count",
+                 explanation="An unreadable path raises OSError out of count.",
+                 evidence="    items = load_items(path)")
+    model = _Model([claim])
+    ca.code_audit(str(repo), scope="uncommitted", ask=model, remember=False)
+    verify = [s for s in model.seen if "--- finding f0 ---" in s]
+    assert verify and "definition of load_items (helpers.py:1)" in verify[0]
+    assert "except OSError" in verify[0]
+
+
 def test_a_finding_the_verifier_rejects_is_dropped(repo):
     """MUTATION: skip the verification call."""
     _change(repo, "app.py", BUGGY)
@@ -226,6 +259,19 @@ def test_ruff_leaves_test_data_and_fixture_imports_alone(repo):
     assert [(f.file, f.title.split(":")[0]) for f in ruff] == [("server.py", "S104")]
     # Not merged in as a second location of the same title either.
     assert all(not loc[0].startswith("tests/") for f in ruff for loc in f.locations)
+
+
+@pytest.mark.skipif(shutil.which("ruff") is None and not (Path(__import__("sys").executable).parent / "ruff").exists(),
+                    reason="needs ruff")
+def test_a_heuristic_lint_rule_goes_through_the_verifier(repo):
+    """S104 flags a pattern; whether it is a problem here is the verifier's call. Without a
+    model it is still reported. MUTATION: keep heuristic ruff findings verified."""
+    _change(repo, "server.py", 'HOST = "0.0.0.0"\n')
+    alone = ca.code_audit(str(repo), ask=None, scope="uncommitted", remember=False)
+    assert [f.title.split(":")[0] for f in alone.findings if f.source == "ruff"] == ["S104"]
+    judged = ca.code_audit(str(repo), ask=_Model([], verdict="REJECTED"), scope="uncommitted",
+                           remember=False)
+    assert [f for f in judged.findings if f.source == "ruff"] == [] and judged.rejected == 1
 
 
 def test_scope_committed_ignores_the_working_tree(repo):

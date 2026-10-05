@@ -32,6 +32,7 @@ The remaining direct `chat_completion` call sites are streaming or multi-turn la
 with their own collectors, frozen in tests/test_completion_call_baseline.py. The 11
 one-shot hand-rolls inside vaf/core/agent.py are the named follow-up recorded there.
 """
+import contextvars
 from typing import Optional
 
 _ERROR_SENTINEL = "[API Error from"
@@ -101,6 +102,17 @@ def collect_stream(chunks) -> Optional[str]:
     """The shared collector alone: text, or None when the stream carried an error."""
     text, _error = _collect(chunks)
     return text
+
+
+# Where a caller that passed `errors=` hears why there was no answer (see complete()).
+_ERRORS: "contextvars.ContextVar[Optional[list]]" = contextvars.ContextVar(
+    "complete_errors", default=None)
+
+
+def _note_error(text: str) -> None:
+    sink = _ERRORS.get()
+    if sink is not None:
+        sink.append(str(text)[:300])
 
 
 def _local_complete(messages, model, max_tokens, temperature, timeout,
@@ -178,7 +190,8 @@ def _local_complete(messages, model, max_tokens, temperature, timeout,
         except Exception:
             pass
         return reasoning or None
-    except Exception:
+    except Exception as exc:
+        _note_error(f"local server: {exc}")
         return None                      # dead server = no answer, NEVER a spawn
 
 
@@ -210,6 +223,7 @@ def _api_complete(backend, provider, model, messages, max_tokens, temperature,
             text, error_text = executor.submit(_run, model).result(timeout=timeout)
         except _cf.TimeoutError:
             print(f"[WARN] complete({caller}): timeout after {timeout}s")
+            _note_error(f"timeout after {timeout}s")
             return None
         except Exception as e:
             text, error_text = None, str(e)
@@ -232,6 +246,7 @@ def _api_complete(backend, provider, model, messages, max_tokens, temperature,
                 pass
         if error_text:
             print(f"[WARN] complete({caller}): backend error: {str(error_text)[:200]}")
+            _note_error(error_text)
         return None
     finally:
         executor.shutdown(wait=False)
@@ -242,7 +257,7 @@ def complete(messages, *, provider: Optional[str] = None, model: Optional[str] =
              timeout: Optional[float] = None, strip_think: bool = True,
              allow_reasoning_fallback: bool = True,
              fallback_model: Optional[str] = None, backend=None,
-             caller: str = "") -> Optional[str]:
+             caller: str = "", errors: Optional[list] = None) -> Optional[str]:
     """One completion. Text or None - never an exception, never an error sentinel.
 
     ``messages`` is a string (wrapped as one user message) or a messages list.
@@ -251,6 +266,11 @@ def complete(messages, *, provider: Optional[str] = None, model: Optional[str] =
     APIBackendManager (the engine passes its own, which carries embedded caller keys
     and the event sink). ``timeout`` bounds the API wait (None = unbounded, the
     query_llm contract) and the local request (None = 120s).
+
+    ``errors``: a list that hears WHY there was no answer - the provider's error, a
+    timeout, a dead local server - so a caller can tell "the provider failed" from "the
+    model answered nothing" (an empty answer adds nothing to it). The code audit needs
+    that: it asks an empty answer again in smaller parts, which only repeats a failure.
     """
     # Label the lane from the caller this function is ALREADY given, so a tool
     # that reaches a model is counted under its own name instead of inheriting
@@ -259,12 +279,17 @@ def complete(messages, *, provider: Optional[str] = None, model: Optional[str] =
     from vaf.core.cost import usage_context as _usage_context
 
     _lane = (caller or "").strip() or None
-    with _usage_context(lane=_lane):
-        return _complete_inner(
-            messages, provider=provider, model=model, max_tokens=max_tokens,
-            temperature=temperature, timeout=timeout, strip_think=strip_think,
-            allow_reasoning_fallback=allow_reasoning_fallback,
-            fallback_model=fallback_model, backend=backend, caller=caller)
+    token = _ERRORS.set(errors) if errors is not None else None
+    try:
+        with _usage_context(lane=_lane):
+            return _complete_inner(
+                messages, provider=provider, model=model, max_tokens=max_tokens,
+                temperature=temperature, timeout=timeout, strip_think=strip_think,
+                allow_reasoning_fallback=allow_reasoning_fallback,
+                fallback_model=fallback_model, backend=backend, caller=caller)
+    finally:
+        if token is not None:
+            _ERRORS.reset(token)
 
 
 def _complete_inner(messages, *, provider=None, model=None, max_tokens: int = 512,

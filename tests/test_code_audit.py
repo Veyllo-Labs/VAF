@@ -891,3 +891,55 @@ def test_a_run_without_a_review_neither_addresses_nor_replaces_the_last_one(repo
         assert ca._load_state(str(repo), "last.json") == saved
     again = ca.code_audit(str(repo), ask=_Model([]))
     assert [a["id"] for a in again.addressed] == [f.id]
+
+
+def test_a_failing_provider_is_not_asked_again_in_parts(repo):
+    """An exhausted account answered every call with an error, and the review split each batch
+    down to single parts, asking a failing provider again and again. MUTATION: treat a raised
+    ask like an empty answer."""
+    _change(repo, "app.py", BUGGY)
+    _change(repo, "other.py", "def avg(items):\n    return sum(items) / len(items)\n")
+    calls = []
+
+    def ask(messages, max_tokens):
+        calls.append(1)
+        raise RuntimeError("402 Insufficient credits")
+
+    report = ca.code_audit(str(repo), scope="uncommitted", ask=ask, remember=False)
+    assert len(calls) == 1
+    assert report.status == "failed" and "402 Insufficient credits" in report.status_reason
+
+
+def test_a_failing_verifier_is_not_asked_again_in_halves(repo):
+    """MUTATION: split a chunk whose verification call raised."""
+    _change(repo, "app.py", BUGGY)
+    second = dict(OFF_BY_ONE, title="Returns an accumulator nobody resets", category="stability",
+                  start_line=5, end_line=5, evidence="    return result")
+    model = _Model([OFF_BY_ONE, second])
+    verify_calls = []
+
+    def ask(messages, max_tokens):
+        if "verify code review findings" in messages[0]["content"]:
+            verify_calls.append(1)
+            raise TimeoutError("timeout after 600s")
+        return model(messages, max_tokens)
+
+    report = ca.code_audit(str(repo), ask=ask, remember=False)
+    assert len(verify_calls) == 1 and len(report.unverified) == 2
+    assert report.status == "incomplete"
+
+
+def test_ask_via_complete_tells_a_failure_from_an_empty_answer(monkeypatch):
+    """complete() never raises; its `errors` list is how a failure is told apart.
+    MUTATION: return "" for both."""
+    from vaf.core import completion
+
+    def failing(messages, **kw):
+        kw["errors"].append("402 Insufficient credits")
+        return None
+
+    monkeypatch.setattr(completion, "complete", failing)
+    with pytest.raises(ca._AskFailed, match="402"):
+        ca.ask_via_complete()([{"role": "user", "content": "x"}], 10)
+    monkeypatch.setattr(completion, "complete", lambda messages, **kw: None)
+    assert ca.ask_via_complete()([{"role": "user", "content": "x"}], 10) == ""

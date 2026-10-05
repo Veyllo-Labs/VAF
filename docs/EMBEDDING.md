@@ -714,7 +714,9 @@ HEAD), `"uncommitted"` or `"files"` (whole files, narrowed with `paths`). `base`
 revision git resolves to a commit; only that commit's id reaches the diff, so a `base` taken
 from a model is safe to pass, and one that names no commit fails the run. Without `ask` only
 the deterministic analyzers run (secret rules, ruff on changed lines) and the report says
-`incomplete`. A finding the first check confirms gets a deep check: the verifier may search
+`incomplete`. Your `ask` returns "" for "no answer" and RAISES when the provider failed:
+an empty answer is asked again in smaller parts, a failure is not (every smaller call
+would repeat it). A finding the first check confirms gets a deep check: the verifier may search
 the repository (code and Markdown) and read files, up to `verify_steps` (default 6) per
 finding, through a text protocol in the same `ask` - each turn is one more message in the
 list, and any model that answers JSON can run it, tool calling or not. It answers with a
@@ -2076,7 +2078,7 @@ Stable public surface (safe to build on):
   `vaf.stop_account_work(scope)` / `vaf.stop_session(session_id, *,
   include_subagents=True)` / `vaf.add_revocation_listener(fn)` /
   `vaf.remove_revocation_listener(fn)` - making an access change reach work already
-  running. See "Taking access away" below.
+  running. See "Taking access away" above.
 - `vaf.mark_trusted_dir` / `vaf.set_tool_policy` / `vaf.list_standing_grants` /
   `vaf.revoke_standing_grants` - standing grants, per account, and their read and
   undo. See "Headless safety: tool confirmation" above.

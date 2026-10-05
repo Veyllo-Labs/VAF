@@ -1143,13 +1143,22 @@ def _ask_text(ask: Ask, system: str, user: str, max_tokens: int) -> str:
                                {"role": "user", "content": user}], max_tokens)
 
 
+class _AskFailed(Exception):
+    """The provider failed - an error, a timeout, an exhausted account - rather than answering
+    nothing. An empty answer is asked again in smaller parts (a reasoning model that ran out of
+    room answers on less); a failure is not, because every smaller call only repeats it.
+    Measured: a run that hit "Insufficient credits" split every batch down to single parts."""
+
+
 def _ask_messages(ask: Ask, messages: List[dict], max_tokens: int) -> str:
+    """The answer, "" for none; _AskFailed when `ask` raised (an `ask` says "the provider
+    failed" by raising, "no answer" by returning nothing)."""
     try:
         return ask(messages, max_tokens) or ""
-    except _Stopped:
+    except (_Stopped, _AskFailed):
         raise
-    except Exception:                                            # noqa: BLE001
-        return ""
+    except Exception as exc:                                     # noqa: BLE001
+        raise _AskFailed(f"{type(exc).__name__}: {exc}"[:300]) from exc
 
 
 def _verify_with_model(found: List[AuditFinding], texts: Dict[str, str], ask: Ask,
@@ -1176,6 +1185,12 @@ def _verify_with_model(found: List[AuditFinding], texts: Dict[str, str], ask: As
         return _ask_text(ask, _VERIFY_SYSTEM, "\n\n".join(body), VERIFY_TOKENS)
 
     def _verdicts(chunk: List[AuditFinding]) -> List[Optional[dict]]:
+        try:
+            return _verdicts_of(chunk)
+        except _AskFailed:
+            return [None] * len(chunk)         # a failed provider: no split, no answer
+
+    def _verdicts_of(chunk: List[AuditFinding]) -> List[Optional[dict]]:
         """One verdict per finding (None: no answer). An unreadable answer for several
         findings is asked again in halves, like the review: a reasoning model that ran out
         of room on eight findings answered nothing for 81 of 101 on a live run."""
@@ -1183,7 +1198,7 @@ def _verify_with_model(found: List[AuditFinding], texts: Dict[str, str], ask: As
         if not isinstance(verdicts, list):
             if len(chunk) > 1:
                 mid = len(chunk) // 2
-                return _verdicts(chunk[:mid]) + _verdicts(chunk[mid:])
+                return _verdicts_of(chunk[:mid]) + _verdicts_of(chunk[mid:])
             return [None]
         by_id = {str(v.get("id")): v for v in verdicts if isinstance(v, dict)}
         return [by_id.get(f"f{n}") for n in range(len(chunk))]   # a skipped id: no answer
@@ -1294,7 +1309,11 @@ def _deep_check(f: AuditFinding, texts: Dict[str, str], ask: Ask, top: str, step
     messages = [{"role": "system", "content": _DEEP_SYSTEM}, {"role": "user", "content": user}]
     used = 0
     while True:
-        verdict, calls = _deep_turn(_ask_messages(ask, messages, DEEP_TOKENS))
+        try:
+            answer = _ask_messages(ask, messages, DEEP_TOKENS)
+        except _AskFailed:
+            return None
+        verdict, calls = _deep_turn(answer)
         if verdict is not None:
             return verdict
         if not calls or used >= steps:
@@ -1482,8 +1501,11 @@ def _run_checks(config: dict, files: List[_File], summary: str, ask: Ask
         return [], True
     listing = "\n".join(f"- {c['name']}: {c['instructions']}" for c in checks)
     change = _redact("\n\n".join(f"=== {f.path} ===\n{(f.diff or f.text)[:6_000]}" for f in files))[:40_000]
-    answer = _ask_text(ask, _CHECKS_SYSTEM, f"Checks:\n{listing}\n\nChange summary: "
-                                            f"{summary}\n\nChange:\n{change}", CHECKS_TOKENS)
+    try:
+        answer = _ask_text(ask, _CHECKS_SYSTEM, f"Checks:\n{listing}\n\nChange summary: "
+                                                f"{summary}\n\nChange:\n{change}", CHECKS_TOKENS)
+    except _AskFailed:
+        answer = ""                            # no verdict for any check: the run is incomplete
     verdicts = _json_from(answer, "[")
     by_name = {str(v.get("name")): v for v in verdicts if isinstance(v, dict)} \
         if isinstance(verdicts, list) else {}
@@ -1626,10 +1648,16 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
             again in halves - a reasoning model that ran out of room on many files usually
             answers on fewer - and one file alone again in smaller parts, until a part that
             cannot be split could not be reviewed. Measured: one 19,000-character file got
-            no readable answer in two live runs while every other file did."""
-            answer = _ask_text(ask, _REVIEW_SYSTEM,
-                               "\n\n".join(head + ["\n\n".join(_context(f) for f in batch)]),
-                               REVIEW_TOKENS)
+            no readable answer in two live runs while every other file did. A provider that
+            FAILED is not asked again in parts (_AskFailed): the batch is not reviewed, and why
+            is said once."""
+            try:
+                answer = _ask_text(ask, _REVIEW_SYSTEM,
+                                   "\n\n".join(head + ["\n\n".join(_context(f) for f in batch)]),
+                                   REVIEW_TOKENS)
+            except _AskFailed as exc:
+                provider_errors.append(str(exc))
+                return [(batch, None)]
             data = _json_from(answer, "{")
             if _readable_review(data):
                 return [(batch, data)]
@@ -1655,6 +1683,7 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
                         + (f" ({len(items)} parts)" if len(items) > len(files) else "")
                         + f" in {len(batches)} batch(es)")
         unreadable: List[str] = []
+        provider_errors: List[str] = []
         reviews = [item for part in _parallel_map(_review_counted, batches, parallel)
                    for item in part]
         for batch, data in reviews:
@@ -1709,7 +1738,9 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
                 found.append(f)
         report.summary = " ".join(summaries)
         if unreadable:
-            incomplete.append(f"no readable review for {len(set(unreadable))} file(s)")
+            incomplete.append(f"no readable review for {len(set(unreadable))} file(s)"
+                              + (f" (the provider failed: {provider_errors[0]})"
+                                 if provider_errors else ""))
 
         # A heuristic linter rule (bandit's S, bugbear's B and BLE) flags a pattern, not a proven
         # problem: measured on a live run, three of eleven "major" findings were S608 on a query
@@ -1722,7 +1753,8 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
             # Nothing the model said can be used, so nothing is verified or checked by it; the
             # run fails. What the analyzers proved (a hard-coded key, an undefined name) is
             # still reported - returning here used to throw it away.
-            failed_reason = "the model reviewed nothing"
+            failed_reason = "the model reviewed nothing" + (
+                f" (the provider failed: {provider_errors[0]})" if provider_errors else "")
         else:
             to_verify = [f for f in found if not f.verified]
             if to_verify:
@@ -1799,8 +1831,12 @@ def ask_via_complete(*, provider: Optional[str] = None, model: Optional[str] = N
     model's review call (130 s measured for one 40k-character batch)."""
     def _ask(messages: List[dict], max_tokens: int) -> str:
         from vaf.core.completion import complete
-        return complete(messages, provider=provider, model=model, max_tokens=max_tokens,
-                        temperature=0, timeout=timeout, caller=caller) or ""
+        errors: List[str] = []
+        text = complete(messages, provider=provider, model=model, max_tokens=max_tokens,
+                        temperature=0, timeout=timeout, caller=caller, errors=errors)
+        if not text and errors:
+            raise _AskFailed(errors[-1])        # the provider failed, not "nothing to say"
+        return text or ""
     return _ask
 
 

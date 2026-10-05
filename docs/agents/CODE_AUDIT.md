@@ -59,7 +59,10 @@ contract a failed run cannot pass.
    is asked again in halves, and one file again in smaller parts, until a part that cannot be
    split; what still gets no readable answer is listed as not reviewed. Measured on a live run
    over 131 files: the two largest changes (329 and 109 changed lines) got no readable answer
-   as a whole.
+   as a whole. A provider that FAILED (an error, a timeout, an exhausted account) is not
+   asked again in parts: every smaller call would only repeat the failure, which a run that
+   hit "Insufficient credits" measured. The batch is not reviewed and the reason names the
+   provider's error; `ask_via_complete` tells the two apart through `complete(errors=)`.
 5. **Verification before anything is reported.** The quote must be in the current file: a
    wrong line is moved to where the quote is, an invented quote drops the finding. Then a
    second call per four findings answers CONFIRMED or REJECTED for each; an unreadable answer

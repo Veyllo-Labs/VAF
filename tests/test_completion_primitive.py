@@ -175,3 +175,16 @@ def test_the_retry_fires_on_a_sentinel_error_only_with_a_fallback_model():
     _FakeManager.constructed = []
     assert complete("q", provider="openai", model="bad") is None
     assert _FakeManager.constructed.count(("call", "bad")) == 1   # no second attempt
+
+
+def test_errors_hears_why_there_was_no_answer(monkeypatch):
+    """None is both "the provider failed" and "the model said nothing"; a caller that asks
+    again in smaller pieces must tell them apart. MUTATION: never write to `errors`."""
+    errors = []
+    assert _api(["[API Error from openai: 402 Insufficient credits]"], errors=errors) is None
+    assert errors and "402" in errors[0]
+    quiet = []
+    assert _api(["   "], errors=quiet) is None and quiet == []
+    dead = []
+    assert _local(monkeypatch, raise_exc=ConnectionError("down"), errors=dead) is None
+    assert dead and "down" in dead[0]

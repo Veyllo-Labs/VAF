@@ -34,6 +34,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The coding agent sees what its own steps answered.** After its first file or test step,
+  the answer of every later web page fetch, web search and "task done" reached the coding
+  agent as a copy of the step before it: a page it fetched or a search it ran never arrived.
+  A step's answer that was corrected afterwards (a file that turned out missing after
+  writing it) was lost the same way. Each step now reports its own answer.
 - **Starting VAF from its icon on a Mac starts it again after it had stopped.** Every icon
   start on a Mac opens a Terminal window with the live dashboard. When VAF stopped and that
   window stayed open, the next start took the old dashboard for a running VAF: it only

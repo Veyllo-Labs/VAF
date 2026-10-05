@@ -10548,9 +10548,16 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 # Update TUI after tool execution
                 live.update(tui.render())
                 
+                # What goes into the history is the call's FINAL result. Deliberately
+                # unconditional: `'result_str' in locals()` was always true after the first local
+                # tool of a run (the loop shares one frame), so every result a branch set without
+                # result_str - task_done, web_fetch, web_deep_search - was replaced by the
+                # previous tool's. Measured in a live run's log: task_done answered with exactly
+                # the 26 and 568 characters of the add_memory and run_tests calls before it, and
+                # a result rewritten after the fact ("File not found after write") never arrived.
+                result_str = str(result)
+
                 # Check for error patterns in result and prevent bash echo of errors
-                if not 'result_str' in locals():
-                    result_str = str(result)
                 
                 is_error = (
                     result_str.startswith("❌") or 

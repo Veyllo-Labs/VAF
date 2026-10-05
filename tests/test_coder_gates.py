@@ -281,3 +281,16 @@ def test_every_named_loop_intervention_reports_to_the_feed():
         "lint failed after write",
     ):
         assert f'"{label}"' in src, f"guard event missing: {label}"
+
+
+def test_every_tool_call_reports_its_own_result():
+    """The tool loop shares one frame, so `'result_str' in locals()` was true after the first
+    local tool and every result set without result_str (task_done, web_fetch,
+    web_deep_search) reached the model as the previous tool's. Measured in a live run's log:
+    task_done's result had exactly the length of the add_memory and run_tests results before
+    it. MUTATION: put the locals() check back."""
+    src = _coder_src()
+    assert "if not 'result_str' in locals()" not in src
+    tail = src[src.index("# What goes into the history is the call's FINAL result."):]
+    assert tail.index("result_str = str(result)") < tail.index('"content": result_str[:_result_char_limit]')
+

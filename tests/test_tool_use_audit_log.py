@@ -107,7 +107,7 @@ def test_the_agents_own_entry_point_reaches_the_funnel_once(log_dir):
     from types import SimpleNamespace
 
     from vaf.core.agent import Agent
-    from tests.conftest import bind_chat_stages
+    from conftest import bind_chat_stages
 
     tool = _Probe()
     fake = bind_chat_stages(SimpleNamespace(

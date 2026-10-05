@@ -11,7 +11,7 @@ import shutil
 import pytest
 from typer.testing import CliRunner
 
-from tests.test_code_audit import BUGGY, OFF_BY_ONE, _change, _Model, repo  # noqa: F401 - fixture
+from test_code_audit import BUGGY, OFF_BY_ONE, _change, _Model, repo  # noqa: F401 - fixture
 from vaf.cli.cmd import audit as audit_cmd
 from vaf.core import code_audit as ca
 
@@ -133,7 +133,7 @@ def test_show_without_an_audit_says_so(repo):
 
 def test_verify_steps_zero_keeps_the_first_check_only(repo, model):
     """MUTATION: ignore --verify-steps."""
-    from tests.test_code_audit import _Deep
+    from test_code_audit import _Deep
     model["model"] = deep = _Deep([OFF_BY_ONE], [])
     _change(repo, "app.py", BUGGY)
     assert _run(repo, "--verify-steps", "0").exit_code == 1 and deep.deep == []

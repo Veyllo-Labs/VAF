@@ -10,7 +10,7 @@ import subprocess
 
 import pytest
 
-from tests.test_code_audit import BUGGY, OFF_BY_ONE, _Model
+from test_code_audit import BUGGY, OFF_BY_ONE, _Model
 from vaf.core import code_audit as ca
 from vaf.tools.code_audit import CodeAuditTool
 

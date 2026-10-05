@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from tests.test_file_routes_account_jail import TENANT, _request, tree  # noqa: F401 - fixtures
+from test_file_routes_account_jail import TENANT, _request, tree  # noqa: F401 - fixtures
 
 ROOT = Path(__file__).resolve().parents[1]
 

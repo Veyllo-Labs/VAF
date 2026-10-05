@@ -15,7 +15,7 @@ import threading
 import httpx
 import pytest
 
-from tests.test_egress_session import _Server, _world, server  # noqa: F401 - fixtures
+from test_egress_session import _Server, _world, server  # noqa: F401 - fixtures
 from vaf.network.egress import EgressPolicy, EgressRefused, egress_httpx_client
 
 

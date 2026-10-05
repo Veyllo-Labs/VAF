@@ -977,10 +977,16 @@ export default function NativeDocxEditor({
         throw new Error(outcome.error || 'Save failed');
       }
       setConflict(null);
+      const info: EditorFileInfo = { revision: outcome.revision, loss: [], editCopy: null };
+      if (outcome.redirected && outcome.path && !onRetarget) {
+        // The edits are in the copy and this host cannot follow it: the draft stays unsaved
+        // HERE, as in DocumentEditor and the code viewer.
+        setSaveMessage(outcome.path); setTimeout(() => setSaveMessage(null), 5000);
+        return;
+      }
       savedModelRef.current = documentModel;
       dirtyRef.current = false;
       onDirtyChange?.(false);
-      const info: EditorFileInfo = { revision: outcome.revision, loss: [], editCopy: null };
       if (outcome.redirected && outcome.path) {
         onRetarget?.(outcome.path, info);
       } else {

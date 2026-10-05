@@ -215,3 +215,15 @@ def test_rollback_of_rollback_restores_newest_state(project):
     assert "restored" in out
     assert (project / "index.html").read_text() == "<html>version 2 with Impressum</html>"
     assert (project / "styles.css").exists()
+
+
+def test_history_and_rollback_run_the_git_vaf_resolved(monkeypatch, tmp_path):
+    """On Windows without git on PATH VAF brings its own; resolve_commit used it while every
+    other rollback step ran a bare "git" that was not there. MUTATION: run "git" again."""
+    import vaf.tools.project_git as pg
+    ran = []
+    monkeypatch.setattr(pg, "resolve_git", lambda: "/opt/vaf/git/bin/git")
+    monkeypatch.setattr(pg.subprocess, "run",
+                        lambda argv, **kw: ran.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
+    pg._run_git(["status", "--porcelain"], cwd=str(tmp_path))
+    assert ran == [["/opt/vaf/git/bin/git", "status", "--porcelain"]]

@@ -178,7 +178,8 @@ def check_destination(url: str, policy: Optional[EgressPolicy] = None, *,
 def _record_refusal(host: str, ip: str, kind: str, username: str) -> None:
     try:
         from vaf.core.security_events import log_security_event
-        log_security_event("egress_blocked", username=username or "",
+        # path=host: the throttle keys on it, so refusals of two hosts are two events.
+        log_security_event("egress_blocked", username=username or "", path=host,
                            detail=f"{host} -> {ip} ({kind})")
     except Exception:
         pass

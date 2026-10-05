@@ -27,7 +27,7 @@ import re
 import subprocess
 from typing import List, Optional
 
-from vaf.core.git_runner import resolve_commit
+from vaf.core.git_runner import resolve_commit, resolve_git
 from vaf.tools.base import BaseTool
 
 
@@ -78,7 +78,8 @@ def _run_git(args: List[str], cwd: str) -> subprocess.CompletedProcess:
     kwargs = {"cwd": cwd, "capture_output": True, "text": True}
     if platform.system() == "Windows":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-    return subprocess.run(["git", *args], **kwargs)
+    # The same git resolve_commit runs: VAF's portable git when none is on PATH (Windows).
+    return subprocess.run([resolve_git(), *args], **kwargs)
 
 
 def apply_coauthor_trailer(message: str) -> str:

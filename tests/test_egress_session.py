@@ -281,3 +281,15 @@ def test_the_refusal_is_a_connection_error_and_a_value_error():
     assert issubclass(EgressRefused, ValueError)
     assert "Only internet addresses" in str(EgressRefused("h", "127.0.0.1", "loopback"))
     assert egress.EgressRefused is EgressRefused
+
+
+def test_refusals_of_two_hosts_are_two_security_events(monkeypatch):
+    """The security log throttles by kind, user and path: without the host as the path a
+    second refused host within the window was never recorded. MUTATION: drop path=host."""
+    from vaf.core import security_events
+    seen = []
+    monkeypatch.setattr(security_events, "log_security_event",
+                        lambda kind, **kw: seen.append((kind, kw.get("path"))))
+    egress._record_refusal("a.example", "127.0.0.1", "loopback", "alice")
+    egress._record_refusal("b.example", "127.0.0.1", "loopback", "alice")
+    assert seen == [("egress_blocked", "a.example"), ("egress_blocked", "b.example")]

@@ -311,6 +311,16 @@ def test_the_document_editor_stays_unsaved_when_it_cannot_follow_the_copy():
     assert "dirtyRef.current = false" not in stay
 
 
+def test_the_word_editor_stays_unsaved_when_it_cannot_follow_the_copy():
+    """The same rule in NativeDocxEditor. MUTATION: mark the model saved before the redirect
+    check."""
+    src = _src("web/components/NativeDocxEditor.tsx")
+    save = src[src.index("const saveDocument = async"):]
+    stay = save[:save.index("savedModelRef.current = documentModel;")]
+    assert "outcome.redirected && outcome.path && !onRetarget" in stay and "return;" in stay
+    assert "dirtyRef.current = false" not in stay
+
+
 def test_each_revoke_button_names_what_it_revokes():
     """A screen reader heard "Revoke" on every row. MUTATION: label the button with the
     bare word again."""

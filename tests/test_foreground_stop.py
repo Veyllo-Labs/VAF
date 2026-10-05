@@ -45,21 +45,34 @@ def test_stop_ends_a_foreground_host_command_and_what_it_started(tmp_path):
     def _call():
         return HostBashTool().run(command=f'{PY} -c "{code}"', timeout=60)
 
+    # Daemon, and stopped on every way out: a failed wait must not leave a 60-second command
+    # and its child running, nor hold the test process open at exit.
     t = threading.Thread(target=lambda: box.update(out=run_bounded(
-        _call, timeout=90, stop_check=stop.is_set, poll=0.1, label="host_bash")))
+        _call, timeout=90, stop_check=stop.is_set, poll=0.1, label="host_bash")), daemon=True)
     t.start()
-    assert _wait(lambda: pidfile.exists() and pidfile.read_text().strip(), 15)
-    child = int(pidfile.read_text())
-    stop.set()
-    t.join(timeout=5)
+    child = None
+    try:
+        assert _wait(lambda: pidfile.exists() and pidfile.read_text().strip(), 15)
+        child = int(pidfile.read_text())
+        stop.set()
+        t.join(timeout=5)
 
-    def _gone(pid):
-        try:
-            return not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
-        except psutil.NoSuchProcess:
-            return True
+        def _gone(pid):
+            try:
+                return not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+            except psutil.NoSuchProcess:
+                return True
 
-    assert _wait(lambda: _gone(child), 3), "the command's child outlived Stop"
+        assert _wait(lambda: _gone(child), 3), "the command's child outlived Stop"
+    finally:
+        stop.set()
+        t.join(timeout=5)
+        if child is None and pidfile.exists():
+            with contextlib.suppress(Exception):
+                child = int(pidfile.read_text())
+        if child is not None:
+            with contextlib.suppress(Exception):
+                psutil.Process(child).kill()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX")
@@ -83,9 +96,10 @@ def test_stop_reaches_what_the_command_detached(tmp_path):
         lambda: HostBashTool().run(command=command, timeout=60),
         timeout=90, stop_check=stop.is_set, poll=0.1, label="host_bash"), daemon=True)
     t.start()
-    assert _wait(lambda: pidfile.exists() and pidfile.read_text().strip(), 15)
-    orphan = int(pidfile.read_text())
+    orphan = None
     try:
+        assert _wait(lambda: pidfile.exists() and pidfile.read_text().strip(), 15)
+        orphan = int(pidfile.read_text())
         stop.set()
         t.join(timeout=5)
 
@@ -97,8 +111,14 @@ def test_stop_reaches_what_the_command_detached(tmp_path):
 
         assert _wait(_gone, 3), "a detached grandchild outlived Stop"
     finally:
-        with contextlib.suppress(Exception):
-            psutil.Process(orphan).kill()
+        stop.set()
+        t.join(timeout=5)
+        if orphan is None and pidfile.exists():
+            with contextlib.suppress(Exception):
+                orphan = int(pidfile.read_text())
+        if orphan is not None:
+            with contextlib.suppress(Exception):
+                psutil.Process(orphan).kill()
 
 
 def test_a_foreground_command_returns_its_output_as_before():

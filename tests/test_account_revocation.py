@@ -159,14 +159,15 @@ def test_a_network_token_of_an_account_that_no_longer_stands_is_401(monkeypatch,
 
 
 def test_the_socket_handshake_asks_the_same_question():
-    """The WebSocket lane has no HTTP middleware in front of it. MUTATION: drop the check
-    from the handshake."""
+    """The WebSocket lane has no HTTP middleware in front of it, and it has two token lanes:
+    the network one and the localhost-only one (local network off), which requires a token
+    too and kept a demoted admin's role. MUTATION: drop the check from either lane."""
     from pathlib import Path
     src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "web_server.py").read_text(
         encoding="utf-8")
     handshake = src[src.index("async def websocket_endpoint"):]
     handshake = handshake[:handshake.index("elif type == ")]
-    assert "await token_account_stands(payload)" in handshake
+    assert handshake.count("await token_account_stands(payload)") == 2
 
 
 # ── the admin route ──────────────────────────────────────────────────────────
@@ -582,3 +583,8 @@ def test_the_grants_list_never_shows_another_accounts_grants():
     empty = src[src.index("if (!data) {"):src.index("const tools = Object.entries")]
     assert "if (!loadFailed) return null;" in empty and "t('loadFailed')" in empty
     assert "onClick={() => void load()}" in empty
+    # A revoke that answers after the admin moved to another account touches neither that
+    # account's error line nor its list.
+    revoke = src[src.index("const revoke = async"):src.index("if (!data) {")]
+    assert revoke.index("if (endpointRef.current !== requested) return;") < revoke.index(
+        "if (!ok) setFailed(true);") < revoke.index("void load();")

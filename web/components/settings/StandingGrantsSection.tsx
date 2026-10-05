@@ -54,17 +54,23 @@ export default function StandingGrantsSection({ endpoint, own }: { endpoint: str
     useEffect(() => { setData(null); setLoadFailed(false); void load(); }, [load]);
 
     const revoke = async (body: { tools?: string[]; dirs?: string[]; everything?: boolean }) => {
+        const requested = endpoint;
         setFailed(false);
+        let ok = false;
         try {
-            const res = await fetch(`${apiBase}${endpoint}/revoke`, {
+            const res = await fetch(`${apiBase}${requested}/revoke`, {
                 method: 'POST', credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
-            if (!res.ok) setFailed(true);
+            ok = res.ok;
         } catch {
-            setFailed(true);
+            ok = false;
         }
+        // The admin moved to another account meanwhile: this answer is about the previous
+        // one, so it neither marks the new account's list as failed nor reloads it.
+        if (endpointRef.current !== requested) return;
+        if (!ok) setFailed(true);
         // Either way the list shows what is really stored.
         void load();
     };

@@ -83,10 +83,14 @@ def _established_marker() -> Path:
     return Path(Config.APP_DIR) / "data_keys.established"
 
 
-def _mark_established() -> None:
+def _mark_established(marker: Optional[Path] = None) -> None:
+    """Write the marker. `marker` is the one taken together with the ring the key went
+    into: read again here, a resolution that outlived the ring it started with (a background
+    thread across a switch of data directory) marked an installation it never wrote a key
+    to, and that installation then looked like one whose key store had vanished."""
     try:
         from vaf.core.secure_store import _atomic_write_bytes, harden_path
-        marker = _established_marker()
+        marker = marker if marker is not None else _established_marker()
         if not marker.exists():
             _atomic_write_bytes(marker, b"1")
             harden_path(marker)
@@ -164,6 +168,7 @@ def _resolve(
     """Ring -> legacy config (adopt + blank) -> mint. Strict at every step."""
     _refuse_if_the_ring_vanished()
     ring = _ring()
+    marker = _established_marker()     # one installation: this ring and its marker
     data = ring.load_strict()  # raises SecureStoreUnreadable instead of minting
     stored = data.get(name, "")
     if stored:
@@ -200,7 +205,7 @@ def _resolve(
     # A failed write raises out of here; nothing below runs, and the caller sees
     # the failure instead of a key that exists only in this process's memory.
     ring.update(_put, strict=True)
-    _mark_established()
+    _mark_established(marker)
     final = ring.load_strict().get(name)
     if not final:
         # THE bug behind every "encrypted with a key nobody has" file: this used

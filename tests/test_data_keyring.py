@@ -437,3 +437,29 @@ def test_writing_a_secret_cannot_resurrect_a_vanished_ring(tmp_path, monkeypatch
     assert not ring_path.exists(), (
         "a fresh ring was created on a machine that had lost its own - every "
         "later read now passes the guard while the real keys are unrecoverable")
+
+
+def test_a_resolution_marks_the_installation_it_wrote_its_key_into(tmp_path, monkeypatch):
+    """A key resolution that outlives a switch of data directory - a background thread of one
+    test still minting while the next test's isolation is in place - marked the NEW
+    installation, which had no ring, so its first key read "the key store is gone". Measured
+    on the Windows runner: "Minted" logged during a test's setup, then that test refused.
+    MUTATION: read the marker path again after the write."""
+    import vaf.core.data_keyring as dk
+    from vaf.core.secure_store import SecureBlobStore
+
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    monkeypatch.setattr(dk, "_store", SecureBlobStore("data_keys", first / "data_keys.enc"))
+    monkeypatch.setattr(dk, "_established_marker", lambda: first / "data_keys.established")
+
+    def mint_while_the_directory_switches():
+        monkeypatch.setattr(dk, "_store", SecureBlobStore("data_keys", second / "data_keys.enc"))
+        monkeypatch.setattr(dk, "_established_marker", lambda: second / "data_keys.established")
+        return "k" * 44
+
+    dk._resolve("switch_test_key", legacy_config_key=None,
+                mint=mint_while_the_directory_switches, validate=lambda v: True)
+    assert (first / "data_keys.established").exists() and (first / "data_keys.enc").exists()
+    assert not (second / "data_keys.established").exists()

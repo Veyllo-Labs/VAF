@@ -70,9 +70,13 @@ def test_a_relative_redirect_stays_on_the_name(server):
 def test_a_trusted_host_is_admitted(server):
     """A registered MCP server on this machine: past the judgement (the connection then fails
     only because nothing listens at the fake address). A refusal raises the same error type,
-    so the cause tells them apart. MUTATION: ignore trusted_host."""
-    with pytest.raises(httpx.ConnectError) as failed:
-        _get(f"http://loop.test:{server.port}/x", EgressPolicy(trusted_host="loop.test"))
+    so the cause tells them apart. Linux and Windows refuse a connection to 127.0.0.9 at once;
+    macOS configures only 127.0.0.1 on its loopback, so there the attempt times out instead -
+    measured on the macOS runner, where the bare ConnectError expectation failed after the
+    30-second default. MUTATION: ignore trusted_host."""
+    with pytest.raises((httpx.ConnectError, httpx.ConnectTimeout)) as failed:
+        _get(f"http://loop.test:{server.port}/x", EgressPolicy(trusted_host="loop.test"),
+             timeout=httpx.Timeout(3.0))
     assert not isinstance(failed.value.__cause__, EgressRefused)
 
 

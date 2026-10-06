@@ -17,9 +17,11 @@ Checks:
   the first value);
 - the npm manifests keep the structure npm relies on: dependency maps are flat
   string-to-string objects, and a package listed in "overrides" that is also a
-  direct dependency must use the IDENTICAL spec string - npm hard-errors on a
-  mismatch ("Override for X conflicts with direct dependency"), which is exactly how
-  the first postcss override attempt failed on 2026-07-23;
+  direct dependency must REFERENCE that dependency (`"postcss": "$postcss"`) - npm
+  hard-errors on a mismatch ("Override for X conflicts with direct dependency"), which
+  is how the first postcss override attempt failed on 2026-07-23. A repeated spec
+  string was allowed until Dependabot bumped the direct postcss and could not touch
+  the override: every grouped web update then failed with EOVERRIDE;
 - each manifest agrees with its package-lock.json at the root (name, version, and
   every direct dependency spec verbatim in the lock's root node), so a package.json
   edit cannot ship without its lock regeneration.
@@ -128,14 +130,14 @@ def test_npm_override_specs_match_direct_dependencies(rel: Path) -> None:
     for field in _DEP_FIELDS:
         for pkg, spec in data.get(field, {}).items():
             ov = overrides.get(pkg)
-            if isinstance(ov, str) and not ov.startswith("$") and ov != spec:
+            if isinstance(ov, str) and ov != f"${pkg}":
                 conflicts.append(
-                    f"{rel}: '{pkg}' is {spec!r} in {field} but {ov!r} in overrides"
+                    f"{rel}: '{pkg}' is {spec!r} in {field} and {ov!r} in overrides"
                 )
     assert not conflicts, (
-        "An override for a direct dependency must repeat its spec verbatim "
-        "(npm: 'Override for X conflicts with direct dependency'):\n"
-        + "\n".join(conflicts)
+        "An override for a direct dependency must reference it, \"<name>\": \"$<name>\" "
+        "(npm: 'Override for X conflicts with direct dependency' as soon as a tool bumps "
+        "one of two copies):\n" + "\n".join(conflicts)
     )
 
 

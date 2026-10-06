@@ -31,6 +31,36 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a31',
+    date: '2026-10-06',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'Code Audit: ask your agent to review the code of a project and it lists the real problems, each one checked against the code before you see it, and asks before the coding agent fixes anything. The coding agent now reviews and fixes its own work before it finishes, and "vaf audit run" reviews any git repository from the command line.',
+          'Settings, Connections lists every tool and folder you allowed "always" or for a chat, each with a button to take it back.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'When the agent installs a missing program, it uses what is already there or an official source at a fixed version, checks the published checksum and tells you what it installed.',
+          'The coding agent finds methods, React components and hooks when it searches code, and sees the answer of every step it takes.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'The agent\'s web fetches can no longer reach VAF itself or the cloud metadata service, and your Nextcloud app password only ever goes to your own Nextcloud server.',
+          'Deactivating, deleting or restricting an account takes effect at once and stops what the account has running.',
+          'Saving in an editor never overwrites a change you did not see, and Excel, PowerPoint and Word files are never saved with less than they had.',
+          'A WhatsApp message that may already have arrived is never sent twice, and a confirmation answers only the question it was shown for.',
+          'Starting VAF from its icon on a Mac works again after it had stopped, and quitting stops all of its containers without ending other programs.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a30',
     date: '2026-09-29',
     sections: [

@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a31] - 2026-10-06
+
 ### Added
 
 - **Code Audit: VAF reviews code changes and proves what it finds.** It finds real bugs,

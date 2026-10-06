@@ -409,11 +409,17 @@ owner-only (`0600`) and, while `file_encryption_enabled` is on, `VAFENC1:` conta
 rather than readable JSON or text. Read them back through `data_files` (or `ipc.get_task_payload`),
 never with a plain `cat` or `json.load`.
 
+**Reads:** `_read_json` takes no lock. A write replaces the file by rename, so a reader
+sees the old file or the new one, and a reader-side lock protected nothing; on Windows it
+did harm, because msvcrt's "read lock" is an exclusive, mandatory byte-range lock: a second
+reader's read failed while the first held it, and the failure read as an empty queue (the
+Windows-only flakes of the workflow duplicate guard). A read that meets a transient
+Windows sharing violation is retried (`_READ_ATTEMPTS`) before it falls back to empty.
+
 **Mutation serialization:** the queue JSONs are mutated by read-modify-write
-sequences, and the per-file lock inside `_read_json` covers a single read while
-`_write_json` takes no lock at all (it hands the payload to
-`data_files.write_bytes_atomic`, whose temp-file-plus-rename replaces the file
-underneath any reader) - two concurrent mutators could interleave and silently drop
+sequences, and neither `_read_json` nor `_write_json` locks anything (the write hands
+the payload to `data_files.write_bytes_atomic`, whose temp-file-plus-rename replaces
+the file underneath any reader) - two concurrent mutators could interleave and silently drop
 one side's update (live-caught: two concurrent `mark_task_running` calls erased
 each other's active entry, letting two workflow launches both past the duplicate
 guard). Every registry mutation therefore runs inside `SubAgentIPC._mutation_guard()`:

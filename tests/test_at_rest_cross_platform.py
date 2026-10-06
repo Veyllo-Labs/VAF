@@ -468,3 +468,53 @@ def test_the_headless_wait_loop_does_not_depend_on_a_posix_only_call():
     assert "getattr(sig_module, \"pause\", None)" in block, (
         "the headless wait loop calls a POSIX-only function without a guard")
     assert "_time.sleep" in block, "no portable fallback for platforms without signal.pause"
+
+
+# ── the sub-agent queue on Windows ───────────────────────────────────────────
+
+def _queue(tmp_path):
+    from vaf.core.subagent_ipc import SubAgentIPC
+    q = SubAgentIPC()
+    q.queue_dir = tmp_path
+    q.active_file = tmp_path / "active_tasks.json"
+    q._mutation_lock_file = tmp_path / ".mutation.lock"
+    q._write_json(q.active_file, [{"task_id": "t1", "status": "running"}])
+    return q
+
+
+def test_a_queue_read_takes_no_windows_byte_lock(tmp_path, monkeypatch):
+    """msvcrt has no shared lock: its "read lock" is exclusive and mandatory, so a second
+    reader's read() failed while the first held it, and the failure read as an empty queue -
+    the Windows-only flakes of the workflow duplicate guard. MUTATION: lock the file for
+    reading again."""
+    import sys
+    import types
+
+    import vaf.core.subagent_ipc as ipc_mod
+    q = _queue(tmp_path)
+    calls = []
+    fake = types.SimpleNamespace(LK_NBLCK=2, LK_NBRLCK=4, LK_UNLCK=0,
+                                 locking=lambda fd, mode, n: calls.append(mode))
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
+    monkeypatch.setattr(ipc_mod, "HAS_FCNTL", False)
+    monkeypatch.setattr(ipc_mod, "HAS_MSVCRT", True, raising=False)
+    assert q._read_json(q.active_file) == [{"task_id": "t1", "status": "running"}]
+    assert calls == []
+
+
+def test_a_queue_read_that_meets_a_sharing_violation_is_retried_not_empty(tmp_path, monkeypatch):
+    """A concurrent replace, Defender or the indexer can make a Windows read fail for a
+    moment; that is not an empty queue. MUTATION: answer [] on the first failed read."""
+    from pathlib import Path
+    q = _queue(tmp_path)
+    real, fails = Path.read_bytes, {"n": 2}
+
+    def flaky(self):
+        if self == q.active_file and fails["n"]:
+            fails["n"] -= 1
+            raise PermissionError(13, "The process cannot access the file")
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", flaky)
+    assert q._read_json(q.active_file) == [{"task_id": "t1", "status": "running"}]
+    assert fails["n"] == 0

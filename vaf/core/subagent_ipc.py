@@ -263,6 +263,11 @@ def _queue_log(message: str) -> None:
         pass
 
 
+# A queue read that meets a transient Windows sharing violation is tried this often
+# (about half a second in all) before it falls back to the empty answer (_read_json).
+_READ_ATTEMPTS = 6
+
+
 class SubAgentIPC:
     """
     Inter-Process Communication system for VAF sub-agents.
@@ -364,47 +369,36 @@ class SubAgentIPC:
             if not file.exists():
                 self._write_json(file, [])
     
-    def _lock_file(self, f, exclusive=False):
-        """Cross-platform file locking."""
-        try:
-            if HAS_FCNTL:
-                # Unix: use fcntl
-                lock_type = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-                fcntl.flock(f.fileno(), lock_type | fcntl.LOCK_NB)
-            elif HAS_MSVCRT:
-                # Windows: use msvcrt
-                import msvcrt
-                lock_mode = msvcrt.LK_NBLCK if exclusive else msvcrt.LK_NBRLCK
-                msvcrt.locking(f.fileno(), lock_mode, 1)
-        except (IOError, OSError):
-            pass  # Ignore locking errors
-    
-    def _unlock_file(self, f):
-        """Cross-platform file unlocking."""
-        try:
-            if HAS_FCNTL:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-            elif HAS_MSVCRT:
-                import msvcrt
-                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
-        except (IOError, OSError):
-            pass  # Ignore unlocking errors
-    
     def _read_json(self, file_path: Path) -> List[Dict]:
-        """Read JSON file with file locking (cross-platform)."""
-        if not file_path.exists():
-            return []
-        
+        """Read a queue file. No read lock, deliberately, and a failed read is retried.
+
+        Writes are atomic renames (`data_files.write_bytes_atomic`), so a reader always sees
+        the old file or the new one, and a lock on the reader's side protected nothing. On
+        Windows it did harm: msvcrt has no shared lock - its "read lock" is an exclusive,
+        MANDATORY byte-range lock - so while one reader held it, a second reader's read()
+        failed with a lock violation, and that failure read as an EMPTY queue. Measured as
+        the Windows-only flakes of the workflow duplicate guard: a claim saw its own entry
+        missing and withdrew ("ALREADY RUNNING" on the only call), and a stop-all found no
+        active task to fail. A read can still meet a sharing violation on Windows (a
+        concurrent replace, Defender, the indexer), which is transient: it is retried, and
+        only a file that stays unreadable falls back to the empty answer, logged."""
+        raw = b""
+        for attempt in range(_READ_ATTEMPTS):
+            try:
+                raw = file_path.read_bytes()
+                break
+            except FileNotFoundError:
+                return []
+            except OSError as e:
+                if attempt == _READ_ATTEMPTS - 1:
+                    _queue_log(f"Queue file {file_path} unreadable after {_READ_ATTEMPTS} "
+                               f"attempts: {e}")
+                    return []
+                time.sleep(0.02 * (attempt + 1))
+        from vaf.core import data_files
         try:
-            # Locking still happens on the raw handle; the CONTENT goes through the
-            # shared at-rest primitive (these files carry task text and results).
-            with open(file_path, 'rb') as f:
-                self._lock_file(f, exclusive=False)
-                try:
-                    raw = f.read()
-                finally:
-                    self._unlock_file(f)
-            from vaf.core import data_files
+            # The CONTENT goes through the shared at-rest primitive (these files carry task
+            # text and results).
             content = data_files.decrypt_bytes(raw).decode('utf-8').strip()
             if not content:
                 return []
@@ -417,9 +411,9 @@ class SubAgentIPC:
                 raise
             _queue_log(f"Unreadable queue file {file_path}: {e}")
             return []
-        except (json.JSONDecodeError, IOError, UnicodeDecodeError):
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return []
-    
+
     def _write_json(self, file_path: Path, data: List[Dict], max_retries: int = 3):
         """Write JSON file with file locking and retry logic (cross-platform)."""
         from vaf.core import data_files

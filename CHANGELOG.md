@@ -13,6 +13,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **On Windows, a workflow no longer refuses to start as "already running", and Stop finds
+  every running sub-agent.** Two parts of VAF reading the sub-agent queue at the same moment
+  could make one of them see an empty queue, because the read took a lock that Windows makes
+  exclusive. A workflow then took its own registration for a missing one and refused, and a
+  Stop could miss the task it was meant to end. Reads take no lock now and retry a moment
+  that Windows briefly blocks.
 - **`vaf --version`, `vaf stop` and other plain commands no longer start VAF's Docker
   services.** The `vaf` command ran `docker compose up` before every command, so checking the
   version or stopping a VAF that was not running brought up the whole stack and left it

@@ -9,18 +9,10 @@ if [ -f "$PROJECT_ROOT/venv/bin/activate" ]; then
     source "$PROJECT_ROOT/venv/bin/activate"
     export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
 
-    # Start Docker services (postgres, redis, browser, etc.)
-    if command -v docker &>/dev/null && [ -f "$PROJECT_ROOT/docker-compose.memory.yml" ]; then
-        echo "Starting Docker services..."
-        # The Redis password lives beside the other secrets, not in the checkout,
-        # so compose has to be told where it is (see service_stack.compose_env_file).
-        VAF_COMPOSE_ENV="$HOME/.vaf/compose.env"
-        VAF_ENV_ARGS=""
-        [ -f "$VAF_COMPOSE_ENV" ] && VAF_ENV_ARGS="--env-file $VAF_COMPOSE_ENV"
-        docker compose $VAF_ENV_ARGS -f "$PROJECT_ROOT/docker-compose.memory.yml" up -d --quiet-pull 2>/dev/null \
-            && echo "   Docker services running" \
-            || echo "   Docker not available - services skipped"
-    fi
+    # The Docker services (database, cache, sandbox, speech, browser) are started by VAF
+    # itself, by the lanes that need them (vaf/core/service_stack.py: the tray, the terminal
+    # app, `vaf run`). Starting them here ran `docker compose up` before EVERY command, so
+    # `vaf --version` or `vaf stop` on a stopped VAF left the whole stack running.
 
     # Run VAF with the venv's own Python. The venv is built from a framework
     # Python (Homebrew's python@X.Y ships a Python.framework), so venv/bin/python

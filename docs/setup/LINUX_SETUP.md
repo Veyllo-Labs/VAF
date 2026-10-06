@@ -95,7 +95,7 @@ cd web && npm install && cd ..
 Use `vaf.sh` in the project root:
 
 ```bash
-./vaf.sh start    # Start Docker + VAF
+./vaf.sh start    # Start VAF (it starts its Docker services)
 ./vaf.sh stop     # Stop VAF cleanly
 ./vaf.sh restart  # Restart VAF
 ./vaf.sh status   # Show what is running

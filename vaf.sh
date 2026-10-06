@@ -149,14 +149,10 @@ cmd_start() {
         exit 1
     fi
 
-    # Start Docker containers if not running
+    # The Docker services are started by VAF itself once it runs (vaf/core/service_stack.py,
+    # from the tray's startup), with the env file that holds the Redis password; a compose
+    # call here went without it. Only the state of containers already up is reported.
     if "$DOCKER" info &>/dev/null; then
-        if ! "$DOCKER" ps --format "{{.Names}}" 2>/dev/null | grep -q "vaf-memory-db"; then
-            info "Starting Docker containers..."
-            "$DOCKER" compose -f "$COMPOSE_FILE" up -d 2>/dev/null && ok "Docker containers started" || warn "Could not start Docker containers"
-        else
-            ok "Docker containers already running"
-        fi
         # Warn about unhealthy containers
         UNHEALTHY=$("$DOCKER" ps --format "{{.Names}}\t{{.Status}}" 2>/dev/null | grep "vaf-" | grep -i "unhealthy" || true)
         if [ -n "$UNHEALTHY" ]; then

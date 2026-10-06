@@ -11,6 +11,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+
+- **`vaf --version`, `vaf stop` and other plain commands no longer start VAF's Docker
+  services.** The `vaf` command ran `docker compose up` before every command, so checking the
+  version or stopping a VAF that was not running brought up the whole stack and left it
+  running. VAF now starts its services only when it starts: the desktop app, `vaf start` and
+  `vaf run`.
+
 ### Security
 
 - **The web interface runs on Next.js 16.3.8.** 16.3.5 carried a critical advisory (remote

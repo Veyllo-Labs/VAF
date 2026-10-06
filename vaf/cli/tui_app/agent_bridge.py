@@ -1421,11 +1421,9 @@ def boot_bridge(events, theme_key: str, session_id: Optional[str], verbose: bool
     # file (a pip install has none) or no Docker -> honest quiet skip, and the
     # memory tool names the dead DB when asked. AFTER the git gate on purpose:
     # a boot that is about to abort must not leave containers starting.
-    from vaf.core.service_stack import ensure_service_stack, find_stack_root
-    if find_stack_root() is not None:
+    from vaf.core.service_stack import start_service_stack_in_background
+    if start_service_stack_in_background():
         boot_tui.info("Starting Docker services in the background (memory, sandbox, speech)...")
-        threading.Thread(target=ensure_service_stack, daemon=True,
-                         name="vaf-tui-services").start()
 
     session_mgr = SessionManager()
     session = None

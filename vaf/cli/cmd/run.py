@@ -809,6 +809,12 @@ def run(
             run_tui(message=message, theme=theme, session_id=session, verbose=verbose)
             return
 
+    # The prompt lanes need the stack as much as the full-screen app (which starts it in its
+    # boot): the memory DB, the sandbox, speech. The launcher script no longer starts it for
+    # every command, so these lanes do, in the background, like the app.
+    from vaf.core.service_stack import start_service_stack_in_background
+    if start_service_stack_in_background():
+        UI.info("Starting Docker services in the background (memory, sandbox, speech)...")
     if ui_mode == "modern":
         _run_modern(message, verbose, theme, session, web_enabled=web)
     else:

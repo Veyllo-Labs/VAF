@@ -643,6 +643,23 @@ def cancel_start() -> int:
     return ended
 
 
+def start_service_stack_in_background(log: Optional[Callable[[str], None]] = None) -> bool:
+    """`ensure_service_stack` on a daemon thread, for a terminal lane that must not wait on a
+    compose up (the model load, the first prompt). False, and nothing started, without a
+    compose file: a pip install has none, and the memory tool names the dead DB when asked.
+
+    Every lane that needs the stack starts it here or through `ensure_service_stack` - the
+    tray (desktop, `vaf start`, vaf.sh, the systemd unit), the full-screen terminal app and
+    the prompt lanes of `vaf run`. The shell launchers used to start it too, before EVERY
+    command: `vaf --version` or `vaf stop` on a stopped VAF brought up the whole stack and
+    left it running."""
+    if find_stack_root() is None:
+        return False
+    threading.Thread(target=ensure_service_stack, kwargs={"log": log}, daemon=True,
+                     name="vaf-services").start()
+    return True
+
+
 def _start_was_cancelled(log) -> bool:
     if _start_cancelled.is_set():
         _say(log, "Service stack start cancelled: VAF is shutting down")

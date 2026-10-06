@@ -31,11 +31,12 @@ duplicate the install steps.
   [SYSTEM_TRAY.md](./SYSTEM_TRAY.md).
 - **Docker services.** The database (PostgreSQL/pgvector), cache, sandbox, STT,
   document engine, TTS and browser containers run via
-  `docker compose -f docker-compose.memory.yml up -d`. `run_vaf.sh` starts them
-  automatically when `docker` is on PATH. See
+  `docker compose -f docker-compose.memory.yml up -d`. VAF starts them itself when a lane
+  that needs them starts (`vaf/core/service_stack.py`: the tray, `vaf start`, the terminal
+  app and `vaf run`), never for a plain command such as `vaf --version` or `vaf stop`. See
   [DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md).
-- **Launcher / entry point.** [run_vaf.sh](../../run_vaf.sh) activates `venv/`,
-  starts the Docker stack, and `exec`s `venv/bin/python -m vaf.main tray` (or
+- **Launcher / entry point.** [run_vaf.sh](../../run_vaf.sh) activates `venv/`
+  and `exec`s `venv/bin/python -m vaf.main tray` (or
   passes through any `vaf` subcommand). The installer also creates a freedesktop
   launcher at `~/.local/share/applications/vaf.desktop` (Exec = `run_vaf.sh`,
   `Terminal=false`) and a `vaf` shell alias.

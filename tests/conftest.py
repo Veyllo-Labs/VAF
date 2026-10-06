@@ -28,6 +28,46 @@ than a claim.
 """
 import pytest
 
+
+# ── what happens after the summary line ─────────────────────────────────────────
+# Measured on the Windows runner, sporadically: every test passed, the summary line was
+# printed, about a hundred "[VAF] Stopping server" lines followed (each Agent a test built
+# registers an exit handler), and the step ended with exit code 1 and no traceback. Python
+# does not let an exception in an exit handler change the exit status, so either pytest
+# returned 1 or something ended the process from outside while the handlers ran. These two
+# lines tell the next occurrence apart: the first is printed when the exit handlers START
+# (registered last, so it runs first), the second when they are all done (registered
+# first, so it runs last). A run that shows the first and not the second was killed in
+# between; one that shows both with status 0 lost its exit code after Python.
+import atexit as _atexit
+import sys as _sys
+import time as _time
+
+_EXIT = {"status": None, "started": None}
+
+
+def _exit_handlers_done():
+    if _EXIT["started"] is None:
+        return
+    _sys.stderr.write(f"[conftest] exit handlers done after "
+                      f"{_time.monotonic() - _EXIT['started']:.1f}s; pytest exit status "
+                      f"{_EXIT['status']}\n")
+    _sys.stderr.flush()
+
+
+_atexit.register(_exit_handlers_done)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    _EXIT["status"] = int(exitstatus)
+
+    def _exit_handlers_start():
+        _EXIT["started"] = _time.monotonic()
+        _sys.stderr.write(f"[conftest] exit handlers start; pytest exit status {int(exitstatus)}\n")
+        _sys.stderr.flush()
+
+    _atexit.register(_exit_handlers_start)
+
 # The environment axes that decide where VAF writes. VAF_LOG_DIR is VAF's own; the rest are
 # the ones a throwaway HOME does NOT cover, and WHICH of them applies depends on the
 # platform: Linux reads the XDG names, Windows reads %LOCALAPPDATA%/%APPDATA%, and macOS

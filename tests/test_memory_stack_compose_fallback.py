@@ -16,8 +16,17 @@ Hermetic: subprocess.run is monkeypatched; no Docker, no containers.
 """
 from pathlib import Path
 
+import pytest
+
 import vaf.core.service_stack as stack
 from vaf.core.service_stack import _compose_plugin_missing
+
+
+@pytest.fixture(autouse=True)
+def _the_real_start(monkeypatch):
+    """This file is about the stack start itself, with docker faked: the suite-wide stub
+    (conftest `_no_service_stack`) steps aside here."""
+    monkeypatch.setattr(stack, "ensure_service_stack", stack._real_ensure_service_stack)
 
 
 def test_plugin_missing_classification():

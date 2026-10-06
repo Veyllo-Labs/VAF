@@ -321,6 +321,45 @@ def _no_container_wipe():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _no_service_stack():
+    """No test may start the real Docker service stack.
+
+    Sibling of `_no_child_processes`: about what the suite STARTS. `ensure_service_stack`
+    bootstraps the container engine (on a Mac it may launch Colima or Docker Desktop) and
+    runs `docker compose up` on the compose file of THIS checkout. Since the prompt lanes of
+    `vaf run` start the stack in the background, a test that invokes `vaf run --classic`
+    with only the lane stubbed reached it: measured, one such test left all seven vaf
+    containers running on the developer's machine, created under the test's scratch home,
+    so Redis carried a password the real VAF does not know and was recreated at its next
+    start; on a Mac it showed as containers that "started by themselves" after the gate.
+    The stub answers False, a start that did not happen. Tests that are about the start
+    itself fake docker and call `_real_ensure_service_stack`.
+    """
+    import sys as _sys_mod
+
+    import vaf.core.service_stack as stack
+
+    previous = stack.ensure_service_stack
+    stack._real_ensure_service_stack = previous
+
+    def _stub(log=None):
+        return False
+
+    stack.ensure_service_stack = _stub
+    # Modules that imported the name before this ran keep their own binding.
+    bound = [m for m in ("vaf.tray", "vaf.core.service_health")
+             if getattr(_sys_mod.modules.get(m), "ensure_service_stack", None) is previous]
+    for m in bound:
+        setattr(_sys_mod.modules[m], "ensure_service_stack", _stub)
+    try:
+        yield
+    finally:
+        stack.ensure_service_stack = previous
+        for m in bound:
+            setattr(_sys_mod.modules[m], "ensure_service_stack", previous)
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _no_child_processes():
     """No test may start a real sub-agent or workflow PROCESS.
 

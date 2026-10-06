@@ -58,3 +58,13 @@ def test_the_prompt_lanes_of_vaf_run_start_the_stack(monkeypatch, flag):
     result = CliRunner().invoke(run_mod.app, [flag])
     assert result.exit_code == 0, result.output
     assert order == ["stack", "classic"]
+
+
+def test_the_suite_itself_never_starts_the_real_stack():
+    """A test that reached `vaf run`'s lanes with only the lane stubbed started all seven
+    containers on the developer's machine, under its scratch home. conftest's
+    `_no_service_stack` keeps the real start out of every test that does not ask for it.
+    MUTATION: drop that fixture."""
+    import vaf.core.service_stack as stack
+    assert stack.ensure_service_stack is not stack._real_ensure_service_stack
+    assert stack.ensure_service_stack() is False

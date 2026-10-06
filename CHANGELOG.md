@@ -11,6 +11,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Security
+
+- **The web interface runs on Next.js 16.3.8.** 16.3.5 carried a critical advisory (remote
+  code execution through `next/og` image generation). VAF does not generate images that way,
+  so the hole was not reachable, but the fixed version is in now; a few build-time helpers
+  got their patch releases too.
+
 ## [0.1.0a31] - 2026-10-06
 
 ### Added

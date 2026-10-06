@@ -394,3 +394,23 @@ def test_a_save_without_a_revision_reads_as_none():
 def test_the_turkish_revoke_label_needs_no_case_ending():
     import json
     assert json.loads(_src("web/messages/tr.json"))["grants"]["revokeItem"] == "Geri al: {name}"
+
+
+@pytest.mark.parametrize("rel, sent, now, mark", [
+    ("web/components/DocumentEditor.tsx", "savedContentRef.current = content;",
+     "contentRef.current !== content", "onDirtyChange?.(stillDirty);"),
+    ("web/components/NativeDocxEditor.tsx", "savedModelRef.current = documentModel;",
+     "modelRef.current !== documentModel", "onDirtyChange?.(stillDirty);"),
+    ("web/components/CodeViewer.tsx", "revisionRef.current = outcome.revision;",
+     "contentRef.current !== content", "setIsDirty(stillDirty);"),
+])
+def test_what_was_typed_while_a_save_was_out_stays_unsaved(rel, sent, now, mark):
+    """A save carries the draft as it was when Save was pressed; the person may type on while
+    the request is out. The editor marked the whole draft clean, so an agent rewrite of the
+    file then reloaded it and the words typed meanwhile were gone. MUTATION: mark the draft
+    clean after a save whatever it holds now."""
+    src = _src(rel)
+    after = src[src.index(sent):]
+    after = after[:after.index("setSaveMessage") if "setSaveMessage" in after else 600]
+    assert f"const stillDirty = {now};" in after and mark in after
+    assert "onDirtyChange?.(false)" not in after and "setIsDirty(false)" not in after

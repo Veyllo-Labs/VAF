@@ -421,7 +421,11 @@ function LegacyDocumentEditor({
     // A restored draft that was already dirty has no known baseline: it stays dirty until saved.
     const savedContentRef = useRef<string | null>(initialContent && !initialDirty ? initialContent : null);
     const dirtyRef = useRef(initialDirty);
+    // The content now, for a save that answers after the person typed on: its closure still
+    // holds what it sent.
+    const contentRef = useRef(content);
     useEffect(() => {
+        contentRef.current = content;
         const dirty = savedContentRef.current === null ? dirtyRef.current : content !== savedContentRef.current;
         if (dirty !== dirtyRef.current) {
             dirtyRef.current = dirty;
@@ -810,9 +814,12 @@ function LegacyDocumentEditor({
                 setTimeout(() => setSaveMessage(null), 5000);
                 return;
             }
+            // What this save carried is the new baseline; what was typed while it was out is
+            // still unsaved, so the draft stays dirty and an agent rewrite does not replace it.
             savedContentRef.current = content;
-            dirtyRef.current = false;
-            onDirtyChange?.(false);
+            const stillDirty = contentRef.current !== content;
+            dirtyRef.current = stillDirty;
+            onDirtyChange?.(stillDirty);
             if (outcome.redirected && outcome.path) {
                 onRetarget?.(outcome.path, info);
             } else {

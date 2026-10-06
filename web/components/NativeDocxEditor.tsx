@@ -849,7 +849,10 @@ export default function NativeDocxEditor({
     return () => { cancelled = true; };
   }, [documentModel, filePath, loadModel]);
 
+  // The model now, for a save that answers after the person edited on (see saveDocument).
+  const modelRef = useRef(documentModel);
   useEffect(() => {
+    modelRef.current = documentModel;
     if (!documentModel) return;
     const dirty = savedModelRef.current === null ? dirtyRef.current : documentModel !== savedModelRef.current;
     if (dirty !== dirtyRef.current) {
@@ -984,9 +987,12 @@ export default function NativeDocxEditor({
         setSaveMessage(outcome.path); setTimeout(() => setSaveMessage(null), 5000);
         return;
       }
+      // What this save carried is the new baseline; an edit made while it was out is still
+      // unsaved, so the draft stays dirty and an agent rewrite does not replace it.
       savedModelRef.current = documentModel;
-      dirtyRef.current = false;
-      onDirtyChange?.(false);
+      const stillDirty = modelRef.current !== documentModel;
+      dirtyRef.current = stillDirty;
+      onDirtyChange?.(stillDirty);
       if (outcome.redirected && outcome.path) {
         onRetarget?.(outcome.path, info);
       } else {

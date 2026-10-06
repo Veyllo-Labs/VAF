@@ -119,6 +119,10 @@ export interface CodeViewerProps {
 export default function CodeViewer({ isOpen, filePath, title, initialContent, liveRefresh = false, onClose, onContentLoad, onRetarget }: CodeViewerProps) {
   const [content, setContent] = useState('');
   const [isDirty, setIsDirty] = useState(false);
+  // The text now, for a save that answers after the person typed on: its closure still holds
+  // what it sent.
+  const contentRef = useRef(content);
+  useEffect(() => { contentRef.current = content; }, [content]);
   const [isSaving, setIsSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   // Markdown opens in rendered preview by default (clean to read); toggle to raw source.
@@ -221,8 +225,10 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
         return;
       }
       revisionRef.current = outcome.revision;
-      setIsDirty(false);
-      setSavedAt(new Date());
+      // Only what this save carried is saved: text typed while it was out stays unsaved.
+      const stillDirty = contentRef.current !== content;
+      setIsDirty(stillDirty);
+      if (!stillDirty) setSavedAt(new Date());
     } catch (err) {
       alert(`Save failed: ${err}`);
     } finally {

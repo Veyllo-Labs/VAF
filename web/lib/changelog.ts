@@ -31,6 +31,20 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a32',
+    date: '2026-10-06',
+    sections: [
+      {
+        kind: 'fixed',
+        items: [
+          'On Windows, a workflow no longer refuses to start as "already running", and Stop finds every running sub-agent.',
+          '"vaf --version", "vaf stop" and other plain commands no longer start VAF\'s Docker services; VAF starts them only when it starts.',
+          'The web interface runs on Next.js 16.3.8, which closes a critical advisory (it was not reachable in VAF).',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a31',
     date: '2026-10-06',
     sections: [

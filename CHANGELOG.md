@@ -77,6 +77,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **Your Nextcloud app password only goes to your Nextcloud server.** The agent reads and
+  downloads cloud files by an id, and an id that was a web address was used as it was: a web
+  page or a mail that got the agent to read "https://some-server/file" made it send your
+  Nextcloud app password to that server. A web address is now accepted only on your own
+  Nextcloud server; any other is refused before anything is sent.
 - **Your agent's web fetches can no longer reach VAF itself.** On the computer VAF runs on, a
   request from that same computer counts as you. The agent's fetch tools (reading a web page,
   downloading a file, reading search results, remote MCP servers, a Nextcloud connection)

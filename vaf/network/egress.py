@@ -184,6 +184,25 @@ def check_destination(url: str, policy: Optional[EgressPolicy] = None, *,
     return pinned
 
 
+def same_origin(url_a: str, url_b: str) -> bool:
+    """Whether two URLs name the same server (scheme, host and port): the audience of a stored
+    credential. A path may change; another host is another server, and so is a URL whose
+    authority hides another host behind a user part (`https://own.example@other.example/`).
+    The guard above decides what may be fetched at all; this decides where a credential may
+    go: an access token to the server that issued it, an app password to the account's own
+    WebDAV server, never to a host a model or a page named."""
+    def origin(url: str):
+        try:
+            parts = urlsplit(str(url or "").strip())
+            port = parts.port or {"http": 80, "https": 443}.get(parts.scheme.lower())
+        except ValueError:
+            return ("", "", None)
+        return (parts.scheme.lower(), (parts.hostname or "").lower(), port)
+
+    a, b = origin(url_a), origin(url_b)
+    return bool(a[1]) and a == b
+
+
 def _record_refusal(host: str, ip: str, kind: str, username: str) -> None:
     try:
         from vaf.core.security_events import log_security_event

@@ -116,17 +116,9 @@ def server_headers(server_name: str, server_cfg: Dict[str, Any]) -> Dict[str, st
 
 
 def same_origin(url_a: str, url_b: str) -> bool:
-    """Whether two URLs name the same server (scheme, host and port): the audience of a stored
-    access token. A path may change; another host is another server."""
-    from urllib.parse import urlsplit
-
-    def origin(url: str):
-        parts = urlsplit(str(url or "").strip())
-        port = parts.port or {"http": 80, "https": 443}.get(parts.scheme.lower())
-        return (parts.scheme.lower(), (parts.hostname or "").lower(), port)
-
-    a, b = origin(url_a), origin(url_b)
-    return bool(a[1]) and a == b
+    """See vaf.network.egress.same_origin (the audience of a stored access token)."""
+    from vaf.network.egress import same_origin as _same_origin
+    return _same_origin(url_a, url_b)
 
 
 def _addressable(cfg: Dict[str, Any]) -> bool:

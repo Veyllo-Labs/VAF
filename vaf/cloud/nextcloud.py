@@ -6,10 +6,17 @@ Nextcloud cloud provider using WebDAV (PROPFIND, PUT, GET, DELETE, MKCOL).
 
 Does not support delta sync — full listing is used for each sync cycle.
 Connects via app-password credentials (no OAuth).
+
+Every request carries the app password (HTTP Basic, sent with the first request). A file id
+that is an absolute URL is therefore accepted only on the account's own server
+(`_url_for`): the cloud_storage tool hands the model's `file_id` through unchanged, and an id
+like `https://other.example/x` used to send the password there, past the destination guard,
+which admits any public host.
 """
 
 import hashlib
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -80,6 +87,20 @@ class NextcloudProvider(CloudProvider):
 
     def _auth(self) -> requests.auth.HTTPBasicAuth:
         return requests.auth.HTTPBasicAuth(self._webdav_username, self._password)
+
+    def _url_for(self, file_id: str) -> str:
+        """The WebDAV URL for a file id: a relative path inside the sync folder, or an absolute
+        URL on this account's own server. Any other absolute URL is refused before a request
+        exists, because every request carries the app password. Only a real scheme makes an
+        id absolute: a file named `http-notes.txt` is a path."""
+        text = str(file_id or "").strip()
+        if not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", text):
+            return self._dav_url(text)
+        from vaf.network.egress import same_origin
+        if not self._dav_base or not same_origin(text, self._dav_base):
+            raise ValueError(f"file id {text[:80]!r} is not on this Nextcloud server; "
+                             "use the id from browse or search")
+        return text
 
     def _dav_url(self, relative: str = "") -> str:
         """Build the full WebDAV URL scoped to the sync folder."""
@@ -329,7 +350,7 @@ class NextcloudProvider(CloudProvider):
         """Download a file by its WebDAV URL (used as file_id) or relative path."""
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
-        url = file_id if file_id.startswith("http") else self._dav_url(file_id)
+        url = self._url_for(file_id)
 
         try:
             resp = self._http.get(url, auth=self._auth(), stream=True, timeout=120)
@@ -347,7 +368,7 @@ class NextcloudProvider(CloudProvider):
 
     def delete_file(self, file_id: str) -> bool:
         """Delete a file via the WebDAV DELETE method."""
-        url = file_id if file_id.startswith("http") else self._dav_url(file_id)
+        url = self._url_for(file_id)
 
         try:
             resp = self._http.delete(url, auth=self._auth(), timeout=15)
@@ -360,7 +381,7 @@ class NextcloudProvider(CloudProvider):
 
     def get_file_metadata(self, file_id: str) -> Optional[CloudFileMetadata]:
         """Get metadata for a single file via PROPFIND with Depth: 0."""
-        url = file_id if file_id.startswith("http") else self._dav_url(file_id)
+        url = self._url_for(file_id)
 
         try:
             root = self._propfind(url, depth="0")

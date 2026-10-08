@@ -81,18 +81,14 @@ def client_key(request: Request) -> str:
     checking path must agree on the key - if one used the peer and the other the real client, the
     limiter would record under one key, look up another, and silently stop blocking anything.
     """
-    peer = request.client.host if request.client else "unknown"
-    try:
-        from vaf.network.binding import effective_client_ip
-        return effective_client_ip(peer, request.headers.get("x-forwarded-for"))
-    except Exception:
-        return peer
+    from vaf.network.binding import connection_client_ip
+    return connection_client_ip(request)
 
 
 def record_login_failure(ip: str) -> None:
     """Record a failed login attempt (called from auth_routes on 401).
 
-    Pass ``client_key(request)``, never ``request.client.host``.
+    Pass ``client_key(request)``, never the socket peer.
     """
     _tracker.record_failure(ip)
     logger.info("Rate-limit: recorded failed attempt for %s", ip)

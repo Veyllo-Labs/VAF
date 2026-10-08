@@ -66,12 +66,8 @@ def _client_ip(request: Request) -> str:
     Delegates to the one shared resolver so this module, the auth middleware, the rate limiter,
     the WebSocket handshake and the OAuth callback exception cannot disagree.
     """
-    peer = request.client.host if request.client else ""
-    try:
-        from vaf.network.binding import effective_client_ip
-        return effective_client_ip(peer, request.headers.get("x-forwarded-for"))
-    except Exception:
-        return peer
+    from vaf.network.binding import connection_client_ip
+    return connection_client_ip(request)
 
 
 def _log_auth_failure(kind: str, request: Request, username: str = "", detail: str = "") -> None:

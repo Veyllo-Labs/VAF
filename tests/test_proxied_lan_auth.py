@@ -29,12 +29,14 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from vaf.auth.middleware import AuthMiddleware
+from vaf.auth.middleware import AuthMiddleware, IPValidationMiddleware
 from vaf.network.binding import effective_client_ip
 
 # The peer the backend sees for ANYTHING relayed by the integrated HTTPS proxy.
 PROXY_PEER = ("127.0.0.1", 40000)
 LAN_DEVICE = "192.168.1.77"
+VPN_DEVICE = "10.8.0.2"         # a WireGuard/OpenVPN client address
+PUBLIC_DEVICE = "203.0.113.7"   # TEST-NET-3, a documentation address
 
 
 async def _ok(request):
@@ -99,6 +101,60 @@ def test_first_run_endpoints_stay_reachable_for_a_lan_browser():
     hop = {"X-Forwarded-For": LAN_DEVICE}
     assert c.post("/api/auth/login", headers=hop).status_code == 200
     assert c.post("/api/auth/test-veyllo-key", headers=hop).status_code == 200
+
+
+# --------------------------------------------------------------------------- the IP check (Layer 2)
+
+def _ip_checked_app():
+    app = Starlette(routes=[
+        Route("/api/users", _ok),
+        Route("/api/auth/bootstrap", _ok, methods=["POST"]),  # creates the first admin
+    ])
+    app.add_middleware(IPValidationMiddleware)
+    return app
+
+
+def test_ip_check_refuses_a_public_client_relayed_by_the_proxy():
+    """THE Layer 2 regression. The check judged the socket peer, which is 127.0.0.1 for
+    everything the proxy relays, so a public address that reached the proxy port passed on HTTP
+    - the first-admin route included - while only the WebSocket refused it.
+
+    Measured before the fix: 200 relayed, 403 only for a direct connection.
+    """
+    c = TestClient(_ip_checked_app(), client=PROXY_PEER)
+    hop = {"X-Forwarded-For": PUBLIC_DEVICE}
+    assert c.post("/api/auth/bootstrap", headers=hop).status_code == 403
+    assert c.get("/api/users", headers=hop).status_code == 403
+
+
+def test_ip_check_lets_lan_and_vpn_devices_through():
+    """A home LAN and a VPN client (RFC 1918 addresses) are the devices this mode is for."""
+    c = TestClient(_ip_checked_app(), client=PROXY_PEER)
+    for device in (LAN_DEVICE, VPN_DEVICE):
+        assert c.get("/api/users", headers={"X-Forwarded-For": device}).status_code == 200
+
+
+def test_ip_check_keeps_internal_loopback_callers():
+    """Internal IPC and the desktop through the Next.js route carry no forwarding header."""
+    c = TestClient(_ip_checked_app(), client=PROXY_PEER)
+    assert c.get("/api/users").status_code == 200
+
+
+def test_ip_check_fails_closed_without_client_info():
+    """The proxy writes "unknown" when it has no client address. That is no address at all."""
+    c = TestClient(_ip_checked_app(), client=PROXY_PEER)
+    assert c.get("/api/users", headers={"X-Forwarded-For": "unknown"}).status_code == 403
+
+
+def test_ip_check_records_the_device_not_the_proxy(monkeypatch):
+    """The security log entry must name who knocked, or every refusal reads 127.0.0.1."""
+    import vaf.auth.middleware as mw
+
+    events = []
+    monkeypatch.setattr(mw, "_emit_security_event", lambda kind, **f: events.append((kind, f)))
+    c = TestClient(_ip_checked_app(), client=PROXY_PEER)
+    c.get("/api/users", headers={"X-Forwarded-For": PUBLIC_DEVICE})
+    assert events == [("ip_blocked", {"ip": PUBLIC_DEVICE, "path": "/api/users"})]
 
 
 # --------------------------------------------------------------------------- the resolver itself

@@ -29,6 +29,7 @@ from vaf.version import __version__
 from vaf.core.log_helper import append_domain_log, get_dated_log_path, is_debug_logging_enabled
 from pathlib import Path
 from vaf.core.path_jail import PathEscape, contained_path, safe_entry_name
+from vaf.network.binding import connection_client_ip
 from typing import Any, Dict, Optional, List
 import logging
 from vaf.core.tray_context import TrayContext
@@ -2865,7 +2866,7 @@ async def upload_session_workspace_file(req: WorkspaceUploadRequest, request: Re
     # after it. 403 rather than 400: this is a refusal, not a malformed request.
     _verdict = _inspect_attachment(data, name, "workspace_upload",
                                    username=_requester_name(request),
-                                   ip=(request.client.host if request.client else ""))
+                                   ip=connection_client_ip(request))
     if _verdict.blocked:
         raise HTTPException(status_code=403, detail=_verdict.message(name))
     target = os.path.join(path, name)
@@ -4113,12 +4114,7 @@ def _ws_client_ip(websocket) -> str:
     non-loopback client therefore cannot forge a loopback identity to skip the network-mode token
     check, the 2FA gate or the local-admin fallback further down.
     """
-    peer = websocket.client.host if websocket.client else "unknown"
-    try:
-        from vaf.network.binding import effective_client_ip
-        return effective_client_ip(peer, websocket.headers.get("x-forwarded-for"))
-    except Exception:
-        return peer
+    return connection_client_ip(websocket)
 
 
 def _emit_sec_ws(detail: str, ip: str = "") -> None:
@@ -9301,7 +9297,7 @@ def _a2a_workspace_for_seat(room_id: str, seat: str, request: Request):
     from vaf.core.a2a.room import Room
     from vaf.core.a2a.store import StoreError, UnsafeName
 
-    ip = getattr(getattr(request, "client", None), "host", "") or ""
+    ip = connection_client_ip(request)
 
     def _refuse():
         _emit_sec_ws(f"a2a workspace room={room_id}: seat refused", ip=ip)
@@ -9395,7 +9391,7 @@ async def a2a_workspace_push(room_id: str, request: Request,
     # it the lane with the least standing trust, so it is gated like every other - and
     # the refusal travels back over the wire as a 403 the remote peer can read.
     _verdict = _inspect_attachment(body, path or "upload", "a2a_room",
-                                   ip=(request.client.host if request.client else ""))
+                                   ip=connection_client_ip(request))
     if _verdict.blocked:
         raise HTTPException(status_code=403, detail=_verdict.message(path or "the file"))
 

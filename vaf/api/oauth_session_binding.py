@@ -27,8 +27,8 @@ def _real_client_ip(request: Request) -> str:
     client's forged copy, so a LAN device could claim loopback and skip the callback actor
     binding below. The proxy now strips client copies before setting its own.
     """
-    from vaf.network.binding import effective_client_ip
-    return effective_client_ip(request.client.host if request.client else "", request.headers.get("x-forwarded-for"))
+    from vaf.network.binding import connection_client_ip
+    return connection_client_ip(request)
 
 
 def require_oauth_actor_in_network_mode(request: Request) -> dict:

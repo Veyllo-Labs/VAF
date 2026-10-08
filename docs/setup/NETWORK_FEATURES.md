@@ -56,9 +56,12 @@ Implementation: `vaf/network/firewall.py`
 
 Every HTTP request passes through `IPValidationMiddleware` which validates the client IP against RFC 1918 private ranges at the application level. This acts as a second barrier if firewall rules are misconfigured or bypassed.
 
-- Rejects any non-private IP with HTTP 403
-- Uses `vaf/network/binding.py` for IP classification
+- Rejects any non-private IP with HTTP 403 (recorded as `ip_blocked` with the device's address)
+- Judges the REAL client, not the socket peer: the integrated proxy relays every device over loopback, so the peer is `127.0.0.1` for all of them. The address comes from `connection_client_ip` in `vaf/network/binding.py`, which honors the proxy's `X-Forwarded-For` only when the peer is loopback. This check used to read the peer and therefore passed every relayed request, a public address on the proxy port included (measured: 200 through the proxy, 403 only on a direct connection), while the WebSocket handshake already refused it.
+- VPN clients pass when their addresses are RFC 1918, as WireGuard and OpenVPN networks usually are (`10.x`). Mesh VPNs that hand out `100.64.0.0/10` (Tailscale, Headscale, NetBird) are refused like any other non-private address.
 - Active only in network mode (localhost mode skips this layer)
+
+`connection_client_ip` is the only place in `vaf/` that reads a connection's client address; the auth middleware, the rate limiter, the login routes, the WebSocket handshake, the OAuth callback and the security log entries all ask it. `tests/test_client_address_has_one_reader.py` refuses a direct read anywhere else (the proxy itself, which writes the header from the peer it sees, is the one exception).
 
 Implementation: `vaf/auth/middleware.py` -> `IPValidationMiddleware`
 

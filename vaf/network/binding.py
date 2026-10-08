@@ -114,6 +114,25 @@ def effective_client_ip(peer_ip: str | None, forwarded_for: str | None) -> str:
     return first_hop or peer
 
 
+def connection_client_ip(conn) -> str:
+    """The real client of a Starlette connection (a Request or a WebSocket).
+
+    The ONE place in the backend that reads the socket peer. Every site that decides or records
+    who a client is - the IP check, the auth middleware, the rate limiter, the WebSocket
+    handshake, the OAuth callback exception, the security log - asks this, so none of them can
+    pass the raw peer by mistake. That mistake happened: the IP check read
+    ``request.client.host`` while the others resolved the hop, and since the peer is 127.0.0.1
+    for everything the integrated proxy relays, the check let a public address through on HTTP
+    (measured: 200 relayed, 403 direct). tests/test_client_address_has_one_reader.py refuses a
+    raw read anywhere else in vaf/.
+
+    A pure ASGI middleware wraps its scope: ``connection_client_ip(HTTPConnection(scope))``.
+    """
+    client = getattr(conn, "client", None)
+    return effective_client_ip(client.host if client else None,
+                               conn.headers.get("x-forwarded-for"))
+
+
 # ---------------------------------------------------------------------------
 # Which requests come from a web page that is not VAF's own
 # ---------------------------------------------------------------------------

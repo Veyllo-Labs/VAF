@@ -13,6 +13,8 @@ The three in the middle exist only in network mode; the guard and CORS always.
 ForeignOriginGuard refuses what a browser marks as coming from another web page (HTTP and
 WebSocket alike), before any identity is looked at.
 IPValidationMiddleware rejects any client IP that is not RFC 1918 or localhost.
+Every client address here comes from ``binding.connection_client_ip`` (the real client behind
+the integrated proxy), never from the socket peer.
 AuthMiddleware enforces JWT authentication for non-localhost clients.
 Public paths (login, bootstrap, needs-setup, static assets) are exempt from auth.
 """
@@ -23,7 +25,7 @@ from typing import Callable
 from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
-from starlette.requests import Request
+from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse
 from starlette.websockets import WebSocketClose
 
@@ -115,7 +117,7 @@ class ForeignOriginGuard:
         if scope.get("type") not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
-        from vaf.network.binding import effective_client_ip, foreign_request_reason
+        from vaf.network.binding import connection_client_ip, foreign_request_reason
 
         headers = Headers(scope=scope)
         reason = foreign_request_reason(headers, scheme=scope.get("scheme") or "http",
@@ -124,8 +126,7 @@ class ForeignOriginGuard:
             await self.app(scope, receive, send)
             return
 
-        client = scope.get("client")
-        ip = effective_client_ip(client[0] if client else None, headers.get("x-forwarded-for"))
+        ip = connection_client_ip(HTTPConnection(scope))
         path = scope.get("path") or ""
         shown = headers.get("origin") or headers.get("x-forwarded-host") or headers.get("host") or ""
         logger.warning("Refused %s from another origin (%s: %s) %s", scope["type"], reason, shown, path)
@@ -165,29 +166,23 @@ class IPValidationMiddleware(BaseHTTPMiddleware):
 
     Only RFC 1918 ranges (10.x, 172.16-31.x, 192.168.x) and localhost
     are allowed.  Everything else gets a 403.
+
+    The address judged is the REAL client, not the socket peer: the integrated HTTPS proxy
+    relays every device over loopback, so the peer is 127.0.0.1 for all of them and this check
+    used to pass every relayed request, a public address on the proxy port included.
     """
 
     async def dispatch(self, request: Request, call_next: Callable):
-        client_ip = request.client.host if request.client else "unknown"
+        from vaf.network.binding import connection_client_ip, is_allowed_ip
 
-        try:
-            from vaf.network.binding import is_allowed_ip
-            if not is_allowed_ip(client_ip):
-                logger.warning("Blocked non-private IP: %s %s", client_ip, request.url.path)
-                _emit_security_event("ip_blocked", ip=client_ip, path=request.url.path)
-                return JSONResponse(
-                    status_code=403,
-                    content={"detail": "Access denied: only local network clients are allowed"},
-                )
-        except ImportError:
-            # Fallback: only allow obvious localhost
-            if client_ip not in ("127.0.0.1", "::1", "localhost"):
-                logger.warning("Blocked IP (binding module unavailable): %s", client_ip)
-                _emit_security_event("ip_blocked", ip=client_ip, path=request.url.path)
-                return JSONResponse(
-                    status_code=403,
-                    content={"detail": "Access denied"},
-                )
+        client_ip = connection_client_ip(request)
+        if not is_allowed_ip(client_ip):
+            logger.warning("Blocked non-private IP: %s %s", client_ip, request.url.path)
+            _emit_security_event("ip_blocked", ip=client_ip, path=request.url.path)
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Access denied: only local network clients are allowed"},
+            )
 
         return await call_next(request)
 
@@ -229,30 +224,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # NOTE: real WebSocket handshakes are scope=="websocket" and never reach this
         # HTTP middleware (BaseHTTPMiddleware skips non-http scopes); the /ws route
         # self-authenticates. An "Upgrade: websocket" header on an HTTP-scope request
-        # is therefore only ever an auth-bypass attempt — it must NOT skip auth.
-        peer_ip = request.client.host if request.client else "unknown"
-
-        try:
-            from vaf.network.binding import effective_client_ip, is_localhost
-        except ImportError:
-            def is_localhost(ip: str) -> bool:
-                return ip in ("127.0.0.1", "::1", "localhost")
-
-            def effective_client_ip(peer: str, forwarded_for: str | None) -> str:
-                if not is_localhost(peer):
-                    return peer
-                return ((forwarded_for or "").split(",")[0] or "").strip() or peer
+        # is therefore only ever an auth-bypass attempt: it must NOT skip auth.
+        from vaf.network.binding import connection_client_ip, is_localhost
 
         # A 127.0.0.1 peer is NOT proof of a local client: the integrated HTTPS proxy terminates TLS
-        # on 0.0.0.0 and relays every LAN device to the backend over loopback, so request.client.host
-        # is 127.0.0.1 for remote users too — which made every tokenless LAN request pass the checks
+        # on 0.0.0.0 and relays every LAN device to the backend over loopback, so the socket peer
+        # is 127.0.0.1 for remote users too, which made every tokenless LAN request pass the checks
         # below and reach the route-level local-admin floors. Resolve the REAL client from the
         # proxy-authored X-Forwarded-For instead (the proxy strips any client-supplied copy first, so
         # a hop can only be ADDED, never removed). Still local, still tokenless, still working:
         # internal loopback IPC (/api/subagent/stream, /api/workflow/update, /api/heartbeat), the
         # desktop via the Next.js /api route (sets no forwarding header) and the same-host OAuth
         # callback (relayed hop is 127.0.0.1). A LAN client without a valid token now gets 401.
-        client_ip = effective_client_ip(peer_ip, request.headers.get("x-forwarded-for"))
+        client_ip = connection_client_ip(request)
 
         token = _extract_token(request)
 

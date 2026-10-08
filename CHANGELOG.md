@@ -13,12 +13,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
-- **In server mode, the local-network check now also holds for the web pages and the API, not
-  only for the chat.** It looked at the address of VAF's own HTTPS proxy, which relays every
-  device, instead of the device behind it. So when the access port was reachable from the
-  internet (a forwarded router port, a rented server), a stranger could load the login page and,
-  on a machine that had no admin account yet, create one. Such requests are refused now, and the
-  security log names the device instead of the proxy, for upload refusals and the room door too.
+- **In server mode, the local-network check now also holds for the API, not only for the
+  chat.** It looked at the address of VAF's own HTTPS proxy, which relays every device, instead
+  of the device behind it. So when the access port was reachable from the internet (a forwarded
+  router port, a rented server), a stranger could call the API and, on a machine that had no
+  admin account yet, create one. API calls from outside the local network are refused now: the
+  login screen still loads, but nothing behind it answers. The security log names the device
+  instead of the proxy, for upload refusals and the room door too.
 
 ## [0.1.0a32] - 2026-10-06
 

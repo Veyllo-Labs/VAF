@@ -246,6 +246,22 @@ def test_a_change_of_the_admitted_networks_is_applied_in_the_same_process(monkey
     assert calls == [8443, 8443]
 
 
+def test_a_network_added_inside_the_wide_list_is_still_applied(monkeypatch):
+    """An admin adds 10.20.0.0/16: the wide list (10.0.0.0/8, ...) stays the same, the
+    firewalld list gains the network. Keyed on the wide list alone, the second setup
+    was swallowed as "already attempted" and firewalld kept the network closed while
+    the app admitted it. MUTATION: key the claim on the wide list only - red."""
+    calls = []
+    narrow = ["192.168.2.0/24"]
+    monkeypatch.setattr(fw, "_setup_firewall_linux", lambda p, pf: calls.append(p) or True)
+    _linux_only(monkeypatch)
+    monkeypatch.setattr(fw, "_sources", lambda narrow_lan=False:
+                        list(narrow) if narrow_lan else ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"])
+    assert fw.setup_firewall(8443, 8001) is True
+    narrow.append("10.20.0.0/16")
+    assert fw.setup_firewall(8443, 8001) is True
+    assert calls == [8443, 8443]
+
 def test_the_other_platforms_open_the_same_networks(monkeypatch, tmp_path):
     """netsh, pf, iptables and ufw all take their sources from the one decision;
     none keeps a list of its own any more."""

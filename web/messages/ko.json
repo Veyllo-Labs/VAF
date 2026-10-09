@@ -1692,7 +1692,7 @@
       "serverModeLocked": "서버 모드에서는 네트워크 접속이 항상 켜져 있고, 여기서 끌 수 없어요.",
       "remoteAccess": {
         "title": "원격 접속(VPN)",
-        "intro": "VAF는 VPN을 직접 만들지 않아요. 이 기기에서 VPN(WireGuard, OpenVPN, Tailscale, NetBird)이 실행 중이면 VAF가 그 연결을 알아보고 그 경로로 기기를 들여보내요.",
+        "intro": "VAF는 VPN을 직접 만들지 않아요. 이 기기에서 VPN(WireGuard, OpenVPN, Tailscale, NetBird)이 실행 중이면 VAF가 그 연결을 감지해요. 그 경로로 기기가 들어올 수 있는지는 아래에서 정해요. WireGuard와 OpenVPN은 보통 이미 허용되어 있고, Tailscale과 NetBird는 허용해야 들어올 수 있어요.",
         "connections": "감지된 연결",
         "none": "네트워크나 VPN 연결을 찾지 못했어요.",
         "kindLan": "LAN",

@@ -1692,7 +1692,7 @@
       "serverModeLocked": "LAN access is permanently enabled in server mode and cannot be disabled here.",
       "remoteAccess": {
         "title": "Remote access (VPN)",
-        "intro": "VAF sets up no VPN of its own. If one runs on this machine (WireGuard, OpenVPN, Tailscale, NetBird), VAF recognises the connection and lets devices in through it.",
+        "intro": "VAF sets up no VPN of its own. If one runs on this machine (WireGuard, OpenVPN, Tailscale, NetBird), VAF detects the connection. Whether devices get in through it is set below: WireGuard and OpenVPN are usually admitted already, Tailscale and NetBird only once you admit them.",
         "connections": "Detected connections",
         "none": "No network or VPN connection found.",
         "kindLan": "LAN",

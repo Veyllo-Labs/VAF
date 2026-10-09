@@ -1692,7 +1692,7 @@
       "serverModeLocked": "Sunucu modunda ağdan erişim her zaman açıktır ve buradan kapatılamaz.",
       "remoteAccess": {
         "title": "Uzaktan erişim (VPN)",
-        "intro": "VAF kendi VPN'ini kurmaz. Bu cihazda bir VPN çalışıyorsa (WireGuard, OpenVPN, Tailscale, NetBird), VAF bu bağlantıyı tanır ve cihazların onun üzerinden girmesine izin verir.",
+        "intro": "VAF kendi VPN'ini kurmaz. Bu cihazda bir VPN çalışıyorsa (WireGuard, OpenVPN, Tailscale, NetBird), VAF bu bağlantıyı algılar. Cihazların onun üzerinden girip giremeyeceğini aşağıda belirlersin: WireGuard ve OpenVPN genellikle zaten izinlidir, Tailscale ve NetBird ise ancak sen izin verdiğinde.",
         "connections": "Algılanan bağlantılar",
         "none": "Ağ ya da VPN bağlantısı bulunamadı.",
         "kindLan": "LAN",

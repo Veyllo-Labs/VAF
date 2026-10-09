@@ -1692,7 +1692,7 @@
       "serverModeLocked": "Im Servermodus ist der Zugriff aus dem Netzwerk immer an und lässt sich hier nicht abschalten.",
       "remoteAccess": {
         "title": "Fernzugriff (VPN)",
-        "intro": "VAF richtet selbst kein VPN ein. Läuft auf diesem Gerät eins (WireGuard, OpenVPN, Tailscale, NetBird), erkennt VAF die Verbindung und lässt Geräte darüber herein.",
+        "intro": "VAF richtet selbst kein VPN ein. Läuft auf diesem Gerät eins (WireGuard, OpenVPN, Tailscale, NetBird), erkennt VAF die Verbindung. Ob Geräte darüber hereinkommen, legst du unten fest: WireGuard und OpenVPN sind meist schon zugelassen, Tailscale und NetBird erst, wenn du sie freigibst.",
         "connections": "Erkannte Verbindungen",
         "none": "Keine Netzwerk- oder VPN-Verbindung gefunden.",
         "kindLan": "LAN",

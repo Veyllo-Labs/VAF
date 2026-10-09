@@ -1692,7 +1692,7 @@
       "serverModeLocked": "在服务器模式下，来自网络的访问始终开启，无法在这里关闭。",
       "remoteAccess": {
         "title": "远程访问（VPN）",
-        "intro": "VAF 自己不搭建 VPN。如果这台设备上运行着 VPN（WireGuard、OpenVPN、Tailscale、NetBird），VAF 会识别这个连接，并让设备通过它进来。",
+        "intro": "VAF 自己不搭建 VPN。如果这台设备上运行着 VPN（WireGuard、OpenVPN、Tailscale、NetBird），VAF 会检测到这个连接。设备能否通过它进来，在下方设置：WireGuard 和 OpenVPN 通常已经放行，Tailscale 和 NetBird 要在你放行后才能进来。",
         "connections": "检测到的连接",
         "none": "没有找到网络连接或 VPN 连接。",
         "kindLan": "LAN",

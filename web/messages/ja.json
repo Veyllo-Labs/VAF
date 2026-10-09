@@ -1692,7 +1692,7 @@
       "serverModeLocked": "サーバーモードではネットワークからのアクセスが常にオンで、ここでは無効にできません。",
       "remoteAccess": {
         "title": "リモートアクセス（VPN）",
-        "intro": "VAFは自分ではVPNを用意しません。このデバイスでVPN（WireGuard、OpenVPN、Tailscale、NetBird）が動いていれば、VAFはその接続を認識し、そこからデバイスを受け入れます。",
+        "intro": "VAFは自分ではVPNを用意しません。このデバイスでVPN（WireGuard、OpenVPN、Tailscale、NetBird）が動いていれば、VAFはその接続を検出します。そこからデバイスを受け入れるかどうかは下で設定します。WireGuardとOpenVPNはたいてい許可済みで、TailscaleとNetBirdは許可したときだけ受け入れます。",
         "connections": "検出された接続",
         "none": "ネットワーク接続もVPN接続も見つかりません。",
         "kindLan": "LAN",

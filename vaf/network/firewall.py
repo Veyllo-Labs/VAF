@@ -107,8 +107,11 @@ def setup_firewall(port: int, port_frontend: int = 3000):
         already failed, so a cancelled dialog can never be logged as success.
         Callers that only check truthiness keep working.
     """
+    # Both lists: firewalld opens the narrow one (the LAN subnet, a WireGuard /24), the
+    # other backends the wide one, and a change can show in one only - a network an
+    # admin adds inside 10.0.0.0/8 leaves the wide list as it was.
     try:
-        sources = tuple(_sources())
+        sources = (tuple(_sources()), tuple(_sources(narrow_lan=True)))
     except Exception as e:
         logger.warning("firewall: admitted networks unreadable (%s); using the setup as it was", e)
         sources = ()

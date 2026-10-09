@@ -1716,6 +1716,7 @@
         "vpnOnlyNoVpn": "Şu anda hiçbir VPN bağlantısı algılanmadı, bu yüzden bu cihaz dışında kimse giremez.",
         "saved": "Kaydedildi. Erişim denetimi hemen geçerli olur, VAF güvenlik duvarını yeniden başlatmadan ayarlar.",
         "failed": "Olmadı.",
+        "changedMeanwhile": "Bu ayarlar bu arada değiştirildi. Şimdi güncel durum gösteriliyor, değişikliğini lütfen yeniden yap.",
         "copied": "Kopyalandı",
         "lockoutTitle": "Bu seni dışarıda bırakır",
         "lockoutText": "Şu anda {address} üzerinden bağlısın. Bu değişiklikten sonra bu adres giremez ve bu sayfa yanıt vermeyi bırakır.",

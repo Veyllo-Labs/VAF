@@ -1716,6 +1716,7 @@
         "vpnOnlyNoVpn": "No VPN connection is detected right now, so nobody but this machine gets in.",
         "saved": "Saved. The access check applies at once; VAF adjusts the firewall without a restart.",
         "failed": "That did not work.",
+        "changedMeanwhile": "These settings were changed in the meantime. The current state is shown now; please make your change again.",
         "copied": "Copied",
         "lockoutTitle": "This locks you out",
         "lockoutText": "You are connected from {address}. After this change that address no longer gets in, and this page stops responding.",

@@ -78,9 +78,19 @@ export default function RemoteAccessSection({ sectionId }: { sectionId?: string 
                 method: 'PUT',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ allowed, vpn_only: vpnOnly, confirm }),
+                // The state this change was made on: the server refuses the save when the
+                // stored settings moved on since (another admin, the CLI), instead of letting
+                // this page's older list bring a removed network back.
+                body: JSON.stringify({ allowed, vpn_only: vpnOnly, confirm,
+                                       base_allowed: data?.allowed ?? null, base_vpn_only: data?.vpn_only ?? null }),
             });
             const body = await res.json().catch(() => ({}));
+            if (res.status === 409 && body?.detail?.code === 'stale' && body.detail.state) {
+                setData(body.detail.state);
+                setLockout(null);
+                setNote({ ok: false, text: t('changedMeanwhile') });
+                return false;
+            }
             if (res.status === 409 && body?.detail?.code === 'lockout') {
                 setLockout({ address: String(body.detail.address || ''), allowed, vpnOnly });
                 return false;

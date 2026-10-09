@@ -72,6 +72,20 @@ def test_a_failed_firewall_degrades_to_manual_instructions_with_exit_zero(seams,
     assert "ufw" in result.output
 
 
+
+def test_the_manual_instructions_name_every_admitted_network(seams, monkeypatch):
+    """One firewalld rule and one ufw rule per admitted network, not just the first.
+    MUTATION: print the ufw rule for sources[0] only - red."""
+    monkeypatch.setattr(firewall, "setup_firewall", lambda p, pf: False)
+    monkeypatch.setattr(binding, "firewall_sources",
+                        lambda narrow_lan=False, cfg=None: ["10.8.0.0/24", "192.168.1.0/24"])
+    result = runner.invoke(server_cmd.app, ["provision"])
+    assert result.exit_code == 0, result.output
+    said = " ".join(result.output.split())
+    for source in ("10.8.0.0/24", "192.168.1.0/24"):
+        assert f'source address="{source}" port port="8443"' in said
+        assert f"sudo ufw allow from {source} to any port 8443 proto tcp" in said
+
 def test_a_dhcp_assigned_lan_ip_earns_a_static_ip_warning(seams, monkeypatch):
     monkeypatch.setattr(binding, "lan_ip_is_dhcp", lambda: True)
     result = runner.invoke(server_cmd.app, ["provision"])

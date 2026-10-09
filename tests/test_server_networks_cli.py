@@ -115,3 +115,50 @@ def test_list_reports_the_vpn_networks_under_vpn_only(settings):
     said = _said(result)
     assert "10.8.0.0/24" in said and "100.64.0.0/10" in said
     assert "local networks" not in said
+
+
+def test_vpn_only_spares_a_lan_your_own_entry_still_admits(settings, monkeypatch):
+    """Under "VPN only" a LAN an entry covers keeps its devices, and one covered in part
+    keeps exactly those addresses; the warning must not claim the whole LAN is out.
+    MUTATION: warn for every LAN regardless of the entries - red."""
+    monkeypatch.setattr(binding, "local_interfaces", lambda: [LAN, WG])
+    settings["local_network_allowed_networks"] = ["192.168.2.0/24"]
+    said = _said(runner.invoke(server_cmd.app, ["vpn-only", "on"]))
+    assert "no longer connect" not in said
+
+    settings["local_network_vpn_only"] = False
+    settings["local_network_allowed_networks"] = ["192.168.2.50/32"]
+    said = _said(runner.invoke(server_cmd.app, ["vpn-only", "on"]))
+    assert "192.168.2.0/24 can no longer connect, except the addresses your own entries admit" in said
+    assert "192.168.2.50/32" in said
+
+
+def test_an_entry_change_reads_and_writes_under_one_lock(settings, monkeypatch):
+    """`networks allow` must not read the list, lose the lock, and write back a list that
+    misses what another admin stored in between. MUTATION: read outside the lock - red."""
+    import contextlib
+    held = {"now": False}
+    reads_outside = []
+
+    @contextlib.contextmanager
+    def locked(cls):
+        held["now"] = True
+        try:
+            yield
+        finally:
+            held["now"] = False
+
+    real_get = Config.get
+
+    def get(cls, key, default=None):
+        if key == "local_network_allowed_networks" and not held["now"]:
+            reads_outside.append(key)
+        return real_get(key, default)
+
+    monkeypatch.setattr(Config, "_locked", classmethod(locked))
+    monkeypatch.setattr(Config, "get", classmethod(get))
+    for args in (["networks", "allow", "10.9.0.0/24"], ["networks", "remove", "10.9.0.0/24"],
+                 ["networks", "tailscale", "on"]):
+        assert runner.invoke(server_cmd.app, args).exit_code == 0
+    assert reads_outside == []
+    assert settings["local_network_allowed_networks"] == ["100.64.0.0/10"]

@@ -123,3 +123,31 @@ def test_the_access_url_falls_back_to_the_vpn_on_a_server_without_lan(stored, mo
     body = _app().get("/api/network/access-url").json()
     assert body["host"] == "10.8.0.1"
     assert body["url"] == "https://10.8.0.1:8443"
+
+
+def test_a_page_with_an_older_list_cannot_bring_back_a_removed_network(stored):
+    """Admin A loaded the page with [10.9.0.0/24, 100.64.0.0/10]; admin B removed
+    10.9.0.0/24 since. A's switch would send the whole old list back. With the base the
+    page loaded, the save is refused and A gets the current state to redo the change on.
+    MUTATION: drop the base comparison - red."""
+    stored["local_network_allowed_networks"] = ["100.64.0.0/10"]   # after B's removal
+    client = _app()
+    r = client.put("/api/network/remote-access", json={
+        "allowed": ["10.9.0.0/24", "100.64.0.0/10"], "vpn_only": True,
+        "base_allowed": ["10.9.0.0/24", "100.64.0.0/10"], "base_vpn_only": False})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "stale"
+    assert r.json()["detail"]["state"]["allowed"] == ["100.64.0.0/10"]
+    assert stored["local_network_allowed_networks"] == ["100.64.0.0/10"]
+    assert stored["local_network_vpn_only"] is False
+
+    r = client.put("/api/network/remote-access", json={
+        "allowed": ["100.64.0.0/10", "10.20.0.0/16"], "vpn_only": False,
+        "base_allowed": ["100.64.0.0/10"], "base_vpn_only": False})
+    assert r.status_code == 200, r.text
+    assert stored["local_network_allowed_networks"] == ["100.64.0.0/10", "10.20.0.0/16"]
+
+
+def test_a_save_without_a_base_is_taken_as_it_is(stored):
+    r = _app().put("/api/network/remote-access", json={"allowed": ["10.20.0.0/16"], "vpn_only": False})
+    assert r.status_code == 200

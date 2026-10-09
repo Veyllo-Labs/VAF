@@ -163,7 +163,9 @@ def server_provision(
                     f"'rule family=\"ipv4\" source address=\"{source}\" port port=\"{access_port}\" protocol=\"tcp\" accept'"
                 )
             UI.info("  sudo firewall-cmd --reload")
-            UI.info(f"  or with ufw: sudo ufw allow from {sources[0]} to any port {access_port} proto tcp")
+            UI.info("  or with ufw:")
+            for source in sources:
+                UI.info(f"  sudo ufw allow from {source} to any port {access_port} proto tcp")
     else:
         UI.info("Firewall step skipped (--no-firewall).")
 
@@ -200,6 +202,19 @@ def _allowed_entries() -> list:
     from vaf.network.binding import normalize_allowed_networks
     taken, _refused = normalize_allowed_networks(Config.get("local_network_allowed_networks"))
     return taken
+
+
+def _change_entries(change) -> list:
+    """Read the admitted networks, apply `change` and store the result under one config
+    lock, so an entry another admin or the web settings wrote in between is not lost.
+    `change` returns the new list, or None to store nothing. Returns what is stored now."""
+    with Config._locked():
+        entries = _allowed_entries()
+        updated = change(list(entries))
+        if updated is not None and updated != entries:
+            Config.set("local_network_allowed_networks", updated)
+            return updated
+        return entries
 
 
 def _normalized_or_exit(value: str) -> str:
@@ -249,11 +264,17 @@ def networks_list():
 def networks_allow(network: str = typer.Argument(..., help="A private network or address, e.g. 10.8.0.0/24")):
     """Admit a private network besides the local ones."""
     entry = _normalized_or_exit(network)
-    entries = _allowed_entries()
-    if entry in entries:
+    already = False
+
+    def change(entries):
+        nonlocal already
+        already = entry in entries
+        return None if already else entries + [entry]
+
+    _change_entries(change)
+    if already:
         UI.info(f"{entry} is already admitted.")
         return
-    Config.set("local_network_allowed_networks", entries + [entry])
     UI.success(f"Admitted {entry}.")
     _applied_note()
 
@@ -262,11 +283,17 @@ def networks_allow(network: str = typer.Argument(..., help="A private network or
 def networks_remove(network: str = typer.Argument(..., help="The network to drop")):
     """Stop admitting a network that was added."""
     entry = _normalized_or_exit(network)
-    entries = _allowed_entries()
-    if entry not in entries:
+    found = False
+
+    def change(entries):
+        nonlocal found
+        found = entry in entries
+        return [e for e in entries if e != entry] if found else None
+
+    _change_entries(change)
+    if not found:
         UI.error(f"{entry} is not in the admitted networks.")
         raise typer.Exit(1)
-    Config.set("local_network_allowed_networks", [e for e in entries if e != entry])
     UI.success(f"No longer admitting {entry}.")
     _applied_note()
 
@@ -275,11 +302,15 @@ def networks_remove(network: str = typer.Argument(..., help="The network to drop
 def networks_tailscale(state: str = typer.Argument(..., metavar="on|off")):
     """Admit Tailscale, Headscale and NetBird devices (100.64.0.0/10)."""
     on = _on_off(state)
-    entries = _allowed_entries()
-    if on and _MESH_VPN_NETWORK not in entries:
-        Config.set("local_network_allowed_networks", entries + [_MESH_VPN_NETWORK])
-    elif not on and _MESH_VPN_NETWORK in entries:
-        Config.set("local_network_allowed_networks", [e for e in entries if e != _MESH_VPN_NETWORK])
+
+    def change(entries):
+        if on and _MESH_VPN_NETWORK not in entries:
+            return entries + [_MESH_VPN_NETWORK]
+        if not on and _MESH_VPN_NETWORK in entries:
+            return [e for e in entries if e != _MESH_VPN_NETWORK]
+        return None
+
+    _change_entries(change)
     UI.success(f"Tailscale / NetBird ({_MESH_VPN_NETWORK}) {'admitted' if on else 'not admitted'}.")
     _applied_note()
 
@@ -300,7 +331,18 @@ def server_vpn_only(state: str = typer.Argument(..., metavar="on|off")):
         UI.info("Admitted VPN networks: " + ", ".join(policy.vpn))
     elif not policy.allowed:
         UI.warning("No VPN interface is up, so no other device can connect until one is.")
-    lan = sorted({i.network for i in local_interfaces() if i.kind == "lan"})
-    if lan:
-        UI.warning("Devices on " + ", ".join(lan) + " can no longer connect.")
+    # A LAN an entry of the admin's still covers stays reachable, and one an entry covers
+    # in part (a single device, a smaller range) keeps exactly those addresses.
+    import ipaddress
+    blocked, partly = [], []
+    for net in sorted({ipaddress.ip_network(i.network) for i in local_interfaces() if i.kind == "lan"},
+                      key=lambda n: (int(n.network_address), n.prefixlen)):
+        if any(net.subnet_of(a) for a in policy.networks):
+            continue
+        (partly if any(net.overlaps(a) for a in policy.networks) else blocked).append(str(net))
+    if blocked:
+        UI.warning("Devices on " + ", ".join(blocked) + " can no longer connect.")
+    if partly:
+        UI.warning("Devices on " + ", ".join(partly) + " can no longer connect, except the "
+                   "addresses your own entries admit (" + ", ".join(policy.allowed) + ").")
     _applied_note()

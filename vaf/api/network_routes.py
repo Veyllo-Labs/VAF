@@ -217,15 +217,24 @@ class RemoteAccessUpdate(BaseModel):
     # Set after the person saw the lockout warning: they keep the change although it
     # shuts out the address they are connected from.
     confirm: bool = False
+    # The state this change was made on, as the page last loaded it. The body replaces the
+    # whole list, so a page opened before another admin removed a network would bring that
+    # network back; with these the save is refused when the stored state moved on.
+    base_allowed: Optional[List[str]] = None
+    base_vpn_only: Optional[bool] = None
 
 
 @router.put("/remote-access", dependencies=[Depends(require_admin)])
 def put_remote_access(body: RemoteAccessUpdate, request: Request):
     """Replace the admitted networks and the "VPN only" switch.
 
-    422 with the refused entries when one is not a private network. 409 when the change
-    would shut out the address this request comes from, unless `confirm` is set: the
-    person would lose this very page, so they are asked once before it happens.
+    422 with the refused entries when one is not a private network. 409 "stale" when
+    `base_allowed`/`base_vpn_only` are sent and the stored settings no longer match them
+    (another admin, or the CLI, changed them since the page loaded): the answer carries
+    the current state to redo the change on. 409 "lockout" when the change would shut out
+    the address this request comes from, unless `confirm` is set: the person would lose
+    this very page, so they are asked once before it happens. Checked and written under
+    the config lock, against the stored settings, so nothing else in the file is touched.
     """
     from vaf.network.binding import (connection_client_ip, inbound_policy,
                                      normalize_allowed_networks)
@@ -238,6 +247,14 @@ def put_remote_access(body: RemoteAccessUpdate, request: Request):
 
     with Config._locked():
         cfg = Config.load()
+        if body.base_allowed is not None or body.base_vpn_only is not None:
+            stored = inbound_policy(cfg)
+            base_allowed, _ = normalize_allowed_networks(body.base_allowed or [])
+            moved = ((body.base_allowed is not None and base_allowed != list(stored.allowed))
+                     or (body.base_vpn_only is not None and bool(body.base_vpn_only) != stored.vpn_only))
+            if moved:
+                raise HTTPException(status_code=409, detail={
+                    "code": "stale", "state": _remote_access_state(request)})
         proposed = {**cfg, "local_network_allowed_networks": allowed,
                     "local_network_vpn_only": bool(body.vpn_only)}
         caller = connection_client_ip(request)

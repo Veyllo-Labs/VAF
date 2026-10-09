@@ -54,9 +54,9 @@ Implementation: `vaf/network/firewall.py`
 
 ### Layer 2: IP Validation Middleware
 
-Every HTTP request passes through `IPValidationMiddleware` which validates the client IP against RFC 1918 private ranges at the application level. This acts as a second barrier if firewall rules are misconfigured or bypassed.
+Every HTTP request passes through `IPValidationMiddleware` which validates the client IP against the networks `inbound_policy()` admits, at the application level: this machine, then by default the RFC 1918 ranges, or with "VPN only" the VPN networks instead, plus the private networks an admin added (which may lie outside RFC 1918, such as `100.64.0.0/10`). This acts as a second barrier if firewall rules are misconfigured or bypassed.
 
-- Rejects any non-private IP with HTTP 403 (recorded as `ip_blocked` with the device's address)
+- Rejects any IP outside the admitted networks with HTTP 403 (recorded as `ip_blocked` with the device's address); under "VPN only" that includes the home network
 - Judges the REAL client, not the socket peer: the integrated proxy relays every device over loopback, so the peer is `127.0.0.1` for all of them. The address comes from `connection_client_ip` in `vaf/network/binding.py`, which honors the proxy's `X-Forwarded-For` only when the peer is loopback. This check used to read the peer and therefore passed every relayed request, a public address on the proxy port included (measured: 200 through the proxy, 403 only on a direct connection), while the WebSocket handshake already refused it.
 - Admitted are this machine, the local networks (RFC 1918) and the networks an admin added; with "VPN only" the networks of the detected VPN interfaces replace the local ones. WireGuard and OpenVPN clients (`10.x`) pass by default; mesh VPNs that hand out `100.64.0.0/10` (Tailscale, Headscale, NetBird) pass once that network is admitted. The decision is `inbound_policy()` in `vaf/network/binding.py`, read on every request, so a change applies without a restart - see [Remote access over a VPN](#remote-access-over-a-vpn).
 - Active only in network mode (localhost mode skips this layer)
@@ -638,11 +638,17 @@ section of the settings shows:
 }
 ```
 
-**PUT** `/api/network/remote-access` with `{"allowed": [...], "vpn_only": bool, "confirm": bool}`
-replaces both settings. `422` with `{"code": "refused", "refused": [{"value", "reason"}]}` when an
-entry is not a private network (reason codes of `REFUSAL_REASONS` in `vaf/network/binding.py`).
-`409` with `{"code": "lockout", "address"}` when the change would shut out the address the
-request comes from; sent again with `"confirm": true` it is saved. The answer is the new state.
+**PUT** `/api/network/remote-access` with `{"allowed": [...], "vpn_only": bool, "confirm": bool,
+"base_allowed": [...], "base_vpn_only": bool}` replaces both settings, checked and written under the
+config lock against the stored file, so no other setting is touched. `422` with
+`{"code": "refused", "refused": [{"value", "reason"}]}` when an entry is not a private network
+(reason codes of `REFUSAL_REASONS` in `vaf/network/binding.py`). `409` with
+`{"code": "stale", "state"}` when `base_allowed`/`base_vpn_only` (the state the page loaded) no
+longer match the stored settings: the body replaces the whole list, so a page opened before another
+admin or the CLI removed a network would otherwise bring it back; the answer carries the current
+state to redo the change on. `409` with `{"code": "lockout", "address"}` when the change would shut
+out the address the request comes from; sent again with `"confirm": true` it is saved. The answer
+is the new state. The CLI (`vaf server networks`) reads and writes the list under the same lock.
 
 ### 6. Authentication Endpoints
 

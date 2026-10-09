@@ -12,7 +12,7 @@ The three in the middle exist only in network mode; the guard and CORS always.
 
 ForeignOriginGuard refuses what a browser marks as coming from another web page (HTTP and
 WebSocket alike), before any identity is looked at.
-IPValidationMiddleware rejects any client IP that is not RFC 1918 or localhost.
+IPValidationMiddleware rejects any client IP outside the admitted networks (binding.inbound_policy).
 Every client address here comes from ``binding.connection_client_ip`` (the real client behind
 the integrated proxy), never from the socket peer.
 AuthMiddleware enforces JWT authentication for non-localhost clients.
@@ -162,10 +162,11 @@ class OwnOriginCORSMiddleware(CORSMiddleware):
 
 class IPValidationMiddleware(BaseHTTPMiddleware):
     """
-    Reject requests from non-private IP addresses.
+    Reject requests from addresses outside the admitted networks.
 
-    Only RFC 1918 ranges (10.x, 172.16-31.x, 192.168.x) and localhost
-    are allowed.  Everything else gets a 403.
+    The networks come from binding.inbound_policy (through is_allowed_ip): this machine,
+    by default the RFC 1918 ranges, with "VPN only" the VPN networks instead, plus the
+    private networks an admin added. Everything else gets a 403.
 
     The address judged is the REAL client, not the socket peer: the integrated HTTPS proxy
     relays every device over loopback, so the peer is 127.0.0.1 for all of them and this check

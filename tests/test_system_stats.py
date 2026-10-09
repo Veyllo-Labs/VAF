@@ -121,8 +121,9 @@ def test_lan_summary_lists_the_hostname_url_first(monkeypatch):
     import vaf.network.binding as binding
     monkeypatch.setattr(binding, "resolve_lan_access_ports",
                         lambda wait_for_proxy=False: (8443, 8001))
-    monkeypatch.setattr(binding, "get_all_local_ips",
-                        lambda: [("eth0", "192.168.1.10")])
+    monkeypatch.setattr(binding, "access_addresses",
+                        lambda cfg=None: [binding.LocalInterface("eth0", "192.168.1.10",
+                                                                 "192.168.1.0/24", "lan")])
 
     lan = stats._lan_summary(True, "srv1")
     assert lan["urls"] == ["https://srv1:8443", "https://192.168.1.10:8443"]

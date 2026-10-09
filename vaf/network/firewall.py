@@ -32,33 +32,65 @@ _windows_firewall_skip: bool = False
 # Rule/anchor names for identification
 FIREWALL_RULE_NAME = "VAF-LocalNetwork"
 
-# RFC 1918 Private IP ranges
-PRIVATE_CIDRS = [
-    "192.168.0.0/16",
-    "10.0.0.0/8",
-    "172.16.0.0/12",
-]
+
+def _sources(*, narrow_lan: bool = False) -> list:
+    """The source networks to open, from the one admission decision (binding.inbound_policy)."""
+    from vaf.network.binding import firewall_sources
+    return firewall_sources(narrow_lan=narrow_lan)
 
 
-# One elevation attempt per (port, port_frontend) per PROCESS. Deliberate: in TLS
-# mode the same app runs two uvicorn lifespans (8001 + 8005) and both spawn the
+# One elevation attempt per (port, port_frontend, sources) per PROCESS. Deliberate: in
+# TLS mode the same app runs two uvicorn lifespans (8001 + 8005) and both spawn the
 # firewall setup within milliseconds - without this claim the user can face TWO
 # password dialogs for one start, and a CANCELLED dialog chains straight into the
 # twin's dialog. The claim is taken at ENTRY (not on success) so the racing twin
 # is deduplicated even while the first attempt still sits on the open dialog.
-# Failures are deliberately not retried in-process: network settings changes
-# restart the app anyway, and a second unprompted dialog is exactly the annoyance
-# this guards against.
-_attempted_ports: dict = {}   # {(port, frontend): "present"|"created"|True|False|None}
+# Failures are deliberately not retried in-process for the same sources: a second
+# unprompted dialog is exactly the annoyance this guards against. A change of the
+# admitted networks is a new key, so an admin's change is applied without a restart.
+_attempted_ports: dict = {}   # {(port, frontend, sources): "present"|"created"|True|False|None}
 _attempt_lock = threading.Lock()
+
+
+def apply_lan_firewall(log=None):
+    """Open the access port for the admitted networks, if network mode and the firewall
+    step are on. The one place both callers go through: the server's startup and a
+    change of the admitted networks (vaf/tray.py). Blocking (it may wait for a password
+    dialog), so callers run it in a thread. Returns what `setup_firewall` returned, or
+    None when it was not asked to run."""
+    from vaf.core.config import Config
+    say = log or (lambda msg: logger.info(msg))
+    if not (Config.get_bool("local_network_enabled", False)
+            and Config.get_bool("local_network_firewall_enabled", True)):
+        return None
+    from vaf.network.binding import resolve_lan_access_ports
+    # In-process caller: wait for the proxy to report the port it ACTUALLY bound
+    # (443->8443 fallback) instead of trusting the configured value.
+    port, port_frontend = resolve_lan_access_ports(wait_for_proxy=True)
+    result = setup_firewall(port, port_frontend)
+    if result == "present":
+        # No elevation ran: the rules were already in place. Kept apart from "created"
+        # so a password dialog can be attributed from the log.
+        say(f"Firewall rule already in place for port {port} - no password dialog needed")
+    elif result == "in_flight":
+        # The twin lifespan of TLS mode is running this very setup; it reports the outcome.
+        say(f"Firewall setup for port {port} is already running in this process")
+    elif result:
+        register_cleanup_on_exit()
+        say(f"Firewall rules created for ports {port}, {port_frontend}")
+    else:
+        say(f"Firewall setup skipped for ports {port}, {port_frontend} - needs elevated "
+            "privileges (no passwordless sudo). Open the port manually or use the in-app firewall step.")
+    return result
 
 
 def setup_firewall(port: int, port_frontend: int = 3000):
     """
-    Setup OS firewall rules for LAN-only access.
+    Setup OS firewall rules for network access.
 
     Creates rules that:
-    - Allow connections from RFC 1918 private IP ranges
+    - Allow connections from the admitted networks (binding.firewall_sources: the
+      local networks or, with "VPN only", the VPN networks, plus an admin's additions)
     - Allow localhost connections
     - Block all other incoming connections on the specified ports
 
@@ -75,7 +107,12 @@ def setup_firewall(port: int, port_frontend: int = 3000):
         already failed, so a cancelled dialog can never be logged as success.
         Callers that only check truthiness keep working.
     """
-    key = (int(port), int(port_frontend))
+    try:
+        sources = tuple(_sources())
+    except Exception as e:
+        logger.warning("firewall: admitted networks unreadable (%s); using the setup as it was", e)
+        sources = ()
+    key = (int(port), int(port_frontend), sources)
     with _attempt_lock:
         if key in _attempted_ports:
             # Report what the first attempt ACTUALLY did, never a blanket
@@ -181,8 +218,8 @@ def _setup_firewall_windows(port: int, port_frontend: int) -> bool:
     # First, remove any existing rules
     _cleanup_firewall_windows()
     
-    # Combine private ranges with comma separator
-    private_ranges = ",".join(PRIVATE_CIDRS)
+    # The admitted networks plus this machine, comma separated.
+    remote_ips = ",".join([*_sources(), "127.0.0.1"])
     
     ports = [port, port_frontend]
     
@@ -195,7 +232,7 @@ def _setup_firewall_windows(port: int, port_frontend: int) -> bool:
             'action=allow',
             f'localport={p}',
             'protocol=tcp',
-            f'remoteip={private_ranges},127.0.0.1'
+            f'remoteip={remote_ips}'
         ]
         
         try:
@@ -246,18 +283,20 @@ def _setup_firewall_macos(port: int, port_frontend: int) -> bool:
     logger.info("Setting up macOS pf rules for local network access")
     
     # Build pf rules
-    rules = f"""# VAF Local Network Rules - Auto-generated
-# Allow localhost
-pass in quick on lo0 proto tcp to any port {{{port}, {port_frontend}}}
-
-# Allow private networks (RFC 1918)
-pass in quick proto tcp from 192.168.0.0/16 to any port {{{port}, {port_frontend}}}
-pass in quick proto tcp from 10.0.0.0/8 to any port {{{port}, {port_frontend}}}
-pass in quick proto tcp from 172.16.0.0/12 to any port {{{port}, {port_frontend}}}
-
-# Block everything else on these ports
-block in quick proto tcp to any port {{{port}, {port_frontend}}}
-"""
+    ports_spec = f"{{{port}, {port_frontend}}}"
+    allow = "".join(f"pass in quick proto tcp from {cidr} to any port {ports_spec}\n"
+                    for cidr in _sources())
+    rules = (
+        "# VAF Local Network Rules - Auto-generated\n"
+        "# Allow localhost\n"
+        f"pass in quick on lo0 proto tcp to any port {ports_spec}\n"
+        "\n"
+        "# Allow the admitted networks (vaf/network/binding.py inbound_policy)\n"
+        f"{allow}"
+        "\n"
+        "# Block everything else on these ports\n"
+        f"block in quick proto tcp to any port {ports_spec}\n"
+    )
     
     try:
         # Write anchor file
@@ -369,48 +408,40 @@ def _firewalld_running() -> bool:
         return False
 
 
-def _lan_subnet_cidr() -> Optional[str]:
-    """CIDR of the network the LAN IP sits on (e.g. 192.168.2.0/24), so the opening is scoped to the LAN
-    only (RFC1918) — never the whole interface or the internet. Uses the interface's real netmask."""
+def _firewalld_zone_of(interface: str) -> Optional[str]:
+    """The zone an interface is in, or None when it is in none. A free lookup for an
+    unprivileged caller (only firewalld's CONFIG reads are polkit-gated)."""
     try:
-        import ipaddress
-        import socket as _socket
-        import psutil
-        from vaf.network.binding import get_local_network_ip
-        lan_ip = get_local_network_ip()
-        if not lan_ip:
-            return None
-        for _iface, addrs in psutil.net_if_addrs().items():
-            for a in addrs:
-                if getattr(a, 'family', None) == _socket.AF_INET and a.address == lan_ip and a.netmask:
-                    return str(ipaddress.ip_network(f"{lan_ip}/{a.netmask}", strict=False))
-    except Exception as e:
-        logger.debug("firewalld: LAN subnet detection failed: %s", e)
-    return None
-
-
-def _firewalld_zone() -> str:
-    """Zone of the interface that carries the LAN IP (a rule only affects traffic on interfaces in that
-    zone). Falls back to the default zone, then 'public'."""
-    try:
-        import socket as _socket
-        import psutil
-        from vaf.network.binding import get_local_network_ip
-        lan_ip = get_local_network_ip()
-        if lan_ip:
-            for iface, addrs in psutil.net_if_addrs().items():
-                if any(getattr(a, 'family', None) == _socket.AF_INET and a.address == lan_ip for a in addrs):
-                    r = subprocess.run(['firewall-cmd', '--get-zone-of-interface', iface],
-                                       capture_output=True, text=True, timeout=5)
-                    if r.returncode == 0 and r.stdout.strip():
-                        return r.stdout.strip()
-                    break
-        r = subprocess.run(['firewall-cmd', '--get-default-zone'], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(['firewall-cmd', '--get-zone-of-interface', interface],
+                           capture_output=True, text=True, timeout=5)
         if r.returncode == 0 and r.stdout.strip():
             return r.stdout.strip()
     except Exception:
         pass
-    return 'public'
+    return None
+
+
+def _firewalld_zones() -> list:
+    """Every zone a client's packet can be judged in: the zone of each LAN and VPN
+    interface, and the default zone, which takes the interfaces in no zone (a fresh
+    WireGuard or Tailscale interface usually is). A rule is restricted to its source
+    either way, so putting it in one more zone admits nobody else."""
+    zones = set()
+    try:
+        from vaf.network.binding import local_interfaces
+        for iface in local_interfaces():
+            zone = _firewalld_zone_of(iface.name)
+            if zone:
+                zones.add(zone)
+    except Exception as e:
+        logger.debug("firewalld: interface zones unreadable: %s", e)
+    try:
+        r = subprocess.run(['firewall-cmd', '--get-default-zone'], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            zones.add(r.stdout.strip())
+    except Exception:
+        pass
+    return sorted(zones) or ['public']
 
 
 def _firewalld_rich_rule(subnet: str, port: int) -> str:
@@ -418,13 +449,22 @@ def _firewalld_rich_rule(subnet: str, port: int) -> str:
             f'port port="{port}" protocol="tcp" accept')
 
 
+def _firewalld_rules(port: int) -> list:
+    """The (zone, rich rule) pairs that admit the admitted networks to `port`: the LAN
+    subnets this machine sits on (never all of RFC 1918), the admitted VPN networks
+    and an admin's additions, each in every zone of `_firewalld_zones`."""
+    sources = _sources(narrow_lan=True)
+    return sorted((zone, _firewalld_rich_rule(src, port))
+                  for zone in _firewalld_zones() for src in sources)
+
+
 def _firewalld_marker_path() -> Path:
     from vaf.core.config import Config
     return Config.APP_DIR / "firewalld_lan.json"
 
 
-def _firewalld_marker_matches(zone: str, rule: str) -> bool:
-    """True when this install already put exactly this rule in this zone.
+def _firewalld_marker_read() -> Optional[list]:
+    """The (zone, rule) pairs this install put in place, or None when it has no record.
 
     The marker REPLACES asking firewalld: an unprivileged
     `firewall-cmd --query-rich-rule` is a CONFIG read, and distros ship that
@@ -432,23 +472,33 @@ def _firewalld_marker_matches(zone: str, rule: str) -> bool:
     `org.fedoraproject.FirewallD1.config.info` = auth_admin_keep, only the
     runtime `.info` action is free) - so the presence CHECK itself raised the
     root password dialog on every app start, which is exactly what this
-    function exists to avoid. The marker can go stale if the rule is removed
+    function exists to avoid. The marker can go stale if a rule is removed
     behind our back; the failure direction is then a CLOSED port (safe), and
-    deleting the marker file or toggling Local Network re-runs the setup."""
+    deleting the marker file or toggling Local Network re-runs the setup.
+    A marker from before the rule sets ({"zone", "rule"}) reads as a set of one."""
     try:
         import json
         data = json.loads(_firewalld_marker_path().read_bytes().decode("utf-8"))
-        return data.get("zone") == zone and data.get("rule") == rule
+        if isinstance(data.get("rules"), list):
+            return sorted((str(z), str(r)) for z, r in data["rules"])
+        if data.get("zone") and data.get("rule"):
+            return [(str(data["zone"]), str(data["rule"]))]
     except Exception:
-        return False
+        pass
+    return None
 
 
-def _firewalld_marker_write(zone: str, rule: str) -> None:
+def _firewalld_marker_matches(rules: list) -> bool:
+    """True when this install already put exactly these rules in place."""
+    return _firewalld_marker_read() == sorted(rules)
+
+
+def _firewalld_marker_write(rules: list) -> None:
     try:
         import json
         p = _firewalld_marker_path()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(json.dumps({"zone": zone, "rule": rule}).encode("utf-8"))
+        p.write_bytes(json.dumps({"rules": [list(r) for r in sorted(rules)]}).encode("utf-8"))
     except Exception as e:
         logger.debug("firewalld: could not write the marker file: %s", e)
 
@@ -470,47 +520,56 @@ _elevation_argv = elevation_argv
 
 
 def _setup_firewall_linux_firewalld(port: int, port_frontend: int):
-    """Open ONLY the LAN access port (the integrated HTTPS proxy port, e.g. 8443) for the LAN subnet, via
-    a firewalld rich rule in the interface's zone. The backend (8001) and frontend (3000) bind 127.0.0.1
-    and are unreachable from the LAN, so they are deliberately NOT opened. Idempotent without asking
-    firewalld: a local marker file remembers what this install already set up, so the normal start runs
-    zero firewall-cmd config reads and can never raise a password dialog. Only a marker miss (first run,
-    or the subnet/port/zone changed) elevates - once, covering check and add together."""
-    subnet = _lan_subnet_cidr()
-    if not subnet:
-        logger.warning("firewalld: could not determine the LAN subnet; not opening any port")
-        return False
-    zone = _firewalld_zone()
-    rule = _firewalld_rich_rule(subnet, port)
-    if _firewalld_marker_matches(zone, rule):
-        logger.info("firewalld: LAN access already set up by this install (zone=%s, source=%s, port=%s)",
-                    zone, subnet, port)
+    """Open ONLY the access port (the integrated HTTPS proxy port, e.g. 8443) for the admitted networks,
+    via firewalld rich rules. The backend (8001) and frontend (3000) bind 127.0.0.1 and are unreachable
+    from the network, so they are deliberately NOT opened. Idempotent without asking firewalld: a local
+    marker file remembers the rules this install set up, so the normal start runs zero firewall-cmd
+    config reads and can never raise a password dialog. Only a change (first run, another subnet, port
+    or zone, an admin admitting or dropping a network) elevates - once, covering the checks, the adds
+    and the removal of the rules this install had set up and no longer wants."""
+    rules = _firewalld_rules(port)
+    previous = _firewalld_marker_read() or []
+    if previous == rules:
+        logger.info("firewalld: access already set up by this install (%d rule(s), port %s)", len(rules), port)
         return "present"
-    logger.warning("firewalld: no marker for this rule, requesting elevation (zone=%s rule=%s)", zone, rule)
-    # ONE elevation covers the check AND the add: query, add to runtime, add to
-    # permanent (survives reboot). Deliberate: the query runs INSIDE the elevated
-    # shell because running it unprivileged is itself an auth_admin polkit action
-    # on common distros - the check would cost the very password dialog it tries
-    # to avoid (live incident: a root dialog on every start for weeks while the
-    # permanent rule existed the whole time; every one of those passwords went
-    # into the CHECK, never into a change).
-    q = shlex.quote(rule)
-    z = shlex.quote(zone)
-    inner = (f"firewall-cmd --zone={z} --query-rich-rule={q} || "
-             f"{{ firewall-cmd --zone={z} --add-rich-rule={q} && "
-             f"firewall-cmd --permanent --zone={z} --add-rich-rule={q}; }}")
+    stale = [r for r in previous if r not in rules]
+    if not rules:
+        logger.warning("firewalld: no network is admitted besides this machine; opening nothing")
+    logger.warning("firewalld: the rules changed, requesting elevation (%d to ensure, %d to remove)",
+                   len(rules), len(stale))
+    # ONE elevation covers everything: each query rides INSIDE it together with
+    # the runtime and permanent adds. Deliberate: running the query unprivileged
+    # is itself an auth_admin polkit action on common distros - the check would
+    # cost the very password dialog it tries to avoid (live incident: a root
+    # dialog on every start for weeks while the permanent rule existed the whole
+    # time; every one of those passwords went into the CHECK, never into a change).
+    # Removing a rule that is already gone is not an error.
+    steps = []
+    for zone, rule in stale:
+        z, q = shlex.quote(zone), shlex.quote(rule)
+        steps.append(f"{{ firewall-cmd --zone={z} --remove-rich-rule={q}; "
+                     f"firewall-cmd --permanent --zone={z} --remove-rich-rule={q}; }} >/dev/null 2>&1 || true")
+    adds = []
+    for zone, rule in rules:
+        z, q = shlex.quote(zone), shlex.quote(rule)
+        adds.append(f"{{ firewall-cmd --zone={z} --query-rich-rule={q} || "
+                    f"{{ firewall-cmd --zone={z} --add-rich-rule={q} && "
+                    f"firewall-cmd --permanent --zone={z} --add-rich-rule={q}; }}; }}")
+    steps.append(" && ".join(adds) if adds else "true")
+    inner = "; ".join(steps)
     argv = _elevation_argv() + ['sh', '-c', inner]
     try:
-        logger.info("firewalld: opening port %s for %s in zone %s via %s", port, subnet, zone, argv[0])
+        logger.info("firewalld: applying %d rule(s) for port %s via %s", len(rules), port, argv[0])
         subprocess.run(argv, check=True, timeout=120)
-        logger.info("firewalld: LAN access ensured (zone=%s, source=%s, port=%s)", zone, subnet, port)
-        _firewalld_marker_write(zone, rule)
+        logger.info("firewalld: access ensured (port %s, sources %s)", port,
+                    sorted({r.split('source address="')[1].split('"')[0] for _, r in rules}))
+        _firewalld_marker_write(rules)
         return "created"
     except subprocess.TimeoutExpired:
         logger.error("firewalld: elevation timed out (password dialog dismissed?)")
         return False
     except subprocess.CalledProcessError as e:
-        logger.error("firewalld: could not add rich rule (dialog cancelled / no privileges?): %s", e)
+        logger.error("firewalld: could not apply the rich rules (dialog cancelled / no privileges?): %s", e)
         return False
     except Exception as e:
         logger.error("firewalld: setup error: %s", e)
@@ -536,8 +595,8 @@ def _setup_firewall_linux_iptables(port: int, port_frontend: int) -> bool:
                 '-m', 'comment', '--comment', f'VAF-localhost-{p}'
             ], check=True)
             
-            # Allow private ranges
-            for cidr in PRIVATE_CIDRS:
+            # Allow the admitted networks
+            for cidr in _sources():
                 subprocess.run([
                     'sudo', '-n','iptables', '-A', 'INPUT',
                     '-p', 'tcp', '--dport', str(p),
@@ -569,8 +628,8 @@ def _setup_firewall_linux_ufw(port: int, port_frontend: int) -> bool:
     
     try:
         for p in ports:
-            # Allow from private networks
-            for cidr in PRIVATE_CIDRS:
+            # Allow from the admitted networks
+            for cidr in _sources():
                 subprocess.run([
                     'sudo', '-n','ufw', 'allow',
                     'from', cidr,

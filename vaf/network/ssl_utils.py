@@ -284,6 +284,23 @@ def _cert_has_required_ip_sans(cert_path: Path, required_ips: set[str]) -> bool:
         return False
 
 
+def certificate_ip_addresses() -> Optional[set]:
+    """The IP addresses the certificate in use names, or None when there is none to read.
+
+    For the settings: an address that came up after the start (a VPN switched on later)
+    is admitted at once but enters the certificate only at the next start."""
+    try:
+        from vaf.core.config import Config
+        path = (Config.get("local_network_ssl_cert") or "").strip()
+        if not path or not os.path.isfile(path):
+            return None
+        cert = x509.load_pem_x509_certificate(Path(path).read_bytes())
+        san_ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        return {str(v) for v in san_ext.get_values_for_type(x509.IPAddress)}
+    except Exception:
+        return None
+
+
 def ca_certificate_path() -> Optional[Path]:
     """Where this machine's local CA lives, or None if it has none yet."""
     path = _get_ssl_dir() / "ca.pem"
@@ -352,13 +369,14 @@ def ensure_ssl_certificates() -> tuple[Optional[str], Optional[str]]:
     if not tls_enabled:
         return None, None
 
-    # Current required IP SANs (for LAN IP changes across restarts)
+    # Current required IP SANs: every address a device may reach this machine on, LAN
+    # and VPN alike, so a changed LAN address or a VPN that came up since the last
+    # start gets a certificate that names it. One that went away does not force a new
+    # one (a superset still verifies).
     required_ips: set[str] = {"127.0.0.1"}
     try:
-        from vaf.network.binding import get_local_network_ip
-        lan_ip = str(get_local_network_ip() or "").strip()
-        if lan_ip:
-            required_ips.add(lan_ip)
+        from vaf.network.binding import get_all_local_ips
+        required_ips.update(str(ip).strip() for _iface, ip in get_all_local_ips() if str(ip).strip())
     except Exception:
         pass
 

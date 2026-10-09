@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (356 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (358 keys).
 
 ## How configuration is set
 
@@ -353,6 +353,8 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `local_network_port` | `8001` | Backend API port. |
 | `local_network_port_frontend` | `3000` | Web UI port. |
 | `local_network_https_port` | `443` | HTTPS port. |
+| `local_network_allowed_networks` | `[]` | Admin-only. Private networks (CIDR) admitted besides the local ones, e.g. `100.64.0.0/10` for Tailscale/NetBird. Public networks, `0.0.0.0/0` and IPv6 are refused and reported by `vaf doctor`. Read on every request; a change re-applies the OS firewall, no restart. See [NETWORK_FEATURES.md](NETWORK_FEATURES.md#remote-access-over-a-vpn). |
+| `local_network_vpn_only` | `False` | Admin-only. Admit the networks of the detected VPN interfaces instead of the local networks (plus the list above); the home network is locked out. |
 | `local_network_tls_enabled` | `False` | Enable TLS. |
 | `local_network_ssl_cert` / `_ssl_key` | `""` | TLS cert/key paths (auto-generated if empty). |
 | `local_network_jwt_secret` | `""` | Managed; JWT signing secret. Held in the data keyring, not in this file: a value left here by an older install is adopted on first use and the plaintext entry is then blanked. |

@@ -133,17 +133,19 @@ def _to_int(value: str) -> Optional[int]:
 
 
 def _lan_summary(lan_enabled: Optional[bool], hostname: str) -> Dict[str, Any]:
-    """LAN reachability: the effective access port and the URLs clients can use.
+    """Network reachability: the effective access port and the URLs clients can use.
     The hostname URL is listed first - the auto-generated certificate carries the
-    hostname as a DNS SAN, so it survives DHCP address changes."""
+    hostname as a DNS SAN, so it survives DHCP address changes. Then one URL per
+    admitted LAN or VPN address (binding.access_addresses): an address whose devices
+    are not admitted is no access URL."""
     if not lan_enabled:
         return {"enabled": bool(lan_enabled), "access_port": None, "urls": []}
     try:
-        from vaf.network.binding import get_all_local_ips, resolve_lan_access_ports
+        from vaf.network.binding import access_addresses, resolve_lan_access_ports
         access_port, _ = resolve_lan_access_ports(wait_for_proxy=False)
         suffix = "" if access_port == 443 else f":{access_port}"
         urls = [f"https://{hostname}{suffix}"] if hostname else []
-        urls += [f"https://{ip}{suffix}" for _, ip in get_all_local_ips()]
+        urls += [f"https://{iface.ip}{suffix}" for iface in access_addresses()]
         return {"enabled": True, "access_port": access_port,
                 "urls": list(dict.fromkeys(urls))}
     except Exception:

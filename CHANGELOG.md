@@ -11,6 +11,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+
+- **`vaf doctor` no longer reports "login is not required" on every server.** The check
+  read a setting that does not exist, while network mode always demands a login. It now
+  reports what can really be wrong with the new VPN settings instead: an entry that is
+  ignored, or "VPN only" with no VPN up.
+
 ### Security
 
 - **In server mode, the local-network check now also holds for the API, not only for the

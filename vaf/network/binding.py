@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
-VAF Network Binding - Local Network IP Detection
+VAF Network Binding - who may reach this machine, and on which addresses
 
-Detects local network interfaces and provides IP validation utilities.
-Used to bind the server to a specific local network interface instead of 0.0.0.0
+Detects the machine's LAN and VPN interfaces and decides which client addresses are
+admitted in network mode. The decision has ONE source, `inbound_policy()`: the access
+check (`is_allowed_ip`), every OS firewall backend (`firewall_sources`) and the shown
+access addresses (`access_addresses`) all read it, so they cannot disagree.
 
 SECURITY: This is Layer 1 of the three-layer defense against internet exposure.
 """
@@ -13,14 +15,16 @@ SECURITY: This is Layer 1 of the three-layer defense against internet exposure.
 import socket
 import ipaddress
 import logging
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# RFC 1918 Private IP Ranges
+# RFC 1918: the local networks VAF admits by default. A home or office LAN, and the
+# subnets WireGuard and OpenVPN usually hand out, sit in them.
 PRIVATE_RANGES = [
     ipaddress.ip_network('10.0.0.0/8'),        # Class A Private
-    ipaddress.ip_network('172.16.0.0/12'),     # Class B Private  
+    ipaddress.ip_network('172.16.0.0/12'),     # Class B Private
     ipaddress.ip_network('192.168.0.0/16'),    # Class C Private
 ]
 
@@ -29,8 +33,17 @@ LOCALHOST_RANGES = [
     ipaddress.ip_network('127.0.0.0/8'),       # IPv4 Localhost
 ]
 
-# All allowed ranges for validation
-ALLOWED_RANGES = LOCALHOST_RANGES + PRIVATE_RANGES
+# Shared address space (carrier-grade NAT). Mesh VPNs hand out addresses from it:
+# Tailscale and Headscale per device, NetBird as one /10. Internet providers use it
+# behind their NAT too, so it is admitted only when an admin says so.
+CGNAT_RANGE = ipaddress.ip_network('100.64.0.0/10')
+
+# What an admin may add to the admitted networks: anything inside these. Deliberately
+# not 198.18.0.0/15, which the outbound classifier below counts as private because
+# fake-IP proxies resolve names into it (no other device sits there), and nothing
+# public: admitting a public network is the internet mode, which needs more than a
+# list entry (a real certificate, a door that turns scanners away).
+_ADMISSIBLE_RANGES = (*PRIVATE_RANGES, CGNAT_RANGE)
 
 
 def is_private_ip(ip: str) -> bool:
@@ -70,24 +83,258 @@ def is_localhost(ip: str) -> bool:
 
 
 def is_allowed_ip(ip: str) -> bool:
+    """Whether a client at `ip` may reach VAF in network mode.
+
+    The main validation function: the IP check middleware and the WebSocket handshake
+    ask it. The admitted networks come from `inbound_policy()`, so an admin's VPN
+    settings take effect on the next request, without a restart. When the settings
+    cannot be read the answer falls back to the long-standing default (this machine
+    and the RFC 1918 networks), never to anything wider.
     """
-    Check if an IP address is allowed (localhost or private).
-    
-    This is the main validation function used by the middleware.
-    
-    Args:
-        ip: IP address string
-        
-    Returns:
-        True if IP is allowed for local network access
-    """
+    if ip in ('localhost', '::1'):
+        return True
     try:
-        if ip in ('localhost', '::1'):
-            return True
         addr = ipaddress.ip_address(ip)
-        return any(addr in net for net in ALLOWED_RANGES)
     except ValueError:
         return False
+    try:
+        networks = inbound_policy().networks
+    except Exception as e:
+        logger.warning("inbound policy unreadable, using the local networks only: %s", e)
+        networks = (*LOCALHOST_RANGES, *PRIVATE_RANGES)
+    return any(addr in net for net in networks)
+
+
+# ---------------------------------------------------------------------------
+# This machine's interfaces, and which networks are admitted
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class LocalInterface:
+    """One address of this machine that another device could reach it on."""
+    name: str        # the interface name the OS reports ("enp3s0", "wg0", "Tailscale")
+    ip: str
+    network: str     # the network its devices come from, as CIDR
+    kind: str        # "lan" or "vpn"
+
+
+# VPN interfaces are told apart by name. Prefixes for the Unix names (wg0, wt0 is
+# NetBird, tun0/tap0 OpenVPN, utun3 every VPN on macOS, zt* ZeroTier), words for the
+# names Windows shows ("Tailscale", "OpenVPN Wintun"). Named boundary: Windows names a
+# WireGuard adapter after its tunnel file ("home"), which reads as a LAN; outside
+# "VPN only" that changes nothing (its subnet is private anyway), and in "VPN only"
+# its network is added by hand.
+_VPN_NAME_PREFIXES = ("wg", "wt", "tun", "tap", "utun", "zt", "ppp", "ipsec", "nordlynx",
+                      "tailscale")
+_VPN_NAME_WORDS = ("tailscale", "wireguard", "openvpn", "wintun", "tap-windows", "zerotier",
+                   "netbird")
+# Bridges of containers and virtual machines on this host: nobody connects from them.
+_SKIPPED_NAME_PREFIXES = ("docker", "br-", "veth", "virbr", "cni", "flannel", "podman", "lxc",
+                          "lxd", "vmnet", "vboxnet", "bridge", "kube", "cali", "weave")
+_SKIPPED_NAME_WORDS = ("(wsl", "default switch")
+
+
+def _interface_kind(name: str) -> Optional[str]:
+    """"vpn", "lan", or None for an interface nobody connects from."""
+    lowered = (name or "").strip().lower()
+    if not lowered or lowered == "lo" or lowered.startswith("loopback"):
+        return None
+    if lowered.startswith(_SKIPPED_NAME_PREFIXES) or any(w in lowered for w in _SKIPPED_NAME_WORDS):
+        return None
+    if lowered.startswith(_VPN_NAME_PREFIXES) or any(w in lowered for w in _VPN_NAME_WORDS):
+        return "vpn"
+    return "lan"
+
+
+def _interface_network(addr: ipaddress.IPv4Address, netmask: Optional[str]) -> str:
+    """The network the devices on an interface come from.
+
+    Mesh VPNs give each device a single address (/32) and route the rest of 100.64/10
+    to it, so the interface's own mask names nobody; their network is the whole block.
+    Elsewhere the mask is the truth. An interface without one is just its address.
+    """
+    if addr in CGNAT_RANGE:
+        return str(CGNAT_RANGE)
+    if netmask:
+        try:
+            return str(ipaddress.ip_network(f"{addr}/{netmask}", strict=False))
+        except ValueError:
+            pass
+    return f"{addr}/32"
+
+
+def local_interfaces() -> List[LocalInterface]:
+    """This machine's LAN and VPN addresses, in the order the OS reports them.
+
+    IPv4 only, interfaces that are up, addresses inside a private range or the
+    shared address space. Loopback, container bridges, link-local and public
+    addresses are left out: the first two never carry another device, and a public
+    address is the internet mode. psutil is a declared dependency; if it fails the
+    list is empty and the callers fall back to what they did before.
+    """
+    try:
+        import psutil
+        addresses = psutil.net_if_addrs()
+        stats = psutil.net_if_stats()
+    except Exception as e:
+        logger.debug("interface listing unavailable: %s", e)
+        return []
+    found: List[LocalInterface] = []
+    for name, entries in addresses.items():
+        state = stats.get(name)
+        if state is not None and not state.isup:
+            continue
+        kind = _interface_kind(name)
+        if kind is None:
+            continue
+        for entry in entries:
+            if getattr(entry, "family", None) != socket.AF_INET or not entry.address:
+                continue
+            try:
+                addr = ipaddress.ip_address(entry.address)
+            except ValueError:
+                continue
+            if not any(addr in net for net in _ADMISSIBLE_RANGES):
+                continue
+            entry_kind = "vpn" if (kind == "vpn" or addr in CGNAT_RANGE) else "lan"
+            found.append(LocalInterface(name=name, ip=str(addr),
+                                        network=_interface_network(addr, entry.netmask),
+                                        kind=entry_kind))
+    return found
+
+
+# Why an entry of the admitted-networks setting was not taken. The codes travel to the
+# web UI, which words them itself; the texts are for the CLI and the logs.
+REFUSAL_REASONS = {
+    "invalid": "not an IPv4 address or network",
+    "ipv6": "IPv6 is not served: the access port listens on IPv4 only",
+    "everything": "this would admit every address, which is the internet",
+    "loopback": "this machine is always admitted",
+    "not_private": "not a private network; admitting a public network is the internet mode",
+}
+
+
+def _setting_list(raw) -> List[str]:
+    """A list setting as strings, whether stored as a list or typed as text."""
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        return [str(v) for v in raw]
+    return str(raw).replace(",", " ").split()
+
+
+def normalize_allowed_networks(values) -> Tuple[List[str], List[Tuple[str, str]]]:
+    """Sort an admin's network entries into the ones admitted and the ones refused.
+
+    An entry is an IPv4 address (taken as /32) or a network; host bits are dropped,
+    so "10.8.0.7/24" reads as 10.8.0.0/24. Taken only when it lies wholly inside a
+    private range or the shared address space. Returns (normalized entries without
+    duplicates, [(entry, reason code)]) with the codes of `REFUSAL_REASONS`.
+    """
+    taken: List[str] = []
+    refused: List[Tuple[str, str]] = []
+    for raw in _setting_list(values):
+        value = raw.strip()
+        if not value:
+            continue
+        try:
+            net = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            refused.append((value, "invalid"))
+            continue
+        if net.version != 4:
+            refused.append((value, "ipv6"))
+        elif net.prefixlen == 0:
+            refused.append((value, "everything"))
+        elif any(net.subnet_of(n) for n in LOCALHOST_RANGES):
+            refused.append((value, "loopback"))
+        elif not any(net.subnet_of(n) for n in _ADMISSIBLE_RANGES):
+            refused.append((value, "not_private"))
+        elif str(net) not in taken:
+            taken.append(str(net))
+    return taken, refused
+
+
+@dataclass(frozen=True)
+class InboundPolicy:
+    """Which client networks are admitted, and why."""
+    vpn_only: bool
+    allowed: Tuple[str, ...]                  # the admin's extra networks, normalized
+    refused: Tuple[Tuple[str, str], ...]      # entries that were not taken, with the reason
+    vpn: Tuple[str, ...]                      # networks of the detected VPN interfaces
+    networks: Tuple[ipaddress.IPv4Network, ...]   # what is admitted, this machine included
+
+
+def _flag(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def inbound_policy(cfg: Optional[dict] = None, *, detect_vpn: Optional[bool] = None) -> InboundPolicy:
+    """The one answer to "which client networks are admitted".
+
+    Always this machine. Then either the local networks (RFC 1918), or with
+    `local_network_vpn_only` the networks of the detected VPN interfaces instead -
+    none detected means nobody but this machine. Plus the admin's
+    `local_network_allowed_networks`, after `normalize_allowed_networks`.
+
+    `cfg` is a loaded configuration (read when omitted). The interfaces are only
+    listed when "VPN only" needs them, or when `detect_vpn` asks for them for a
+    display, so the per-request check costs no interface scan otherwise.
+    """
+    if cfg is None:
+        from vaf.core.config import Config
+        cfg = Config.load()
+    vpn_only = _flag(cfg.get("local_network_vpn_only", False))
+    allowed, refused = normalize_allowed_networks(cfg.get("local_network_allowed_networks"))
+    vpn: List[str] = []
+    if vpn_only or detect_vpn:
+        for iface in local_interfaces():
+            if iface.kind == "vpn" and iface.network not in vpn:
+                vpn.append(iface.network)
+    networks = list(LOCALHOST_RANGES)
+    if vpn_only:
+        networks += [ipaddress.ip_network(n) for n in vpn]
+    else:
+        networks += PRIVATE_RANGES
+    networks += [ipaddress.ip_network(n) for n in allowed]
+    return InboundPolicy(vpn_only=vpn_only, allowed=tuple(allowed), refused=tuple(refused),
+                         vpn=tuple(vpn), networks=tuple(networks))
+
+
+def _without_contained(cidrs: List[str]) -> List[str]:
+    """Drop duplicates and every network that lies inside another one of the list."""
+    nets = []
+    for c in cidrs:
+        net = ipaddress.ip_network(c)
+        if net not in nets:
+            nets.append(net)
+    kept = [n for n in nets if not any(n != o and n.subnet_of(o) for o in nets)]
+    return [str(n) for n in sorted(kept, key=lambda n: (int(n.network_address), n.prefixlen))]
+
+
+def firewall_sources(*, narrow_lan: bool = False, cfg: Optional[dict] = None) -> List[str]:
+    """The source networks the OS firewall opens the access port for.
+
+    The same decision as `is_allowed_ip`, without this machine (every firewall admits
+    its own loopback). With `narrow_lan` the local part is the subnets this machine
+    sits on instead of all of RFC 1918 - firewalld has always opened only those.
+    A detected VPN network is opened when it is admitted, so a WireGuard client is
+    not stopped by the firewall that its address already passes in the app.
+    """
+    policy = inbound_policy(cfg, detect_vpn=True)
+    if policy.vpn_only:
+        sources = list(policy.vpn)
+    else:
+        if narrow_lan:
+            sources = [i.network for i in local_interfaces() if i.kind == "lan"]
+        else:
+            sources = [str(n) for n in PRIVATE_RANGES]
+        sources += [n for n in policy.vpn
+                    if any(ipaddress.ip_network(n).subnet_of(a) for a in policy.networks)]
+    sources += list(policy.allowed)
+    return _without_contained(sources)
 
 
 def effective_client_ip(peer_ip: str | None, forwarded_for: str | None) -> str:
@@ -702,132 +949,80 @@ def lan_ip_is_dhcp() -> Optional[bool]:
     return None
 
 
-def get_all_local_ips() -> List[Tuple[str, str]]:
-    """
-    Get all local network IP addresses.
-    
-    Returns:
-        List of (interface_name, ip_address) tuples for all private IPs
-    """
-    local_ips = []
-    
+def _default_route_ip() -> Optional[str]:
+    """The source address of the default route. A UDP connect sends no packet."""
     try:
-        # Method 1: Try netifaces if available (most reliable)
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            import netifaces
-            for iface in netifaces.interfaces():
-                addrs = netifaces.ifaddresses(iface).get(netifaces.AF_INET, [])
-                for addr in addrs:
-                    ip = addr.get('addr', '')
-                    if ip and is_private_ip(ip):
-                        local_ips.append((iface, ip))
-            if local_ips:
-                return local_ips
-        except ImportError:
-            logger.debug("netifaces not available, using fallback method")
-        
-        # Method 2: Use socket to find IPs (fallback)
-        # This connects to an external address but doesn't send any data
-        hostname = socket.gethostname()
-        
-        # Try to get all addresses for the hostname
-        try:
-            for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
-                ip = info[4][0]
-                if is_private_ip(ip):
-                    local_ips.append(('unknown', ip))
-        except socket.gaierror:
-            pass
-        
-        # Method 3: Connect trick to find the default route IP
-        if not local_ips:
-            try:
-                # This doesn't actually send any packets
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.settimeout(0.1)
-                # Use a public IP - no actual connection is made
-                s.connect(('8.8.8.8', 80))
-                ip = s.getsockname()[0]
-                s.close()
-                if is_private_ip(ip):
-                    local_ips.append(('default', ip))
-            except Exception:
-                pass
-        
-        return local_ips
-        
-    except Exception as e:
-        logger.error(f"Failed to get local IPs: {e}")
-        return []
+            s.settimeout(0.1)
+            s.connect(('8.8.8.8', 80))
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except Exception:
+        return None
+
+
+def get_all_local_ips() -> List[Tuple[str, str]]:
+    """Every address another device could reach this machine on: (interface, ip).
+
+    The LAN and VPN interfaces of `local_interfaces()`. Certificates carry all of
+    them, so an admin who admits a VPN network later needs no new certificate. When
+    the interface listing yields nothing, the default route's source address stands
+    in, as long as it is a local one.
+    """
+    found = [(iface.name, iface.ip) for iface in local_interfaces()]
+    if found:
+        return found
+    ip = _default_route_ip()
+    return [('default', ip)] if ip and is_private_ip(ip) else []
+
+
+# Which LAN interface counts as THE local address when there are several.
+_LAN_PREFERENCE = ('eth', 'en', 'wlan', 'wifi', 'lan')
+
+
+def _preference(iface: LocalInterface) -> Tuple[int, int, str]:
+    lowered = iface.name.lower()
+    rank = next((i for i, p in enumerate(_LAN_PREFERENCE) if p in lowered), len(_LAN_PREFERENCE))
+    return (0 if iface.kind == "lan" else 1, rank, iface.name)
 
 
 def get_local_network_ip() -> str:
-    """
-    Detect the primary local network IP address.
-    
-    This is the IP that should be used for binding when local_network_enabled=True.
-    
-    Returns:
-        Local network IP address (e.g., "192.168.1.100")
-        
+    """This machine's address on its local network (a LAN interface, never a VPN).
+
+    The DHCP warning, the firewall's LAN subnet and room invitations are about the
+    local network, so they use this. A device that only has VPN interfaces (a rented
+    server) has none: `access_addresses()` is the call for "where can a device reach
+    me".
+
     Raises:
         RuntimeError: If no local network interface is found
     """
-    local_ips = get_all_local_ips()
-    
-    if not local_ips:
-        raise RuntimeError(
-            "No local network interface found. "
-            "Please ensure you are connected to a local network (WiFi or Ethernet)."
-        )
-    
-    # Prefer certain interface patterns
-    preference_order = ['eth', 'en', 'wlan', 'wifi', 'lan']
-    
-    # Sort by preference
-    def sort_key(item):
-        iface, ip = item
-        iface_lower = iface.lower()
-        for i, pref in enumerate(preference_order):
-            if pref in iface_lower:
-                return (i, iface)
-        return (len(preference_order), iface)
-    
-    sorted_ips = sorted(local_ips, key=sort_key)
-    
-    selected_ip = sorted_ips[0][1]
-    logger.info(f"Selected local network IP: {selected_ip}")
-    
-    return selected_ip
+    lan = sorted((i for i in local_interfaces() if i.kind == "lan"), key=_preference)
+    if lan:
+        return lan[0].ip
+    ip = _default_route_ip()
+    if ip and is_private_ip(ip):
+        return ip
+    raise RuntimeError(
+        "No local network interface found. "
+        "Please ensure you are connected to a local network (WiFi or Ethernet)."
+    )
 
 
-def get_local_network_info() -> dict:
+def access_addresses(cfg: Optional[dict] = None) -> List[LocalInterface]:
+    """The interfaces whose devices are admitted right now, LAN first.
+
+    An interface counts when its own address passes the admission (`is_allowed_ip`
+    with the same policy): a LAN address in "VPN only" does not, a Tailscale address
+    only once its network is admitted. This is what the settings, `vaf top` and
+    `vaf server status` show as access URLs.
     """
-    Get comprehensive local network information.
-    
-    Returns:
-        Dict with network info for display in UI
-    """
-    import platform as plt
-    
-    try:
-        hostname = socket.gethostname()
-    except Exception:
-        hostname = "unknown"
-    
-    local_ips = get_all_local_ips()
-    
-    try:
-        primary_ip = get_local_network_ip()
-    except RuntimeError:
-        primary_ip = None
-    
-    return {
-        "hostname": hostname,
-        "platform": plt.system(),
-        "primary_ip": primary_ip,
-        "all_interfaces": [
-            {"interface": iface, "ip": ip}
-            for iface, ip in local_ips
-        ]
-    }
+    policy = inbound_policy(cfg)
+    admitted = []
+    for iface in local_interfaces():
+        addr = ipaddress.ip_address(iface.ip)
+        if any(addr in net for net in policy.networks):
+            admitted.append(iface)
+    return sorted(admitted, key=_preference)

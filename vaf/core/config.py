@@ -14,6 +14,22 @@ from vaf.core.channels import CHAT_CHANNELS as _CHAT_CHANNELS
 # Single source of truth for legacy local-admin scope (before bootstrap sets real admin UUID)
 LEGACY_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
 
+# Network settings whose change re-binds the servers: the tray restarts frontend, backend
+# and proxy for them (vaf/tray.py on_config_changed and its file poll read this tuple).
+NETWORK_RESTART_KEYS = (
+    "local_network_enabled",
+    "local_network_tls_enabled",
+    "local_network_https_port",
+    "local_network_port",
+    "local_network_port_frontend",
+)
+# Network settings that change WHO is admitted. The access check reads them on every
+# request; only the OS firewall has to be re-applied, so no restart.
+NETWORK_ADMISSION_KEYS = (
+    "local_network_allowed_networks",
+    "local_network_vpn_only",
+)
+
 
 # ── Single source of truth for per-provider API models ────────────────────────
 # `default` = used when the user hasn't picked a model; `fallback` = the static
@@ -678,6 +694,8 @@ class Config:
         "local_network_ssl_cert": "",                             # Path to PEM certificate file (e.g. cert.pem)
         "local_network_ssl_key": "",                              # Path to PEM private key file (e.g. key.pem)
         "local_network_https_port": 443,                           # Port for integrated HTTPS proxy (no Nginx); 8443 if 443 needs admin
+        "local_network_allowed_networks": [],                      # Admin-only. Extra private networks (CIDR) admitted besides the local ones, e.g. 100.64.0.0/10 for Tailscale/NetBird; public networks are refused (vaf/network/binding.py inbound_policy)
+        "local_network_vpn_only": False,                           # Admin-only. Admit the networks of the detected VPN interfaces instead of the local networks (plus the list above)
         
         # Docker Settings (Desktop Mode only)
         # Note: CLI mode (vaf run) always runs natively with full host access
@@ -1714,11 +1732,8 @@ class Config:
         # Detect and notify changes for critical keys
         # local_network_* for server restart; provider for tray VRAM load/unload; model for llama-server reload
         critical_keys = [
-            "local_network_enabled",
-            "local_network_tls_enabled",
-            "local_network_https_port",
-            "local_network_port",
-            "local_network_port_frontend",
+            *NETWORK_RESTART_KEYS,
+            *NETWORK_ADMISSION_KEYS,
             "provider",
             "n_ctx",
             "gpu_layers",

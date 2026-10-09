@@ -97,7 +97,7 @@ import threading
 import signal
 import platform
 import webbrowser
-from vaf.core.config import Config
+from vaf.core.config import Config, NETWORK_ADMISSION_KEYS, NETWORK_RESTART_KEYS
 from vaf.core.log_helper import get_dated_log_path
 from vaf.core.backend import ServerManager
 from vaf.core.tray_context import TrayContext
@@ -1395,8 +1395,21 @@ def on_config_changed(key, value, old_value=None):
     # Network binding changes → restart uvicorn + frontend.
     # Enabling LAN flips several of these keys in one save; _schedule_network_restart coalesces the burst
     # into a SINGLE serialized restart (no concurrent teardown of the frontend singleton / uvicorn).
-    elif key in ["local_network_enabled", "local_network_port", "local_network_port_frontend", "local_network_tls_enabled", "local_network_https_port"]:
+    elif key in NETWORK_RESTART_KEYS:
         _schedule_network_restart(key, value)
+
+    # Who is admitted changed (an admin's VPN settings). The access check reads the
+    # settings on every request, so nothing restarts; only the OS firewall is re-applied
+    # for the new networks. Off the observer's thread: it may wait for a password dialog.
+    elif key in NETWORK_ADMISSION_KEYS:
+        def _reapply_firewall():
+            time.sleep(0.5)  # let the config save finish
+            try:
+                from vaf.network.firewall import apply_lan_firewall
+                apply_lan_firewall(log=lambda msg: log("Tray", msg))
+            except Exception as e:
+                log("Tray", f"Firewall re-apply error: {e}")
+        threading.Thread(target=_reapply_firewall, daemon=True, name="vaf-firewall-reapply").start()
 
     # Provider or API key changed -> apply to the already-running agents live (no VAF
     # restart), so finishing onboarding with a cloud key (or switching provider in
@@ -1422,15 +1435,22 @@ def on_config_changed(key, value, old_value=None):
 # Last known network config (read from file by poll thread) so CLI changes in another process are picked up
 _last_network_config = {}
 
+def _seed_network_config():
+    """Remember the network settings as they are at start, so the poll reports only changes."""
+    cfg = Config.load()
+    for key in (*NETWORK_RESTART_KEYS, *NETWORK_ADMISSION_KEYS):
+        _last_network_config[key] = cfg.get(key, Config.DEFAULTS.get(key))
+
+
 def _config_file_poll_loop():
-    """Poll config file every 25s; if local_network_* changed (e.g. by 'vaf server on' in CLI), trigger restart."""
-    defaults = {"local_network_enabled": False, "local_network_port": 8001, "local_network_port_frontend": 3000, "local_network_tls_enabled": False, "local_network_https_port": 443}
+    """Poll config file every 25s; if a network setting changed in another process (e.g. 'vaf server on'
+    or 'vaf server networks allow' in the CLI), hand it to on_config_changed like a save in this one."""
     while True:
         time.sleep(25)
         try:
             cfg = Config.load()
-            for key in ["local_network_enabled", "local_network_port", "local_network_port_frontend", "local_network_tls_enabled", "local_network_https_port"]:
-                new_val = cfg.get(key, defaults.get(key))
+            for key in (*NETWORK_RESTART_KEYS, *NETWORK_ADMISSION_KEYS):
+                new_val = cfg.get(key, Config.DEFAULTS.get(key))
                 old_val = _last_network_config.get(key)
                 if new_val != old_val:
                     on_config_changed(key, new_val, old_val)
@@ -1483,11 +1503,7 @@ def run_headless():
     
     # Register config observer
     Config.add_observer(on_config_changed)
-    _last_network_config["local_network_enabled"] = Config.get("local_network_enabled", False)
-    _last_network_config["local_network_port"] = Config.get("local_network_port", 8001)
-    _last_network_config["local_network_port_frontend"] = Config.get("local_network_port_frontend", 3000)
-    _last_network_config["local_network_tls_enabled"] = Config.get("local_network_tls_enabled", False)
-    _last_network_config["local_network_https_port"] = Config.get("local_network_https_port", 443)
+    _seed_network_config()
     threading.Thread(target=_config_file_poll_loop, daemon=True).start()
 
     # Singleton Check
@@ -1568,11 +1584,7 @@ def run_app():
     # Register config observer
     Config.add_observer(on_config_changed)
     # So CLI "vaf server on" (other process) is picked up: poll config file every 25s
-    _last_network_config["local_network_enabled"] = Config.get("local_network_enabled", False)
-    _last_network_config["local_network_port"] = Config.get("local_network_port", 8001)
-    _last_network_config["local_network_port_frontend"] = Config.get("local_network_port_frontend", 3000)
-    _last_network_config["local_network_tls_enabled"] = Config.get("local_network_tls_enabled", False)
-    _last_network_config["local_network_https_port"] = Config.get("local_network_https_port", 443)
+    _seed_network_config()
     threading.Thread(target=_config_file_poll_loop, daemon=True).start()
 
     print("[Tray] run_app called (Pystray)")

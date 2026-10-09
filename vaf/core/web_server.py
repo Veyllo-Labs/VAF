@@ -1757,24 +1757,8 @@ async def startup_event():
     if Config.get("local_network_enabled", False) and Config.get("local_network_firewall_enabled", True):
         def _setup_firewall_bg():
             try:
-                from vaf.network.firewall import setup_firewall, register_cleanup_on_exit
-                from vaf.network.binding import resolve_lan_access_ports
-                # In-process caller: wait for the proxy to report the port it ACTUALLY
-                # bound (443->8443 fallback) instead of trusting the configured value.
-                port, port_frontend = resolve_lan_access_ports(wait_for_proxy=True)
-
-                success = setup_firewall(port, port_frontend)
-                if success == "present":
-                    # No elevation ran: the rule was already active, or the twin
-                    # lifespans of TLS mode already attempted this start. The old
-                    # single "created" message hid this difference, which made a
-                    # nightly password dialog unattributable from the log.
-                    log("WebServer", f"Firewall rule already in place for port {port} - no password dialog needed")
-                elif success:
-                    register_cleanup_on_exit()
-                    log("WebServer", f"Firewall rules created for ports {port}, {port_frontend}")
-                else:
-                    log("WebServer", f"Firewall setup skipped for ports {port}, {port_frontend} - needs elevated privileges (no passwordless sudo). Open the port manually or use the in-app firewall step.")
+                from vaf.network.firewall import apply_lan_firewall
+                apply_lan_firewall(log=lambda msg: log("WebServer", msg))
             except Exception as e:
                 log("WebServer", f"Firewall setup error: {e}")
         import threading as _threading

@@ -15,6 +15,27 @@ def _finding(severity: str, code: str, message: str) -> Dict[str, str]:
     return {"severity": severity, "code": code, "message": message}
 
 
+def _admission_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
+    """What is wrong with the admitted networks (vaf/network/binding.py inbound_policy)."""
+    try:
+        from vaf.network.binding import REFUSAL_REASONS, inbound_policy
+        policy = inbound_policy(cfg)
+    except Exception:
+        return []
+    found: List[Dict[str, str]] = []
+    if policy.refused:
+        listed = "; ".join(f"{value} ({REFUSAL_REASONS.get(code, code)})"
+                           for value, code in policy.refused)
+        found.append(_finding(
+            "medium", "network_allowed_entries_ignored",
+            f"Admitted networks contain entries that are ignored: {listed}."))
+    if policy.vpn_only and not policy.vpn and not policy.allowed:
+        found.append(_finding(
+            "low", "network_vpn_only_without_vpn",
+            "\"VPN only\" is on but no VPN interface is up, so no other device can connect."))
+    return found
+
+
 def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict[str, str]]:
     """
     Return security findings derived from config.
@@ -28,7 +49,6 @@ def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict
     if network_enabled:
         tls_enabled = bool(cfg.get("local_network_tls_enabled", False))
         firewall_enabled = bool(cfg.get("local_network_firewall_enabled", False))
-        require_login = bool(cfg.get("local_network_require_login", False))
         require_2fa = bool(cfg.get("local_network_require_2fa", False))
 
         if not tls_enabled:
@@ -47,14 +67,6 @@ def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict
                     "Local network mode is enabled but firewall checks are disabled.",
                 )
             )
-        if not require_login:
-            findings.append(
-                _finding(
-                    "high",
-                    "network_login_not_required",
-                    "Local network mode is enabled but login is not required.",
-                )
-            )
         if not require_2fa:
             findings.append(
                 _finding(
@@ -63,6 +75,11 @@ def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict
                     "Local network mode is enabled but 2FA is not required.",
                 )
             )
+        # No check for "login not required": network mode has no such switch. The auth
+        # middleware demands a token from every network client unconditionally, and the
+        # check that stood here read a key registered nowhere, so it reported HIGH on
+        # every server.
+        findings.extend(_admission_findings(cfg))
 
     # The one state that means "somebody the owner never decided about is answered": the
     # channel switch. The expert modes this used to warn about are gone (they said the same

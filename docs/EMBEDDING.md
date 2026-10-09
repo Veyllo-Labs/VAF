@@ -601,6 +601,21 @@ What an embedded agent can and cannot do on the host - the short version of
   or widens one call; `trusted_host` lets one host an administrator registered
   be on this machine or the LAN. A tool YOU write that takes a URL from the
   model needs the same: use the session instead of `requests.get`.
+- **Serving the agent to other devices: ask the same two functions.** If you put
+  an HTTP door of your own in front of an agent, judge each request the way VAF's
+  server does, or you rebuild the mistake it made: behind a reverse proxy the
+  socket peer is the proxy, so "is this client local" must be asked of the real
+  client. `vaf.network.binding.connection_client_ip(conn)` takes a Starlette
+  `Request` or `WebSocket` (a pure ASGI middleware wraps its scope in
+  `HTTPConnection(scope)`), and `is_allowed_ip(ip)` answers with the same policy
+  VAF's own door and firewall use: this machine, the local networks, and what an
+  admin admitted (`local_network_allowed_networks`, `local_network_vpn_only`).
+  `inbound_policy()` returns that policy whole, `firewall_sources()` the networks
+  an OS firewall should open, `local_interfaces()` this machine's LAN and VPN
+  addresses. These live in `vaf.network.binding`, not on the `vaf` facade:
+  there is one HTTP door today, the same named boundary as the origin guard
+  ([NETWORK_FEATURES.md](setup/NETWORK_FEATURES.md#remote-access-over-a-vpn),
+  [vaf/network/README.md](../vaf/network/README.md)).
 - **Admin-only tools stay off - but a bare agent still acts as the machine
   owner.** Without `user_scope`, an embedded agent has no admin identity
   (`admin_only` tools are blocked), yet in local mode its memory tools

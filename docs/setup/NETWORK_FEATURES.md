@@ -37,10 +37,10 @@ Implementation: `ForeignOriginGuard` in `vaf/auth/middleware.py`, the decision i
 
 When "Local Network Hosting" is enabled, VAF automatically configures the OS firewall (Windows Firewall, macOS pf, or Linux).
 
-On **Linux**, VAF **prefers firewalld** when it is running. It opens **only the effective proxy port** (e.g. 8443) for the **LAN subnet** via a rich rule (e.g. `source address="192.168.2.0/24" port="8443" protocol="tcp" accept`) in the interface's actual zone - not a blanket world-open. The backend (8001) and frontend (3000) bind `127.0.0.1` and are deliberately **not** opened (they are unreachable from the LAN). Elevation uses **pkexec** in a desktop session (a native polkit password dialog appears when hosting is enabled) and `sudo -n` headless/server (non-interactive, fails fast, never hangs on a TTY). Firewall setup runs off the startup critical path (daemon thread) so it never blocks startup. Idempotence deliberately does NOT ask firewalld: an unprivileged `firewall-cmd --query-rich-rule` is a polkit `auth_admin` action on common distros (the firewalld `config.info` action; only the runtime `info` action is free), so a presence check would itself raise the root password dialog on every start. Even `firewall-cmd --state` is admin-gated there (measured: polkit action `FirewallD1.config`), so the "is firewalld running" probe asks `systemctl is-active` instead - the only firewall-cmd calls a normal start may make are the two free zone lookups. Instead, a local marker file (`~/.vaf/firewalld_lan.json`) remembers what this install already set up: on a marker hit the start runs zero firewall-cmd config reads and can never prompt. Only a marker miss (first run, or the port/subnet/zone changed) elevates - exactly once, with the check and both adds (runtime + permanent) inside the same elevated shell. The setup also runs **at most once per app process** (in TLS mode the same app runs two server lifespans; without that claim a cancelled dialog would chain straight into the twin's dialog). If the rule is ever removed behind VAF's back the marker goes stale and the port stays closed (the safe direction); delete the marker file or toggle Local Network to re-run the setup. `iptables`/`ufw` remain as the fallback when firewalld is not running.
+On **Linux**, VAF **prefers firewalld** when it is running. It opens **only the effective proxy port** (e.g. 8443) for the **admitted networks** via rich rules (e.g. `source address="192.168.2.0/24" port="8443" protocol="tcp" accept`) - not a blanket world-open. The sources are the LAN subnets this machine sits on (never all of RFC 1918), the admitted VPN networks and the networks an admin added (see [Remote access over a VPN](#remote-access-over-a-vpn)); each gets one rule in the zone of every LAN and VPN interface and in the default zone, because a fresh WireGuard or Tailscale interface is usually in no zone and its packets are judged in the default one. The backend (8001) and frontend (3000) bind `127.0.0.1` and are deliberately **not** opened (they are unreachable from the LAN). Elevation uses **pkexec** in a desktop session (a native polkit password dialog appears when hosting is enabled) and `sudo -n` headless/server (non-interactive, fails fast, never hangs on a TTY). Firewall setup runs off the startup critical path (daemon thread) so it never blocks startup. Idempotence deliberately does NOT ask firewalld: an unprivileged `firewall-cmd --query-rich-rule` is a polkit `auth_admin` action on common distros (the firewalld `config.info` action; only the runtime `info` action is free), so a presence check would itself raise the root password dialog on every start. Even `firewall-cmd --state` is admin-gated there (measured: polkit action `FirewallD1.config`), so the "is firewalld running" probe asks `systemctl is-active` instead - the only firewall-cmd calls a normal start may make are the two free zone lookups. Instead, a local marker file (`~/.vaf/firewalld_lan.json`) remembers the set of rules this install set up: on a marker hit the start runs zero firewall-cmd config reads and can never prompt. Only a change (first run, another port, subnet or zone, an admin admitting or dropping a network) elevates - exactly once, with each check and both adds (runtime + permanent) inside the same elevated shell, together with the removal of the rules this install had set up and no longer wants. A marker from before the rule sets (one zone, one rule) still counts, so an update alone raises no dialog. The setup also runs **at most once per app process** (in TLS mode the same app runs two server lifespans; without that claim a cancelled dialog would chain straight into the twin's dialog). If the rule is ever removed behind VAF's back the marker goes stale and the port stays closed (the safe direction); delete the marker file or toggle Local Network to re-run the setup. `iptables`/`ufw` remain as the fallback when firewalld is not running.
 
 On other platforms, the firewall is configured to:
-- **Allow**: Traffic from RFC 1918 Private IP ranges (`192.168.0.0/16`, `10.0.0.0/8`, `172.16.0.0/12`).
+- **Allow**: Traffic from the admitted networks: by default the RFC 1918 ranges (`192.168.0.0/16`, `10.0.0.0/8`, `172.16.0.0/12`), with "VPN only" the VPN networks instead, plus the networks an admin added. The list comes from `firewall_sources()` in `vaf/network/binding.py`, the same decision the IP check makes; no backend keeps a list of its own.
 - **Allow**: Localhost traffic (`127.0.0.0/8`, `::1`).
 - **Block**: All other incoming traffic to VAF ports.
 
@@ -58,7 +58,7 @@ Every HTTP request passes through `IPValidationMiddleware` which validates the c
 
 - Rejects any non-private IP with HTTP 403 (recorded as `ip_blocked` with the device's address)
 - Judges the REAL client, not the socket peer: the integrated proxy relays every device over loopback, so the peer is `127.0.0.1` for all of them. The address comes from `connection_client_ip` in `vaf/network/binding.py`, which honors the proxy's `X-Forwarded-For` only when the peer is loopback. This check used to read the peer and therefore passed every relayed request, a public address on the proxy port included (measured: 200 through the proxy, 403 only on a direct connection), while the WebSocket handshake already refused it.
-- VPN clients pass when their addresses are RFC 1918, as WireGuard and OpenVPN networks usually are (`10.x`). Mesh VPNs that hand out `100.64.0.0/10` (Tailscale, Headscale, NetBird) are refused like any other non-private address.
+- Admitted are this machine, the local networks (RFC 1918) and the networks an admin added; with "VPN only" the networks of the detected VPN interfaces replace the local ones. WireGuard and OpenVPN clients (`10.x`) pass by default; mesh VPNs that hand out `100.64.0.0/10` (Tailscale, Headscale, NetBird) pass once that network is admitted. The decision is `inbound_policy()` in `vaf/network/binding.py`, read on every request, so a change applies without a restart - see [Remote access over a VPN](#remote-access-over-a-vpn).
 - Active only in network mode (localhost mode skips this layer)
 - Named boundary: the check sits in the backend, so it covers `/api` and `/ws`. Page loads go from the proxy straight to the Next.js frontend and do not pass it; a client outside the allowed networks still receives the login screen, but every API call that screen makes is refused. The pages carry no data, only the fact that VAF runs there.
 
@@ -212,6 +212,50 @@ The system actively tracks all connections (WebSocket and HTTP) to the VAF backe
 
 ---
 
+## Remote access over a VPN
+
+VAF does not run a VPN server: that needs root, and the router (a Fritzbox has WireGuard
+built in), Tailscale or the hosting's provisioning already do it well. What VAF does is
+recognise the VPN, admit its devices and name its address.
+
+**Detection.** `local_interfaces()` in `vaf/network/binding.py` lists this machine's
+addresses through psutil: interfaces that are up, IPv4, inside a private range or the
+shared address space `100.64.0.0/10`. A VPN interface is told apart by name - `wg*`, `wt*`
+(NetBird), `tun*`/`tap*`, `utun*` (every VPN on macOS), `zt*` (ZeroTier), and the
+Windows names "Tailscale", "WireGuard", "OpenVPN", "Wintun" - or by an address in
+`100.64.0.0/10`. Bridges of containers and virtual machines (`docker*`, `br-*`, `veth*`,
+`virbr*`, the WSL switch) are left out: nobody connects from them. A mesh VPN gives each
+device one address and routes the rest of `100.64.0.0/10` to it, so its network is that
+whole block; elsewhere the interface's mask is the network.
+
+**Admission.** `inbound_policy()` is the one answer to "who may connect":
+
+| Setting | Admitted |
+|---|---|
+| default | this machine, the local networks (RFC 1918) |
+| `local_network_allowed_networks` | in addition, each private network an admin listed, e.g. `100.64.0.0/10` for Tailscale/NetBird |
+| `local_network_vpn_only` | this machine and the networks of the detected VPN interfaces, plus the list above; the local networks are out, and with no VPN up nobody else gets in |
+
+An entry is an address (taken as `/32`) or a network, and is taken only when it lies
+inside RFC 1918 or `100.64.0.0/10` (`normalize_allowed_networks`). A public network,
+`0.0.0.0/0`, loopback, IPv6 (the access port listens on IPv4 only) and anything
+unreadable is refused with a reason, never widened into; `vaf doctor` lists refused
+entries, and a "VPN only" with no VPN up and nothing listed.
+
+**Who reads it.** The IP check (`is_allowed_ip`, every request and every WebSocket
+handshake), the OS firewall (`firewall_sources()`, see Layer 1), and the shown access
+addresses (`access_addresses()`: the settings, `vaf top`, `vaf server status`). The
+access check takes a change at once; the firewall is re-applied by the running app when
+`local_network_allowed_networks` or `local_network_vpn_only` change (one password
+dialog on a desktop with firewalld), with no restart. Certificates carry every LAN and
+VPN address (see "How Auto-SSL Works").
+
+Named boundaries: Windows names a WireGuard adapter after its tunnel file, so it reads as
+a LAN - outside "VPN only" that changes nothing, in "VPN only" its network is listed by
+hand. A WireGuard interface configured with a single address (`/32`) names no network;
+list the VPN's subnet the same way. A VPN that comes up while VAF runs is admitted at
+once if its network is, but enters the certificate at the next start.
+
 ## TLS/SSL Encryption
 
 VAF supports full TLS encryption for both HTTP (HTTPS) and WebSocket (WSS) traffic within the local network. This prevents eavesdropping and man-in-the-middle attacks even on shared LANs.
@@ -242,7 +286,7 @@ When TLS is enabled and no valid certificate is configured, VAF's `ssl_utils` mo
    - Valid for 1 year
    - Includes Subject Alternative Names (SANs) for:
      - `localhost` / `127.0.0.1` / `::1`
-     - All detected local network IPs (e.g. `192.168.1.100`)
+     - Every detected LAN and VPN address (e.g. `192.168.1.100`, `10.8.0.1`, `100.101.102.103`)
      - Machine hostname and FQDN
 
 3. **Persists certificates** in `~/.vaf/ssl/`
@@ -428,15 +472,19 @@ With this lock enabled, attempts to disable hosting in the UI/API are ignored an
 | `local_network_https_port` | `int` | `443` | HTTPS proxy listen port (falls back to 8443 automatically on any platform when 443 is privileged/unbindable) |
 | `local_network_ssl_cert` | `string` | `""` | PEM certificate path (auto-populated) |
 | `local_network_ssl_key` | `string` | `""` | PEM private key path (auto-populated) |
+| `local_network_allowed_networks` | `list[str]` | `[]` | Private networks admitted besides the local ones (CIDR or address); public networks are refused. See [Remote access over a VPN](#remote-access-over-a-vpn) |
+| `local_network_vpn_only` | `bool` | `false` | Admit the networks of the detected VPN interfaces instead of the local networks |
 
 ### Live Updates
 
 Changes to network settings trigger an automatic, orchestrated restart of the frontend and backend services to apply new bindings (e.g., switching from `127.0.0.1` to `0.0.0.0`). Enabling or disabling Local Network flips several config keys in one save; VAF coalesces them into a single restart. Disabling Local Network actually **stops** the integrated HTTPS proxy (8443) and the internal 8005 channel, so LAN access truly closes. The permanent firewalld rule remains (harmless - nothing is listening on the port).
 
+Who is admitted (`local_network_allowed_networks`, `local_network_vpn_only`) restarts nothing: the IP check reads it on every request, and the running app re-applies the OS firewall for the new networks (`apply_lan_firewall` in `vaf/network/firewall.py`, also what the start runs). The key lists live once in `vaf/core/config.py` (`NETWORK_RESTART_KEYS`, `NETWORK_ADMISSION_KEYS`); the tray and its file poll read them.
+
 When TLS is enabled, firewall setup uses the effective HTTPS access port (`local_network_https_port`, or `8443` when `443` is privileged on any platform) so LAN clients can reach the proxy entry point. On Linux, firewalld is preferred: it opens only that effective proxy port for the LAN subnet via a rich rule, elevating through pkexec (desktop GUI dialog) or `sudo -n` (headless).
 On Windows, creating firewall rules via `netsh advfirewall` requires elevated rights. If VAF is not started as Administrator, LAN access can fail even when hosting is enabled.
 The integrated HTTPS proxy is configured for broad client compatibility (`TLS 1.2+`) so older LAN devices do not fail with empty-response errors during TLS negotiation.
-Auto-generated TLS certificates carry the machine's hostname and FQDN as DNS SANs plus all local IPs, and are re-generated when the current LAN IP changes, so the IP SANs stay aligned with the active access IP (a hostname change alone does not trigger re-issuance - the freshness check covers IP SANs only).
+Auto-generated TLS certificates carry the machine's hostname and FQDN as DNS SANs plus every LAN and VPN address, and are re-generated at start when an address is missing (a changed LAN IP, a VPN that came up), so the IP SANs stay aligned with the access addresses (a hostname change alone does not trigger re-issuance - the freshness check covers IP SANs only).
 
 ---
 
@@ -454,8 +502,8 @@ vaf/
     database.py          # Auth DB session (shared with memory DB)
     user_config.py       # Per-user config directories
   network/
-    binding.py           # IP detection, RFC 1918 validation, real client, foreign-origin decision, frontend port
-    firewall.py          # OS firewall automation (Windows/macOS/Linux)
+    binding.py           # LAN/VPN interfaces, who is admitted (inbound_policy), real client, foreign-origin decision, frontend port
+    firewall.py          # OS firewall automation (Windows/macOS/Linux) for the admitted networks
     https_proxy.py       # Integrated HTTPS reverse proxy (/api, /ws -> 8005; rest -> 3000)
     connection_tracker.py # Real-time connection monitoring
     ssl_utils.py         # Auto-SSL certificate generation

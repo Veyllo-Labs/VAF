@@ -233,8 +233,12 @@ def put_remote_access(body: RemoteAccessUpdate, request: Request):
     (another admin, or the CLI, changed them since the page loaded): the answer carries
     the current state to redo the change on. 409 "lockout" when the change would shut out
     the address this request comes from, unless `confirm` is set: the person would lose
-    this very page, so they are asked once before it happens. Checked and written under
-    the config lock, against the stored settings, so nothing else in the file is touched.
+    this very page, so they are asked once before it happens.
+
+    Checked and written under the config lock against the configuration loaded inside
+    it, so a setting another process changed meanwhile keeps its new value. One load and
+    one save for both keys - what Config.set does per key - so the observers see one
+    change and the firewall is re-applied once, not twice.
     """
     from vaf.network.binding import (connection_client_ip, inbound_policy,
                                      normalize_allowed_networks)

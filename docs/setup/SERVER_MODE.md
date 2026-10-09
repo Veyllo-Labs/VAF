@@ -145,6 +145,34 @@ ip route get 1.1.1.1 | grep -oP 'src \K\S+'
 
 Only the HTTPS proxy access port (8443 after a 443 fallback) is exposed on the network interface. All other ports are bound to `127.0.0.1`.
 
+## Over a VPN
+
+A server that should be reached from outside the home or office network is reached
+through a VPN, not by opening the access port to the internet. VAF runs no VPN server
+itself; it recognises the VPN interface and admits its devices
+([NETWORK_FEATURES.md](NETWORK_FEATURES.md#remote-access-over-a-vpn)).
+
+- **WireGuard or OpenVPN** (addresses in `10.x`): admitted by default, nothing to set.
+  `vaf server status` lists the interface with its access URL, and the certificate
+  carries its address after the next start.
+- **Tailscale, Headscale, NetBird** (addresses in `100.64.0.0/10`): admit them once with
+  `vaf server networks tailscale on`.
+- **Another private network** (a routed site network, a WireGuard set up with `/32`
+  addresses): `vaf server networks allow 10.20.0.0/16`. Public networks, `0.0.0.0/0` and
+  IPv6 are refused with the reason; `vaf server networks list` shows what is admitted
+  and what is ignored, `vaf server networks remove` drops an entry.
+- **Only the VPN**: `vaf server vpn-only on` locks the local network out and admits the
+  networks of the detected VPN interfaces (plus your entries). With no VPN up, nobody
+  but this machine gets in; the command says so, and so does `vaf doctor`.
+
+The access check takes a change at once. The running service re-applies the OS firewall
+within about 25 seconds, with no restart; on a headless server that needs passwordless
+sudo like every firewall step here, otherwise open the port by hand for the networks
+`vaf server status` lists. On a rented server keep the access port closed in the
+provider's firewall and open only the VPN's own port there; then run
+`vaf server provision --no-firewall`, since the provider's firewall is the one that
+faces the internet.
+
 ## Locked Settings
 
 In server mode, the following config keys are locked and cannot be changed via the Settings UI or the API:

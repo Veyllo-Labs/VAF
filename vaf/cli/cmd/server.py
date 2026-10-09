@@ -7,6 +7,11 @@ from vaf.core.config import Config
 from vaf.cli.ui import UI
 
 app = typer.Typer(help="Manage local network server mode (Hosting/SSL)")
+networks_app = typer.Typer(help="Networks admitted besides the local ones, e.g. a VPN")
+app.add_typer(networks_app, name="networks")
+
+# Tailscale, Headscale and NetBird hand out addresses from the shared address space.
+_MESH_VPN_NETWORK = "100.64.0.0/10"
 
 
 def _enable_lan_keys() -> None:
@@ -63,16 +68,39 @@ def server_status():
 
     if enabled:
         try:
-            from vaf.network.binding import get_all_local_ips
-            ips = get_all_local_ips()
-            if ips:
-                suffix = _access_port_suffix()
-                UI.print("\n[bold]LAN access (integrated HTTPS proxy):[/bold]")
-                for _, ip in ips:
-                    UI.print(f"  - https://{ip}{suffix}")
-        except Exception:
-            pass
+            _print_access(_access_port_suffix())
+        except Exception as e:
+            UI.warning(f"Could not read the network interfaces: {e}")
     UI.print()
+
+
+def _print_access(suffix: str) -> None:
+    """Interfaces with their access URL, the admitted networks, and what was refused."""
+    from vaf.network.binding import (REFUSAL_REASONS, access_addresses, inbound_policy,
+                                     local_interfaces)
+    policy = inbound_policy(detect_vpn=True)
+    admitted = {(i.name, i.ip) for i in access_addresses()}
+    interfaces = local_interfaces()
+    UI.print("\n[bold]Access (integrated HTTPS proxy):[/bold]")
+    if not interfaces:
+        UI.print("  [dim]no LAN or VPN interface found[/dim]")
+    for iface in interfaces:
+        kind = "VPN" if iface.kind == "vpn" else "LAN"
+        if (iface.name, iface.ip) in admitted:
+            UI.print(f"  {iface.name:<14} {kind}  https://{iface.ip}{suffix}")
+        else:
+            hint = ""
+            if iface.network == _MESH_VPN_NETWORK:
+                hint = " - vaf server networks tailscale on"
+            elif policy.vpn_only and iface.kind == "lan":
+                hint = " - locked out by VPN only"
+            UI.print(f"  {iface.name:<14} {kind}  [dim]{iface.ip} not admitted{hint}[/dim]")
+    local = "the VPN networks" if policy.vpn_only else "the local networks"
+    UI.print(f"\n[bold]Admitted:[/bold] this machine, {local}"
+             + (f", {', '.join(policy.allowed)}" if policy.allowed else ""))
+    UI.print(f"[bold]VPN only:[/bold] {'[yellow]YES[/yellow]' if policy.vpn_only else 'no'}")
+    for value, code in policy.refused:
+        UI.warning(f"Ignored entry {value}: {REFUSAL_REASONS.get(code, code)}")
 
 
 @app.command(name="provision")
@@ -123,13 +151,19 @@ def server_provision(
             UI.success(f"Firewall opened for port {access_port} (LAN subnet only).")
         else:
             UI.warning("Could not open the OS firewall automatically (needs elevation).")
-            UI.info("Open the access port manually, e.g. with firewalld (replace the subnet):")
-            UI.info(
-                "  sudo firewall-cmd --permanent --zone=public --add-rich-rule="
-                f"'rule family=\"ipv4\" source address=\"192.168.1.0/24\" port port=\"{access_port}\" protocol=\"tcp\" accept'"
-                " && sudo firewall-cmd --reload"
-            )
-            UI.info(f"  or with ufw: sudo ufw allow {access_port}/tcp")
+            try:
+                from vaf.network.binding import firewall_sources
+                sources = firewall_sources(narrow_lan=True) or ["192.168.1.0/24"]
+            except Exception:
+                sources = ["192.168.1.0/24"]
+            UI.info("Open the access port manually for the admitted networks, e.g. with firewalld:")
+            for source in sources:
+                UI.info(
+                    "  sudo firewall-cmd --permanent --zone=public --add-rich-rule="
+                    f"'rule family=\"ipv4\" source address=\"{source}\" port port=\"{access_port}\" protocol=\"tcp\" accept'"
+                )
+            UI.info("  sudo firewall-cmd --reload")
+            UI.info(f"  or with ufw: sudo ufw allow from {sources[0]} to any port {access_port} proto tcp")
     else:
         UI.info("Firewall step skipped (--no-firewall).")
 
@@ -142,12 +176,131 @@ def server_provision(
         UI.info("LAN IP looks statically configured.")
 
     try:
-        from vaf.network.binding import get_all_local_ips
-        ips = get_all_local_ips()
+        from vaf.network.binding import access_addresses
+        reachable = access_addresses()
     except Exception:
-        ips = []
-    if ips:
+        reachable = []
+    if reachable:
         suffix = "" if access_port == 443 else f":{access_port}"
-        UI.print("\n[bold]LAN access once the service is running:[/bold]")
-        for _, ip in ips:
-            UI.print(f"  - https://{ip}{suffix}")
+        UI.print("\n[bold]Access once the service is running:[/bold]")
+        for iface in reachable:
+            UI.print(f"  - https://{iface.ip}{suffix}  ({iface.name})")
+
+
+# ── who is admitted besides the local networks ─────────────────────────────
+#
+# The CLI half of the "Remote access (VPN)" settings. Both write the same two keys and
+# go through the same check (binding.normalize_allowed_networks). The access check reads
+# the file on every request; a running VAF re-applies the firewall within about 25
+# seconds (the tray polls the file), without a restart. Named boundary: like the rest of this group there is no
+# admin-password door, because install.sh runs it without a terminal, and the config
+# file is writable only by the same OS user anyway.
+
+def _allowed_entries() -> list:
+    from vaf.network.binding import normalize_allowed_networks
+    taken, _refused = normalize_allowed_networks(Config.get("local_network_allowed_networks"))
+    return taken
+
+
+def _normalized_or_exit(value: str) -> str:
+    from vaf.network.binding import REFUSAL_REASONS, normalize_allowed_networks
+    taken, refused = normalize_allowed_networks([value])
+    if refused:
+        UI.error(f"{value}: {REFUSAL_REASONS.get(refused[0][1], refused[0][1])}")
+        raise typer.Exit(1)
+    if not taken:
+        UI.error("Name a network, e.g. 10.8.0.0/24 or 100.64.0.0/10.")
+        raise typer.Exit(1)
+    return taken[0]
+
+
+def _on_off(state: str) -> bool:
+    lowered = (state or "").strip().lower()
+    if lowered not in ("on", "off"):
+        UI.error("Say on or off.")
+        raise typer.Exit(2)
+    return lowered == "on"
+
+
+def _applied_note() -> None:
+    UI.info("The access check uses this at once; a running VAF re-applies the firewall within about 25 seconds. Nothing restarts.")
+
+
+@networks_app.command("list")
+def networks_list():
+    """Show the admitted networks and the entries that are ignored."""
+    from vaf.network.binding import REFUSAL_REASONS, inbound_policy
+    policy = inbound_policy(detect_vpn=True)
+    UI.print("\n[bold]Admitted networks:[/bold]")
+    UI.print("  this machine (127.0.0.0/8)")
+    if policy.vpn_only:
+        UI.print("  the VPN networks: " + (", ".join(policy.vpn) if policy.vpn else "[yellow]none up[/yellow]"))
+    else:
+        UI.print("  the local networks (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)")
+    for entry in policy.allowed:
+        UI.print(f"  {entry}")
+    UI.print(f"\n[bold]VPN only:[/bold] {'yes' if policy.vpn_only else 'no'}")
+    for value, code in policy.refused:
+        UI.warning(f"Ignored entry {value}: {REFUSAL_REASONS.get(code, code)}")
+    UI.print()
+
+
+@networks_app.command("allow")
+def networks_allow(network: str = typer.Argument(..., help="A private network or address, e.g. 10.8.0.0/24")):
+    """Admit a private network besides the local ones."""
+    entry = _normalized_or_exit(network)
+    entries = _allowed_entries()
+    if entry in entries:
+        UI.info(f"{entry} is already admitted.")
+        return
+    Config.set("local_network_allowed_networks", entries + [entry])
+    UI.success(f"Admitted {entry}.")
+    _applied_note()
+
+
+@networks_app.command("remove")
+def networks_remove(network: str = typer.Argument(..., help="The network to drop")):
+    """Stop admitting a network that was added."""
+    entry = _normalized_or_exit(network)
+    entries = _allowed_entries()
+    if entry not in entries:
+        UI.error(f"{entry} is not in the admitted networks.")
+        raise typer.Exit(1)
+    Config.set("local_network_allowed_networks", [e for e in entries if e != entry])
+    UI.success(f"No longer admitting {entry}.")
+    _applied_note()
+
+
+@networks_app.command("tailscale")
+def networks_tailscale(state: str = typer.Argument(..., metavar="on|off")):
+    """Admit Tailscale, Headscale and NetBird devices (100.64.0.0/10)."""
+    on = _on_off(state)
+    entries = _allowed_entries()
+    if on and _MESH_VPN_NETWORK not in entries:
+        Config.set("local_network_allowed_networks", entries + [_MESH_VPN_NETWORK])
+    elif not on and _MESH_VPN_NETWORK in entries:
+        Config.set("local_network_allowed_networks", [e for e in entries if e != _MESH_VPN_NETWORK])
+    UI.success(f"Tailscale / NetBird ({_MESH_VPN_NETWORK}) {'admitted' if on else 'not admitted'}.")
+    _applied_note()
+
+
+@app.command("vpn-only")
+def server_vpn_only(state: str = typer.Argument(..., metavar="on|off")):
+    """Admit only the VPN networks (and the ones you added); the local network is locked out."""
+    on = _on_off(state)
+    Config.set("local_network_vpn_only", on)
+    if not on:
+        UI.success("VPN only is off: the local networks are admitted again.")
+        _applied_note()
+        return
+    from vaf.network.binding import inbound_policy, local_interfaces
+    policy = inbound_policy(detect_vpn=True)
+    UI.success("VPN only is on.")
+    if policy.vpn:
+        UI.info("Admitted VPN networks: " + ", ".join(policy.vpn))
+    elif not policy.allowed:
+        UI.warning("No VPN interface is up, so no other device can connect until one is.")
+    lan = sorted({i.network for i in local_interfaces() if i.kind == "lan"})
+    if lan:
+        UI.warning("Devices on " + ", ".join(lan) + " can no longer connect.")
+    _applied_note()

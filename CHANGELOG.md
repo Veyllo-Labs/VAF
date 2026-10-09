@@ -11,6 +11,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+
+- **Reach VAF over a VPN.** VAF now recognises VPN connections (WireGuard, OpenVPN,
+  Tailscale, NetBird, ZeroTier) and shows their address next to the home network's in
+  `vaf server status` and `vaf top`; the certificate carries it too. WireGuard and OpenVPN
+  devices are admitted by default, and on Linux with firewalld the firewall now opens for
+  them as well (it used to open only the home network). Tailscale and NetBird devices get in
+  once you say so:
+  `vaf server networks tailscale on`. `vaf server networks allow` admits another private
+  network, and `vaf server vpn-only on` admits only the VPN and locks the home network out.
+  Public networks are refused. The firewall follows on its own, and nothing restarts.
+
 ### Fixed
 
 - **`vaf doctor` no longer reports "login is not required" on every server.** The check

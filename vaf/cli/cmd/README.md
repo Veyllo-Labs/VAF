@@ -16,7 +16,7 @@ This directory contains the logic for individual `vaf` CLI commands. Each file t
 - **subagent.py**: Allows running specialized sub-agents (Coder, Researcher) independently.
 - **workflow.py**: Workflow execution and inspection commands.
 - **service.py**: Manages the VAF background process (`start`/`stop`/`restart`/`status`), via PID file in desktop mode or systemd in server mode.
-- **server.py**: Toggles local network hosting with mandatory TLS (`server on`/`server off`).
+- **server.py**: Toggles local network hosting with mandatory TLS (`server on`/`server off`), provisions a server (`server provision`), shows the access URLs per LAN and VPN interface (`server status`), and manages who is admitted besides the local networks (`server networks list|allow|remove|tailscale`, `server vpn-only on|off`).
 - **update.py**: Self-update to the latest published GitHub Release, with dependency reinstall, migrations, and rollback on failure.
 - **info.py**: Displays system and diagnostic information (Python, platform, key dependency versions).
 - **security.py**: Security diagnostics and hardening checks (`security doctor`).

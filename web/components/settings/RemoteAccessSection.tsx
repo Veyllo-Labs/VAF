@@ -73,6 +73,9 @@ export default function RemoteAccessSection({ sectionId }: { sectionId?: string 
     const save = async (allowed: string[], vpnOnly: boolean, confirm = false): Promise<boolean> => {
         setBusy(true);
         setNote(null);
+        // A new edit replaces a confirmation still on screen: "Save anyway" must only ever
+        // save the change it was shown for, never an older one after this edit failed.
+        if (!confirm) setLockout(null);
         try {
             const res = await fetch(`${apiBase}/api/network/remote-access`, {
                 method: 'PUT',

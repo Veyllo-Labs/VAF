@@ -162,3 +162,36 @@ def test_an_entry_change_reads_and_writes_under_one_lock(settings, monkeypatch):
         assert runner.invoke(server_cmd.app, args).exit_code == 0
     assert reads_outside == []
     assert settings["local_network_allowed_networks"] == ["100.64.0.0/10"]
+
+
+def test_removing_an_entry_says_when_its_range_stays_admitted(settings):
+    """An entry inside a network that is admitted anyway (the local networks, a detected VPN
+    under "VPN only") is gone from the list, not from the admitted devices.
+    MUTATION: always report "No longer admitting" - red."""
+    settings["local_network_allowed_networks"] = ["10.20.0.0/16", "100.70.0.0/16"]
+    said = _said(runner.invoke(server_cmd.app, ["networks", "remove", "10.20.0.0/16"]))
+    assert "Removed 10.20.0.0/16 from your entries" in said
+    assert "stays admitted: it lies inside 10.0.0.0/8" in said
+    said = _said(runner.invoke(server_cmd.app, ["networks", "remove", "100.70.0.0/16"]))
+    assert "No longer admitting 100.70.0.0/16" in said
+
+    settings["local_network_vpn_only"] = True
+    settings["local_network_allowed_networks"] = ["10.8.0.0/24"]
+    said = _said(runner.invoke(server_cmd.app, ["networks", "remove", "10.8.0.0/24"]))
+    assert "stays admitted: it lies inside 10.8.0.0/24" in said
+
+
+def test_tailscale_off_under_vpn_only_says_it_stays_admitted(settings):
+    """Under "VPN only" a detected Tailscale interface admits 100.64.0.0/10 by itself, so
+    switching the entry off does not lock those devices out. MUTATION: report "not
+    admitted" regardless - red."""
+    settings["local_network_vpn_only"] = True
+    settings["local_network_allowed_networks"] = ["100.64.0.0/10"]
+    said = _said(runner.invoke(server_cmd.app, ["networks", "tailscale", "off"]))
+    assert "stays admitted while VPN only is on" in said
+    assert settings["local_network_allowed_networks"] == []
+
+    settings["local_network_vpn_only"] = False
+    settings["local_network_allowed_networks"] = ["100.64.0.0/10"]
+    said = _said(runner.invoke(server_cmd.app, ["networks", "tailscale", "off"]))
+    assert "(100.64.0.0/10) not admitted" in said

@@ -98,3 +98,16 @@ def test_non_linux_is_refused(seams, monkeypatch):
     result = runner.invoke(server_cmd.app, ["provision"])
     assert result.exit_code == 1
     assert seams["set"] == [], "a refusal must not touch the config"
+
+
+def test_no_admitted_network_means_no_example_rule(seams, monkeypatch):
+    """With nothing admitted besides this machine ("VPN only" with no VPN up) there is no
+    rule worth suggesting; an example network would open the port to devices that are not
+    admitted. MUTATION: fall back to 192.168.1.0/24 again - red."""
+    monkeypatch.setattr(firewall, "setup_firewall", lambda p, pf: False)
+    monkeypatch.setattr(binding, "firewall_sources", lambda narrow_lan=False, cfg=None: [])
+    result = runner.invoke(server_cmd.app, ["provision"])
+    assert result.exit_code == 0, result.output
+    said = " ".join(result.output.split())
+    assert "192.168.1.0/24" not in said and "firewall-cmd --permanent" not in said
+    assert "No admitted network could be determined" in said

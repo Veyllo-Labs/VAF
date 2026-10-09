@@ -153,19 +153,25 @@ def server_provision(
             UI.warning("Could not open the OS firewall automatically (needs elevation).")
             try:
                 from vaf.network.binding import firewall_sources
-                sources = firewall_sources(narrow_lan=True) or ["192.168.1.0/24"]
+                sources = firewall_sources(narrow_lan=True)
             except Exception:
-                sources = ["192.168.1.0/24"]
-            UI.info("Open the access port manually for the admitted networks, e.g. with firewalld:")
-            for source in sources:
-                UI.info(
-                    "  sudo firewall-cmd --permanent --zone=public --add-rich-rule="
-                    f"'rule family=\"ipv4\" source address=\"{source}\" port port=\"{access_port}\" protocol=\"tcp\" accept'"
-                )
-            UI.info("  sudo firewall-cmd --reload")
-            UI.info("  or with ufw:")
-            for source in sources:
-                UI.info(f"  sudo ufw allow from {source} to any port {access_port} proto tcp")
+                sources = []
+            if not sources:
+                # No example network instead: a rule for a network that is not admitted (or not
+                # even this machine's) would open the port to the wrong devices.
+                UI.warning("No admitted network could be determined, so there is no safe rule to "
+                           "suggest. Check `vaf server status` and `vaf server networks list`.")
+            else:
+                UI.info("Open the access port manually for the admitted networks, e.g. with firewalld:")
+                for source in sources:
+                    UI.info(
+                        "  sudo firewall-cmd --permanent --zone=public --add-rich-rule="
+                        f"'rule family=\"ipv4\" source address=\"{source}\" port port=\"{access_port}\" protocol=\"tcp\" accept'"
+                    )
+                UI.info("  sudo firewall-cmd --reload")
+                UI.info("  or with ufw:")
+                for source in sources:
+                    UI.info(f"  sudo ufw allow from {source} to any port {access_port} proto tcp")
     else:
         UI.info("Firewall step skipped (--no-firewall).")
 
@@ -237,6 +243,16 @@ def _on_off(state: str) -> bool:
     return lowered == "on"
 
 
+def _still_admitted(entry: str) -> list:
+    """The admitted networks that still cover `entry` (a network inside the local networks,
+    a detected VPN or another entry stays admitted when its own entry goes)."""
+    import ipaddress
+    from vaf.network.binding import inbound_policy
+    net = ipaddress.ip_network(entry)
+    return [str(a) for a in inbound_policy(detect_vpn=True).networks
+            if not a.is_loopback and net.subnet_of(a)]
+
+
 def _applied_note() -> None:
     UI.info("The access check uses this at once; a running VAF re-applies the firewall within about 25 seconds. Nothing restarts.")
 
@@ -294,7 +310,12 @@ def networks_remove(network: str = typer.Argument(..., help="The network to drop
     if not found:
         UI.error(f"{entry} is not in the admitted networks.")
         raise typer.Exit(1)
-    UI.success(f"No longer admitting {entry}.")
+    holders = _still_admitted(entry)
+    if holders:
+        UI.success(f"Removed {entry} from your entries.")
+        UI.info(f"It stays admitted: it lies inside {', '.join(holders)}.")
+    else:
+        UI.success(f"No longer admitting {entry}.")
     _applied_note()
 
 
@@ -311,7 +332,15 @@ def networks_tailscale(state: str = typer.Argument(..., metavar="on|off")):
         return None
 
     _change_entries(change)
-    UI.success(f"Tailscale / NetBird ({_MESH_VPN_NETWORK}) {'admitted' if on else 'not admitted'}.")
+    holders = [] if on else _still_admitted(_MESH_VPN_NETWORK)
+    if on:
+        UI.success(f"Tailscale / NetBird ({_MESH_VPN_NETWORK}) admitted.")
+    elif holders:
+        UI.success(f"Removed {_MESH_VPN_NETWORK} from your entries.")
+        UI.info("It stays admitted while VPN only is on and Tailscale or NetBird is up: "
+                "the detected VPN networks are admitted then.")
+    else:
+        UI.success(f"Tailscale / NetBird ({_MESH_VPN_NETWORK}) not admitted.")
     _applied_note()
 
 

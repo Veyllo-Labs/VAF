@@ -55,14 +55,23 @@ export default function RemoteAccessSection({ sectionId }: { sectionId?: string 
     const [draft, setDraft] = useState('');
     const [busy, setBusy] = useState(false);
     const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
-    const [lockout, setLockout] = useState<{ address: string; allowed: string[]; vpnOnly: boolean } | null>(null);
+    // `draft` is set when the confirmation belongs to an entry typed into the add field, so
+    // the field is emptied once the confirmed save went through.
+    const [lockout, setLockout] = useState<{ address: string; allowed: string[]; vpnOnly: boolean; draft?: string } | null>(null);
+    const [loadFailed, setLoadFailed] = useState(false);
 
     const load = useCallback(async () => {
         try {
             const res = await fetch(`${apiBase}/api/network/remote-access`, { credentials: 'include' });
-            if (!res.ok) { setData(null); return; }
+            // Not an admin: the section is not theirs, it stays hidden.
+            if (res.status === 401 || res.status === 403) { setData(null); setLoadFailed(false); return; }
+            // Anything else keeps the last state and says so, instead of the section vanishing.
+            if (!res.ok) { setLoadFailed(true); return; }
             setData(await res.json());
-        } catch { /* a section that cannot be fetched stays as it was */ }
+            setLoadFailed(false);
+        } catch {
+            setLoadFailed(true);
+        }
     }, [apiBase]);
 
     useEffect(() => { void load(); }, [load]);
@@ -70,7 +79,7 @@ export default function RemoteAccessSection({ sectionId }: { sectionId?: string 
     const refusalText = (r: Refusal) =>
         REFUSAL_CODES.includes(r.reason) ? t(`refused.${r.reason}`, { value: r.value }) : r.value;
 
-    const save = async (allowed: string[], vpnOnly: boolean, confirm = false): Promise<boolean> => {
+    const save = async (allowed: string[], vpnOnly: boolean, confirm = false, draftEntry?: string): Promise<boolean> => {
         setBusy(true);
         setNote(null);
         // A new edit replaces a confirmation still on screen: "Save anyway" must only ever
@@ -95,7 +104,7 @@ export default function RemoteAccessSection({ sectionId }: { sectionId?: string 
                 return false;
             }
             if (res.status === 409 && body?.detail?.code === 'lockout') {
-                setLockout({ address: String(body.detail.address || ''), allowed, vpnOnly });
+                setLockout({ address: String(body.detail.address || ''), allowed, vpnOnly, draft: draftEntry });
                 return false;
             }
             if (res.status === 422 && Array.isArray(body?.detail?.refused)) {
@@ -120,7 +129,21 @@ export default function RemoteAccessSection({ sectionId }: { sectionId?: string 
         setNote(ok ? { ok: true, text: t('copied') } : { ok: false, text: t('failed') });
     };
 
-    if (!data) return null;
+    if (!data) {
+        if (!loadFailed) return null;
+        return (
+            <div id={sectionId} className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 scroll-mt-2">
+                <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>
+                <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs text-red-600">{t('loadFailed')}</p>
+                    <button type="button" onClick={() => void load()}
+                        className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 shrink-0">
+                        {t('retry')}
+                    </button>
+                </div>
+            </div>
+        );
+    }
     const mesh = data.mesh_vpn_network;
     const own = data.allowed.filter(n => n !== mesh);
     const meshWaiting = !data.mesh_vpn_admitted
@@ -136,7 +159,7 @@ export default function RemoteAccessSection({ sectionId }: { sectionId?: string 
         if (busy) return;
         const entry = draft.trim();
         if (!entry) return;
-        void save([...data.allowed, entry], data.vpn_only).then(saved => { if (saved) setDraft(''); });
+        void save([...data.allowed, entry], data.vpn_only, false, entry).then(saved => { if (saved) setDraft(''); });
     };
 
     return (
@@ -232,6 +255,15 @@ export default function RemoteAccessSection({ sectionId }: { sectionId?: string 
             {note && (
                 <p className={`text-xs mt-2 ${note.ok ? 'text-gray-600' : 'text-red-600'}`}>{note.text}</p>
             )}
+            {loadFailed && (
+                <div className="flex items-center justify-between gap-3 mt-2">
+                    <p className="text-xs text-red-600">{t('loadFailed')}</p>
+                    <button type="button" onClick={() => void load()}
+                        className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 shrink-0">
+                        {t('retry')}
+                    </button>
+                </div>
+            )}
 
             {lockout && (
                 <div className="mt-4 p-4 rounded-lg border border-amber-200 bg-amber-50" role="alertdialog">
@@ -243,7 +275,12 @@ export default function RemoteAccessSection({ sectionId }: { sectionId?: string 
                             {tCommon('cancel')}
                         </button>
                         <button type="button" disabled={busy}
-                            onClick={() => void save(lockout.allowed, lockout.vpnOnly, true)}
+                            onClick={() => {
+                                const typed = lockout.draft;
+                                void save(lockout.allowed, lockout.vpnOnly, true).then(saved => {
+                                    if (saved && typed !== undefined) setDraft(current => (current.trim() === typed ? '' : current));
+                                });
+                            }}
                             className="px-3 py-1.5 text-sm font-medium rounded-lg bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-50">
                             {t('lockoutConfirm')}
                         </button>

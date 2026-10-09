@@ -129,38 +129,44 @@ def test_vpn_only_spares_a_lan_your_own_entry_still_admits(settings, monkeypatch
     settings["local_network_vpn_only"] = False
     settings["local_network_allowed_networks"] = ["192.168.2.50/32"]
     said = _said(runner.invoke(server_cmd.app, ["vpn-only", "on"]))
-    assert "192.168.2.0/24 can no longer connect, except the addresses your own entries admit" in said
-    assert "192.168.2.50/32" in said
+    assert "192.168.2.0/24 can no longer connect, except the addresses inside 192.168.2.50/32, which stay admitted" in said
 
 
 def test_an_entry_change_reads_and_writes_under_one_lock(settings, monkeypatch):
     """`networks allow` must not read the list, lose the lock, and write back a list that
-    misses what another admin stored in between. MUTATION: read outside the lock - red."""
+    misses what another admin stored in between. MUTATION: read outside the lock, or write
+    after leaving it - red."""
     import contextlib
-    held = {"now": False}
-    reads_outside = []
+    depth = {"n": 0}      # re-entrant, like the real lock: Config.set nests inside
+    outside = []
 
     @contextlib.contextmanager
     def locked(cls):
-        held["now"] = True
+        depth["n"] += 1
         try:
             yield
         finally:
-            held["now"] = False
+            depth["n"] -= 1
 
-    real_get = Config.get
+    real_get, real_set = Config.get, Config.set
 
     def get(cls, key, default=None):
-        if key == "local_network_allowed_networks" and not held["now"]:
-            reads_outside.append(key)
+        if key == "local_network_allowed_networks" and depth["n"] == 0:
+            outside.append(("read", key))
         return real_get(key, default)
+
+    def set_(cls, key, value):
+        if key == "local_network_allowed_networks" and depth["n"] == 0:
+            outside.append(("write", key))
+        return real_set(key, value)
 
     monkeypatch.setattr(Config, "_locked", classmethod(locked))
     monkeypatch.setattr(Config, "get", classmethod(get))
+    monkeypatch.setattr(Config, "set", classmethod(set_))
     for args in (["networks", "allow", "10.9.0.0/24"], ["networks", "remove", "10.9.0.0/24"],
                  ["networks", "tailscale", "on"]):
         assert runner.invoke(server_cmd.app, args).exit_code == 0
-    assert reads_outside == []
+    assert outside == [], "the read and the write must both happen under the one lock"
     assert settings["local_network_allowed_networks"] == ["100.64.0.0/10"]
 
 
@@ -203,4 +209,26 @@ def test_the_partial_lan_warning_names_only_the_entries_that_touch_it(settings, 
     monkeypatch.setattr(binding, "local_interfaces", lambda: [LAN, WG])
     settings["local_network_allowed_networks"] = ["192.168.2.50/32", "100.64.0.0/10"]
     said = _said(runner.invoke(server_cmd.app, ["vpn-only", "on"]))
-    assert "your own entries admit (192.168.2.50/32)" in said
+    assert "except the addresses inside 192.168.2.50/32, which stay admitted" in said
+    assert "100.64.0.0/10, which" not in said and "inside 192.168.2.50/32, 100.64" not in said
+
+
+def test_a_lan_overlapped_by_a_vpn_names_the_vpn_not_an_empty_entry_list(settings, monkeypatch):
+    """A LAN that only a VPN network overlaps used to be excused by "your own entries ()".
+    MUTATION: name only the admin's entries again - red."""
+    lan = binding.LocalInterface("enp3s0", "10.8.0.200", "10.8.0.0/16", "lan")
+    monkeypatch.setattr(binding, "local_interfaces", lambda: [lan, WG])
+    said = _said(runner.invoke(server_cmd.app, ["vpn-only", "on"]))
+    assert "10.8.0.0/16 can no longer connect, except the addresses inside 10.8.0.0/24" in said
+    assert "()" not in said
+
+
+def test_a_point_to_point_vpn_is_named_as_admitting_no_peer(settings, monkeypatch):
+    """WireGuard with a /32 address, OpenVPN net30: the interface names no network, so
+    "VPN only" admits no peer on it. Not widened by guessing; the admin is told.
+    MUTATION: drop the warning - red."""
+    p2p = binding.LocalInterface("wg0", "10.8.0.1", "10.8.0.1/32", "vpn")
+    monkeypatch.setattr(binding, "local_interfaces", lambda: [LAN, p2p])
+    said = _said(runner.invoke(server_cmd.app, ["vpn-only", "on"]))
+    assert "10.8.0.1/32 names only this machine's own address" in said
+    assert "vaf server networks allow" in said

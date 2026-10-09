@@ -31,6 +31,9 @@ def seams(monkeypatch):
                         lambda wait_for_proxy=False: (8443, 8001))
     monkeypatch.setattr(binding, "lan_ip_is_dhcp", lambda: None)
     monkeypatch.setattr(binding, "get_all_local_ips", lambda: [("eth0", "192.168.1.10")])
+    # The manual firewall instructions read the admitted networks; a fixed answer keeps the
+    # degraded-firewall tests from depending on what the host's interfaces happen to be.
+    monkeypatch.setattr(binding, "firewall_sources", lambda narrow_lan=False, cfg=None: ["192.168.1.0/24"])
     monkeypatch.setattr(firewall, "setup_firewall",
                         lambda p, pf: calls["firewall"].append((p, pf)) or "created")
     monkeypatch.setattr(server_cmd.platform, "system", lambda: "Linux")

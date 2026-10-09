@@ -307,3 +307,11 @@ def test_saving_an_admission_change_notifies_the_observers(monkeypatch, tmp_path
     Config.save({**Config.load(), "local_network_vpn_only": True})
     assert "local_network_vpn_only" in seen
     assert Config.load()["local_network_vpn_only"] is True
+
+
+
+def test_doctor_names_a_point_to_point_vpn_under_vpn_only(monkeypatch):
+    _machine(monkeypatch, {"enp3s0": MACHINE["enp3s0"],
+                           "wg0": (True, [_v4("10.8.0.1", "255.255.255.255")])})
+    assert "network_vpn_single_address" in _codes(local_network_vpn_only=True)
+    assert "network_vpn_single_address" not in _codes()

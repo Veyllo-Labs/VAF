@@ -95,6 +95,9 @@ def _print_access(suffix: str) -> None:
             elif policy.vpn_only and iface.kind == "lan":
                 hint = " - locked out by VPN only"
             UI.print(f"  {iface.name:<14} {kind}  [dim]{iface.ip} not admitted{hint}[/dim]")
+        if policy.vpn_only and iface.kind == "vpn" and iface.network.endswith("/32"):
+            UI.print(f"  {'':<14}      [yellow]{iface.network} names no peer: add the VPN's "
+                     "network with vaf server networks allow[/yellow]")
     local = "the VPN networks" if policy.vpn_only else "the local networks"
     UI.print(f"\n[bold]Admitted:[/bold] this machine, {local}"
              + (f", {', '.join(policy.allowed)}" if policy.allowed else ""))
@@ -358,6 +361,12 @@ def server_vpn_only(state: str = typer.Argument(..., metavar="on|off")):
     UI.success("VPN only is on.")
     if policy.vpn:
         UI.info("Admitted VPN networks: " + ", ".join(policy.vpn))
+    single = [n for n in policy.vpn if n.endswith("/32")]
+    if single:
+        # A point-to-point VPN (WireGuard with a /32 address, OpenVPN net30) reports no
+        # network around this machine's address; guessing one would admit strangers.
+        UI.warning(", ".join(single) + " names only this machine's own address, so no peer on "
+                   "that VPN gets in. Add the VPN's network: vaf server networks allow <network>")
     elif not policy.allowed:
         UI.warning("No VPN interface is up, so no other device can connect until one is.")
     # A LAN an entry of the admin's still covers stays reachable, and one an entry covers
@@ -372,8 +381,9 @@ def server_vpn_only(state: str = typer.Argument(..., metavar="on|off")):
     if blocked:
         UI.warning("Devices on " + ", ".join(blocked) + " can no longer connect.")
     if partly:
-        touching = [e for e in policy.allowed
-                    if any(ipaddress.ip_network(e).overlaps(ipaddress.ip_network(n)) for n in partly)]
+        # Named by what really overlaps: an entry of the admin's, or a VPN network.
+        touching = [str(a) for a in policy.networks if not a.is_loopback
+                    and any(a.overlaps(ipaddress.ip_network(n)) for n in partly)]
         UI.warning("Devices on " + ", ".join(partly) + " can no longer connect, except the "
-                   "addresses your own entries admit (" + ", ".join(touching) + ").")
+                   "addresses inside " + ", ".join(touching) + ", which stay admitted.")
     _applied_note()

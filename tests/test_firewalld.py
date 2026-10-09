@@ -373,3 +373,28 @@ def test_unreadable_admitted_networks_apply_nothing_and_are_retried(monkeypatch)
     state["broken"] = False
     assert fw.setup_firewall(8443, 8001) is True
     assert calls == [8443]
+
+
+
+def test_a_failed_removal_fails_the_setup_so_the_marker_keeps_the_rule(monkeypatch, tmp_path):
+    """A removal that fails must not vanish into `|| true`: the marker would forget the
+    rule and its permanent copy would come back at the next boot. The removal asks first
+    (a rule already gone is fine) and is chained into the elevation's result.
+    MUTATION: swallow removal failures again - red."""
+    rec = _RunRecorder()
+    _wire_firewalld(monkeypatch, rec, tmp_path, sources=("192.168.2.0/24",))
+    tailscale = ("public", fw._firewalld_rich_rule("100.64.0.0/10", 8443))
+    fw._firewalld_marker_write([LAN_RULE, tailscale])
+    assert fw._setup_firewall_linux_firewalld(8443, 8001) == "created"
+    inner = rec.calls[0][-1]
+    assert "|| true" not in inner
+    assert "! firewall-cmd --zone=public --query-rich-rule=" in inner
+    assert "! firewall-cmd --permanent --zone=public --query-rich-rule=" in inner
+
+    def failing(argv, **kw):
+        raise fw.subprocess.CalledProcessError(1, argv)
+
+    fw._firewalld_marker_write([LAN_RULE, tailscale])
+    monkeypatch.setattr(fw.subprocess, "run", failing)
+    assert fw._setup_firewall_linux_firewalld(8443, 8001) is False
+    assert fw._firewalld_marker_read() == sorted([LAN_RULE, tailscale])

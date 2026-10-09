@@ -550,20 +550,23 @@ def _setup_firewall_linux_firewalld(port: int, port_frontend: int):
     # cost the very password dialog it tries to avoid (live incident: a root
     # dialog on every start for weeks while the permanent rule existed the whole
     # time; every one of those passwords went into the CHECK, never into a change).
-    # Removing a rule that is already gone is not an error.
+    # A removal asks first: a rule that is already gone (in the runtime or the permanent
+    # set) is not an error, but a removal that FAILS fails the whole elevation, so the marker
+    # keeps the rule and the next setup tries again. Swallowing it forgot the rule while its
+    # permanent copy came back at the next boot.
     steps = []
     for zone, rule in stale:
         z, q = shlex.quote(zone), shlex.quote(rule)
-        steps.append(f"{{ firewall-cmd --zone={z} --remove-rich-rule={q}; "
-                     f"firewall-cmd --permanent --zone={z} --remove-rich-rule={q}; }} >/dev/null 2>&1 || true")
-    adds = []
+        steps.append(f"{{ ! firewall-cmd --zone={z} --query-rich-rule={q} >/dev/null 2>&1 || "
+                     f"firewall-cmd --zone={z} --remove-rich-rule={q}; }} && "
+                     f"{{ ! firewall-cmd --permanent --zone={z} --query-rich-rule={q} >/dev/null 2>&1 || "
+                     f"firewall-cmd --permanent --zone={z} --remove-rich-rule={q}; }}")
     for zone, rule in rules:
         z, q = shlex.quote(zone), shlex.quote(rule)
-        adds.append(f"{{ firewall-cmd --zone={z} --query-rich-rule={q} || "
-                    f"{{ firewall-cmd --zone={z} --add-rich-rule={q} && "
-                    f"firewall-cmd --permanent --zone={z} --add-rich-rule={q}; }}; }}")
-    steps.append(" && ".join(adds) if adds else "true")
-    inner = "; ".join(steps)
+        steps.append(f"{{ firewall-cmd --zone={z} --query-rich-rule={q} || "
+                     f"{{ firewall-cmd --zone={z} --add-rich-rule={q} && "
+                     f"firewall-cmd --permanent --zone={z} --add-rich-rule={q}; }}; }}")
+    inner = " && ".join(steps) if steps else "true"
     argv = _elevation_argv() + ['sh', '-c', inner]
     try:
         logger.info("firewalld: applying %d rule(s) for port %s via %s", len(rules), port, argv[0])

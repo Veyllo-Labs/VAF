@@ -1717,6 +1717,8 @@
         "saved": "Gespeichert. Die Zugangsprüfung gilt sofort, die Firewall passt VAF ohne Neustart an.",
         "failed": "Das hat nicht geklappt.",
         "changedMeanwhile": "Die Einstellungen wurden inzwischen geändert. Hier steht jetzt der aktuelle Stand, bitte die Änderung noch einmal machen.",
+        "loadFailed": "Der Stand ließ sich gerade nicht laden.",
+        "retry": "Erneut laden",
         "copied": "Kopiert",
         "lockoutTitle": "Damit sperrst du dich aus",
         "lockoutText": "Du bist gerade über {address} verbunden. Nach dieser Änderung kommt diese Adresse nicht mehr herein, und diese Seite reagiert nicht mehr.",

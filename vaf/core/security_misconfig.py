@@ -29,6 +29,14 @@ def _admission_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
         found.append(_finding(
             "medium", "network_allowed_entries_ignored",
             f"Admitted networks contain entries that are ignored: {listed}."))
+    single = [n for n in policy.vpn if n.endswith("/32")] if policy.vpn_only else []
+    if single:
+        found.append(_finding(
+            "low", "network_vpn_single_address",
+            "\"VPN only\" admits the VPN by its interface network, and "
+            + ", ".join(single) + " names only this machine's own address (a point-to-point "
+            "configuration), so no peer on it gets in. Add the VPN's network with "
+            "`vaf server networks allow`."))
     if policy.vpn_only and not policy.vpn and not policy.allowed:
         found.append(_finding(
             "low", "network_vpn_only_without_vpn",

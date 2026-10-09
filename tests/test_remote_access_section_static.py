@@ -28,7 +28,30 @@ def test_an_unconfirmed_save_clears_the_pending_confirmation_before_it_is_sent()
 def test_adding_a_network_waits_for_a_running_save():
     """MUTATION: drop the busy guard from addOwn - red."""
     source = SECTION.read_text(encoding="utf-8")
-    add = source[source.index("const addOwn"):source.index("return (")]
+    start = source.index("const addOwn")
+    add = source[start:source.index("return (", start)]
     guard = add.find("if (busy) return;")
     call = add.find("save(")
     assert guard != -1 and guard < call
+
+
+
+def test_a_failed_load_keeps_the_section_and_offers_a_retry():
+    """Only "not yours" (401/403) hides the section; any other failure keeps the last state
+    and says so with a retry, instead of the panel vanishing without a word.
+    MUTATION: blank the data on every non-OK answer again - red."""
+    source = SECTION.read_text(encoding="utf-8")
+    load = source[source.index("const load = useCallback"):source.index("useEffect(")]
+    assert "res.status === 401 || res.status === 403" in load
+    assert "if (!res.ok) { setLoadFailed(true); return; }" in load
+    assert "t('retry')" in source and "t('loadFailed')" in source
+
+
+def test_a_confirmed_add_empties_the_field_it_came_from():
+    """An entry whose save needed "Save anyway" stayed in the field and could be sent again.
+    MUTATION: drop the draft from the lockout - red."""
+    source = SECTION.read_text(encoding="utf-8")
+    assert "save([...data.allowed, entry], data.vpn_only, false, entry)" in source
+    assert "draft: draftEntry" in source
+    confirm = source[source.index("const typed = lockout.draft;"):]
+    assert "setDraft(current => (current.trim() === typed ? '' : current))" in confirm[:400]

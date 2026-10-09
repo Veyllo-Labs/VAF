@@ -32,6 +32,7 @@ import UpdateRepairModal from './settings/UpdateRepairModal';
 import LanguagePicker from './settings/LanguagePicker';
 import SecretsSection from './settings/SecretsSection';
 import SshSection from './settings/SshSection';
+import RemoteAccessSection from './settings/RemoteAccessSection';
 import StandingGrantsSection from './settings/StandingGrantsSection';
 import { PickerSelect } from '@/components/ui/PickerDialog';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -1223,7 +1224,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         addSecs('interface', [tInterface('language'), tInterface('dateTime'), tInterface('automation')]);
         addSecs('advanced', [tAdvanced('failover'), tAdvanced('attachments'), tAdvanced('system'), tAdvanced('updateRepair'), tAdvanced('browserPool')]);
         addSecs('automations', [tAutomations('scheduled')]);
-        addSecs('local_network', [tLocalNet('networkSettings'), tLocalNet('userManagement'), tLocalNet('connectionDetails'), tLocalNet('networkTopology')]);
+        addSecs('local_network', [tLocalNet('networkSettings'), tLocalNet('remoteAccess.title'), tLocalNet('userManagement'), tLocalNet('connectionDetails'), tLocalNet('networkTopology')]);
         addSecs('about', [tAbout('principles'), tAbout('credits')]);
         return out;
     })();
@@ -4625,7 +4626,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     {localConfig.server_mode ? (
                                         <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-800">
                                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                                            <span>LAN access is permanently enabled in server mode and cannot be disabled here.</span>
+                                            <span>{tLocalNet('serverModeLocked')}</span>
                                         </div>
                                     ) : (
                                     <Switch
@@ -4729,6 +4730,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 </Section>
                                 
                                 <div className={cn("space-y-6 transition-all duration-300", !localConfig.local_network_enabled && "opacity-50 pointer-events-none grayscale-[0.5]")}>
+                                    {/* Who may connect besides the home network: VPN connections and admitted
+                                        networks. Self-loading like the SSH section; saves through its own route. */}
+                                    <RemoteAccessSection sectionId={slugifySection(tLocalNet('remoteAccess.title'))} />
                                     <Section title={tLocalNet('userManagement')}>
                                         <div className="flex flex-col gap-4">
                                             {/* Toolbar */}

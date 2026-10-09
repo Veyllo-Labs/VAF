@@ -677,7 +677,7 @@ _HARDCODED_COPY_DEBT = {
     "web/components/NativeDocxEditor.tsx": 20,
     "web/components/NotificationsModal.tsx": 8,
     "web/components/PdfWithHighlights.tsx": 2,
-    "web/components/SettingsModal.tsx": 31,
+    "web/components/SettingsModal.tsx": 30,
     "web/components/SubAgentWindow.tsx": 50,
     "web/components/ToolMessage.tsx": 2,
     "web/components/TrainingDashboard.tsx": 6,

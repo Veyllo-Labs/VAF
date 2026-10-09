@@ -786,6 +786,10 @@ The Settings UI shows the **General**, **AI & Model**, **Advanced**, and **Local
 
 The `/api/security/*` surface (overview, events, skill actions) is admin-only (`Depends(require_admin)`) by design: it deliberately aggregates cross-user data for the admin's Logs Overview dashboard, including per-user workspace sizes and per-scope memory/chunk counts, with usernames attached server-side. Full scope UUIDs never leave the backend (the overview shortens them to the first 8 characters for display). This aggregate lane, including the owner-connection read path described in Section 4, must never be reachable from a per-user route.
 
+### Network routes (`vaf/api/network_routes.py`)
+
+The connection map (`/api/network/connections`) lists every connected device's address and user name, so it is cross-user data like the security overview and answers an admin only (`Depends(require_admin)`), as do `/status`, `/access-url` and `/remote-access`. They were open to any signed-in account while the settings tab that reads them was admin-only. `/ws-config` stays open because the login page needs it before anybody is signed in. Pinned by `tests/test_remote_access_routes.py`.
+
 ## Isolation Summary Table
 
 | Component | Isolation mechanism | Level |

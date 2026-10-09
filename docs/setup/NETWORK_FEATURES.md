@@ -542,10 +542,15 @@ The proxy `/ws` relay connects to the backend with `max_size=None`, so it does *
 
 ## API Reference
 
+Every `/api/network/*` route except `/ws-config` answers an admin only (`require_admin`; the
+tokenless local desktop is the local admin). The connection map lists every connected
+device's address and user name, and the rest describes the machine's network; the settings
+tab that reads them was admin-only while the routes were not.
+
 ### 1. Get Access URL
 **GET** `/api/network/access-url`
 
-Returns the URL other devices on the LAN should use. When TLS is enabled, the port matches the **effective** integrated HTTPS proxy port (443, or 8443 after the cross-platform fallback). The Web UI uses this for the "For other devices on LAN" row in Network settings.
+Returns the URL other devices should use: the first admitted LAN address, else the first admitted VPN address (a server reached only over a VPN has no LAN). When TLS is enabled, the port matches the **effective** integrated HTTPS proxy port (443, or 8443 after the cross-platform fallback). The Web UI uses this for the "For other devices on LAN" row in Network settings.
 
 **Response (TLS on, 443 unbindable → 8443 fallback):**
 ```json
@@ -607,7 +612,39 @@ Real runtime state of LAN hosting: whether the integrated HTTPS proxy actually b
 
 Tells the caller which WebSocket transport to use; the answer differs per client so one frontend build works on the desktop and over the LAN. TLS off -> `{ "useWss": false, "port": 8001 }`; TLS on with `X-Forwarded-Proto: https` (a LAN client behind the proxy) -> `{ "useWss": true, "port": <effective proxy port> }`; TLS on without that header (the local desktop on `http://127.0.0.1:3000`) -> `{ "useWss": false, "port": 8005 }` (the internal plain channel, since QtWebEngine rejects the proxy's self-signed cert).
 
-### 5. Authentication Endpoints
+### 5. Remote access (VPN)
+**GET** `/api/network/remote-access`
+
+The detected LAN and VPN interfaces and who is admitted - what the "Remote access (VPN)"
+section of the settings shows:
+
+```json
+{
+  "enabled": true,
+  "access_port": 8443,
+  "interfaces": [
+    {"name": "enp3s0", "ip": "192.168.2.10", "network": "192.168.2.0/24", "kind": "lan",
+     "admitted": true, "url": "https://192.168.2.10:8443", "in_certificate": true, "single_address": false},
+    {"name": "tailscale0", "ip": "100.101.102.103", "network": "100.64.0.0/10", "kind": "vpn",
+     "admitted": false, "url": null, "in_certificate": true, "single_address": false}
+  ],
+  "allowed": [],
+  "refused": [],
+  "vpn_only": false,
+  "vpn_networks": ["100.64.0.0/10"],
+  "mesh_vpn_network": "100.64.0.0/10",
+  "mesh_vpn_admitted": false,
+  "your_address": "192.168.2.50"
+}
+```
+
+**PUT** `/api/network/remote-access` with `{"allowed": [...], "vpn_only": bool, "confirm": bool}`
+replaces both settings. `422` with `{"code": "refused", "refused": [{"value", "reason"}]}` when an
+entry is not a private network (reason codes of `REFUSAL_REASONS` in `vaf/network/binding.py`).
+`409` with `{"code": "lockout", "address"}` when the change would shut out the address the
+request comes from; sent again with `"confirm": true` it is saved. The answer is the new state.
+
+### 6. Authentication Endpoints
 
 | Method | Endpoint | Auth Required | Description |
 |--------|----------|---------------|-------------|

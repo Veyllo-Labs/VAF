@@ -21,7 +21,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   once you say so:
   `vaf server networks tailscale on`. `vaf server networks allow` admits another private
   network, and `vaf server vpn-only on` admits only the VPN and locks the home network out.
-  Public networks are refused. The firewall follows on its own, and nothing restarts.
+  Public networks are refused. The firewall follows on its own, and nothing restarts. The same
+  settings are in Settings, Local Network, "Remote access (VPN)", which asks before a change
+  would lock out the device you are using.
 
 ### Fixed
 
@@ -39,6 +41,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   admin account yet, create one. API calls from outside the local network are refused now: the
   login screen still loads, but nothing behind it answers. The security log names the device
   instead of the proxy, for upload refusals and the room door too.
+- **Only admins can read the network routes now.** The connection map listed every connected
+  device's address and user name to any signed-in account, and the network status and
+  access address were open the same way, although the settings tab that shows them is
+  admin-only.
 
 ## [0.1.0a32] - 2026-10-06
 

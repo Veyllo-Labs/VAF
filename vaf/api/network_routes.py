@@ -5,13 +5,26 @@
 Network API: access URL (LAN IP + port) for local network hosting.
 
 Endpoints:
-- GET /api/network/access-url  → { "host", "port", "url" } for other devices
-- GET /api/network/ws-config → { "useWss", "port" } for WebSocket URL (TLS vs plain)
+- GET /api/network/access-url  → { "host", "port", "url" } for other devices (admin)
+- GET /api/network/status → the proxy's real binding (admin)
+- GET /api/network/connections → the live connection map (admin)
+- GET/PUT /api/network/remote-access → VPN interfaces and who is admitted (admin)
+- GET /api/network/ws-config → { "useWss", "port" } for WebSocket URL (TLS vs plain); open,
+  the login page needs it before anybody is signed in
+
+Everything but /ws-config answers an admin only: the connection map lists every connected
+device's address and user name, and the rest describes the machine's network. The
+settings tab that reads them was admin-only; the routes were not (any signed-in account
+could read the map).
 """
 
 import logging
-from fastapi import APIRouter, Request
+from typing import List, Optional
 
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
+
+from vaf.api.user_routes import require_admin
 from vaf.core.config import Config
 
 logger = logging.getLogger(__name__)
@@ -62,18 +75,25 @@ def get_ws_config(request: Request):
     return {"useWss": False, "port": _INTERNAL_API_PORT}
 
 
-@router.get("/access-url")
+def _primary_host() -> Optional[str]:
+    """The address other devices should use: the first admitted LAN address, else the first
+    admitted VPN address (a server reached only over a VPN has no LAN)."""
+    try:
+        from vaf.network.binding import access_addresses
+        reachable = access_addresses()
+        return reachable[0].ip if reachable else None
+    except Exception as e:
+        logger.debug("Could not list the access addresses: %s", e)
+        return None
+
+
+@router.get("/access-url", dependencies=[Depends(require_admin)])
 def get_access_url():
     """
     Return host and ports for display; full url (with port) for copy.
     Network mode is always with encryption. The access port is the port the proxy actually bound.
     """
-    try:
-        from vaf.network.binding import get_local_network_ip
-        host = get_local_network_ip()
-    except Exception as e:
-        logger.debug(f"Could not get LAN IP: {e}")
-        host = None
+    host = _primary_host()
     access_port = _access_port()
     backend_port = Config.get("local_network_port", 8001)
     if not host:
@@ -94,7 +114,7 @@ def get_access_url():
     }
 
 
-@router.get("/status")
+@router.get("/status", dependencies=[Depends(require_admin)])
 def get_network_status():
     """Real runtime status of LAN hosting: whether the integrated HTTPS proxy actually bound, on which
     port (after any privileged-port fallback), the resulting LAN URL, and the last bind error if it
@@ -104,11 +124,7 @@ def get_network_status():
     st = runtime_status.get_proxy_status()
     tls = Config.get("local_network_tls_enabled", False)
     enabled = Config.get("local_network_enabled", False)
-    try:
-        from vaf.network.binding import get_local_network_ip
-        host = get_local_network_ip()
-    except Exception:
-        host = None
+    host = _primary_host()
     eff = st.get("effective_https_port")
     url = None
     if host and eff:
@@ -125,7 +141,7 @@ def get_network_status():
     }
 
 
-@router.get("/connections")
+@router.get("/connections", dependencies=[Depends(require_admin)])
 def get_connections():
     """
     Return list of active network connections (Topology).
@@ -139,3 +155,100 @@ def get_connections():
     except Exception as e:
         logger.error(f"Failed to get connections: {e}")
         return []
+
+
+# ── remote access: VPN interfaces and who is admitted ──────────────────────
+#
+# The web half of the "Remote access (VPN)" settings; `vaf server networks` and
+# `vaf server vpn-only` are the CLI half. Both write the same two keys through the same
+# check (binding.normalize_allowed_networks). The access check reads them on every
+# request; the tray sees the save and re-applies the OS firewall, without a restart.
+
+_MESH_VPN_NETWORK = "100.64.0.0/10"
+
+
+def _remote_access_state(request: Request) -> dict:
+    from vaf.network.binding import (connection_client_ip, inbound_policy, is_allowed_ip,
+                                     local_interfaces)
+    from vaf.network.ssl_utils import certificate_ip_addresses
+
+    policy = inbound_policy(detect_vpn=True)
+    port = _access_port()
+    suffix = "" if port == 443 else f":{port}"
+    in_cert = certificate_ip_addresses()
+    interfaces = []
+    for iface in local_interfaces():
+        admitted = is_allowed_ip(iface.ip)
+        interfaces.append({
+            "name": iface.name,
+            "ip": iface.ip,
+            "network": iface.network,
+            "kind": iface.kind,
+            "admitted": admitted,
+            "url": f"https://{iface.ip}{suffix}" if admitted else None,
+            "in_certificate": None if in_cert is None else iface.ip in in_cert,
+            # A VPN address with no network around it (a WireGuard set up with /32)
+            # names none of its peers; its subnet has to be listed by hand.
+            "single_address": iface.network.endswith("/32"),
+        })
+    return {
+        "enabled": Config.get_bool("local_network_enabled", False),
+        "access_port": port,
+        "interfaces": interfaces,
+        "allowed": list(policy.allowed),
+        "refused": [{"value": v, "reason": r} for v, r in policy.refused],
+        "vpn_only": policy.vpn_only,
+        "vpn_networks": list(policy.vpn),
+        "mesh_vpn_network": _MESH_VPN_NETWORK,
+        "mesh_vpn_admitted": any(a == _MESH_VPN_NETWORK for a in policy.allowed),
+        "your_address": connection_client_ip(request),
+    }
+
+
+@router.get("/remote-access", dependencies=[Depends(require_admin)])
+def get_remote_access(request: Request):
+    """The VPN interfaces with their access URL, and who is admitted."""
+    return _remote_access_state(request)
+
+
+class RemoteAccessUpdate(BaseModel):
+    allowed: List[str]
+    vpn_only: bool
+    # Set after the person saw the lockout warning: they keep the change although it
+    # shuts out the address they are connected from.
+    confirm: bool = False
+
+
+@router.put("/remote-access", dependencies=[Depends(require_admin)])
+def put_remote_access(body: RemoteAccessUpdate, request: Request):
+    """Replace the admitted networks and the "VPN only" switch.
+
+    422 with the refused entries when one is not a private network. 409 when the change
+    would shut out the address this request comes from, unless `confirm` is set: the
+    person would lose this very page, so they are asked once before it happens.
+    """
+    from vaf.network.binding import (connection_client_ip, inbound_policy,
+                                     normalize_allowed_networks)
+    import ipaddress
+
+    allowed, refused = normalize_allowed_networks(body.allowed)
+    if refused:
+        raise HTTPException(status_code=422, detail={
+            "code": "refused", "refused": [{"value": v, "reason": r} for v, r in refused]})
+
+    with Config._locked():
+        cfg = Config.load()
+        proposed = {**cfg, "local_network_allowed_networks": allowed,
+                    "local_network_vpn_only": bool(body.vpn_only)}
+        caller = connection_client_ip(request)
+        kept = caller in ("localhost", "::1")
+        if not kept:
+            try:
+                addr = ipaddress.ip_address(caller)
+                kept = any(addr in net for net in inbound_policy(proposed).networks)
+            except ValueError:
+                kept = False
+        if not kept and not body.confirm:
+            raise HTTPException(status_code=409, detail={"code": "lockout", "address": caller})
+        Config.save(proposed)
+    return _remote_access_state(request)

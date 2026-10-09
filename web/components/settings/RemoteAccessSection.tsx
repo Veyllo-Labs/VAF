@@ -133,6 +133,7 @@ export default function RemoteAccessSection({ sectionId }: { sectionId?: string 
     };
     const addOwn = (e: FormEvent) => {
         e.preventDefault();
+        if (busy) return;
         const entry = draft.trim();
         if (!entry) return;
         void save([...data.allowed, entry], data.vpn_only).then(saved => { if (saved) setDraft(''); });

@@ -195,3 +195,12 @@ def test_tailscale_off_under_vpn_only_says_it_stays_admitted(settings):
     settings["local_network_allowed_networks"] = ["100.64.0.0/10"]
     said = _said(runner.invoke(server_cmd.app, ["networks", "tailscale", "off"]))
     assert "(100.64.0.0/10) not admitted" in said
+
+
+def test_the_partial_lan_warning_names_only_the_entries_that_touch_it(settings, monkeypatch):
+    """An unrelated entry (Tailscale's range) is no exception for the home network.
+    MUTATION: list every entry again - red."""
+    monkeypatch.setattr(binding, "local_interfaces", lambda: [LAN, WG])
+    settings["local_network_allowed_networks"] = ["192.168.2.50/32", "100.64.0.0/10"]
+    said = _said(runner.invoke(server_cmd.app, ["vpn-only", "on"]))
+    assert "your own entries admit (192.168.2.50/32)" in said

@@ -280,8 +280,9 @@ def test_the_other_platforms_open_the_same_networks(monkeypatch, tmp_path):
     assert remote and all(r == "remoteip=10.8.0.0/24,100.64.0.0/10,127.0.0.1" for r in remote)
 
     seen.clear()
+    monkeypatch.setattr(fw, "_ufw_marker_path", lambda: tmp_path / "ufw_sources.json")
     assert fw._setup_firewall_linux_ufw(8443, 8001) is True
-    froms = {argv[argv.index("from") + 1] for argv in seen if "from" in argv}
+    froms = {argv[argv.index("from") + 1] for argv in seen if "from" in argv and "delete" not in argv}
     assert froms == set(sources)
 
     seen.clear()
@@ -308,3 +309,45 @@ def test_the_other_platforms_open_the_same_networks(monkeypatch, tmp_path):
     for src in sources:
         assert f"from {src} to any port" in rules
     assert "192.168.0.0/16" not in rules and rules.rstrip().endswith("port {8443, 8001}")
+
+
+
+def _ufw_wire(monkeypatch, tmp_path, sources):
+    seen = []
+
+    def run(argv, **kw):
+        seen.append(argv)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(fw.subprocess, "run", run)
+    monkeypatch.setattr(fw, "_sources", lambda narrow_lan=False: list(sources))
+    monkeypatch.setattr(fw, "_ufw_marker_path", lambda: tmp_path / "ufw_sources.json")
+    return seen
+
+
+def _ufw_deleted(seen):
+    return {(int(a[a.index("port") + 1]), a[a.index("from") + 1]) for a in seen if "delete" in a}
+
+
+def test_ufw_closes_a_network_that_is_no_longer_admitted(monkeypatch, tmp_path):
+    """ufw only ever adds. Since the admitted networks change without a restart, a dropped
+    network stayed open there; the setup now deletes, by the same rule spec, the allows it
+    made last time and no longer wants. MUTATION: skip the deletes - red."""
+    sources = ["10.8.0.0/24", "100.64.0.0/10"]
+    seen = _ufw_wire(monkeypatch, tmp_path, sources)
+    assert fw._setup_firewall_linux_ufw(8443, 8001) is True
+    seen.clear()
+    sources.remove("100.64.0.0/10")
+    assert fw._setup_firewall_linux_ufw(8443, 8001) is True
+    assert _ufw_deleted(seen) == {(8443, "100.64.0.0/10"), (8001, "100.64.0.0/10")}
+    adds = {a[a.index("from") + 1] for a in seen if "allow" in a and "delete" not in a}
+    assert adds == {"10.8.0.0/24"}
+
+
+def test_ufw_without_a_marker_assumes_the_old_rfc1918_allows(monkeypatch, tmp_path):
+    """An install from before the admitted networks has RFC 1918 allowed on both ports and
+    no marker. Switched to "VPN only", those allows must go too."""
+    seen = _ufw_wire(monkeypatch, tmp_path, ["10.8.0.0/24"])
+    assert fw._setup_firewall_linux_ufw(8443, 8001) is True
+    assert _ufw_deleted(seen) == {(p, n) for p in (8443, 8001)
+                                  for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")}

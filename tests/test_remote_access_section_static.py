@@ -22,3 +22,13 @@ def test_an_unconfirmed_save_clears_the_pending_confirmation_before_it_is_sent()
     send = save.find("await fetch(")
     assert clear and send != -1 and clear.start() < send, (
         "an unconfirmed save must drop the pending lockout confirmation before the request")
+
+
+
+def test_adding_a_network_waits_for_a_running_save():
+    """MUTATION: drop the busy guard from addOwn - red."""
+    source = SECTION.read_text(encoding="utf-8")
+    add = source[source.index("const addOwn"):source.index("return (")]
+    guard = add.find("if (busy) return;")
+    call = add.find("save(")
+    assert guard != -1 and guard < call

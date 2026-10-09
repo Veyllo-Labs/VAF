@@ -372,6 +372,8 @@ def server_vpn_only(state: str = typer.Argument(..., metavar="on|off")):
     if blocked:
         UI.warning("Devices on " + ", ".join(blocked) + " can no longer connect.")
     if partly:
+        touching = [e for e in policy.allowed
+                    if any(ipaddress.ip_network(e).overlaps(ipaddress.ip_network(n)) for n in partly)]
         UI.warning("Devices on " + ", ".join(partly) + " can no longer connect, except the "
-                   "addresses your own entries admit (" + ", ".join(policy.allowed) + ").")
+                   "addresses your own entries admit (" + ", ".join(touching) + ").")
     _applied_note()

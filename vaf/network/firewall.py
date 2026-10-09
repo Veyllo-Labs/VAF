@@ -624,28 +624,66 @@ def _setup_firewall_linux_iptables(port: int, port_frontend: int) -> bool:
         return False
 
 
+def _ufw_marker_path() -> Path:
+    from vaf.core.config import Config
+    return Config.APP_DIR / "ufw_sources.json"
+
+
+def _ufw_previous(ports: list) -> list:
+    """The (port, source) pairs this install allowed through ufw last time.
+
+    ufw only ever adds, so a network an admin dropped would stay open there. The marker
+    lets the next setup delete exactly what it added, by the same rule spec, without
+    parsing ufw's (translated) output. With no marker, the rules every version before
+    the admitted networks added are assumed: RFC 1918 on both ports. Deleting a rule
+    that is not there is harmless."""
+    try:
+        import json
+        data = json.loads(_ufw_marker_path().read_bytes().decode("utf-8"))
+        return [(int(p), str(s)) for p, s in data.get("rules", [])]
+    except FileNotFoundError:
+        from vaf.network.binding import PRIVATE_RANGES
+        return [(p, str(n)) for p in ports for n in PRIVATE_RANGES]
+    except Exception:
+        return []
+
+
 def _setup_firewall_linux_ufw(port: int, port_frontend: int) -> bool:
-    """Setup using ufw (Uncomplicated Firewall)."""
+    """Setup using ufw (Uncomplicated Firewall): allow the admitted networks on both ports,
+    and delete the allows this install made for networks that are no longer admitted."""
     
     ports = [port, port_frontend]
+    wanted = [(p, cidr) for p in ports for cidr in _sources()]
     
     try:
-        for p in ports:
-            # Allow from the admitted networks
-            for cidr in _sources():
+        for p, cidr in _ufw_previous(ports):
+            if (p, cidr) not in wanted:
                 subprocess.run([
-                    'sudo', '-n','ufw', 'allow',
-                    'from', cidr,
-                    'to', 'any',
-                    'port', str(p),
-                    'proto', 'tcp',
-                    'comment', f'VAF-{p}'
-                ], check=True)
+                    'sudo', '-n', 'ufw', 'delete', 'allow',
+                    'from', cidr, 'to', 'any', 'port', str(p), 'proto', 'tcp',
+                ], capture_output=True)
+        for p, cidr in wanted:
+            # Allow from the admitted networks (ufw skips a rule it already has)
+            subprocess.run([
+                'sudo', '-n','ufw', 'allow',
+                'from', cidr,
+                'to', 'any',
+                'port', str(p),
+                'proto', 'tcp',
+                'comment', f'VAF-{p}'
+            ], check=True)
             
             # Deny from anywhere else (ufw default deny handles this)
         
         # Reload ufw
         subprocess.run(['sudo', '-n','ufw', 'reload'], capture_output=True)
+        try:
+            import json
+            marker = _ufw_marker_path()
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_bytes(json.dumps({"rules": [list(r) for r in wanted]}).encode("utf-8"))
+        except Exception as e:
+            logger.debug("ufw: could not write the marker file: %s", e)
         
         logger.info(f"Linux ufw rules created for ports {ports}")
         return True

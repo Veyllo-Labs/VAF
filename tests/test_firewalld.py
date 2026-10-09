@@ -351,3 +351,25 @@ def test_ufw_without_a_marker_assumes_the_old_rfc1918_allows(monkeypatch, tmp_pa
     assert fw._setup_firewall_linux_ufw(8443, 8001) is True
     assert _ufw_deleted(seen) == {(p, n) for p in (8443, 8001)
                                   for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")}
+
+
+def test_unreadable_admitted_networks_apply_nothing_and_are_retried(monkeypatch):
+    """An unreadable policy must not run a platform setup on an empty list nor be cached
+    as "already attempted": the next setup has to try again once it is readable.
+    MUTATION: fall back to an empty key and carry on - red."""
+    calls = []
+    state = {"broken": True}
+
+    def sources(narrow_lan=False):
+        if state["broken"]:
+            raise OSError("config unreadable")
+        return ["192.168.0.0/16"]
+
+    monkeypatch.setattr(fw, "_setup_firewall_linux", lambda p, pf: calls.append(p) or True)
+    _linux_only(monkeypatch)
+    monkeypatch.setattr(fw, "_sources", sources)
+    assert fw.setup_firewall(8443, 8001) is False
+    assert calls == [] and fw._attempted_ports == {}
+    state["broken"] = False
+    assert fw.setup_firewall(8443, 8001) is True
+    assert calls == [8443]

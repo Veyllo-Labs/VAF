@@ -110,11 +110,15 @@ def setup_firewall(port: int, port_frontend: int = 3000):
     # Both lists: firewalld opens the narrow one (the LAN subnet, a WireGuard /24), the
     # other backends the wide one, and a change can show in one only - a network an
     # admin adds inside 10.0.0.0/8 leaves the wide list as it was.
+    # Unreadable admitted networks: nothing is applied, and nothing is recorded, so the
+    # next call (the next start, the next admission change) tries again. No platform
+    # setup runs either - every backend reads the same lists and would fail the same way.
     try:
         sources = (tuple(_sources()), tuple(_sources(narrow_lan=True)))
     except Exception as e:
-        logger.warning("firewall: admitted networks unreadable (%s); using the setup as it was", e)
-        sources = ()
+        logger.warning("firewall: admitted networks unreadable (%s); no firewall rule was "
+                       "applied, the next setup tries again", e)
+        return False
     key = (int(port), int(port_frontend), sources)
     with _attempt_lock:
         if key in _attempted_ports:

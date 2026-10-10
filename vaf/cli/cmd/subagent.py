@@ -40,6 +40,7 @@ def run_subagent(
     task: str = typer.Option("", "--task", "-t", help="Task for the sub-agent"),
     task_id: Optional[str] = typer.Option(None, "--task-id", help="Task ID for IPC tracking"),
     project_path: Optional[str] = typer.Option(None, "--project-path", "-p", help="Project path (for coding_agent)"),
+    environment: Optional[str] = typer.Option(None, "--environment", help="Sandbox environment id (for coding_agent)"),
     topic: Optional[str] = typer.Option(None, "--topic", help="Topic (for research_agent)"),
     format: Optional[str] = typer.Option("html", "--format", help="Output format (for research_agent/document_agent)"),
     max_results: Optional[int] = typer.Option(5, "--max-results", help="Max results (for research_agent)"),
@@ -145,6 +146,8 @@ def run_subagent(
             kwargs = {"task": task}
             if project_path:
                 kwargs["project_path"] = project_path
+            if environment:
+                kwargs["environment"] = environment
             result = tool.run(**kwargs)
             _safe_print(result)
             

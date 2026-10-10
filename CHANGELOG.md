@@ -20,7 +20,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   leave a dev server running there; the chat hears back when it stops. Each environment
   chooses its network: none, only package registries through a filtering proxy, or the
   open internet, and an admin can cap that choice. Nobody else can see or use your
-  environments.
+  environments. The coder works in a project environment too: give it one (or have one
+  for that folder) and it builds, tests and runs its dev server inside, with the
+  packages it installed there.
 - **Reach VAF over a VPN.** VAF now recognises VPN connections (WireGuard, OpenVPN,
   Tailscale, NetBird, ZeroTier) and shows their address next to the home network's in
   `vaf server status` and `vaf top`; the certificate carries it too. WireGuard and OpenVPN

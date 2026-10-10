@@ -2998,6 +2998,10 @@ class CodingAgentTool(BaseTool):
             "project_path": {
                 "type": "string",
                 "description": "Optional: Absolute path to an EXISTING project directory to continue working on. ONLY provide this when editing/fixing an existing project whose path you already know (e.g. from [SESSION WORKSPACE]). Do NOT invent or guess paths. For new projects, omit this entirely — the agent will create the project directory automatically in the correct location."
+            },
+            "environment": {
+                "type": "string",
+                "description": "Optional: the id of one of your sandbox environments (sandbox_manage, kind='project') whose project folder is project_path. The coder then runs its commands, tests and dev servers in that container, with its network and installed packages. Without it, a project environment you already have for that folder is used on its own."
             }
         },
         "required": ["task"]
@@ -3508,9 +3512,16 @@ Thumbs.db
             if _grants:
                 _sub_env[CHAT_GRANTS_ENV] = ",".join(sorted(_grants))
 
+            _spawn_args = ()
+            if project_path:
+                _spawn_args += ("--project-path", project_path)
+            # The environment id is an argument, never an environment variable: a variable
+            # set here would outlive this spawn in the parent (Rule 4.5), an argument cannot.
+            if kwargs.get("environment"):
+                _spawn_args += ("--environment", str(kwargs.get("environment")))
             spawned = spawn_subagent(
                 "coding_agent", task,
-                args=(("--project-path", project_path) if project_path else ()),
+                args=_spawn_args,
                 extra_env=_sub_env,
             )
             if spawned:
@@ -3914,12 +3925,35 @@ Thumbs.db
             self.local_tools["update_codex"] = make_git_tool_wrapper(UpdateCodexTool, base_dir)
             self.local_tools["add_memory"] = make_git_tool_wrapper(AddMemoryTool, base_dir)
 
+        # The sandbox environment this run works in, decided AFTER base_dir: the caller's
+        # project environment mounted at exactly this folder (an explicit `environment`
+        # must match it), or none. A local, never instance state - the tool object is
+        # shared across turns and users. A content-only run has no project to bind.
+        _env_binding = None
+        _env_owner = _caller_identity(kwargs)[0]
+        if not skip_template:
+            try:
+                from vaf.core.environments import EnvironmentRefused, get_environment_manager
+                _env_binding = get_environment_manager().bind_for_project(
+                    _env_owner, base_dir, kwargs.get("environment") or None)
+            except EnvironmentRefused as _env_err:
+                return f"Error: {_env_err}"
+            except Exception as _env_err:
+                if kwargs.get("environment"):
+                    return f"Error: the sandbox environment could not be reached ({_env_err})"
+                _env_binding = None
+            if _env_binding is not None:
+                tui.append_stream(f"Working in sandbox environment {_env_binding.id} "
+                                  f"(network {_env_binding.network})")
+        elif kwargs.get("environment"):
+            return "Error: a content-only run has no project folder to work in an environment"
+
         # Run the project's tests in the isolated sandbox (real pass/fail, not a guess).
         # Registered UNCONDITIONALLY (base_dir is always valid, incl. CONTENT_ONLY) so it
         # matches the run_tests schema, which the execution-phase tool list advertises in
         # every mode - otherwise the model could call an unregistered tool.
         from vaf.tools.sandbox_test_runner import RunTestsTool
-        self.local_tools["run_tests"] = RunTestsTool(base_dir)
+        self.local_tools["run_tests"] = RunTestsTool(base_dir, environment=_env_binding)
 
         # Render a page in the sandbox browser and report errors/console/text -
         # the visual half of the verify loop (run_tests proves logic, render_check
@@ -3956,7 +3990,8 @@ Thumbs.db
         # jail (bwrap) rooted at base_dir - full workspace access (incl. host docker),
         # but VAF's core, secrets and the agent itself are structurally out of reach.
         if HAS_CODING_TOOLS:
-            self.local_tools["bash"] = BashTool(base_dir)
+            self.local_tools["bash"] = BashTool(base_dir, environment=_env_binding,
+                                                owner_scope=_env_owner)
 
         # ═══════════════════════════════════════════════════════════════════
         # TEMPLATE ANALYSIS - Use LLM with own context BEFORE starting work
@@ -5023,11 +5058,18 @@ Task {task_idx + 1}: {current_task}
                                 "Run the project's tests and return the REAL pass/fail result. After writing "
                                 "tests, CALL THIS to verify them — never claim tests pass without running them. "
                                 "Default command: pytest. On failure, read the output, fix with write_file/edit_file, "
-                                "run_tests again. NOTE: this runs in your ISOLATED sandbox on a COPY of the project "
-                                "(no .git, unprivileged user; the internet is reachable, so the command may pip or npm "
-                                "install what the tests need) - it is NOT a shell on your real repo. For git "
-                                "on the real repo use git_log / project_history / project_rollback; to change files "
-                                "use edit_file / write_file."
+                                + (
+                                    f"run_tests again. NOTE: this runs in sandbox environment {_env_binding.id}, IN the "
+                                    f"project itself (/workspace; network {_env_binding.network}; packages you installed "
+                                    "there stay). For git use git_log / project_history / project_rollback; to change "
+                                    "files use edit_file / write_file."
+                                    if _env_binding is not None else
+                                    "run_tests again. NOTE: this runs in your ISOLATED sandbox on a COPY of the project "
+                                    "(no .git, unprivileged user; the internet is reachable, so the command may pip or npm "
+                                    "install what the tests need) - it is NOT a shell on your real repo. For git "
+                                    "on the real repo use git_log / project_history / project_rollback; to change files "
+                                    "use edit_file / write_file."
+                                )
                             ),
                             "parameters": {
                                 "type": "object",
@@ -6258,12 +6300,31 @@ Task {task_idx + 1}: {current_task}
                         "type": "function",
                         "function": {
                             "name": "bash",
-                            "description": "Execute shell command.",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {"command": {"type": "string"}},
-                                "required": ["command"]
-                            }
+                            "description": (
+                                (f"Execute a shell command in sandbox environment {_env_binding.id} "
+                                 f"(/workspace is the project; network {_env_binding.network}). "
+                                 "background=true starts a dev server or another long-running "
+                                 "command and returns its id; it is stopped when this run ends "
+                                 "unless keep_running is true.")
+                                if _env_binding is not None else "Execute shell command."
+                            ),
+                            "parameters": (
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "command": {"type": "string"},
+                                        "background": {"type": "boolean"},
+                                        "keep_running": {"type": "boolean"},
+                                    },
+                                    "required": ["command"]
+                                }
+                                if _env_binding is not None else
+                                {
+                                    "type": "object",
+                                    "properties": {"command": {"type": "string"}},
+                                    "required": ["command"]
+                                }
+                            )
                         }
                     })
 
@@ -10705,6 +10766,17 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
             except Exception:
                 final_commit_note = ""
         git_line = f"**💾 {final_commit_note}**\n" if final_commit_note else ""
+        # Background processes this run started in its environment end with the run,
+        # unless the model asked to keep one; those that stay are named.
+        try:
+            _bash_tool = self.local_tools.get("bash")
+            _kept = _bash_tool.stop_unkept() if hasattr(_bash_tool, "stop_unkept") else []
+            if _kept:
+                git_line += ("Still running in sandbox environment "
+                             f"{_env_binding.id if _env_binding else ''}: {', '.join(_kept)} "
+                             "(host_process lists and stops them)\n")
+        except Exception:
+            pass
         # How the code audit rounds ended - clean, incomplete, stuck on attempted findings, or
         # at the limit - so the caller never reads an unreviewed run as a reviewed one.
         if _audit_state["note"]:

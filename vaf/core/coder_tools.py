@@ -74,6 +74,9 @@ _EXECUTE = {
     # coder tool - whether an account has them at all is the account allowlist.
     # python_exec still checks the person's standing or chat grant on its own.
     "host_bash",
+    # The dev servers bash(background=true) starts in the run's sandbox environment:
+    # read their output, stop one. It reaches only this chat's own background commands.
+    "host_process",
     "python_sandbox",
     "python_exec",
     "linter",

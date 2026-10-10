@@ -106,11 +106,19 @@ Examples:
             own = 120
         return min(max(10, own), 300) + 30
 
-    def __init__(self, base_dir: str = None):
+    def __init__(self, base_dir: str = None, environment=None, owner_scope=None):
         # base_dir = the coder's project workspace. Bound at registration (like the git
         # tools) so bash defaults to the project, not the tray process cwd, and so the
         # sandbox confines writes to exactly this workspace.
         self.base_dir = base_dir
+        # A sandbox environment whose /workspace IS base_dir (vaf/core/environments.py):
+        # commands then run in that container, with its network and its installed
+        # packages, and may start a dev server that keeps running. Bound per instance,
+        # never on the class: the coder builds one per run, for one caller.
+        self.environment = environment
+        self.owner_scope = owner_scope
+        # Background processes this run started, as (handle, keep_running).
+        self.started = []
 
     def run(self, **kwargs) -> str:
         import shlex as _shlex
@@ -131,6 +139,9 @@ Examples:
             return f"Error: {warning}"
 
         timeout = min(max(10, timeout), 300)
+
+        if self.environment is not None:
+            return self._run_in_environment(command, cwd, timeout, warning, kwargs)
 
         workspace = self.base_dir or kwargs.get("base_dir")
         if not workspace:
@@ -167,3 +178,64 @@ Examples:
             parts.append("\nThis sandbox has no network. Run the same command with host_bash "
                          "if you have it: it runs on the host, with network.")
         return "\n".join(parts)
+
+
+    def _run_in_environment(self, command: str, cwd, timeout: int, warning, kwargs) -> str:
+        from vaf.core.environments import EnvironmentRefused, get_environment_manager
+        env = self.environment
+        mgr = get_environment_manager()
+        try:
+            if kwargs.get("background"):
+                try:
+                    from vaf.core.subagent_ipc import get_current_session_id
+                    session_id = get_current_session_id() or ""
+                except Exception:
+                    session_id = ""
+                handle = mgr.start_process(self.owner_scope, env.id, command,
+                                           session_id=session_id, cwd=cwd or None)
+                self.started.append((handle, bool(kwargs.get("keep_running"))))
+                return (f"$ {command}\nStarted {handle} in the background in environment "
+                        f"{env.id}. host_process(action=\"log\", id=\"{handle}\") shows its "
+                        f"output. It is stopped when this run ends"
+                        + (" unless keep_running is set" if not kwargs.get("keep_running")
+                           else "; keep_running is set, so it stays") + ".")
+            r = mgr.exec_in(env, ["sh", "-c", command], timeout=timeout, cwd=cwd or None)
+        except EnvironmentRefused as e:
+            return f"Error: {e}"
+        parts = []
+        if warning:
+            parts.append(warning)
+        parts.append(f"$ {command}")
+        parts.append(f"(workspace: environment {env.id}, network {env.network})")
+        out, err = r.stdout or "", r.stderr or ""
+        if out:
+            if len(out) > 8000:
+                out = out[:8000] + "\n... (output truncated)"
+            parts.append(f"\nOutput:\n{out}")
+        if err:
+            if len(err) > 4000:
+                err = err[:4000] + "\n... (stderr truncated)"
+            parts.append(f"\nStderr:\n{err}")
+        if r.timed_out:
+            parts.append(f"\nTimed out after {timeout}s.")
+        parts.append("\nSuccess (exit code: 0)" if r.returncode == 0
+                     else f"\nFailed (exit code: {r.returncode})")
+        return "\n".join(parts)
+
+    def stop_unkept(self) -> list:
+        """At the end of a coder run: stop the background processes started without
+        keep_running. Returns the handles still running."""
+        if self.environment is None or not self.started:
+            return []
+        from vaf.core.environments import get_environment_manager
+        mgr = get_environment_manager()
+        kept = []
+        for handle, keep in self.started:
+            if keep:
+                kept.append(handle)
+                continue
+            try:
+                mgr.stop_process(self.owner_scope, handle)
+            except Exception:
+                pass
+        return kept

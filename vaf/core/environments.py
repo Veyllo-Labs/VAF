@@ -418,6 +418,43 @@ class EnvironmentManager:
                 return self._from_row(row)
         raise EnvironmentRefused(f"no environment {env_id!r}")
 
+    @staticmethod
+    def _same_dir(a: str, b: str) -> bool:
+        try:
+            return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+        except Exception:
+            return False
+
+    def find_for_project(self, owner_scope: Any, project_dir: str) -> Optional[Environment]:
+        """The caller's project environment whose /workspace is this host directory, or
+        None. Compared on resolved, case-normalised paths (a symlinked home, Windows)."""
+        try:
+            envs = self.list(owner_scope)
+        except EnvironmentRefused:
+            return None
+        for env in envs:
+            if env.kind == "project" and env.project_path and self._same_dir(env.project_path, project_dir):
+                return env
+        return None
+
+    def bind_for_project(self, owner_scope: Any, project_dir: str,
+                         env_id: Optional[str] = None) -> Optional[Environment]:
+        """The environment a coder run in `project_dir` works in. With `env_id`, that one,
+        which must be the caller's project environment mounted at exactly this directory
+        (refused otherwise: a bind mount is fixed when the container is made, so a run
+        elsewhere would edit files the environment never sees). Without it, the caller's
+        project environment for this directory if there is one, else None."""
+        if not env_id:
+            return self.find_for_project(owner_scope, project_dir)
+        env = self.get(owner_scope, env_id)
+        if env.kind != "project" or not env.project_path:
+            raise EnvironmentRefused(f"environment {env_id} has no project folder; create one "
+                                     f"with kind='project' and project_path")
+        if not self._same_dir(env.project_path, project_dir):
+            raise EnvironmentRefused(f"environment {env_id} works in {env.project_path}, not in "
+                                     f"{project_dir}")
+        return env
+
     # -- creating ----------------------------------------------------------------
     def _network_rank(self, network: str) -> int:
         return NETWORKS.index(network)

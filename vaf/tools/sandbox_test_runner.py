@@ -204,6 +204,33 @@ def run_project_tests(base_dir: str, command: Optional[str] = None, timeout: int
             pass
 
 
+def run_tests_in_environment(env, command: Optional[str] = None, timeout: int = 180) -> str:
+    """Run ``command`` in the project itself: the coder is bound to a project environment
+    whose /workspace IS the project, so there is nothing to copy, the environment's
+    installed packages are there, and a test that writes files writes them into the real
+    project. Same refusals and result format as run_project_tests."""
+    cmd = (command or _DEFAULT_COMMAND).strip() or _DEFAULT_COMMAND
+    redirect = _reject_non_test_command(cmd)
+    if redirect:
+        return redirect
+    from vaf.core.environments import EnvironmentRefused, get_environment_manager
+    try:
+        mgr = get_environment_manager()
+        if "pytest" in cmd:
+            missing = _ensure_pytest(mgr, env)
+            if missing:
+                return missing
+        result = mgr.exec_in(env, ["sh", "-c", cmd], timeout=timeout, cwd="/workspace")
+    except EnvironmentRefused as exc:
+        return f"Cannot run tests: {exc}."
+    except Exception as exc:
+        return f"Cannot run tests: the environment could not be reached ({exc})."
+    if result.timed_out or result.cancelled:
+        return _format_result(cmd, -1, result.stdout, (result.stderr or "")
+                              + f"\nTimed out after {int(timeout)}s.")
+    return _format_result(cmd, result.returncode, result.stdout, result.stderr)
+
+
 def _format_result(command: str, rc: int, out: str, err: str) -> str:
     combined = (out + ("\n" + err if err.strip() else "")).strip()
     # Keep the tail: pytest's summary (pass/fail counts, failing assertions) is at the end.
@@ -253,12 +280,22 @@ class RunTestsTool(BaseTool):
             own = 180
         return own + 180
 
-    def __init__(self, base_dir: str = "."):
+    def __init__(self, base_dir: str = ".", environment=None):
         # base_dir defaults so the main agent's tool loader can instantiate the class (obj()) without
         # crashing; it is then excluded via coder_only. The coder passes the real project dir.
         self.base_dir = base_dir
+        # A project environment whose /workspace is base_dir: the tests then run there, in
+        # the project itself, instead of in a copy in the scratch environment. Per instance,
+        # and so is what that means for the gate: a test run in the real project can write.
+        self.environment = environment
+        if environment is not None:
+            self.permission_level = "write"
+            self.side_effect_class = "reversible"
 
     def run(self, **kwargs) -> str:
+        if self.environment is not None:
+            return run_tests_in_environment(self.environment, kwargs.get("command"),
+                                            timeout=int(kwargs.get("timeout", 180) or 180))
         return run_project_tests(self.base_dir, kwargs.get("command"),
                                  timeout=int(kwargs.get("timeout", 180) or 180),
                                  user_scope_id=kwargs.get("user_scope_id"))

@@ -1,0 +1,153 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
+"""The coder working in a sandbox environment.
+
+A coder run is bound to the caller's project environment whose /workspace IS the run's
+project folder: explicitly (`environment`, which must match) or on its own when one exists.
+Its bash and run_tests then run in that container. The binding is per instance and per
+run, never class state: the tool objects are shared across turns and people."""
+import os
+import types
+
+import pytest
+
+from vaf.core import environments as envmod
+from vaf.tools.bash import BashTool
+from vaf.tools.sandbox_test_runner import RunTestsTool
+
+
+def _env(env_id="0a1b2c3d", kind="project", project_path="/p", network="registries"):
+    return envmod.Environment(id=env_id, kind=kind, network=network, owner="h", container="c",
+                              volume="", net="n", project_path=project_path, state="running")
+
+
+@pytest.fixture
+def mgr(monkeypatch, tmp_path):
+    m = envmod.EnvironmentManager(state_dir=tmp_path / "state")
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: m)
+    return m
+
+
+# -- which environment ---------------------------------------------------------------
+
+def test_an_explicit_environment_must_be_a_project_environment_for_exactly_this_folder(mgr, monkeypatch, tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    env = _env(project_path=str(proj))
+    monkeypatch.setattr(mgr, "get", lambda owner, env_id, admin=False: env)
+    assert mgr.bind_for_project("s", str(proj), env.id) is env
+    with pytest.raises(envmod.EnvironmentRefused, match="works in"):
+        mgr.bind_for_project("s", str(other), env.id)
+    env.kind, env.project_path = "temporary", ""
+    with pytest.raises(envmod.EnvironmentRefused, match="no project folder"):
+        mgr.bind_for_project("s", str(proj), env.id)
+
+
+def test_without_an_id_the_callers_environment_for_the_folder_is_found(mgr, monkeypatch, tmp_path):
+    """Resolved paths: a project reached through a symlink is the same project.
+    MUTATION: compare the raw strings - red."""
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    os.symlink(real, link)
+    env = _env(project_path=str(real))
+    monkeypatch.setattr(mgr, "list", lambda owner, everyone=False: [env, _env("ffff0000", kind="temporary", project_path="")])
+    assert mgr.bind_for_project("s", str(link)) is env
+    assert mgr.bind_for_project("s", str(tmp_path)) is None
+
+
+# -- bash and run_tests in the environment ----------------------------------------------
+
+class _Recorder:
+    def __init__(self):
+        self.calls = []
+
+    def exec_in(self, env, argv, **kw):
+        self.calls.append(("exec_in", argv, kw))
+        return envmod.ExecResult(0, "built\n", "")
+
+    def start_process(self, owner, env_id, command, **kw):
+        self.calls.append(("start_process", owner, env_id, command, kw))
+        return f"e-{env_id}-p{len(self.calls):08x}"
+
+    def stop_process(self, owner, handle):
+        self.calls.append(("stop_process", owner, handle))
+        return "stopped"
+
+
+def test_bash_runs_in_the_environment_and_starts_dev_servers_there(monkeypatch):
+    rec = _Recorder()
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: rec)
+    tool = BashTool("/p", environment=_env(), owner_scope="scope-alice")
+    out = tool.run(command="npm run build")
+    assert "environment 0a1b2c3d" in out and "built" in out and "exit code: 0" in out
+    assert rec.calls[0][:2] == ("exec_in", ["sh", "-c", "npm run build"])
+    tool.run(command="npm run dev", background=True)
+    tool.run(command="npm run api", background=True, keep_running=True)
+    kept = tool.stop_unkept()
+    stopped = [c for c in rec.calls if c[0] == "stop_process"]
+    assert len(stopped) == 1 and stopped[0][1] == "scope-alice"
+    assert len(kept) == 1 and kept[0] not in stopped[0][2]
+
+
+def test_bash_without_an_environment_keeps_the_jail(monkeypatch):
+    import vaf.tools.workspace_exec as wx
+    seen = []
+    monkeypatch.setattr(wx, "run_in_workspace", lambda ws, cmd, timeout: (seen.append(ws) or (0, "", "", "bwrap")))
+    BashTool("/p").run(command="ls")
+    assert seen == ["/p"]
+
+
+def test_run_tests_runs_in_the_project_itself_and_says_it_can_write(monkeypatch):
+    """No copy: the environment's /workspace is the project. Per instance - the class
+    stays read-only for every other run. MUTATION: set the permission on the class - red."""
+    rec = _Recorder()
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: rec)
+    bound = RunTestsTool("/p", environment=_env())
+    out = bound.run()
+    assert out.startswith("TESTS PASSED")
+    assert any(c[0] == "exec_in" and c[2].get("cwd") == "/workspace" and c[1][:2] == ["sh", "-c"]
+               for c in rec.calls)
+    assert bound.permission_level == "write"
+    assert RunTestsTool("/p").permission_level == "read" and RunTestsTool.permission_level == "read"
+
+
+# -- the id crosses the process boundary as an argument ---------------------------------
+
+def test_the_spawn_passes_the_environment_as_an_argument_never_as_a_variable(monkeypatch):
+    """Rule 4.5: a variable set for a spawn can outlive it in the parent; an argument
+    cannot. MUTATION: hand it over in extra_env - red."""
+    import vaf.core.config as cfg
+    import vaf.core.subagent_spawn as spawn
+    from vaf.tools.coder import CodingAgentTool
+    monkeypatch.delenv("VAF_IN_SUBAGENT_TERMINAL", raising=False)
+    real_get = cfg.Config.get
+    monkeypatch.setattr(cfg.Config, "get", classmethod(
+        lambda cls, k, d=None: True if k == "sub_agents_in_separate_terminals" else real_get(k, d)))
+    seen = {}
+
+    def _spawn(kind, task, args=(), extra_env=None, **kw):
+        seen.update(kind=kind, args=args, env=extra_env or {})
+        return types.SimpleNamespace(marker="[SUBAGENT_ASYNC:t:coding_agent]")
+
+    monkeypatch.setattr(spawn, "spawn_subagent", _spawn)
+    out = CodingAgentTool().run(task="make the tests pass", project_path="/tmp/proj-x",
+                                environment="0a1b2c3d")
+    assert out == "[SUBAGENT_ASYNC:t:coding_agent]"
+    assert seen["args"] == ("--project-path", "/tmp/proj-x", "--environment", "0a1b2c3d")
+    assert not any("0a1b2c3d" in str(v) for v in seen["env"].values())
+
+
+def test_the_child_cli_hands_the_environment_to_the_coder(monkeypatch):
+    from typer.testing import CliRunner
+    import vaf.cli.cmd.subagent as sub
+    import vaf.tools.coder as coder
+    seen = {}
+    monkeypatch.setattr(coder.CodingAgentTool, "run", lambda self, **kw: seen.update(kw) or "done")
+    monkeypatch.setattr(sub, "_safe_print", lambda *a, **k: None, raising=False)
+    CliRunner().invoke(sub.app, ["run", "coding_agent", "--task", "x", "--environment", "0a1b2c3d",
+                                 "--no-auto-close"])
+    assert seen.get("environment") == "0a1b2c3d"

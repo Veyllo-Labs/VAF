@@ -80,6 +80,7 @@ _EXECUTE = {
     # A server, only for a run started with coding_agent(deploy_to=...): advertised and
     # registered for that run alone and pinned to that one server (vaf/tools/coder.py).
     "ssh",
+    "ftp",
     "python_sandbox",
     "python_exec",
     "linter",

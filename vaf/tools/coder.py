@@ -2892,27 +2892,33 @@ def _coder_funnel(tools, *, scope, role, session_id):
 
 
 class DeployTarget:
-    """The ONE server a coder run may deploy to (`coding_agent(deploy_to=...)`): an ssh
-    target and the folder on it uploads must land under."""
+    """The ONE server a coder run may deploy to (`coding_agent(deploy_to=...)`): an ssh or an
+    ftp target (`kind`) and the folder on it uploads must land under."""
 
-    def __init__(self, target, root: str):
+    def __init__(self, target, root: str, kind: str = "ssh"):
         self.target = target
         self.root = root
+        self.kind = kind
 
     def __str__(self) -> str:
-        return f"{self.target}:{self.root}"
+        # What the child process parses back (--deploy-to): `user@host:/folder` for ssh,
+        # `ftps://user@host/folder` for ftp.
+        return f"{self.target}{self.root}" if self.kind == "ftp" else f"{self.target}:{self.root}"
 
 
 def _deploy_target(raw, user_scope_id):
-    """(DeployTarget, None) for `user@host[:port]:/folder`, or (None, reason).
+    """(DeployTarget, None) for `user@host[:port]:/folder` (ssh) or
+    `ftps://user@host[:port]/folder` (ftp, `ftp://` without encryption), or (None, reason).
 
     Refused before the run starts when the server is not one this account has confirmed:
-    the coder runs unattended, so its ssh lane only reaches servers a person already
-    accepted (vaf/tools/ssh.py), and a run that found out at its very end would have built
-    everything for nothing."""
+    the coder runs unattended, so it only reaches servers a person already accepted
+    (vaf/tools/ssh.py, vaf/tools/ftp.py), and a run that found out at its very end would have
+    built everything for nothing."""
     import posixpath
     from vaf.core import ssh
     text = str(raw or "").strip()
+    if text.lower().startswith(("ftp://", "ftps://")):
+        return _ftp_deploy_target(text, user_scope_id)
     cut = text.find(":/")
     if cut <= 0:
         return None, ("deploy_to must be user@host:/folder or user@host:port:/folder, "
@@ -2933,40 +2939,77 @@ def _deploy_target(raw, user_scope_id):
     return DeployTarget(target, root), None
 
 
-def _deploy_refusal(fn_name: str, fn_args, deploy, base_dir: Optional[str] = None) -> Optional[str]:
-    """The answer to an ssh call this run may not make, or None (and the call is pinned to
-    the run's server). Without deploy_to a run has no ssh at all; with it, only that server,
-    uploads and downloads only under its folder, and never install_key, which is the main
-    agent's to do with the person. A relative local_path is the project's (`dist`), not the
-    chat workspace's, which is what the ssh tool reads a relative path against."""
+def _ftp_deploy_target(text: str, user_scope_id):
+    """The ftp half of _deploy_target. The login folder itself (`/`) is allowed here, unlike
+    over ssh: an FTP login is usually locked into the account's own space, and on many web
+    spaces that folder IS the site."""
     import posixpath
-    if fn_name != "ssh":
+    from vaf.core import ftp
+    slash = text.find("/", text.index("://") + 3)
+    if slash < 0:
+        return None, ("deploy_to must name the folder on the web space: "
+                      "ftps://user@host/folder (or / for the login folder itself)")
+    root = "/" + posixpath.normpath(text[slash:]).lstrip("/")
+    root = "/" if root in ("/.", "//") else root
+    try:
+        target = ftp.parse_server(text[:slash])
+    except ftp.FtpError as e:
+        return None, f"deploy_to: {e}"
+    if not ftp.is_known(target, user_scope_id):
+        return None, (f"the server {target} is not confirmed for this account yet. Connect once "
+                      f"with ftp(server=\"{target}\", action=\"list\") so the user confirms it, "
+                      "then start the coder again with deploy_to")
+    return DeployTarget(target, root, kind="ftp"), None
+
+
+def _deploy_refusal(fn_name: str, fn_args, deploy, base_dir: Optional[str] = None) -> Optional[str]:
+    """The answer to an ssh or ftp call this run may not make, or None (and the call is pinned
+    to the run's server). Without deploy_to a run reaches no server at all; with it, only that
+    server over the lane its target names, paths only under its folder, and never
+    install_key, which is the main agent's to do with the person. A relative local_path is
+    the project's (`dist`), not the chat workspace's, which is what both tools read a
+    relative path against."""
+    import posixpath
+    if fn_name not in ("ssh", "ftp"):
         return None
     if deploy is None:
-        return ("ssh is not available in this run: the coder reaches a server only when it was "
-                "started with deploy_to for that server.")
+        return (f"{fn_name} is not available in this run: the coder reaches a server only when "
+                "it was started with deploy_to for that server.")
+    if deploy.kind != fn_name:
+        return (f"{fn_name} is not available in this run: it deploys to {deploy.target} over "
+                f"{deploy.kind}; use the {deploy.kind} tool.")
     if not isinstance(fn_args, dict):
-        return "ssh needs its arguments as an object."
-    from vaf.core import ssh
+        return f"{fn_name} needs its arguments as an object."
+    from vaf.core import ftp, ssh
     asked = fn_args.get("server")
     if asked:
         try:
-            same = str(ssh.parse_server(asked)) == str(deploy.target)
-        except ssh.SshError:
+            parse = ssh.parse_server if fn_name == "ssh" else ftp.parse_server
+            same = str(parse(asked)) == str(deploy.target)
+        except (ssh.SshError, ftp.FtpError):
             same = False
         if not same:
-            return f"ssh refused: this run may deploy to {deploy.target} only, not {asked}."
+            return f"{fn_name} refused: this run may deploy to {deploy.target} only, not {asked}."
     fn_args["server"] = str(deploy.target)
-    action = str(fn_args.get("action") or "run").strip().lower()
-    if action not in ("run", "upload", "download"):
-        return (f"ssh refused: action {action!r} is not part of a deploy (run, upload, "
-                "download); installing a key is for the main agent, with the user.")
-    if action in ("upload", "download"):
+    if fn_name == "ssh":
+        action = str(fn_args.get("action") or "run").strip().lower()
+        if action not in ("run", "upload", "download"):
+            return (f"ssh refused: action {action!r} is not part of a deploy (run, upload, "
+                    "download); installing a key is for the main agent, with the user.")
+        with_paths = ("upload", "download")
+    else:
+        action = str(fn_args.get("action") or "list").strip().lower()
+        if action not in ("list", "upload", "download", "delete"):
+            return (f"ftp refused: action {action!r} is not part of a deploy (list, upload, "
+                    "download, delete).")
+        with_paths = ("list", "upload", "download", "delete")
+    if action in with_paths:
         remote = str(fn_args.get("remote_path") or "").strip()
         full = posixpath.normpath(remote if remote.startswith("/") else
                                   posixpath.join(deploy.root, remote or "."))
         if full != deploy.root and not full.startswith(deploy.root.rstrip("/") + "/"):
-            return f"ssh refused: this run uploads and downloads under {deploy.root} only."
+            return (f"{fn_name} refused: this run uploads and downloads under {deploy.root} "
+                    "only.")
         fn_args["remote_path"] = full
         if base_dir:
             local = str(fn_args.get("local_path") or "").strip()
@@ -3143,7 +3186,7 @@ class CodingAgentTool(BaseTool):
             },
             "deploy_to": {
                 "type": "string",
-                "description": "Optional, and ONLY when the user asked for the result to go onto a server: user@host[:port]:/folder. The coder then gets the ssh tool for exactly that server (upload the built files into that folder, run commands there such as a restart); without deploy_to it has no ssh at all. The server must already be confirmed by the user: if it is new, connect once with ssh(server=..., command='true') first. SSH servers only: for a host that offers FTP alone the coder cannot deploy, so build first and upload the result yourself."
+                "description": "Optional, and ONLY when the user asked for the result to go onto a server: user@host[:port]:/folder for an SSH server, or ftps://user@host[:port]/folder for a web space with FTP (ftp://... only for one without encryption). The coder then gets the ssh tool, or the ftp tool, for exactly that server and folder (upload the built files there; over ssh also run commands such as a restart); without deploy_to it reaches no server at all. The server must already be confirmed by the user: if it is new, connect once first with ssh(server=..., command='true') or ftp(server=..., action='list')."
             }
         },
         "required": ["task"]
@@ -4145,10 +4188,15 @@ Thumbs.db
         if HAS_CODING_TOOLS:
             self.local_tools["bash"] = BashTool(base_dir, environment=_env_binding,
                                                 owner_scope=_env_owner)
-        # ssh only for a run started with deploy_to: registered here, never auto-discovered
-        # (MANUALLY_ADDED_TOOLS below), and every call pinned by _deploy_refusal.
+        # ssh or ftp only for a run started with deploy_to, the one its target names:
+        # registered here, never auto-discovered (MANUALLY_ADDED_TOOLS below), and every call
+        # pinned by _deploy_refusal.
         self.local_tools.pop("ssh", None)
-        if _deploy is not None:
+        self.local_tools.pop("ftp", None)
+        if _deploy is not None and _deploy.kind == "ftp":
+            from vaf.tools.ftp import FtpTool
+            self.local_tools["ftp"] = FtpTool()
+        elif _deploy is not None:
             from vaf.tools.ssh import SshTool
             self.local_tools["ssh"] = SshTool()
 
@@ -5544,6 +5592,7 @@ Task {task_idx + 1}: {current_task}
                                     "list_files", "python_sandbox", "web_fetch", "web_deep_search",
                                     "git_init", "git_add_commit", "git_status", "git_log", "bash",
                                     "ssh",      # only with deploy_to, advertised by hand
+                                    "ftp",      # only with deploy_to=ftps://, advertised by hand
                                 ]
                                 if instance.name in MANUALLY_ADDED_TOOLS:
                                     continue
@@ -6523,7 +6572,7 @@ Task {task_idx + 1}: {current_task}
 
             # ssh, only for a run started with deploy_to, in every context (the deploy is
             # usually the last task). Pinned to that one server by _deploy_refusal.
-            if _deploy is not None:
+            if _deploy is not None and _deploy.kind == "ssh":
                 tools_schema.append({
                     "type": "function",
                     "function": {
@@ -6546,6 +6595,33 @@ Task {task_idx + 1}: {current_task}
                                 "remote_path": {"type": "string"},
                                 "as_root": {"type": "boolean"},
                                 "sudo_credential": {"type": "string"},
+                                "login_credential": {"type": "string"},
+                                "timeout": {"type": "integer"},
+                            },
+                            "required": ["action"]
+                        }
+                    }
+                })
+            # ftp, the same for a deploy_to=ftps://... run: a web space with FTP alone.
+            if _deploy is not None and _deploy.kind == "ftp":
+                tools_schema.append({
+                    "type": "function",
+                    "function": {
+                        "name": "ftp",
+                        "description": (
+                            f"Deploy to {_deploy.target}, the one web space this run may reach. "
+                            f"action='upload' copies local_path (a file, or a folder such as the "
+                            f"built site, whose files land INSIDE remote_path) to remote_path "
+                            f"under {_deploy.root}; 'list' shows a folder there; 'download' "
+                            "fetches a file; 'delete' removes one file (an old build's file)."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "action": {"type": "string",
+                                           "enum": ["list", "upload", "download", "delete"]},
+                                "local_path": {"type": "string"},
+                                "remote_path": {"type": "string"},
                                 "login_credential": {"type": "string"},
                                 "timeout": {"type": "integer"},
                             },

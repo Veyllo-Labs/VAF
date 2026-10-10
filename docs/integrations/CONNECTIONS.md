@@ -145,6 +145,11 @@ web123@ftp.example.org, the password is ..."; the agent stores the password with
   names it. `host_bash` refuses `ftp`, `lftp`, `ncftp` and `curl`/`wget` with an `ftp://`
   address and points at this tool: those carry the password on the command line, ask nobody
   about a new server and notice no changed certificate.
+- **The coder deploys to a web space too.** `coding_agent(deploy_to="ftps://user@host/folder")`
+  gives the coder the `ftp` tool for that one web space and folder (no `ssh` in such a run),
+  under the same rules as the SSH deploy above: only when the person asked, only to a server
+  they already confirmed. Over FTP the login folder itself (`/`) may be the target, because on
+  many web spaces that folder is the site.
 - **Removing a server.** `vaf ftp servers` lists the confirmed servers and how each one's
   certificate is trusted; `vaf ftp forget ftps://HOST` removes one, and the next connection
   asks again.

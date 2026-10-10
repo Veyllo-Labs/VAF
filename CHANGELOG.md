@@ -16,7 +16,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **The coder can put what it built onto your server, when you ask for it.** The agent
   starts the coder with the server and folder you named, and only then does the coder get
   SSH, for that one server and that folder. The server must be one you already confirmed in
-  the chat; a new one is asked about first. The SSH tool also uploads whole folders now.
+  the chat; a new one is asked about first. The SSH tool also uploads whole folders now. A web
+  space with FTP works the same way: name it as `ftps://user@host/folder` and the coder gets
+  FTP for that one place.
 - **The agent can work with files on your web space over FTP.** Many web spaces offer FTP and
   nothing else: the agent lists what is there, uploads a file or a whole built site, downloads
   and deletes a file. It is encrypted (FTPS) unless you write `ftp://`, and then it tells you

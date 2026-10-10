@@ -7,6 +7,7 @@ The main agent decides, from what the user asked, whether a run's result goes on
 Only then does the coder get the ssh tool, for that one server, with uploads under that one
 folder, and the server must be one the user already confirmed - the coder runs unattended,
 and nobody could be asked about a new fingerprint. Without deploy_to it has no ssh at all."""
+import os
 import types
 
 import pytest
@@ -123,11 +124,17 @@ def test_ssh_is_registered_and_advertised_only_with_a_target():
     src = inspect.getsource(coder.CodingAgentTool.run)
     assert '"ssh",      # only with deploy_to' in src
     schema_at = src.index('"name": "ssh"')
-    assert "if _deploy is not None:" in src[schema_at - 300:schema_at]
+    assert 'if _deploy is not None and _deploy.kind == "ssh":' in src[schema_at - 300:schema_at]
+    ftp_at = src.index('"name": "ftp"')
+    assert 'if _deploy is not None and _deploy.kind == "ftp":' in src[ftp_at - 300:ftp_at]
+    assert '"ftp",      # only with deploy_to=ftps://' in src
     assert 'self.local_tools.pop("ssh", None)' in src
+    assert 'self.local_tools.pop("ftp", None)' in src
+    reg_at = src.index('self.local_tools["ftp"] = FtpTool()')
+    assert '_deploy.kind == "ftp"' in src[reg_at - 150:reg_at], "ftp registered without its target"
     assert "or _deploy_refusal(fn_name, fn_args, _deploy, base_dir))" in src
     from vaf.core.coder_tools import CODER_ALLOWED_TOOLS
-    assert "ssh" in CODER_ALLOWED_TOOLS
+    assert "ssh" in CODER_ALLOWED_TOOLS and "ftp" in CODER_ALLOWED_TOOLS
 
 
 def test_the_child_cli_hands_the_target_to_the_coder():
@@ -148,4 +155,60 @@ def test_the_main_agent_reads_who_deploys_from_both_tools():
     assert "coding_agent with deploy_to=" in SshTool.description
     assert "server work that builds nothing" in SshTool.description
     hint = coder.CodingAgentTool.parameters["properties"]["deploy_to"]["description"]
-    assert "ssh(server=" in hint and "SSH servers only" in hint
+    assert "ssh(server=" in hint and "ftp(server=" in hint and "ftps://user@host" in hint
+    from vaf.tools.ftp import FtpTool
+    assert "coding_agent with deploy_to=" in FtpTool.description
+    assert "file work that builds nothing" in FtpTool.description
+
+
+# -- deploying to a web space over FTP ---------------------------------------------
+
+@pytest.fixture
+def ftp_known(monkeypatch):
+    from vaf.core import ftp
+    seen = set()
+    monkeypatch.setattr(ftp, "is_known", lambda target, scope: target.name in seen)
+    return seen
+
+
+def _ftp_deploy(root="/htdocs"):
+    from vaf.core import ftp
+    return coder.DeployTarget(ftp.parse_server("ftps://web123@ftp.example.org"), root, kind="ftp")
+
+
+def test_an_ftp_target_is_a_web_space_and_a_folder(ftp_known):
+    """MUTATION: send ftps:// down the ssh parser again - red."""
+    ftp_known.add("ftps://ftp.example.org")
+    d, err = coder._deploy_target("ftps://web123@ftp.example.org/htdocs/site/", "s")
+    assert err is None and d.kind == "ftp" and d.root == "/htdocs/site"
+    assert str(d) == "ftps://web123@ftp.example.org/htdocs/site"
+    # The child process parses the same text back to the same target.
+    again, _ = coder._deploy_target(str(d), "s")
+    assert again.kind == "ftp" and str(again) == str(d)
+    # The login folder itself is a web space's site on many hosters.
+    assert coder._deploy_target("ftps://web123@ftp.example.org/", "s")[0].root == "/"
+    assert "name the folder" in coder._deploy_target("ftps://web123@ftp.example.org", "s")[1]
+
+
+def test_an_unconfirmed_web_space_is_refused_with_the_call_that_confirms_it(ftp_known):
+    d, err = coder._deploy_target("ftps://web123@new.example.org/htdocs", "s")
+    assert d is None and 'ftp(server="ftps://web123@new.example.org", action="list")' in err
+
+
+def test_an_ftp_run_gets_ftp_pinned_and_no_ssh():
+    """MUTATION: let an ftp run's ftp call through unpinned - red."""
+    d = _ftp_deploy()
+    assert "use the ftp tool" in coder._deploy_refusal("ssh", {"command": "ls"}, d)
+    assert "use the ssh tool" in coder._deploy_refusal("ftp", {"action": "list"}, _deploy())
+    assert "not available in this run" in coder._deploy_refusal("ftp", {"action": "list"}, None)
+    args = {"action": "upload", "local_path": "dist", "remote_path": "site"}
+    assert coder._deploy_refusal("ftp", args, d, "/home/user/proj") is None
+    assert args["server"] == str(d.target) and args["remote_path"] == "/htdocs/site"
+    assert args["local_path"] == os.path.join("/home/user/proj", "dist")
+    assert "only" in coder._deploy_refusal("ftp", {"server": "ftps://u@evil.example",
+                                                   "action": "list"}, d)
+    assert "under /htdocs" in coder._deploy_refusal("ftp", {"action": "delete",
+                                                            "remote_path": "/etc/passwd"}, d)
+    assert "not part of a deploy" in coder._deploy_refusal("ftp", {"action": "rename"}, d)
+    listed = {"action": "list"}
+    assert coder._deploy_refusal("ftp", listed, d) is None and listed["remote_path"] == "/htdocs"

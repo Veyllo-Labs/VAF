@@ -86,7 +86,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 
 | Tool | Perm | What it does |
 |------|------|--------------|
-| `coding_agent` | write | Autonomous code-generation sub-agent. With `deploy_to` (`user@host:/folder`, only when the user asked) it gets `ssh` for that one server the user already confirmed; without it, no `ssh`. |
+| `coding_agent` | write | Autonomous code-generation sub-agent. With `deploy_to` (`user@host:/folder`, or `ftps://user@host/folder` for a web space; only when the user asked) it gets `ssh`, or `ftp`, for that one server the user already confirmed; without it, neither. |
 | `code_audit` | read | Review a project's code change like a code reviewer: real bugs, security problems and risky changes, each proven against the code before it is reported, with a fix prompt. Read-only and inside the account's file jail; the result tells the agent to show the findings and ASK whether the coder should fix them, and to change nothing before a yes. The coder runs the same review after every commit in its own loop. See [CODE_AUDIT.md](CODE_AUDIT.md). |
 | `create_agent_tool` | system | Create/update a Python tool the agent can use immediately. |
 | `python_sandbox` | write | Run Python in the caller's own scratch environment (a Docker container of their own); `export_files` copies produced artifacts (images, PDFs) into the chat workspace after the run. |

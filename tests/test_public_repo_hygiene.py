@@ -139,6 +139,11 @@ def test_no_real_home_paths_in_tracked_content():
     )
 
 
+# Where actions/checkout puts this repository on the GitHub runners (measured in the job
+# logs): Linux, macOS, Windows.
+_CI_CHECKOUTS = ("/home/runner/work/VAF/VAF", "/Users/runner/work/VAF/VAF", "D:\\a\\VAF\\VAF")
+
+
 def test_no_checkout_path_in_tracked_content():
     """This repo's own absolute location must never appear in committed content.
 
@@ -152,17 +157,22 @@ def test_no_checkout_path_in_tracked_content():
     it stayed invisible for a day because CI was down during the outage that
     would otherwise have caught it in minutes. The home-path layer above misses
     this shape entirely when the checkout lives outside a home directory.
+
+    The CI runners' checkout paths are needles too, on every host: written into a
+    tracked file they matched only ON the runner, so a docstring that named the Linux
+    runner's checkout passed every local run and took six CI jobs red.
     """
-    needle = str(_REPO)
+    needles = {str(_REPO), *_CI_CHECKOUTS}
     offenders = []
     for rel, p in _tracked_text_files():
         if rel == "tests/test_public_repo_hygiene.py":
-            continue                      # this file names the needle by construction
+            continue                      # this file names the needles by construction
         text = p.read_bytes().decode("utf-8", errors="ignore")
-        if needle in text:
-            offenders.append(rel)
+        found = sorted(n for n in needles if n in text)
+        if found:
+            offenders.append(f"{rel} ({', '.join(found)})")
     assert not offenders, (
-        f"The repository's own absolute path ({needle}) appears in committed content - "
+        f"The repository's own absolute path ({_REPO}) or a CI runner's appears in committed content - "
         "that code runs on one machine only. Derive it instead "
         "(Path(__file__).resolve().parents[N]) or use tmp_path:\n"
         + "\n".join(f"  {o}" for o in sorted(offenders))

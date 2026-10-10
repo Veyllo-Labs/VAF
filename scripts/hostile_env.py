@@ -60,7 +60,7 @@ away here. Windows-only SERIALIZATION defects (str(PurePath) renders with the
 host's separator, invisible on Linux where it equals as_posix) are covered by a
 static guard, tests/test_windows_path_hygiene.py, which fails on any OS. Nor can
 it put the CHECKOUT INSIDE THE HOME, where the Linux and macOS runners have it
-(/home/runner/work/VAF/VAF): the source tree is located by its resolved path, so
+(/home/runner/work/...): the source tree is located by its resolved path, so
 only a second checkout inside the scratch home would reproduce that, and the
 suite needs files no fresh checkout has. A test that compares the real home with
 the source tree passed here and failed there (the home's parent also overlapped

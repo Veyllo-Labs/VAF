@@ -32,6 +32,7 @@ import UpdateRepairModal from './settings/UpdateRepairModal';
 import LanguagePicker from './settings/LanguagePicker';
 import SecretsSection from './settings/SecretsSection';
 import SshSection from './settings/SshSection';
+import FtpSection from './settings/FtpSection';
 import SandboxSection from './settings/SandboxSection';
 import RemoteAccessSection from './settings/RemoteAccessSection';
 import StandingGrantsSection from './settings/StandingGrantsSection';
@@ -4619,6 +4620,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             like the connections above it, so not admin-only. */}
                         {activeTab === 'connections' && <SecretsSection />}
                         {activeTab === 'connections' && <SshSection />}
+                        {activeTab === 'connections' && <FtpSection />}
                         {activeTab === 'connections' && <SandboxSection />}
                         {activeTab === 'connections' && <StandingGrantsSection endpoint="/api/security/grants" own />}
 

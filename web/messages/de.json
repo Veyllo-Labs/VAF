@@ -2484,6 +2484,17 @@
     "failed": "Das hat nicht geklappt.",
     "delete": "Löschen"
   },
+  "ftp": {
+    "title": "FTP zu deinem Webspace",
+    "intro": "Die Server, auf die dein Agent per FTP Dateien legen und von denen er sie holen darf. Die erste Verbindung zu einem Server fragt dich immer. Ändert sich später das Zertifikat eines Servers, wird er abgewiesen, bis du ihn hier entfernst.",
+    "servers": "Von dir bestätigte Server",
+    "noServers": "Noch keine.",
+    "trustAuthority": "Zertifizierungsstelle",
+    "trustPinned": "Gemerktes Zertifikat",
+    "trustNone": "Nicht verschlüsselt",
+    "forget": "Entfernen; die nächste Verbindung fragt wieder",
+    "failed": "Das hat nicht geklappt."
+  },
   "ssh": {
     "title": "SSH zu deinen Servern",
     "intro": "Der Agent meldet sich mit dem eigenen Schlüssel dieses Kontos bei deinen Servern an, nie mit der SSH-Einrichtung dieses Computers. Die erste Verbindung zu einem Server fragt dich immer.",

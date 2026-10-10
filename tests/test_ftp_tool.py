@@ -184,3 +184,53 @@ def test_the_terminal_lists_and_forgets_a_server(lab, monkeypatch):
     assert runner.invoke(cli.app, ["forget", name]).exit_code == 1
     main = (pathlib.Path(cli.__file__).resolve().parents[2] / "main.py").read_text(encoding="utf-8")
     assert re.search(r'add_typer\(ftp\.app, name="ftp"[^)]*callback=_terminal_door', main, re.S)
+
+
+# -- Settings, Connections, FTP -----------------------------------------------------
+
+def _routes_client(role, scope, allowed):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from vaf.api.ftp_routes import router
+    from vaf.core.tool_dispatch import set_account_allowlist_resolver
+    set_account_allowlist_resolver(lambda s: allowed)
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def _as(request, call_next):
+        request.state.user = {"user_scope_id": scope, "username": "alice", "role": role}
+        return await call_next(request)
+
+    app.include_router(router)
+    return TestClient(app)
+
+
+@pytest.fixture
+def _resolver_restored():
+    from vaf.core.tool_dispatch import (get_account_allowlist_resolver,
+                                        set_account_allowlist_resolver)
+    previous = get_account_allowlist_resolver()
+    yield
+    set_account_allowlist_resolver(previous)
+
+
+def test_the_settings_route_is_closed_to_an_account_without_ftp(lab, _resolver_restored):
+    """An unrestricted account ("everything") is not granted an opt-in tool.
+    MUTATION: drop the 403 - red."""
+    client = _routes_client("user", ALICE, None)
+    assert client.get("/api/ftp").status_code == 403
+    assert client.delete("/api/ftp/servers/ftps://x").status_code == 403
+
+
+def test_the_settings_route_lists_and_removes_a_server(lab, _resolver_restored):
+    tmp, root, server = lab
+    _tool(server, _call_confirmed=True)
+    name = f"ftps://127.0.0.1:{server.port}"
+    client = _routes_client("user", ALICE, frozenset({"ftp"}))
+    listed = client.get("/api/ftp").json()["servers"]
+    assert listed[0]["name"] == name and listed[0]["trust"] == "pinned"
+    assert listed[0]["fingerprint"].startswith("SHA256:")
+    assert PASSWORD not in client.get("/api/ftp").text
+    assert client.delete(f"/api/ftp/servers/{name}").json() == {"deleted": True}
+    assert client.get("/api/ftp").json()["servers"] == []
+    assert client.delete(f"/api/ftp/servers/{name}").status_code == 404

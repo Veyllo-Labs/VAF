@@ -1128,6 +1128,16 @@ except ImportError as e:
 except Exception as e:
     log("WebServer", f"Failed to mount SSH routes: {e}")
 
+# Mount the FTP routes (the caller's own confirmed FTP servers; nothing secret)
+try:
+    from vaf.api.ftp_routes import router as ftp_router
+    app.include_router(ftp_router)
+    log("WebServer", "FTP routes mounted at /api/ftp")
+except ImportError as e:
+    log("WebServer", f"FTP routes not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount FTP routes: {e}")
+
 # Mount the sandbox environment routes (the caller's own environments; admins may see all)
 try:
     from vaf.api.sandbox_routes import router as sandbox_router

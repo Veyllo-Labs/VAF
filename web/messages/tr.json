@@ -2484,6 +2484,17 @@
     "failed": "Bu işe yaramadı.",
     "delete": "Sil"
   },
+  "ftp": {
+    "title": "Web alanına FTP",
+    "intro": "Ajanının FTP ile dosya yükleyip indirebileceği sunucular. Bir sunucuya ilk bağlantıda her zaman sana sorulur; sertifikası sonradan değişen bir sunucu, sen onu buradan kaldırana kadar reddedilir.",
+    "servers": "Onayladığın sunucular",
+    "noServers": "Henüz yok.",
+    "trustAuthority": "Sertifika otoritesi",
+    "trustPinned": "Hatırlanan sertifika",
+    "trustNone": "Şifrelenmemiş",
+    "forget": "Kaldır; sonraki bağlantı yeniden sorar",
+    "failed": "Bu işe yaramadı."
+  },
   "ssh": {
     "title": "Sunucularına SSH",
     "intro": "Ajan, sunucularına bu bilgisayarın SSH ayarlarıyla değil, bu hesabın kendi anahtarıyla bağlanır. Bir sunucuya ilk bağlantıda sana her zaman sorulur.",

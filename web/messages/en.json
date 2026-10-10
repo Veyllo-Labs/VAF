@@ -2484,6 +2484,17 @@
     "failed": "That did not work.",
     "delete": "Delete"
   },
+  "ftp": {
+    "title": "FTP to your web space",
+    "intro": "The servers your agent may move files to and from over FTP. The first connection to a server always asks you; a server whose certificate later changes is refused until you remove it here.",
+    "servers": "Servers you confirmed",
+    "noServers": "None yet.",
+    "trustAuthority": "Certificate authority",
+    "trustPinned": "Remembered certificate",
+    "trustNone": "Not encrypted",
+    "forget": "Remove; the next connection asks again",
+    "failed": "That did not work."
+  },
   "ssh": {
     "title": "SSH to your servers",
     "intro": "The agent logs in to your servers with this account's own key, never with the SSH setup of this computer. The first connection to a server always asks you.",

@@ -150,9 +150,9 @@ web123@ftp.example.org, the password is ..."; the agent stores the password with
   under the same rules as the SSH deploy above: only when the person asked, only to a server
   they already confirmed. Over FTP the login folder itself (`/`) may be the target, because on
   many web spaces that folder is the site.
-- **Removing a server.** `vaf ftp servers` lists the confirmed servers and how each one's
-  certificate is trusted; `vaf ftp forget ftps://HOST` removes one, and the next connection
-  asks again.
+- **Removing a server.** Settings, Connections, FTP (and `vaf ftp servers`) lists the
+  confirmed servers and how each one's certificate is trusted; the remove button (or
+  `vaf ftp forget ftps://HOST`) removes one, and the next connection asks again.
 - **Named boundaries.** The first connection trusts the server the person confirms (compare
   the fingerprint with the hoster's panel if you can). Implicit FTPS (port 990) is not
   offered; every hoster measured offers explicit TLS on port 21. An upload adds and

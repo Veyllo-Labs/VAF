@@ -445,6 +445,26 @@ def _temporal_builtins(username: Optional[str] = None) -> Dict[str, str]:
     }
 
 
+def _books_to_the_runs_account(execute):
+    """Every model call a workflow run makes is booked to the account it runs for. A
+    workflow started from a chat runs as its own process (`vaf workflow run`), which takes
+    its identity from the chat rather than from VAF_USER_SCOPE_ID, so its steps - the coder
+    above all - were booked to the machine owner. execute() is where every construction
+    site converges (the start gate below says so too), and a wrapper restores the outer
+    label when the run ends, so an in-process run inside a chat turn leaves that turn's
+    label as it found it."""
+    import functools
+
+    @functools.wraps(execute)
+    def wrapper(self, *args, **kwargs):
+        if not getattr(self, "user_scope_id", None):
+            return execute(self, *args, **kwargs)
+        from vaf.core.cost import usage_context
+        with usage_context(scope=self.user_scope_id):
+            return execute(self, *args, **kwargs)
+    return wrapper
+
+
 class WorkflowEngine:
     """
     Executes multi-step workflows with automatic output chaining.
@@ -543,6 +563,7 @@ class WorkflowEngine:
         return ("This workflow is not enabled for your account. "
                 "An administrator can enable it in user management.")
 
+    @_books_to_the_runs_account
     def execute(
         self,
         steps: List[WorkflowStep],

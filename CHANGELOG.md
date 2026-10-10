@@ -40,6 +40,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Usage is booked to the account that caused it.** What the coder, the librarian, the
+  browser agent and background workflows spent for another account was booked to the
+  machine owner, in Settings, Usage and in that account's budget. It now lands on the
+  account the work was done for.
 - **The page checks the coder makes show up in the chat.** Each look at a page got the same
   file name, so a second check overwrote the first and the chat never showed either; every
   screenshot now has a name of its own and appears in the chat.

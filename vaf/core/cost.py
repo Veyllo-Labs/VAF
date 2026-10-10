@@ -26,6 +26,7 @@ adjacency (Rule 4.1).
 from __future__ import annotations
 
 import json
+import os
 import re
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -517,6 +518,15 @@ def current_lane() -> str:
     return _LANE.get()
 
 
+def _spawned_for() -> Optional[str]:
+    """The account this process was spawned to work for: VAF_USER_SCOPE_ID, the identity a
+    sub-agent spawn hands its child as data (coder, librarian, browser, learn job). None in
+    the main process, which never sets it in its own environment. Read per call, never
+    cached: it is the child's whole identity, fixed for the life of the process."""
+    raw = str(os.environ.get("VAF_USER_SCOPE_ID") or "").strip()
+    return raw or None
+
+
 
 # Word/symbol count as a stand-in for a tokenizer. Deliberately crude: a real
 # tokenizer would have to be loaded per provider and run on every call, for a
@@ -562,7 +572,10 @@ def record_call(provider: str, model: str, input_tokens: int, output_tokens: int
     """
     est = estimate_cost(provider, model, input_tokens, output_tokens, cache=cache)
     lane_name = str(lane or _LANE.get() or "main")
-    scope = _SCOPE.get() if user_scope_id is _UNSET else user_scope_id
+    # A label the caller set wins; without one, the account the process was spawned for. A
+    # sub-agent child labels nothing, so every coder, librarian and browser call it made was
+    # booked to the machine owner - in the totals, the Usage view and the budget cap alike.
+    scope = (_SCOPE.get() or _spawned_for()) if user_scope_id is _UNSET else user_scope_id
     try:
         record_spend(scope, est, lane=lane_name, provider=provider,
                      reported=reported, estimated=estimated)

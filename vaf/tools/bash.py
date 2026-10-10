@@ -189,8 +189,19 @@ Examples:
 
 
     def _run_in_environment(self, command: str, cwd, timeout: int, warning, kwargs) -> str:
+        from vaf.core.command_policy import classify_command
         from vaf.core.environments import EnvironmentRefused, get_environment_manager
         env = self.environment
+        # The jailed profile above refuses only what hurts the machine: the bubblewrap jail
+        # has no network. An environment can have one ('registries', 'open'), and a login to
+        # or an upload onto another machine from here would step around the deploy pin
+        # (deploy_to gives a run ssh or ftp for ONE server). Measured: `curl -T ... ftp://`,
+        # `scp` and `ssh` all passed the jailed profile.
+        if {"remote_login", "ftp_transfer"} & set(classify_command(command, profile="host").categories):
+            return ("Error: bash in a sandbox environment does not log in to or upload onto "
+                    "another machine. A deploy goes through the ssh or ftp tool this run got "
+                    "with deploy_to, pinned to that one server; without deploy_to the coder "
+                    "reaches no server.")
         mgr = get_environment_manager()
         as_root = bool(kwargs.get("as_root"))
         if as_root and kwargs.get("background"):

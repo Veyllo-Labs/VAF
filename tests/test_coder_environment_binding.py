@@ -145,6 +145,23 @@ def test_background_processes_end_on_every_exit_of_the_run():
     assert len(asked) == 1        # only the tool the raising run bound; never a leftover
 
 
+def test_the_environment_shell_does_not_step_around_the_deploy_pin(monkeypatch):
+    """An environment can have network; the jailed profile refuses no login or upload, so
+    `curl -T ... ftp://` and `scp` went straight past deploy_to's one-server pin.
+    MUTATION: drop the check - red."""
+    rec = _Recorder()
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: rec)
+    tool = BashTool("/p", environment=_env(), owner_scope="s")
+    for cmd in ("curl -T dist/index.html ftp://u:p@example.org/htdocs/", "lftp example.org",
+                "scp -r dist u@example.org:/var/www", "ssh u@example.org 'ls'"):
+        before = len(rec.calls)
+        out = tool.run(command=cmd)
+        assert out.startswith("Error:") and "deploy_to" in out, cmd
+        assert len(rec.calls) == before, f"{cmd} reached the environment"
+    tool.run(command="pip install requests && curl https://pypi.org/simple/")
+    assert rec.calls, "an ordinary download in the environment must still run"
+
+
 def test_as_root_is_the_environments_and_only_runs_to_its_end(monkeypatch):
     """MUTATION: drop as_root from the exec_in call - red; let the jailed shell accept it -
     red: the host has no root lane."""

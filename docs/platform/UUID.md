@@ -484,7 +484,7 @@ When building a new feature that handles user data:
 | Database RLS | `vaf/memory/database.py` | `get_db(user_scope_id=...)` sets `app.current_user_scope_id` per transaction on the app engine (role `vaf_app`, `memory_db_url`); a separate owner engine (`memory_db_owner_url`) handles DDL and global maintenance |
 | Memory Routes | `vaf/memory/routes.py` | `Depends(get_current_user_scope)` |
 | Agent RAG | `vaf/core/agent.py` | `_current_user_scope_id` for memory_save/search |
-| Sandbox | `vaf/tools/python_sandbox.py` | `/tmp/vaf_{scope_prefix}_{exec_id}` |
+| Sandbox | `vaf/tools/python_sandbox.py` | the caller's own scratch environment, one container per person (`vaf-env-<scope hash>-scratch`, `vaf/core/environments.py`); each run in its own `/tmp/vaf_run_<id>` there |
 | Automation | `vaf/core/automation.py` | Tasks carry `user_scope_id` |
 | Email Config | `vaf/tools/mail_utils.py` | `email_config_by_scope[scope]` → `email_config_by_user` → `email_config` |
 | Email accounts (SSOT) | `vaf/core/email_accounts.py` | `get_email_config(username, user_scope_id)` with scope-first lookup |

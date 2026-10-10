@@ -487,8 +487,10 @@ there too - cleared before the commit, a lookup in between re-cached the old ans
 - **Running work stops.** Deactivation and deletion call `revoke_account`; a demotion or a
   narrowed tool, workflow or hands-off grant calls `stop_account_work`. Both stop every chat
   the account has queued or running (generation, queued follow-ups, a waiting confirmation,
-  sub-agents), end its background host commands - which the Stop button spares - and close
-  its sockets, which carry the old role.
+  sub-agents), end its background host commands - which the Stop button spares - stop its
+  sandbox environments and the processes in them (a revocation listener in
+  `vaf/core/environments.py`; stopped, not deleted), and close its sockets, which carry the
+  old role.
 - **Nothing more runs.** While the mark stands, the tool funnel refuses the account's calls
   BEFORE the admin exemption (a turn queued before a demotion still carries the old role),
   a tool call already running ends through the funnel's own stop check, and the runner drops
@@ -579,7 +581,11 @@ the tool is not enabled for; `vaf ssh` acts as the machine owner. Guarded by
 The `ftp` tool keeps its confirmed servers the same way: per account under
 `~/.vaf/ftp/<account>/` (owner-only, the same account key as ssh's), so a server one account
 confirmed is new to the next, and the FTP password is a credential of the person's own store,
-passed by NAME. Guarded by `tests/test_ftp_core.py` and `tests/test_ftp_tool.py`.
+passed by NAME; `host_bash` refuses the FTP clients and `curl`/`wget` with an `ftp://` address
+for the same reason ssh's are refused. The surfaces too: `/api/ftp` (Settings, Connections, FTP)
+answers for the connection's own account and refuses with 403 an account the tool is not enabled
+for; `vaf ftp` acts as the machine owner. Guarded by `tests/test_ftp_core.py` and
+`tests/test_ftp_tool.py`.
 
 Cloud DOWNLOADS follow the same rule. Both download actions wrote to
 `Platform.downloads_dir()` - process global, so every tenant's download landed in the

@@ -67,7 +67,7 @@ from vaf.core.service_stack import (
 logger = logging.getLogger(__name__)
 
 # How long a single service probe may take. Short on purpose: the API calls
-# this for seven services in a row while a user waits on a dialog.
+# this for every service in a row while a user waits on a dialog.
 PROBE_TIMEOUT = 3.0
 INSPECT_TIMEOUT = 10.0
 # Ceiling for waiting on an engine that was just asked to start. The boot path
@@ -464,10 +464,10 @@ def collect_service_status(
     of `services`).
 
     With the daemon down nothing else is attempted: no inspect, no probes. That
-    keeps the worst case at one `docker info` (10s) instead of seven timeouts,
+    keeps the worst case at one `docker info` (10s) instead of a timeout per service,
     which matters because a web request waits on this. The host probe is a file
     read and runs regardless: with forwarding off the containers ARE running,
-    which is what makes the failure look like seven separate ones.
+    which is what makes the failure look like one per service.
     """
     daemon = daemon_probe()
     root = find_stack_root()

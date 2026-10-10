@@ -142,8 +142,8 @@ web123@ftp.example.org, the password is ..."; the agent stores the password with
   and `.vaf`; the whole folder is checked against 500 MB before the first byte.
 - **Confirmed in the chat, like `ssh`.** A trusted folder does not silence it, not over
   Telegram, WhatsApp or Discord, and a regular account gets it only when its tool allowlist
-  names it. `host_bash` refuses `ftp`, `lftp`, `ncftp` and `curl`/`wget` with an `ftp://`
-  address and points at this tool: those carry the password on the command line, ask nobody
+  names it. `host_bash` refuses the FTP clients (`ftp`, `lftp`, the `ncftp` tools) and
+  `curl`/`wget` with an `ftp://` or `ftps://` address and points at this tool: those carry the password on the command line, ask nobody
   about a new server and notice no changed certificate.
 - **The coder deploys to a web space too.** `coding_agent(deploy_to="ftps://user@host/folder")`
   gives the coder the `ftp` tool for that one web space and folder (no `ssh` in such a run),

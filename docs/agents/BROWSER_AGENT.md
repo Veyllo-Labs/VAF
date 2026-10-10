@@ -1235,7 +1235,11 @@ Two callers, one implementation (`vaf/core/browser_render.py`):
 - The **main agent** has `render_check` as a registry tool.
 - The **coder** registers it as an inner tool bound to the project directory,
   next to `run_tests`: `run_tests` proves the logic, `render_check` proves the
-  page. Relative targets like `index.html` resolve against the project.
+  page. Relative targets like `index.html` resolve against the project. A coder
+  bound to a sandbox environment is the exception: its `render_check` renders
+  inside that container (`EnvironmentManager.render`, a headless shell on the
+  environment's own network, `localhost` meaning the environment), so it never
+  touches the sandbox browser and is never answered "busy".
 
 Targets:
 

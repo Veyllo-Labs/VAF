@@ -201,6 +201,11 @@ Named, not hidden - each of these is a decision with a reason:
   and their PUBLIC keys, no secret. Its public key (`id_ed25519.pub`) is plaintext for the
   same reason: it is meant to be handed out.
 
+- **An account's confirmed FTP servers** (`~/.vaf/ftp/<account>/servers.json`, 0600 in a
+  0700 folder). Server names, how each certificate is trusted, and a certificate's SHA-256
+  fingerprint where it is pinned: no secret. The FTP password is not in it; it is a
+  credential in `user_secrets.enc`, used by NAME.
+
 - **Embeddings** (`memories.embedding`, `chunks.embedding`). pgvector needs
   plaintext vectors to search; the codebase's own comment calls them
   "practically invertible back to text". Treat them as equivalent to the content

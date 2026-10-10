@@ -41,8 +41,11 @@ A filesystem agent is not forced to wait the full research budget: the librarian
 `browser_timeout_seconds`, and `host_bash` the command's own timeout (up to 600 s) plus a margin -
 it used to be abandoned at the generic 120 s while it accepted a 300-second command. The coder's
 inner tools declare theirs too, since the coder runs them through the funnel: `bash` its command's
-timeout (up to 300 s) plus 30, `run_tests` its test timeout (180 s) plus 180 for copying the
-project in and out, `python_exec` its own timeout plus 15. These were
+timeout (up to 300 s) plus 30, and for a root command in a sandbox environment the 900 s the
+hand-back of `/workspace` may take on top; `run_tests` its test timeout (default 180 s) plus
+everything around it (`PREPARATION_SECONDS`: creating the run folder, copying the project in,
+the pytest probe, installing pytest on the fallback image, removing the copy, each on its own
+clock); `python_exec` its own timeout plus 15. These were
 tool NAMES in `bounded_run.py` before, which a tool registered by an embedder could never join.
 A small set of tools manage their own lifecycle and are deliberately **not** wrapped - each
 declares `self_supervised = True` on its class: `browser_agent` (its own in-loop stop
@@ -52,8 +55,9 @@ sever a blocked CDP socket - see the stop section in `BROWSER_AGENT.md`), the wo
 orchestrators `create_agent_workflow` / `execute_workflow` (the engine
 already bounds each step, so bounding them again would double-bound), `python_sandbox` (it runs
 a stop-aware poll loop with its own deadline that kills the Docker exec the moment Stop is requested -
-being abandoned by `run_bounded` would race that kill against the stop flag being cleared), and
-`coding_agent` (a large edit legitimately takes many minutes; its loop polls `should_stop` each
+being abandoned by `run_bounded` would race that kill against the stop flag being cleared),
+`sandbox_exec` (the same stop-aware bounded run inside the caller's sandbox environment, which ends
+the command there by its marker), and `coding_agent` (a large edit legitimately takes many minutes; its loop polls `should_stop` each
 iteration and commits on every exit path, so a flat timeout would abandon it mid-edit and leave the
 file half-written).
 
@@ -167,7 +171,9 @@ A command the agent runs in the FOREGROUND (`host_bash`, `python_exec`) goes thr
 `vaf.core.processes.run_foreground`: its own process group, a wait in half-second slices, and
 on Stop - or at its timeout - the whole tree is ended, not only the shell. `ssh` keeps its own
 wait (it streams uploads and downloads under a byte cap) and ends its process group the same way
-(`bounded_run.cancel_check`). Background commands (`host_process`) are spared by Stop, as above.
+(`bounded_run.cancel_check`). `ftp` runs no process: it checks the same `cancel_check`, and its
+own time limit, between the blocks of a transfer and ends it there. Background commands
+(`host_process`) are spared by Stop, as above.
 
 A call that was stopped or ran out of time is not reported as finished: the funnel's
 `tool_end` carries `aborted: "stopped" | "timeout"` (`tool_dispatch.abort_kind` reads the

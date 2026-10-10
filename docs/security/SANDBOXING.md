@@ -274,7 +274,7 @@ One image serves every sandbox environment and the registries proxy:
 | **Tag** | `vaf-sandbox-env:<first 12 hex of the Dockerfile's sha256>`. A changed Dockerfile is a new image. After a successful build, the images of earlier Dockerfiles are removed; one still used by a container stays until that environment is deleted. |
 | **Pins** | Node.js comes from the official release, version-pinned with a sha256 per architecture. The architecture is read from `dpkg`, not from BuildKit's `TARGETARCH`. pytest is pinned. |
 | **User** | `sandbox` (uid 10001) with a HOME every uid can write: on Linux an environment runs as the caller's uid, which has no passwd entry. `git safe.directory '*'`, because a container holds only the caller's own project. |
-| **When it is built** | The stack start begins the build in the background, and so does the scratch environment while the image is missing; after a background attempt that ended without an image (offline, a mirror down) the next one waits ten minutes (`BACKGROUND_RETRY_S`). `ensure_image()` builds when a caller needs the image now and never waits. A lock is shared across processes (`filelock`), so the web server, the CLI and a coder child never build it twice. |
+| **When it is built** | The stack start begins the build in the background, and so does the scratch environment while the image is missing; after a background attempt that ended without an image (offline, a mirror down) the next one waits ten minutes (`BACKGROUND_RETRY_S`). `ensure_image()` builds when a caller needs the image now (it blocks for the build) and is never held back by that pause. A lock is shared across processes (`filelock`), so the web server, the CLI and a coder child never build it twice. |
 | **While it is missing** | The scratch environment that `python_sandbox` uses runs on `python:3.12-slim-bookworm`, so code execution never waits for a build or an offline machine. That fallback has no Node.js and no browser. |
 | **Freshness** | Past `sandbox_env_image_max_age_days` (default 14, `0` = off), the next build pulls the base image and skips the cache, so the Debian packages inside receive their security updates. |
 | **Size (measured)** | Built in 105 s on a warm docker cache; 1.64 GB on disk, 1.44 GB of it beyond the Python base image it shares. |
@@ -375,8 +375,9 @@ container. The reaper wakes the chat when one ends on its own, and ends one afte
 
 ## Shell execution surfaces
 
-Beyond the Python sandbox there are three shell-execution surfaces, each with a distinct
-confinement model. The guiding rule: **the coder's own shell is jailed; the host is reached
+Beyond the Python sandbox there are several shell-execution surfaces (the coder's `bash`,
+`run_tests`, `host_bash`, and the remote lanes `ssh` and `ftp`; `sandbox_exec` is described with
+the sandbox environments above), each with a distinct confinement model. The guiding rule: **the coder's own shell is jailed; the host is reached
 only through `host_bash`, which an account has or does not have.**
 
 ### Coder `bash` - kernel-jailed workspace shell (`vaf/tools/workspace_exec.py`)
@@ -415,13 +416,24 @@ user at the main agent instead. Confinement is verified by real escape attempts 
 `tests/test_workspace_exec.py` (VAF-core write blocked, source invisible, host DB unreachable,
 env secrets not leaked, docker always refused).
 
+**In a sandbox environment** (the coder bound with `coding_agent(environment=...)`, or one
+exists for its project folder) none of the above applies as written: `bash` runs in that
+container (`exec_in`, `/workspace` is the project), with the environment's network and its
+installed packages, can start a dev server with `background=true`, and has the root lane
+(`as_root`, see "Sandbox environments"). The container is the confinement there. Because it can
+have network, a login to or an upload onto another machine (`remote_login`, `ftp_transfer` of
+`vaf/core/command_policy.py`) is refused in this lane as well, so the coder's deploy pin
+(`deploy_to`) cannot be stepped around from inside an environment.
+
 ### `run_tests` (`vaf/tools/sandbox_test_runner.py`)
 
 Gives the coder a sanctioned way to actually run its project's tests and get the **real**
 pass/fail, instead of guessing. It copies the project into a fresh `/tmp/vaf_tests_<id>` in the
 CALLER's scratch environment (see "The scratch environment" above), runs `python3 -m pytest -q`
 under an in-container `timeout -s KILL`, returns the summary, and removes the copy in a
-`finally`. It is `read`-level (no host side effects). Every refusal starts with
+`finally`. It is `read`-level (no host side effects). Bound to a sandbox environment it runs in
+the project itself instead (`/workspace`, with the environment's packages), and that instance is
+`write`-level, because what the tests write lands in the project. Every refusal starts with
 "Cannot run tests:", which the coder counts as a failed run.
 
 ### `host_bash` - host shell (`vaf/tools/host_bash.py`)
@@ -528,8 +540,10 @@ is always asked and refused where nobody is asked, never over a messaging channe
 account only when its allowlist names it, the local side under the account's write jail. Its
 own: the certificate is checked (an authority's, or the fingerprint remembered at the first
 connection), the address a server names for passive transfers is not followed, cloud metadata
-addresses are refused, and `host_bash` refuses `ftp`, `lftp`, `ncftp` and `curl`/`wget` with
-an `ftp://` address (`ftp_transfer` in `vaf/core/command_policy.py`) and points here. Pinned
+addresses are refused, and `host_bash` refuses the FTP clients (`ftp`, `lftp`, `ncftp`,
+`ncftpput`, `ncftpget`, `tnftp`, `pftp`) and `curl`/`wget` with an `ftp://` or `ftps://` address
+(`ftp_transfer` in `vaf/core/command_policy.py`) and points here; the coder's `bash` in a sandbox
+environment refuses the same. Pinned
 in `tests/test_ftp_core.py` and `tests/test_ftp_tool.py`, against a small FTPS server from the
 standard library (`tests/ftp_stub.py`).
 

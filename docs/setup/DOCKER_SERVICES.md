@@ -306,7 +306,7 @@ When a runtime is present (or has just been set up), the installer manages the s
    - **Windows**: starts Rancher Desktop (and does **not** restart it if it is already running)
 3. **Wait for Readiness**: The installer polls until the daemon is responsive (up to ~60–120s on a first Colima boot).
 4. **Apply Changes - two-phase**: it brings up the core registry-image services first
-   (`postgres redis sandbox stt gotenberg`) so a slow local build of `tts`/`vaf-browser` can never block the
+   (`postgres redis stt gotenberg`) so a slow local build of `tts`/`vaf-browser` can never block the
    database the app needs to boot, then starts those optional services best-effort with `--build`.
    `up -d`:
    - Starts new services (e.g., Gotenberg after an update that adds it)
@@ -321,15 +321,19 @@ When a runtime is present (or has just been set up), the installer manages the s
      Debian Chromium, and a cached `--build` never re-runs that layer, so the browser engine
      would age forever while `--build` reports success. The age gate closes that class: once
      the `vaf-browser` image is older than `browser_image_max_age_days` (default 14, admin-only,
-     `0` = off), the start runs one `build --pull --no-cache vaf-browser` first, so the base
-     image and Chromium are actually refreshed. A failed fresh build never blocks the start;
-     it is recorded as a `browser_image_stale` security event and the old image keeps serving.
+     `0` = off), the start first pulls the Dockerfile's base images into their local tags and
+     then runs one `build --no-cache vaf-browser`, so the base image and Chromium are actually
+     refreshed - and stay refreshed: `build --pull` alone used a fresh base for that one build
+     and left the local tag on the old one, so the cached `--build` right after it put the old
+     engine back (measured: Chromium 154 built, 151 back seconds later, the gate firing at every
+     start). A failed fresh build never blocks the start; it is recorded as a
+     `browser_image_stale` security event and the old image keeps serving.
 
 > **Note:** Data in named volumes (e.g., `vaf_memory_pgdata`) is never lost during `up -d`. Only container images and configuration are updated.
 
 ### When VAF Starts (`vaf tray` or `vaf run`)
 
-When you start VAF (Desktop shortcut, `vaf tray`, or the terminal app `vaf run`), it brings up the Docker stack if Docker is available. The lifecycle lives in one place, `vaf/core/service_stack.py`: engine bootstrap (macOS starts Docker Desktop or Colima, Windows starts Rancher/Docker Desktop), then a two-phase compose up - core registry-image services first (postgres, redis, sandbox, stt, gotenberg), the locally built ones (tts, vaf-browser) best-effort afterwards, so a failed local build can never take the database down with it. `vaf run` starts the stack in the background so booting the model never waits on a compose up.
+When you start VAF (Desktop shortcut, `vaf tray`, or the terminal app `vaf run`), it brings up the Docker stack if Docker is available. The lifecycle lives in one place, `vaf/core/service_stack.py`: engine bootstrap (macOS starts Docker Desktop or Colima, Windows starts Rancher/Docker Desktop), then a two-phase compose up - core registry-image services first (postgres, redis, stt, gotenberg), the locally built ones (tts, vaf-browser) best-effort afterwards, so a failed local build can never take the database down with it. `vaf run` starts the stack in the background so booting the model never waits on a compose up.
 
 Note that quitting the TRAY stops the stack (containers and data survive for a fast restart) - and the terminal app starts it as well (see below).
 
@@ -337,7 +341,8 @@ Note that quitting the TRAY stops the stack (containers and data survive for a f
 
 - The quit first cancels its own stack start (`cancel_start`). A start still running used to race the stop: `compose stop` picks its containers when it begins, and the start's `up --build` then created tts and vaf-browser behind it, which nothing stopped again. Now every later start phase is skipped, and a compose `up`/`build` this process is still running is ended - found by parentage (our own children naming this compose file), never by name. The flag check and the launch of a step are two moments, so the stop keeps cancelling until the start has returned (up to 8 s): a step launched just after its first scan is ended on the next one. When one was cut short, the stop makes a second pass two seconds later, unless another VAF instance holds the service port by then.
 - The per-user browser containers (`vaf-browser-u-*`, created with `docker run`, so `compose stop` never sees them) are stopped too, in parallel with the stack stop: the ones this process's pool started or adopted (healthy or not), never every container by name, and not one another VAF process is connected to, since a `vaf run` session can use the same container. NAMED BOUNDARY: one orphaned by a crash keeps running until its scope uses the browser again and it idles out.
-- tts, stt and the sandbox run behind docker-init (`init: true`), like vaf-browser. As PID 1, `sleep` and the Flask server had no SIGTERM handler, the kernel applies no default action to PID 1, and every stop waited out the grace and ended in SIGKILL (exit 137); stt has a handler only once its server runs, so a quit during its model load did the same. The rule is pinned for every service: one without `init: true` must be listed in `tests/test_stack_quit_during_start.py` with the reason its own PID 1 handles SIGTERM (postgres and redis exec their server, gotenberg ships tini).
+- The sandbox environments (created with `docker run`, so `compose stop` never sees them either) are stopped in a thread of their own, in parallel with the browsers: every running one that is not busy, and the registries proxy with them unless a busy registries environment still needs it. A busy one (a `vaf env exec` or a coder in another process) is left running. Stopped, not removed: the next use starts them again.
+- tts and stt run behind docker-init (`init: true`), like vaf-browser. As PID 1, `sleep` and the Flask server had no SIGTERM handler, the kernel applies no default action to PID 1, and every stop waited out the grace and ended in SIGKILL (exit 137); stt has a handler only once its server runs, so a quit during its model load did the same. The rule is pinned for every service: one without `init: true` must be listed in `tests/test_stack_quit_during_start.py` with the reason its own PID 1 handles SIGTERM (postgres and redis exec their server, gotenberg ships tini).
 - The quit waits for this stop, bounded inside its 25 s force exit; a `compose stop` still running at the bound carries on as its own process. NAMED BOUNDARY: nothing else is handed to a process that outlives the quit on purpose - a stop running after VAF exits would race a new instance starting the stack right after.
 
 Why the terminal app starts it too: a terminal-only session after a tray quit used to run against a dead memory database. Without a compose file (a pip install ships none) or without Docker, the start is skipped and the memory tools name the unreachable database instead of pretending the memory is empty.
@@ -387,8 +392,8 @@ service):
 The snapshot also carries one **host** row, `host: {ip_forward, forwarding_ok, reason}`:
 the Linux kernel's `net.ipv4.ip_forward` switch, read from `/proc` (no command, no
 privilege). With it off every container runs and none can reach the internet: the
-browser never brings its CDP port up, nothing can be pulled, and the seven service rows
-look like seven separate failures. Docker switches it on when it starts; a firewall
+browser never brings its CDP port up, nothing can be pulled, and the service rows look
+like that many separate failures. Docker switches it on when it starts; a firewall
 reload or a system update that re-applies `/etc/sysctl.d` (openSUSE's `70-yast.conf`
 carries `net.ipv4.ip_forward = 0`) switches it back off behind Docker's back. Measured
 twice on one host. `forwarding_ok` is `null` on macOS and Windows, where the engine runs
@@ -423,7 +428,7 @@ A running container is not a reachable one: the probe is what catches a firewall
 dropping loopback traffic, a service still loading, and a port published somewhere
 other than where VAF looks. When the Docker daemon is unreachable, nothing else is
 attempted - no inspect, no probes - so a status call costs one `docker info` instead
-of seven timeouts.
+of a timeout per service.
 
 **What a repair run does** (`repair_service_stack()`), in order, reporting every step
 as it finishes:

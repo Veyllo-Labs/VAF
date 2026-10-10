@@ -186,6 +186,12 @@ disarm the floor again.
 - **ReactFlow graphs on touch.** Pinch/drag work by default, but a dense graph needs
   a wider zoom range so pinch-out shows the whole thing: set `minZoom={0.05}`
   (`maxZoom={4}`). Do **not** tell users to use the +/- buttons; fingers must work.
+- **A button inside a ReactFlow node.** A node that is neither selectable nor draggable gets
+  no pointer events, and its children inherit that: the pane takes the click (measured on the
+  Repair button under the VAF hub in Update and Repair). Give the button's wrapper
+  `pointer-events-auto nodrag nopan`. On a phone a button inside the graph is too small to tap
+  once fitView has scaled the graph down, so Update and Repair hides that one (`max-md:hidden`)
+  and keeps Repair in the bottom bar (`md:hidden` there), the same button rendered twice.
 - **Avoid negative-margin hacks to widen content** (`-ml-11` to pull an answer under
   the avatar clipped the avatar). Restructure instead - e.g. render the element as a
   full-width sibling on mobile via `isMobile`, indented column on desktop.

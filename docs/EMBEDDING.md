@@ -1103,6 +1103,13 @@ declarations give a tool of yours the same treatment. NAMED BOUNDARY: `vaf.core.
 is engine-internal, not on the facade; the tool, `vaf ssh` and the settings route
 are its only callers.
 
+**Files on a web space** are VAF's `ftp` tool (`vaf/core/ftp.py`, Python's ftplib):
+FTPS unless `ftp://` is written, each account's own list of confirmed servers, a
+certificate trusted through an authority or by the fingerprint remembered at the
+first connection, the password a stored credential's NAME. Built from the same
+contract as `ssh` and nothing else. NAMED BOUNDARY, the same as ssh's: `vaf.core.ftp`
+is engine-internal; the tool, `vaf ftp` and the settings route are its only callers.
+
 `self.log(message)` is the supported way for a tool to write a diagnostic
 line. It appends to `tools_<date>.log` in the VAF log directory, filling in
 your tool's name and the current session id, and it inherits everything the
@@ -2142,9 +2149,11 @@ Stable public surface (safe to build on):
   posture" above.
 - `vaf.EnvironmentManager` / `vaf.get_environment_manager()` - sandbox environments: a
   container, a volume and a network of one's own per person, to run, install and test
-  code in (`create`, `get`, `list`, `exec`, `read_file`, `write_file`, `list_files`,
-  `copy_in`, `copy_out`, `stop`, `delete`, `scratch_for`, `start_reaper`,
-  `stop_all_at_quit`, `prune`, `summary`). The kinds (`temporary`, `project`), the network profiles
+  code in (`create`, `get`, `list`, `exec`, `exec_in`, `read_file`, `write_file`,
+  `list_files`, `copy_in`, `copy_out`, `stop`, `delete`, `scratch_for`, `start_reaper`,
+  `stop_all_at_quit`, `prune`, `summary`). `prune()` and `summary()` raise
+  `EnvironmentRefused` when docker does not list the environments (a pass that could not
+  look reports no zeros); the reaper's own pass (`reap_once`) never raises. The kinds (`temporary`, `project`), the network profiles
   (`none`, `registries`, `open`) and the refusal type `vaf.core.environments.EnvironmentRefused`
   are part of the contract. See "Sandbox environments" above.
 - `vaf.contained_path(root, relative="", *, must_exist=False)` /

@@ -81,7 +81,8 @@ a Network section with the total up/down rates and the connected clients
 (inbound connections grouped per remote IP, with the ports they use), and the
 health of every Docker service. Per-IP byte rates are deliberately absent: they
 would need packet capture (root); connection counts are the honest per-IP
-signal available to an unprivileged process.
+signal available to an unprivileged process. Below the services, a `sandbox` row
+says how many sandbox environments run and are stopped (idle while none exists).
 
 ```bash
 vaf top              # live view, refresh every 2s (Ctrl+C to exit)

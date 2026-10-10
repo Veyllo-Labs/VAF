@@ -147,6 +147,18 @@ already dead. Every caller then reported a failed stop: the Windows test leg fou
 `processes.stop` answering "could not be stopped" and `terminate_all` counting 0 of
 2. On Linux the name exists, so no local run could fail. Here the Windows side of
 the seam is simulated: `is_windows()` true and no SIGKILL in the signal module.
+
+## 8. A path the protocol defines as POSIX is never normalised with the host's flavour.
+
+An FTP path, a tar member name, a path inside a container: POSIX whatever the host.
+`os.path.normpath(os.path.join("/", "docs"))` is `/docs` on Linux and `\\docs` on
+Windows, and a following `.lstrip("/")` leaves the backslash standing, so the join
+onto a local folder roots at the drive. The Windows leg found exactly this in the
+FTP test server (tests/ftp_stub.py): every path read as outside its root, nine FTP
+tests failed with "550 outside" or a closed connection, and every Linux and macOS
+job was green. The rule: such a path goes through `posixpath`; the scan below
+refuses the spelling that gives it away, an `os.path` normalise or join whose
+result is then stripped, split or tested against "/".
 """
 import ast
 import ntpath
@@ -753,3 +765,48 @@ def test_the_tree_stop_runs_under_windows_semantics(monkeypatch):
     finally:
         if child.poll() is None:
             child.kill()
+
+
+# -- 8. POSIX protocol paths normalised with the host's flavour --------------------
+
+_HOST_FLAVOUR_ON_POSIX_PATH = re.compile(
+    r"os\.path\.(normpath|join)\(.*\)\.(lstrip|rstrip|strip|startswith|endswith|split)\(\s*['\"]/['\"]")
+
+
+def test_the_protocol_path_class_is_real():
+    """The two flavours part exactly where an FTP path is joined and stripped."""
+    assert posixpath.normpath(posixpath.join("/", "docs/report.pdf")).lstrip("/") == "docs/report.pdf"
+    assert ntpath.normpath(ntpath.join("/", "docs/report.pdf")).lstrip("/") == "\\docs\\report.pdf"
+
+
+def test_no_posix_path_is_normalised_with_the_host_flavour():
+    """MUTATION: put os.path back into tests/ftp_stub.py's _path - red."""
+    hits = []
+    for rel, path in _tracked_python_files():
+        if rel == "tests/test_windows_path_hygiene.py":
+            continue
+        for no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if _HOST_FLAVOUR_ON_POSIX_PATH.search(line):
+                hits.append(f"{rel}:{no}")
+    assert hits == [], "use posixpath for a POSIX protocol path: " + ", ".join(hits)
+
+
+def test_the_ftp_test_server_maps_paths_under_windows_semantics(tmp_path):
+    """The stub's own mapping with os.path swapped for ntpath, as on the Windows leg.
+    MUTATION: back to os.path in _path - red (one file named "\\docs\\report.pdf")."""
+    import types
+    sys.path.insert(0, str(_REPO / "tests"))
+    try:
+        import ftp_stub
+    finally:
+        sys.path.remove(str(_REPO / "tests"))
+    stub = ftp_stub.FtpStub(tmp_path)
+    try:
+        # Only the stub's own `os` sees ntpath: pathlib's resolve() reads os.path too, and
+        # swapping it process-wide would test the simulation instead of the stub.
+        with mock.patch.object(ftp_stub, "os", types.SimpleNamespace(path=ntpath)):
+            mapped = stub._path("/", "docs/report.pdf")
+        assert mapped == tmp_path.resolve() / "docs" / "report.pdf"
+    finally:
+        stub._listener.close()
+

@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime
 import ipaddress
 import os
+import posixpath
 import socket
 import ssl
 import threading
@@ -152,7 +153,10 @@ class FtpStub:
                     pass
 
     def _path(self, cwd: str, arg: str) -> Path:
-        rel = os.path.normpath(os.path.join(cwd, arg)).lstrip("/")
+        # posixpath, not os.path: an FTP path is POSIX whatever the host. ntpath turned
+        # "/docs" into "\\docs", which survived the lstrip and rooted the join at the
+        # drive, so every path read as outside the root on Windows.
+        rel = posixpath.normpath(posixpath.join(cwd, arg)).lstrip("/")
         path = (self.root / rel).resolve()
         if path != self.root.resolve() and self.root.resolve() not in path.parents:
             raise PermissionError(arg)

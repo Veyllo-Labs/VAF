@@ -7,6 +7,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
 import type { ChangelogEntry, ChangeKind } from '@/lib/changelog';
 import { useThemeStore } from '@/lib/themeStore';
+import { AgentAvatar } from '@/components/AgentAvatar';
 
 // Veyllo design tokens (the app's Tailwind lacks these exact ones, so inline like NotificationsModal).
 // This whole modal is styled through this JS palette, which the Tailwind dark-palette swap cannot
@@ -18,13 +19,15 @@ import { useThemeStore } from '@/lib/themeStore';
 const C_LIGHT = {
   surface: '#ffffff', fg: '#111827', muted: '#5b6472', faint: '#9aa3b2',
   line: '#e7e9ee', surface3: '#f1f4f8', ink: '#2a3142', accent: '#1d4ed8',
-  accentSoft: 'rgba(29,78,216,.08)',
   // full-screen blur scrim behind the modal (kept navy in light so light stays pixel-identical)
   scrim: 'rgba(16,24,40,.40)',
-  // ink glyph details drawn ON the ink shape (exclamation mark / orb interior)
+  // ink glyph details drawn ON the ink shape (the exclamation mark)
   inkContrast: '#ffffff',
   // soft radial halo behind the icon
   halo: 'rgba(17,24,39,.10)',
+  // halo behind the agent: its body stays dark in both themes, so the pool under it is a
+  // shadow in both (the light `halo` of the dark theme would wash the dark square out)
+  agentHalo: 'rgba(17,24,39,.10)',
   titleGradient: 'linear-gradient(180deg,#111827 30%,#354155)',
   // the near-black CTA button keeps its brand color in dark mode; the border is the
   // "subtle dark border polish" so it still reads against the dark card (user decision).
@@ -34,11 +37,11 @@ const C_LIGHT = {
 const C_DARK: typeof C_LIGHT = {
   surface: '#202020', fg: '#ececec', muted: '#8a8a8a', faint: '#6b6b6b',
   line: '#2f2f2f', surface3: '#262626', ink: '#ececec', accent: '#3b82f6',
-  accentSoft: 'rgba(59,130,246,.16)',
   // neutral black scrim so the dark backdrop does not read blue (the light navy tinted it)
   scrim: 'rgba(0,0,0,.55)',
   inkContrast: '#202020',
   halo: 'rgba(236,236,236,.08)',
+  agentHalo: 'rgba(0,0,0,.35)',
   titleGradient: 'linear-gradient(180deg,#ececec 30%,#b0b0b0)',
   buttonBorder: '#333333',
   buttonBg: '#e6e6e6', buttonFg: '#181818',
@@ -136,11 +139,11 @@ export default function AnnouncementModal({
             </span>
           )}
 
-          {/* Icon: dark filled warning triangle (intro) or agent orb (changelog) */}
+          {/* Icon: dark filled warning triangle (intro) or the agent (changelog) */}
           <div style={{ position: 'relative', height: 78, display: 'grid', placeItems: 'center', margin: '18px 0 14px' }}>
             <span style={{
               position: 'absolute', width: 140, height: 140, borderRadius: '50%',
-              background: `radial-gradient(circle, ${C.halo}, transparent 62%)`,
+              background: `radial-gradient(circle, ${variant === 'intro' ? C.halo : C.agentHalo}, transparent 62%)`,
             }} />
             {variant === 'intro' ? (
               <svg width={50} height={50} viewBox="0 0 24 24" style={{ position: 'relative', filter: 'drop-shadow(0 8px 18px rgba(16,24,40,.20))' }}>
@@ -152,10 +155,10 @@ export default function AnnouncementModal({
                 <circle cx="12" cy="17" r="1.15" fill={C.inkContrast} />
               </svg>
             ) : (
-              <span style={{
-                position: 'relative', width: 30, height: 30, borderRadius: '50%', background: C.ink,
-                boxShadow: `0 0 0 8px ${C.accentSoft}, 0 8px 20px -6px rgba(16,24,40,.35)`,
-              }} />
+              // The agent itself in its resting state, the same avatar the chat and the login
+              // screen show. It picks its own light/dark body from the theme store; only the
+              // halo under it comes from this palette (agentHalo).
+              <div style={{ position: 'relative', transform: 'scale(1.6)' }}><AgentAvatar mode="idle" /></div>
             )}
           </div>
 

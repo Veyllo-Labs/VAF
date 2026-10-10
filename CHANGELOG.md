@@ -31,6 +31,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   read a setting that does not exist, while network mode always demands a login. It now
   reports what can really be wrong with the new VPN settings instead: an entry that is
   ignored, or "VPN only" with no VPN up.
+- **The "What's new" window shows the agent again.** Its header showed a plain circle in a
+  ring where the agent belongs; it now shows the same agent as the chat, in the colours of
+  the light or dark theme you use.
 
 ### Security
 

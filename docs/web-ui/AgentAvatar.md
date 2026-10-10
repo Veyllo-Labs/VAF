@@ -205,6 +205,7 @@ Older messages: `dim` prop → light gray box, gray static dot.
 | SystemStep (Router, RAG, info-tools) active | `waiting` | false |
 | SystemStep done | `idle` | false |
 | Workflow message | `idle` | false |
+| "What's new" window header (`AnnouncementModal`, changelog variant) | `idle` | false |
 
 ---
 

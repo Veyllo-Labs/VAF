@@ -273,6 +273,31 @@ NAMED BOUNDARIES:
 - The receiving side still treats a tokenless loopback request as the owner; replacing
   that with a per-start IPC token is a separate change.
 
+## Sandbox environments
+
+### The environment image (`vaf/core/environment_image.py`)
+
+One image serves every sandbox environment and the registries proxy:
+
+- Python 3.12, Node.js LTS, git, a C/C++ compiler for packages without a wheel, ripgrep and jq;
+- `tinyproxy`, which the proxy container runs from the same image;
+- `chromium-headless-shell`, which takes screenshots of what an environment serves.
+
+| Property | Detail |
+|---|---|
+| **Source** | `vaf/assets/sandbox/Dockerfile`, inside the package. It goes to `docker build -` on stdin with no build context: a wheel install has no `docker/` directory, and an embedder building on the facade gets the same image. |
+| **Tag** | `vaf-sandbox-env:<first 12 hex of the Dockerfile's sha256>`. A changed Dockerfile is a new image. After a successful build, the images of earlier Dockerfiles are removed; one still used by a container stays until that environment is deleted. |
+| **Pins** | Node.js comes from the official release, version-pinned with a sha256 per architecture. The architecture is read from `dpkg`, not from BuildKit's `TARGETARCH`. pytest is pinned. |
+| **User** | `sandbox` (uid 10001) with a HOME every uid can write: on Linux an environment runs as the caller's uid, which has no passwd entry. `git safe.directory '*'`, because a container holds only the caller's own project. |
+| **When it is built** | The stack start begins the build in the background. `ensure_image()` builds when a caller needs the image now. A lock is shared across processes (`filelock`), so the web server, the CLI and a coder child never build it twice. |
+| **While it is missing** | The scratch environment that `python_sandbox` uses runs on `python:3.12-slim-bookworm`, so code execution never waits for a build or an offline machine. That fallback has no Node.js and no browser. |
+| **Freshness** | Past `sandbox_env_image_max_age_days` (default 14, `0` = off), the next build pulls the base image and skips the cache, so the Debian packages inside receive their security updates. |
+| **Size (measured)** | Built in 105 s on a warm docker cache; 1.64 GB on disk, 1.44 GB of it beyond the Python base image it shares. |
+
+**Why the headless shell and not the full Chromium.** The full browser's headless mode crashes in a container without a crash database. Measured with Chromium 151: `chrome_crashpad_handler: --database is required`, and with crashpad switched off an "FD ownership violation". Debian's `chromium-headless-shell` is the separate binary built for exactly this use. It took a 1280x800 screenshot of a page the environment served in 215 ms, as a non-root user with every capability dropped and no network beyond the environment's own.
+
+**Licences.** The image is built locally only and never published. tinyproxy is GPL-2.0, and `chromium-headless-shell` carries the Chromium licences. Each runs as a separate program next to the other Debian packages, an aggregate with no code linkage. See [THIRD_PARTY.md](../legal/THIRD_PARTY.md).
+
 ## Shell execution surfaces
 
 Beyond the Python sandbox there are three shell-execution surfaces, each with a distinct

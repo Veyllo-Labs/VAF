@@ -295,6 +295,12 @@ weights carry their own license independent of the code that loads them.
 | openai-whisper (the ASR engine inside it) | that image's `.venv` | MIT | Copyright (c) 2022 OpenAI - https://github.com/openai/whisper |
 | Whisper model weights (`base` by default) | downloaded at first use into the `vaf_stt_models` volume | MIT | OpenAI - "Whisper's code and model weights are released under the MIT License" (upstream README) |
 | Smart Turn v3 model weights (`smart-turn-v3.2-cpu.onnx`, ~8 MB int8) | downloaded at first use into `models/speaker/` when `voice_semantic_endpoint_enabled` is on (default off); loader `vaf/core/voice_vad.py` | BSD-2-Clause | Pipecat AI - https://huggingface.co/pipecat-ai/smart-turn-v3 (semantic voice turn-end; Whisper-Tiny encoder + linear head) |
+| Sandbox environment image (`vaf-sandbox-env`) | built LOCALLY from `vaf/assets/sandbox/Dockerfile` by `vaf/core/environment_image.py`; never published as a prebuilt image | aggregate of the components below and the Debian packages of the base image, each under its own licence | Veyllo GmbH (the Dockerfile, AGPL-3.0-or-later) |
+| Node.js 24 (in that image) | official release tarball, version-pinned with a sha256 per architecture | MIT (bundled third-party components under their own permissive licences, listed in its `LICENSE`) | OpenJS Foundation and Node.js contributors - https://nodejs.org |
+| tinyproxy (in that image; runs the registries proxy) | Debian package | GPL-2.0-or-later | Copyright tinyproxy contributors - https://tinyproxy.github.io |
+| chromium-headless-shell (in that image; takes screenshots) | Debian package | BSD-3-Clause (plus the licences of Chromium's bundled components) | The Chromium Authors - https://www.chromium.org |
+
+The sandbox environment image is built on the user's own machine and never distributed by VAF: tinyproxy is GPL-2.0-or-later and runs there as a separate program next to the other packages (an aggregate, no code linkage), the same position as KasmVNC in the browser image. Publishing a prebuilt image would mean shipping the licence texts and the corresponding source with it.
 
 The three speech-to-text rows are MIT and the Smart Turn v3 weights are BSD-2-Clause,
 so shipping and commercial use are unrestricted beyond retaining the notices above

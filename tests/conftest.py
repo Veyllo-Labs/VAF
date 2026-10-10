@@ -415,6 +415,27 @@ def _browser_pool_off():
         os.environ["VAF_BROWSER_POOL_MAX"] = previous
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _sandbox_env_image_never_builds():
+    """No test may start a build of the sandbox environment image.
+
+    The image is about 1.6 GB and takes minutes; a test that reaches the stack start
+    or an environment creation with a docker daemon present would otherwise start
+    one on the developer's machine, and nothing a test cleans up removes it.
+    `environment_image.builds_disabled()` reads this variable before every build.
+    A test about the build itself deletes it and drives the stubbed docker seam.
+    """
+    import os
+
+    previous = os.environ.get("VAF_SANDBOX_ENV_NO_BUILD")
+    os.environ["VAF_SANDBOX_ENV_NO_BUILD"] = "1"
+    yield
+    if previous is None:
+        os.environ.pop("VAF_SANDBOX_ENV_NO_BUILD", None)
+    else:
+        os.environ["VAF_SANDBOX_ENV_NO_BUILD"] = previous
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _isolated_threat_db(tmp_path_factory):
     """The known-bad hash list is MACHINE-global by design, so it is machine-global

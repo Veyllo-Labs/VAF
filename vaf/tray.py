@@ -1253,14 +1253,8 @@ def quit_app(icon=None, item=None):
             raw = (r.stdout or "").strip()
             if r.returncode != 0 or not raw:
                 return False
-            # RFC3339Nano ("2026-08-21T04:12:58.81979334Z"): trim to
-            # microseconds for fromisoformat.
-            iso = raw.rstrip("Z")
-            if "." in iso:
-                head, frac = iso.split(".", 1)
-                iso = f"{head}.{frac[:6]}"
-            started = datetime.fromisoformat(iso).replace(tzinfo=timezone.utc)
-            return started > _shutdown_began_utc
+            from vaf.core.containers import parse_docker_time
+            return parse_docker_time(raw) > _shutdown_began_utc
         except Exception:
             return False
 

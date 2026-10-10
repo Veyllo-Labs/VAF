@@ -36,7 +36,6 @@ this module's logger.
 import logging
 import os
 import platform
-import re
 import subprocess
 import threading
 import time
@@ -474,25 +473,13 @@ def _browser_image_age_days() -> Optional[float]:
     then stands down rather than rebuilding on a guess.
     """
     try:
-        docker = resolve_docker_exe()
-        r = subprocess.run([docker, "inspect", "vaf-browser", "--format", "{{.Config.Image}}"],
-                           capture_output=True, text=True, timeout=20)
+        from vaf.core import containers
+        r = containers.docker(["inspect", "vaf-browser", "--format", "{{.Config.Image}}"],
+                              timeout=20)
         image = (r.stdout or "").strip()
         if r.returncode != 0 or not image:
             return None
-        r = subprocess.run([docker, "image", "inspect", image, "--format", "{{.Created}}"],
-                           capture_output=True, text=True, timeout=20)
-        created_raw = (r.stdout or "").strip()
-        if r.returncode != 0 or not created_raw:
-            return None
-        from datetime import datetime, timezone
-        # Docker prints RFC3339 with nanoseconds; fromisoformat wants at most
-        # microseconds, so the fractional part is trimmed.
-        created_raw = re.sub(r"\.(\d{6})\d*", r".\1", created_raw.replace("Z", "+00:00"))
-        created = datetime.fromisoformat(created_raw)
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        return max(0.0, (datetime.now(timezone.utc) - created).total_seconds() / 86400.0)
+        return containers.image_age_days(image)
     except Exception:
         return None
 
@@ -769,6 +756,14 @@ def _ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
                             return True
                         opt = subprocess.run(base + ["--build"] + list(OPTIONAL_SERVICES),
                                              timeout=600, **kwargs)
+                        # The sandbox environments' image is not a compose service
+                        # (it ships inside the package and is built from stdin), so
+                        # it is started here, in the optional phase, off this path.
+                        try:
+                            from vaf.core.environment_image import start_background_build
+                            start_background_build()
+                        except Exception:
+                            pass
                         if opt.returncode != 0:
                             # Name the real reason. The old wording guessed "VM clock skew"
                             # at every failure, which sent a genuine build error looking for

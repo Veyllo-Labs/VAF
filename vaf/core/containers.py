@@ -24,8 +24,10 @@ every saved browser profile (logins, history). A test pins it to literal values.
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 
@@ -100,6 +102,30 @@ def ensure_network(name: str, *, internal: bool = False,
         return r2.returncode == 0
     except Exception:
         return False
+
+
+def parse_docker_time(raw: str) -> datetime:
+    """A docker timestamp (RFC 3339 with nanoseconds, `...58.819793341Z`) as an aware
+    datetime. fromisoformat takes at most microseconds, so the fraction is trimmed.
+    Raises ValueError for text that is not a timestamp."""
+    text = re.sub(r"\.(\d{6})\d*", r".\1", str(raw).strip().replace("Z", "+00:00"))
+    value = datetime.fromisoformat(text)
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def image_age_days(image: str) -> Optional[float]:
+    """How many days ago this image was built, or None when it cannot be known (no
+    such image, docker trouble, an unreadable timestamp) - an age gate then stands down
+    rather than rebuilding on a guess."""
+    try:
+        r = docker(["image", "inspect", image, "--format", "{{.Created}}"], timeout=20)
+        raw = (r.stdout or "").strip()
+        if r.returncode != 0 or not raw:
+            return None
+        created = parse_docker_time(raw)
+        return max(0.0, (datetime.now(timezone.utc) - created).total_seconds() / 86400.0)
+    except Exception:
+        return None
 
 
 def mem_available_mb() -> Optional[int]:

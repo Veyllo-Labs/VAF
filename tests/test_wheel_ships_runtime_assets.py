@@ -32,6 +32,8 @@ RUNTIME_ASSETS = (
     ("media", "vaf/media/**/*", 5),
     # Skills that ship with the product; discovery reads them from the package.
     ("skills/builtin", "vaf/skills/builtin/**/*", 1),
+    # The sandbox environments' Dockerfile, piped to `docker build -`.
+    ("assets/sandbox", "vaf/assets/sandbox/*", 1),
 )
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent

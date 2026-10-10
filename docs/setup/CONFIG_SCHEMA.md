@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (358 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (359 keys).
 
 ## How configuration is set
 
@@ -373,6 +373,7 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `browser_pool_idle_seconds` | `900` | Admin-only. How long an unused instance stays up before it is stopped to give the RAM back. The container and its profile volume survive, so the person's history and logins come back with them. Minimum 60. Overridden by `VAF_BROWSER_POOL_IDLE_S`. |
 | `browser_pool_strict` | `False` | Admin-only. Strict pool: a user who cannot get a DEDICATED browser instance (pool at capacity, low memory, docker trouble) is answered busy instead of silently sharing the fallback browser. Every fallback, strict or not, is recorded as a `browser_pool_fallback` security event. Off by default: a solo install would rather time-share than see busy. Overridden by `VAF_BROWSER_POOL_STRICT`. |
 | `browser_image_max_age_days` | `14` | Admin-only. Freshness budget for the browser image: older than this, the next stack start rebuilds it with `--pull --no-cache` so the unpinned Debian Chromium inside actually receives security updates (the ordinary cached `--build` never re-runs that layer). A failed fresh build never blocks the start; it is recorded as a `browser_image_stale` security event instead. `0` disables the gate. Overridden by `VAF_BROWSER_IMAGE_MAX_AGE_DAYS`. |
+| `sandbox_env_image_max_age_days` | `14` | Admin-only. Freshness budget for the sandbox environment image (`vaf-sandbox-env`, built from the Dockerfile inside the package): older than this, the next build pulls the base image and skips the cache, so the Debian packages inside (the headless browser among them) receive their security updates. `0` disables it. Overridden by `VAF_SANDBOX_ENV_IMAGE_MAX_AGE_DAYS`. |
 | `web_ui_enabled` | `True` | Serve the web UI. |
 | `tray_autostart` | `False` | Start the desktop tray on login. |
 | `theme` | `vaf` | Terminal colour theme for both terminal lanes; catalog in `vaf/cli/themes.py`. The default is monochrome. Changed by `t` / `theme <name>` in the app, or the Theme row in `vaf settings`. |

@@ -714,6 +714,7 @@ class Config:
         "browser_pool_idle_seconds": 900,                          # Stop an unused instance after this long (data kept)
         "browser_pool_strict": False,                              # Refuse (busy) instead of falling back to the shared browser
         "browser_image_max_age_days": 14,                          # Rebuild the browser image with a fresh base beyond this age (0 = off)
+        "sandbox_env_image_max_age_days": 14,                      # Rebuild the sandbox environment image with a fresh base beyond this age (0 = off)
 
         # Connections: Telegram (bot token, whitelist per user_scope_id)
         "telegram_config": None,                                   # { enabled, verified?, whitelist: [...] }; the bot token lives in the key ring (channel_secrets)
@@ -1036,6 +1037,9 @@ class Config:
         # account's MCP tools off, the discovery deadline, and the base of the sign-in's
         # redirect address (which decides where every account's authorization code is sent).
         "mcp_",
+        # Sandbox environments: per-person limits, the network a person's code may reach,
+        # the hosts the registries proxy lets through. One policy for the whole instance.
+        "sandbox_env_",
     )
     GLOBAL_CONFIG_KEYS = frozenset([
         "provider", "model", "n_ctx", "gpu_layers", "n_parallel", "llama_cache_ram",

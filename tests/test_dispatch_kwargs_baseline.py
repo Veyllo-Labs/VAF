@@ -212,6 +212,12 @@ KWARGS_BASELINE = {
     # +user_scope_id: the run goes into the CALLER's own scratch environment, not one
     # container shared by every account.
     "run_tests":                 ("chat", ["user_scope_id"]),
+    # The sandbox environment tools act as the caller in the caller's own environments;
+    # session_id ties a background process to the chat it wakes.
+    "sandbox_exec":              ("chat", ["session_id", "user_role", "user_scope_id", "username"]),
+    "sandbox_files":             ("chat", ["session_id", "user_role", "user_scope_id", "username"]),
+    "sandbox_manage":            ("chat", ["session_id", "user_role", "user_scope_id", "username"]),
+    "sandbox_transfer":          ("chat", ["session_id", "user_role", "user_scope_id", "username"]),
     "save_thinking_suggestion":  ("chat", []),
     "schedule_reminder":         ("chat", ["user_scope_id", "username"]),
     # DELIBERATE change: the discovery tools answer from the registry as the MODEL

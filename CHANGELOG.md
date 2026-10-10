@@ -13,6 +13,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **The agent can build and test in a sandbox environment of its own.** It creates a
+  container for the task (temporary, removed a day after its last use, or a project
+  environment that keeps its installed packages and can work in one of your project
+  folders), runs commands and edits files in it, copies results to your folders, and can
+  leave a dev server running there; the chat hears back when it stops. Each environment
+  chooses its network: none, only package registries through a filtering proxy, or the
+  open internet, and an admin can cap that choice. Nobody else can see or use your
+  environments.
 - **Reach VAF over a VPN.** VAF now recognises VPN connections (WireGuard, OpenVPN,
   Tailscale, NetBird, ZeroTier) and shows their address next to the home network's in
   `vaf server status` and `vaf top`; the certificate carries it too. WireGuard and OpenVPN

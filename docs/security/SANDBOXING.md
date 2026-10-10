@@ -313,6 +313,27 @@ The isolated gateway mode needs Docker 28. On an older engine, the network is cr
 without it and the environment's `degraded` field says that the host is reachable on the
 network's gateway.
 
+**The agent's tools** (`vaf/tools/environments.py`), each acting as the caller and refused
+on messaging channels:
+- `sandbox_manage`: create, list, stop, delete. A project path runs through `is_safe_path` and
+  the write jail before the manager's own checks.
+- `sandbox_exec`: a command in `/workspace` (or `cwd`), bounded and stop-aware.
+  `background=true` starts a process that keeps running (a dev server). The command travels
+  in the environment of the docker client, not on a command line; its output goes to
+  `/tmp/vaf-env-proc/` inside the container; it carries the marker `VAF_PROC_ID`.
+- `sandbox_files`: read, write, list inside the environment.
+- `sandbox_transfer`: `copy_in` and `copy_out` between the environment and the caller's own
+  folders; the host side runs through `is_safe_path` and the write jail, and only regular
+  files and folders arrive.
+
+Background processes are listed, read and stopped with `host_process` (ids
+`e-<environment>-<process>`), next to the chat's host commands. The record of who started
+one, from which chat, lives on the host beside the environment's record, so code in the
+environment cannot rewrite it; whether it runs and its exit code are read from the
+container. The reaper wakes the chat when one ends on its own, and ends one after
+`sandbox_env_process_max_hours`. None of these tools is offered to thinking runs or on a
+4k context.
+
 **Housekeeping.**
 - **Reaper.** The web server runs one: it removes expired temporary environments, stops idle project environments, and clears records and labelled volumes or networks a crash left behind.
 - **Busy.** It is asked of docker, not of the reaper's memory: a process inside that carries a VAF run marker (`VAF_RUN_ID`, `VAF_PROC_ID`) keeps an environment alive. When the answer cannot be had, the environment counts as busy.

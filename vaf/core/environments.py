@@ -102,6 +102,8 @@ PROXY_NETWORK = "vaf-env-proxy-out"
 PROXY_PORT = 8888
 ISOLATED_GATEWAY = {"com.docker.network.bridge.gateway_mode_ipv4": "isolated"}
 READ_LIMIT_BYTES = 200_000
+PROC_DIR = "/tmp/vaf-env-proc"
+_PROC_ID_RE = re.compile(r"^p[0-9a-f]{8}$")
 TRANSFER_LIMIT_BYTES = 200 * 1024 * 1024
 
 # The defaults live here as well as in Config.DEFAULTS: an embedder building on the
@@ -323,9 +325,35 @@ class EnvironmentManager:
             pass
 
     def _delete_state(self, env_id: str) -> None:
+        for suffix in (".json", ".procs.json"):
+            try:
+                (self._state_dir() / f"{env_id}{suffix}").unlink()
+            except FileNotFoundError:
+                pass
+
+    # Background processes: the RECORD (who started it, from which chat, when) is kept
+    # here on the host, because the wake turn needs the person's identity and code in the
+    # environment must not be able to rewrite it; WHETHER it runs, its exit code and its
+    # output are read from the container (a VAF_PROC_ID marker, files under PROC_DIR), so
+    # the web server, the CLI and a coder child all see the same truth.
+    def _read_procs(self, env_id: str) -> Dict[str, Dict[str, Any]]:
+        if not _ID_RE.match(env_id or ""):
+            return {}
         try:
-            (self._state_dir() / f"{env_id}.json").unlink()
-        except FileNotFoundError:
+            data = json.loads((self._state_dir() / f"{env_id}.procs.json").read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _write_procs(self, env_id: str, procs: Dict[str, Dict[str, Any]]) -> None:
+        path = self._state_dir() / f"{env_id}.procs.json"
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(procs, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+        try:
+            from vaf.core.secure_store import harden_path
+            harden_path(path)
+        except Exception:
             pass
 
     # -- docker views ----------------------------------------------------------
@@ -853,6 +881,185 @@ class EnvironmentManager:
         self._touch(env)
         return written
 
+    # -- background processes ----------------------------------------------------------
+    @staticmethod
+    def process_handle(env_id: str, proc_id: str) -> str:
+        """The id a person and the agent use for a background process: e-<env>-<proc>."""
+        return f"e-{env_id}-{proc_id}"
+
+    @staticmethod
+    def parse_process_handle(handle: str):
+        """(env_id, proc_id) for an e-<env>-<proc> handle, or None."""
+        m = re.fullmatch(r"e-([a-z0-9-]{1,40})-(p[0-9a-f]{8})", str(handle or "").strip())
+        return (m.group(1), m.group(2)) if m else None
+
+    def start_process(self, owner_scope: Any, env_id: str, command: str, *,
+                      session_id: str = "", username: Optional[str] = None,
+                      user_role: Optional[str] = None, cwd: Optional[str] = None) -> str:
+        """Start a command that keeps running (a dev server) and return its handle. Its
+        output goes to a log inside the environment; it ends when it exits, is stopped,
+        the environment stops, or after `sandbox_env_process_max_hours`."""
+        owner_scope = resolve_owner(owner_scope)
+        env = self.get(owner_scope, env_id)
+        self._ensure_running(env)
+        proc = "p" + secrets.token_hex(4)
+        script = (f'mkdir -p {PROC_DIR} && cd "$VAF_CWD" && '
+                  f'( sh -c "$VAF_CMD" > {PROC_DIR}/{proc}.log 2>&1; '
+                  f'echo $? > {PROC_DIR}/{proc}.exit )')
+        values = {**os.environ, "VAF_CMD": str(command), "VAF_CWD": self._workdir(env, cwd)}
+        r = containers.docker(["exec", "-d", "-e", f"VAF_PROC_ID={proc}", "-e", "VAF_CMD",
+                               "-e", "VAF_CWD", env.container, "sh", "-c", script],
+                              timeout=30, env=values)
+        if r.returncode != 0:
+            raise EnvironmentRefused(f"the process could not be started: "
+                                     f"{(r.stderr or '').strip()[:200]}")
+        with self._locked():
+            procs = self._read_procs(env.id)
+            procs[proc] = {"command": str(command)[:400], "session_id": str(session_id or ""),
+                           "user_scope_id": owner_scope, "username": username, "role": user_role,
+                           "started": time.time(), "stopped": False, "notified": False}
+            self._write_procs(env.id, procs)
+        self._touch(env)
+        return self.process_handle(env.id, proc)
+
+    def _proc_status(self, env: Environment):
+        """(running proc ids, {proc id: exit text}) read from inside the container."""
+        if env.state != "running":
+            return set(), {}
+        script = (f'for d in /proc/[0-9]*; do tr "\\0" "\\n" < "$d/environ" 2>/dev/null '
+                  f'| sed -n "s/^VAF_PROC_ID=//p"; done | sort -u | sed "s/^/alive /"; '
+                  f'for f in {PROC_DIR}/*.exit; do [ -f "$f" ] && '
+                  f'printf "exit %s %s\\n" "$(basename "$f" .exit)" "$(cat "$f")"; done; true')
+        try:
+            r = containers.docker(["exec", env.container, "sh", "-c", script], timeout=20)
+        except Exception:
+            return set(), {}
+        alive, exits = set(), {}
+        for line in (r.stdout or "").splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == "alive":
+                alive.add(parts[1])
+            elif len(parts) >= 3 and parts[0] == "exit":
+                exits[parts[1]] = parts[2]
+        return alive, exits
+
+    def processes(self, owner_scope: Any, *, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """This person's background processes in all their environments, optionally only
+        those one chat started. Each: handle, env, command, state, started."""
+        out: List[Dict[str, Any]] = []
+        for env in self.list(owner_scope):
+            procs = self._read_procs(env.id)
+            if not procs:
+                continue
+            alive, exits = self._proc_status(env)
+            for proc, rec in procs.items():
+                if session_id is not None and rec.get("session_id") != str(session_id):
+                    continue
+                if proc in alive:
+                    state = "running"
+                elif rec.get("stopped"):
+                    state = "stopped"
+                elif proc in exits:
+                    state = f"exited with code {exits[proc]}"
+                else:
+                    state = "ended (the environment stopped)"
+                out.append({"handle": self.process_handle(env.id, proc), "env": env.id,
+                            "command": rec.get("command", ""), "state": state,
+                            "started": rec.get("started", 0.0)})
+        return out
+
+    def process_log(self, owner_scope: Any, handle: str, max_chars: int = 4000) -> str:
+        env_id, proc = self._own_process(owner_scope, handle)
+        env = self.get(owner_scope, env_id)
+        if env.state != "running":
+            return "(the environment is stopped; its processes ended with it)"
+        r = containers.docker(["exec", env.container, "tail", "-c", str(int(max_chars)),
+                               f"{PROC_DIR}/{proc}.log"], timeout=20)
+        return r.stdout if r.returncode == 0 else "(no output yet)"
+
+    def stop_process(self, owner_scope: Any, handle: str) -> str:
+        env_id, proc = self._own_process(owner_scope, handle)
+        env = self.get(owner_scope, env_id)
+        if env.state == "running":
+            containers.docker(["exec", env.container, "sh", "-c",
+                               containers.kill_marked_cmd("VAF_PROC_ID", proc)], timeout=20)
+        with self._locked():
+            procs = self._read_procs(env.id)
+            if proc in procs:
+                procs[proc]["stopped"] = True
+                procs[proc]["notified"] = True
+                self._write_procs(env.id, procs)
+        return f"stopped {handle}"
+
+    def _own_process(self, owner_scope: Any, handle: str):
+        parsed = self.parse_process_handle(handle)
+        if parsed is None or parsed[1] not in self._read_procs(parsed[0]):
+            raise EnvironmentRefused(f"no process {handle!r}")
+        self.get(owner_scope, parsed[0])            # someone else's reads as missing
+        return parsed
+
+    def _watch_processes(self, env: Environment, now: float) -> None:
+        """The reaper's look at one environment's processes: one that ended on its own
+        wakes the chat that started it; one past `sandbox_env_process_max_hours` is
+        stopped, and its chat is told."""
+        procs = self._read_procs(env.id)
+        pending = {p: r for p, r in procs.items() if not r.get("notified")}
+        if not pending:
+            return
+        alive, exits = self._proc_status(env)
+        limit = float(setting("process_max_hours")) * 3600
+        changed = False
+        for proc, rec in pending.items():
+            note = ""
+            if proc in alive:
+                if now - float(rec.get("started") or now) <= limit:
+                    continue
+                containers.docker(["exec", env.container, "sh", "-c",
+                                   containers.kill_marked_cmd("VAF_PROC_ID", proc)], timeout=20)
+                note = (f"it was ended after {setting('process_max_hours')} h "
+                        f"(sandbox_env_process_max_hours)")
+            elif proc in exits:
+                note = f"exit {exits[proc]}"
+            elif env.state != "running":
+                note = "the environment stopped"
+            else:
+                continue
+            rec["notified"] = True
+            changed = True
+            self._wake(env, proc, rec, note)
+        if changed:
+            with self._locked():
+                fresh = self._read_procs(env.id)
+                for proc in pending:
+                    if proc in fresh and procs[proc].get("notified"):
+                        fresh[proc]["notified"] = True
+                self._write_procs(env.id, fresh)
+
+    def _wake(self, env: Environment, proc: str, rec: Dict[str, Any], note: str) -> None:
+        if not rec.get("session_id"):
+            return
+        handle = self.process_handle(env.id, proc)
+        tail = ""
+        if env.state == "running":
+            try:
+                r = containers.docker(["exec", env.container, "tail", "-c", "1500",
+                                       f"{PROC_DIR}/{proc}.log"], timeout=20)
+                tail = (r.stdout or "").strip()
+            except Exception:
+                tail = ""
+        text = (f"Background command in sandbox environment {env.id} finished: "
+                f"{str(rec.get('command', ''))[:160]} ({handle}, {note}).\n"
+                f"End of its output:\n{tail or '(no output)'}\n\n"
+                f"Continue with what it was started for, or tell the user how it went. "
+                f"host_process(action=\"log\", id=\"{handle}\") shows more of the output.")
+        try:
+            from vaf.core.task_queue import enqueue_wake_turn
+            enqueue_wake_turn(kind="process", session_id=rec["session_id"], text=text,
+                              user_scope_id=rec.get("user_scope_id"), username=rec.get("username"),
+                              role=rec.get("role"), extra={"process_id": handle})
+        except Exception:
+            pass
+
     # -- housekeeping ----------------------------------------------------------------
     def busy(self, env: Environment) -> bool:
         """Whether anything VAF started is running inside: a process carrying a run or
@@ -887,6 +1094,7 @@ class EnvironmentManager:
                 registries_running = True
             try:
                 env = self._from_row(row)
+                self._watch_processes(env, now)
                 if env.kind in ("temporary", SCRATCH_KIND):
                     if env.expires and env.expires < now and not self.busy(env):
                         self._remove(env)

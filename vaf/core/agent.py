@@ -3901,7 +3901,9 @@ class Agent:
                             if instance.name in ("git_add_commit", "git_status", "git_log", "memory_save",
                                                  "memory_update",
                                                  "update_user_identity", "set_timer", "schedule_reminder",
-                                                 "write_file", "download_file"):
+                                                 "write_file", "download_file",
+                                                 "sandbox_manage", "sandbox_exec", "sandbox_files",
+                                                 "sandbox_transfer"):
                                 continue
                         # thinking_done: ONLY in thinking mode — the main agent must never call this
                         if instance.name == "thinking_done":
@@ -3954,6 +3956,12 @@ class Agent:
                                 "read_automation",
                                 "restore_automation",
                                 "list_trash",
+                                # Four schemas for one capability that a 4k context cannot
+                                # carry next to a conversation; python_sandbox still runs code.
+                                "sandbox_manage",
+                                "sandbox_exec",
+                                "sandbox_files",
+                                "sandbox_transfer",
                             ]
                             if instance.name in SMALL_CTX_EXCLUDED_TOOLS:
                                 continue
@@ -8217,6 +8225,17 @@ class Agent:
             if "git_status" in self.tools:
                  forced_tools.add("git_status")
                  forced_tools.add("git_add_commit")
+
+        # A place to run and test code: the sandbox environments. Only phrases that name one,
+        # so "sandbox" in a question about python_sandbox output does not pull four schemas.
+        if any(kw in u_lower for kw in [
+            "sandbox environment", "sandbox-umgebung", "sandbox umgebung", "dev server",
+            "dev-server", "test environment", "testumgebung", "isolated environment",
+            "isolierte umgebung", "in a container", "in einem container"
+        ]):
+            for _name in ("sandbox_manage", "sandbox_exec", "sandbox_files"):
+                if _name in self.tools:
+                    forced_tools.add(_name)
 
         # Reviewing code is reading it: code_audit reports and asks, coding_agent changes.
         # Only phrases that name code: "review", "audit" and "überprüf" alone sit inside

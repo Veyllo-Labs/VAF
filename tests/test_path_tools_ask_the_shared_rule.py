@@ -82,6 +82,9 @@ NOT_A_LOCAL_PATH = {
     ("github_get_file_structure", "path"): "a path inside a GitHub repository",
     ("github_list_directory", "path"): "a path inside a GitHub repository",
     ("github_update_file", "path"): "a path inside a GitHub repository",
+    ("sandbox_files", "path"): "a path inside the caller's sandbox container, resolved there",
+    ("sandbox_transfer", "path"): "the container side of the copy; the host side is host_path, "
+                                  "which runs through is_safe_path and the write jail",
 }
 
 # Tools that take a local path and never reach a containment decision. Every entry is a known

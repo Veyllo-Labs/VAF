@@ -113,6 +113,7 @@ graph TD
 | "termin löschen", "cancel" | `delete_calendar_event` |
 | "code", "script", "bug", "fix" | `coding_agent`, `git_status`, `git_add_commit` |
 | "code review", "code audit", "prüf den Code", "check my code" (deliberately not "review" or "audit" alone: they sit inside "preview" and "audit log") | `code_audit` (reads and reports; changing code stays `coding_agent`, after the person said yes) |
+| "sandbox environment", "sandbox-umgebung", "dev server", "test environment", "testumgebung", "isolated environment", "in a container" (deliberately not "sandbox" alone: it names `python_sandbox` output too) | `sandbox_manage`, `sandbox_exec`, `sandbox_files` |
 | "git", "commit", "push", "pull" | `git_status`, `git_add_commit`, `git_log` |
 | "research", "recherche", "analyse" | `research_agent`, `web_search` |
 | "mail", "inbox", "posteingang", "nachricht", "newsletter", "rechnung" | `inbox`, `find_mail`, `list_email_accounts` |

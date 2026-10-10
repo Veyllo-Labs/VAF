@@ -45,6 +45,29 @@ def _as_int(value: Any, default: int) -> int:
         return default
 
 
+def _fresh_project_folder(session_id: Any, scope: Any, name: Any):
+    """A new, empty folder for a project environment, in this chat's own project area
+    (VAF_Projects/<account>/<chat>/, the folder the coder makes its projects in), or
+    (None, None) without a chat. Returns (path, created Path).
+
+    A live run asked for a project environment with no folder to give it, and spent six
+    host_bash calls searching the home directory - other accounts' project data included -
+    before it made one at the top of VAF_Projects instead of in its own area."""
+    import re
+    from vaf.core.session import get_session_workspace_dir
+    base = get_session_workspace_dir(str(session_id or ""), create=True,
+                                     user_scope_id=str(scope) if scope else None)
+    if base is None:
+        return None, None
+    slug = re.sub(r"[^a-z0-9-]+", "-", str(name or "").lower()).strip("-")[:40] or "sandbox-project"
+    target, n = base / slug, 1
+    while target.exists():
+        n += 1
+        target = base / f"{slug}-{n}"
+    target.mkdir(parents=True)
+    return str(target), target
+
+
 def _stop_check():
     """True when the current chat asked to stop (the sandbox lanes poll it)."""
     try:
@@ -70,8 +93,11 @@ class SandboxManageTool(BaseTool):
         "Create, list, stop or delete a sandbox environment: a Docker container of your own "
         "to run, install and test code in without touching this machine. kind='temporary' is "
         "removed whole 24 h after its last use; kind='project' stays (packages stay installed) "
-        "and may mount a project folder at /workspace (project_path). Use sandbox_exec to run "
-        "commands in it, sandbox_files to read and write its files. " + _NETWORK_HELP
+        "and mounts a project folder at /workspace: project_path, or leave it out and a new "
+        "folder is made in this chat's project area. To have the coder build in a project "
+        "environment, call coding_agent with environment=<its id> and project_path=<its "
+        "folder>. Use sandbox_exec to run commands in it, sandbox_files to read and write its "
+        "files. " + _NETWORK_HELP
     )
     parameters = {
         "type": "object",
@@ -86,7 +112,9 @@ class SandboxManageTool(BaseTool):
             "network": {"type": "string", "enum": ["none", "registries", "open"],
                         "description": "For create. See the tool description."},
             "project_path": {"type": "string",
-                             "description": "For create with kind=project: a project folder of yours to mount at /workspace."},
+                             "description": ("For create with kind=project: a project folder of yours to "
+                                             "mount at /workspace. Leave it out for a new project: a "
+                                             "folder is made in this chat's project area.")},
             "memory_mb": {"type": "integer", "description": "For create: memory limit in MB (default 1024)."},
         },
         "required": ["action"],
@@ -104,20 +132,39 @@ class SandboxManageTool(BaseTool):
                     return "No sandbox environments."
                 return "\n".join(e.describe() for e in envs)
             if action == "create":
+                kind = str(kwargs.get("kind") or "temporary")
                 project_path = kwargs.get("project_path") or None
-                if project_path:
+                made = None
+                if kind == "project" and not project_path:
+                    project_path, made = _fresh_project_folder(kwargs.get("session_id"), scope,
+                                                               kwargs.get("name"))
+                    if not project_path:
+                        return _refused(self.name, "a project environment needs project_path here: "
+                                                   "there is no chat to make a folder in")
+                if project_path and made is None:
                     from vaf.tools.filesystem import is_safe_path
                     ok, why = is_safe_path(str(project_path))
                     if not ok:
                         return _refused(self.name, why)
-                env = mgr.create(scope, kind=str(kwargs.get("kind") or "temporary"),
-                                 name=str(kwargs.get("name") or ""), project_path=project_path,
-                                 network=kwargs.get("network") or None,
-                                 memory_mb=kwargs.get("memory_mb") or None,
-                                 session_id=str(kwargs.get("session_id") or ""),
-                                 user_role=kwargs.get("user_role"))
+                try:
+                    env = mgr.create(scope, kind=kind,
+                                     name=str(kwargs.get("name") or ""), project_path=project_path,
+                                     network=kwargs.get("network") or None,
+                                     memory_mb=kwargs.get("memory_mb") or None,
+                                     session_id=str(kwargs.get("session_id") or ""),
+                                     user_role=kwargs.get("user_role"))
+                except Exception:
+                    if made is not None:
+                        try:
+                            made.rmdir()            # only ever the empty folder made above
+                        except OSError:
+                            pass
+                    raise
                 lines = [f"Created {env.describe()}",
                          f"Run commands with sandbox_exec(environment=\"{env.id}\", command=...)."]
+                if getattr(env, "kind", "") == "project" and getattr(env, "project_path", ""):
+                    lines.append(f"Have the coder build in it: coding_agent(task=..., "
+                                 f"project_path=\"{env.project_path}\", environment=\"{env.id}\").")
                 if env.degraded:
                     lines.append(f"Note: {env.degraded}.")
                 return "\n".join(lines)

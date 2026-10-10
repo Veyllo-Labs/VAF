@@ -316,7 +316,13 @@ network's gateway.
 **The agent's tools** (`vaf/tools/environments.py`), each acting as the caller and refused
 on messaging channels:
 - `sandbox_manage`: create, list, stop, delete. A project path runs through `is_safe_path` and
-  the write jail before the manager's own checks.
+  the write jail before the manager's own checks. A project environment asked for without a
+  path gets a new, empty folder in the chat's own project area (`VAF_Projects/<account>/<chat>/`,
+  where the coder makes its projects too; removed again if the create is refused); without a
+  chat, the path is required. The answer names the call that puts the coder to work in it:
+  `coding_agent(project_path=..., environment=...)`. The manager itself and `vaf env create
+  --project` keep a pathless project environment on a volume of its own: a terminal has no chat
+  area to put a folder in.
 - `sandbox_exec`: a command in `/workspace` (or `cwd`), bounded and stop-aware.
   `background=true` starts a process that keeps running (a dev server). The command travels
   in the environment of the docker client, not on a command line; its output goes to
@@ -333,7 +339,9 @@ on messaging channels:
   container: no browser container joins the environment's network (a person's browser
   serves CDP without authentication on its network), and no port is published. Failed
   requests are not measured this way, and the report says so. A coder bound to an
-  environment gets the same lane through `render_check`.
+  environment gets the same lane through `render_check`, and is not offered `browser_agent`,
+  which cannot see the environment; a `browser_agent` call aimed at `/workspace` or a
+  `localhost` address is refused with a pointer to `render_check`.
 
 From the terminal, `vaf env` does the same as the machine owner, behind the terminal door:
 `list [--all]`, `create --temp | --project NAME [--path DIR] [--network ...] [--memory MB]`

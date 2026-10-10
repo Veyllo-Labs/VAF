@@ -100,6 +100,71 @@ def test_a_project_path_runs_through_is_safe_path(mgr, monkeypatch):
     assert "Access denied" in out and not [c for c in mgr.calls if c[0] == "create"]
 
 
+class _ProjectMgr:
+    def __init__(self, fail=False):
+        self.calls, self.fail = [], fail
+
+    def create(self, scope, **kw):
+        self.calls.append(kw)
+        if self.fail:
+            raise envmod.EnvironmentRefused("not enough free memory")
+        return types.SimpleNamespace(id="0a1b2c3d", degraded="", kind=kw["kind"],
+                                     project_path=kw["project_path"] or "",
+                                     describe=lambda: "0a1b2c3d, kind=project")
+
+
+@pytest.fixture
+def chat_area(monkeypatch, tmp_path):
+    import vaf.core.session as session_mod
+    area = tmp_path / "VAF_Projects" / "ab12cd34" / "chat-1"
+
+    def _ws(session_id=None, create=False, *, user_scope_id=None):
+        if not session_id:
+            return None
+        area.mkdir(parents=True, exist_ok=True)
+        return area
+
+    monkeypatch.setattr(session_mod, "get_session_workspace_dir", _ws)
+    return area
+
+
+def test_a_project_without_a_folder_gets_one_in_the_chats_own_area(monkeypatch, chat_area):
+    """MUTATION: drop _fresh_project_folder from sandbox_manage - red: the live agent searched
+    the whole home directory with host_bash for a folder to give it."""
+    m = _ProjectMgr()
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: m)
+    run = lambda: tools.SandboxManageTool().run(action="create", kind="project", name="Mein Zaehler!",
+                                                user_scope_id="scope-alice", session_id="chat-1")
+    out = run()
+    assert m.calls[-1]["project_path"] == str(chat_area / "mein-zaehler")
+    assert (chat_area / "mein-zaehler").is_dir()
+    assert f'coding_agent(task=..., project_path="{chat_area / "mein-zaehler"}", environment="0a1b2c3d")' in out
+    run()                                                     # a second one never reuses it
+    assert m.calls[-1]["project_path"] == str(chat_area / "mein-zaehler-2")
+
+
+def test_without_a_chat_a_project_needs_its_path(monkeypatch, chat_area):
+    m = _ProjectMgr()
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: m)
+    out = tools.SandboxManageTool().run(action="create", kind="project", user_scope_id="s")
+    assert "needs project_path" in out and m.calls == []
+
+
+def test_a_refused_create_leaves_no_empty_folder_behind(monkeypatch, chat_area):
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: _ProjectMgr(fail=True))
+    out = tools.SandboxManageTool().run(action="create", kind="project", name="x",
+                                        user_scope_id="s", session_id="chat-1")
+    assert "not enough free memory" in out and not (chat_area / "x").exists()
+
+
+def test_the_manager_and_the_coder_point_at_each_other():
+    """Each lane learned of the other only one way: coding_agent's environment parameter named
+    sandbox_manage, sandbox_manage never named the coder."""
+    assert "coding_agent with environment=" in tools.SandboxManageTool.description
+    from vaf.tools.coder import CodingAgentTool
+    assert "sandbox_manage" in CodingAgentTool.parameters["properties"]["environment"]["description"]
+
+
 def test_exec_bounds_the_timeout_and_reports_the_exit(mgr):
     out = tools.SandboxExecTool().run(environment="0a1b2c3d", command="echo hi", timeout=99999,
                                       user_scope_id="s")

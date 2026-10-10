@@ -143,8 +143,17 @@ def test_real_env_secrets_not_leaked(tmp_path, monkeypatch):
     assert "sk-should-not-leak" not in (out + err), "tray env secrets leaked into the jail"
 
 
-def test_refuses_a_folder_above_home():
+def test_refuses_a_folder_above_home(tmp_path, monkeypatch):
     """/home holds every account's home: bound read-write, it carried this user's ~/.vaf
-    and everybody else's. MUTATION: back to `p == home` - red."""
+    and everybody else's. MUTATION: back to `p == home` - red.
+
+    A home of its own under tmp_path: on a CI runner the checkout lies inside the real home
+    (/home/runner/work/...), so the real home's parent also overlaps VAF's source tree and
+    that refusal answered first, with another reason."""
+    homes = tmp_path / "homes"
+    (homes / "alice").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(homes / "alice"))
+    monkeypatch.setenv("USERPROFILE", str(homes / "alice"))    # Path.home() on Windows
+    assert not _VAF_ROOT.is_relative_to(homes.resolve())
     with pytest.raises(ValueError, match="above"):
-        _assert_safe_workspace(str(Path.home().resolve().parent))
+        _assert_safe_workspace(str(homes))

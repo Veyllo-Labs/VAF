@@ -58,7 +58,15 @@ are covered by seams and simulated branches in tests/test_at_rest_cross_platform
 instead, and the honest boundary is written down there rather than pretended
 away here. Windows-only SERIALIZATION defects (str(PurePath) renders with the
 host's separator, invisible on Linux where it equals as_posix) are covered by a
-static guard, tests/test_windows_path_hygiene.py, which fails on any OS. The
+static guard, tests/test_windows_path_hygiene.py, which fails on any OS. Nor can
+it put the CHECKOUT INSIDE THE HOME, where the Linux and macOS runners have it
+(/home/runner/work/VAF/VAF): the source tree is located by its resolved path, so
+only a second checkout inside the scratch home would reproduce that, and the
+suite needs files no fresh checkout has. A test that compares the real home with
+the source tree passed here and failed there (the home's parent also overlapped
+the source tree, and that refusal answered first); such a test gives itself a home
+of its own (HOME and USERPROFILE under tmp_path), as test_refuses_a_folder_above_home
+does. Measured when this was written: no other test compares the two. The
 standing rule: every Windows CI red that the local gates could not have caught
 adds its class to one of these three places in the SAME fix - a hostile axis
 here, a simulated branch there, or a static guard.

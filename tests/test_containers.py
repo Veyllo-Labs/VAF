@@ -212,6 +212,19 @@ def test_exec_bounded_builds_one_marked_bounded_command(monkeypatch):
     assert seen["kw"]["env"]["VAF_BRIDGE_TOKEN"] == "s3cr3t"
 
 
+def test_a_run_as_another_user_says_so_on_the_exec(monkeypatch):
+    seen = {}
+    import vaf.core.service_stack as stack
+    monkeypatch.setattr(stack, "resolve_docker_exe", lambda: "docker")
+    monkeypatch.setattr(containers, "_popen",
+                        lambda argv, **kw: seen.update(argv=argv) or _Proc(("done", 0, "", "")))
+    containers.exec_bounded("c", ["apt-get", "update"], timeout=60, workdir="/", run_id="r6", user="0:0")
+    argv = seen["argv"]
+    assert argv[argv.index("-u") + 1] == "0:0" and argv.index("-u") < argv.index("c")
+    containers.exec_bounded("c", ["id"], timeout=5, workdir="/", run_id="r7")
+    assert "-u" not in seen["argv"]
+
+
 def test_a_stop_kills_the_client_and_the_run_inside(monkeypatch):
     """docker exec does not pass a kill on: the run's own processes are ended by their
     marker. MUTATION: drop the in-container kill - red."""

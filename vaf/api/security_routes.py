@@ -73,7 +73,8 @@ def derive_sandbox_status(docker_available: bool,
     on demand. States (dashboard traffic light):
       ok      -> docker up; execution is container-enforced. With environments
                  running, their hardening is read live and reported together: all
-                 of them must drop every capability, set no-new-privileges, run
+                 of them must drop every capability (adding back at most the six
+                 of the coder's root lane, ROOT_LANE_CAPS), set no-new-privileges, run
                  non-root and sit on a network of their own. Without one running,
                  they start on demand with that same hardening.
       warn    -> docker daemon down/missing: sandboxed execution is BLOCKED.
@@ -92,16 +93,18 @@ def derive_sandbox_status(docker_available: bool,
         return {"state": "ok", "reason": "ephemeral_on_demand", "container_running": False,
                 "environments": 0}
     try:
+        from vaf.core.environments import ROOT_LANE_CAPS
         cap_drop_all = no_new_privileges = non_root = own_network = True
         networks: List[str] = []
         memory = cpus = 0
         for ins in running:
             host_cfg = ins.get("HostConfig") or {}
             cap_drop = [str(c).upper() for c in (host_cfg.get("CapDrop") or [])]
+            cap_add = {str(c).upper().replace("CAP_", "") for c in (host_cfg.get("CapAdd") or [])}
             security_opt = [str(s) for s in (host_cfg.get("SecurityOpt") or [])]
             nets = list(((ins.get("NetworkSettings") or {}).get("Networks") or {}).keys())
             user = str((ins.get("Config") or {}).get("User") or "")
-            cap_drop_all &= "ALL" in cap_drop
+            cap_drop_all &= "ALL" in cap_drop and cap_add <= set(ROOT_LANE_CAPS)
             no_new_privileges &= any("no-new-privileges" in s for s in security_opt)
             non_root &= bool(user) and user.split(":")[0] not in ("0", "root")
             own_network &= bool(nets) and _INTERNAL_NETWORK not in nets and all(

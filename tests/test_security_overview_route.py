@@ -15,13 +15,14 @@ from vaf.api.security_routes import collect_sandbox_status, derive_sandbox_statu
 
 def _inspect_payload(running=True, cap_drop=("ALL",), sec_opt=("no-new-privileges:true",),
                      memory=536870912, nano_cpus=500000000, networks=("vaf-env-net-ab12cd34",),
-                     user="1000:1000"):
+                     user="1000:1000", cap_add=()):
     """One sandbox environment as `docker inspect` reports it."""
     return {
         "State": {"Running": running},
         "Config": {"User": user},
         "HostConfig": {
             "CapDrop": list(cap_drop),
+            "CapAdd": list(cap_add) or None,
             "SecurityOpt": list(sec_opt),
             "Memory": memory,
             "NanoCpus": nano_cpus,
@@ -60,6 +61,15 @@ def test_no_running_environment_is_still_enforced():
         assert s["state"] == "ok"
         assert s["reason"] == "ephemeral_on_demand"
         assert s["container_running"] is False
+
+
+def test_the_root_lanes_six_capabilities_are_the_only_ones_an_environment_may_add():
+    """MUTATION: drop the CapAdd check - red: an environment with NET_ADMIN read as hardened."""
+    from vaf.core.environments import ROOT_LANE_CAPS
+    lane = derive_sandbox_status(True, [_inspect_payload(cap_add=ROOT_LANE_CAPS)])
+    assert lane["hardening"]["cap_drop_all"] is True
+    more = derive_sandbox_status(True, [_inspect_payload(cap_add=ROOT_LANE_CAPS + ("NET_ADMIN",))])
+    assert more["hardening"]["cap_drop_all"] is False
 
 
 @pytest.mark.parametrize("weak, field", [

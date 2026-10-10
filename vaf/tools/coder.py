@@ -6361,42 +6361,53 @@ Task {task_idx + 1}: {current_task}
                     }
                 })
 
-                # Bash (planning/setup)
-                if HAS_CODING_TOOLS:
-                    tools_schema.append({
-                        "type": "function",
-                        "function": {
-                            "name": "bash",
-                            "description": (
-                                (f"Execute a shell command in sandbox environment {_env_binding.id} "
-                                 f"(/workspace is the project; network {_env_binding.network}). "
-                                 "background=true starts a dev server or another long-running "
-                                 "command and returns its id; it is stopped when this run ends "
-                                 "unless keep_running is true.")
-                                if _env_binding is not None else "Execute shell command."
-                            ),
-                            "parameters": (
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "command": {"type": "string"},
-                                        "background": {"type": "boolean"},
-                                        "keep_running": {"type": "boolean"},
-                                    },
-                                    "required": ["command"]
-                                }
-                                if _env_binding is not None else
-                                {
-                                    "type": "object",
-                                    "properties": {"command": {"type": "string"}},
-                                    "required": ["command"]
-                                }
-                            )
-                        }
-                    })
-
                 # Plug-and-play tools can be large - keep them out of TASK contexts.
                 tools_schema.extend(plug_and_play_tools)
+
+            # Bash in EVERY context, the task phase included. It used to be planning-only, to
+            # keep task schemas small for local models; without it a live task run had no way
+            # to install or run a linter, faked an npm package into node_modules by hand and
+            # committed probe files. One schema entry is the smaller cost. Bound to a sandbox
+            # environment the command runs in that container, and as_root is the coder's root
+            # lane there (system packages); unbound it is the jailed shell, no network.
+            if HAS_CODING_TOOLS:
+                tools_schema.append({
+                    "type": "function",
+                    "function": {
+                        "name": "bash",
+                        "description": (
+                            (f"Execute a shell command in sandbox environment {_env_binding.id} "
+                             f"(/workspace is the project; network {_env_binding.network}). "
+                             "background=true starts a dev server or another long-running "
+                             "command and returns its id; it is stopped when this run ends "
+                             "unless keep_running is true. as_root=true runs one command as root "
+                             "inside the environment, for system packages (apt-get install ...); "
+                             "what it leaves in /workspace is handed back to the project's owner.")
+                            if _env_binding is not None else
+                            "Execute a shell command in the project folder (jailed: no network, "
+                            "system folders read-only). Use it to run the project, a linter or a "
+                            "build; install packages only where they are already cached."
+                        ),
+                        "parameters": (
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "command": {"type": "string"},
+                                    "background": {"type": "boolean"},
+                                    "keep_running": {"type": "boolean"},
+                                    "as_root": {"type": "boolean"},
+                                },
+                                "required": ["command"]
+                            }
+                            if _env_binding is not None else
+                            {
+                                "type": "object",
+                                "properties": {"command": {"type": "string"}},
+                                "required": ["command"]
+                            }
+                        )
+                    }
+                })
 
             # THE chokepoint: everything the loop appended by hand and everything
             # auto-discovery added is in the list by now, so this is the only place

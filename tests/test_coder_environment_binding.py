@@ -145,6 +145,34 @@ def test_background_processes_end_on_every_exit_of_the_run():
     assert len(asked) == 1        # only the tool the raising run bound; never a leftover
 
 
+def test_as_root_is_the_environments_and_only_runs_to_its_end(monkeypatch):
+    """MUTATION: drop as_root from the exec_in call - red; let the jailed shell accept it -
+    red: the host has no root lane."""
+    rec = _Recorder()
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: rec)
+    tool = BashTool("/p", environment=_env(), owner_scope="s")
+    out = tool.run(command="apt-get install -y tree", as_root=True)
+    assert rec.calls[-1][2]["as_root"] is True and "as root" in out
+    tool.run(command="ls")
+    assert rec.calls[-1][2]["as_root"] is False
+    assert "start a background process without it" in tool.run(command="x", as_root=True, background=True)
+    assert "only in a sandbox environment" in BashTool("/p").run(command="apt-get install tree", as_root=True)
+
+
+def test_bash_is_offered_in_every_context_and_as_root_only_when_bound():
+    """A task run without a shell faked an npm package by hand. MUTATION: put the bash
+    schema back inside the main-context block - red."""
+    import inspect
+    from vaf.tools import coder
+    src = inspect.getsource(coder.CodingAgentTool.run)
+    bash_at = src.index('"name": "bash"')
+    main_block = src.rindex("if is_main_context:", 0, bash_at)
+    assert src.index("tools_schema.extend(plug_and_play_tools)", main_block) < bash_at
+    assert src.index("THE chokepoint", bash_at) > bash_at
+    schema = src[bash_at:src.index("THE chokepoint", bash_at)]
+    assert schema.index('"as_root"') < schema.index("if _env_binding is not None else\n                            {")
+
+
 def test_bash_without_an_environment_keeps_the_jail(monkeypatch):
     import vaf.tools.workspace_exec as wx
     seen = []

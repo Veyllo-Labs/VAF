@@ -731,6 +731,7 @@ class Config:
             "pypi.org", "files.pythonhosted.org",
             "registry.npmjs.org", "registry.yarnpkg.com",
             "github.com", "codeload.github.com", "objects.githubusercontent.com",
+            "deb.debian.org", "security.debian.org",
         ],
 
         # Connections: Telegram (bot token, whitelist per user_scope_id)

@@ -149,6 +149,9 @@ class FakeDocker:
             fmt = args[-1]
             if ".proxy" in fmt:
                 return _done(0, f"{c['state']}\t{c['labels'].get(LABEL + '.proxy', '')}\n")
+            if "CapAdd" in fmt:
+                caps = [c["args"][i + 1] for i, a in enumerate(c["args"]) if a == "--cap-add"]
+                return _done(0, json.dumps(caps or None) + "\n")
             return _done(0, "\n")
         if head == "exec":
             name = next(a for a in args[1:] if a in self.containers)
@@ -545,6 +548,44 @@ def test_exec_runs_bounded_with_a_marker_in_the_workspace(docker, mgr, monkeypat
     assert r.stdout == "hello\n" and r.returncode == 0
     assert seen["container"] == env.container and seen["argv"] == ["sh", "-c", "echo hello"]
     assert seen["workdir"] == "/workspace" and re.fullmatch(r"[0-9a-f]{12}", seen["run_id"])
+
+
+def test_the_root_lane_runs_as_root_and_hands_the_workspace_back(docker, mgr, monkeypatch):
+    """MUTATION: drop user="0:0", or the give-back after it - red: a root-owned file in a
+    person's project folder could not be removed without sudo."""
+    seen = {}
+
+    def _exec_bounded(container, argv, **kw):
+        seen.update(argv=argv, **kw)
+        return 0, "", "", False, False
+
+    monkeypatch.setattr(containers, "exec_bounded", _exec_bounded)
+    env = mgr.create(ALICE, kind="temporary")
+    caps = [a for i, a in enumerate(docker.containers[env.container]["args"])
+            if i and docker.containers[env.container]["args"][i - 1] == "--cap-add"]
+    assert tuple(caps) == envmod.ROOT_LANE_CAPS
+    mgr.exec_in(env, ["sh", "-c", "apt-get install -y tree"], as_root=True)
+    assert seen["user"] == "0:0"
+    give_back = [c for c in docker.calls if c[:4] == ["exec", "-u", "0:0", env.container]]
+    assert give_back and "chown" in give_back[-1][-1] and envmod._host_user() in give_back[-1][-1]
+    mgr.exec_in(env, ["sh", "-c", "id"])
+    assert seen["user"] is None
+
+
+def test_no_root_lane_where_it_cannot_work(docker, mgr, monkeypatch):
+    """The scratch environment has none, and an environment made before the lane lacks its
+    capabilities. MUTATION: skip _require_root_lane - red."""
+    monkeypatch.setattr(containers, "exec_bounded", lambda *a, **k: (0, "", "", False, False))
+    scratch = mgr.scratch_for(ALICE)
+    assert "--cap-add" not in docker.containers[scratch.container]["args"]
+    with pytest.raises(EnvironmentRefused, match="no root lane"):
+        mgr.exec_in(scratch, ["id"], as_root=True)
+    old = mgr.create(ALICE)
+    args = docker.containers[old.container]["args"]
+    docker.containers[old.container]["args"] = [a for i, a in enumerate(args)
+                                                if a != "--cap-add" and (i == 0 or args[i - 1] != "--cap-add")]
+    with pytest.raises(EnvironmentRefused, match="create a new environment"):
+        mgr.exec_in(old, ["id"], as_root=True)
 
 
 def test_container_paths_stay_posix_and_resolve_against_the_workspace():

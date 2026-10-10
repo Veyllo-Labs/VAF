@@ -35,6 +35,17 @@ ISOLATION, measured on Docker 29.7 before this was written
 - Every environment runs non-root (the caller's uid:gid on Linux, so files in a
   mounted project stay theirs; the image's uid 10001 elsewhere), with `--init`,
   every capability dropped, `no-new-privileges`, a pids limit, memory and CPU limits.
+- THE ROOT LANE, for the coder only (`exec_in(as_root=True)`, behind the coder's
+  `bash(as_root=true)`): a temporary or project environment is created with six
+  capabilities added back (ROOT_LANE_CAPS), which only a root process can use - the
+  environment's own user has no ambient capabilities and no-new-privileges keeps setuid
+  from granting any. Measured: with every capability dropped a root `apt-get` fails;
+  with these six it updates and installs, while the environment's user still cannot
+  write a system folder. What a root command leaves in /workspace is given back to the
+  environment's user at once (a mounted project is the person's own folder: a root-owned
+  file there could not be removed without sudo). NAMED BOUNDARY: the main agent's
+  sandbox_exec and `vaf env exec` have no root lane; it exists to let the coder set up
+  what it builds, and nothing reaches the host as root. The scratch environment has none.
   No docker socket and no host path besides the project are ever mounted, and no host
   secret is passed in.
 - Network profiles, each on the environment's own network:
@@ -103,6 +114,9 @@ PROXY_PORT = 8888
 ISOLATED_GATEWAY = {"com.docker.network.bridge.gateway_mode_ipv4": "isolated"}
 READ_LIMIT_BYTES = 200_000
 PROC_DIR = "/tmp/vaf-env-proc"
+# Added back to a temporary or project environment for the coder's root lane (see the
+# module docstring): what a package manager needs as root, and nothing for anyone else.
+ROOT_LANE_CAPS = ("CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SETUID", "SETGID")
 _PROC_ID_RE = re.compile(r"^p[0-9a-f]{8}$")
 TRANSFER_LIMIT_BYTES = 200 * 1024 * 1024
 
@@ -124,6 +138,8 @@ DEFAULTS: Dict[str, Any] = {
         "pypi.org", "files.pythonhosted.org",
         "registry.npmjs.org", "registry.yarnpkg.com",
         "github.com", "codeload.github.com", "objects.githubusercontent.com",
+        # The image's own apt sources, for the root lane: apt honours the proxy variables.
+        "deb.debian.org", "security.debian.org",
     ],
 }
 SCRATCH_MEMORY_MB = 512
@@ -588,6 +604,7 @@ class EnvironmentManager:
             *self._label_args(labels),
             "--init", "--restart", "no",
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+            *self._root_lane_args(env),
             "--pids-limit", str(int(setting("pids"))),
             "--memory", f"{int(memory_mb)}m", "--cpus", str(cpus),
             "--network", env.net,
@@ -619,6 +636,46 @@ class EnvironmentManager:
             self._attach_proxy(env)
         with self._locked():
             self._write_state(env)
+
+    @staticmethod
+    def _root_lane_args(env: Environment) -> List[str]:
+        """The capabilities the root lane needs, for the kinds that have one."""
+        if env.kind not in KINDS:
+            return []
+        out: List[str] = []
+        for cap in ROOT_LANE_CAPS:
+            out += ["--cap-add", cap]
+        return out
+
+    def _require_root_lane(self, env: Environment) -> None:
+        """Refuse a root command where it cannot work: the scratch environment has no root
+        lane, and an environment made before the lane existed lacks its capabilities (they
+        are fixed when the container is made). Asked of docker, not of a stored flag."""
+        if env.kind not in KINDS:
+            raise EnvironmentRefused(f"environment {env.id} has no root lane (only temporary "
+                                     f"and project environments do)")
+        r = containers.docker(["inspect", env.container, "--format", "{{json .HostConfig.CapAdd}}"],
+                              timeout=20)
+        try:
+            have = {str(c).upper().replace("CAP_", "") for c in (json.loads(r.stdout or "null") or [])}
+        except Exception:
+            have = set()
+        if r.returncode != 0 or not set(ROOT_LANE_CAPS) <= have:
+            raise EnvironmentRefused(f"environment {env.id} was created without the capabilities a "
+                                     f"root command needs; create a new environment for root "
+                                     f"commands")
+
+    def _give_back_workspace(self, env: Environment) -> None:
+        """Hand what a root command left in /workspace back to the environment's user, so a
+        mounted project stays its owner's folder."""
+        if not (env.project_path or env.volume):
+            return
+        try:
+            containers.docker(["exec", "-u", "0:0", env.container, "sh", "-c",
+                               f"find {WORKSPACE} -xdev -uid 0 -exec chown {_host_user()} {{}} +"],
+                              timeout=120)
+        except Exception:
+            pass
 
     @staticmethod
     def _label_args(labels: Dict[str, str]) -> List[str]:
@@ -807,17 +864,24 @@ class EnvironmentManager:
     def exec_in(self, env: Environment, argv: List[str], *, timeout: float = 120,
                 cwd: Optional[str] = None, env_values: Optional[Dict[str, str]] = None,
                 check_stop: Optional[Callable[[], bool]] = None,
-                input_text: Optional[str] = None, run_id: Optional[str] = None) -> ExecResult:
+                input_text: Optional[str] = None, run_id: Optional[str] = None,
+                as_root: bool = False) -> ExecResult:
         """Run argv in an environment the caller already holds (ownership checked by
         whoever fetched it). Bounded twice: `timeout -s KILL` inside the container, and
         a backstop here that also kills the run's own processes by their marker - the
-        docker client dying does not stop them."""
+        docker client dying does not stop them. `as_root` is the coder's root lane (see
+        the module docstring): refused where the environment has none, and what the
+        command leaves in /workspace is given back to the environment's user."""
         self._ensure_running(env)
+        if as_root:
+            self._require_root_lane(env)
         run_id = run_id or secrets.token_hex(6)
         rc, out, err, timed_out, cancelled = containers.exec_bounded(
             env.container, argv, timeout=timeout, workdir=self._workdir(env, cwd),
             env_values=env_values, run_id=run_id, check_stop=check_stop,
-            input_text=input_text)
+            input_text=input_text, user="0:0" if as_root else None)
+        if as_root:
+            self._give_back_workspace(env)
         self._touch(env)
         return ExecResult(rc, out, err, timed_out=timed_out, cancelled=cancelled,
                           extra={"run_id": run_id})

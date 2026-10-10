@@ -142,6 +142,9 @@ Examples:
 
         if self.environment is not None:
             return self._run_in_environment(command, cwd, timeout, warning, kwargs)
+        if kwargs.get("as_root"):
+            return ("Error: bash runs a command as root only in a sandbox environment, and this "
+                    "run has none: here it is a jailed shell in the project folder.")
 
         workspace = self.base_dir or kwargs.get("base_dir")
         if not workspace:
@@ -184,6 +187,10 @@ Examples:
         from vaf.core.environments import EnvironmentRefused, get_environment_manager
         env = self.environment
         mgr = get_environment_manager()
+        as_root = bool(kwargs.get("as_root"))
+        if as_root and kwargs.get("background"):
+            return ("Error: as_root runs one command to its end (apt-get install and the like); "
+                    "start a background process without it.")
         try:
             if kwargs.get("background"):
                 try:
@@ -199,14 +206,16 @@ Examples:
                         f"output. It is stopped when this run ends"
                         + (" unless keep_running is set" if not kwargs.get("keep_running")
                            else "; keep_running is set, so it stays") + ".")
-            r = mgr.exec_in(env, ["sh", "-c", command], timeout=timeout, cwd=cwd or None)
+            r = mgr.exec_in(env, ["sh", "-c", command], timeout=timeout, cwd=cwd or None,
+                            as_root=as_root)
         except EnvironmentRefused as e:
             return f"Error: {e}"
         parts = []
         if warning:
             parts.append(warning)
         parts.append(f"$ {command}")
-        parts.append(f"(workspace: environment {env.id}, network {env.network})")
+        parts.append(f"(workspace: environment {env.id}, network {env.network}"
+                     + (", as root)" if as_root else ")"))
         out, err = r.stdout or "", r.stderr or ""
         if out:
             if len(out) > 8000:

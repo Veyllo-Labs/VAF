@@ -187,7 +187,8 @@ def _popen(argv, **kwargs):
 
 def exec_bounded(container: str, argv: List[str], *, timeout: float, workdir: str,
                  run_id: str, env_values: Optional[Dict[str, str]] = None,
-                 check_stop=None, input_text: Optional[str] = None):
+                 check_stop=None, input_text: Optional[str] = None,
+                 user: Optional[str] = None):
     """Run argv in a running container, bounded and stop-aware.
 
     Bounded twice: `timeout -s KILL` inside the container ends the command on its own
@@ -195,6 +196,7 @@ def exec_bounded(container: str, argv: List[str], *, timeout: float, workdir: st
     processes by their marker. `check_stop` is polled every half second; True ends the
     run the same way. Values in `env_values` reach the run as its environment without
     appearing on a command line (`-e NAME`, the value in the client's environment).
+    `user` runs the command as that uid:gid instead of the container's own user.
 
     Returns (returncode, stdout, stderr, timed_out, cancelled)."""
     from vaf.core.service_stack import resolve_docker_exe
@@ -205,6 +207,8 @@ def exec_bounded(container: str, argv: List[str], *, timeout: float, workdir: st
     if input_text is not None:
         cmd.append("-i")
     cmd += ["-w", workdir, "-e", f"VAF_RUN_ID={run_id}"]
+    if user:
+        cmd += ["-u", str(user)]
     for name in (env_values or {}):
         cmd += ["-e", name]
     cmd += [container, "timeout", "-s", "KILL", str(seconds), *argv]

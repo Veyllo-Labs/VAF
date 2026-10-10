@@ -40,6 +40,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The coder has a shell while it works, not only while it plans.** Without one it could
+  not install or run a checker in the middle of a task and patched around it by hand. In a
+  sandbox environment it can also run a single command as root there, to install system
+  packages for what it builds; nothing on your computer runs as root.
 - **The coder no longer gives up after a long check.** A browser test that ran for a few
   minutes was taken for a model that had stopped answering, and the run ended half done.
   Every finished tool call now counts as work.

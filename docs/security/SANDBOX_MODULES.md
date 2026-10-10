@@ -157,7 +157,7 @@ textwrap.wrap('Long text...', width=10) # → ['Long', 'text...']
 - Memory: 512 MB max - OOM-killed if exceeded
 - CPU: 0.5 cores - cannot monopolise the host
 - Process isolation: cannot access host PID namespace or host filesystem
-- One container per person, non-root, every capability dropped
+- One container per person, non-root, every capability dropped (the scratch environment has no root lane)
 - Packages from the `packages` parameter are installed into the run's own directory and removed with it; nothing accumulates between executions
 
 **Practical allowed usage:**

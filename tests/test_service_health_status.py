@@ -29,6 +29,9 @@ def _no_real_environments(monkeypatch):
     fake = types.SimpleNamespace(
         summary=lambda: {"environments": 0, "running": 0, "image_built": True})
     monkeypatch.setattr(environments, "get_environment_manager", lambda: fake)
+    # Nor read the developer's process table: a stack start running on this machine would
+    # turn every stopped container of a test into "starting".
+    monkeypatch.setattr(sh, "start_in_progress", lambda: False)
 
 
 def _inspect(running=True, health=None, host_port="6379"):
@@ -364,3 +367,58 @@ def test_a_daemon_that_is_down_asks_no_sandbox_question():
     )
     assert asked == []
     assert status["sandbox"]["state"] == "unknown" and "not reachable" in status["sandbox"]["reason"]
+
+
+# -- a stack start under way: on its way up, not broken -----------------------------------
+
+def test_a_container_the_start_has_not_reached_yet_is_starting_not_stopped():
+    """The start brings tts and the browser up after a build that took minutes; until then
+    they exist and are stopped, and the dialog called that a fault and offered Repair.
+    MUTATION: drop the pending branch - red."""
+    stopped = {"Name": "/vaf-redis", "State": {"Running": False}, "HostConfig": {}}
+    row = sh.derive_service_status(REDIS, stopped, 6379, None, stack_starting=True)
+    assert row["state"] == "warn" and row["starting"] is True
+    assert "not brought this container up yet" in row["reason"]
+    missing = sh.derive_service_status(TTS, None, 5002, None, stack_starting=True)
+    assert missing["starting"] is True and missing["state"] == "warn"
+    # Without a start under way a stopped required container is the error it always was.
+    assert sh.derive_service_status(REDIS, stopped, 6379, None)["state"] == "error"
+    # A running one is judged by its answer, start or no start.
+    running = sh.derive_service_status(REDIS, _inspect(), 6379, {"kind": "tcp", "ok": True},
+                                       stack_starting=True)
+    assert running["state"] == "ok" and running["starting"] is False
+
+
+def test_the_snapshot_says_starting_while_the_stack_start_runs():
+    status = sh.collect_service_status(
+        daemon_probe=lambda: {"ok": True, "reason": "ok", "detail": ""},
+        inspect_probe=lambda names: [{"Name": "/vaf-tts", "State": {"Running": False}, "HostConfig": {}}],
+        port_reader=lambda spec: spec.default_port or None,
+        service_probe=lambda spec, port: None,
+        host_probe=lambda: None,
+        sandbox_probe=lambda: None,
+        start_probe=lambda: True,
+    )
+    assert status["starting"] is True
+    tts = next(s for s in status["services"] if s["service_key"] == "tts")
+    assert tts["starting"] is True and tts["state"] == "warn"
+
+
+def test_start_in_progress_reads_this_process_and_the_process_table(monkeypatch):
+    """MUTATION: look at this process's flag only - red: a start in the tray read as none
+    from `vaf repair --check` in a terminal."""
+    import types
+    import psutil
+    monkeypatch.setattr(ss._start_active, "is_set", lambda: False)
+
+    def _procs(argvs):
+        return lambda attrs=None: iter([types.SimpleNamespace(info={"cmdline": a}) for a in argvs])
+
+    compose = ["docker", "compose", "-f", ss.COMPOSE_FILENAME, "up", "-d", "--build", "tts"]
+    monkeypatch.setattr(psutil, "process_iter", _procs([["bash"], compose]))
+    assert ss.start_in_progress() is True
+    other = ["docker", "compose", "-f", "other.yml", "up", "-d"]
+    monkeypatch.setattr(psutil, "process_iter", _procs([["bash"], other, None]))
+    assert ss.start_in_progress() is False
+    monkeypatch.setattr(ss._start_active, "is_set", lambda: True)
+    assert ss.start_in_progress() is True

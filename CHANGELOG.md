@@ -47,6 +47,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The built-in browser gets its security updates again.** Once its image was older than
+  two weeks, every VAF start rebuilt it with a fresh Chromium and then, seconds later, put
+  the old one back, so the browser stayed on an engine three versions behind and each start
+  waited two and a half minutes longer for nothing. The rebuild now lasts, and the next
+  starts are fast again.
+- **Update and Repair no longer calls a starting container stopped.** Text-to-speech and
+  the browser come up after the other containers; until then the dialog showed them as
+  stopped problems and offered Repair. They now read "Starting", and Repair waits. The
+  Repair button sits under the VAF node, and while it runs the connections of the
+  containers it repairs turn amber, afterwards red for any that is still not working.
 - **The coder has a shell while it works, not only while it plans.** Without one it could
   not install or run a checker in the middle of a task and patched around it by hand. In a
   sandbox environment it can also run a single command as root there, to install system

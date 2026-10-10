@@ -118,6 +118,9 @@ type Health = 'ok' | 'degraded' | 'down' | 'idle';
  *  amber, not green: "running" was never the question. */
 export function healthOf(svc: ServiceRow): Health {
     if (svc.state === 'unknown') return 'idle';
+    // Before the existence checks: the stack start has not reached it yet (still building
+    // or about to run it), which is on its way up and not broken.
+    if (svc.starting) return 'degraded';
     if (svc.exists === false || svc.exists === null) return svc.required ? 'down' : 'idle';
     if (!svc.running) return svc.required ? 'down' : 'idle';
     if (svc.port_mismatch) return 'degraded';
@@ -187,6 +190,11 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
     const [repairSteps, setRepairSteps] = useState<RepairStep[] | null>(null);
     const [repairError, setRepairError] = useState<string | null>(null);
     const [repairOk, setRepairOk] = useState<boolean | null>(null);
+    // The containers the last repair run was about: what was not green when it started.
+    // Their edges turn amber while it runs, and red afterwards for any that is still not
+    // green. Read through a ref by runRepair, so the callback stays stable across polls.
+    const [repairTargets, setRepairTargets] = useState<string[] | null>(null);
+    const issuesRef = useRef<ServiceRow[]>([]);
 
     const inFlight = useRef(false);
     // Set when the dialog goes away, so the repair poll below stops instead of
@@ -259,6 +267,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
     }, []);
 
     const runRepair = useCallback(async () => {
+        setRepairTargets(issuesRef.current.map((s) => s.service_key));
         setRepairBusy(true);
         setRepairError(null);
         setRepairSteps([]);
@@ -571,6 +580,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
     const rows = useMemo(() => services?.services ?? [], [services]);
     const sandbox = services?.sandbox ?? null;
     const issues = useMemo(() => rows.filter((s) => healthOf(s) !== 'ok'), [rows]);
+    issuesRef.current = issues;
     // The host's forwarding switch is a finding of its own, above the containers:
     // with it off they all run and none can reach the internet.
     const hostForwardingOff = services?.host?.forwarding_ok === false;
@@ -581,10 +591,40 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
     // it is right for each of them rather than one invented number for all.
     const starting = Boolean(services?.starting);
     const startingLeft = Math.max(0, Number(services?.starting_seconds_left ?? 0));
+    const overlayActive = ['applying', 'waiting', 'done', 'failed', 'timeout'].includes(phase.kind);
+    const repairFinished = repairOk !== null || repairError !== null;
+
+    // The repair button: under the VAF hub in the graph, in the panel that replaces the
+    // graph while Docker is unreachable (repair starts it), and in the bottom bar on a
+    // phone, where the graph is too small to tap a button inside it.
+    const repairButton = useCallback((extra: string) => (
+        <button
+            onClick={runRepair}
+            disabled={repairBusy || overlayActive || starting}
+            title={starting ? tM('startingHint') : undefined}
+            className={`h-9 px-4 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 whitespace-nowrap disabled:opacity-50 ${
+                issues.length && !starting
+                    ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                    : 'border border-gray-200 bg-white hover:bg-gray-50 text-gray-700'
+            } ${extra}`}
+        >
+            {repairBusy ? (
+                <><Loader2 size={14} className="animate-spin" /> {tM('repairRunning')}</>
+            ) : starting ? (
+                <><Loader2 size={14} className="animate-spin" />
+                    {startingLeft > 0
+                        ? tM('startingWaitSeconds', { n: startingLeft })
+                        : tM('startingWait')}</>
+            ) : (
+                <><Wrench size={14} /> {tM('repair')}</>
+            )}
+        </button>
+    ), [runRepair, repairBusy, overlayActive, starting, startingLeft, issues.length, tM]);
 
     const statusLabel = useCallback((svc: ServiceRow): string => {
         const h = healthOf(svc);
         if (svc.state === 'unknown') return tM('statusUnknown');
+        if (svc.starting && !svc.running) return tM('startingWait');
         if (svc.exists === false) return tM('statusAbsent');
         if (!svc.running) return tM('statusDown');
         if (svc.port_mismatch) return tM('portMismatch');
@@ -610,13 +650,21 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
             style: { border: 'none', background: 'transparent', width: 'auto' },
             data: {
                 label: (
-                    <div className="px-4 py-3 rounded-xl bg-white border border-gray-200 shadow-sm flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-lg bg-gray-900 dark:bg-[#2e2e2e] text-white flex items-center justify-center">
-                            <Server size={16} />
+                    <div className="relative">
+                        <div className="px-4 py-3 rounded-xl bg-white border border-gray-200 shadow-sm flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-lg bg-gray-900 dark:bg-[#2e2e2e] text-white flex items-center justify-center">
+                                <Server size={16} />
+                            </div>
+                            <div className="text-left">
+                                <div className="text-sm font-semibold text-gray-800">{tM('hubNode')}</div>
+                                <div className="text-[10px] text-gray-500">{formatVersion(version).display}</div>
+                            </div>
                         </div>
-                        <div className="text-left">
-                            <div className="text-sm font-semibold text-gray-800">{tM('hubNode')}</div>
-                            <div className="text-[10px] text-gray-500">{formatVersion(version).display}</div>
+                        {/* pointer-events-auto: React Flow switches pointer events off on a node
+                            that can be neither selected nor dragged, and the button inherited it
+                            (measured: the pane took the click). */}
+                        <div className="nodrag nopan pointer-events-auto absolute left-1/2 -translate-x-1/2 top-full mt-3 max-md:hidden">
+                            {repairButton('shadow-sm')}
                         </div>
                     </div>
                 ),
@@ -690,18 +738,27 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
             },
         }] : [];
         setNodes([hub, ...serviceNodes, ...sandboxNodes] as any);
+        const targets = new Set(repairTargets ?? []);
         setEdges([...rows.map((svc) => {
             const h = healthOf(svc);
+            const target = targets.has(svc.service_key);
+            // Red only for what the repair left broken: one it started and that is still
+            // inside its start window is on its way up and keeps its amber.
+            const stroke = target && repairBusy ? COLOR.degraded
+                : target && repairFinished && h !== 'ok' && !svc.starting ? COLOR.down
+                    : COLOR[h];
             return {
                 id: `e-${svc.service_key}`,
                 source: 'vaf',
                 target: `svc-${svc.service_key}`,
-                animated: repairBusy,
+                // While a repair runs: the edges it is about move, or all of them when
+                // nothing was broken and the run is a check of everything.
+                animated: repairBusy && (target || targets.size === 0),
                 style: {
-                    stroke: COLOR[h],
-                    strokeWidth: 1.5,
-                    opacity: 0.6,
-                    ...(h === 'ok' ? {} : { strokeDasharray: '4 4' }),
+                    stroke,
+                    strokeWidth: target ? 2 : 1.5,
+                    opacity: target ? 0.9 : 0.6,
+                    ...(h === 'ok' && stroke === COLOR.ok ? {} : { strokeDasharray: '4 4' }),
                 },
             };
         }), ...(sandbox ? [{
@@ -715,11 +772,10 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                 ...(sandboxHealth === 'ok' ? {} : { strokeDasharray: '4 4' }),
             },
         }] : [])] as any);
-    }, [rows, sandbox, repairBusy, version, statusLabel, tM, setNodes, setEdges]);
+    }, [rows, sandbox, repairBusy, repairTargets, repairFinished, repairButton, version, statusLabel, tM, setNodes, setEdges]);
 
     // ─── render ──────────────────────────────────────────────────────────────
 
-    const overlayActive = ['applying', 'waiting', 'done', 'failed', 'timeout'].includes(phase.kind);
     const versionInfo = formatVersion(version);
 
     return (
@@ -909,6 +965,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                                         {services.docker.detail && (
                                             <p className="text-xs text-gray-400 font-mono max-w-md truncate">{services.docker.detail}</p>
                                         )}
+                                        {repairButton('')}
                                     </div>
                                 ) : (
                                     <Suspense fallback={<div className="absolute inset-0 flex items-center justify-center"><Loader2 size={20} className="animate-spin text-gray-400" /></div>}>
@@ -944,27 +1001,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                                     <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
                                         {issues.length ? `${tM('issues')} (${issues.length})` : tM('services')}
                                     </span>
-                                    <button
-                                        onClick={runRepair}
-                                        disabled={repairBusy || overlayActive || starting}
-                                        title={starting ? tM('startingHint') : undefined}
-                                        className={`h-9 px-4 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50 ${
-                                            issues.length && !starting
-                                                ? 'bg-amber-500 hover:bg-amber-600 text-white'
-                                                : 'border border-gray-200 bg-white hover:bg-gray-50 text-gray-700'
-                                        }`}
-                                    >
-                                        {repairBusy ? (
-                                            <><Loader2 size={14} className="animate-spin" /> {tM('repairRunning')}</>
-                                        ) : starting ? (
-                                            <><Loader2 size={14} className="animate-spin" />
-                                                {startingLeft > 0
-                                                    ? tM('startingWaitSeconds', { n: startingLeft })
-                                                    : tM('startingWait')}</>
-                                        ) : (
-                                            <><Wrench size={14} /> {tM('repair')}</>
-                                        )}
-                                    </button>
+                                    {repairButton('md:hidden')}
                                 </div>
 
                                 <div className="mt-3 space-y-1.5">

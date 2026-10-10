@@ -58,6 +58,7 @@ from vaf.core.service_stack import (
     diagnose_docker_daemon,
     ensure_service_stack,
     find_stack_root,
+    start_in_progress,
     is_docker_daemon_running,
     resolve_docker_exe,
     service_by_container,
@@ -268,7 +269,8 @@ def enable_host_forwarding(run: Callable[..., subprocess.CompletedProcess] = sub
 def derive_service_status(spec: ServiceSpec,
                           inspect: Optional[Dict[str, Any]],
                           cfg_port: Optional[int],
-                          probe: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+                          probe: Optional[Dict[str, Any]],
+                          stack_starting: bool = False) -> Dict[str, Any]:
     """Pure: one service's row from its probe results.
 
     States: ok, warn (something is off but nothing the user depends on is
@@ -308,8 +310,15 @@ def derive_service_status(spec: ServiceSpec,
     # starting does not answer yet, and calling that "does not answer" sends the
     # user to a repair button for something that only needs a few more seconds.
     starting = bool(running and (health == "starting" or starting_left > 0))
+    # A stack start under way brings the containers up in phases, the optional ones after
+    # a build that can take minutes: one it has not reached yet is on its way, not broken.
+    pending = bool(stack_starting and not running)
 
-    if not exists:
+    if pending:
+        starting = True
+        state = "warn"
+        reason = "The stack start has not brought this container up yet."
+    elif not exists:
         state = "error" if spec.required else "absent"
         reason = ("The container was never created. Repair can bring it up."
                   if spec.required else
@@ -442,6 +451,7 @@ def collect_service_status(
     service_probe: Callable[[ServiceSpec, Optional[int]], Optional[Dict[str, Any]]] = probe_service,
     host_probe: Callable[[], Optional[Dict[str, Any]]] = probe_host_forwarding,
     sandbox_probe: Callable[[], Optional[Dict[str, Any]]] = probe_sandbox,
+    start_probe: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """Every service's state in one snapshot, plus the host's forwarding switch and
     the sandbox environments (`derive_sandbox_status`: not a service, so not a row
@@ -479,6 +489,10 @@ def collect_service_status(
             })
     else:
         sandbox = derive_sandbox_status(sandbox_probe())
+        try:
+            stack_starting = bool((start_probe or start_in_progress)())
+        except Exception:
+            stack_starting = False
         inspects = inspect_probe([s.container_name for s in SERVICES])
         by_name: Dict[str, Dict[str, Any]] = {}
         for ins in inspects:
@@ -492,7 +506,7 @@ def collect_service_status(
             probe = None
             if ins is not None and bool((ins.get("State") or {}).get("Running")):
                 probe = service_probe(spec, cfg_port)
-            services.append(derive_service_status(spec, ins, cfg_port, probe))
+            services.append(derive_service_status(spec, ins, cfg_port, probe, stack_starting))
 
     # Is the stack still coming up? Surfaced at the top so a caller does not have
     # to re-derive it, and so a button can wait instead of offering to repair

@@ -414,7 +414,7 @@ starting while docker's own health status says `starting`, or while it is inside
 the `start_period` from the compose file. Both numbers come from the container:
 the start periods differ per service (30s for the database, 120s for the speech
 containers), so any single figure VAF invented would be wrong for most of them.
-The snapshot repeats this at the top level as `starting` and
+A container the stack start has not reached yet counts as starting too: the start brings the optional containers up after a `--build`, so for that long they exist and are stopped, and a status that called that a fault sent people to Repair. `start_in_progress()` in `vaf/core/service_stack.py` answers from this process's own start and from the process table (a compose `up` or `build` of this stack in any process, so `vaf repair --check` in a terminal sees the tray's start), and a crashed start leaves nothing behind. The snapshot repeats this at the top level as `starting` and
 `starting_seconds_left` so a caller does not have to re-derive it, which is what
 lets the Repair button wait and count down instead of offering to fix a stack
 that is already on its way up.

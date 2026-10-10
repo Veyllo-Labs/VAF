@@ -483,6 +483,31 @@ def _browser_image_age_days() -> Optional[float]:
         return None
 
 
+def _dockerfile_bases(dockerfile: Path) -> list:
+    """The images a Dockerfile builds FROM: stage names, `scratch` and anything with a
+    build argument in it left out. Empty when the file cannot be read."""
+    bases: list = []
+    stages: set = set()
+    try:
+        lines = dockerfile.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        words = line.split()
+        if not words or words[0].upper() != "FROM":
+            continue
+        words = [w for w in words[1:] if not w.startswith("--")]
+        if not words:
+            continue
+        image = words[0]
+        if (image.lower() != "scratch" and image.lower() not in stages and "$" not in image
+                and image not in bases):
+            bases.append(image)
+        if len(words) >= 3 and words[1].upper() == "AS":
+            stages.add(words[2].lower())
+    return bases
+
+
 def _maybe_rebuild_stale_browser_image(base, kwargs, log=None) -> None:
     """The age gate: one cache-less, base-pulling browser rebuild when the
     image is older than the budget. Never raises, never blocks the start; a
@@ -498,6 +523,21 @@ def _maybe_rebuild_stale_browser_image(base, kwargs, log=None) -> None:
             return
         _say(log, f"browser image is {age:.0f} days old (budget {budget}); "
                   "rebuilding with a fresh base")
+        # The base images are pulled into their LOCAL tags first. `build --pull` alone
+        # uses a fresh base for that one build and leaves the tag on the old one, so the
+        # cached `up --build` right after it - and every start after that - resolved the
+        # old base, hit the old cache and put the old engine back under the image's name.
+        # Measured: a fresh build installed Chromium 154, the cached build seconds later
+        # brought 151 back, and the gate fired at every start for 35 days, two and a half
+        # minutes each, without the image ever getting younger.
+        root = kwargs.get("cwd")
+        if root:
+            for image in _dockerfile_bases(Path(root) / "docker" / "browser" / "Dockerfile"):
+                try:
+                    subprocess.run([resolve_docker_exe(), "pull", "--quiet", image],
+                                   timeout=600, **kwargs)
+                except Exception:
+                    pass
         # `base` already carries `up -d ...`; the build command is derived by
         # cutting at "up" so both loop variants (docker compose / legacy
         # docker-compose) stay valid.
@@ -627,6 +667,28 @@ def cancel_start() -> int:
     if ended:
         _start_interrupted.set()
     return ended
+
+
+def start_in_progress() -> bool:
+    """Whether the stack is being brought up right now: this process's own start, or a
+    compose `up`/`build` of this stack in any process (the tray, a terminal's `vaf start`,
+    a repair). Read from the process table, so a start that crashed leaves nothing behind
+    that would say "starting" for ever. Never raises.
+
+    What it is for: the start brings the optional containers up after a `--build` that can
+    take minutes, and until then they exist and are stopped. A status that called that a
+    fault sent people to Repair for a stack that was on its way up."""
+    if _start_active.is_set():
+        return True
+    try:
+        import psutil
+        for proc in psutil.process_iter(["cmdline"]):
+            argv = proc.info.get("cmdline") or []
+            if COMPOSE_FILENAME in argv and ("up" in argv or "build" in argv):
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def start_service_stack_in_background(log: Optional[Callable[[str], None]] = None) -> bool:

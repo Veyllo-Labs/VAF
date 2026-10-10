@@ -82,6 +82,32 @@ def test_a_stale_image_derives_the_build_command_from_both_compose_variants(monk
         assert calls == [prefix + ["build", "--pull", "--no-cache", "vaf-browser"]]
 
 
+def test_the_bases_are_pulled_into_their_tags_before_the_fresh_build(monkeypatch, tmp_path):
+    """`build --pull` leaves the local base tag on the old image, and the cached
+    `up --build` after it resolved that tag and put the old engine back (measured:
+    Chromium 154 built, 151 back seconds later, the gate firing at every start).
+    MUTATION: drop the pull - red."""
+    monkeypatch.setattr(ss, "_browser_image_age_days", lambda: 30.0)
+    monkeypatch.setattr(ss, "_browser_image_max_age_days", lambda: 14)
+    monkeypatch.setattr(ss, "resolve_docker_exe", lambda: "docker")
+    (tmp_path / "docker" / "browser").mkdir(parents=True)
+    (tmp_path / "docker" / "browser" / "Dockerfile").write_text(
+        "# syntax=docker/dockerfile:1\nFROM --platform=$BUILDPLATFORM debian:bookworm-slim AS base\n"
+        "RUN true\nFROM base\nFROM scratch\n", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(ss.subprocess, "run", lambda cmd, **kw: calls.append(list(cmd)) or _proc(0))
+    ss._maybe_rebuild_stale_browser_image(["docker", "compose", "up", "-d"], {"cwd": str(tmp_path)})
+    assert calls[0] == ["docker", "pull", "--quiet", "debian:bookworm-slim"]
+    assert calls[1] == ["docker", "compose", "build", "--pull", "--no-cache", "vaf-browser"]
+    assert len(calls) == 2
+
+
+def test_the_real_browser_dockerfile_names_its_base():
+    from pathlib import Path
+    dockerfile = Path(ss.__file__).resolve().parents[2] / "docker" / "browser" / "Dockerfile"
+    assert ss._dockerfile_bases(dockerfile) == ["debian:bookworm-slim"]
+
+
 def test_a_fresh_image_is_left_alone(monkeypatch):
     monkeypatch.setattr(ss, "_browser_image_age_days", lambda: 3.0)
     monkeypatch.setattr(ss, "_browser_image_max_age_days", lambda: 14)

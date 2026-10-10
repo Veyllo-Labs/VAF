@@ -1117,12 +1117,18 @@ docker compose -f docker-compose.memory.yml up -d --build vaf-browser
 Chromium (unpinned, from Debian) only re-runs when the Dockerfile text above it changes; a
 cached `--build` leaves the engine at whatever version the layer was first built with.
 Once the image is older than `browser_image_max_age_days` (default 14), the next stack
-start rebuilds it with `--pull --no-cache`, which refreshes the Debian base and Chromium
-with it; the Security dashboard's firewall card shows the engine version and image age.
-To force the same thing by hand:
+start pulls the Debian base into its local tag and rebuilds the image with `--no-cache`,
+which brings Chromium with it; the Security dashboard's firewall card shows the engine
+version and image age. The pull is the part that makes it last: `build --pull` alone uses
+a fresh base for that one build and leaves the local tag on the old one, so the next cached
+`--build` resolved the old base, hit the old cache and put the old engine back. Measured
+before the fix: a fresh build installed Chromium 154, the start's own cached build brought
+151 back seconds later, and the gate fired at every start for weeks, two and a half
+minutes each. To force the same thing by hand:
 
 ```bash
-docker compose -f docker-compose.memory.yml build --pull --no-cache vaf-browser
+docker pull debian:bookworm-slim
+docker compose -f docker-compose.memory.yml build --no-cache vaf-browser
 docker compose -f docker-compose.memory.yml up -d vaf-browser
 ```
 

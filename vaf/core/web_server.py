@@ -1128,6 +1128,16 @@ except ImportError as e:
 except Exception as e:
     log("WebServer", f"Failed to mount SSH routes: {e}")
 
+# Mount the sandbox environment routes (the caller's own environments; admins may see all)
+try:
+    from vaf.api.sandbox_routes import router as sandbox_router
+    app.include_router(sandbox_router)
+    log("WebServer", "Sandbox environment routes mounted at /api/sandbox")
+except ImportError as e:
+    log("WebServer", f"Sandbox environment routes not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount sandbox environment routes: {e}")
+
 # Mount the MCP sign-in routes (each account signs in to an MCP server on its own; mcp_oauth.py)
 try:
     from vaf.api.mcp_routes import router as mcp_router

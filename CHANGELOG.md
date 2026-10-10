@@ -24,7 +24,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   for that folder) and it builds, tests and runs its dev server inside, with the
   packages it installed there. A screenshot of what an environment serves appears
   right in the chat, with the page's console output and text. `vaf env` does all of it
-  from the terminal (`vaf env create --temp`, `vaf env exec ID -- ...`, `vaf env shell ID`).
+  from the terminal (`vaf env create --temp`, `vaf env exec ID -- ...`, `vaf env shell ID`),
+  and Settings, Connections, Sandbox environments lists yours with Stop and Delete.
 - **Reach VAF over a VPN.** VAF now recognises VPN connections (WireGuard, OpenVPN,
   Tailscale, NetBird, ZeroTier) and shows their address next to the home network's in
   `vaf server status` and `vaf top`; the certificate carries it too. WireGuard and OpenVPN

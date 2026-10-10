@@ -7,8 +7,6 @@ This directory contains the logic for individual `vaf` CLI commands. Each file t
 - **run.py**: Handles the `run` command, initializing the agent and starting the TUI or one-shot prompt.
 - **settings.py**: Provides the interactive settings menu to modify `config.json`.
 - **scaffold.py**: Logic for creating new project templates from pre-defined structures.
-- **bridge.py**: Manages external platform connections like Discord.
-- **bridge_discord.py**: Discord-specific bridge helper.
 - **automate.py**: Test/build/lint automation commands.
 - **git.py**: AI-enhanced Git operations (auto-commits, status summaries).
 - **audit.py**: Code Audit (`audit run` reviews a change in any git repository with the configured model and prints verified findings with a fix prompt each; exit 0 clean, 1 findings, 2 incomplete; `--verify-steps N` bounds the verifier's searches and reads per confirmed finding, 0 keeps the first check only; `audit show` prints the last audit, `audit dismiss` records a finding as not a problem). Engine: `vaf.core.code_audit`.
@@ -25,6 +23,15 @@ This directory contains the logic for individual `vaf` CLI commands. Each file t
 - **ww.py**: Whare Wananga tool self-learning commands (train and inspect per-tool know-how).
 - **secure.py**: Encryption and key management (`secure status` reports where every at-rest key lives and what is still unprotected, `secure recover` restores the data key from the recovery key after a reinstall, `secure rotate-db` replaces the shipped default Postgres password).
 - **memory.py**: Memory store maintenance (`memory rekey` re-encrypts rows after a key rotation, `memory cross-chat` dry-runs the Cross Chat Hint lane for one question).
+- **setup.py**: Creates the admin account for this machine (`vaf setup`).
+- **repair.py**: Checks the Docker services and puts a broken one back (`vaf repair`); the work is `vaf.core.service_health`.
+- **top.py**: Live server dashboard in the terminal (`vaf top`): uptime, configuration, utilization, services.
+- **usage.py**: Token usage and spend records (`usage show`, `usage set-currency`).
+- **inbox.py**: Your conversations across every channel (`inbox list`).
+- **outbox.py**: Messages your agent prepared and has not sent (`outbox list|send|discard|edit`).
+- **secrets.py**: Credentials your agent's commands may use, never shown to the model (`secrets list|set|rm`).
+- **ssh.py**: The SSH key and servers your agent uses, never your `~/.ssh` (`ssh key|hosts|forget`).
+- **a2a.py**: Agent-to-agent rooms: join, talk, read.
 
 ## Development Guide
 
@@ -37,4 +44,4 @@ When adding a new command:
 ## Dependencies
 
 - Relies on `vaf.core` for agent logic and `vaf.cli.ui` for presentation.
-- May use specialized libraries relevant to the command (e.g., `discord.py` for bridges).
+- May use specialized libraries relevant to the command.

@@ -150,7 +150,7 @@ All HTTP responses include security headers to protect against common web attack
 | Header | Value | Purpose |
 |--------|-------|---------|
 | `X-Content-Type-Options` | `nosniff` | Prevents MIME-type sniffing |
-| `X-Frame-Options` | `DENY` | Prevents clickjacking via iframes |
+| `X-Frame-Options` | `DENY`; `SAMEORIGIN` under `/api/browser-vnc/` | Prevents clickjacking via iframes. The interactive browser's viewer is the one page meant to be framed, and only by the web UI on the same origin |
 | `X-XSS-Protection` | `1; mode=block` | Legacy XSS filter |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` | Limits referrer leakage |
 | `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` | Disables browser APIs |

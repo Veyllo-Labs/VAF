@@ -454,16 +454,6 @@ Key rules:
   means the question could not be answered for this connection and nothing is changed.
 - **Live call (voice agent):** client sends `voice_call_start` / `voice_call_turn` / `voice_call_end` / `voice_call_speak`; server answers `voice_call_reply` / `voice_call_error` / `speaker_enroll_tts`. Enrollment uses the `speaker_enroll_*` / `speaker_profile_*` family. Payloads, guards and the delegation protocol are documented in [VOICE_AGENT.md](../agents/VOICE_AGENT.md). With `voice_semantic_endpoint_enabled` on, the client additionally streams `voice_call_chunk` (16 kHz mono int16 PCM, base64, ~100 ms frames, ~43 kB/s while actively listening, never while muted) and `voice_call_reset` (mute toggled - drop server stream state); the server may push `voice_turn_end {reason}` proposing the endpoint, which triggers the same stop the browser's silence timer would - the timer always remains the fallback. `voice_call_turn` and `voice_call_reply` carry a `timings` object (per-stage latency in ms: browser `endpoint_wait`/`encode`, server `gate`/`stt`/`speaker`/`policy`/`llm`/`tts`).
 
-## Native DOCX Editor Endpoints
-
-The native DOCX editor uses dedicated backend endpoints instead of the legacy HTML roundtrip:
-
-- `GET /api/file/docx-model`
-  - Loads `.docx` into VAF's native DOCX model.
-- `POST /api/file/save-docx-native`
-  - Saves the native DOCX model back to `.docx`.
-
-These endpoints are used only for the native DOCX editor path. The legacy HTML editor endpoints remain available for non-DOCX editor flows.
 - `session_list`: available sessions
 - `session_delete_result`: the answer to `delete_session` / `hide_session`. `{ id, deleted, needsConfirm }`. `needsConfirm: true` means the server refused because the chat is not untouched and nobody confirmed - the browser opens the delete dialog and asks again with `confirmed: true`. `deleted: true` means it is gone (a successful archive counts, the file moved) and the browser switches away from it. Both false means nothing was removed. Addressed by `id`, deliberately NOT `sessionId`: the cross-session filter above drops events stamped with a session that is not the open one, and the chat being deleted usually is not.
 - `history_update`: session history (also sets active session). `isActive` answers "is a
@@ -528,6 +518,17 @@ These endpoints are used only for the native DOCX editor path. The legacy HTML e
 - `contact_reply_result`: response to `contact_reply_decision`. Payload: `{ ok, decision?, replyId, error? }`. Used to remove the pending item from the UI or show an error.
 - `speaker_confirm_pending`: a voice segment scored "unsure" and the owner should confirm (web fallback lane; the primary lane is the main messenger). Payload: `{ confirmId, question, audioPath, score }` - no `sessionId`, so it passes the session filter globally. Emitted per-user via `push_update_to_user` (never broadcast). The UI shows an audio player + yes/no buttons + an optional name field and replies with `speaker_confirm_reply`.
 - `speaker_confirm_result`: response to `speaker_confirm_reply`. Payload: `{ ok, outcome ("self"|"other"|"named"|"expired"), ack, confirmId, error? }`. Removes the card.
+
+## Native DOCX Editor Endpoints
+
+The native DOCX editor uses dedicated backend endpoints instead of the legacy HTML roundtrip:
+
+- `GET /api/file/docx-model`
+  - Loads `.docx` into VAF's native DOCX model.
+- `POST /api/file/save-docx-native`
+  - Saves the native DOCX model back to `.docx`.
+
+These endpoints are used only for the native DOCX editor path. The legacy HTML editor endpoints remain available for non-DOCX editor flows.
 
 ## Troubleshooting Checklist
 

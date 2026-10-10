@@ -972,7 +972,7 @@ def _browser_guidance(tier: str) -> str:
 
 class BrowserAgentTool(BaseTool):
     """
-    Autonomous browser agent — controls a real headless Chromium browser.
+    Autonomous browser agent - controls a real Chromium browser (headed, on a virtual X display).
 
     Use this tool when:
     • The target page requires JavaScript to render (React, Vue, SPA)

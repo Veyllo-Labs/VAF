@@ -563,7 +563,8 @@ class WorkflowEngine:
                 steps run as **killable child processes** and the engine waits for their IPC
                 result bounded + stop-aware, instead of running them in-process. This avoids
                 the in-process hang and the abandoned-thread-holds-the-LLM-lock problem.
-                browser_agent stays in-process (it self-manages its own stop/limits).
+                browser_agent spawns too: the step sets VAF_SPAWN_BROWSER_SUBAGENT, which
+                BrowserAgentTool.run reads (standalone browser use stays in-process).
 
         Returns:
             WorkflowResult with all outputs and status

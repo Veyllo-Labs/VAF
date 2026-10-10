@@ -38,10 +38,12 @@ document is used in the first two (separate-process) modes:
 |------|------------------------|-----------------------|
 | **CLI** (terminal session) | a new **terminal window** running `vaf subagent run …` | No - result picked up via IPC on the next turn (poll; no backend to push to) |
 | **WebUI / desktop app** | a **piped child process** (no visible terminal); the parent drains its stdout (`stderr` is merged in) | No, but the result is **pushed back immediately** (see *Result push* below), so the main agent reacts as soon as the sub-agent finishes, not only on your next message |
-| **Inside a workflow** | **in-process** - the engine sets `VAF_IN_SUBAGENT_TERMINAL=1` to avoid nested spawns, so the step runs the sub-agent directly and **waits** for its result | Yes - the step waits (so step N can feed step N+1) |
+| **Inside a workflow, `run_temp`** (`create_agent_workflow`) | a **killable child process** per heavy step: `engine.execute(..., wait_for_subagents=True)` spawns the tools in `SPAWNABLE_STEP_TOOLS` (coding, research, document, librarian, browser) and waits for their IPC result, bounded and stop-aware. `browser_agent` spawns through `VAF_SPAWN_BROWSER_SUBAGENT`, which `BrowserAgentTool.run` reads | Yes - the step waits (so step N can feed step N+1) |
+| **Inside a workflow, every other lane** (automations, resumed runs, `vaf workflow`) | `wait_for_subagents` stays off. The three `SUBAGENT_STEP_TOOLS` (coding, librarian, research) run **in-process**: the engine sets `VAF_IN_SUBAGENT_TERMINAL=1` to avoid nested spawns. A tool that spawns on its own (`document_agent`) hands off asynchronously and the run pauses until the drain resumes it | In-process steps: yes. A hand-off: the run pauses, the turn does not wait |
 
 The ASCII diagrams below depict the **CLI terminal** mode. In WebUI/desktop the "Separate
-Terminal" box is a headless child process; inside a workflow there is no child at all.
+Terminal" box is a piped child process without a window; an in-process workflow step has no
+child at all.
 
 **The child works where the caller works.** A terminal window does not inherit the
 spawner's cwd on Linux (gnome-terminal is a D-Bus client of a long-lived server; children

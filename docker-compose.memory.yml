@@ -235,7 +235,7 @@ services:
           memory: 512M
 
   # ==========================================================================
-  # Browser (Headless Chromium via CDP)
+  # Browser (Chromium via CDP, headed under KasmVNC's X display)
   # ==========================================================================
   # VAF's browser_agent tool connects here via ws://localhost:9222.
   # No Chromium installation needed on the host.

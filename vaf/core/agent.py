@@ -13284,11 +13284,9 @@ class Agent:
                 # export_files copies artifacts into THIS chat's workspace -
                 # key on the session, never the process-global pointer.
                 tool_args["_session_id"] = getattr(self, "current_session_id", None)
-                # Per-user container workdir (/tmp/vaf_<scope12>_<exec>): the tool
-                # reads this kwarg, but the dispatcher never injected it, so every
-                # main-agent run landed in the shared prefix regardless of user.
-                # Direct assignment on purpose: model-supplied args must never
-                # override the server-side identity (spoof guard, like host_bash).
+                # The caller's identity (user_scope_id) is not assigned here: the tool
+                # declares identity_kwargs, and assign_declared_identity in
+                # vaf/core/tool_dispatch.py overwrites whatever the model sent.
             if name == "python_sandbox" and is_channel_session:
                 # Non-main channel sessions must not bridge host tools from sandbox code.
                 tool_args["with_vaf_tools"] = False

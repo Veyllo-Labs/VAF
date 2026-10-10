@@ -616,8 +616,8 @@ def test_a_root_vaf_still_runs_environments_non_root(monkeypatch):
     monkeypatch.setattr(os, "getgid", lambda: 0, raising=False)
     assert envmod._host_user() == envmod.IMAGE_UID
     if os.name == "posix":
-        monkeypatch.setattr(os, "getuid", lambda: 1000)
-        monkeypatch.setattr(os, "getgid", lambda: 1000)
+        monkeypatch.setattr(os, "getuid", lambda: 1000, raising=False)
+        monkeypatch.setattr(os, "getgid", lambda: 1000, raising=False)
         assert envmod._host_user() == "1000:1000"
 
 

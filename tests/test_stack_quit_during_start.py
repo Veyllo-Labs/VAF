@@ -147,7 +147,7 @@ def test_the_quit_stops_the_pool_s_own_browsers_only(monkeypatch):
         pool._instances[scope] = type("I", (), {"container_name": name})()
     stopped = []
     monkeypatch.setattr(bp, "_pool", pool)
-    monkeypatch.setattr(bp, "_docker", lambda args, timeout=60: stopped.append(list(args)))
+    monkeypatch.setattr("vaf.core.containers.docker", lambda args, timeout=60: stopped.append(list(args)))
     monkeypatch.setattr(bp, "_in_use_by_another_process", lambda name: False)
     assert bp.stop_known_instances() == 2
     assert sorted(a[-1] for a in stopped) == ["vaf-browser-u-aaa", "vaf-browser-u-bbb"]
@@ -159,7 +159,7 @@ def test_without_a_pool_nothing_is_touched(monkeypatch):
     import vaf.core.browser_pool as bp
     calls = []
     monkeypatch.setattr(bp, "_pool", None)
-    monkeypatch.setattr(bp, "_docker", lambda args, timeout=60: calls.append(args))
+    monkeypatch.setattr("vaf.core.containers.docker", lambda args, timeout=60: calls.append(args))
     assert bp.stop_known_instances() == 0 and calls == []
 
 
@@ -243,7 +243,7 @@ def test_a_container_that_never_became_healthy_is_stopped_too(monkeypatch):
     pool._owned["c"] = "vaf-browser-u-ccc"          # started, readiness failed
     stopped = []
     monkeypatch.setattr(bp, "_pool", pool)
-    monkeypatch.setattr(bp, "_docker", lambda args, timeout=60: stopped.append(list(args)))
+    monkeypatch.setattr("vaf.core.containers.docker", lambda args, timeout=60: stopped.append(list(args)))
     monkeypatch.setattr(bp, "_in_use_by_another_process", lambda name: False)
     assert bp.stop_known_instances() == 1
     assert stopped and stopped[0][-1] == "vaf-browser-u-ccc"
@@ -255,7 +255,7 @@ def test_an_allocation_under_way_at_quit_stops_its_own_container(monkeypatch):
     import vaf.core.browser_pool as bp
     pool = bp.BrowserPool()
     stopped = []
-    monkeypatch.setattr(bp, "_docker", lambda args, timeout=60: stopped.append(list(args)))
+    monkeypatch.setattr("vaf.core.containers.docker", lambda args, timeout=60: stopped.append(list(args)))
     monkeypatch.setattr(bp, "_in_use_by_another_process", lambda name: False)
     pool._closing = True
     assert pool._take_ownership("d", "vaf-browser-u-ddd") is False
@@ -271,7 +271,7 @@ def test_an_adoption_finishing_at_quit_spares_a_browser_in_use_elsewhere(monkeyp
     import vaf.core.browser_pool as bp
     pool = bp.BrowserPool()
     stopped = []
-    monkeypatch.setattr(bp, "_docker", lambda args, timeout=60: stopped.append(list(args)))
+    monkeypatch.setattr("vaf.core.containers.docker", lambda args, timeout=60: stopped.append(list(args)))
     monkeypatch.setattr(bp, "_in_use_by_another_process", lambda name: True)
     pool._closing = True
     assert pool._take_ownership("f", "vaf-browser-u-fff") is False
@@ -284,7 +284,7 @@ _HOLDER = ("import socket, sys, time; "
 
 
 def _published_port(monkeypatch, bp, port):
-    monkeypatch.setattr(bp, "_docker", lambda args, timeout=20: type(
+    monkeypatch.setattr("vaf.core.containers.docker", lambda args, timeout=20: type(
         "R", (), {"returncode": 0, "stdout": f"9222/tcp -> 127.0.0.1:{port}\n"})())
 
 
@@ -382,7 +382,7 @@ def test_the_quit_leaves_a_browser_in_use_elsewhere_running(monkeypatch):
     pool._owned["s"] = "vaf-browser-u-sss"
     stopped = []
     monkeypatch.setattr(bp, "_pool", pool)
-    monkeypatch.setattr(bp, "_docker", lambda args, timeout=60: stopped.append(list(args)))
+    monkeypatch.setattr("vaf.core.containers.docker", lambda args, timeout=60: stopped.append(list(args)))
     monkeypatch.setattr(bp, "_in_use_by_another_process", lambda name: True)
     bp.stop_known_instances()
     assert stopped == [], "a browser another VAF process uses was stopped"

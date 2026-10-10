@@ -509,7 +509,7 @@ def _purge_container_downloads(container_name: str) -> None:
     uploadable to a website) by the next person. Best-effort; the full profile
     scrub wipes the same folders as part of its job."""
     try:
-        from vaf.core.browser_pool import _docker
+        from vaf.core.containers import docker as _docker
         _docker(["exec", container_name, "sh", "-c",
                  "rm -rf /home/browser/Downloads/* /home/browser/Workspace/* 2>/dev/null || true"],
                 timeout=30)
@@ -606,7 +606,7 @@ def _sync_workspace_to_container(container_name: str, user_scope_id: str,
     the event loop. Never raises."""
     paths: List[str] = []
     try:
-        from vaf.core.browser_pool import _docker
+        from vaf.core.containers import docker as _docker
         from vaf.core.session import get_user_projects_root
 
         root = get_user_projects_root(user_scope_id)
@@ -670,7 +670,7 @@ def _sweep_container_downloads(container_name: str, user_scope_id: str) -> List[
     (docker + hashing): call off the event loop. Never raises."""
     delivered: List[str] = []
     try:
-        from vaf.core.browser_pool import _docker
+        from vaf.core.containers import docker as _docker
         from vaf.core.session import get_user_projects_root
 
         root = get_user_projects_root(user_scope_id)

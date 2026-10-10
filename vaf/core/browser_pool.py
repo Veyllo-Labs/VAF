@@ -35,14 +35,13 @@ instance, it never removes data.
 
 from __future__ import annotations
 
-import hashlib
 import os
-import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
+from vaf.core import containers
 from vaf.core.log_helper import append_domain_log
 
 _NAME_PREFIX = "vaf-browser-u-"
@@ -128,10 +127,6 @@ def pool_strict() -> bool:
         return DEFAULT_POOL_STRICT
 
 
-def _scope_hash(scope: str) -> str:
-    return hashlib.sha256(scope.encode("utf-8")).hexdigest()[:12]
-
-
 @dataclass
 class BrowserInstance:
     user_scope_id: str
@@ -139,13 +134,6 @@ class BrowserInstance:
     cdp_base: str            # http://127.0.0.1:<port>
     vnc_base: str            # http://127.0.0.1:<port>
     last_used: float
-
-
-def _docker(args: List[str], timeout: float = 60) -> subprocess.CompletedProcess:
-    """One docker CLI call. The single seam the tests stub."""
-    from vaf.core.service_stack import resolve_docker_exe
-    return subprocess.run([resolve_docker_exe(), *args],
-                          capture_output=True, text=True, timeout=timeout)
 
 
 def _seccomp_profile_path() -> Optional[str]:
@@ -194,20 +182,6 @@ def _vnc_wait_s() -> float:
         return 8.0
 
 
-def _mem_available_mb() -> Optional[int]:
-    """Free-ish memory in MB, or None where /proc/meminfo does not exist
-    (macOS/Windows hosts run the containers inside a VM with its own budget,
-    so the floor check stands down there rather than guessing)."""
-    try:
-        with open("/proc/meminfo", "r", encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("MemAvailable:"):
-                    return int(line.split()[1]) // 1024
-    except Exception:
-        pass
-    return None
-
-
 class BrowserPool:
     """Singleton allocator of per-user browser containers."""
 
@@ -240,7 +214,7 @@ class BrowserPool:
             if self._template is not None:
                 return self._template
         try:
-            r = _docker(["inspect", "vaf-browser", "--format",
+            r = containers.docker(["inspect", "vaf-browser", "--format",
                          "{{.Config.Image}}\t{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}"])
             if r.returncode != 0:
                 return None
@@ -302,9 +276,9 @@ class BrowserPool:
             template = self._resolve_template()
             if template is None:
                 return False
-            r = _docker(["inspect", template[0], "--format", "{{.Id}}"], timeout=20)
+            r = containers.docker(["inspect", template[0], "--format", "{{.Id}}"], timeout=20)
             want = (r.stdout or "").strip() if r.returncode == 0 else ""
-            r = _docker(["inspect", name, "--format", "{{.Image}}"], timeout=20)
+            r = containers.docker(["inspect", name, "--format", "{{.Image}}"], timeout=20)
             have = (r.stdout or "").strip() if r.returncode == 0 else ""
             return bool(want and have and want != have)
         except Exception:
@@ -329,17 +303,17 @@ class BrowserPool:
                 self._fallback_reason = "VAF is shutting down"
                 return None
             inst = self._instances.get(scope)
-        name = _NAME_PREFIX + _scope_hash(scope)
+        name = _NAME_PREFIX + containers.scope_hash(scope)
 
-        state = self._container_state(name)
+        state = containers.container_state(name)
         if state in ("running", "exited") and self._image_is_stale(name):
             # Recreate rather than adopt. The PROFILE VOLUME is untouched by
             # this (it is named and mounted afresh), so the person's logins,
             # history and bookmarks come back with the new container; only the
             # stale binary is thrown away.
-            append_domain_log("webui", f"[browser_pool] instance for scope hash {_scope_hash(scope)} "
+            append_domain_log("webui", f"[browser_pool] instance for scope hash {containers.scope_hash(scope)} "
                                        "runs an outdated image; recreating on the current one")
-            _docker(["rm", "-f", name], timeout=60)
+            containers.docker(["rm", "-f", name], timeout=60)
             with self._lock:
                 self._instances.pop(scope, None)
                 self._owned.pop(scope, None)
@@ -358,7 +332,7 @@ class BrowserPool:
             if state == "exited":
                 if not self._may_start_another():
                     return None
-                r = _docker(["start", name])
+                r = containers.docker(["start", name])
                 if r.returncode != 0:
                     append_domain_log("webui", f"[browser_pool] docker start failed: "
                                                f"{(r.stderr or '').strip()[:200]}; using shared browser")
@@ -383,7 +357,7 @@ class BrowserPool:
             return None
         if not self._wait_healthy(inst):
             append_domain_log("webui", f"[browser_pool] instance for scope hash "
-                                       f"{_scope_hash(scope)} did not become healthy; using shared browser")
+                                       f"{containers.scope_hash(scope)} did not become healthy; using shared browser")
             self._fallback_reason = "instance did not become healthy"
             return None
         with self._lock:
@@ -391,21 +365,14 @@ class BrowserPool:
         self._ensure_reaper()
         return inst
 
-    def _container_state(self, name: str) -> Optional[str]:
-        r = _docker(["inspect", name, "--format", "{{.State.Status}}"], timeout=20)
-        if r.returncode != 0:
-            return None
-        return r.stdout.strip() or None
-
     def _may_start_another(self) -> bool:
         limit = pool_max()
-        r = _docker(["ps", "--filter", f"name={_NAME_PREFIX}", "--format", "{{.Names}}"], timeout=20)
-        running = len([ln for ln in (r.stdout or "").splitlines() if ln.strip()]) if r.returncode == 0 else 0
+        running = containers.count_running(_NAME_PREFIX)
         if running >= limit:
             append_domain_log("webui", f"[browser_pool] at capacity ({running}/{limit}); using shared browser")
             self._fallback_reason = f"at capacity ({running}/{limit})"
             return False
-        free = _mem_available_mb()
+        free = containers.mem_available_mb()
         if free is not None and free < _min_free_mb():
             append_domain_log("webui", f"[browser_pool] low memory ({free} MB free, floor "
                                        f"{_min_free_mb()} MB); using shared browser")
@@ -420,7 +387,7 @@ class BrowserPool:
                                        "container present?); using shared browser")
             return None
         image, _shared_network = template
-        volume = _VOLUME_PREFIX + _scope_hash(scope)
+        volume = _VOLUME_PREFIX + containers.scope_hash(scope)
         # ONE NETWORK PER INSTANCE, never the shared browser's. Inside the
         # container Chromium's CDP proxy listens on 0.0.0.0:9222 with NO
         # authentication - safe only because the host publishes it on loopback
@@ -488,7 +455,7 @@ class BrowserPool:
         if vnc_secret:
             args += ["-e", f"VAF_BROWSER_VNC_SECRET={vnc_secret}"]
         args.append(image)
-        r = _docker(args, timeout=120)
+        r = containers.docker(args, timeout=120)
         if r.returncode != 0:
             append_domain_log("webui", f"[browser_pool] docker run failed: {(r.stderr or '').strip()[:300]}")
             return None
@@ -497,28 +464,13 @@ class BrowserPool:
         return self._read_endpoints(scope, name)
 
     def _ensure_network(self, scope: str) -> Optional[str]:
-        """The instance's own bridge network, created once per scope.
-
-        `docker network create` on an existing name fails harmlessly, so the
-        existence check and the create are not a race worth locking: either
-        way the name exists afterwards, which is all the run needs."""
-        net = _NETWORK_PREFIX + _scope_hash(scope)
-        try:
-            r = _docker(["network", "inspect", net, "--format", "{{.Name}}"], timeout=20)
-            if r.returncode == 0 and net in (r.stdout or ""):
-                return net
-            c = _docker(["network", "create", "--driver", "bridge", net], timeout=30)
-            if c.returncode == 0:
-                return net
-            # Lost a race against another thread creating the same network?
-            r2 = _docker(["network", "inspect", net, "--format", "{{.Name}}"], timeout=20)
-            return net if r2.returncode == 0 else None
-        except Exception:
-            return None
+        """The instance's own bridge network, created once per scope."""
+        net = _NETWORK_PREFIX + containers.scope_hash(scope)
+        return net if containers.ensure_network(net) else None
 
     def _read_endpoints(self, scope: str, name: str) -> Optional[BrowserInstance]:
         def host_port(container_port: str) -> Optional[str]:
-            r = _docker(["port", name, container_port], timeout=20)
+            r = containers.docker(["port", name, container_port], timeout=20)
             if r.returncode != 0:
                 return None
             # "127.0.0.1:49153" (possibly one line per address family; loopback first)
@@ -613,7 +565,7 @@ class BrowserPool:
                         self.touch(scope)
                         continue
                     try:
-                        _docker(["stop", "-t", "5", inst.container_name], timeout=60)
+                        containers.docker(["stop", "-t", "5", inst.container_name], timeout=60)
                         append_domain_log("webui", f"[browser_pool] idle instance stopped "
                                                    f"({inst.container_name})")
                     except Exception:
@@ -656,7 +608,7 @@ def _in_use_by_another_process(name: str) -> bool:
     mid-session costs the work."""
     try:
         import psutil
-        r = _docker(["port", name], timeout=20)
+        r = containers.docker(["port", name], timeout=20)
         if r.returncode != 0:
             return False
         ports = set()
@@ -691,7 +643,7 @@ def _stop_at_quit(name: str) -> None:
         append_domain_log("webui", f"[browser_pool] {name} left running at quit: "
                                    "another VAF process is using it")
         return
-    _docker(["stop", "-t", "5", name], timeout=60)
+    containers.docker(["stop", "-t", "5", name], timeout=60)
 
 
 def stop_known_instances(timeout_s: float = 20.0) -> int:

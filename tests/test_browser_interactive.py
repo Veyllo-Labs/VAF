@@ -633,7 +633,7 @@ def test_workspace_mirror_walk_caps_and_signature(monkeypatch, tmp_path):
         calls.append(list(args))
         return _types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(bp, "_docker", fake_docker)
+    monkeypatch.setattr("vaf.core.containers.docker", fake_docker)
     # The copy lane is a tar extracted INSIDE the container as the browser
     # user (docker cp + root chown died with cap_drop ALL); the seam records.
     tars = []
@@ -716,7 +716,7 @@ def test_sweep_delivers_through_the_threat_funnel(monkeypatch, tmp_path):
             return _types.SimpleNamespace(returncode=0, stdout="", stderr="")
         return _types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(bp, "_docker", fake_docker)
+    monkeypatch.setattr("vaf.core.containers.docker", fake_docker)
     monkeypatch.setattr(session_mod, "get_user_projects_root",
                         lambda scope: tmp_path / "VAF_Projects" / "ab12cd34")
     blocked = {"value": False}

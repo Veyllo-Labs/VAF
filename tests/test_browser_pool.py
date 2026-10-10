@@ -3,7 +3,7 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """The per-user browser pool, tested without docker.
 
-The docker CLI sits behind one seam (`browser_pool._docker`) and the config
+The docker CLI sits behind one seam (`vaf.core.containers.docker`) and the config
 behind another (`browser_pool._config_get`); these tests pin the DECISIONS:
 two people get a browser of their own by default while an explicit 0 still
 switches the pool off entirely, the environment overrides the config key,
@@ -19,6 +19,7 @@ import pytest
 
 import vaf.core.browser_interactive as bi
 import vaf.core.browser_pool as bp
+from vaf.core import containers
 
 
 class _FakeDocker:
@@ -84,8 +85,8 @@ def pool(monkeypatch):
     monkeypatch.setattr(bp, "_config_get", lambda key: None)
     monkeypatch.delenv("VAF_BROWSER_POOL_STRICT", raising=False)
     fake = _FakeDocker()
-    monkeypatch.setattr(bp, "_docker", fake)
-    monkeypatch.setattr(bp, "_mem_available_mb", lambda: 16000)
+    monkeypatch.setattr("vaf.core.containers.docker", fake)
+    monkeypatch.setattr("vaf.core.containers.mem_available_mb", lambda: 16000)
     # Fallbacks emit security events (lazy import in resolve): record them
     # here instead of letting a unit test write the machine's real event log.
     events = []
@@ -257,13 +258,13 @@ def test_capacity_gate_answers_shared_fallback(pool, monkeypatch):
 
 def test_memory_floor_refuses_new_instances(pool, monkeypatch):
     monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "4")
-    monkeypatch.setattr(bp, "_mem_available_mb", lambda: 800)
+    monkeypatch.setattr("vaf.core.containers.mem_available_mb", lambda: 800)
     assert pool.resolve("scope-a") is None
 
 
 def test_exited_instance_is_adopted_and_restarted(pool, monkeypatch):
     monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
-    name = "vaf-browser-u-" + bp._scope_hash("scope-a")
+    name = "vaf-browser-u-" + containers.scope_hash("scope-a")
     pool._test_docker.containers[name] = "exited"      # left over from an earlier VAF process
     inst = pool.resolve("scope-a")
     assert inst is not None and inst.container_name == name
@@ -283,7 +284,7 @@ def test_peek_never_calls_docker(pool, monkeypatch):
 
 def test_docker_failure_falls_back_to_the_shared_browser(pool, monkeypatch):
     monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
-    monkeypatch.setattr(bp, "_docker", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no docker")))
+    monkeypatch.setattr("vaf.core.containers.docker", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no docker")))
     assert pool.resolve("scope-a") is None
 
 
@@ -502,8 +503,8 @@ def live_health_pool(monkeypatch):
     monkeypatch.delenv("VAF_BROWSER_POOL_MAX", raising=False)
     monkeypatch.setattr(bp, "_config_get", lambda key: None)
     fake = _FakeDocker()
-    monkeypatch.setattr(bp, "_docker", fake)
-    monkeypatch.setattr(bp, "_mem_available_mb", lambda: 16000)
+    monkeypatch.setattr("vaf.core.containers.docker", fake)
+    monkeypatch.setattr("vaf.core.containers.mem_available_mb", lambda: 16000)
     p = bp.BrowserPool()
     p._ensure_reaper = lambda: None            # no threads in unit tests
     p._test_docker = fake
@@ -643,7 +644,7 @@ def test_a_pooled_instance_on_an_outdated_image_is_recreated(pool, monkeypatch):
         return real(args, timeout=timeout)
 
     monkeypatch.setattr(pool._test_docker, "__call__", aged, raising=False)
-    monkeypatch.setattr(bp, "_docker", aged)
+    monkeypatch.setattr("vaf.core.containers.docker", aged)
     again = pool.resolve("scope-a")
     assert again is not None
     calls = [c for c in pool._test_docker.calls if c[0] == "rm"]
@@ -662,7 +663,7 @@ def test_a_pooled_instance_on_the_current_image_is_adopted(pool, monkeypatch):
             return types.SimpleNamespace(returncode=0, stdout="sha256:SAME\n", stderr="")
         return real(args, timeout=timeout)
 
-    monkeypatch.setattr(bp, "_docker", same)
+    monkeypatch.setattr("vaf.core.containers.docker", same)
     assert pool.resolve("scope-a") is not None
     assert not [c for c in pool._test_docker.calls if c[0] == "rm"]
 

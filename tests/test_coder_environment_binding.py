@@ -141,13 +141,17 @@ def test_the_spawn_passes_the_environment_as_an_argument_never_as_a_variable(mon
     assert not any("0a1b2c3d" in str(v) for v in seen["env"].values())
 
 
-def test_the_child_cli_hands_the_environment_to_the_coder(monkeypatch):
-    from typer.testing import CliRunner
+def test_the_child_cli_hands_the_environment_to_the_coder():
+    """Read from the source, not invoked: `vaf subagent run` sets process-wide state on
+    purpose (VAF_IN_SUBAGENT_TERMINAL, VAF_TASK_ID, the adopted cwd), because it IS the
+    child; invoked inside the suite it leaked that state into every later test.
+    MUTATION: drop the kwargs line - red."""
+    import ast
+    from pathlib import Path
     import vaf.cli.cmd.subagent as sub
-    import vaf.tools.coder as coder
-    seen = {}
-    monkeypatch.setattr(coder.CodingAgentTool, "run", lambda self, **kw: seen.update(kw) or "done")
-    monkeypatch.setattr(sub, "_safe_print", lambda *a, **k: None, raising=False)
-    CliRunner().invoke(sub.app, ["run", "coding_agent", "--task", "x", "--environment", "0a1b2c3d",
-                                 "--no-auto-close"])
-    assert seen.get("environment") == "0a1b2c3d"
+    tree = ast.parse(Path(sub.__file__).read_text(encoding="utf-8"))
+    run = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "run_subagent")
+    assert "environment" in [a.arg for a in run.args.args]
+    src = ast.unparse(run)
+    assert "kwargs['environment'] = environment" in src
+    assert "'--environment'" in src

@@ -86,6 +86,20 @@ def test_a_docker_that_cannot_be_started_is_a_line_not_a_traceback(mgr, monkeypa
     assert res.exit_code == 1 and "docker could not be run" in res.output
 
 
+def test_prune_says_when_docker_could_not_be_asked(monkeypatch):
+    """A reaper pass that could not list anything returned zeros, and prune printed
+    "Removed 0" as a success. MUTATION: let prune read a failed listing as an empty one -
+    red."""
+    from vaf.core import containers
+    monkeypatch.setattr(containers, "docker",
+                        lambda *a, **k: types.SimpleNamespace(returncode=1, stdout="",
+                                                              stderr="Cannot connect to the Docker daemon"))
+    monkeypatch.setattr(env_cmd, "_manager", lambda: envmod.EnvironmentManager())
+    res = CliRunner().invoke(env_cmd.app, ["prune"])
+    assert res.exit_code == 1 and "Removed" not in res.output
+    assert "did not list the environments" in res.output
+
+
 def test_exec_passes_the_command_and_its_exit_code(mgr):
     res = CliRunner().invoke(env_cmd.app, ["exec", "0a1b2c3d", "--", "python3", "-c", "print(1)"])
     assert res.exit_code == 3 and "out" in res.output

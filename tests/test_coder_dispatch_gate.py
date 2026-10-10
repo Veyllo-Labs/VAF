@@ -259,6 +259,15 @@ def test_the_inner_tools_wait_as_long_as_they_say_they_may():
     assert tool_budget_seconds(PythonExecTool(), {"code": "x", "timeout": 200}) > 200
 
 
+def test_a_test_run_waits_through_its_preparation():
+    """Copying the project, probing and installing pytest each have a clock of their own;
+    a budget of 180 s on top of the tests ran out while pytest was still being installed
+    on the fallback image. MUTATION: back to own + 180 - red."""
+    from vaf.tools.sandbox_test_runner import RunTestsTool
+    steps = 30 + 120 + 30 + 180 + 30          # mkdir, copy in, probe, install, cleanup
+    assert RunTestsTool().budget_seconds({"timeout": 60}) >= 60 + steps
+
+
 def test_a_root_command_waits_for_its_files_to_be_handed_back_too():
     """A root command in an environment ends with the give-back of /workspace, on a clock of
     its own (EnvironmentManager.GIVE_BACK_TIMEOUT); a budget of the command alone abandoned

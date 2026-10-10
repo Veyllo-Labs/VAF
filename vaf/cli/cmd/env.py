@@ -236,6 +236,10 @@ def delete(env_id: str = typer.Argument(..., help="The environment's id"),
 @app.command("prune")
 def prune():
     """Remove expired temporary environments, stop idle ones, clear crash leftovers."""
-    summary = _manager().prune()
+    from vaf.core.environments import EnvironmentRefused
+    try:
+        summary = _manager().prune()
+    except (EnvironmentRefused, OSError) as e:
+        _fail(e)
     UI.success(f"Removed {summary['removed']}, stopped {summary['stopped']}, "
                f"cleared {summary['orphans']} leftovers.")

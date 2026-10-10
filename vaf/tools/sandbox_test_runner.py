@@ -283,14 +283,20 @@ class RunTestsTool(BaseTool):
         "required": [],
     }
 
+    # What a run does besides the tests, each step on its own clock (run_project_tests):
+    # mkdir 30 s, copying the project in 120 s, the pytest probe 30 s, installing pytest
+    # where the scratch environment still runs on the fallback image 180 s, removing the
+    # copy 30 s - plus the 15 s backstop exec_bounded keeps behind each bounded step.
+    PREPARATION_SECONDS = 30 + 120 + 30 + 180 + 30 + 5 * 15
+
     def budget_seconds(self, args):
-        # The test command's own timeout (default 180) plus copying the project into the
-        # sandbox and back out (bounded at 120 + 20 + 15 s by run_project_tests itself).
+        # The test command's own timeout (default 180) plus everything around it: the
+        # dispatcher must not stop waiting while pytest is still being installed.
         try:
             own = int((args or {}).get("timeout") or 180)
         except (TypeError, ValueError):
             own = 180
-        return own + 180
+        return own + self.PREPARATION_SECONDS
 
     def __init__(self, base_dir: str = ".", environment=None):
         # base_dir defaults so the main agent's tool loader can instantiate the class (obj()) without

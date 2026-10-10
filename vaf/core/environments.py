@@ -1432,7 +1432,10 @@ class EnvironmentManager:
         return cleared
 
     def prune(self) -> Dict[str, int]:
-        """What `vaf env prune` runs: one reaper pass now."""
+        """What `vaf env prune` runs: one reaper pass now. Raises EnvironmentRefused when
+        docker does not list the environments: the reaper then does nothing and returns
+        zeros, and a pass that could not look must not report "removed 0"."""
+        self._docker_rows(strict=True)
         return self.reap_once()
 
     def start_reaper(self, interval_s: float = 60.0) -> None:

@@ -2493,7 +2493,9 @@
     "trustPinned": "Hatırlanan sertifika",
     "trustNone": "Şifrelenmemiş",
     "forget": "Kaldır; sonraki bağlantı yeniden sorar",
-    "failed": "Bu işe yaramadı."
+    "failed": "Bu işe yaramadı.",
+    "loadFailed": "FTP sunucuları yüklenemedi.",
+    "retry": "Tekrar dene"
   },
   "ssh": {
     "title": "Sunucularına SSH",

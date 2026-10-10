@@ -2493,7 +2493,9 @@
     "trustPinned": "記憶した証明書",
     "trustNone": "暗号化なし",
     "forget": "削除（次回の接続で再確認）",
-    "failed": "うまくいきませんでした。"
+    "failed": "うまくいきませんでした。",
+    "loadFailed": "FTPサーバーを読み込めませんでした。",
+    "retry": "再試行"
   },
   "ssh": {
     "title": "サーバーへのSSH",

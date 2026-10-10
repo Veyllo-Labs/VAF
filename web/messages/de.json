@@ -2493,7 +2493,9 @@
     "trustPinned": "Gemerktes Zertifikat",
     "trustNone": "Nicht verschlüsselt",
     "forget": "Entfernen; die nächste Verbindung fragt wieder",
-    "failed": "Das hat nicht geklappt."
+    "failed": "Das hat nicht geklappt.",
+    "loadFailed": "Die FTP-Server konnten nicht geladen werden.",
+    "retry": "Erneut versuchen"
   },
   "ssh": {
     "title": "SSH zu deinen Servern",

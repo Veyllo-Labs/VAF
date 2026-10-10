@@ -2493,7 +2493,9 @@
     "trustPinned": "Remembered certificate",
     "trustNone": "Not encrypted",
     "forget": "Remove; the next connection asks again",
-    "failed": "That did not work."
+    "failed": "That did not work.",
+    "loadFailed": "The FTP servers could not be loaded.",
+    "retry": "Try again"
   },
   "ssh": {
     "title": "SSH to your servers",

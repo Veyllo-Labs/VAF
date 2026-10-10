@@ -2493,7 +2493,9 @@
     "trustPinned": "기억된 인증서",
     "trustNone": "암호화되지 않음",
     "forget": "제거하면 다음 연결 때 다시 확인합니다",
-    "failed": "실패했습니다."
+    "failed": "실패했습니다.",
+    "loadFailed": "FTP 서버를 불러오지 못했습니다.",
+    "retry": "다시 시도"
   },
   "ssh": {
     "title": "서버에 SSH 연결",

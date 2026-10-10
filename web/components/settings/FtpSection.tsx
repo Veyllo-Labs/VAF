@@ -18,22 +18,29 @@ interface FtpServer {
  * The FTP servers this account confirmed for its agent (vaf/core/ftp.py, /api/ftp), each with
  * how its certificate is trusted: a certificate authority, a fingerprint remembered at the
  * first connection, or none for plain FTP. Hidden for an account the ftp tool is not enabled
- * for (the route answers 403). Removing a server makes the agent's next connection to it ask
- * again - what a server whose certificate changed needs.
+ * for (the route answers 403); any other failed load shows itself with a retry, so a server
+ * error does not read as "FTP is not for you". Removing a server makes the agent's next
+ * connection to it ask again - what a server whose certificate changed needs.
  */
 export default function FtpSection() {
     const t = useTranslations('ftp');
     const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
     const [servers, setServers] = useState<FtpServer[] | null>(null);
     const [note, setNote] = useState<string | null>(null);
+    const [loadFailed, setLoadFailed] = useState(false);
 
     const load = useCallback(async () => {
         try {
             const res = await fetch(`${apiBase}/api/ftp`, { credentials: 'include' });
-            if (!res.ok) { setServers(null); return; }
+            // 403: the tool is not enabled for this account - the section stays away.
+            if (res.status === 403) { setServers(null); setLoadFailed(false); return; }
+            if (!res.ok) { setLoadFailed(true); return; }
             const body = await res.json();
             setServers(Array.isArray(body.servers) ? body.servers : []);
-        } catch { /* a section that cannot be fetched stays as it was */ }
+            setLoadFailed(false);
+        } catch {
+            setLoadFailed(true);
+        }
     }, [apiBase]);
 
     useEffect(() => { void load(); }, [load]);
@@ -57,11 +64,21 @@ export default function FtpSection() {
     const trustLabel = (s: FtpServer) =>
         s.trust === 'authority' ? t('trustAuthority') : s.trust === 'pinned' ? t('trustPinned') : t('trustNone');
 
-    if (servers === null) return null;
+    if (servers === null && !loadFailed) return null;
     return (
         <div className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 mt-6">
             <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>
             <p className="text-xs text-gray-600 mb-4">{t('intro')}</p>
+            {loadFailed && (
+                <div className="flex items-center gap-3 mb-2">
+                    <p className="text-sm text-red-600">{t('loadFailed')}</p>
+                    <button type="button" onClick={() => void load()}
+                        className="px-2 py-1 text-xs font-medium rounded-md border border-gray-200 text-gray-700 hover:bg-gray-100">
+                        {t('retry')}
+                    </button>
+                </div>
+            )}
+            {servers === null ? null : <>
             <p className="text-xs font-semibold text-gray-700 mb-1">{t('servers')}</p>
             {servers.length === 0 ? (
                 <p className="text-sm text-gray-500">{t('noServers')}</p>
@@ -89,6 +106,7 @@ export default function FtpSection() {
                     ))}
                 </ul>
             )}
+            </>}
             {note && <p className="text-xs mt-2 text-red-600">{note}</p>}
         </div>
     );

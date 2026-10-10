@@ -2493,7 +2493,9 @@
     "trustPinned": "已记住的证书",
     "trustNone": "未加密",
     "forget": "移除；下次连接时会重新询问",
-    "failed": "操作未成功。"
+    "failed": "操作未成功。",
+    "loadFailed": "无法加载 FTP 服务器。",
+    "retry": "重试"
   },
   "ssh": {
     "title": "通过 SSH 连接你的服务器",

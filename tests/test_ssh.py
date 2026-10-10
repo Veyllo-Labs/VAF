@@ -380,6 +380,25 @@ def test_a_folder_uploads_whole_without_links_or_history(lab, tmp_path):
     assert not (remote / ".git").exists() and not os.path.lexists(remote / "leak")
 
 
+def test_an_unreadable_folder_is_an_error_line_not_a_crash(lab, tmp_path, monkeypatch):
+    """MUTATION: catch ValueError alone - red: a PermissionError escaped the tool."""
+    from vaf.core import user_secrets
+    from vaf.tools.ssh import SshTool
+    user_secrets.set_secret("SERVER_PASS", PASSWORD)
+    owner = {"user_scope_id": None, "username": None, "user_role": "admin"}
+    _tool(command="true", login_credential="SERVER_PASS", _call_confirmed=True, **owner)
+    site = tmp_path / "site"
+    site.mkdir()
+
+    def _denied(cls, folder, limit):
+        raise PermissionError(13, "Permission denied", str(folder / "secret.txt"))
+
+    monkeypatch.setattr(SshTool, "_folder_stream", classmethod(_denied))
+    out = _tool(action="upload", local_path=str(site), remote_path=str(tmp_path / "remote"),
+                login_credential="SERVER_PASS", **owner)
+    assert out.startswith("Error:") and "Permission denied" in out
+
+
 def test_the_folder_limit_counts_the_archive_not_only_the_files(tmp_path):
     """Every file adds a 512-byte header. MUTATION: check only the summed sizes - red: sixty
     empty files passed a 10 kB limit as 0 bytes while the archive was over 30 kB."""

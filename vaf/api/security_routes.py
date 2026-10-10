@@ -78,7 +78,8 @@ def derive_sandbox_status(docker_available: bool,
                  running, their hardening is read live and reported together: all
                  of them must drop every capability (adding back at most the six
                  of the coder's root lane, ROOT_LANE_CAPS), set no-new-privileges, run
-                 non-root and sit on a network of their own. Without one running,
+                 non-root, carry a memory, CPU and process limit, and sit on a network
+                 of their own. Without one running,
                  they start on demand with that same hardening.
       warn    -> docker daemon down/missing: sandboxed execution is BLOCKED.
                  Fail-closed (nothing escapes to the host), but the feature is
@@ -98,9 +99,9 @@ def derive_sandbox_status(docker_available: bool,
                 "environments": 0}
     try:
         from vaf.core.environments import ROOT_LANE_CAPS
-        cap_drop_all = no_new_privileges = non_root = own_network = True
+        cap_drop_all = no_new_privileges = non_root = own_network = limited = True
         networks: List[str] = []
-        memory = cpus = 0
+        memory = cpus = pids = 0
         for ins in running:
             host_cfg = ins.get("HostConfig") or {}
             cap_drop = [str(c).upper() for c in (host_cfg.get("CapDrop") or [])]
@@ -114,20 +115,30 @@ def derive_sandbox_status(docker_available: bool,
             own_network &= bool(nets) and _INTERNAL_NETWORK not in nets and all(
                 n.startswith("vaf-env-net-") for n in nets)
             networks.extend(nets)
-            memory = max(memory, int(host_cfg.get("Memory") or 0))
-            cpus = max(cpus, int(host_cfg.get("NanoCpus") or 0))
+            own_memory = int(host_cfg.get("Memory") or 0)
+            own_cpus = int(host_cfg.get("NanoCpus") or 0)
+            own_pids = int(host_cfg.get("PidsLimit") or 0)
+            # 0 (or docker's -1 for pids) means unlimited: one such environment can take
+            # the whole machine.
+            limited &= own_memory > 0 and own_cpus > 0 and own_pids > 0
+            memory = max(memory, own_memory)
+            cpus = max(cpus, own_cpus)
+            pids = max(pids, own_pids)
         hardening = {
             "cap_drop_all": cap_drop_all,
             "no_new_privileges": no_new_privileges,
             "non_root": non_root,
             "memory_bytes": memory,
             "nano_cpus": cpus,
+            "pids_limit": pids,
+            "limits": limited,
             "networks": sorted(set(networks)),
             "isolated_network": own_network,
         }
     except Exception:
         hardening = {}
-    weak = [k for k in ("cap_drop_all", "no_new_privileges", "non_root", "isolated_network")
+    weak = [k for k in ("cap_drop_all", "no_new_privileges", "non_root", "isolated_network",
+                        "limits")
             if hardening and not hardening.get(k)]
     return {
         "state": "warn" if weak else "ok",

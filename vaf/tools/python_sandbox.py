@@ -513,9 +513,9 @@ class PythonSandboxTool(BaseTool):
                 logger.warning("ToolBridge setup failed: %s", exc)
                 return f"[ERROR] python_sandbox: Could not start tool bridge: {exc}"
 
+        # Step 3: A working directory for this run, inside this person's own container.
+        workdir = f"/tmp/vaf_run_{exec_id}"
         try:
-            # Step 3: A working directory for this run, inside this person's own container.
-            workdir = f"/tmp/vaf_run_{exec_id}"
 
             # Create workspace directory. The mkdir is trivial; this budget is really for the
             # docker-exec round-trip, which can be slow on a COLD or busy container (first run after a
@@ -573,8 +573,7 @@ class PythonSandboxTool(BaseTool):
                     _export_files, workdir, scratch.container, _sid
                 )
 
-            # Step 6: Cleanup workspace
-            execute_fn(f"rm -rf {workdir}", timeout=15)
+            # Step 6: the workspace goes in the finally below, on every exit.
 
             # Step 7: Format result
             if exit_code != 0:
@@ -598,5 +597,11 @@ class PythonSandboxTool(BaseTool):
             logger.error(f"Sandbox execution error: {e}")
             return f"[ERROR] Sandbox execution failed: {e}"
         finally:
+            # On every exit - a refused package, a failed install, an exception - and not
+            # through execute_fn: after a Stop its stop check would cancel the cleanup too.
+            try:
+                get_environment_manager().exec_in(scratch, ["rm", "-rf", workdir], timeout=15)
+            except Exception:
+                pass
             if bridge:
                 bridge.stop()

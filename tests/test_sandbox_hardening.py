@@ -56,6 +56,29 @@ def test_each_run_goes_to_the_callers_scratch_environment(monkeypatch):
     assert asked == ["scope-alice"] and "stop here" in out
 
 
+def test_the_runs_folder_goes_on_every_exit_and_not_through_the_stop_check(monkeypatch):
+    """A refused package returned before the old Step 6, and after a Stop the Stop-aware
+    lane cancelled the cleanup too. MUTATION: put the cleanup back into Step 6 - red."""
+    import vaf.core.environments as envmod
+    calls = []
+
+    class _Mgr:
+        def scratch_for(self, scope):
+            return types.SimpleNamespace(container="vaf-env-ab12cd34ef56-scratch")
+
+        def exec_in(self, env, argv, **kw):
+            calls.append((argv, kw))
+            return envmod.ExecResult(0, "", "")
+
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: _Mgr())
+    monkeypatch.setattr(PythonSandboxTool, "_ensure_docker_available", staticmethod(lambda: (True, "")))
+    out = PythonSandboxTool().run(code="print(1)", packages=["numpy; rm -rf /"], user_scope_id="s")
+    assert "Invalid package spec" in out
+    argv, kw = calls[-1]
+    assert argv[:2] == ["rm", "-rf"] and argv[2].startswith("/tmp/vaf_run_")
+    assert "check_stop" not in kw
+
+
 def test_the_executor_hands_values_over_as_environment_with_one_marker(monkeypatch):
     """The run's commands share one marker (so a Stop ends exactly this run) and the
     bridge values travel as env_values, never in the command text. MUTATION: build the

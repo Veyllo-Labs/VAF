@@ -2931,11 +2931,12 @@ def _deploy_target(raw, user_scope_id):
     return DeployTarget(target, root), None
 
 
-def _deploy_refusal(fn_name: str, fn_args, deploy) -> Optional[str]:
+def _deploy_refusal(fn_name: str, fn_args, deploy, base_dir: Optional[str] = None) -> Optional[str]:
     """The answer to an ssh call this run may not make, or None (and the call is pinned to
     the run's server). Without deploy_to a run has no ssh at all; with it, only that server,
     uploads and downloads only under its folder, and never install_key, which is the main
-    agent's to do with the person."""
+    agent's to do with the person. A relative local_path is the project's (`dist`), not the
+    chat workspace's, which is what the ssh tool reads a relative path against."""
     import posixpath
     if fn_name != "ssh":
         return None
@@ -2965,6 +2966,12 @@ def _deploy_refusal(fn_name: str, fn_args, deploy) -> Optional[str]:
         if full != deploy.root and not full.startswith(deploy.root.rstrip("/") + "/"):
             return f"ssh refused: this run uploads and downloads under {deploy.root} only."
         fn_args["remote_path"] = full
+        if base_dir:
+            local = str(fn_args.get("local_path") or "").strip()
+            if not local and action == "download":
+                local = posixpath.basename(full.rstrip("/")) or "download"
+            if local and not os.path.isabs(os.path.expanduser(local)):
+                fn_args["local_path"] = os.path.join(base_dir, local)
     return None
 
 
@@ -10099,7 +10106,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                     )
                     if _refusal is None:
                         _refusal = (_environment_browser_refusal(fn_name, fn_args, _env_binding)
-                                    or _deploy_refusal(fn_name, fn_args, _deploy))
+                                    or _deploy_refusal(fn_name, fn_args, _deploy, base_dir))
                     if _refusal is not None:
                         # Answered here and nothing else runs: the file handling further down
                         # judges a result by its wording, and a refused write_file must never

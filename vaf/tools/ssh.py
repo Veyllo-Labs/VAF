@@ -187,7 +187,7 @@ class SshTool(BaseTool):
             if action == "upload" and local.is_dir():
                 try:
                     stdin, uploaded_files = self._folder_stream(local, ssh.MAX_TRANSFER_BYTES)
-                except ValueError as e:
+                except (ValueError, OSError) as e:
                     return f"Error: {e}"
                 command = f"mkdir -p {shlex.quote(remote)} && tar -xf - -C {shlex.quote(remote)}"
             elif action == "upload":

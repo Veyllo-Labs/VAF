@@ -181,7 +181,7 @@ def test_schema_declares_export_files():
 def test_export_runs_before_workdir_cleanup():
     src = Path(ps_mod.__file__).read_text(encoding="utf-8")
     body = src[src.index("def run(self, **kwargs)"):]
-    assert body.index("_export_artifacts(") < body.index('rm -rf {workdir}'), (
+    assert body.index("_export_artifacts(") < body.index('["rm", "-rf", workdir]'), (
         "export must run BEFORE the per-exec workdir is removed - after cleanup "
         "the produced files are gone"
     )

@@ -233,19 +233,22 @@ def _run_result(cmd: str, result, timeout: int) -> str:
     used to read "Timed out", which sent the coder looking for a slow test."""
     if result.cancelled:
         return _format_result(cmd, -1, result.stdout, (result.stderr or "")
-                              + "\nStopped: the user asked to stop.")
+                              + "\nStopped: the user asked to stop.", header="TEST RUN STOPPED")
     if result.timed_out:
         return _format_result(cmd, -1, result.stdout, (result.stderr or "")
                               + f"\nTimed out after {int(timeout)}s.")
     return _format_result(cmd, result.returncode, result.stdout, result.stderr)
 
 
-def _format_result(command: str, rc: int, out: str, err: str) -> str:
+def _format_result(command: str, rc: int, out: str, err: str,
+                   header: Optional[str] = None) -> str:
     combined = (out + ("\n" + err if err.strip() else "")).strip()
     # Keep the tail: pytest's summary (pass/fail counts, failing assertions) is at the end.
     if len(combined) > 4000:
         combined = "...(truncated)...\n" + combined[-4000:]
-    if rc == 0:
+    if header:
+        head = header
+    elif rc == 0:
         head = "TESTS PASSED"
     elif rc == -1:
         head = "TEST RUN TIMED OUT"

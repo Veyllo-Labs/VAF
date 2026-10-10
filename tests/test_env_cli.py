@@ -111,6 +111,16 @@ def test_a_refusal_is_an_error_and_exit_1(monkeypatch):
     assert res.exit_code == 1 and "no account" in res.output
 
 
+def test_a_timeout_exits_124_whatever_killed_the_command(monkeypatch):
+    """`timeout -s KILL` ends a command with 137. MUTATION: exit with the return code on a
+    timeout again - red."""
+    from vaf.core import environments as envmod
+    monkeypatch.setattr(env_cmd, "_manager", lambda: types.SimpleNamespace(
+        exec=lambda *a, **k: envmod.ExecResult(137, "", "", timed_out=True)))
+    monkeypatch.setattr(env_cmd, "_scope", lambda: "s")
+    assert CliRunner().invoke(env_cmd.app, ["exec", "0a1b2c3d", "--", "sleep", "999"]).exit_code == 124
+
+
 def test_preview_prints_the_page_text(monkeypatch, tmp_path):
     """The help promises the console and the text. MUTATION: drop the text lines - red."""
     import base64

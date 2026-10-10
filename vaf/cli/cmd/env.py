@@ -127,6 +127,7 @@ def exec_cmd(
         UI.print(r.stderr.rstrip())
     if r.timed_out:
         UI.error(f"Timed out after {timeout}s.")
+        raise typer.Exit(124)           # what timeout(1) says, whatever killed the command
     raise typer.Exit(r.returncode if r.returncode >= 0 else 124)
 
 

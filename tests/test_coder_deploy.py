@@ -92,6 +92,21 @@ def test_uploads_land_under_the_target_folder_only():
     assert coder._deploy_refusal("ssh", {"action": "upload", "remote_path": "/var/www/site"}, _deploy()) is None
 
 
+def test_a_relative_local_path_is_the_projects_not_the_chats():
+    """The ssh tool reads a relative path against the chat workspace. MUTATION: drop the
+    base_dir join - red: `dist` was looked for in the wrong folder."""
+    import os
+    up = {"action": "upload", "local_path": "dist", "remote_path": "/var/www/site"}
+    assert coder._deploy_refusal("ssh", up, _deploy(), "/home/user/proj") is None
+    assert up["local_path"] == os.path.join("/home/user/proj", "dist")
+    absolute = {"action": "upload", "local_path": "/tmp/build", "remote_path": "/var/www/site"}
+    coder._deploy_refusal("ssh", absolute, _deploy(), "/home/user/proj")
+    assert absolute["local_path"] == "/tmp/build"
+    down = {"action": "download", "remote_path": "logs/error.log"}
+    coder._deploy_refusal("ssh", down, _deploy(), "/home/user/proj")
+    assert down["local_path"] == os.path.join("/home/user/proj", "error.log")
+
+
 def test_ssh_is_registered_and_advertised_only_with_a_target():
     """MUTATION: let auto-discovery add ssh, or advertise it without a target - red."""
     import inspect
@@ -100,7 +115,7 @@ def test_ssh_is_registered_and_advertised_only_with_a_target():
     schema_at = src.index('"name": "ssh"')
     assert "if _deploy is not None:" in src[schema_at - 300:schema_at]
     assert 'self.local_tools.pop("ssh", None)' in src
-    assert "or _deploy_refusal(fn_name, fn_args, _deploy))" in src
+    assert "or _deploy_refusal(fn_name, fn_args, _deploy, base_dir))" in src
     from vaf.core.coder_tools import CODER_ALLOWED_TOOLS
     assert "ssh" in CODER_ALLOWED_TOOLS
 

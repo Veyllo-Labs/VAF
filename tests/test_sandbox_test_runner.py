@@ -180,7 +180,7 @@ def test_stop_reaches_the_test_run_and_reads_as_a_stop(tmp_path, fake, monkeypat
     run_tests_in_environment(SimpleNamespace(container="c"), "npm test")
     assert [kw.get("check_stop") for argv, kw in mgr.calls if argv[:2] == ["sh", "-c"]] == [stop]
     report = runner._run_result("npm test", ExecResult(-1, "", "", cancelled=True), 180)
-    assert "Stopped" in report and "Timed out" not in report
+    assert report.startswith("TEST RUN STOPPED") and "TIMED OUT" not in report.upper()
 
 
 def test_cleanup_runs_even_when_copy_fails(tmp_path, fake):

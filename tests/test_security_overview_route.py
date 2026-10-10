@@ -15,7 +15,7 @@ from vaf.api.security_routes import collect_sandbox_status, derive_sandbox_statu
 
 def _inspect_payload(running=True, cap_drop=("ALL",), sec_opt=("no-new-privileges:true",),
                      memory=536870912, nano_cpus=500000000, networks=("vaf-env-net-ab12cd34",),
-                     user="1000:1000", cap_add=()):
+                     user="1000:1000", cap_add=(), pids=512):
     """One sandbox environment as `docker inspect` reports it."""
     return {
         "State": {"Running": running},
@@ -26,6 +26,7 @@ def _inspect_payload(running=True, cap_drop=("ALL",), sec_opt=("no-new-privilege
             "SecurityOpt": list(sec_opt),
             "Memory": memory,
             "NanoCpus": nano_cpus,
+            "PidsLimit": pids,
         },
         "NetworkSettings": {"Networks": {n: {} for n in networks}},
     }
@@ -88,6 +89,16 @@ def test_one_weakened_environment_spoils_the_flag(weak, field):
     # MUTATION: keep the state ok whatever the flags say - red.
     assert s["state"] == "warn" and s["reason"] == "hardening_incomplete"
     assert derive_sandbox_status(True, [_inspect_payload()])["state"] == "ok"
+
+
+@pytest.mark.parametrize("unlimited", [{"memory": 0}, {"nano_cpus": 0}, {"pids": 0}, {"pids": -1}])
+def test_an_environment_without_its_limits_is_weak(unlimited):
+    """One unlimited environment can take the whole machine. MUTATION: leave the limits out
+    of the weak flags - red."""
+    s = derive_sandbox_status(True, [_inspect_payload(), _inspect_payload(**unlimited)])
+    assert s["hardening"]["limits"] is False and s["state"] == "warn"
+    full = derive_sandbox_status(True, [_inspect_payload()])
+    assert full["hardening"]["limits"] is True and full["hardening"]["pids_limit"] == 512
 
 
 def test_unlisted_environments_are_unmeasured_never_green(monkeypatch):

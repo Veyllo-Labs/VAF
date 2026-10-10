@@ -522,7 +522,9 @@ def _spawned_for() -> Optional[str]:
     """The account this process was spawned to work for: VAF_USER_SCOPE_ID, the identity a
     sub-agent spawn hands its child as data (coder, librarian, browser, learn job). None in
     the main process, which never sets it in its own environment. Read per call, never
-    cached: it is the child's whole identity, fixed for the life of the process."""
+    cached: it is the child's whole identity, fixed for the life of the process.
+    NAMED BOUNDARY: research_agent and document_agent spawn without any identity, so their
+    calls still read as unlabelled (and as the machine owner's)."""
     raw = str(os.environ.get("VAF_USER_SCOPE_ID") or "").strip()
     return raw or None
 

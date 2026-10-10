@@ -40,6 +40,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The coder no longer gives up after a long check.** A browser test that ran for a few
+  minutes was taken for a model that had stopped answering, and the run ended half done.
+  Every finished tool call now counts as work.
 - **Usage is booked to the account that caused it.** What the coder, the librarian, the
   browser agent and background workflows spent for another account was booked to the
   machine owner, in Settings, Usage and in that account's budget. It now lands on the

@@ -204,3 +204,29 @@ def test_the_child_cli_hands_the_environment_to_the_coder():
     src = ast.unparse(run)
     assert "kwargs['environment'] = environment" in src
     assert "'--environment'" in src
+
+
+def test_browser_agent_is_refused_for_the_environments_own_pages():
+    """The personal browser never joins an environment's network. MUTATION: return None from
+    _environment_browser_refusal - red: a live run spent 5.5 minutes on file:///workspace."""
+    from vaf.tools import coder
+    env = _env()
+    for task in ("Open file:///workspace/index.html and click +",
+                 "open http://localhost:5173/ and fill the form",
+                 "check http://127.0.0.1:8000/"):
+        msg = coder._environment_browser_refusal("browser_agent", {"task": task}, env)
+        assert msg and "render_check" in msg and env.id in msg, task
+    assert coder._environment_browser_refusal("browser_agent", {"task": "read https://docs.python.org/3/"}, env) is None
+    assert coder._environment_browser_refusal("browser_agent", {"task": "file:///workspace/x"}, None) is None
+    assert coder._environment_browser_refusal("render_check", {"task": "file:///workspace/x"}, env) is None
+
+
+def test_bound_runs_offer_no_browser_agent_and_say_where_render_check_looks():
+    """MUTATION: advertise browser_agent while bound, or drop the dispatch check - red."""
+    import inspect
+    from vaf.tools import coder
+    src = inspect.getsource(coder.CodingAgentTool.run)
+    head = src.index('"name": "browser_agent"')
+    assert "*([] if _env_binding is not None else [{" in src[head - 400:head]
+    assert "Render a page INSIDE sandbox environment {_env_binding.id}" in src
+    assert "_refusal = _environment_browser_refusal(fn_name, fn_args, _env_binding)" in src

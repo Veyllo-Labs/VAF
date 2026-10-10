@@ -2891,6 +2891,32 @@ def _coder_funnel(tools, *, scope, role, session_id):
                       gate_enabled=False, max_result_chars=None, authorize=current_authorizer())
 
 
+# What a browser_agent task names when it means a page of the run's own environment.
+_ENVIRONMENT_TARGET = re.compile(
+    r"file://|/workspace\b|\blocalhost\b|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal",
+    re.IGNORECASE)
+
+
+def _environment_browser_refusal(fn_name: str, fn_args, environment) -> Optional[str]:
+    """The answer to a browser_agent call aimed at the run's sandbox environment, or None.
+
+    The personal browser never joins an environment's network (its CDP port has no
+    authentication), so it cannot see /workspace or the environment's localhost. A live run
+    sent it to file:///workspace/index.html anyway, took the path from render_check's
+    report, and spent five and a half minutes finding nothing. render_check renders inside
+    the environment and is the one to use. A task for an outside page passes."""
+    if fn_name != "browser_agent" or environment is None:
+        return None
+    task = str((fn_args or {}).get("task") or "") if isinstance(fn_args, dict) else ""
+    if not _ENVIRONMENT_TARGET.search(task):
+        return None
+    return (f"browser_agent cannot see sandbox environment {environment.id}: the browser never joins "
+            "an environment's network, so its /workspace files and its localhost are out of reach. "
+            "Use render_check instead: it renders inside the environment (a project path like "
+            "'index.html', or http://localhost:<port>/ for a server started with "
+            "bash(background=true)) and reports page errors, console output and the rendered text.")
+
+
 def _coder_dispatch_refusal(fn_name: str, tool, *, coder_allowed, caller_allowed,
                             scope, role, session_id) -> Optional[str]:
     """Why the coder must NOT run this call, or None when it may: the questions only this
@@ -5116,14 +5142,25 @@ Task {task_idx + 1}: {current_task}
                         "function": {
                             "name": "render_check",
                             "description": (
-                                "Open an HTML file you wrote (or a URL) in the sandbox browser and get a "
-                                "developer's report: page errors, console output, failed requests, and the "
-                                "rendered text. USE THIS after writing/changing a web page to verify it "
-                                "actually renders - a page can be syntactically fine and still blank. "
-                                "Pass a project-relative path like 'index.html'. For a dev server use "
-                                "http://localhost:<port>/ - it is reachable only if the server listens on "
-                                "0.0.0.0 (start it that way, e.g. `python3 -m http.server --bind 0.0.0.0`). "
-                                "Single look, no clicking; fix with edit_file, then render_check again."
+                                (f"Render a page INSIDE sandbox environment {_env_binding.id} and get a "
+                                 "developer's report: page errors, console output and the rendered text "
+                                 "(failed requests are not measured there). USE THIS after writing or "
+                                 "changing a web page - a page can be syntactically fine and still blank. "
+                                 "Pass a project-relative path like 'index.html', or "
+                                 "http://localhost:<port>/ for a server you started with "
+                                 "bash(background=true): localhost is the environment itself, any bind "
+                                 "address works. It is the only browser that sees the environment; "
+                                 "browser_agent cannot. Single look, no clicking; fix with edit_file, "
+                                 "then render_check again.")
+                                if _env_binding is not None else
+                                ("Open an HTML file you wrote (or a URL) in the sandbox browser and get a "
+                                 "developer's report: page errors, console output, failed requests, and the "
+                                 "rendered text. USE THIS after writing/changing a web page to verify it "
+                                 "actually renders - a page can be syntactically fine and still blank. "
+                                 "Pass a project-relative path like 'index.html'. For a dev server use "
+                                 "http://localhost:<port>/ - it is reachable only if the server listens on "
+                                 "0.0.0.0 (start it that way, e.g. `python3 -m http.server --bind 0.0.0.0`). "
+                                 "Single look, no clicking; fix with edit_file, then render_check again.")
                             ),
                             "parameters": {
                                 "type": "object",
@@ -5148,8 +5185,10 @@ Task {task_idx + 1}: {current_task}
                     # plug-and-play copy, which is main-context-only) because this is
                     # where pages get written and therefore where they must be tested.
                     # Execution rides the generic local_tools fallback: auto-discovery
-                    # registers the instance regardless of context.
-                    {
+                    # registers the instance regardless of context. NOT offered while the
+                    # run is bound to a sandbox environment: the pages live inside it, and
+                    # the personal browser never joins an environment's network.
+                    *([] if _env_binding is not None else [{
                         "type": "function",
                         "function": {
                             "name": "browser_agent",
@@ -5177,7 +5216,7 @@ Task {task_idx + 1}: {current_task}
                                 "required": ["task"]
                             }
                         }
-                    },
+                    }]),
                     {
                         "type": "function",
                         "function": {
@@ -9917,6 +9956,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         caller_allowed=caller_allowed, scope=caller_scope, role=caller_role,
                         session_id=caller_session,
                     )
+                    if _refusal is None:
+                        _refusal = _environment_browser_refusal(fn_name, fn_args, _env_binding)
                     if _refusal is not None:
                         # Answered here and nothing else runs: the file handling further down
                         # judges a result by its wording, and a refused write_file must never
@@ -10646,6 +10687,11 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 # execution (e.g. set_todos triggers switch_to_task_context which
                 # reassigns the `history` variable via sync_legacy_vars).
                 _log_to_file(f"[DEBUG-X] Adding tool result to history: fn_name={fn_name}, result_len={len(result_str)}")
+                # A tool that just answered is activity, however long it ran. Only the
+                # model's reply reset the idle clock, so a five-minute browser_agent run
+                # read as a model that had stopped responding (AgenticLoop.should_continue
+                # stops past two idle minutes), and the next loop start ended the run.
+                loop.record_activity()
                 # Gate bookkeeping (verify-before-done, read-before-edit): the ORDER of
                 # writes vs. green verifies per task context, and the set of files this
                 # run has actually seen. Fed from the one place every tool result passes.

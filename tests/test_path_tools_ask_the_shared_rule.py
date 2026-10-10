@@ -83,6 +83,8 @@ NOT_A_LOCAL_PATH = {
     ("github_list_directory", "path"): "a path inside a GitHub repository",
     ("github_update_file", "path"): "a path inside a GitHub repository",
     ("sandbox_files", "path"): "a path inside the caller's sandbox container, resolved there",
+    ("sandbox_preview", "target"): "a URL or a path inside the caller's sandbox container; the "
+                                   "headless browser that opens it runs in that container",
     ("sandbox_transfer", "path"): "the container side of the copy; the host side is host_path, "
                                   "which runs through is_safe_path and the write jail",
 }

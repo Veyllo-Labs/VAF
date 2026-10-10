@@ -3903,7 +3903,7 @@ class Agent:
                                                  "update_user_identity", "set_timer", "schedule_reminder",
                                                  "write_file", "download_file",
                                                  "sandbox_manage", "sandbox_exec", "sandbox_files",
-                                                 "sandbox_transfer"):
+                                                 "sandbox_transfer", "sandbox_preview"):
                                 continue
                         # thinking_done: ONLY in thinking mode — the main agent must never call this
                         if instance.name == "thinking_done":
@@ -3962,6 +3962,7 @@ class Agent:
                                 "sandbox_exec",
                                 "sandbox_files",
                                 "sandbox_transfer",
+                                "sandbox_preview",
                             ]
                             if instance.name in SMALL_CTX_EXCLUDED_TOOLS:
                                 continue

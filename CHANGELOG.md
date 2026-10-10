@@ -22,7 +22,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   open internet, and an admin can cap that choice. Nobody else can see or use your
   environments. The coder works in a project environment too: give it one (or have one
   for that folder) and it builds, tests and runs its dev server inside, with the
-  packages it installed there.
+  packages it installed there. A screenshot of what an environment serves appears
+  right in the chat, with the page's console output and text.
 - **Reach VAF over a VPN.** VAF now recognises VPN connections (WireGuard, OpenVPN,
   Tailscale, NetBird, ZeroTier) and shows their address next to the home network's in
   `vaf server status` and `vaf top`; the certificate carries it too. WireGuard and OpenVPN
@@ -37,6 +38,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The page checks the coder makes show up in the chat.** Each look at a page got the same
+  file name, so a second check overwrote the first and the chat never showed either; every
+  screenshot now has a name of its own and appears in the chat.
 - **`vaf doctor` no longer reports "login is not required" on every server.** The check
   read a setting that does not exist, while network mode always demands a login. It now
   reports what can really be wrong with the new VPN settings instead: an entry that is

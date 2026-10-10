@@ -199,7 +199,7 @@ def test_coder_advertises_and_registers_the_same_tool():
     # registration is a tool the model calls into a KeyError; a registration
     # without a schema is a tool the model can never call.
     src = (_REPO / "vaf" / "tools" / "coder.py").read_bytes().decode("utf-8")
-    assert 'self.local_tools["render_check"] = RenderCheckTool(base_dir)' in src
+    assert 'self.local_tools["render_check"] = RenderCheckTool(base_dir, environment=_env_binding,' in src
     assert '"name": "render_check"' in src
     assert "`render_check(target)`" in src, "prompt guidance line missing"
     # The report closes with the rendered text; the coder's default 3000-char

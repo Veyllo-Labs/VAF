@@ -3961,7 +3961,8 @@ Thumbs.db
         # run just wrote. Registered unconditionally for the same reason as
         # run_tests: the schema is advertised in every mode.
         from vaf.tools.render_check import RenderCheckTool
-        self.local_tools["render_check"] = RenderCheckTool(base_dir)
+        self.local_tools["render_check"] = RenderCheckTool(base_dir, environment=_env_binding,
+                                                           owner_scope=_env_owner)
 
         # Code audit of this run's change with this run's model (vaf.core.code_audit). The loop
         # runs a round by itself once the tasks are done (_maybe_start_audit_round); the model

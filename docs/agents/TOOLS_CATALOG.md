@@ -2,7 +2,7 @@
 
 The tools the **main agent** loads by default, grouped by area. Generated from the live
 tool registry (`Agent.tools`, populated by `_load_tools()` in
-[vaf/core/agent.py](../../vaf/core/agent.py)); 135 tools, counted from a freshly
+[vaf/core/agent.py](../../vaf/core/agent.py)); 136 tools, counted from a freshly
 constructed chat agent rather than from this list's own history. The **Coder sub-agent**
 additionally loads `coder_only` file/shell tools (e.g. `bash`, `move_file`,
 `codesearch`) that are not in this list. Some tools only do anything once their
@@ -93,6 +93,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `sandbox_manage` | write | Create, list, stop or delete a sandbox environment: a container of the caller's own to run, install and test code in. `temporary` is removed whole 24 h after its last use; `project` stays and may mount the caller's project folder at `/workspace`. Network `none`, `registries` (package registries through a filtering proxy) or `open`, capped by the admin's `sandbox_env_network_max`. See [SANDBOXING.md](../security/SANDBOXING.md#sandbox-environments). |
 | `sandbox_exec` | write | Run a shell command in one of the caller's environments; `background=true` starts a dev server or another long-running command, read and stopped through `host_process`, and the chat is woken when it ends. |
 | `sandbox_files` | write | Read, write or list files inside one of the caller's environments. |
+| `sandbox_preview` | write | One look at a page an environment serves or holds (`localhost` is the environment itself): a screenshot saved into the chat workspace and shown in the chat, console output, page errors, rendered text. Taken by `chromium-headless-shell` inside the environment, so no browser container joins its network and no port is opened. |
 | `sandbox_transfer` | write | Copy files between an environment and the caller's own folders (`copy_in`, `copy_out`); the host side runs through `is_safe_path` and the write jail, and only regular files and folders arrive. |
 | `python_exec` | dangerous | Run Python on the host (no sandbox) - confirmed in the chat: "only this time" runs that one call (the funnel hands the confirmation over as `_call_confirmed`, `accepts_call_confirmation`), "for this chat" and "always" keep it allowed. The tool re-checks on its own because a workflow step and the coder run it without the gate; there only a stored "always" or the person's "for this chat" grant for that chat lets it run. Stored credentials as `os.environ["VAF_SECRET_<NAME>"]`, like `host_bash`. Refused on messaging channels in the chat, like `host_bash`, also with `channel_tools_unrestricted` on. See the host-execution line in [EMBEDDING.md](../EMBEDDING.md). |
 | `run_tests` | read | *(coder-only)* Run the project's tests in the isolated sandbox and return the real pass/fail. |

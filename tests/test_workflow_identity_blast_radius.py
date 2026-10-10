@@ -115,6 +115,7 @@ NEWLY_IDENTIFIED = {
     "sandbox_exec": ('session_id', 'user_role', 'user_scope_id', 'username'),
     "sandbox_files": ('session_id', 'user_role', 'user_scope_id', 'username'),
     "sandbox_manage": ('session_id', 'user_role', 'user_scope_id', 'username'),
+    "sandbox_preview": ('session_id', 'user_role', 'user_scope_id', 'username'),
     "sandbox_transfer": ('session_id', 'user_role', 'user_scope_id', 'username'),
     # Both added 2026-07-31 with their file_access declaration. In the workflow lane a
     # step now searches / lints inside the workflow owner's tree instead of wherever

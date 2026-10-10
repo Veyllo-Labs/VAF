@@ -217,6 +217,7 @@ KWARGS_BASELINE = {
     "sandbox_exec":              ("chat", ["session_id", "user_role", "user_scope_id", "username"]),
     "sandbox_files":             ("chat", ["session_id", "user_role", "user_scope_id", "username"]),
     "sandbox_manage":            ("chat", ["session_id", "user_role", "user_scope_id", "username"]),
+    "sandbox_preview":           ("chat", ["session_id", "user_role", "user_scope_id", "username"]),
     "sandbox_transfer":          ("chat", ["session_id", "user_role", "user_scope_id", "username"]),
     "save_thinking_suggestion":  ("chat", []),
     "schedule_reminder":         ("chat", ["user_scope_id", "username"]),

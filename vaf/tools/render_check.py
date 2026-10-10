@@ -80,11 +80,15 @@ class RenderCheckTool(BaseTool):
         "required": ["target"],
     }
 
-    def __init__(self, base_dir: Optional[str] = None):
+    def __init__(self, base_dir: Optional[str] = None, environment=None, owner_scope=None):
         # The coder passes its project directory so `index.html` means the file
         # it just wrote; the main agent's default constructor leaves targets to
         # resolve as the caller typed them (absolute, or URL).
         self.base_dir = base_dir
+        # A coder run bound to a project environment renders INSIDE it: its dev server
+        # lives on the environment's network, which the sandbox browser never joins.
+        self.environment = environment
+        self.owner_scope = owner_scope
 
     def run(self, **kwargs) -> str:
         from vaf.core.browser_render import render_page
@@ -96,6 +100,9 @@ class RenderCheckTool(BaseTool):
             wait_ms = min(10000, max(0, int(kwargs.get("wait_ms") or 1500)))
         except Exception:
             wait_ms = 1500
+
+        if self.environment is not None:
+            return self._render_in_environment(target, wait_ms)
 
         if not target.lower().startswith(("http://", "https://")):
             if self.base_dir and not os.path.isabs(os.path.expanduser(target)):
@@ -115,6 +122,22 @@ class RenderCheckTool(BaseTool):
         # that falls off.
         result = render_page(target, user_scope_id=kwargs.get("user_scope_id"),
                              wait_ms=wait_ms, max_text=6000)
+        return self._format(result)
+
+    def _render_in_environment(self, target: str, wait_ms: int) -> str:
+        """localhost is the environment; a project file is its path under /workspace."""
+        from vaf.core.environments import EnvironmentRefused, get_environment_manager
+        if not target.lower().startswith(("http://", "https://")):
+            full = target if os.path.isabs(os.path.expanduser(target)) else os.path.join(self.base_dir or "", target)
+            rel = os.path.relpath(os.path.realpath(full), os.path.realpath(self.base_dir or full))
+            if rel.startswith(".."):
+                return "render_check refused: only files inside the project can be rendered here."
+            target = "/workspace/" + rel.replace(os.sep, "/")
+        try:
+            result = get_environment_manager().render(self.owner_scope, self.environment.id,
+                                                      target, wait_ms=wait_ms)
+        except EnvironmentRefused as e:
+            return f"render_check failed: {e}"
         return self._format(result)
 
     # ── the report ────────────────────────────────────────────────────────────
@@ -137,7 +160,9 @@ class RenderCheckTool(BaseTool):
         lines.extend(f"  - {e}" for e in errs)
 
         failed = r.get("failed_requests") or []
-        if failed:
+        if r.get("failed_requests") is None and "failed_requests" in r:
+            lines.append("Failed requests: not measured in this mode")
+        elif failed:
             lines.append(f"Failed requests ({len(failed)}):")
             lines.extend(f"  - {f}" for f in failed)
         else:
@@ -150,7 +175,7 @@ class RenderCheckTool(BaseTool):
         else:
             lines.append("Console: quiet")
 
-        shot_note = self._save_screenshot(r.get("screenshot_b64") or "")
+        shot_note = self._save_screenshot(r.get("screenshot_b64") or "", r.get("screenshot_ext") or "jpg")
         if shot_note:
             lines.append(shot_note)
 
@@ -162,7 +187,7 @@ class RenderCheckTool(BaseTool):
                          "(blank page, render failure, or purely graphical content).")
         return "\n".join(lines)
 
-    def _save_screenshot(self, b64: str) -> str:
+    def _save_screenshot(self, b64: str, ext: str = "jpg") -> str:
         """Into the chat session's workspace; the report names it by its absolute path, which
         analyze_image takes in every lane (a coder child knows its chat through VAF_SESSION_ID).
         No session at all (an automation) means no file - the text report stands on its own
@@ -178,9 +203,18 @@ class RenderCheckTool(BaseTool):
             ws = get_session_workspace_dir(session_id, create=True)
             if not ws:
                 return ""
-            path = os.path.join(str(ws), "render_check.jpg")
+            # A name of its own per look, so the chat shows each one (the UI keys its file
+            # chips on the path) and a second look never overwrites the first.
+            import time as _time
+            stamp = _time.strftime("%Y%m%d-%H%M%S") + f"-{int(_time.time() * 1000) % 1000:03d}"
+            path = os.path.join(str(ws), f"render_check_{stamp}.{ext}")
             with open(path, "wb") as f:
                 f.write(base64.b64decode(b64))
+            try:
+                from vaf.core.web_interface import notify_file_created
+                notify_file_created(session_id, path)
+            except Exception:
+                pass
             # The absolute path, so it names the same file in every lane: the coder resolves
             # a relative path against its own project, the chat against its workspace.
             return (f"Screenshot: {path} (view it with analyze_image "

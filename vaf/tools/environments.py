@@ -313,3 +313,47 @@ class SandboxTransferTool(BaseTool):
                 notify_file_created(session_id, path)
         except Exception:
             pass
+
+
+class SandboxPreviewTool(BaseTool):
+    name = "sandbox_preview"
+    category = "code"
+    permission_level = "write"                 # saves the screenshot into the chat workspace
+    side_effect_class = "reversible"
+    channel_restrictions = ("channel",)
+    identity_kwargs = ("user_scope_id", "username", "user_role", "session_id")
+    description = (
+        "Look at a page one of your sandbox environments serves or holds: a screenshot "
+        "(saved into the chat workspace and shown in the chat), the console output, page "
+        "errors and the rendered text. target is a URL (localhost means the environment "
+        "itself, so a dev server started with sandbox_exec background=true is reachable "
+        "whatever address it binds) or a path under /workspace. Taken by a headless browser "
+        "inside the environment; no clicking or forms."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "environment": {"type": "string", "description": "The environment's id."},
+            "target": {"type": "string",
+                       "description": "e.g. http://localhost:5173/ or index.html (under /workspace)."},
+            "width": {"type": "integer", "description": "Viewport width (default 1280)."},
+            "height": {"type": "integer", "description": "Viewport height (default 800)."},
+            "wait_ms": {"type": "integer", "description": "Time for scripts to run before the shot (default 1500, max 10000)."},
+        },
+        "required": ["environment", "target"],
+    }
+
+    def run(self, **kwargs) -> str:
+        from vaf.core.environments import EnvironmentRefused
+        from vaf.tools.render_check import RenderCheckTool
+        try:
+            result = _manager().render(
+                kwargs.get("user_scope_id"), str(kwargs.get("environment") or ""),
+                str(kwargs.get("target") or ""), width=int(kwargs.get("width") or 1280),
+                height=int(kwargs.get("height") or 800), wait_ms=int(kwargs.get("wait_ms") or 1500))
+        except EnvironmentRefused as e:
+            return _refused(self.name, e)
+        except Exception as e:
+            return _refused(self.name, f"the sandbox could not be reached ({e})")
+        # The same developer's report render_check gives, from the same formatter.
+        return RenderCheckTool.__new__(RenderCheckTool)._format(result)

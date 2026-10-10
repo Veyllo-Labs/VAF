@@ -912,6 +912,15 @@ IPC-based "agent run underway" scan cannot attribute a spawned run to one instan
 that scan keeps guarding whichever manager it runs on, which can refuse an
 interactive start conservatively during workflow browser runs.
 
+**Never on a sandbox environment's network.** A sandbox environment (vaf/core/environments.py)
+never shares a network with a person's browser, not even for a preview. Inside the browser
+container, Chromium's CDP proxy listens on `0.0.0.0:9222` without authentication; the
+per-instance network above is what keeps that safe. Code running in an environment
+(model-written code, an npm dependency) could otherwise drive the person's logged-in browser.
+Previews of what an environment serves are taken by `chromium-headless-shell` inside the
+environment's own container (`sandbox_preview`, and `render_check` for a coder bound to an
+environment): see [SANDBOXING.md](../security/SANDBOXING.md#sandbox-environments).
+
 ### Downloads
 
 ```bash

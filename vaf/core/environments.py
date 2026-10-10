@@ -918,6 +918,79 @@ class EnvironmentManager:
         self._touch(env)
         return written
 
+    # -- looking at what it serves ---------------------------------------------------------
+    def render(self, owner_scope: Any, env_id: str, target: str, *, width: int = 1280,
+               height: int = 800, wait_ms: int = 1500) -> Dict[str, Any]:
+        """One look at a page, from INSIDE the environment: `target` is a URL (localhost
+        is the environment itself, so a dev server bound to 127.0.0.1 works) or a path
+        under /workspace. chromium-headless-shell in the environment's own container
+        takes the screenshot, logs the console and dumps the DOM; no browser container
+        joins the environment's network, nothing is published, no CDP port exists.
+
+        Returns the dict render_check formats: ok, url, title, page_errors, console,
+        failed_requests (None: not measured this way), text, screenshot_b64,
+        screenshot_ext ("png")."""
+        import base64
+        env = self.get(owner_scope, env_id)
+        url = self._render_url(target)
+        width = min(max(320, int(width)), 3840)
+        height = min(max(240, int(height)), 2160)
+        budget = min(max(0, int(wait_ms)), 10000)
+        run = secrets.token_hex(6)
+        out_dir = f"/tmp/vaf-preview/{run}"
+        common = ["chromium-headless-shell", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
+                  f"--virtual-time-budget={budget}", "--no-first-run"]
+        try:
+            mk = self.exec_in(env, ["mkdir", "-p", out_dir], timeout=20)
+            if mk.returncode != 0:
+                raise EnvironmentRefused(f"the preview could not be prepared: {mk.stderr.strip()[:200]}")
+            shot = self.exec_in(env, [*common, f"--user-data-dir={out_dir}/p1", "--enable-logging=stderr",
+                                      "--v=0", f"--window-size={width},{height}",
+                                      f"--screenshot={out_dir}/shot.png", url], timeout=60)
+            if shot.returncode == 127 or "not found" in (shot.stderr or "")[:400]:
+                raise EnvironmentRefused("this environment has no browser for previews (it runs on "
+                                         "the fallback image); create a new one once the "
+                                         "environment image is built")
+            dom = self.exec_in(env, [*common, f"--user-data-dir={out_dir}/p2", "--dump-dom", url],
+                               timeout=60)
+            png = containers.docker(["exec", env.container, "cat", f"{out_dir}/shot.png"],
+                                    timeout=30, binary=True)
+        finally:
+            try:
+                self.exec_in(env, ["rm", "-rf", out_dir], timeout=20)
+            except Exception:
+                pass
+        console, errors = [], []
+        for line in (shot.stderr or "").splitlines():
+            if ":CONSOLE" not in line:
+                continue
+            msg = line.split("] ", 1)[-1].strip()
+            (errors if '"Uncaught ' in msg else console).append(msg[:300])
+        html = dom.stdout or ""
+        title, text = _page_title_and_text(html)
+        ok = png.returncode == 0 and bool(png.stdout)
+        result: Dict[str, Any] = {
+            "ok": ok, "url": url, "title": title, "page_errors": errors[:20],
+            "console": console[:30], "failed_requests": None, "text": text[:6000],
+            "screenshot_b64": base64.b64encode(png.stdout).decode("ascii") if ok else "",
+            "screenshot_ext": "png",
+        }
+        if not ok:
+            result["error"] = ((shot.stderr or "").strip().splitlines() or ["no screenshot"])[-1][:300]
+        return result
+
+    @staticmethod
+    def _render_url(target: str) -> str:
+        t = str(target or "").strip()
+        if not t:
+            raise EnvironmentRefused("nothing to render")
+        low = t.lower()
+        if low.startswith(("http://", "https://")):
+            return t
+        if low.startswith("file://"):
+            t = t[len("file://"):]
+        return "file://" + _container_path(t)
+
     # -- background processes ----------------------------------------------------------
     @staticmethod
     def process_handle(env_id: str, proc_id: str) -> str:
@@ -1249,6 +1322,41 @@ class EnvironmentManager:
                 containers.docker(["stop", "-t", "5", row["container"]], timeout=60)
                 stopped += 1
         return stopped
+
+
+def _page_title_and_text(html: str):
+    """The <title> and the visible text of a DOM dump (scripts and styles left out)."""
+    from html.parser import HTMLParser
+
+    class _Text(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.parts, self.title, self._skip, self._in_title = [], "", 0, False
+
+        def handle_starttag(self, tag, attrs):
+            if tag in ("script", "style", "noscript"):
+                self._skip += 1
+            if tag == "title":
+                self._in_title = True
+
+        def handle_endtag(self, tag):
+            if tag in ("script", "style", "noscript") and self._skip:
+                self._skip -= 1
+            if tag == "title":
+                self._in_title = False
+
+        def handle_data(self, data):
+            if self._in_title:
+                self.title += data
+            elif not self._skip and data.strip():
+                self.parts.append(data.strip())
+
+    parser = _Text()
+    try:
+        parser.feed(html or "")
+    except Exception:
+        pass
+    return parser.title.strip(), "\n".join(parser.parts)
 
 
 _manager: Optional[EnvironmentManager] = None

@@ -326,6 +326,15 @@ on messaging channels:
   folders; the host side runs through `is_safe_path` and the write jail, and only regular
   files and folders arrive.
 
+- `sandbox_preview`: one look at a page the environment serves or holds. `localhost` is
+  the environment itself, so a dev server bound to `127.0.0.1` works. You get a screenshot
+  (saved into the chat workspace and shown in the chat), the console output, the page errors
+  and the rendered text. `chromium-headless-shell` takes it inside the environment's own
+  container: no browser container joins the environment's network (a person's browser
+  serves CDP without authentication on its network), and no port is published. Failed
+  requests are not measured this way, and the report says so. A coder bound to an
+  environment gets the same lane through `render_check`.
+
 Background processes are listed, read and stopped with `host_process` (ids
 `e-<environment>-<process>`), next to the chat's host commands. The record of who started
 one, from which chat, lives on the host beside the environment's record, so code in the

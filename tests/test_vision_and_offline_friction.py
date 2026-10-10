@@ -73,11 +73,19 @@ def test_render_check_names_its_screenshot_by_its_full_path(monkeypatch, tmp_pat
     monkeypatch.setattr(ipc, "get_current_session_id", lambda: "green123456")
     monkeypatch.setattr(session_mod, "get_session_workspace_dir",
                         lambda sid, create=False, **kw: tmp_path)
+    import vaf.core.web_interface as wi
+    chips = []
+    monkeypatch.setattr(wi, "notify_file_created", lambda sid, path, title=None: chips.append(path))
     tool = RenderCheckTool.__new__(RenderCheckTool)
     note = tool._save_screenshot("aGVsbG8=")
-    shot = tmp_path / "render_check.jpg"
-    assert shot.read_bytes() == b"hello"
+    second = tool._save_screenshot("aGVsbG8=", "png")
+    [shot] = [p for p in tmp_path.iterdir() if p.suffix == ".jpg"]
+    assert shot.name.startswith("render_check_") and shot.read_bytes() == b"hello"
     assert f"image_path='{shot}'" in note
+    # Every look gets a name of its own and is announced, so the chat shows it and a
+    # second look never overwrites the first. MUTATION: the fixed render_check.jpg - red.
+    assert len(list(tmp_path.iterdir())) == 2 and second != note
+    assert chips == [str(shot), str(next(p for p in tmp_path.iterdir() if p.suffix == ".png"))]
 
 
 def test_the_jailed_shell_says_it_has_no_network():

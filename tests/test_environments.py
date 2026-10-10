@@ -37,7 +37,8 @@ class FakeDocker:
         self.volumes = {}      # name -> labels
         self.networks = {}     # name -> {"labels", "internal", "options"}
         self.calls = []
-        self.busy = set()      # container names with a marked process
+        self.busy = set()      # container names with a marked process of their own user
+        self.busy_root = set()  # ... with one of root's, visible only to root (no CAP_SYS_PTRACE)
         self.fail_isolated = False
         self.fail_run = False
         self.image_ids = {}    # tag -> image id, for `image inspect` and a container's .Image
@@ -163,7 +164,8 @@ class FakeDocker:
         if head == "exec":
             name = next(a for a in args[1:] if a in self.containers)
             if containers.MARKED_PROCESSES_CMD in args:
-                return _done(0, "42\n" if name in self.busy else "")
+                seen = self.busy_root if args[1:3] == ["-u", "0:0"] else self.busy
+                return _done(0, "42\n" if name in seen else "")
             return _done(0, "")
         raise AssertionError(f"unexpected docker call {args}")
 
@@ -497,6 +499,49 @@ def test_busy_is_asked_of_docker_and_unknown_counts_as_busy(docker, mgr, monkeyp
     assert mgr.busy(env) is True
 
 
+def test_a_root_run_counts_as_busy_though_the_user_cannot_see_it(docker, mgr):
+    """Each user reads only its own processes' environment (measured with the root lane's
+    capabilities): the reaper asked as the environment's user alone and stopped a project
+    environment in the middle of a root apt-get, or of the give-back after it. MUTATION:
+    ask as the user only - red; as root only - red (the dev server is the user's)."""
+    env = mgr.create(ALICE)
+    env.state = "running"
+    docker.busy_root.add(env.container)
+    assert mgr.busy(env) is True
+    docker.busy_root.clear()
+    docker.busy.add(env.container)
+    assert mgr.busy(env) is True
+    docker.busy.clear()
+    assert mgr.busy(env) is False
+    # The scratch environment has no root lane: one question is enough there.
+    scratch = mgr.scratch_for(ALICE)
+    scratch.state = "running"
+    before = len(docker.calls)
+    assert mgr.busy(scratch) is False
+    assert len(docker.calls) - before == 1
+
+
+def test_a_root_run_touches_first_and_its_give_back_is_marked(docker, mgr, monkeypatch):
+    """MUTATION: drop the touch before the run - red (the reaper judged the old expiry
+    while the run started); drop the give-back's marker - red (busy() could not see it)."""
+    touched = []
+    env = mgr.create(ALICE, kind="temporary")
+
+    def _exec_bounded(container, argv, **kw):
+        touched.append(mgr._read_state(env.id)["last_used"])
+        return 0, "", "", False, False
+
+    monkeypatch.setattr(containers, "exec_bounded", _exec_bounded)
+    env.last_used = 1.0
+    mgr._write_state(env)
+    mgr.exec_in(env, ["sh", "-c", "apt-get install -y tree"], as_root=True)
+    assert touched and touched[0] > 1.0
+    give_back = [c for c in docker.calls if "chown" in c[-1]][-1]
+    assert give_back[1:3] == ["-u", "0:0"]
+    marker = give_back[give_back.index("-e") + 1]
+    assert re.fullmatch(r"VAF_RUN_ID=[0-9a-f]{12}", marker)
+
+
 def test_the_suite_runs_without_housekeeping():
     """conftest switches it off, so no test's reaper can judge real environments."""
     assert envmod.housekeeping_off()
@@ -617,7 +662,7 @@ def test_the_root_lane_runs_as_root_and_hands_the_workspace_back(docker, mgr, mo
     assert tuple(caps) == envmod.ROOT_LANE_CAPS
     mgr.exec_in(env, ["sh", "-c", "apt-get install -y tree"], as_root=True)
     assert seen["user"] == "0:0"
-    give_back = [c for c in docker.calls if c[:4] == ["exec", "-u", "0:0", env.container]]
+    give_back = [c for c in docker.calls if c[:3] == ["exec", "-u", "0:0"] and env.container in c]
     assert give_back and "chown" in give_back[-1][-1] and envmod._host_user() in give_back[-1][-1]
     # MUTATION: drop the chmod - red: a setuid file in a host folder is a way to root there.
     script = give_back[-1][-1]

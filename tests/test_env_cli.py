@@ -67,6 +67,25 @@ def test_create_takes_exactly_one_kind_and_waits_for_the_image(mgr):
     assert kw["kind"] == "project" and kw["project_path"] == "/p" and kw["wait_for_image"] is True
 
 
+def test_a_docker_that_cannot_be_started_is_a_line_not_a_traceback(mgr, monkeypatch):
+    """MUTATION: catch only EnvironmentRefused again - red: no docker CLI ended `vaf env
+    shell` (and every other command) in a traceback."""
+    import subprocess
+
+    def _no_docker(*a, **k):
+        raise FileNotFoundError(2, "No such file or directory", "docker")
+
+    held = types.SimpleNamespace(get=lambda *a, **k: types.SimpleNamespace(container="vaf-env-x"),
+                                 _ensure_running=lambda env: None, list=_no_docker)
+    monkeypatch.setattr(env_cmd, "_manager", lambda: held)
+    monkeypatch.setattr(subprocess, "call", _no_docker)
+    res = CliRunner().invoke(env_cmd.app, ["shell", "0a1b2c3d"])
+    assert res.exit_code == 1 and "docker could not be run" in res.output
+    assert not isinstance(res.exception, FileNotFoundError)
+    res = CliRunner().invoke(env_cmd.app, ["list"])
+    assert res.exit_code == 1 and "docker could not be run" in res.output
+
+
 def test_exec_passes_the_command_and_its_exit_code(mgr):
     res = CliRunner().invoke(env_cmd.app, ["exec", "0a1b2c3d", "--", "python3", "-c", "print(1)"])
     assert res.exit_code == 3 and "out" in res.output

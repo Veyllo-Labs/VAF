@@ -38,7 +38,8 @@ def _manager():
 
 
 def _fail(exc) -> None:
-    UI.error(str(exc))
+    # OSError: the docker CLI could not be started at all (not installed, not executable).
+    UI.error(f"docker could not be run: {exc}" if isinstance(exc, OSError) else str(exc))
     raise typer.Exit(1)
 
 
@@ -48,7 +49,7 @@ def list_envs(all_owners: bool = typer.Option(False, "--all", help="Everybody's 
     from vaf.core.environments import EnvironmentRefused
     try:
         envs = _manager().list(_scope(), everyone=all_owners)
-    except EnvironmentRefused as e:
+    except (EnvironmentRefused, OSError) as e:
         _fail(e)
     if not envs:
         UI.info("No sandbox environments.")
@@ -78,7 +79,7 @@ def create(
         env = _manager().create(_scope(), kind="project" if project else "temporary",
                                 name=project or "", project_path=path, network=network,
                                 memory_mb=memory, wait_for_image=True)
-    except EnvironmentRefused as e:
+    except (EnvironmentRefused, OSError) as e:
         _fail(e)
     UI.success(f"Created {env.describe()}")
     if env.degraded:
@@ -119,7 +120,7 @@ def exec_cmd(
             print(_manager().start_process(_scope(), env_id, command))
             return
         r = _manager().exec(_scope(), env_id, command, timeout=timeout)
-    except EnvironmentRefused as e:
+    except (EnvironmentRefused, OSError) as e:
         _fail(e)
     if r.stdout:
         print(r.stdout, end="" if r.stdout.endswith("\n") else "\n")
@@ -140,10 +141,11 @@ def shell(env_id: str = typer.Argument(..., help="The environment's id")):
     try:
         env = _manager().get(_scope(), env_id)
         _manager()._ensure_running(env)
-    except EnvironmentRefused as e:
+        code = subprocess.call([resolve_docker_exe(), "exec", "-it", "-w", "/workspace",
+                                env.container, "bash"])
+    except (EnvironmentRefused, OSError) as e:
         _fail(e)
-    raise typer.Exit(subprocess.call([resolve_docker_exe(), "exec", "-it", "-w", "/workspace",
-                                      env.container, "bash"]))
+    raise typer.Exit(code)
 
 
 @app.command("ps")
@@ -152,7 +154,7 @@ def ps():
     from vaf.core.environments import EnvironmentRefused
     try:
         rows = _manager().processes(_scope())
-    except EnvironmentRefused as e:
+    except (EnvironmentRefused, OSError) as e:
         _fail(e)
     if not rows:
         UI.info("No background processes.")
@@ -168,7 +170,7 @@ def logs(handle: str = typer.Argument(..., help="A process id from `vaf env ps`"
     from vaf.core.environments import EnvironmentRefused
     try:
         print(_manager().process_log(_scope(), handle, max_chars=min(max(200, chars), 200000)))
-    except EnvironmentRefused as e:
+    except (EnvironmentRefused, OSError) as e:
         _fail(e)
 
 
@@ -178,7 +180,7 @@ def kill(handle: str = typer.Argument(..., help="A process id from `vaf env ps`"
     from vaf.core.environments import EnvironmentRefused
     try:
         print(_manager().stop_process(_scope(), handle))
-    except EnvironmentRefused as e:
+    except (EnvironmentRefused, OSError) as e:
         _fail(e)
 
 
@@ -192,7 +194,7 @@ def preview(env_id: str = typer.Argument(..., help="The environment's id"),
     from vaf.core.environments import EnvironmentRefused
     try:
         r = _manager().render(_scope(), env_id, target)
-    except EnvironmentRefused as e:
+    except (EnvironmentRefused, OSError) as e:
         _fail(e)
     if not r.get("ok"):
         _fail(r.get("error") or "no screenshot")
@@ -213,7 +215,7 @@ def stop(env_id: str = typer.Argument(..., help="The environment's id"),
     from vaf.core.environments import EnvironmentRefused
     try:
         UI.success(f"Stopped {_manager().stop(_scope(), env_id, admin=all_owners).id}")
-    except EnvironmentRefused as e:
+    except (EnvironmentRefused, OSError) as e:
         _fail(e)
 
 
@@ -227,7 +229,7 @@ def delete(env_id: str = typer.Argument(..., help="The environment's id"),
         raise typer.Exit(1)
     try:
         UI.success(f"Deleted {_manager().delete(_scope(), env_id, admin=all_owners).id}")
-    except EnvironmentRefused as e:
+    except (EnvironmentRefused, OSError) as e:
         _fail(e)
 
 

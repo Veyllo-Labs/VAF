@@ -693,7 +693,9 @@ class EnvironmentManager:
                   f"-exec chmod ug-s {{}} + ; "
                   f"find {WORKSPACE} -xdev -uid 0 -exec chown -h {_host_user()} {{}} +")
         try:
-            r = containers.docker(["exec", "-u", "0:0", env.container, "sh", "-c", script],
+            # Marked like any run, so busy() sees the walk and the reaper leaves it alone.
+            r = containers.docker(["exec", "-u", "0:0", "-e", f"VAF_RUN_ID={secrets.token_hex(6)}",
+                                   env.container, "sh", "-c", script],
                                   timeout=self.GIVE_BACK_TIMEOUT)
         except Exception as e:
             return str(e)[:300]
@@ -924,6 +926,9 @@ class EnvironmentManager:
         self._ensure_running(env)
         if as_root:
             self._require_root_lane(env)
+        # Before as well as after: a temporary environment whose expiry is near must not
+        # be judged by the reaper in the moment before the run's process shows up.
+        self._touch(env)
         run_id = run_id or secrets.token_hex(6)
         rc, out, err, timed_out, cancelled = containers.exec_bounded(
             env.container, argv, timeout=timeout, workdir=self._workdir(env, cwd),
@@ -1322,17 +1327,23 @@ class EnvironmentManager:
         """Whether anything VAF started is running inside: a process carrying a run or
         process marker in its environment. Asked of docker, because the process using
         the environment may be another one. Cannot tell counts as busy - a stopped
-        environment costs a restart, a cut run costs the work."""
+        environment costs a restart, a cut run costs the work.
+
+        Asked as the environment's user AND, where a root lane can exist, as root: with
+        every capability but the root lane's dropped (no CAP_SYS_PTRACE), each reads only
+        its own processes' environment. Measured: the user sees its dev server and not a
+        root apt-get, root sees the apt-get and not the dev server."""
         if env.state != "running":
             return False
-        try:
-            r = containers.docker(["exec", env.container, "sh", "-c", containers.MARKED_PROCESSES_CMD],
-                                  timeout=20)
-        except Exception:
-            return True
-        if r.returncode != 0:
-            return True
-        return bool((r.stdout or "").strip())
+        for as_user in ([[], ["-u", "0:0"]] if env.kind in KINDS else [[]]):
+            try:
+                r = containers.docker(["exec", *as_user, env.container, "sh", "-c",
+                                       containers.MARKED_PROCESSES_CMD], timeout=20)
+            except Exception:
+                return True
+            if r.returncode != 0 or (r.stdout or "").strip():
+                return True
+        return False
 
     def reap_once(self, now: Optional[float] = None) -> Dict[str, int]:
         """One pass: expired temporary environments are removed, idle project ones are

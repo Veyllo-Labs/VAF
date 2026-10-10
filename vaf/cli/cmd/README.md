@@ -31,6 +31,7 @@ This directory contains the logic for individual `vaf` CLI commands. Each file t
 - **outbox.py**: Messages your agent prepared and has not sent (`outbox list|send|discard|edit`).
 - **secrets.py**: Credentials your agent's commands may use, never shown to the model (`secrets list|set|rm`).
 - **ssh.py**: The SSH key and servers your agent uses, never your `~/.ssh` (`ssh key|hosts|forget`).
+- **ftp.py**: The FTP servers your agent confirmed, with how each certificate is trusted (`ftp servers|forget`). Behind the terminal door.
 - **a2a.py**: Agent-to-agent rooms: join, talk, read.
 - **env.py**: Your sandbox environments (`env list|create|exec|shell|ps|logs|kill|preview|stop|delete|prune`): containers to run, install and test code in, the same `vaf.core.environments` the agent's tools use. Behind the terminal door.
 

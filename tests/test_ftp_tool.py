@@ -164,3 +164,23 @@ def test_the_router_forces_ftp_for_a_web_space():
     for msg in ("a minecraft server", "software", "after the deadline"):
         assert not agent._FTP_ROUTE_RE.search(msg), msg
     assert 'forced_tools.add("ftp")' in inspect.getsource(agent.Agent)
+
+
+def test_the_terminal_lists_and_forgets_a_server(lab, monkeypatch):
+    """MUTATION: drop the forget command's failure exit - red."""
+    import pathlib
+    import re
+    from typer.testing import CliRunner
+    import vaf.cli.cmd.ftp as cli
+    tmp, root, server = lab
+    monkeypatch.setattr(cli, "_scope", lambda: ALICE)
+    runner = CliRunner()
+    assert "No servers yet" in runner.invoke(cli.app, ["servers"]).output
+    _tool(server, _call_confirmed=True)
+    name = f"ftps://127.0.0.1:{server.port}"
+    listed = runner.invoke(cli.app, ["servers"]).output
+    assert name in listed and "remembered certificate" in listed and "SHA256:" in listed
+    assert runner.invoke(cli.app, ["forget", name]).exit_code == 0
+    assert runner.invoke(cli.app, ["forget", name]).exit_code == 1
+    main = (pathlib.Path(cli.__file__).resolve().parents[2] / "main.py").read_text(encoding="utf-8")
+    assert re.search(r'add_typer\(ftp\.app, name="ftp"[^)]*callback=_terminal_door', main, re.S)

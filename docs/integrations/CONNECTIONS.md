@@ -145,6 +145,9 @@ web123@ftp.example.org, the password is ..."; the agent stores the password with
   names it. `host_bash` refuses `ftp`, `lftp`, `ncftp` and `curl`/`wget` with an `ftp://`
   address and points at this tool: those carry the password on the command line, ask nobody
   about a new server and notice no changed certificate.
+- **Removing a server.** `vaf ftp servers` lists the confirmed servers and how each one's
+  certificate is trusted; `vaf ftp forget ftps://HOST` removes one, and the next connection
+  asks again.
 - **Named boundaries.** The first connection trusts the server the person confirms (compare
   the fingerprint with the hoster's panel if you can). Implicit FTPS (port 990) is not
   offered; every hoster measured offers explicit TLS on port 21. An upload adds and

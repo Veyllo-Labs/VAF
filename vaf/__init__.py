@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from .core.log_helper import install_thread_excepthook
     from .core.automation_triggers import RoomTriggerWatch
     from .core.code_audit import AuditFinding, AuditReport, code_audit
+    from .core.environments import EnvironmentManager, get_environment_manager
     from .core.pdf_extract import extract_pdf_markdown
     from .core.revocation import (add_revocation_listener, remove_revocation_listener,
                                   restore_account, revoke_account, stop_account_work,
@@ -32,7 +33,7 @@ if TYPE_CHECKING:
 
 __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_KINDS", "BaseTool",
            "CoreAgent",
-           "EgressPolicy", "EgressRefused",
+           "EgressPolicy", "EgressRefused", "EnvironmentManager",
            "NON_CONVERSATION_KINDS",
            "PathEscape", "RemoteRefused",
            "RemoteRoom", "Room", "RoomError", "RoomTriggerWatch",
@@ -43,7 +44,8 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "account_allows_tool", "add_revocation_listener", "build_capability_addendum",
            "code_audit", "contained_path", "derive_peer_id",
            "describe_room_entry", "egress_session", "extract_pdf_markdown",
-           "fold_room_owners", "fold_room_tasks", "fold_room_votes", "inspect_upload",
+           "fold_room_owners", "fold_room_tasks", "fold_room_votes", "get_environment_manager",
+           "inspect_upload",
            "install_thread_excepthook", "invited_rooms", "jail_allows", "joined_rooms",
            "list_standing_grants", "mark_trusted_dir", "markers",
            "participant_key", "record_threat", "remove_revocation_listener",
@@ -87,6 +89,15 @@ def __getattr__(name):
         from .core.path_jail import PathEscape, contained_path, safe_entry_name
         return {"PathEscape": PathEscape, "contained_path": contained_path,
                 "safe_entry_name": safe_entry_name}[name]
+    if name in ("EnvironmentManager", "get_environment_manager"):
+        # A container, a volume and a network of one's own to run, install and test code
+        # in, per person. VAF's own python_sandbox, test runner and coder use this object;
+        # an application that lets a model run code needs the same separation and gets it
+        # from here instead of composing docker calls. Stdlib at module level. See
+        # docs/EMBEDDING.md, "Sandbox environments".
+        from .core.environments import EnvironmentManager, get_environment_manager
+        return {"EnvironmentManager": EnvironmentManager,
+                "get_environment_manager": get_environment_manager}[name]
     if name == "user_jail":
         # Confine one tool run to the caller's own files. Declaring identity_kwargs tells
         # the dispatcher WHO is calling; this turns that answer into an actual boundary.

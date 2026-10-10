@@ -140,7 +140,7 @@ def _resolve_project(provided: str) -> "tuple[str, str]":
         )
     if not os.path.isdir(path):
         return "", f"Project directory does not exist: {path}"
-    from vaf.tools.coder import is_unsafe_project_dir
+    from vaf.core.workspace_guard import is_unsafe_project_dir
     if is_unsafe_project_dir(path):
         return "", f"Refused: {path} is not a valid project directory."
     if not os.path.isdir(os.path.join(path, ".git")):

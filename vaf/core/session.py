@@ -1675,7 +1675,7 @@ def record_created_file(session_id: Optional[str], file_path) -> None:
     try:
         if not session_id or not file_path:
             return
-        from vaf.tools.coder import is_unsafe_project_dir
+        from vaf.core.workspace_guard import is_unsafe_project_dir
         project_dir = str(Path(file_path).parent.resolve())
         # Never record unsafe dirs (e.g. /home/<user>) as the session's
         # project - that would poison every later edit-task in this chat.

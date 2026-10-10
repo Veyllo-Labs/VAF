@@ -416,6 +416,27 @@ def _browser_pool_off():
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _sandbox_env_housekeeping_off():
+    """No reaper, quit stop or revocation stop for sandbox environments in the suite.
+
+    The web server's startup starts the reaper; a test that runs the app's lifespan
+    would otherwise start a thread that lists the developer's REAL environments, judges
+    them against the suite's scratch state directory, and removes their volumes and
+    networks as crash leftovers. Tests of the reaper call reap_once on a manager with
+    the stubbed docker seam instead.
+    """
+    import os
+
+    previous = os.environ.get("VAF_SANDBOX_ENV_HOUSEKEEPING_OFF")
+    os.environ["VAF_SANDBOX_ENV_HOUSEKEEPING_OFF"] = "1"
+    yield
+    if previous is None:
+        os.environ.pop("VAF_SANDBOX_ENV_HOUSEKEEPING_OFF", None)
+    else:
+        os.environ["VAF_SANDBOX_ENV_HOUSEKEEPING_OFF"] = previous
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _sandbox_env_image_never_builds():
     """No test may start a build of the sandbox environment image.
 

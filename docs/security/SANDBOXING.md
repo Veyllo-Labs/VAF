@@ -298,6 +298,48 @@ One image serves every sandbox environment and the registries proxy:
 
 **Licences.** The image is built locally only and never published. tinyproxy is GPL-2.0, and `chromium-headless-shell` carries the Chromium licences. Each runs as a separate program next to the other Debian packages, an aggregate with no code linkage. See [THIRD_PARTY.md](../legal/THIRD_PARTY.md).
 
+### Environments (`vaf/core/environments.py`)
+
+An environment is a container, a volume and a network of its own, per person. The main
+agent and the coder reach the same environment by its id; `vaf env` and the web UI list
+and remove environments. Applications use the same object (`vaf.get_environment_manager()`, see
+[EMBEDDING.md](../EMBEDDING.md#sandbox-environments-vafenvironmentmanager)).
+
+| Property | Detail |
+|---|---|
+| **Kinds** | `temporary`: removed whole (container, volume, network, record) when it expires, by default 24 h after its last use. `project`: kept across restarts with its installed packages; stopped after `sandbox_env_idle_stop_minutes` without a running process, never removed unasked; may mount a host project at `/workspace`. **Scratch**: one per person under a fixed name, used by `python_sandbox` and `run_tests`; it extends itself on use and is exempt from the count and memory limits, because those lanes must keep answering. |
+| **Names** | `vaf-env-<scope hash>-<id>`, `vaf-env-vol-<id>`, `vaf-env-net-<id>`. The scope hash (12 hex of the scope's sha256) keeps a container listing from saying who uses the machine. |
+| **Identity** | Docker labels `org.veyllo.vaf.env.*` (id, owner, kind, network, created) on all three objects, so a crash between the creates leaves nothing a label listing cannot find. Labels cannot change afterwards; the name, expiry, last use and the project path live in a record per environment under `<vaf dir>/environments/`, written atomically under a lock shared across processes. |
+| **Ownership** | The owner label, checked on every operation. Another person's environment answers like a missing one, so ids cannot be probed. An admin may list and delete it, never run anything in it. A missing scope means the machine owner (the rule of `config.resolve_caller_username`); with no owner configured the call is refused. The shared "no scope" bucket of the old sandbox does not come back. |
+| **Process** | Non-root: the caller's uid:gid on Linux, so files in a mounted project stay theirs, and the image's uid 10001 elsewhere. `--init`, `--cap-drop ALL`, `no-new-privileges`, `--pids-limit`, `--memory`, `--cpus`. No docker socket, no host path besides the project, no host secret. |
+| **Project mount** | `-v <project>:/workspace:z`. `:z` relabels the directory for SELinux, which is enforcing on Fedora-family hosts. The path must pass `is_unsafe_project_dir`, `assert_safe_workspace` (VAF's code, the home directory and `/` are refused, which is what keeps `:z` away from them) and the person's file jail. |
+| **Limits** | `sandbox_env_*` in [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md), all admin-only. A refusal names its reason. |
+
+**Network profiles, measured on Docker 29.7.** Every environment has its own network.
+
+| Profile | Network | Reaches |
+|---|---|---|
+| `none` | `--internal` with `com.docker.network.bridge.gateway_mode_ipv4=isolated` | Nothing outside the environment's network. A plain `--internal` network still reached the host through its own gateway (VAF's port 8443 answered from one); in isolated gateway mode the host was unreachable on every address. |
+| `registries` | The same, plus the shared proxy `vaf-env-proxy` | Only the hosts in `sandbox_env_registry_hosts`, through tinyproxy (`FilterDefaultDeny`, anchored host patterns, CONNECT to 443 and 80). Measured: pip and npm installed through it; `example.com`, an IP literal and a look-alike host got 403, and the direct route was closed. |
+| `open` | An ordinary bridge | The internet. |
+| scratch | An ordinary bridge plus `host.docker.internal` | The internet and the Tool Bridge, as `python_sandbox` always had. |
+
+The isolated gateway mode needs Docker 28. On an older engine, the network is created
+without it and the environment's `degraded` field says that the host is reachable on the
+network's gateway.
+
+**Housekeeping.**
+- **Reaper.** The web server runs one: it removes expired temporary environments, stops idle project environments, and clears records and labelled volumes or networks a crash left behind.
+- **Busy.** It is asked of docker, not of the reaper's memory: a process inside that carries a VAF run marker (`VAF_RUN_ID`, `VAF_PROC_ID`) keeps an environment alive. When the answer cannot be had, the environment counts as busy.
+- **Repeatable removal.** Removing an environment twice does no harm, because several reapers may race.
+- **Quit.** VAF's quit stops every environment that is not busy. They are started with `docker run`, so `compose stop` never sees them.
+- **Revoked access.** An account whose access is taken away has its environments stopped.
+
+**Named boundaries.**
+- `open` is not "internet only". Through the gateway it reaches whatever listens on the host's `0.0.0.0` (the Tool Bridge, token-protected; VAF in LAN mode, login-protected), and the LAN is reachable.
+- `registries` does not stop data leaving through the allowed hosts themselves (`npm publish`, a push with a token the code brought along).
+- No disk quota. overlay2 has none without xfs project quotas, so the number of environments per person is limited instead, and their size is shown.
+
 ## Shell execution surfaces
 
 Beyond the Python sandbox there are three shell-execution surfaces, each with a distinct

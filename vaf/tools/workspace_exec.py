@@ -41,12 +41,11 @@ import shlex
 import shutil
 import subprocess
 import uuid
-from pathlib import Path
 from typing import Tuple
 
-# The VAF repo root — the coder's workspace must never be this or inside it, and it is
-# never mounted into the jail.
-_VAF_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# The workspace guard (VAF's code, HOME and / are refused) is the core one, shared with
+# the sandbox environments' project mount.
+from vaf.core.workspace_guard import assert_safe_workspace as _assert_safe_workspace  # noqa: E402
 SANDBOX_IMAGE = "python:3.11-slim"
 _DOCKER_SOCK_CANDIDATES = ("/var/run/docker.sock", "/run/docker.sock")
 
@@ -92,18 +91,6 @@ def _invokes_docker(command: str) -> bool:
 # Environment: start empty and re-inject only non-secret basics, so exported API keys
 # and tokens in the tray process environment never leak into the jail.
 _ENV_ALLOWLIST = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ")
-
-
-def _assert_safe_workspace(ws: str) -> None:
-    p = Path(ws).resolve()
-    root = _VAF_PROJECT_ROOT
-    if p == root or root.is_relative_to(p) or p.is_relative_to(root):
-        raise ValueError(f"refusing to run: workspace {p} overlaps the VAF source tree {root}")
-    # Never root the jail at the real HOME or filesystem root: that would bind-mount the
-    # user's home (incl. ~/.vaf secrets) or the whole system read-write.
-    home = Path.home().resolve()
-    if p == home or p == Path("/"):
-        raise ValueError(f"refusing to run: workspace {p} is the home/root directory, not a project")
 
 
 def _wrap_timeout(command: str, timeout: int) -> str:

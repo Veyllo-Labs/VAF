@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (359 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (370 keys).
 
 ## How configuration is set
 
@@ -374,6 +374,17 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `browser_pool_strict` | `False` | Admin-only. Strict pool: a user who cannot get a DEDICATED browser instance (pool at capacity, low memory, docker trouble) is answered busy instead of silently sharing the fallback browser. Every fallback, strict or not, is recorded as a `browser_pool_fallback` security event. Off by default: a solo install would rather time-share than see busy. Overridden by `VAF_BROWSER_POOL_STRICT`. |
 | `browser_image_max_age_days` | `14` | Admin-only. Freshness budget for the browser image: older than this, the next stack start rebuilds it with `--pull --no-cache` so the unpinned Debian Chromium inside actually receives security updates (the ordinary cached `--build` never re-runs that layer). A failed fresh build never blocks the start; it is recorded as a `browser_image_stale` security event instead. `0` disables the gate. Overridden by `VAF_BROWSER_IMAGE_MAX_AGE_DAYS`. |
 | `sandbox_env_image_max_age_days` | `14` | Admin-only. Freshness budget for the sandbox environment image (`vaf-sandbox-env`, built from the Dockerfile inside the package): older than this, the next build pulls the base image and skips the cache, so the Debian packages inside (the headless browser among them) receive their security updates. `0` disables it. Overridden by `VAF_SANDBOX_ENV_IMAGE_MAX_AGE_DAYS`. |
+| `sandbox_env_max_per_user` | `3` | Admin-only. How many temporary and project sandbox environments one person may have at once; the scratch environment `python_sandbox` uses is not counted. A create beyond it is refused with the reason. Overridden by `VAF_SANDBOX_ENV_MAX_PER_USER`, like every key below. |
+| `sandbox_env_memory_mb` | `1024` | Admin-only. Memory limit of an environment unless the caller asks for another value. |
+| `sandbox_env_memory_max_mb` | `4096` | Admin-only. The most memory one environment may ask for. |
+| `sandbox_env_cpus` | `1.0` | Admin-only. CPU cores per environment (`docker run --cpus`). |
+| `sandbox_env_pids` | `512` | Admin-only. Process limit per environment (`--pids-limit`). |
+| `sandbox_env_temp_ttl_hours` | `24` | Admin-only. A temporary environment (and the scratch one) is removed whole this long after its last use. |
+| `sandbox_env_idle_stop_minutes` | `30` | Admin-only. A project environment with no process VAF started running inside is stopped (not removed) after this long without use. |
+| `sandbox_env_min_free_mb` | `1500` | Admin-only. No new environment, and no restart of a stopped one, below this much free memory. Measured on Linux only; elsewhere the containers run in a VM with its own budget. |
+| `sandbox_env_process_max_hours` | `8` | Admin-only. A background process in an environment (a dev server) is ended after this. |
+| `sandbox_env_network_max` | `"open"` | Admin-only. The widest network an environment may ask for, in the order `none`, `registries`, `open`. The default lets the agent choose; a server for several people may cap it at `registries`. |
+| `sandbox_env_registry_hosts` | `["pypi.org", "files.pythonhosted.org", "registry.npmjs.org", "registry.yarnpkg.com", "github.com", "codeload.github.com", "objects.githubusercontent.com"]` | Admin-only. The hosts the `registries` proxy lets through, matched exactly. Changing the list recreates the proxy on the next use. |
 | `web_ui_enabled` | `True` | Serve the web UI. |
 | `tray_autostart` | `False` | Start the desktop tray on login. |
 | `theme` | `vaf` | Terminal colour theme for both terminal lanes; catalog in `vaf/cli/themes.py`. The default is monochrome. Changed by `t` / `theme <name>` in the app, or the Theme row in `vaf settings`. |

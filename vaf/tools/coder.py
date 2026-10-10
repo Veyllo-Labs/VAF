@@ -45,57 +45,9 @@ from vaf.tools.coder_templates import TemplateManager
 from vaf.core.persistence import PersistenceManager, ProjectState, Task, coerce_task_title
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Project Directory Safety
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def is_unsafe_project_dir(path: str) -> bool:
-    """True if `path` must never be used as a project/work directory for agents.
-
-    Agents may only create projects under safe locations (normally
-    Documents/VAF_Projects). Unsafe are:
-    - the filesystem root and the user's home directory itself
-    - the standard user directories themselves (Documents, Desktop, Downloads, ...)
-      (subdirectories of them are fine, e.g. Documents/VAF_Projects/...)
-    - anything inside the VAF config dir (~/.vaf)
-    - anything inside the VAF program/source tree
-
-    Also used by web_server/headless_runner to refuse persisting or re-injecting
-    poisoned last_project_path values (self-heal for sessions that recorded
-    /home/<user> as a project before this guard existed).
-    """
-    try:
-        p = Path(path).expanduser().resolve()
-    except Exception:
-        return True
-
-    home = Path.home().resolve()
-
-    # Filesystem root, home itself, or anything above home (e.g. /home, /Users)
-    if p == Path(p.anchor) or home.is_relative_to(p):
-        return True
-
-    # Standard user dirs themselves (their subdirs are allowed)
-    standard_dirs = {
-        home / d for d in (
-            "Documents", "Desktop", "Downloads", "Pictures",
-            "Music", "Videos", "Public", "Templates",
-        )
-    }
-    if p in standard_dirs:
-        return True
-
-    # VAF config dir (~/.vaf) and everything inside it
-    vaf_cfg = home / ".vaf"
-    if p == vaf_cfg or p.is_relative_to(vaf_cfg):
-        return True
-
-    # VAF program/source tree and everything inside it
-    vaf_root = Path(__file__).resolve().parents[2]
-    if p == vaf_root or p.is_relative_to(vaf_root):
-        return True
-
-    return False
+# Project directory safety lives in core (vaf/core/workspace_guard.py): the session store,
+# the web server and the headless runner ask the same question.
+from vaf.core.workspace_guard import is_unsafe_project_dir  # noqa: E402
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

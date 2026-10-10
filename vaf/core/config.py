@@ -715,6 +715,23 @@ class Config:
         "browser_pool_strict": False,                              # Refuse (busy) instead of falling back to the shared browser
         "browser_image_max_age_days": 14,                          # Rebuild the browser image with a fresh base beyond this age (0 = off)
         "sandbox_env_image_max_age_days": 14,                      # Rebuild the sandbox environment image with a fresh base beyond this age (0 = off)
+        # Sandbox environments (vaf/core/environments.py, which holds the same defaults
+        # for an embedder without a config file; a guard test pins the two together).
+        "sandbox_env_max_per_user": 3,                             # Temporary + project environments one person may have (scratch not counted)
+        "sandbox_env_memory_mb": 1024,                             # Memory per environment unless asked otherwise
+        "sandbox_env_memory_max_mb": 4096,                         # The most memory one environment may ask for
+        "sandbox_env_cpus": 1.0,                                   # CPU cores per environment
+        "sandbox_env_pids": 512,                                   # Process limit per environment
+        "sandbox_env_temp_ttl_hours": 24,                          # A temporary environment is removed this long after its last use
+        "sandbox_env_idle_stop_minutes": 30,                       # A project environment with no running process is stopped after this
+        "sandbox_env_min_free_mb": 1500,                           # No new environment below this much free memory (Linux)
+        "sandbox_env_process_max_hours": 8,                        # A background process in an environment is ended after this
+        "sandbox_env_network_max": "open",                         # The widest network an environment may ask for: none, registries, open
+        "sandbox_env_registry_hosts": [                            # Hosts the registries proxy lets through
+            "pypi.org", "files.pythonhosted.org",
+            "registry.npmjs.org", "registry.yarnpkg.com",
+            "github.com", "codeload.github.com", "objects.githubusercontent.com",
+        ],
 
         # Connections: Telegram (bot token, whitelist per user_scope_id)
         "telegram_config": None,                                   # { enabled, verified?, whitelist: [...] }; the bot token lives in the key ring (channel_secrets)

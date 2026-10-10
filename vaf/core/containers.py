@@ -24,9 +24,11 @@ every saved browser profile (logins, history). A test pins it to literal values.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -38,16 +40,17 @@ def windowless_kwargs() -> dict:
     return {}
 
 
-def docker(args: List[str], timeout: float = 60, *, input: Optional[str] = None,
-           env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
-    """One docker CLI call, captured as text. The single seam the tests stub.
+def docker(args: List[str], timeout: float = 60, *, input=None,
+           env: Optional[Dict[str, str]] = None, binary: bool = False) -> subprocess.CompletedProcess:
+    """One docker CLI call, captured as text (bytes with `binary`, for a tar stream).
+    The single seam the tests stub.
 
     `env` replaces the client's environment: it is how a value reaches a container
     without appearing on any command line (`docker exec -e NAME` takes the value from
     the client's environment). Raises what subprocess raises (FileNotFoundError when
     there is no docker, TimeoutExpired); callers decide what a failure means."""
     from vaf.core.service_stack import resolve_docker_exe
-    return subprocess.run([resolve_docker_exe(), *args], capture_output=True, text=True,
+    return subprocess.run([resolve_docker_exe(), *args], capture_output=True, text=not binary,
                           timeout=timeout, input=input, env=env, **windowless_kwargs())
 
 
@@ -140,3 +143,98 @@ def mem_available_mb() -> Optional[int]:
     except Exception:
         pass
     return None
+
+
+# -- running inside a container ----------------------------------------------------
+# A run started with `docker exec` keeps running when the docker client is killed, so
+# a timeout or a Stop has to end it INSIDE the container. Every run VAF starts carries
+# a marker in its environment (VAF_RUN_ID for a bounded command, VAF_PROC_ID for a
+# background process); children inherit it, and /proc/<pid>/environ is readable for
+# the container's own user. Killing by marker ends exactly that run - the cwd or
+# command-line match the shared sandbox used would kill every process in an
+# environment whose working directory is /workspace, the dev server included.
+MARKER_VARS = ("VAF_RUN_ID", "VAF_PROC_ID")
+_MARKER_VALUE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def kill_marked_cmd(var: str, value: str) -> str:
+    """Pure-sh killer for every process whose environment carries `var=value`. Needs
+    only procfs and shell builtins (the fallback image ships no procps). The scanning
+    shell skips itself."""
+    if var not in MARKER_VARS or not _MARKER_VALUE.match(value or ""):
+        raise ValueError("not a VAF run marker")
+    return ('for d in /proc/[0-9]*; do p="${d##*/}"; [ "$p" = "$$" ] && continue; '
+            f'if tr "\\0" "\\n" < "$d/environ" 2>/dev/null | grep -qx "{var}={value}"; '
+            'then kill -9 "$p" 2>/dev/null; fi; done')
+
+
+# The pids of every process carrying either marker, one per line; empty when none.
+MARKED_PROCESSES_CMD = (
+    'for d in /proc/[0-9]*; do p="${d##*/}"; [ "$p" = "$$" ] && continue; '
+    'if tr "\\0" "\\n" < "$d/environ" 2>/dev/null | grep -qE "^(VAF_RUN_ID|VAF_PROC_ID)="; '
+    'then echo "$p"; fi; done'
+)
+
+
+def _popen(argv, **kwargs):
+    """subprocess.Popen, behind a seam the tests stub."""
+    return subprocess.Popen(argv, **kwargs)
+
+
+def exec_bounded(container: str, argv: List[str], *, timeout: float, workdir: str,
+                 run_id: str, env_values: Optional[Dict[str, str]] = None,
+                 check_stop=None, input_text: Optional[str] = None):
+    """Run argv in a running container, bounded and stop-aware.
+
+    Bounded twice: `timeout -s KILL` inside the container ends the command on its own
+    clock, and a backstop here (timeout + 15 s) kills the docker client and the run's
+    processes by their marker. `check_stop` is polled every half second; True ends the
+    run the same way. Values in `env_values` reach the run as its environment without
+    appearing on a command line (`-e NAME`, the value in the client's environment).
+
+    Returns (returncode, stdout, stderr, timed_out, cancelled)."""
+    from vaf.core.service_stack import resolve_docker_exe
+    if not _MARKER_VALUE.match(run_id or ""):
+        raise ValueError("run_id must be a plain token")
+    seconds = max(1, int(timeout))
+    cmd = [resolve_docker_exe(), "exec"]
+    if input_text is not None:
+        cmd.append("-i")
+    cmd += ["-w", workdir, "-e", f"VAF_RUN_ID={run_id}"]
+    for name in (env_values or {}):
+        cmd += ["-e", name]
+    cmd += [container, "timeout", "-s", "KILL", str(seconds), *argv]
+    try:
+        proc = _popen(cmd, stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                      env=({**os.environ, **env_values} if env_values else None),
+                      **windowless_kwargs())
+    except Exception as e:
+        return -1, "", str(e), False, False
+    pending_input = input_text
+    deadline = time.monotonic() + seconds + 15
+    while True:
+        try:
+            out, err = proc.communicate(input=pending_input, timeout=0.5)
+            rc = proc.returncode
+            # timeout -s KILL ends the command with 137 (128 + SIGKILL) when its clock ran out.
+            return rc, out or "", err or "", rc in (124, 137), False
+        except subprocess.TimeoutExpired:
+            pending_input = None
+        stopped = bool(check_stop and check_stop())
+        if stopped or time.monotonic() >= deadline:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                docker(["exec", container, "sh", "-c", kill_marked_cmd("VAF_RUN_ID", run_id)],
+                       timeout=15)
+            except Exception:
+                pass
+            try:
+                out, err = proc.communicate(timeout=5)
+            except Exception:
+                out, err = "", ""
+            note = "cancelled by stop request" if stopped else f"timed out after {seconds}s"
+            return -1, out or "", f"{(err or '').strip()}\n{note}".strip(), not stopped, stopped

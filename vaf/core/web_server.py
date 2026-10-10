@@ -1619,6 +1619,20 @@ _legacy_claim_done = False  # the unscoped-session claim runs once, not per life
 
 
 @app.on_event("startup")
+async def start_sandbox_env_housekeeping():
+    # The sandbox environments' reaper (expired temporary environments removed, idle
+    # project ones stopped, crash leftovers cleared) and the revocation listener that
+    # stops a revoked account's environments. The web server is the long-lived process
+    # on the product path; start_reaper is idempotent, as the TLS mode's second
+    # lifespan needs.
+    try:
+        from vaf.core.environments import get_environment_manager
+        get_environment_manager().start_reaper()
+    except Exception as e:
+        log("WebServer", f"Sandbox environment housekeeping not started: {e}")
+
+
+@app.on_event("startup")
 async def start_skills_rescan():
     # Periodic skill re-scan (post-install tamper detection for the security
     # dashboard). start_periodic_rescan is idempotent - required because this
@@ -2723,7 +2737,7 @@ def _resolve_session_workspace(session_id: str, request: Request, create: bool =
     if not path or not os.path.isdir(path):
         return ""
     try:
-        from vaf.tools.coder import is_unsafe_project_dir
+        from vaf.core.workspace_guard import is_unsafe_project_dir
         if is_unsafe_project_dir(path):
             return ""
     except Exception:

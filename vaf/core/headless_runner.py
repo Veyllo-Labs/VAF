@@ -1983,7 +1983,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         # Self-heal sessions that recorded an unsafe dir (e.g. /home/<user>)
                         # before the project-dir guard existed: never re-inject such paths,
                         # otherwise the agent keeps sending the coder back there.
-                        from vaf.tools.coder import is_unsafe_project_dir as _is_unsafe_proj
+                        from vaf.core.workspace_guard import is_unsafe_project_dir as _is_unsafe_proj
                         if _last_proj and _is_unsafe_proj(_last_proj):
                             _last_proj = ""
                         if _workspace and _is_unsafe_proj(_workspace):

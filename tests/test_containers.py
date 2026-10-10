@@ -128,3 +128,83 @@ def test_docker_raises_what_subprocess_raises(monkeypatch):
     monkeypatch.setattr(containers.subprocess, "run", _run)
     with pytest.raises(subprocess.TimeoutExpired):
         containers.docker(["ps"], timeout=1)
+
+
+# -- bounded exec inside a container ---------------------------------------------------
+
+def test_kill_marked_cmd_only_takes_a_plain_marker():
+    cmd = containers.kill_marked_cmd("VAF_RUN_ID", "ab12cd34ef56")
+    assert 'grep -qx "VAF_RUN_ID=ab12cd34ef56"' in cmd and "/environ" in cmd
+    for bad in ("x; rm -rf /", "", "a b", "$(id)"):
+        with pytest.raises(ValueError):
+            containers.kill_marked_cmd("VAF_RUN_ID", bad)
+    with pytest.raises(ValueError):
+        containers.kill_marked_cmd("PATH", "x")
+
+
+class _Proc:
+    def __init__(self, outcome):
+        self.outcome = outcome          # ("done", rc, out, err) or "hang"
+        self.killed = False
+        self.returncode = None
+        self.inputs = []
+
+    def communicate(self, input=None, timeout=None):
+        self.inputs.append(input)
+        if self.outcome == "hang" and not self.killed:
+            raise subprocess.TimeoutExpired("docker", timeout)
+        if self.outcome == "hang":
+            return "partial", ""
+        _, self.returncode, out, err = self.outcome
+        return out, err
+
+    def kill(self):
+        self.killed = True
+
+
+def test_exec_bounded_builds_one_marked_bounded_command(monkeypatch):
+    seen = {}
+    import vaf.core.service_stack as stack
+    monkeypatch.setattr(stack, "resolve_docker_exe", lambda: "docker")
+
+    def _popen(argv, **kw):
+        seen["argv"], seen["kw"] = argv, kw
+        return _Proc(("done", 0, "ok\n", ""))
+
+    monkeypatch.setattr(containers, "_popen", _popen)
+    rc, out, err, timed_out, cancelled = containers.exec_bounded(
+        "env-c", ["python3", "x.py"], timeout=30, workdir="/workspace", run_id="r1",
+        env_values={"VAF_BRIDGE_TOKEN": "s3cr3t"}, input_text="data")
+    assert (rc, out, timed_out, cancelled) == (0, "ok\n", False, False)
+    argv = seen["argv"]
+    assert argv[:3] == ["docker", "exec", "-i"]
+    assert argv[argv.index("-w") + 1] == "/workspace"
+    assert "VAF_RUN_ID=r1" in argv
+    assert argv[argv.index("env-c"):] == ["env-c", "timeout", "-s", "KILL", "30", "python3", "x.py"]
+    assert not any("s3cr3t" in a for a in argv) and "VAF_BRIDGE_TOKEN" in argv
+    assert seen["kw"]["env"]["VAF_BRIDGE_TOKEN"] == "s3cr3t"
+
+
+def test_a_stop_kills_the_client_and_the_run_inside(monkeypatch):
+    """docker exec does not pass a kill on: the run's own processes are ended by their
+    marker. MUTATION: drop the in-container kill - red."""
+    import vaf.core.service_stack as stack
+    monkeypatch.setattr(stack, "resolve_docker_exe", lambda: "docker")
+    proc = _Proc("hang")
+    monkeypatch.setattr(containers, "_popen", lambda argv, **kw: proc)
+    kills = []
+    monkeypatch.setattr(containers, "docker", lambda args, timeout=60, **kw: kills.append(args) or _done())
+    rc, out, err, timed_out, cancelled = containers.exec_bounded(
+        "env-c", ["sleep", "99"], timeout=30, workdir="/workspace", run_id="r2",
+        check_stop=lambda: True)
+    assert proc.killed and cancelled and not timed_out and rc == -1
+    assert "cancelled by stop request" in err
+    assert kills and kills[0][:3] == ["exec", "env-c", "sh"]
+    assert 'VAF_RUN_ID=r2' in kills[0][-1]
+
+
+def test_the_in_container_clock_reads_as_a_timeout(monkeypatch):
+    import vaf.core.service_stack as stack
+    monkeypatch.setattr(stack, "resolve_docker_exe", lambda: "docker")
+    monkeypatch.setattr(containers, "_popen", lambda argv, **kw: _Proc(("done", 137, "", "")))
+    assert containers.exec_bounded("c", ["sleep", "9"], timeout=1, workdir="/", run_id="r3")[3] is True

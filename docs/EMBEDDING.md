@@ -755,6 +755,36 @@ checks); the pipeline, the budgets and the named boundaries are in
 
 ---
 
+## Sandbox environments: `vaf.EnvironmentManager`
+
+A place where an agent may run, install and test whatever it likes without reaching the
+host: a container, a volume and a network of its own, per person. VAF's own agents use
+it for `python_sandbox`, the test runner and the coder; an application uses the same
+object.
+
+```python
+import vaf
+
+envs = vaf.get_environment_manager()           # one per process
+env = envs.create("scope-of-alice", kind="temporary", network="registries")
+print(envs.exec("scope-of-alice", env.id, "pip install requests && python -c 'import requests'"))
+envs.write_file("scope-of-alice", env.id, "app.py", "print('hi')")
+print(envs.read_file("scope-of-alice", env.id, "app.py"))
+envs.delete("scope-of-alice", env.id)          # container, volume, network and record
+```
+
+- **Kinds.**
+  - `temporary`: removed whole when it expires (`sandbox_env_temp_ttl_hours`, default 24, counted from the last use).
+  - `project`: kept until deleted, stopped when idle; `project_path=` mounts a host directory at `/workspace`.
+  - `scratch_for(scope)`: the one scratch environment per person that `python_sandbox` uses.
+- **Networks** (`network=`): `none` (no route out, the host unreachable), `registries` (only package registries, through a filtering proxy) or `open`. The admin key `sandbox_env_network_max` caps what may be asked for. `open` reaches the LAN and whatever listens on the host's `0.0.0.0`; `registries` does not stop data leaving through the registries themselves. Both are said in the tools' descriptions too.
+- **Ownership.** Every call takes the owner's scope first. Another person's environment answers like a missing one; `admin=True` on `get`, `stop` and `delete` reaches it, and nothing runs code in someone else's environment. A scope of `None` means the machine owner, as everywhere in VAF; with no owner configured, the call is refused.
+- **Refusals** raise `EnvironmentRefused` (from `vaf.core.environments`) with a reason a person can act on: the limit per person, the memory floor, the network cap, a project path outside the caller's own folder, an image still being built.
+- **What it needs.** Docker, and the environment image, which VAF builds from the Dockerfile inside the package (minutes the first time). `create` refuses while it builds; `wait_for_image=True` waits for it. Docker 28 or newer gives `none` and `registries` an isolated gateway; on an older engine the host stays reachable on the network's gateway, and the environment's `degraded` field says so.
+- **Housekeeping.** Call `start_reaper()` once in a long-lived process: it removes expired environments and stops idle ones, deciding "busy" by asking docker. Call `stop_all_at_quit()` when your process ends. `docker run` containers are invisible to `compose stop`.
+
+The model, the isolation measurements and the named boundaries are in [SANDBOXING.md](security/SANDBOXING.md#sandbox-environments).
+
 ## Sub-agents as a library
 
 VAF's heavy sub-agents (`coding_agent`, `research_agent`, `document_agent`,
@@ -2101,6 +2131,13 @@ Stable public surface (safe to build on):
   `vaf.EgressRefused` - fetching a URL that someone else chose without reaching this
   machine, its cloud metadata service or (when switched off) the LAN. See "Security
   posture" above.
+- `vaf.EnvironmentManager` / `vaf.get_environment_manager()` - sandbox environments: a
+  container, a volume and a network of one's own per person, to run, install and test
+  code in (`create`, `get`, `list`, `exec`, `read_file`, `write_file`, `list_files`,
+  `copy_in`, `copy_out`, `stop`, `delete`, `scratch_for`, `start_reaper`,
+  `stop_all_at_quit`, `prune`). The kinds (`temporary`, `project`), the network profiles
+  (`none`, `registries`, `open`) and the refusal type `vaf.core.environments.EnvironmentRefused`
+  are part of the contract. See "Sandbox environments" above.
 - `vaf.contained_path(root, relative="", *, must_exist=False)` /
   `vaf.safe_entry_name(name, *, allow_hidden=False)` / `vaf.PathEscape` - keeping a
   path that came from OUTSIDE inside the directory it may touch. The jail above

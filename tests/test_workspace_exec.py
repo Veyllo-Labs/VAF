@@ -10,6 +10,7 @@ not by a bypassable command string filter. These tests pin the guard logic and, 
 bubblewrap is present, prove real escape attempts fail.
 """
 import os
+from pathlib import Path
 
 import pytest
 
@@ -21,7 +22,9 @@ from vaf.tools.workspace_exec import (
     run_in_workspace,
 )
 
-VAF_ROOT = str(wx._VAF_PROJECT_ROOT)
+from vaf.core.workspace_guard import _VAF_ROOT
+
+VAF_ROOT = str(_VAF_ROOT)
 
 
 # --- guard logic (no bwrap/docker needed) ----------------------------------
@@ -35,7 +38,7 @@ def test_refuses_workspace_inside_vaf_source():
 
 def test_refuses_home_and_root_workspace():
     with pytest.raises(ValueError):
-        _assert_safe_workspace(str(wx.Path.home()))
+        _assert_safe_workspace(str(Path.home()))
     with pytest.raises(ValueError):
         _assert_safe_workspace("/")
 

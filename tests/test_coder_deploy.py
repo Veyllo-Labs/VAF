@@ -31,6 +31,16 @@ def test_a_deploy_target_is_a_server_and_a_folder(known):
         assert coder._deploy_target(bad, "s")[0] is None, bad
 
 
+def test_two_leading_slashes_are_the_servers_root_too(known):
+    """posixpath.normpath keeps a leading "//". MUTATION: drop the lstrip - red: "//" passed
+    for a folder and the run could upload anywhere on the server."""
+    known.add(str(ssh.parse_server("deploy@example.org")))
+    for root in ("//", "///", "//.", "/srv/.."):
+        d, err = coder._deploy_target(f"deploy@example.org:{root}", "s")
+        assert d is None and "server's root" in err, root
+    assert coder._deploy_target("deploy@example.org://srv/app", "s")[0].root == "/srv/app"
+
+
 def test_a_server_nobody_confirmed_is_refused_before_anything_is_built(known):
     """MUTATION: drop the is_known check - red: the run would find out at its very end."""
     d, err = coder._deploy_target("deploy@new.example.org:/srv/app", "s")

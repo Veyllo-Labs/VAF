@@ -308,7 +308,7 @@ services (`vaf repair --check`, `vaf top`, the Update and Repair dialog; see
 | Profile | Network | Reaches |
 |---|---|---|
 | `none` | `--internal` with `com.docker.network.bridge.gateway_mode_ipv4=isolated` | Nothing outside the environment's network. A plain `--internal` network still reached the host through its own gateway (VAF's port 8443 answered from one); in isolated gateway mode the host was unreachable on every address. |
-| `registries` | The same, plus the shared proxy `vaf-env-proxy` | Only the hosts in `sandbox_env_registry_hosts`, through tinyproxy (`FilterDefaultDeny`, anchored host patterns, CONNECT to 443 and 80). Measured: pip and npm installed through it; `example.com`, an IP literal and a look-alike host got 403, and the direct route was closed. |
+| `registries` | The same, plus the shared proxy `vaf-env-proxy` | Only the hosts in `sandbox_env_registry_hosts`, through tinyproxy (`FilterDefaultDeny`, anchored host patterns, CONNECT to 443 and 80). Measured: pip and npm installed through it; `example.com`, an IP literal and a look-alike host got 403, and the direct route was closed. The reaper stops the proxy while no registries environment runs; every use of one that runs starts it again if it is gone (measured: stopped by hand, the next command brought it back and pip downloaded). |
 | `open` | An ordinary bridge | The internet. |
 | scratch | An ordinary bridge plus `host.docker.internal` | The internet and the Tool Bridge, as `python_sandbox` always had. |
 

@@ -111,6 +111,29 @@ def test_the_coders_render_check_maps_project_files_and_refuses_the_rest(monkeyp
     assert "only files inside the project" in tool.run(target="..")
 
 
+def test_render_check_maps_against_the_project_never_the_file_itself(monkeypatch, tmp_path):
+    """Without a base_dir the file itself was the base: an absolute target came out as "."
+    and the workspace was rendered instead. MUTATION: fall back to the file again - red."""
+    from vaf.tools.render_check import RenderCheckTool
+    seen = []
+
+    class _M:
+        def render(self, owner, env_id, target, wait_ms=1500):
+            seen.append(target)
+            return {"ok": False, "error": "stop"}
+
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: _M())
+    proj = tmp_path / "proj"
+    (proj / "dist").mkdir(parents=True)
+    page = proj / "dist" / "index.html"
+    env = types.SimpleNamespace(id="0a1b2c3d", project_path=str(proj))
+    RenderCheckTool(None, environment=env, owner_scope="scope-alice").run(target=str(page))
+    assert seen == ["/workspace/dist/index.html"]
+    bare = RenderCheckTool(None, environment=types.SimpleNamespace(id="0a1b2c3d"),
+                           owner_scope="scope-alice")
+    assert "no project folder" in bare.run(target=str(page))
+
+
 def test_a_file_named_with_two_dots_is_still_in_the_project(monkeypatch, tmp_path):
     """MUTATION: back to rel.startswith("..") - red: `..draft.html` was refused as a climb."""
     from vaf.tools.render_check import RenderCheckTool

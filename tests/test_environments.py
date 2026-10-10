@@ -499,6 +499,21 @@ def test_busy_is_asked_of_docker_and_unknown_counts_as_busy(docker, mgr, monkeyp
     assert mgr.busy(env) is True
 
 
+def test_a_running_registries_environment_gets_its_proxy_back(docker, mgr, monkeypatch):
+    """The reaper can stop the proxy between its listing and a registries environment's
+    start. MUTATION: return early for a running environment again - red: the environment
+    kept running without package access until it was restarted."""
+    monkeypatch.setattr(containers, "exec_bounded", lambda *a, **k: (0, "", "", False, False))
+    env = mgr.create(ALICE, network="registries")
+    docker.containers[envmod.PROXY_CONTAINER]["state"] = "exited"
+    mgr.exec_in(mgr.get(ALICE, env.id), ["true"])
+    assert docker.containers[envmod.PROXY_CONTAINER]["state"] == "running"
+    # A proxy that cannot come back does not refuse a command that needs no package.
+    docker.containers[envmod.PROXY_CONTAINER]["state"] = "exited"
+    monkeypatch.setattr(mgr, "_ensure_proxy", lambda: (_ for _ in ()).throw(EnvironmentRefused("no image")))
+    assert mgr.exec_in(mgr.get(ALICE, env.id), ["ls"]).returncode == 0
+
+
 def test_a_root_run_counts_as_busy_though_the_user_cannot_see_it(docker, mgr):
     """Each user reads only its own processes' environment (measured with the root lane's
     capabilities): the reaper asked as the environment's user alone and stopped a project

@@ -790,6 +790,15 @@ class EnvironmentManager:
     # -- running -------------------------------------------------------------------
     def _ensure_running(self, env: Environment) -> None:
         if env.state == "running":
+            if env.network == "registries":
+                # The proxy can be gone while the environment runs (the reaper stopped it
+                # between its listing and this environment's start, a quit left a busy one
+                # running): bring it back. Best effort - a command that needs no package
+                # must not be refused for it, and one that does says why it failed.
+                try:
+                    self._attach_proxy(env)
+                except EnvironmentRefused:
+                    pass
             return
         if env.kind != SCRATCH_KIND:
             free = containers.mem_available_mb()

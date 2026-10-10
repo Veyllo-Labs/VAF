@@ -171,6 +171,11 @@ def test_bash_is_offered_in_every_context_and_as_root_only_when_bound():
     assert src.index("THE chokepoint", bash_at) > bash_at
     schema = src[bash_at:src.index("THE chokepoint", bash_at)]
     assert schema.index('"as_root"') < schema.index("if _env_binding is not None else\n                            {")
+    # MUTATION: drop timeout from either schema - red: an install that needs more than the
+    # default 120 s could not ask for it, though BashTool takes up to 300.
+    bound, unbound = schema.split("if _env_binding is not None else\n                            {")
+    assert '"timeout": _bash_timeout' in bound and '"timeout": _bash_timeout' in unbound
+    assert "default 120, at most 300" in src[src.rindex("_bash_timeout = ", 0, bash_at):bash_at]
 
 
 def test_bash_without_an_environment_keeps_the_jail(monkeypatch):

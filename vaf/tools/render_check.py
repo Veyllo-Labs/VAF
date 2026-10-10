@@ -128,9 +128,14 @@ class RenderCheckTool(BaseTool):
         """localhost is the environment; a project file is its path under /workspace."""
         from vaf.core.environments import EnvironmentRefused, get_environment_manager
         if not target.lower().startswith(("http://", "https://")):
-            full = target if os.path.isabs(os.path.expanduser(target)) else os.path.join(self.base_dir or "", target)
+            # The folder mounted at /workspace. The file itself is no base: an absolute path
+            # would come out as "." and render the workspace instead of the file.
+            base = self.base_dir or getattr(self.environment, "project_path", "") or ""
+            if not base:
+                return "render_check refused: this environment has no project folder to render files from."
+            full = target if os.path.isabs(os.path.expanduser(target)) else os.path.join(base, target)
             try:
-                rel = os.path.relpath(os.path.realpath(full), os.path.realpath(self.base_dir or full))
+                rel = os.path.relpath(os.path.realpath(full), os.path.realpath(base))
             except ValueError:
                 rel = None                      # another drive (Windows): outside by definition
             # A climb is the whole `..` component, not the prefix: `..notes.html` is a file

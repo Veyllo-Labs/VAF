@@ -67,12 +67,17 @@ export default function SandboxSection() {
             if (!body) { setLoadFailed(true); return; }
             setData({ ...body, all: everyone });
             setLoadFailed(false);
+            // A confirmed delete whose environment is gone (removed elsewhere) is dropped.
+            const ids = new Set(((body.environments ?? []) as Environment[]).map(e => e.id));
+            setConfirming(c => (c && ids.has(c) ? c : null));
         } catch {
             if (seq === latest.current) setLoadFailed(true);
         }
     }, [apiBase, everyone]);
 
     useEffect(() => { void load(); }, [load]);
+    // A delete confirmed on one list never carries over to the other "All accounts" setting.
+    useEffect(() => { setConfirming(null); }, [everyone]);
     // The refresh after an action reloads with the selection of NOW: the closure an action
     // started with would ask for the old scope, win the race and leave the list stale.
     const loadNow = useRef(load);

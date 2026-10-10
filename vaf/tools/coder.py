@@ -2917,7 +2917,9 @@ def _deploy_target(raw, user_scope_id):
     if cut <= 0:
         return None, ("deploy_to must be user@host:/folder or user@host:port:/folder, "
                       f"not {text!r}")
-    root = posixpath.normpath(text[cut + 1:])
+    # normpath keeps a leading "//" (POSIX leaves it implementation-defined), which would
+    # pass for a folder while naming the server's root.
+    root = "/" + posixpath.normpath(text[cut + 1:]).lstrip("/")
     if root == "/":
         return None, "deploy_to must name a folder, not the server's root"
     try:
@@ -6474,6 +6476,10 @@ Task {task_idx + 1}: {current_task}
             # committed probe files. One schema entry is the smaller cost. Bound to a sandbox
             # environment the command runs in that container, and as_root is the coder's root
             # lane there (system packages); unbound it is the jailed shell, no network.
+            # BashTool takes a timeout of its own; without it in the schema an install or a
+            # build that needs more than the default could not ask for it.
+            _bash_timeout = {"type": "integer",
+                             "description": "Seconds the command may run (default 120, at most 300)."}
             if HAS_CODING_TOOLS:
                 tools_schema.append({
                     "type": "function",
@@ -6497,6 +6503,7 @@ Task {task_idx + 1}: {current_task}
                                 "type": "object",
                                 "properties": {
                                     "command": {"type": "string"},
+                                    "timeout": _bash_timeout,
                                     "background": {"type": "boolean"},
                                     "keep_running": {"type": "boolean"},
                                     "as_root": {"type": "boolean"},
@@ -6506,7 +6513,8 @@ Task {task_idx + 1}: {current_task}
                             if _env_binding is not None else
                             {
                                 "type": "object",
-                                "properties": {"command": {"type": "string"}},
+                                "properties": {"command": {"type": "string"},
+                                               "timeout": _bash_timeout},
                                 "required": ["command"]
                             }
                         )

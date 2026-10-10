@@ -81,7 +81,8 @@ def test_container_state_and_running_count(monkeypatch):
     answers = {
         ("inspect", "a"): _done(0, "running\n"),
         ("inspect", "b"): _done(1, "", "No such object"),
-        ("ps",): _done(0, "vaf-x-1\nvaf-x-2\n\n"),
+        # Docker's name filter is a substring match: the third is not one of ours.
+        ("ps",): _done(0, "vaf-x-1\nvaf-x-2\nold-vaf-x-3\n\n"),
     }
 
     def _docker(args, timeout=60, **kw):

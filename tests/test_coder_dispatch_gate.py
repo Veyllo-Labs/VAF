@@ -259,6 +259,22 @@ def test_the_inner_tools_wait_as_long_as_they_say_they_may():
     assert tool_budget_seconds(PythonExecTool(), {"code": "x", "timeout": 200}) > 200
 
 
+def test_a_root_command_waits_for_its_files_to_be_handed_back_too():
+    """A root command in an environment ends with the give-back of /workspace, on a clock of
+    its own (EnvironmentManager.GIVE_BACK_TIMEOUT); a budget of the command alone abandoned
+    the call while the files were still being handed back. MUTATION: drop the addition -
+    red."""
+    from vaf.core.environments import EnvironmentManager
+    from vaf.tools.bash import BashTool
+
+    bound = BashTool("/p", environment=object())
+    plain = bound.budget_seconds({"command": "apt-get install -y tree", "timeout": 60})
+    assert bound.budget_seconds({"command": "apt-get install -y tree", "timeout": 60,
+                                 "as_root": True}) == plain + EnvironmentManager.GIVE_BACK_TIMEOUT
+    # Without an environment as_root is refused at once: nothing to wait for.
+    assert BashTool("/p").budget_seconds({"command": "x", "timeout": 60, "as_root": True}) == plain
+
+
 # ── "only this time" reaches the tool (the funnel's confirmation, N13) ──────────────
 
 def test_only_this_time_now_runs_python_exec(tmp_path):

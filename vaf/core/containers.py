@@ -75,11 +75,12 @@ def container_state(name: str) -> Optional[str]:
 def count_running(name_prefix: str) -> int:
     """How many running containers carry this name prefix. Counted at docker, not in
     memory, so containers another VAF process started count too. 0 when docker does
-    not answer."""
+    not answer. Docker's name filter matches anywhere in the name, so the prefix is
+    checked again here: `old-vaf-browser-u-...` is not one of ours."""
     r = docker(["ps", "--filter", f"name={name_prefix}", "--format", "{{.Names}}"], timeout=20)
     if r.returncode != 0:
         return 0
-    return len([ln for ln in (r.stdout or "").splitlines() if ln.strip()])
+    return len([ln for ln in (r.stdout or "").splitlines() if ln.strip().startswith(name_prefix)])
 
 
 def ensure_network(name: str, *, internal: bool = False,

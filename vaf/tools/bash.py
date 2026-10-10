@@ -99,12 +99,17 @@ Examples:
     
     def budget_seconds(self, args):
         # The command's own timeout (default 120, at most 300) plus the jail's start-up: the
-        # dispatcher must not stop waiting before the command itself is allowed to end.
+        # dispatcher must not stop waiting before the command itself is allowed to end. A
+        # root command then hands what it left in /workspace back, on a clock of its own.
         try:
             own = int((args or {}).get("timeout") or 120)
         except (TypeError, ValueError):
             own = 120
-        return min(max(10, own), 300) + 30
+        budget = min(max(10, own), 300) + 30
+        if (args or {}).get("as_root") and self.environment is not None:
+            from vaf.core.environments import EnvironmentManager
+            budget += EnvironmentManager.GIVE_BACK_TIMEOUT
+        return budget
 
     def __init__(self, base_dir: str = None, environment=None, owner_scope=None):
         # base_dir = the coder's project workspace. Bound at registration (like the git

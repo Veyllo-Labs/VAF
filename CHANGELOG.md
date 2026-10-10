@@ -89,6 +89,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **A Windows program name with `.exe` no longer slips past the command checks.** The checks
+  that refuse `ssh`, an FTP upload or a download piped into a shell looked at the bare name,
+  so on a Windows host `curl.exe` and `ssh.exe` passed where `curl` and `ssh` were refused.
+- **A folder above the home directory is refused as a work folder.** The check that keeps the
+  home directory and `/` from being mounted read-write into a sandbox let `/home` through,
+  which holds every account's home on the machine.
 - **In server mode, the local-network check now also holds for the API, not only for the
   chat.** It looked at the address of VAF's own HTTPS proxy, which relays every device, instead
   of the device behind it. So when the access port was reachable from the internet (a forwarded

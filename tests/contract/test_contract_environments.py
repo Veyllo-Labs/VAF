@@ -28,8 +28,10 @@ def test_kinds_and_network_profiles():
 
 
 def test_refusals_are_one_exception_type():
-    from vaf.core.environments import EnvironmentRefused
+    from vaf.core.environments import EnvironmentRefused, EnvironmentsUnlisted
     assert issubclass(EnvironmentRefused, Exception)
+    # Unmeasured (docker did not list) is told apart, and still caught as a refusal.
+    assert issubclass(EnvironmentsUnlisted, EnvironmentRefused)
 
 
 def test_the_documented_signatures():

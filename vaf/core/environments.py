@@ -160,6 +160,12 @@ class EnvironmentRefused(Exception):
     """An operation that cannot be done, with the reason a person can act on."""
 
 
+class EnvironmentsUnlisted(EnvironmentRefused):
+    """Docker did not list the environments (it is down or did not answer): unmeasured, which
+    is not the same as "no such environment". A subclass, so every caller that catches a
+    refusal still catches it; the web routes answer it with 503 instead of 404."""
+
+
 def setting(name: str) -> Any:
     """One limit: `VAF_SANDBOX_ENV_<NAME>` first, then the admin-only config key
     `sandbox_env_<name>`, then DEFAULTS. Typed like the default; a value that does
@@ -401,8 +407,8 @@ class EnvironmentManager:
         r = containers.docker(args, timeout=30)
         if r.returncode != 0:
             if strict:
-                raise EnvironmentRefused(f"docker did not list the environments: "
-                                         f"{(r.stderr or '').strip()[:200]}")
+                raise EnvironmentsUnlisted(f"docker did not list the environments: "
+                                           f"{(r.stderr or '').strip()[:200]}")
             return []
         rows = []
         for line in (r.stdout or "").splitlines():
@@ -449,7 +455,9 @@ class EnvironmentManager:
         if not _ID_RE.match(env_id):
             raise EnvironmentRefused(f"no environment {env_id!r}")
         owner_hash = containers.scope_hash(resolve_owner(owner_scope))
-        for row in self._docker_rows(None if admin else owner_hash):
+        # Strict: a docker that does not answer raises EnvironmentsUnlisted instead of
+        # reading as "no such environment", which sent people looking for a wrong id.
+        for row in self._docker_rows(None if admin else owner_hash, strict=True):
             if row["id"] == env_id:
                 return self._from_row(row)
         raise EnvironmentRefused(f"no environment {env_id!r}")
@@ -1013,8 +1021,14 @@ class EnvironmentManager:
             raise EnvironmentRefused(f"{host_path} is not a file or a folder")
         buf = io.BytesIO()
         total = 0
+        entries = [(src, src.name)]
+        if src.is_dir():
+            # Not rglob: before Python 3.13 its ** followed a linked folder, and a file below
+            # it was no link itself.
+            from vaf.core.path_jail import walk_without_links
+            entries += [(src / rel, f"{src.name}/{rel}") for rel, _ in walk_without_links(src)]
         with tarfile.open(fileobj=buf, mode="w") as tar:
-            for item in ([src] if src.is_file() else [src, *sorted(src.rglob("*"))]):
+            for item, arc in entries:
                 if item.is_symlink():
                     continue
                 if item.is_file():
@@ -1022,8 +1036,7 @@ class EnvironmentManager:
                     if total > TRANSFER_LIMIT_BYTES:
                         raise EnvironmentRefused(f"{host_path} is larger than "
                                                  f"{TRANSFER_LIMIT_BYTES // (1024 * 1024)} MB")
-                arc = item.name if item == src else str(Path(src.name) / item.relative_to(src))
-                tar.add(str(item), arcname=arc.replace(os.sep, "/"), recursive=False)
+                tar.add(str(item), arcname=arc, recursive=False)
         target = _container_path(dest)
         r = containers.docker(["exec", "-i", env.container, "sh", "-c",
                                'mkdir -p "$1" && tar -xf - -C "$1" --no-same-owner', "sh", target],

@@ -117,7 +117,8 @@ def _command_line(args) -> str:
 def exec_cmd(
     ctx: typer.Context,
     env_id: str = typer.Argument(..., help="The environment's id"),
-    timeout: int = typer.Option(600, "--timeout", help="Seconds the command may run"),
+    timeout: Optional[int] = typer.Option(None, "--timeout",
+                                          help="Seconds the command may run (default 600)"),
     background: bool = typer.Option(False, "--background", help="Keep it running and return its id"),
 ):
     """Run a command in an environment: vaf env exec ID -- COMMAND ...
@@ -129,6 +130,13 @@ def exec_cmd(
     if not command:
         UI.error("No command. Example: vaf env exec ID -- python3 --version")
         raise typer.Exit(2)
+    if background and timeout is not None:
+        # Said, not ignored: a background process runs until it is stopped (`vaf env kill`)
+        # or reaches sandbox_env_process_max_hours.
+        UI.error("--timeout is for a command that runs to its end; a background process runs "
+                 "until `vaf env kill` or sandbox_env_process_max_hours.")
+        raise typer.Exit(2)
+    timeout = 600 if timeout is None else timeout
     try:
         if background:
             print(_manager().start_process(_scope(), env_id, command))

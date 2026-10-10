@@ -871,3 +871,50 @@ def test_settings_read_env_then_config_and_never_switch_a_limit_off(monkeypatch)
     assert envmod.setting("max_per_user") == envmod.DEFAULTS["max_per_user"]
     monkeypatch.setenv("VAF_SANDBOX_ENV_REGISTRY_HOSTS", "pypi.org, example.org")
     assert envmod.setting("registry_hosts") == ["pypi.org", "example.org"]
+
+
+def test_a_docker_that_does_not_list_is_not_a_missing_environment(docker, mgr, monkeypatch):
+    """get() read a failed listing as "no environment", which sent people after a wrong id.
+    MUTATION: drop strict=True in get() - red."""
+    env = mgr.create(ALICE)
+    real = docker.__call__
+
+    def _docker(args, timeout=60, **kw):
+        if args[0] == "ps":
+            return _done(1, "", "Cannot connect to the Docker daemon")
+        return real(args, timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _docker)
+    with pytest.raises(envmod.EnvironmentsUnlisted, match="did not list"):
+        mgr.get(ALICE, env.id)
+    assert issubclass(envmod.EnvironmentsUnlisted, EnvironmentRefused)
+
+
+def test_copy_in_never_enters_a_linked_folder(docker, mgr, monkeypatch, tmp_path):
+    """Before Python 3.13 rglob's ** followed a linked folder, and a file below it was no link
+    itself, so it went in. MUTATION: back to rglob("*", recurse_symlinks=True), the old
+    behaviour - red."""
+    import io
+    import tarfile
+    env = mgr.create(ALICE)
+    site = tmp_path / "site"
+    (site / "src").mkdir(parents=True)
+    (site / "src" / "app.py").write_text("print(1)")
+    secret = tmp_path / "dotssh"
+    secret.mkdir()
+    (secret / "id_ed25519").write_text("PRIVATE")
+    (site / "keys").symlink_to(secret, target_is_directory=True)
+    (site / "key_link").symlink_to(secret / "id_ed25519")
+    real = docker.__call__
+    sent = []
+
+    def _docker(args, timeout=60, **kw):
+        if args[0] == "exec" and kw.get("input"):
+            sent.append(kw["input"])
+        return real(args, timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _docker)
+    mgr.copy_in(ALICE, env.id, str(site))
+    with tarfile.open(fileobj=io.BytesIO(sent[-1])) as tar:
+        names = sorted(tar.getnames())
+    assert names == ["site", "site/src", "site/src/app.py"]

@@ -141,3 +141,10 @@ def test_real_env_secrets_not_leaked(tmp_path, monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-should-not-leak")
     rc, out, err, mode = run_in_workspace(str(tmp_path), "env")
     assert "sk-should-not-leak" not in (out + err), "tray env secrets leaked into the jail"
+
+
+def test_refuses_a_folder_above_home():
+    """/home holds every account's home: bound read-write, it carried this user's ~/.vaf
+    and everybody else's. MUTATION: back to `p == home` - red."""
+    with pytest.raises(ValueError, match="above"):
+        _assert_safe_workspace(str(Path.home().resolve().parent))

@@ -76,7 +76,8 @@ async def sandbox_overview(request: Request, all: int = 0) -> Dict[str, Any]:
 
 
 async def _act(request: Request, env_id: str, action: str, all: int) -> Dict[str, Any]:
-    from vaf.core.environments import EnvironmentRefused, get_environment_manager
+    from vaf.core.environments import (EnvironmentRefused, EnvironmentsUnlisted,
+                                       get_environment_manager)
     user, is_admin = _caller(request)
     if all and not is_admin:
         raise HTTPException(status_code=403, detail="admin only")
@@ -84,6 +85,8 @@ async def _act(request: Request, env_id: str, action: str, all: int) -> Dict[str
     fn = mgr.stop if action == "stop" else mgr.delete
     try:
         env = await asyncio.to_thread(fn, user["user_scope_id"], env_id, admin=bool(all))
+    except EnvironmentsUnlisted as e:
+        raise HTTPException(status_code=503, detail=f"sandbox unavailable: {e}"[:300])
     except EnvironmentRefused as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

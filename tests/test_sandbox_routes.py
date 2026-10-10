@@ -154,3 +154,23 @@ def test_the_admin_view_says_its_processes_are_the_callers_own(monkeypatch):
     monkeypatch.setattr(envmod, "get_environment_manager", lambda: fake)
     out = sandbox_routes._overview("scope-admin", True)
     assert out["processes_scope"] == "own" and seen["scope"] == "scope-admin"
+
+
+def test_an_action_on_a_docker_that_does_not_list_is_503_not_404(monkeypatch):
+    """Unmeasured is not "no such environment". MUTATION: drop the EnvironmentsUnlisted
+    branch in _act - red (404)."""
+    import asyncio
+    import types
+    from fastapi import HTTPException
+    from vaf.api import sandbox_routes
+    import vaf.core.environments as envmod
+
+    def _unlisted(*a, **k):
+        raise envmod.EnvironmentsUnlisted("docker did not list the environments: down")
+
+    monkeypatch.setattr(envmod, "get_environment_manager",
+                        lambda: types.SimpleNamespace(stop=_unlisted, delete=_unlisted))
+    monkeypatch.setattr(sandbox_routes, "_caller", lambda request: ({"user_scope_id": "scope-a"}, False))
+    with pytest.raises(HTTPException) as err:
+        asyncio.run(sandbox_routes._act(None, "0a1b2c3d", "stop", 0))
+    assert err.value.status_code == 503 and "did not list" in err.value.detail

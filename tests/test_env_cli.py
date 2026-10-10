@@ -193,3 +193,16 @@ def test_a_docker_that_hangs_is_a_line_not_a_traceback(monkeypatch):
     for args in (["list"], ["ps"]):
         res = CliRunner().invoke(env_cmd.app, args)
         assert res.exit_code == 1 and "did not answer in time" in res.output, args
+
+
+def test_a_timeout_on_a_background_process_is_refused_not_ignored(mgr):
+    """A background process runs until it is stopped; --timeout there was accepted and did
+    nothing. MUTATION: drop the refusal - red."""
+    r = CliRunner()
+    res = r.invoke(env_cmd.app, ["exec", "0a1b2c3d", "--background", "--timeout", "5", "--", "node", "s.js"])
+    assert res.exit_code == 2 and "--timeout" in res.output
+    assert not any(name == "start_process" for name, _, _ in mgr.calls)
+    r.invoke(env_cmd.app, ["exec", "0a1b2c3d", "--", "true"])
+    assert mgr.calls[-1][2]["timeout"] == 600
+    r.invoke(env_cmd.app, ["exec", "0a1b2c3d", "--timeout", "30", "--", "true"])
+    assert mgr.calls[-1][2]["timeout"] == 30

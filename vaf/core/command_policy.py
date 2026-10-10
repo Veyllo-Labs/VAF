@@ -306,6 +306,10 @@ def _executable_at(tokens: List[str]) -> tuple:
     while i < len(tokens):
         tok = tokens[i]
         base = tok.rsplit("/", 1)[-1].lower()
+        # `curl.exe` and `ftp.exe` on a Windows host are curl and ftp: judged by the name
+        # without the suffix, or every rule below was one `.exe` away from passing.
+        if base.endswith(".exe"):
+            base = base[:-4]
         if not base:
             i += 1
             continue

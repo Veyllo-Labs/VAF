@@ -78,8 +78,10 @@ def assert_safe_workspace(ws: str) -> None:
     root = _VAF_ROOT
     if p == root or root.is_relative_to(p) or p.is_relative_to(root):
         raise ValueError(f"refusing to run: workspace {p} overlaps the VAF source tree {root}")
-    # Never root a jail at the real HOME or filesystem root: that would bind-mount the
-    # user's home (incl. ~/.vaf secrets) or the whole system read-write.
+    # Never root a jail at the real HOME, anything above it (/home holds every account's home)
+    # or the filesystem root: that would bind-mount a home (incl. ~/.vaf secrets) or the
+    # whole system read-write. The same rule as is_unsafe_project_dir.
     home = Path.home().resolve()
-    if p == home or p == Path(p.anchor):
-        raise ValueError(f"refusing to run: workspace {p} is the home/root directory, not a project")
+    if home.is_relative_to(p) or p == Path(p.anchor):
+        raise ValueError(f"refusing to run: workspace {p} is the home directory, a folder above "
+                         "it or the root directory, not a project")

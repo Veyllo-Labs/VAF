@@ -757,8 +757,11 @@ checks); the pipeline, the budgets and the named boundaries are in
 
 ## Sandbox environments: `vaf.EnvironmentManager`
 
-A place where an agent may run, install and test whatever it likes without reaching the
-host: a container, a volume and a network of its own, per person. VAF's own agents use
+A place where an agent may run, install and test whatever it likes: a container, a volume
+and a network of its own, per person. The code runs inside the container, but two things
+reach the host on purpose: a project environment mounts a host folder read-write, and the
+`open` network reaches whatever listens on the host's addresses and the LAN (`none` and
+`registries` do not). VAF's own agents use
 it for `python_sandbox`, the test runner and the coder; an application uses the same
 object.
 

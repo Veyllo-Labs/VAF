@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from vaf.core.tool_dispatch import current_session_stop_check
 from vaf.tools.base import BaseTool
 
 _NETWORK_HELP = (
@@ -66,18 +67,6 @@ def _fresh_project_folder(session_id: Any, scope: Any, name: Any):
         target = base / f"{slug}-{n}"
     target.mkdir(parents=True)
     return str(target), target
-
-
-def _stop_check():
-    """True when the current chat asked to stop (the sandbox lanes poll it)."""
-    try:
-        from vaf.core.subagent_ipc import get_current_session_id
-        from vaf.core.task_queue import TaskQueue
-        sid = get_current_session_id()
-        tq = TaskQueue()
-        return lambda: bool(sid) and tq.should_stop(sid)
-    except Exception:
-        return lambda: False
 
 
 class SandboxManageTool(BaseTool):
@@ -229,7 +218,7 @@ class SandboxExecTool(BaseTool):
                         f"id=\"{handle}\") shows its output; this chat is woken when it ends.")
             timeout = min(max(1, _as_int(kwargs.get("timeout"), 120)), self.MAX_TIMEOUT_SECONDS)
             r = mgr.exec(scope, env_id, command, timeout=timeout, cwd=kwargs.get("cwd") or None,
-                         check_stop=_stop_check())
+                         check_stop=current_session_stop_check())
         except EnvironmentRefused as e:
             return _refused(self.name, e)
         except Exception as e:

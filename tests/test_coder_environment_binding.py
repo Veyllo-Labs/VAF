@@ -52,7 +52,10 @@ def test_without_an_id_the_callers_environment_for_the_folder_is_found(mgr, monk
     real = tmp_path / "real"
     real.mkdir()
     link = tmp_path / "link"
-    os.symlink(real, link)
+    try:
+        os.symlink(real, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
     env = _env(project_path=str(real))
     monkeypatch.setattr(mgr, "list", lambda owner, everyone=False: [env, _env("ffff0000", kind="temporary", project_path="")])
     assert mgr.bind_for_project("s", str(link)) is env

@@ -174,14 +174,8 @@ class PythonSandboxTool(BaseTool):
         """Return a predicate that is True when the current session has requested Stop.
         Lets a long sandbox exec be cancelled promptly instead of running to its timeout while
         the worker thread is abandoned. Falls back to 'never' if the queue/session is unavailable."""
-        try:
-            from vaf.core.task_queue import TaskQueue
-            from vaf.core.subagent_ipc import get_current_session_id
-            sid = get_current_session_id()
-            tq = TaskQueue()
-            return lambda: bool(sid) and tq.should_stop(sid)
-        except Exception:
-            return lambda: False
+        from vaf.core.tool_dispatch import current_session_stop_check
+        return current_session_stop_check()
 
     def _executor(self, env, run_id: str):
         """`execute_fn(command, timeout, env=None) -> (rc, stdout, stderr)` for one run in

@@ -22,6 +22,7 @@ import tarfile
 import uuid
 from typing import Optional
 
+from vaf.core.tool_dispatch import current_session_stop_check
 from vaf.tools.base import BaseTool
 
 # Directories never copied into the sandbox (heavy / irrelevant to a test run).
@@ -191,11 +192,9 @@ def run_project_tests(base_dir: str, command: Optional[str] = None, timeout: int
             missing = _ensure_pytest(mgr, env)
             if missing:
                 return missing
-        result = mgr.exec_in(env, ["sh", "-c", cmd], timeout=timeout, cwd=run_dir)
-        if result.timed_out or result.cancelled:
-            return _format_result(cmd, -1, result.stdout, (result.stderr or "")
-                                  + f"\nTimed out after {int(timeout)}s.")
-        return _format_result(cmd, result.returncode, result.stdout, result.stderr)
+        result = mgr.exec_in(env, ["sh", "-c", cmd], timeout=timeout, cwd=run_dir,
+                             check_stop=current_session_stop_check())
+        return _run_result(cmd, result, timeout)
     finally:
         # Always remove the copy; the scratch environment outlives this run.
         try:
@@ -220,12 +219,22 @@ def run_tests_in_environment(env, command: Optional[str] = None, timeout: int = 
             missing = _ensure_pytest(mgr, env)
             if missing:
                 return missing
-        result = mgr.exec_in(env, ["sh", "-c", cmd], timeout=timeout, cwd="/workspace")
+        result = mgr.exec_in(env, ["sh", "-c", cmd], timeout=timeout, cwd="/workspace",
+                             check_stop=current_session_stop_check())
     except EnvironmentRefused as exc:
         return f"Cannot run tests: {exc}."
     except Exception as exc:
         return f"Cannot run tests: the environment could not be reached ({exc})."
-    if result.timed_out or result.cancelled:
+    return _run_result(cmd, result, timeout)
+
+
+def _run_result(cmd: str, result, timeout: int) -> str:
+    """The report of a finished, timed-out or stopped run. A stop is said as a stop: it
+    used to read "Timed out", which sent the coder looking for a slow test."""
+    if result.cancelled:
+        return _format_result(cmd, -1, result.stdout, (result.stderr or "")
+                              + "\nStopped: the user asked to stop.")
+    if result.timed_out:
         return _format_result(cmd, -1, result.stdout, (result.stderr or "")
                               + f"\nTimed out after {int(timeout)}s.")
     return _format_result(cmd, result.returncode, result.stdout, result.stderr)

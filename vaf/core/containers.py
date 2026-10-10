@@ -217,13 +217,17 @@ def exec_bounded(container: str, argv: List[str], *, timeout: float, workdir: st
     except Exception as e:
         return -1, "", str(e), False, False
     pending_input = input_text
-    deadline = time.monotonic() + seconds + 15
+    started = time.monotonic()
+    deadline = started + seconds + 15
     while True:
         try:
             out, err = proc.communicate(input=pending_input, timeout=0.5)
             rc = proc.returncode
-            # timeout -s KILL ends the command with 137 (128 + SIGKILL) when its clock ran out.
-            return rc, out or "", err or "", rc in (124, 137), False
+            # timeout -s KILL ends the command with 137 (128 + SIGKILL) when its clock ran
+            # out - and so does the memory limit's OOM kill, at any moment. Only a run that
+            # lasted its whole budget timed out; one killed early says its exit code.
+            ran_out = time.monotonic() - started >= seconds - 1
+            return rc, out or "", err or "", rc in (124, 137) and ran_out, False
         except subprocess.TimeoutExpired:
             pending_input = None
         stopped = bool(check_stop and check_stop())

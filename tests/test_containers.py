@@ -230,6 +230,20 @@ def test_a_stop_kills_the_client_and_the_run_inside(monkeypatch):
     assert 'VAF_RUN_ID=r2' in kills[0][-1]
 
 
+def test_an_early_kill_is_not_a_timeout(monkeypatch):
+    """137 is also the memory limit's OOM kill. MUTATION: drop the elapsed check - red: an
+    out-of-memory crash after a second read as "timed out after 60s"."""
+    import vaf.core.service_stack as stack
+    monkeypatch.setattr(stack, "resolve_docker_exe", lambda: "docker")
+    monkeypatch.setattr(containers, "_popen", lambda argv, **kw: _Proc(("done", 137, "", "Killed")))
+    rc, _, _, timed_out, _ = containers.exec_bounded("c", ["node", "big.js"], timeout=60,
+                                                     workdir="/", run_id="r4")
+    assert rc == 137 and timed_out is False
+    clock = iter([100.0, 160.5])
+    monkeypatch.setattr(containers.time, "monotonic", lambda: next(clock))
+    assert containers.exec_bounded("c", ["sleep", "99"], timeout=60, workdir="/", run_id="r5")[3] is True
+
+
 def test_the_in_container_clock_reads_as_a_timeout(monkeypatch):
     import vaf.core.service_stack as stack
     monkeypatch.setattr(stack, "resolve_docker_exe", lambda: "docker")

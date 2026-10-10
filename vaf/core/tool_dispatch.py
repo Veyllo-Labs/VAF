@@ -561,6 +561,18 @@ def session_stop_check(session_id: str | None):
     return _check
 
 
+def current_session_stop_check():
+    """session_stop_check for the session this call runs in (the IPC context: a chat turn,
+    or a sub-agent child's VAF_SESSION_ID). The sandbox lanes ask for it at the start of a
+    long run, so Stop ends the run inside the container instead of letting it reach its
+    timeout."""
+    try:
+        from vaf.core.subagent_ipc import get_current_session_id
+        return session_stop_check(get_current_session_id())
+    except Exception:
+        return lambda: False
+
+
 def clip_middle(text: str, limit: int, *, marker: str) -> str:
     """``text`` cut to ``limit`` characters by leaving out its MIDDLE.
 

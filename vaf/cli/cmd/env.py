@@ -201,6 +201,8 @@ def preview(env_id: str = typer.Argument(..., help="The environment's id"),
         print(f"Title: {r['title']}")
     for line in (r.get("page_errors") or []) + (r.get("console") or []):
         print(f"  {line}")
+    text = (r.get("text") or "").strip()
+    print("\nRendered text:\n" + text if text else "\nRendered text: none")
 
 
 @app.command("stop")

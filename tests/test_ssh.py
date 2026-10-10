@@ -380,6 +380,21 @@ def test_a_folder_uploads_whole_without_links_or_history(lab, tmp_path):
     assert not (remote / ".git").exists() and not os.path.lexists(remote / "leak")
 
 
+def test_the_folder_limit_counts_the_archive_not_only_the_files(tmp_path):
+    """Every file adds a 512-byte header. MUTATION: check only the summed sizes - red: sixty
+    empty files passed a 10 kB limit as 0 bytes while the archive was over 30 kB."""
+    from vaf.tools.ssh import SshTool
+    folder = tmp_path / "many"
+    folder.mkdir()
+    for i in range(60):
+        (folder / f"f{i}.txt").write_text("")
+    with pytest.raises(ValueError, match="larger than"):
+        SshTool._folder_stream(folder, 10_000)
+    buf, count = SshTool._folder_stream(folder, 10_000_000)
+    assert count == 60
+    buf.close()
+
+
 def test_a_regular_account_moves_only_its_own_files(lab, tmp_path):
     """The local side is under the account's write jail (file_access), like download_file."""
     _tool(command="true", login_credential="SERVER_PASS", _call_confirmed=True)

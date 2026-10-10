@@ -223,10 +223,22 @@ def exec_bounded(container: str, argv: List[str], *, timeout: float, workdir: st
     pending_input = input_text
     started = time.monotonic()
     deadline = started + seconds + 15
+    # As the run's own user: a root run's processes cannot be killed by the container's
+    # unprivileged user.
+    as_user = ["-u", str(user)] if user else []
     while True:
         try:
             out, err = proc.communicate(input=pending_input, timeout=0.5)
             rc = proc.returncode
+            # A child the command put in the background (`server &`) outlives it with the
+            # same marker, and an environment with a marked process reads as busy for good:
+            # never stopped when idle, never removed when expired. A process meant to keep
+            # running is started as one (VAF_PROC_ID), so what is left here goes.
+            try:
+                docker(["exec", *as_user, container, "sh", "-c",
+                        kill_marked_cmd("VAF_RUN_ID", run_id)], timeout=15)
+            except Exception:
+                pass
             # timeout -s KILL ends the command with 137 (128 + SIGKILL) when its clock ran
             # out - and so does the memory limit's OOM kill, at any moment. Only a run that
             # lasted its whole budget timed out; one killed early says its exit code.
@@ -241,9 +253,6 @@ def exec_bounded(container: str, argv: List[str], *, timeout: float, workdir: st
             except Exception:
                 pass
             try:
-                # As the run's own user: a root run's processes cannot be killed by the
-                # container's unprivileged user.
-                as_user = ["-u", str(user)] if user else []
                 docker(["exec", *as_user, container, "sh", "-c",
                         kill_marked_cmd("VAF_RUN_ID", run_id)], timeout=15)
             except Exception:

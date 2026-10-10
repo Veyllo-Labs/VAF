@@ -819,9 +819,20 @@ class EnvironmentManager:
         owner_scope = resolve_owner(owner_scope)
         owner_hash = containers.scope_hash(owner_scope)
         env_id = f"s-{owner_hash}"
+        wanted = environment_image.usable_image()
+        if wanted == environment_image.FALLBACK_IMAGE:
+            # Running on the fallback means the image is missing: have it built, so the next
+            # scratch environment gets Node, the browser and the rest.
+            environment_image.start_background_build()
         for row in self._docker_rows(owner_hash):
             if row["id"] == env_id:
                 env = self._from_row(row)
+                if not self._runs_image(env, wanted) and not self.busy(env):
+                    # Made on the fallback, or on an image a refresh replaced. Every use
+                    # extends it, so it would never expire into the right one: recreated
+                    # now, unless something runs in it.
+                    self._remove(env)
+                    break
                 if self._read_state(env_id) is None:
                     # Adopted from a process whose record is gone: write one, or the
                     # reaper would never see this scratch environment expire.
@@ -854,6 +865,20 @@ class EnvironmentManager:
             # Another process created it in the meantime: use theirs.
             self._ensure_running(env)
         return env
+
+    @staticmethod
+    def _runs_image(env: Environment, image: str) -> bool:
+        """Whether the container runs `image`, compared by image ID (a refresh keeps the tag
+        and changes the ID). Cannot tell counts as yes: a lookup that failed must not throw
+        away a working environment."""
+        try:
+            have = containers.docker(["inspect", env.container, "--format", "{{.Image}}"], timeout=20)
+            want = containers.docker(["image", "inspect", image, "--format", "{{.Id}}"], timeout=20)
+        except Exception:
+            return True
+        if have.returncode != 0 or want.returncode != 0:
+            return True
+        return (have.stdout or "").strip() == (want.stdout or "").strip()
 
     # -- working in it ---------------------------------------------------------------
     def _workdir(self, env: Environment, cwd: Optional[str]) -> str:

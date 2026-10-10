@@ -111,6 +111,17 @@ def test_a_refusal_is_an_error_and_exit_1(monkeypatch):
     assert res.exit_code == 1 and "no account" in res.output
 
 
+def test_preview_prints_the_page_text(monkeypatch, tmp_path):
+    """The help promises the console and the text. MUTATION: drop the text lines - red."""
+    import base64
+    shot = {"ok": True, "screenshot_b64": base64.b64encode(b"png").decode(), "title": "Home",
+            "page_errors": [], "console": ["hello"], "text": "Counter 0"}
+    monkeypatch.setattr(env_cmd, "_manager", lambda: types.SimpleNamespace(render=lambda *a, **k: shot))
+    monkeypatch.setattr(env_cmd, "_scope", lambda: "s")
+    res = CliRunner().invoke(env_cmd.app, ["preview", "0a1b2c3d", "index.html", "--out", str(tmp_path / "p.png")])
+    assert res.exit_code == 0 and "Rendered text:\nCounter 0" in res.output, res.output
+
+
 def test_prune_reports_what_it_did(mgr):
     res = CliRunner().invoke(env_cmd.app, ["prune"])
     assert res.exit_code == 0 and "Removed 1" in res.output and "cleared 2" in res.output

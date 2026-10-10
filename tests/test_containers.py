@@ -191,6 +191,7 @@ class _Proc:
 
 def test_exec_bounded_builds_one_marked_bounded_command(monkeypatch):
     seen = {}
+    monkeypatch.setattr(containers, "docker", lambda *a, **k: _done())   # no real docker
     import vaf.core.service_stack as stack
     monkeypatch.setattr(stack, "resolve_docker_exe", lambda: "docker")
 
@@ -214,6 +215,7 @@ def test_exec_bounded_builds_one_marked_bounded_command(monkeypatch):
 
 def test_a_run_as_another_user_says_so_on_the_exec(monkeypatch):
     seen = {}
+    monkeypatch.setattr(containers, "docker", lambda *a, **k: _done())   # no real docker
     import vaf.core.service_stack as stack
     monkeypatch.setattr(stack, "resolve_docker_exe", lambda: "docker")
     monkeypatch.setattr(containers, "_popen",
@@ -223,6 +225,21 @@ def test_a_run_as_another_user_says_so_on_the_exec(monkeypatch):
     assert argv[argv.index("-u") + 1] == "0:0" and argv.index("-u") < argv.index("c")
     containers.exec_bounded("c", ["id"], timeout=5, workdir="/", run_id="r7")
     assert "-u" not in seen["argv"]
+
+
+def test_what_a_finished_run_left_behind_is_ended_as_its_user(monkeypatch):
+    """A `server &` outlives its command with the marker, and a marked process reads as busy
+    for good. MUTATION: drop the kill after a normal end - red."""
+    import vaf.core.service_stack as stack
+    monkeypatch.setattr(stack, "resolve_docker_exe", lambda: "docker")
+    monkeypatch.setattr(containers, "_popen", lambda argv, **kw: _Proc(("done", 0, "ok", "")))
+    calls = []
+    monkeypatch.setattr(containers, "docker", lambda args, timeout=60, **kw: calls.append(args) or _done())
+    rc, out, _, _, _ = containers.exec_bounded("env-c", ["sh", "-c", "srv &"], timeout=30,
+                                               workdir="/", run_id="r9", user="0:0")
+    assert (rc, out) == (0, "ok")
+    assert calls and calls[-1][:4] == ["exec", "-u", "0:0", "env-c"]
+    assert containers.kill_marked_cmd("VAF_RUN_ID", "r9") in calls[-1]
 
 
 def test_a_stop_kills_the_client_and_the_run_inside(monkeypatch):
@@ -244,6 +261,7 @@ def test_a_stop_kills_the_client_and_the_run_inside(monkeypatch):
 
 
 def test_an_early_kill_is_not_a_timeout(monkeypatch):
+    monkeypatch.setattr(containers, "docker", lambda *a, **k: _done())   # no real docker
     """137 is also the memory limit's OOM kill. MUTATION: drop the elapsed check - red: an
     out-of-memory crash after a second read as "timed out after 60s"."""
     import vaf.core.service_stack as stack
@@ -271,6 +289,7 @@ def test_the_backstop_kills_a_root_run_as_root(monkeypatch):
 
 
 def test_the_in_container_clock_reads_as_a_timeout(monkeypatch):
+    monkeypatch.setattr(containers, "docker", lambda *a, **k: _done())   # no real docker
     import vaf.core.service_stack as stack
     monkeypatch.setattr(stack, "resolve_docker_exe", lambda: "docker")
     monkeypatch.setattr(containers, "_popen", lambda argv, **kw: _Proc(("done", 137, "", "")))

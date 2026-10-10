@@ -255,11 +255,13 @@ class SshTool(BaseTool):
     def _folder_stream(cls, folder: Path, limit: int):
         """A folder as an uncompressed tar in a temporary file, for `tar -xf -` on the server:
         (open file at its start, number of files). Links are left out - one could point at a
-        file outside the folder - and so are .git and .vaf. Refused above `limit` bytes."""
+        file outside the folder - and so are .git and .vaf. Refused above `limit` bytes of
+        archive, headers included: many small files add a header block each."""
         import tarfile
         import tempfile
         buf = tempfile.TemporaryFile()
         count = total = 0
+        too_large = ValueError(f"the folder is larger than {limit // (1024 * 1024)} MB")
 
         def _keep(info: tarfile.TarInfo):
             info.uid = info.gid = 0
@@ -275,11 +277,13 @@ class SshTool(BaseTool):
                     if path.is_file():
                         total += path.stat().st_size
                         if total > limit:
-                            raise ValueError(f"the folder is larger than {limit // (1024 * 1024)} MB")
+                            raise too_large         # before reading a file that cannot fit
                         count += 1
                     elif not path.is_dir():
                         continue
                     tar.add(str(path), arcname=rel.as_posix(), recursive=False, filter=_keep)
+                    if buf.tell() > limit:
+                        raise too_large
         except Exception:
             buf.close()
             raise

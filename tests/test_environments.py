@@ -40,6 +40,7 @@ class FakeDocker:
         self.busy = set()      # container names with a marked process
         self.fail_isolated = False
         self.fail_run = False
+        self.image_ids = {}    # tag -> image id, for `image inspect` and a container's .Image
 
     @staticmethod
     def _labels(args):
@@ -95,6 +96,9 @@ class FakeDocker:
                 rows = [f"{n}\t{m['labels'].get(LABEL + '.id', '')}" for n, m in self.networks.items()
                         if self._match(m["labels"], self._filters(args))]
                 return _done(0, "\n".join(rows))
+        if head == "image" and args[1] == "inspect":
+            tag = args[2]
+            return _done(0, self.image_ids.get(tag, "sha256:" + tag) + "\n")
         if head == "volume":
             sub = args[1]
             if sub == "create":
@@ -149,6 +153,9 @@ class FakeDocker:
             fmt = args[-1]
             if ".proxy" in fmt:
                 return _done(0, f"{c['state']}\t{c['labels'].get(LABEL + '.proxy', '')}\n")
+            if fmt == "{{.Image}}":
+                image = c["args"][c["args"].index("sleep") - 1] if "sleep" in c["args"] else ""
+                return _done(0, self.image_ids.get(image, "sha256:" + image) + "\n")
             if "CapAdd" in fmt:
                 caps = [c["args"][i + 1] for i, a in enumerate(c["args"]) if a == "--cap-add"]
                 return _done(0, json.dumps(caps or None) + "\n")
@@ -522,12 +529,34 @@ def test_scratch_converges_on_one_container_and_reaches_the_bridge(docker, mgr):
     assert mgr.scratch_for(BOB).container != first.container
 
 
+def test_scratch_moves_to_the_built_image_unless_something_runs(docker, mgr, monkeypatch):
+    """Every use extends the scratch environment, so one made on the fallback image (or on an
+    image a refresh replaced) never expired into the right one. MUTATION: drop the image
+    check in scratch_for - red; recreate a busy one - red."""
+    monkeypatch.setattr(environment_image, "usable_image", lambda: environment_image.FALLBACK_IMAGE)
+    builds = []
+    monkeypatch.setattr(environment_image, "start_background_build", lambda: builds.append(1))
+    old = mgr.scratch_for(ALICE)
+    assert builds, "running on the fallback must have the image built"
+    assert environment_image.FALLBACK_IMAGE in _run_args(docker, old.container)
+    monkeypatch.setattr(environment_image, "usable_image", lambda: "vaf-sandbox-env:test")
+    docker.busy.add(old.container)
+    mgr.scratch_for(ALICE)
+    assert environment_image.FALLBACK_IMAGE in _run_args(docker, old.container)   # busy: kept
+    docker.busy.discard(old.container)
+    new = mgr.scratch_for(ALICE)
+    assert new.container == old.container
+    assert "vaf-sandbox-env:test" in _run_args(docker, new.container)
+    assert environment_image.FALLBACK_IMAGE not in _run_args(docker, new.container)
+
+
 def test_scratch_adopts_a_container_another_process_created(docker, mgr):
     owner = containers.scope_hash(ALICE)
     name = f"vaf-env-{owner}-scratch"
     docker.containers[name] = {"state": "exited", "labels": {
         LABEL: "1", LABEL + ".id": f"s-{owner}", LABEL + ".owner": owner,
-        LABEL + ".kind": "scratch", LABEL + ".network": "open"}, "args": [], "networks": set()}
+        LABEL + ".kind": "scratch", LABEL + ".network": "open"},
+        "args": ["run", "vaf-sandbox-env:test", "sleep", "infinity"], "networks": set()}
     env = mgr.scratch_for(ALICE)
     assert env.container == name and docker.containers[name]["state"] == "running"
     assert not [c for c in docker.calls if c[0] == "run"]

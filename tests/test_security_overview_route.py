@@ -8,6 +8,8 @@ ok (container-enforced, running or ephemeral-on-demand), warn (docker down ->
 execution blocked, fail-closed), and honest hardening booleans derived from the
 LIVE docker inspect payload rather than compose claims.
 """
+import types
+
 import pytest
 
 from vaf.api.security_routes import collect_sandbox_status, derive_sandbox_status
@@ -110,6 +112,25 @@ def test_unlisted_environments_are_unmeasured_never_green(monkeypatch):
     monkeypatch.setattr(sr, "_docker_available", lambda: True)
     monkeypatch.setattr(sr, "_environment_container_ids", lambda: None)
     assert sr.collect_docker_isolation() is None
+
+
+def test_the_registries_proxy_is_no_environment_but_its_ports_are_looked_at(monkeypatch):
+    """It shares the environment label without an id, runs with no CPU limit and on a
+    network of its own. MUTATION: list by the environment label alone - red: the tile went
+    amber whenever a registries environment ran."""
+    import vaf.api.security_routes as sr
+    from vaf.core import containers
+    from vaf.core.environments import LABEL, PROXY_CONTAINER
+    seen = {}
+    monkeypatch.setattr(containers, "docker", lambda args, timeout=60, **kw:
+                        seen.setdefault("ps", args) and types.SimpleNamespace(returncode=0, stdout="abc\n", stderr=""))
+    assert sr._environment_container_ids() == ["abc"]
+    assert f"label={LABEL}.id" in seen["ps"] and f"label={LABEL}=1" in seen["ps"]
+    looked = {}
+    monkeypatch.setattr(sr, "_docker_available", lambda: True)
+    monkeypatch.setattr(sr, "inspect_containers", lambda names: looked.setdefault("names", names) and [])
+    sr.collect_docker_isolation()
+    assert PROXY_CONTAINER in looked["names"] and "abc" in looked["names"]
 
 
 def test_a_sandbox_on_the_internal_network_warns():

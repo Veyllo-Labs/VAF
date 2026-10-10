@@ -665,17 +665,31 @@ class EnvironmentManager:
                                      f"root command needs; create a new environment for root "
                                      f"commands")
 
-    def _give_back_workspace(self, env: Environment) -> None:
+    # A whole project tree is walked twice; a large one (node_modules) takes minutes, not
+    # the two a plain docker call is given.
+    GIVE_BACK_TIMEOUT = 900
+
+    def _give_back_workspace(self, env: Environment) -> Optional[str]:
         """Hand what a root command left in /workspace back to the environment's user, so a
-        mounted project stays its owner's folder."""
+        mounted project stays its owner's folder. None when done, else what went wrong.
+
+        A mounted project is a folder ON THE HOST: a setuid file a root command left there is
+        a way to root on this machine for as long as it stays. The setuid and setgid bits come
+        off every file in /workspace first, whoever owns it (root may chown a file to another
+        user as well), then root's files go to the environment's user."""
         if not (env.project_path or env.volume):
-            return
+            return None
+        script = (f"find {WORKSPACE} -xdev -type f \\( -perm -4000 -o -perm -2000 \\) "
+                  f"-exec chmod ug-s {{}} + ; "
+                  f"find {WORKSPACE} -xdev -uid 0 -exec chown -h {_host_user()} {{}} +")
         try:
-            containers.docker(["exec", "-u", "0:0", env.container, "sh", "-c",
-                               f"find {WORKSPACE} -xdev -uid 0 -exec chown {_host_user()} {{}} +"],
-                              timeout=120)
-        except Exception:
-            pass
+            r = containers.docker(["exec", "-u", "0:0", env.container, "sh", "-c", script],
+                                  timeout=self.GIVE_BACK_TIMEOUT)
+        except Exception as e:
+            return str(e)[:300]
+        if r.returncode != 0:
+            return ((r.stderr or "").strip() or f"exit {r.returncode}")[:300]
+        return None
 
     @staticmethod
     def _label_args(labels: Dict[str, str]) -> List[str]:
@@ -906,7 +920,11 @@ class EnvironmentManager:
             env_values=env_values, run_id=run_id, check_stop=check_stop,
             input_text=input_text, user="0:0" if as_root else None)
         if as_root:
-            self._give_back_workspace(env)
+            failed = self._give_back_workspace(env)
+            if failed:
+                err = (f"{err.rstrip()}\n" if err.strip() else "") + (
+                    f"[warning] what this root command left in {WORKSPACE} could not be handed "
+                    f"back to the project's owner ({failed}); files there may still be root's.")
         self._touch(env)
         return ExecResult(rc, out, err, timed_out=timed_out, cancelled=cancelled,
                           extra={"run_id": run_id})

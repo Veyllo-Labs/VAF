@@ -597,8 +597,30 @@ def test_the_root_lane_runs_as_root_and_hands_the_workspace_back(docker, mgr, mo
     assert seen["user"] == "0:0"
     give_back = [c for c in docker.calls if c[:4] == ["exec", "-u", "0:0", env.container]]
     assert give_back and "chown" in give_back[-1][-1] and envmod._host_user() in give_back[-1][-1]
+    # MUTATION: drop the chmod - red: a setuid file in a host folder is a way to root there.
+    script = give_back[-1][-1]
+    assert "chmod ug-s" in script and script.index("chmod ug-s") < script.index("chown")
     mgr.exec_in(env, ["sh", "-c", "id"])
     assert seen["user"] is None
+
+
+def test_a_give_back_that_failed_is_said_not_swallowed(docker, mgr, monkeypatch):
+    """MUTATION: ignore the give-back's exit code again - red: root's files stayed root's in
+    the person's folder and nobody heard of it."""
+    monkeypatch.setattr(containers, "exec_bounded", lambda *a, **k: (0, "installed\n", "", False, False))
+    env = mgr.create(ALICE, kind="temporary")
+    real = docker.__call__
+
+    def _docker(args, timeout=60, **kw):
+        if args[:3] == ["exec", "-u", "0:0"] and "chown" in args[-1]:
+            assert timeout >= 600                       # a large tree needs minutes
+            return _done(1, "", "find: /workspace/x: Permission denied")
+        return real(args, timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _docker)
+    r = mgr.exec_in(env, ["sh", "-c", "apt-get install -y tree"], as_root=True)
+    assert r.returncode == 0 and r.stdout == "installed\n"
+    assert "[warning]" in r.stderr and "Permission denied" in r.stderr
 
 
 def test_no_root_lane_where_it_cannot_work(docker, mgr, monkeypatch):

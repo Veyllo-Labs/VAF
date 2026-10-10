@@ -48,11 +48,14 @@ def _docker_available() -> bool:
 def _environment_container_ids() -> Optional[List[str]]:
     """Every running sandbox environment container, whoever owns it (the dashboard is
     the admin's view of the machine). None when docker could not be asked: that is an
-    unmeasured state, not an empty machine."""
+    unmeasured state, not an empty machine. An environment carries an id label; the
+    registries proxy shares the environment label but has none, and is not an environment
+    (no CPU limit, a network of its own: it would read as weak hardening)."""
     try:
         from vaf.core import containers
         from vaf.core.environments import LABEL
         r = containers.docker(["ps", "-q", "--filter", f"label={LABEL}=1",
+                               "--filter", f"label={LABEL}.id",
                                "--filter", "status=running"], timeout=10)
         if r.returncode != 0:
             return None
@@ -334,8 +337,11 @@ def collect_docker_isolation() -> Optional[Dict[str, Any]]:
     env_ids = _environment_container_ids()
     if env_ids is None:
         return None                     # the environments could not be listed: unmeasured
+    from vaf.core.environments import PROXY_CONTAINER
+    # The registries proxy is no environment, but it is a container VAF started: its ports
+    # are looked at like every other one's (a missing container is simply absent).
     return derive_docker_isolation(
-        inspect_containers([s.container_name for s in SERVICES] + env_ids)
+        inspect_containers([s.container_name for s in SERVICES] + env_ids + [PROXY_CONTAINER])
     )
 
 

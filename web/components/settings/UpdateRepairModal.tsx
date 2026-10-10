@@ -124,7 +124,6 @@ export function healthOf(svc: ServiceRow): Health {
     if (svc.exists === false || svc.exists === null) return svc.required ? 'down' : 'idle';
     if (!svc.running) return svc.required ? 'down' : 'idle';
     if (svc.port_mismatch) return 'degraded';
-    if (svc.starting) return 'degraded';
     if (svc.probe_ok === false) return svc.required ? 'down' : 'degraded';
     if (svc.health && !['healthy', 'none', ''].includes(svc.health)) return 'degraded';
     return 'ok';

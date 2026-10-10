@@ -299,6 +299,14 @@ def connect(target: Target, *, user_scope_id: Optional[str], password: Optional[
         return Session(ftp, target, first_contact=first, trust="none")
 
     # Encrypted. An authority-vouched certificate first; when it is not, the pinned one.
+    # A remembered encrypted server is trusted one of two ways; anything else (a pinned entry
+    # without its fingerprint, a plain-FTP or unknown trust under an ftps:// name) would reach
+    # the unverified handshake below with nothing to compare against.
+    if known is not None and not (known.get("trust") == "authority" or (
+            known.get("trust") == "pinned" and known.get("fingerprint"))):
+        raise FtpError(f"the remembered entry for {target.name} is damaged (no certificate to "
+                       "compare with). Tell the user; they remove the server in Settings, "
+                       "Connections, FTP (or `vaf ftp forget`), and the next call asks again")
     pinned = (known or {}).get("fingerprint", "")
     attempts = ["authority"] if (known or {}).get("trust") == "authority" else (
         ["pinned"] if pinned else ["authority", "pinned"])
@@ -438,17 +446,17 @@ def upload(session: Session, local: Path, remote: str, *,
     stop = _stop_check(check_stop)
     ftp = session.ftp
     if local.is_dir():
+        from vaf.core.path_jail import walk_without_links
         files = []
         total = 0
-        for path in sorted(local.rglob("*")):
-            rel = path.relative_to(local)
-            if any(part in FOLDER_SKIP for part in rel.parts) or path.is_symlink():
+        for rel_text, is_folder in walk_without_links(local, FOLDER_SKIP):
+            if is_folder:
                 continue
-            if path.is_file():
-                total += path.stat().st_size
-                if total > limit:
-                    raise FtpError(f"the folder is larger than {limit // (1024 * 1024)} MB")
-                files.append(rel)
+            rel = Path(rel_text)
+            total += (local / rel).stat().st_size
+            if total > limit:
+                raise FtpError(f"the folder is larger than {limit // (1024 * 1024)} MB")
+            files.append(rel)
         _ensure_dirs(ftp, remote)
         made = {""}
         sent = 0

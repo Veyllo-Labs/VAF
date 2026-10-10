@@ -281,6 +281,8 @@ One image serves every sandbox environment and the registries proxy:
 
 **Why the headless shell and not the full Chromium.** The full browser's headless mode crashes in a container without a crash database. Measured with Chromium 151: `chrome_crashpad_handler: --database is required`, and with crashpad switched off an "FD ownership violation". Debian's `chromium-headless-shell` is the separate binary built for exactly this use. It took a 1280x800 screenshot of a page the environment served in 215 ms, as a non-root user with every capability dropped and no network beyond the environment's own.
 
+**Package index dates.** The image's `apt-get update` runs with `Acquire::Check-Date=false`, as the browser and speech images do: a build host whose clock is behind (common in VMs, WSL2 and CI) would otherwise reject freshly signed index files as "not valid yet". The signatures are still verified. NAMED BOUNDARY: the option switches off apt's time checks as a whole, so an index file past its `Valid-Until` is not refused either; a mirror that replays an old, validly signed index during a build would not be noticed. The image's age budget (`sandbox_env_image_max_age_days`) rebuilds it regardless.
+
 **Licences.** The image is built locally only and never published. tinyproxy is GPL-2.0, and `chromium-headless-shell` carries the Chromium licences. Each runs as a separate program next to the other Debian packages, an aggregate with no code linkage. See [THIRD_PARTY.md](../legal/THIRD_PARTY.md).
 
 ### Environments (`vaf/core/environments.py`)

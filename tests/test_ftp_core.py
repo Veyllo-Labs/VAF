@@ -276,3 +276,34 @@ def test_forget_and_the_server_list(lab):
     assert [r["name"] for r in ftp.servers(ALICE)] == [name]
     assert ftp.forget(name, ALICE) is True
     assert ftp.servers(ALICE) == [] and ftp.forget(name, ALICE) is False
+
+
+def test_a_damaged_server_entry_is_refused_not_trusted_blindly(lab):
+    """A pinned entry without its fingerprint, or a plain-FTP trust under an ftps:// name,
+    reached the unverified handshake with nothing to compare. MUTATION: drop the check - red."""
+    tmp, root = lab
+    with FtpStub(root, cert=make_cert(tmp, "leaf")) as server:
+        t = _target(server)
+        for damaged in ({"trust": "pinned", "fingerprint": ""}, {"trust": "none"}, {"trust": "?"}):
+            ftp._save(ALICE, {t.name: damaged})
+            with pytest.raises(ftp.FtpError, match="damaged"):
+                ftp.connect(t, user_scope_id=ALICE, password=PASSWORD, confirmed=True)
+        assert server.connections == 0
+
+
+def test_a_folder_upload_never_enters_a_linked_folder(session):
+    """Before Python 3.13 rglob's ** followed linked folders: a file under site/linked was no
+    link itself and went up. MUTATION: stop pruning linked folders - red (followlinks=True
+    alone stays green: the pruning is the second guard)."""
+    tmp, root, server, s = session
+    site = tmp / "linked_site"
+    site.mkdir()
+    (site / "index.html").write_text("ok")
+    secret = tmp / "dotssh"
+    secret.mkdir()
+    (secret / "id_ed25519").write_text("PRIVATE")
+    (site / "keys").symlink_to(secret, target_is_directory=True)
+    from vaf.core.path_jail import walk_without_links
+    assert walk_without_links(site) == [("index.html", False)]
+    assert ftp.upload(s, site, "w")["files"] == 1
+    assert not (root / "w" / "keys").exists()

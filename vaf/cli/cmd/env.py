@@ -37,19 +37,35 @@ def _manager():
     return get_environment_manager()
 
 
+def _errors():
+    """What a command turns into an error line instead of a traceback: a refusal, a docker CLI
+    that cannot be started (OSError), and one that hangs or fails (SubprocessError, e.g.
+    TimeoutExpired from a docker call's own timeout)."""
+    import subprocess
+    from vaf.core.environments import EnvironmentRefused
+    return (EnvironmentRefused, OSError, subprocess.SubprocessError)
+
+
 def _fail(exc) -> None:
-    # OSError: the docker CLI could not be started at all (not installed, not executable).
-    UI.error(f"docker could not be run: {exc}" if isinstance(exc, OSError) else str(exc))
+    import subprocess
+    if isinstance(exc, OSError):
+        message = f"docker could not be run: {exc}"
+    elif isinstance(exc, subprocess.TimeoutExpired):
+        message = f"docker did not answer in time ({exc})"
+    elif isinstance(exc, subprocess.SubprocessError):
+        message = f"docker failed: {exc}"
+    else:
+        message = str(exc)
+    UI.error(message)
     raise typer.Exit(1)
 
 
 @app.command("list")
 def list_envs(all_owners: bool = typer.Option(False, "--all", help="Everybody's environments (admin view)")):
     """Your environments, or with --all everybody's."""
-    from vaf.core.environments import EnvironmentRefused
     try:
         envs = _manager().list(_scope(), everyone=all_owners)
-    except (EnvironmentRefused, OSError) as e:
+    except _errors() as e:
         _fail(e)
     if not envs:
         UI.info("No sandbox environments.")
@@ -68,7 +84,6 @@ def create(
     memory: Optional[int] = typer.Option(None, "--memory", help="Memory limit in MB"),
 ):
     """Create an environment. Waits for the environment image the first time it is built."""
-    from vaf.core.environments import EnvironmentRefused
     if temp == bool(project):
         UI.error("Say --temp or --project NAME (one of them).")
         raise typer.Exit(2)
@@ -79,7 +94,7 @@ def create(
         env = _manager().create(_scope(), kind="project" if project else "temporary",
                                 name=project or "", project_path=path, network=network,
                                 memory_mb=memory, wait_for_image=True)
-    except (EnvironmentRefused, OSError) as e:
+    except _errors() as e:
         _fail(e)
     UI.success(f"Created {env.describe()}")
     if env.degraded:
@@ -110,7 +125,6 @@ def exec_cmd(
     Several words are one command with its arguments, each kept whole
     (`-- python3 -c "print('a b')"`); a single quoted word is a shell line
     (`-- "pip install -r requirements.txt && pytest"`)."""
-    from vaf.core.environments import EnvironmentRefused
     command = _command_line(ctx.args)
     if not command:
         UI.error("No command. Example: vaf env exec ID -- python3 --version")
@@ -120,7 +134,7 @@ def exec_cmd(
             print(_manager().start_process(_scope(), env_id, command))
             return
         r = _manager().exec(_scope(), env_id, command, timeout=timeout)
-    except (EnvironmentRefused, OSError) as e:
+    except _errors() as e:
         _fail(e)
     if r.stdout:
         print(r.stdout, end="" if r.stdout.endswith("\n") else "\n")
@@ -136,14 +150,13 @@ def exec_cmd(
 def shell(env_id: str = typer.Argument(..., help="The environment's id")):
     """An interactive shell in an environment (/workspace)."""
     import subprocess
-    from vaf.core.environments import EnvironmentRefused
     from vaf.core.service_stack import resolve_docker_exe
     try:
         env = _manager().get(_scope(), env_id)
         _manager()._ensure_running(env)
         code = subprocess.call([resolve_docker_exe(), "exec", "-it", "-w", "/workspace",
                                 env.container, "bash"])
-    except (EnvironmentRefused, OSError) as e:
+    except _errors() as e:
         _fail(e)
     raise typer.Exit(code)
 
@@ -151,10 +164,9 @@ def shell(env_id: str = typer.Argument(..., help="The environment's id")):
 @app.command("ps")
 def ps():
     """Background processes in your environments."""
-    from vaf.core.environments import EnvironmentRefused
     try:
         rows = _manager().processes(_scope())
-    except (EnvironmentRefused, OSError) as e:
+    except _errors() as e:
         _fail(e)
     if not rows:
         UI.info("No background processes.")
@@ -167,20 +179,18 @@ def ps():
 def logs(handle: str = typer.Argument(..., help="A process id from `vaf env ps`"),
          chars: int = typer.Option(4000, "--chars", help="How much of the end to show")):
     """The end of a background process's output."""
-    from vaf.core.environments import EnvironmentRefused
     try:
         print(_manager().process_log(_scope(), handle, max_chars=min(max(200, chars), 200000)))
-    except (EnvironmentRefused, OSError) as e:
+    except _errors() as e:
         _fail(e)
 
 
 @app.command("kill")
 def kill(handle: str = typer.Argument(..., help="A process id from `vaf env ps`")):
     """Stop a background process."""
-    from vaf.core.environments import EnvironmentRefused
     try:
         print(_manager().stop_process(_scope(), handle))
-    except (EnvironmentRefused, OSError) as e:
+    except _errors() as e:
         _fail(e)
 
 
@@ -191,10 +201,9 @@ def preview(env_id: str = typer.Argument(..., help="The environment's id"),
     """A screenshot of a page the environment serves, plus its console and text."""
     import base64
     from pathlib import Path
-    from vaf.core.environments import EnvironmentRefused
     try:
         r = _manager().render(_scope(), env_id, target)
-    except (EnvironmentRefused, OSError) as e:
+    except _errors() as e:
         _fail(e)
     if not r.get("ok"):
         _fail(r.get("error") or "no screenshot")
@@ -215,10 +224,9 @@ def preview(env_id: str = typer.Argument(..., help="The environment's id"),
 def stop(env_id: str = typer.Argument(..., help="The environment's id"),
          all_owners: bool = typer.Option(False, "--all-owners", help="Also another person's (admin)")):
     """Stop an environment (its files stay)."""
-    from vaf.core.environments import EnvironmentRefused
     try:
         UI.success(f"Stopped {_manager().stop(_scope(), env_id, admin=all_owners).id}")
-    except (EnvironmentRefused, OSError) as e:
+    except _errors() as e:
         _fail(e)
 
 
@@ -227,22 +235,20 @@ def delete(env_id: str = typer.Argument(..., help="The environment's id"),
            yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask"),
            all_owners: bool = typer.Option(False, "--all-owners", help="Also another person's (admin)")):
     """Delete an environment: container, files and network."""
-    from vaf.core.environments import EnvironmentRefused
     if not yes and not typer.confirm(f"Delete environment {env_id} and everything in it?"):
         raise typer.Exit(1)
     try:
         UI.success(f"Deleted {_manager().delete(_scope(), env_id, admin=all_owners).id}")
-    except (EnvironmentRefused, OSError) as e:
+    except _errors() as e:
         _fail(e)
 
 
 @app.command("prune")
 def prune():
     """Remove expired temporary environments, stop idle ones, clear crash leftovers."""
-    from vaf.core.environments import EnvironmentRefused
     try:
         summary = _manager().prune()
-    except (EnvironmentRefused, OSError) as e:
+    except _errors() as e:
         _fail(e)
     UI.success(f"Removed {summary['removed']}, stopped {summary['stopped']}, "
                f"cleared {summary['orphans']} leftovers.")

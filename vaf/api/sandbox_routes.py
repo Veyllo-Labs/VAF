@@ -4,7 +4,9 @@
 """The caller's sandbox environments (vaf/core/environments.py) for Settings, Connections.
 
 GET lists the caller's own environments and the background processes in them; an admin
-may ask for everybody's (`?all=1`). POST .../stop and DELETE act on one; an admin may act
+may ask for everybody's environments (`?all=1`). The processes stay the caller's own even
+then (`processes_scope: "own"`): another person's commands are theirs to read, and the admin
+view is for stopping and deleting, never for looking inside. POST .../stop and DELETE act on one; an admin may act
 on another person's with `?all=1`. Nothing here runs code in an environment - that is the
 agent's tools and `vaf env exec`, and never on someone else's.
 """
@@ -59,7 +61,7 @@ def _overview(scope, everyone: bool) -> Dict[str, Any]:
         return {"available": False, "reason": f"sandbox unavailable: {e}"[:300],
                 "environments": [], "processes": []}
     return {"available": True, "environments": [_row(e, with_owner=everyone) for e in envs],
-            "processes": procs}
+            "processes": procs, "processes_scope": "own"}
 
 
 @router.get("")

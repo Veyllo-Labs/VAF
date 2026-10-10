@@ -644,3 +644,23 @@ def test_a_download_target_that_cannot_be_written_is_an_error_before_ssh_runs(la
                 **owner)
     assert out.startswith("Error:") and "cannot be written" in out, out
     assert len(lab.calls()) == before, "ssh ran although the target could not be written"
+
+
+def test_a_folder_stream_never_enters_a_linked_folder(tmp_path):
+    """Same walk as the ftp upload. MUTATION: back to rglob - red on Python before 3.13; the
+    helper's own test pins the walk."""
+    import tarfile
+    from vaf.tools.ssh import SshTool
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "index.html").write_text("ok")
+    (site / ".git").mkdir()
+    (site / ".git" / "HEAD").write_text("x")
+    secret = tmp_path / "dotssh"
+    secret.mkdir()
+    (secret / "id_ed25519").write_text("PRIVATE")
+    (site / "keys").symlink_to(secret, target_is_directory=True)
+    buf, count = SshTool._folder_stream(site, 10_000_000)
+    with tarfile.open(fileobj=buf) as tar:
+        names = tar.getnames()
+    assert names == ["index.html"] and count == 1

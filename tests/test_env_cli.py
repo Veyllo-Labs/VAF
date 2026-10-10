@@ -178,3 +178,18 @@ def test_preview_prints_the_page_text(monkeypatch, tmp_path):
 def test_prune_reports_what_it_did(mgr):
     res = CliRunner().invoke(env_cmd.app, ["prune"])
     assert res.exit_code == 0 and "Removed 1" in res.output and "cleared 2" in res.output
+
+
+def test_a_docker_that_hangs_is_a_line_not_a_traceback(monkeypatch):
+    """containers.docker raises TimeoutExpired when docker does not answer. MUTATION: catch
+    only EnvironmentRefused and OSError again - red."""
+    import subprocess
+
+    def _hang(*a, **k):
+        raise subprocess.TimeoutExpired(["docker", "ps"], 30)
+
+    monkeypatch.setattr(env_cmd, "_manager", lambda: types.SimpleNamespace(list=_hang, processes=_hang))
+    monkeypatch.setattr(env_cmd, "_scope", lambda: "scope-owner")
+    for args in (["list"], ["ps"]):
+        res = CliRunner().invoke(env_cmd.app, args)
+        assert res.exit_code == 1 and "did not answer in time" in res.output, args

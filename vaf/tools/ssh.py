@@ -273,20 +273,17 @@ class SshTool(BaseTool):
             info.uname = info.gname = ""
             return info
 
+        from vaf.core.path_jail import walk_without_links
         try:
             with tarfile.open(fileobj=buf, mode="w") as tar:
-                for path in sorted(folder.rglob("*")):
-                    rel = path.relative_to(folder)
-                    if any(part in cls._FOLDER_SKIP for part in rel.parts) or path.is_symlink():
-                        continue
-                    if path.is_file():
+                for rel, is_folder in walk_without_links(folder, cls._FOLDER_SKIP):
+                    path = folder / rel
+                    if not is_folder:
                         total += path.stat().st_size
                         if total > limit:
                             raise too_large         # before reading a file that cannot fit
                         count += 1
-                    elif not path.is_dir():
-                        continue
-                    tar.add(str(path), arcname=rel.as_posix(), recursive=False, filter=_keep)
+                    tar.add(str(path), arcname=rel, recursive=False, filter=_keep)
                     if buf.tell() > limit:
                         raise too_large
         except Exception:

@@ -139,10 +139,13 @@ def derive_sandbox_status(docker_available: bool,
             "isolated_network": own_network,
         }
     except Exception:
-        hardening = {}
+        # A field docker answered in a shape this cannot read: the hardening is unmeasured,
+        # and an empty result must not fall through to the green below.
+        return {"state": "nodata", "reason": "hardening_unreadable", "container_running": True,
+                "environments": len(running)}
     weak = [k for k in ("cap_drop_all", "no_new_privileges", "non_root", "isolated_network",
                         "limits")
-            if hardening and not hardening.get(k)]
+            if not hardening.get(k)]
     return {
         "state": "warn" if weak else "ok",
         "reason": "hardening_incomplete" if weak else "container_running",

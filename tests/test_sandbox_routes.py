@@ -139,3 +139,18 @@ def test_the_section_is_mounted_and_reads_its_strings():
     assert "useEffect(() => { loadNow.current = load; }, [load]);" in section
     server = (root / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
     assert "from vaf.api.sandbox_routes import router as sandbox_router" in server
+
+
+def test_the_admin_view_says_its_processes_are_the_callers_own(monkeypatch):
+    """Everybody's environments, but not everybody's commands. MUTATION: drop the scope - red."""
+    import types
+    from vaf.api import sandbox_routes
+    import vaf.core.environments as envmod
+    import vaf.core.service_stack as stack
+    monkeypatch.setattr(stack, "is_docker_daemon_running", lambda: True)
+    seen = {}
+    fake = types.SimpleNamespace(list=lambda scope, everyone=False: [],
+                                 processes=lambda scope: seen.setdefault("scope", scope) and [])
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: fake)
+    out = sandbox_routes._overview("scope-admin", True)
+    assert out["processes_scope"] == "own" and seen["scope"] == "scope-admin"

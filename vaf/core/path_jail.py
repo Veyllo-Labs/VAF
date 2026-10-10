@@ -152,3 +152,30 @@ def safe_entry_name(name: str, *, allow_hidden: bool = False) -> str:
     if not allow_hidden and raw.startswith("."):
         raise PathEscape("name must not be hidden")
     return raw
+
+
+def walk_without_links(root, skip=()):
+    """Every folder and regular file below `root`, as (relative POSIX path, is_folder), in a
+    stable order: links are left out, and so is everything below a linked folder, and every
+    entry whose name is in `skip` with all below it. For an upload that must carry this
+    folder's own contents and nothing a link points at. `Path.rglob` is not that: before
+    Python 3.13 its `**` followed linked folders, so a file under `site/linked -> ~/.ssh` was
+    neither a link itself nor skipped."""
+    out = []
+    base = Path(root)
+    for here, dirs, files in os.walk(base, followlinks=False):
+        rel_here = Path(here).relative_to(base)
+        keep = []
+        for name in sorted(dirs):
+            if name in skip or os.path.islink(os.path.join(here, name)):
+                continue
+            keep.append(name)
+            out.append(((rel_here / name).as_posix(), True))
+        dirs[:] = keep
+        for name in sorted(files):
+            full = os.path.join(here, name)
+            if name in skip or os.path.islink(full) or not os.path.isfile(full):
+                continue
+            out.append(((rel_here / name).as_posix(), False))
+    return sorted(out)
+

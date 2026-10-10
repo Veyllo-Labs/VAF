@@ -329,3 +329,16 @@ def test_skills_status_derivation():
 
     out_high = derive_skills_status({"bad": {"scan": {"score": 90, "level": "high", "count": 5}}}, [], None)
     assert out_high["state"] == "critical"
+
+
+def test_an_unreadable_hardening_result_is_unmeasured_not_green():
+    """A field docker answered in a shape the derivation cannot read emptied the hardening,
+    and an empty one fell through to "ok". MUTATION: go back to hardening = {} - red."""
+    from vaf.api.security_routes import derive_sandbox_status
+    broken = {"State": {"Running": True},
+              "HostConfig": {"CapDrop": ["ALL"], "Memory": "lots", "NanoCpus": 1, "PidsLimit": 1},
+              "Config": {"User": "1000:1000"},
+              "NetworkSettings": {"Networks": {"vaf-env-net-ab12cd34": {}}}}
+    out = derive_sandbox_status(True, [broken])
+    assert out["state"] == "nodata" and out["reason"] == "hardening_unreadable"
+    assert out["container_running"] is True and out["environments"] == 1

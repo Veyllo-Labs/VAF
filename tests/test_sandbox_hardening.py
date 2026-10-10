@@ -105,3 +105,67 @@ def test_timeout_kill_uses_marker_and_skips_without_one(monkeypatch):
     calls.clear()
     tool._kill_sandbox_exec(_P(), "echo no marker here")
     assert calls == []                                  # never falls back to a broad kill
+
+
+# -- bridge values travel in the environment, never in a command line ----------
+
+def test_exec_passes_values_as_environment_not_as_command_text(monkeypatch):
+    """`docker exec -e NAME` with the value in the client's environment: the token is
+    neither in the host's process list nor in the shell's cmdline in the shared
+    container. MUTATION: put NAME=value into exec_cmd - red."""
+    import vaf.tools.python_sandbox as ps
+    seen = {}
+
+    class _Proc:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+    def _popen(args, **kw):
+        seen["args"], seen["env"] = list(args), kw.get("env")
+        return _Proc()
+
+    monkeypatch.setattr(ps.subprocess, "Popen", _popen)
+    PythonSandboxTool()._execute_in_persistent("true", 5, env={"VAF_BRIDGE_TOKEN": "s3cr3t-token"})
+    assert not any("s3cr3t-token" in a for a in seen["args"]), seen["args"]
+    i = seen["args"].index("-e")
+    assert seen["args"][i + 1] == "VAF_BRIDGE_TOKEN"
+    assert seen["env"]["VAF_BRIDGE_TOKEN"] == "s3cr3t-token"
+
+
+def test_the_bridge_run_hands_its_values_over_as_env():
+    """MUTATION: build the command with `VAF_BRIDGE_TOKEN="..."` again - red."""
+    calls = []
+
+    def _exec(cmd, timeout, env=None):
+        calls.append((cmd, env))
+        return 0, "", ""
+
+    PythonSandboxTool()._run_with_bridge(
+        "print(1)", _exec, "/tmp/vaf_abc_1", 10,
+        {"VAF_BRIDGE_URL": "http://host.docker.internal:4242", "VAF_BRIDGE_TOKEN": "tok-123"},
+        "# stub")
+    run_cmd, run_env = calls[-1]
+    assert "tok-123" not in run_cmd and "VAF_BRIDGE_TOKEN" not in run_cmd
+    assert run_env == {"VAF_BRIDGE_URL": "http://host.docker.internal:4242",
+                       "VAF_BRIDGE_TOKEN": "tok-123"}
+
+
+def test_ephemeral_exec_passes_values_as_environment(monkeypatch):
+    import vaf.tools.sandbox as sb
+    seen = {}
+
+    def _run(args, **kw):
+        seen["args"], seen["env"] = list(args), kw.get("env")
+        import types
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sb.subprocess, "run", _run)
+    box = sb.DockerSandbox.__new__(sb.DockerSandbox)
+    box.is_running = True
+    box.container_name = "vaf_sandbox_test"
+    box.execute("true", timeout=5, env={"VAF_BRIDGE_TOKEN": "tok-9"})
+    assert "tok-9" not in " ".join(seen["args"])
+    assert seen["args"][seen["args"].index("-e") + 1] == "VAF_BRIDGE_TOKEN"
+    assert seen["env"]["VAF_BRIDGE_TOKEN"] == "tok-9"

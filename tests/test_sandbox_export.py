@@ -62,6 +62,62 @@ def test_paths_outside_scratch_are_refused(export_env, monkeypatch):
     assert not called, "docker cp must never run for non-scratch paths"
 
 
+def test_only_files_inside_this_runs_workdir_are_exported(export_env, monkeypatch):
+    """The persistent sandbox is shared, so another user's run sits next to this one
+    under /tmp. Any /tmp or /workspace path used to be accepted, which let one run copy
+    another run's files out. MUTATION: accept any /tmp or /workspace path again - red."""
+    dest, _ = export_env
+    copied = []
+
+    def _run(cmd, **kw):
+        copied.append(cmd[-2])
+        Path(cmd[-1]).write_bytes(b"data")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ps_mod.subprocess, "run", _run)
+    notes = PythonSandboxTool()._export_artifacts(
+        ["/tmp/vaf_otheruser_1234/secret.txt", "/workspace/testrun_x/a.txt",
+         "../vaf_otheruser_1234/secret.txt", "/tmp/vaf_abc/../vaf_x/b.txt"],
+        "/tmp/vaf_abc", use_persistent=True, session_id="c")
+    assert all("export skipped" in n for n in notes), notes
+    assert copied == [], "docker cp must never run for a path outside this run's dir"
+
+    notes = PythonSandboxTool()._export_artifacts(
+        ["/tmp/vaf_abc/out/chart.png", "sub/../plot.png"], "/tmp/vaf_abc",
+        use_persistent=True, session_id="c")
+    assert [c.split(":", 1)[1] for c in copied] == ["/tmp/vaf_abc/out/chart.png",
+                                                   "/tmp/vaf_abc/plot.png"]
+    assert all("Exported" in n for n in notes), notes
+
+
+@pytest.mark.parametrize("kind", ["symlink", "directory"])
+def test_a_link_or_directory_from_docker_cp_is_removed_not_delivered(export_env, monkeypatch,
+                                                                     tmp_path, kind):
+    """docker cp copies a symbolic link AS a link: one the code planted would land in
+    the chat workspace pointing at a host file. MUTATION: drop _refuse_copied_non_file -
+    the link resolves to a real file, isfile() is True and it is reported as exported."""
+    dest, notified = export_env
+    host_secret = tmp_path / "host_secret"
+    host_secret.write_text("private")
+
+    def _run(cmd, **kw):
+        target = Path(cmd[-1])
+        if kind == "symlink":
+            target.symlink_to(host_secret)
+        else:
+            target.mkdir()
+            (target / "inner.txt").write_text("x")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ps_mod.subprocess, "run", _run)
+    notes = PythonSandboxTool()._export_artifacts(
+        ["thing"], "/tmp/vaf_abc", use_persistent=True, session_id="c")
+    assert notes and "export refused" in notes[0], notes
+    assert not (dest / "thing").exists() and not (dest / "thing").is_symlink()
+    assert notified == []
+    assert host_secret.read_text() == "private"
+
+
 def test_cp_failure_yields_note_not_crash(export_env, monkeypatch):
     monkeypatch.setattr(ps_mod.subprocess, "run",
                         lambda cmd, **kw: types.SimpleNamespace(returncode=1, stdout="", stderr="no such file"))
@@ -82,7 +138,7 @@ def test_basename_is_sanitized(export_env, monkeypatch):
     dest, _ = export_env
     monkeypatch.setattr(ps_mod.subprocess, "run", _fake_cp_success(dest))
     PythonSandboxTool()._export_artifacts(
-        ["/tmp/evil name$(rm).png"], "/tmp/w", use_persistent=True, session_id="c")
+        ["evil name$(rm).png"], "/tmp/w", use_persistent=True, session_id="c")
     names = [p.name for p in dest.iterdir()]
     assert names and all(re.fullmatch(r"[A-Za-z0-9._-]+", n) for n in names), names
 

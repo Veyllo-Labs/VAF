@@ -36,6 +36,8 @@ API features required.
 """
 import base64
 import os
+import posixpath
+import shutil
 import subprocess
 import logging
 import time
@@ -129,7 +131,8 @@ class PythonSandboxTool(BaseTool):
                     "Files your code wrote that must be DELIVERED to the user: copied from the "
                     "sandbox into the chat workspace after a successful run (e.g. ['chart.png']). "
                     "THE way to persist binary artifacts - never print base64 into context. "
-                    "Relative paths resolve against the run's working directory. Max 5 files."
+                    "Relative paths resolve against the run's working directory, and only files "
+                    "inside it can be exported. Max 5 files."
                 )
             },
             "with_vaf_tools": {
@@ -244,12 +247,32 @@ class PythonSandboxTool(BaseTool):
         except Exception:
             pass
 
-    def _execute_in_persistent(self, command: str, timeout: int, workdir: str = "/workspace") -> Tuple[int, str, str]:
+    @staticmethod
+    def _exec_env_args(env: Optional[Dict[str, str]]) -> Tuple[List[str], Optional[Dict[str, str]]]:
+        """`docker exec` flags and the client's environment for values a run must see.
+
+        Each name goes on the command line as a bare `-e NAME`; the value travels only in
+        the environment of the docker client, which hands it to the process in the
+        container. Written into the command instead (`NAME="value" sh -c ...`, as the
+        bridge token once was), the value sat in the cmdline of the host's docker client
+        and of the shell inside the shared container, readable from /proc by every other
+        run there."""
+        if not env:
+            return [], None
+        flags: List[str] = []
+        for name in env:
+            flags += ["-e", name]
+        return flags, {**os.environ, **env}
+
+    def _execute_in_persistent(self, command: str, timeout: int, workdir: str = "/workspace",
+                               env: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
         """Execute command in the persistent sandbox container, stop-aware: a Stop request kills the
         exec promptly instead of letting it run to the timeout."""
+        env_flags, client_env = self._exec_env_args(env)
         exec_cmd = [
             "docker", "exec",
             "-w", workdir,
+            *env_flags,
             SANDBOX_CONTAINER,
             "sh", "-c", command
         ]
@@ -257,7 +280,7 @@ class PythonSandboxTool(BaseTool):
         try:
             proc = subprocess.Popen(
                 exec_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                **self._get_subprocess_kwargs()
+                env=client_env, **self._get_subprocess_kwargs()
             )
         except Exception as e:
             return -1, "", str(e)
@@ -281,14 +304,15 @@ class PythonSandboxTool(BaseTool):
                     out, err = "", ""
                 return -1, out or "", f"{(err or '').strip()}\nExecution {reason}.".strip()
     
-    def _execute_in_ephemeral(self, command: str, timeout: int) -> Tuple[int, str, str]:
+    def _execute_in_ephemeral(self, command: str, timeout: int,
+                              env: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
         """Execute in an ephemeral container (fallback if persistent not available)."""
         if self._ephemeral_sandbox is None:
             from vaf.tools.sandbox import DockerSandbox
             self._ephemeral_sandbox = DockerSandbox(image="python:3.11-slim")
             self._ephemeral_sandbox.start()
         
-        return self._ephemeral_sandbox.execute(command, timeout=timeout)
+        return self._ephemeral_sandbox.execute(command, timeout=timeout, env=env)
     
     # ------------------------------------------------------------------ #
     #  Programmatic Tool Calling helpers                                   #
@@ -364,7 +388,9 @@ class PythonSandboxTool(BaseTool):
         bridge_env: Dict[str, str],
         stub_src: str,
     ) -> Tuple[int, str, str]:
-        """Write stub + code into workdir, pass bridge env, execute."""
+        """Write stub + code into workdir, pass bridge env, execute. The bridge URL and
+        token reach the run as its environment (see _exec_env_args), never as text in
+        the command."""
         # Write vaf_tools.py stub (base64 to avoid escaping issues)
         b64_stub = base64.b64encode(stub_src.encode()).decode()
         exit_code, _, err = execute_fn(
@@ -373,16 +399,13 @@ class PythonSandboxTool(BaseTool):
         if exit_code != 0:
             return -1, "", f"Failed to write vaf_tools stub: {err}"
 
-        # Build env export prefix for the sandbox command
-        env_prefix = " ".join(f'{k}="{v}"' for k, v in bridge_env.items())
-
         b64_code = base64.b64encode(code.encode()).decode()
         cmd = (
             f"cd {workdir} && "
-            f"{self._run_env_prefix(workdir, extra_pythonpath=workdir)} {env_prefix} "
+            f"{self._run_env_prefix(workdir, extra_pythonpath=workdir)} "
             f"sh -c 'echo {b64_code} | base64 -d | python3'"
         )
-        return execute_fn(cmd, timeout=timeout)
+        return execute_fn(cmd, timeout=timeout, env=dict(bridge_env))
 
     # ------------------------------------------------------------------ #
     #  Main run()                                                           #
@@ -427,6 +450,43 @@ class PythonSandboxTool(BaseTool):
             "also works. Use python_sandbox scratch paths (/tmp, /workspace) for intermediates."
         )
 
+    @staticmethod
+    def _export_source(raw: str, workdir: str) -> Optional[str]:
+        """The container path one export_files entry names, or None when it lies outside
+        this run's own working directory.
+
+        The persistent sandbox is shared: every run's workdir sits next to the others
+        under /tmp. Accepting any /tmp or /workspace path let one user's run copy another
+        user's files out while that run was still going (the workdir names are listed by
+        `ls /tmp`). Normalised first, so `../vaf_other/x` cannot climb out."""
+        p = str(raw or "").strip()
+        if not p:
+            return None
+        root = posixpath.normpath(workdir)
+        cpath = posixpath.normpath(p if p.startswith("/") else posixpath.join(root, p))
+        if not cpath.startswith(root + "/"):
+            return None
+        return cpath
+
+    @staticmethod
+    def _refuse_copied_non_file(dest: str) -> Optional[str]:
+        """Remove what docker cp produced when it is not a regular file, and say why.
+
+        docker cp copies a symbolic link AS a link: one the code planted (pointing at a
+        host path such as ~/.ssh/id_ed25519) would land in the chat workspace and resolve
+        on the host when anything opened it. A directory would land whole. Neither is an
+        artifact this lane delivers."""
+        if os.path.islink(dest):
+            try:
+                os.unlink(dest)
+            except OSError:
+                pass
+            return "it is a symbolic link"
+        if os.path.isdir(dest):
+            shutil.rmtree(dest, ignore_errors=True)
+            return "it is a directory"
+        return None
+
     def _export_artifacts(self, export_files, workdir: str, use_persistent: bool,
                           session_id) -> list:
         """Copy files the code produced OUT of the container into the chat workspace.
@@ -435,9 +495,10 @@ class PythonSandboxTool(BaseTool):
         "sandbox_persist"): the base64-through-context lane truncates anything
         beyond the model's output budget (live incident: a 400KB chart arrived
         as 2.5KB of corrupt PNG). docker cp runs BEFORE the per-exec workdir is
-        removed. Only scratch paths (/tmp, /workspace) may be named; the
-        DESTINATION is always the chat workspace - the model never chooses a
-        host path. Returns human/model-readable note lines; never raises.
+        removed. Only files inside THIS run's working directory may be named
+        (see _export_source); the DESTINATION is always the chat workspace - the
+        model never chooses a host path. Returns human/model-readable note
+        lines; never raises.
         """
         notes = []
         try:
@@ -456,12 +517,16 @@ class PythonSandboxTool(BaseTool):
                 p = str(raw or "").strip()
                 if not p:
                     continue
-                cpath = p if p.startswith("/") else f"{workdir}/{p}"
-                if not (cpath.startswith("/tmp/") or cpath.startswith("/workspace/")):
-                    notes.append(f"[export skipped: {p} - only /tmp or /workspace paths can be exported]")
+                cpath = self._export_source(p, workdir)
+                if cpath is None:
+                    notes.append(f"[export skipped: {p} - only files inside this run's "
+                                 f"working directory can be exported]")
                     continue
                 base = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(cpath.rstrip("/"))) or "artifact"
                 dest = str(Path(dest_dir) / base)
+                if os.path.islink(dest):
+                    # docker cp would write THROUGH a link left at the destination.
+                    os.unlink(dest)
                 try:
                     r = subprocess.run(
                         ["docker", "cp", f"{container}:{cpath}", dest],
@@ -470,6 +535,10 @@ class PythonSandboxTool(BaseTool):
                     )
                 except Exception as e:
                     notes.append(f"[export failed: {p}: {e}]")
+                    continue
+                refused = self._refuse_copied_non_file(dest)
+                if refused:
+                    notes.append(f"[export refused: {p} - {refused}]")
                     continue
                 if r.returncode != 0 or not os.path.isfile(dest):
                     reason = (r.stderr or "").strip() or "file not found in sandbox"

@@ -7,7 +7,7 @@ import subprocess
 import uuid
 import logging
 import time
-from typing import Optional, Tuple, List
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger("vaf.sandbox")
 
@@ -214,9 +214,12 @@ class DockerSandbox:
             subprocess.run(["docker", "rm", "-f", self.container_name], **kwargs)
             self.is_running = False
 
-    def execute(self, command: str, timeout: int = 30, workdir: str = "/") -> Tuple[int, str, str]:
+    def execute(self, command: str, timeout: int = 30, workdir: str = "/",
+                env: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
         """
         Executes a shell command inside the container.
+        `env` values reach the process as its environment: the names go on the command
+        line as bare `-e NAME`, the values only into the docker client's environment.
         Returns: (exit_code, stdout, stderr)
         """
         if not self.is_running:
@@ -226,9 +229,13 @@ class DockerSandbox:
 
         # Construct the docker exec command
         # We use 'sh -c' to handle pipes, redirects, and multiple commands
+        env_flags: List[str] = []
+        for name in (env or {}):
+            env_flags += ["-e", name]
         exec_cmd = [
             "docker", "exec", 
             "-w", workdir,
+            *env_flags,
             self.container_name, 
             "sh", "-c", command
         ]
@@ -236,6 +243,8 @@ class DockerSandbox:
         try:
             import platform
             kwargs = {"capture_output": True, "text": True, "timeout": timeout}
+            if env:
+                kwargs["env"] = {**os.environ, **env}
             if platform.system() == "Windows":
                 kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
             result = subprocess.run(exec_cmd, **kwargs)

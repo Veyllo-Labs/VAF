@@ -80,7 +80,7 @@ docker compose -f docker-compose.memory.yml up -d
 | **CPU** | 0.5 Cores |
 | **Network** | `vaf-sandbox-network` (isolated bridge). Cannot reach postgres/redis/gotenberg/tts/stt by hostname. Outbound internet (pip install) and Tool Bridge back-channel (`host.docker.internal`) still work. |
 | **Filesystem** | Isolated (no host access). Packages installed via the `packages` parameter are TEMPORARY: pip runs with `--target` into the run's private `_pkgs` dir (plus `--no-cache-dir` so the shared pip cache does not grow), `PYTHONPATH`/`PIP_TARGET` point there for the run - `PIP_TARGET` also redirects code that shells out to pip itself - and the whole directory is deleted with the per-run workspace. Nothing accumulates in the shared container across runs or users. |
-| **Workspace** | Per-execution temp dir under `/tmp/vaf_*` (unique UUID per run, auto-deleted after). Container `working_dir` is `/workspace` (persistent volume), but code always executes in the per-run `/tmp/vaf_*` dir. |
+| **Workspace** | Per-execution temp dir under `/tmp/vaf_*` (unique UUID per run, auto-deleted after). Container `working_dir` is `/workspace` (persistent volume), but code always executes in the per-run `/tmp/vaf_*` dir. `export_files` copies only files inside the run's own dir (normalised, so `..` cannot climb out); a symbolic link or a directory that docker cp produced is removed again instead of delivered. |
 | **Capabilities** | `cap_drop: ALL`, `no-new-privileges: true` - container has no Linux capabilities beyond default isolation. |
 | **Module blocking** | None at Python level - `subprocess`, `socket`, `os` are importable. Constraints are enforced by Docker process/filesystem isolation, network isolation, and resource limits, not by a Python import blocklist. |
 | **Timeout kill** | A timed-out or user-stopped execution is killed INSIDE the container, scoped to that run only: a pure-sh procfs scan terminates every process whose cwd or cmdline carries the run's unique workspace path (`kill_run_processes_cmd` in `vaf/tools/sandbox.py`). Slim images ship no procps, so the previous `pkill -9 -f python` silently no-opped (a timed-out pip finished a 229MB install into an already-cleaned workspace) - and would have hit every other user's run in the shared container. Guarded by `tests/test_sandbox_hardening.py`. |
@@ -173,7 +173,7 @@ ToolBridgeServer (random port, daemon) ←── vaf_tools.call("web_search", �
 
 | Property | Detail |
 |---|---|
-| Token | `secrets.token_hex(16)` per execution - mismatches rejected (HTTP 403) |
+| Token | `secrets.token_hex(16)` per execution - mismatches rejected (HTTP 403). It reaches the run as its environment: `docker exec -e VAF_BRIDGE_TOKEN` carries only the name, the value travels in the docker client's environment. Written into the command, it sat in the cmdline of the host client and of the shell in the shared container, readable from `/proc` by every other run there |
 | Binding | `0.0.0.0` on host, random ephemeral port. Accessible from any interface on the host; relies on the per-execution token for authentication. |
 | Trust gates | All calls go through `agent.execute_tool()` - full VAF gate pipeline applies |
 | Cleanup | `bridge.stop()` in `finally` block - no port leak on crash |

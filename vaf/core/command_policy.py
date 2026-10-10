@@ -88,6 +88,12 @@ _COMMAND_STRING_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 # lands on a terminal nobody sees. The host lane refuses it and points at the ssh tool, which
 # keeps each account's own key and servers (vaf/core/ssh.py). `git` over ssh is not this.
 _REMOTE_LOGINS = frozenset({"ssh", "scp", "sftp"})
+# Moving files over FTP with this computer's own clients: the password stands on a command
+# line every process can read, nobody is asked about a new server, and a certificate that
+# changed goes unnoticed. The host lane refuses it and points at the ftp tool
+# (vaf/core/ftp.py). curl and wget count when an argument is an ftp:// or ftps:// address.
+_FTP_CLIENTS = frozenset({"ftp", "lftp", "ncftp", "ncftpput", "ncftpget", "tnftp", "pftp"})
+_FTP_URL_RE = re.compile(r"^['\"]?ftps?://", re.IGNORECASE)
 # ssh's single-letter options that take a value (ssh(1) synopsis).
 _SSH_VALUE_LETTERS = frozenset("BbcDEeFIiJLlmOoPpQRSWw")
 # How deep `bash -c "sh -c '...'"` may nest before the command is refused as unreadable.
@@ -124,12 +130,15 @@ CATEGORY_REASONS = {
     "remote_login": "logs in to another machine with this computer's own SSH setup; use the "
                     "ssh tool, which keeps each account's key and servers apart and answers "
                     "the password prompt",
+    "ftp_transfer": "moves files over FTP with this computer's own tools and the password on "
+                    "the command line; use the ftp tool, which asks before a new server, "
+                    "checks its certificate and keeps the password out of every command",
 }
 
 # What each profile refuses outright. Everything else in CATEGORY_REASONS is a note.
 _BLOCKING = {
     "host": ("fork_bomb", "device_write", "destructive_removal", "pipe_to_shell",
-             "opaque_command", "nested_too_deep", "remote_login"),
+             "opaque_command", "nested_too_deep", "remote_login", "ftp_transfer"),
     # The jail has no network and its workspace is disposable; only what reaches the
     # machine or the jail root is refused.
     "jailed": ("fork_bomb", "device_write", "destructive_removal", "opaque_command",
@@ -454,6 +463,10 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0) ->
 
         if exe in _REMOTE_LOGINS and "remote_login" not in cats:
             cats.append("remote_login")
+        if (exe in _FTP_CLIENTS or (exe in _NETWORK_FETCHERS
+                                    and any(_FTP_URL_RE.match(a) for a in args))) \
+                and "ftp_transfer" not in cats:
+            cats.append("ftp_transfer")
 
         if exe in _NETWORK_FETCHERS:
             pipeline_fetch = True

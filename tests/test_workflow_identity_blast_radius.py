@@ -189,6 +189,8 @@ NEWLY_IDENTIFIED = {
     "store_credential": ('user_scope_id', 'username'),
     # Its own key and servers belong to one account, in a workflow step as anywhere.
     "ssh": ('user_role', 'user_scope_id', 'username'),
+    # Its confirmed FTP servers belong to one account, in a workflow step as anywhere.
+    "ftp": ('user_role', 'user_scope_id', 'username'),
     # session_id: the chat is a declared key now (None in a step, which has no chat).
     "learn_attached_knowledge": ('session_id', 'user_scope_id'),
     "learn_document": ('user_role', 'user_scope_id'),

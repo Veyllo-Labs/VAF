@@ -1470,7 +1470,7 @@ Then use the results to answer. Do NOT guess from your training data!
         _secrets_note = ""
         # A list, deliberately: each of these tools takes a stored credential its own way
         # (prompt_note says how), so a declared flag would still need a sentence per tool.
-        if self.agent and ({"host_bash", "python_exec", "store_credential", "ssh"}
+        if self.agent and ({"host_bash", "python_exec", "store_credential", "ssh", "ftp"}
                            & set(tool_names)):
             try:
                 from vaf.core.user_secrets import prompt_note

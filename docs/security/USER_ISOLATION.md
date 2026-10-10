@@ -576,6 +576,11 @@ account permission outside the file jail. The same holds for the surfaces: `/api
 the tool is not enabled for; `vaf ssh` acts as the machine owner. Guarded by
 `tests/test_ssh.py`.
 
+The `ftp` tool keeps its confirmed servers the same way: per account under
+`~/.vaf/ftp/<account>/` (owner-only, the same account key as ssh's), so a server one account
+confirmed is new to the next, and the FTP password is a credential of the person's own store,
+passed by NAME. Guarded by `tests/test_ftp_core.py` and `tests/test_ftp_tool.py`.
+
 Cloud DOWNLOADS follow the same rule. Both download actions wrote to
 `Platform.downloads_dir()` - process global, so every tenant's download landed in the
 owner's home, in one of the four roots the file routes serve. A tenant now receives a

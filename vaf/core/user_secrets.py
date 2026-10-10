@@ -37,7 +37,7 @@ NAMED BOUNDARIES:
 - A background command's log file (owner-only, per chat) holds the raw output; the scrub runs when
   the log is read into the conversation, because the command writes the file itself.
 - Engine-internal like `channel_secrets`, not on the facade: the consumers are VAF's own host
-  tools (host_bash, python_exec, store_credential, ssh), and no third-party tool has been
+  tools (host_bash, python_exec, store_credential, ssh, ftp), and no third-party tool has been
   measured to need it.
 - The same store keeps an account's INTERNAL values under namespaces of their own
   (`account_value`): the SSH key's passphrase (vaf/core/ssh.py). They are never listed by
@@ -206,7 +206,7 @@ def prompt_note(*, user_scope_id=None, username=None, can_store: bool = False) -
         parts.append("**Stored credentials:** the user keeps these for your commands: " + listed
                      + ". Use them by name - `$VAF_SECRET_<NAME>` in host_bash, "
                      "`os.environ[\"VAF_SECRET_<NAME>\"]` in python_exec, the bare NAME as "
-                     "login_credential in ssh - and never print or repeat the value.")
+                     "login_credential in ssh and ftp - and never print or repeat the value.")
     if can_store:
         parts.append("**A password, token or login the user gives you:** store each value with "
                      "store_credential (a NAME like FTP_PASS) as your FIRST step - before a plan, "

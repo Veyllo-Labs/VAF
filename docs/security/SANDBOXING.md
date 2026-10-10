@@ -519,6 +519,20 @@ after the host). The controls:
 
 Pinned in `tests/test_ssh.py` (a fake `ssh` on PATH and the real `ssh-keygen`).
 
+### `ftp` - files on a web space (`vaf/tools/ftp.py`)
+
+Lists, uploads (a file or a folder), downloads and deletes over FTPS, or plain FTP when
+written `ftp://` (`vaf/core/ftp.py`, Python's ftplib). The controls are the `ssh` tool's:
+confirmed in the chat, a trusted folder does not silence it, the first connection to a server
+is always asked and refused where nobody is asked, never over a messaging channel, a regular
+account only when its allowlist names it, the local side under the account's write jail. Its
+own: the certificate is checked (an authority's, or the fingerprint remembered at the first
+connection), the address a server names for passive transfers is not followed, cloud metadata
+addresses are refused, and `host_bash` refuses `ftp`, `lftp`, `ncftp` and `curl`/`wget` with
+an `ftp://` address (`ftp_transfer` in `vaf/core/command_policy.py`) and points here. Pinned
+in `tests/test_ftp_core.py` and `tests/test_ftp_tool.py`, against a small FTPS server from the
+standard library (`tests/ftp_stub.py`).
+
 > **Note on `channel_tools_unrestricted`:** this admin setting (default ON) lets channel sessions
 > use the same tools as the main agent and lifts `channel_restrictions` for tools that rely on it
 > (e.g. `browser_agent`). A tool that needs a person - `dangerous` and restricted on channels:

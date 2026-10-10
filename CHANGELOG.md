@@ -17,6 +17,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   starts the coder with the server and folder you named, and only then does the coder get
   SSH, for that one server and that folder. The server must be one you already confirmed in
   the chat; a new one is asked about first. The SSH tool also uploads whole folders now.
+- **The agent can work with files on your web space over FTP.** Many web spaces offer FTP and
+  nothing else: the agent lists what is there, uploads a file or a whole built site, downloads
+  and deletes a file. It is encrypted (FTPS) unless you write `ftp://`, and then it tells you
+  that the password crosses the network readable. The first connection to a server is yours to
+  confirm, and a server whose certificate later changes is refused. The password is one you
+  stored; the agent only ever uses its name.
 - **The agent can build and test in a sandbox environment of its own.** It creates a
   container for the task (temporary, removed a day after its last use, or a project
   environment that keeps its installed packages and can work in one of your project

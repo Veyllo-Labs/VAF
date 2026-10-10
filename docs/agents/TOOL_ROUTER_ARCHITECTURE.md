@@ -121,6 +121,7 @@ graph TD
 | "search", "find", "news", "weather" | `web_search` |
 | "passwort", "password", "zugangsdaten", "api key", ... | `store_credential` (forced always, see above) |
 | "ssh", "sftp", "scp", "vps", "putty" (whole words), or an IPv4 address | `ssh` (deliberately not "server" alone: every Minecraft sentence says it) |
+| "ftp", "ftps", "webspace", "web space", "filezilla" (whole words) | `ftp` |
 
 ### `search_tools` - on-demand discovery tool
 

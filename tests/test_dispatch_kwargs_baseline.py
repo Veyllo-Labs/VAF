@@ -140,6 +140,8 @@ KWARGS_BASELINE = {
     "store_credential":          ("chat", ["user_scope_id", "username"]),
     # Measured. The account's own key and servers, and its stored credentials by name.
     "ssh":                       ("chat", ["user_role", "user_scope_id", "username"]),
+    # Measured. The account's own confirmed FTP servers, and its stored credentials by name.
+    "ftp":                       ("chat", ["user_role", "user_scope_id", "username"]),
     "label_mail":                ("chat", ["user_scope_id", "username"]),
     "learn_attached_knowledge":  ("chat", ["_agent", "session_id", "user_scope_id"]),
     "learn_document":            ("chat", ["_agent", "user_role", "user_scope_id"]),

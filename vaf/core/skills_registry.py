@@ -63,7 +63,7 @@ _manifest_lock = threading.RLock()
 _ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 # Ids that would collide with the filesystem jail / blocked dirs or our own files.
-_RESERVED_IDS = {"git", "env", "ssh", "node_modules", "manifest"}
+_RESERVED_IDS = {"git", "env", "ssh", "ftp", "node_modules", "manifest"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

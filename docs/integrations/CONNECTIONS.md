@@ -118,6 +118,38 @@ stores the password with `store_credential` and passes only its NAME (`login_cre
   a long update gets up to 600 seconds per call. An account that also has `host_bash` can
   read files on this computer, the key folder included.
 
+### FTP to your web space
+
+Many web spaces offer FTP and nothing else. The `ftp` tool (`vaf/tools/ftp.py`, built on
+`vaf/core/ftp.py` and Python's own ftplib) lists a folder there, uploads a file or a whole
+folder (a built site), downloads a file and deletes one. The person says "my web space is
+web123@ftp.example.org, the password is ..."; the agent stores the password with
+`store_credential` and passes only its NAME (`login_credential`).
+
+- **Encrypted unless written otherwise.** `ftps://user@host` (explicit TLS, the data channel
+  encrypted too) is the default, also when the scheme is left out. `ftp://user@host` is
+  plain FTP: only when it is written that way, and the first connection says that the
+  password and the files then cross the network readable. A server confirmed one way is
+  not thereby confirmed the other.
+- **The first connection is asked, a changed certificate is refused.** Each account keeps
+  its own list of confirmed servers (`~/.vaf/ftp/<account>/`, owner-only, closed to the file
+  tools). A server a public certificate authority vouches for is remembered as such, so a
+  renewed certificate does not break anything. A server whose certificate no authority
+  vouches for (a hoster's shared certificate, a self-signed one) is remembered by its
+  fingerprint, and a different certificate later is refused until the person removes the
+  server.
+- **What a folder upload leaves out.** Links (one could point outside the folder), `.git`
+  and `.vaf`; the whole folder is checked against 500 MB before the first byte.
+- **Confirmed in the chat, like `ssh`.** A trusted folder does not silence it, not over
+  Telegram, WhatsApp or Discord, and a regular account gets it only when its tool allowlist
+  names it. `host_bash` refuses `ftp`, `lftp`, `ncftp` and `curl`/`wget` with an `ftp://`
+  address and points at this tool: those carry the password on the command line, ask nobody
+  about a new server and notice no changed certificate.
+- **Named boundaries.** The first connection trusts the server the person confirms (compare
+  the fingerprint with the hoster's panel if you can). Implicit FTPS (port 990) is not
+  offered; every hoster measured offers explicit TLS on port 21. An upload adds and
+  overwrites; there is no mirroring that deletes on the server.
+
 ### Developer
 
 | Platform | Status | Description |

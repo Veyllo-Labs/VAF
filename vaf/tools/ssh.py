@@ -37,6 +37,31 @@ _OUT_LIMIT = 8000
 _ERR_LIMIT = 4000
 
 
+def transfer_local_path(kwargs: Dict[str, Any], *, download: bool) -> Path:
+    """The local side of an upload or download, for ssh and ftp alike: inside this person's
+    own files (the write jail is installed around run by `file_access`). Relative means this
+    chat's workspace; a download without local_path lands there under the remote name."""
+    from vaf.tools.filesystem import is_safe_path
+    raw = str(kwargs.get("local_path") or "").strip()
+    if not raw and download:
+        raw = os.path.basename(str(kwargs.get("remote_path") or "").rstrip("/")) or "download"
+    if not raw:
+        raise ValueError("local_path is needed")
+    path = Path(os.path.expanduser(raw))
+    if not path.is_absolute():
+        from vaf.core.session import get_session_workspace_dir
+        from vaf.core.subagent_ipc import get_current_session_id
+        ws = get_session_workspace_dir(get_current_session_id(), create=True)
+        if not ws:
+            raise ValueError("a relative local_path needs a chat workspace; pass an "
+                             "absolute path")
+        path = Path(ws) / path
+    safe, resolved = is_safe_path(str(path))
+    if not safe:
+        raise ValueError(str(resolved))
+    return Path(resolved)
+
+
 class SshTool(BaseTool):
     name = "ssh"
     category = "code"
@@ -225,27 +250,7 @@ class SshTool(BaseTool):
     # ── helpers ───────────────────────────────────────────────────────────────
     @staticmethod
     def _local_path(kwargs: Dict[str, Any], *, download: bool) -> Path:
-        """The local file, inside this person's own files (the write jail is installed around
-        run by `file_access`). Relative means this chat's workspace."""
-        from vaf.tools.filesystem import is_safe_path
-        raw = str(kwargs.get("local_path") or "").strip()
-        if not raw and download:
-            raw = os.path.basename(str(kwargs.get("remote_path") or "").rstrip("/")) or "download"
-        if not raw:
-            raise ValueError("local_path is needed")
-        path = Path(os.path.expanduser(raw))
-        if not path.is_absolute():
-            from vaf.core.session import get_session_workspace_dir
-            from vaf.core.subagent_ipc import get_current_session_id
-            ws = get_session_workspace_dir(get_current_session_id(), create=True)
-            if not ws:
-                raise ValueError("a relative local_path needs a chat workspace; pass an "
-                                 "absolute path")
-            path = Path(ws) / path
-        safe, resolved = is_safe_path(str(path))
-        if not safe:
-            raise ValueError(str(resolved))
-        return Path(resolved)
+        return transfer_local_path(kwargs, download=download)
 
     # What a folder upload leaves out: a repository's history and the coder's own notes are
     # not part of what gets deployed.

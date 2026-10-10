@@ -1258,6 +1258,9 @@ _OWNER_SEND_TOOLS = CHAT_SEND_TOOLS + ("send_to_user",)
 # The router forces the ssh tool for a message that names another machine the way people
 # do: ssh itself, a VPS, or an IPv4 address (module level: _route_tools imports `re` locally).
 _SSH_ROUTE_RE = re.compile(r"\b(?:ssh|sftp|scp|vps|putty)\b|\b\d{1,3}(?:\.\d{1,3}){3}\b")
+# And the ftp tool for one that names FTP or a web space, the hosting that offers nothing else
+# ("Webspace" is the German word for it too).
+_FTP_ROUTE_RE = re.compile(r"\b(?:ftps?|webspace|web space|filezilla)\b")
 
 
 class Agent:
@@ -8409,6 +8412,8 @@ class Agent:
         # Deliberately not "server" alone - every Minecraft sentence says it.
         if "ssh" in self.tools and _SSH_ROUTE_RE.search(u_lower):
             forced_tools.add("ssh")
+        if "ftp" in self.tools and _FTP_ROUTE_RE.search(u_lower):
+            forced_tools.add("ftp")
 
         # 1. Every visible tool, grouped by its category. Soft structure only: the router may
         # take tools from as many areas as the request needs. A hard category step first

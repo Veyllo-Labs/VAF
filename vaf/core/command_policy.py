@@ -93,7 +93,8 @@ _REMOTE_LOGINS = frozenset({"ssh", "scp", "sftp"})
 # changed goes unnoticed. The host lane refuses it and points at the ftp tool
 # (vaf/core/ftp.py). curl and wget count when an argument is an ftp:// or ftps:// address.
 _FTP_CLIENTS = frozenset({"ftp", "lftp", "ncftp", "ncftpput", "ncftpget", "tnftp", "pftp"})
-_FTP_URL_RE = re.compile(r"^['\"]?ftps?://", re.IGNORECASE)
+# The address alone, or as an option's value (`--url=ftp://...`).
+_FTP_URL_RE = re.compile(r"^(?:--?[A-Za-z][\w-]*=)?['\"]?ftps?://", re.IGNORECASE)
 # ssh's single-letter options that take a value (ssh(1) synopsis).
 _SSH_VALUE_LETTERS = frozenset("BbcDEeFIiJLlmOoPpQRSWw")
 # How deep `bash -c "sh -c '...'"` may nest before the command is refused as unreadable.

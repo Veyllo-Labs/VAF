@@ -142,11 +142,13 @@ def test_host_bash_hands_ftp_to_this_tool():
     for cmd in ("curl -T dist/index.html ftp://u:pw@example.org/htdocs/",
                 "curl --ftp-ssl -T f ftps://example.org/x", "wget ftp://example.org/file",
                 "lftp -u u,p example.org -e 'mirror -R dist /htdocs; quit'", "ftp -n example.org",
-                "ncftpput -u u example.org /x f", "bash -c 'lftp example.org'"):
+                "ncftpput -u u example.org /x f", "bash -c 'lftp example.org'",
+                "curl --url=ftp://example.org/x -T f"):
         v = classify_command(cmd, profile="host")
         assert v.blocked and "ftp_transfer" in v.categories, cmd
         assert "ftp tool" in v.reason, cmd
-    for cmd in ("curl https://example.org", "echo ftp://example.org", "git push"):
+    for cmd in ("curl https://example.org", "echo ftp://example.org", "git push",
+                "curl https://example.org/?next=ftp://example.net"):
         assert not classify_command(cmd, profile="host").blocked, cmd
     # On the other machine, and in the network-less jail, it is not this computer's business.
     assert not classify_command("lftp example.org", profile="remote").blocked

@@ -145,6 +145,22 @@ def test_background_processes_end_on_every_exit_of_the_run():
     assert len(asked) == 1        # only the tool the raising run bound; never a leftover
 
 
+def test_an_environment_the_run_cannot_use_ends_the_display_it_started():
+    """A content-only run is refused before the display starts and before its temporary
+    folder exists; a binding that fails later stops the display and its animation first.
+    MUTATION: move the content-only check after live.start() - red; drop stop_live() from the
+    refusal - red."""
+    import inspect
+    from vaf.tools import coder
+    src = inspect.getsource(coder.CodingAgentTool.run)
+    early = src.index('if kwargs.get("environment") and _content_only_task(task):')
+    assert early < src.index("live.start()") and early < src.index("tempfile.mkdtemp(")
+    assert early < src.index("spawned = spawn_subagent("), "a child was started just to refuse"
+    refusal = src.index("return _env_refusal")
+    assert "stop_live()" in src[refusal - 200:refusal]
+    assert "animation_running.clear()" in src[refusal - 200:refusal]
+
+
 def test_the_environment_shell_does_not_step_around_the_deploy_pin(monkeypatch):
     """An environment can have network; the jailed profile refuses no login or upload, so
     `curl -T ... ftp://` and `scp` went straight past deploy_to's one-server pin.
@@ -174,6 +190,10 @@ def test_as_root_is_the_environments_and_only_runs_to_its_end(monkeypatch):
     assert rec.calls[-1][2]["as_root"] is False
     assert "start a background process without it" in tool.run(command="x", as_root=True, background=True)
     assert "only in a sandbox environment" in BashTool("/p").run(command="apt-get install tree", as_root=True)
+    # MUTATION: drop the background refusal without an environment - red: a dev server held
+    # the call until its timeout in the foreground.
+    assert "background process only in a sandbox environment" in BashTool("/p").run(
+        command="npm run dev", background=True)
 
 
 def test_bash_is_offered_in_every_context_and_as_root_only_when_bound():

@@ -2906,6 +2906,14 @@ class DeployTarget:
         return f"{self.target}{self.root}" if self.kind == "ftp" else f"{self.target}:{self.root}"
 
 
+def _content_only_task(task: str) -> bool:
+    """The legacy content-only mode: an automation that wants text back, no project folder
+    (a temporary one instead)."""
+    upper = str(task or "").upper()
+    return "CONTENT_ONLY" in upper and ("AUTOMATION" in upper or "NO PROJECT" in upper
+                                        or "NO FILE PATHS" in upper)
+
+
 def _deploy_target(raw, user_scope_id):
     """(DeployTarget, None) for `user@host[:port]:/folder` (ssh) or
     `ftps://user@host[:port]/folder` (ftp, `ftp://` without encryption), or (None, reason).
@@ -3571,6 +3579,10 @@ Thumbs.db
             _deploy, _deploy_error = _deploy_target(kwargs.get("deploy_to"), caller_scope)
             if _deploy_error:
                 return f"Error: {_deploy_error}"
+        # A content-only run has no project folder, so no environment to work in: refused
+        # here, before a child process, the display or its temporary folder exist.
+        if kwargs.get("environment") and _content_only_task(task):
+            return "Error: a content-only run has no project folder to work in an environment"
         # The chat this run works for: in the parent the dispatcher's context, in the
         # spawned child VAF_SESSION_ID. The policy asks whether it is a messaging channel,
         # and python_exec's own check reads the person's grants for it.
@@ -3934,9 +3946,7 @@ Thumbs.db
 
         # Legacy: Hard skip for CONTENT_ONLY mode (creates temp dir instead of project)
         # This is ONLY for automations that need temp content without project structure
-        skip_template = (
-            "CONTENT_ONLY" in task_upper and ("AUTOMATION" in task_upper or "NO PROJECT" in task_upper or "NO FILE PATHS" in task_upper)
-        )
+        skip_template = _content_only_task(task)
         
         # Check if continuing existing project
         project_path = kwargs.get('project_path', '')
@@ -4127,21 +4137,26 @@ Thumbs.db
         _env_binding = None
         _env_owner = _caller_identity(kwargs)[0]
         if not skip_template:
+            _env_refusal = None
             try:
                 from vaf.core.environments import EnvironmentRefused, get_environment_manager
                 _env_binding = get_environment_manager().bind_for_project(
                     _env_owner, base_dir, kwargs.get("environment") or None)
             except EnvironmentRefused as _env_err:
-                return f"Error: {_env_err}"
+                _env_refusal = f"Error: {_env_err}"
             except Exception as _env_err:
                 if kwargs.get("environment"):
-                    return f"Error: the sandbox environment could not be reached ({_env_err})"
+                    _env_refusal = f"Error: the sandbox environment could not be reached ({_env_err})"
                 _env_binding = None
+            if _env_refusal:
+                # The display and its animation thread are running by now: end them, or an
+                # in-process run leaves them drawing over the chat.
+                animation_running.clear()
+                stop_live()
+                return _env_refusal
             if _env_binding is not None:
                 tui.append_stream(f"Working in sandbox environment {_env_binding.id} "
                                   f"(network {_env_binding.network})")
-        elif kwargs.get("environment"):
-            return "Error: a content-only run has no project folder to work in an environment"
 
         # Run the project's tests in the isolated sandbox (real pass/fail, not a guess).
         # Registered UNCONDITIONALLY (base_dir is always valid, incl. CONTENT_ONLY) so it

@@ -198,7 +198,10 @@ def preview(env_id: str = typer.Argument(..., help="The environment's id"),
         _fail(e)
     if not r.get("ok"):
         _fail(r.get("error") or "no screenshot")
-    Path(out).write_bytes(base64.b64decode(r["screenshot_b64"]))
+    shot = r.get("screenshot_b64")
+    if not shot:
+        _fail("the preview came back without a screenshot")
+    Path(out).write_bytes(base64.b64decode(shot))
     UI.success(f"Saved {out}")
     if r.get("title"):
         print(f"Title: {r['title']}")

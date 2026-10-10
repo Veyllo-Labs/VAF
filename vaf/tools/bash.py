@@ -150,6 +150,11 @@ Examples:
         if kwargs.get("as_root"):
             return ("Error: bash runs a command as root only in a sandbox environment, and this "
                     "run has none: here it is a jailed shell in the project folder.")
+        if kwargs.get("background"):
+            # Said, not run in the foreground instead: a dev server started that way held the
+            # call until its timeout and was then killed.
+            return ("Error: bash starts a background process only in a sandbox environment, and "
+                    "this run has none: here every command runs to its end.")
 
         workspace = self.base_dir or kwargs.get("base_dir")
         if not workspace:

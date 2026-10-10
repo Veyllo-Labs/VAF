@@ -100,6 +100,16 @@ def test_prune_says_when_docker_could_not_be_asked(monkeypatch):
     assert "did not list the environments" in res.output
 
 
+def test_a_preview_without_a_screenshot_writes_no_file(monkeypatch, tmp_path):
+    """MUTATION: decode r["screenshot_b64"] unchecked again - red: a KeyError traceback."""
+    held = types.SimpleNamespace(render=lambda *a, **k: {"ok": True, "title": "x"})
+    monkeypatch.setattr(env_cmd, "_manager", lambda: held)
+    monkeypatch.setattr(env_cmd, "_scope", lambda: "scope-owner")
+    out = tmp_path / "shot.png"
+    res = CliRunner().invoke(env_cmd.app, ["preview", "0a1b2c3d", "http://localhost:3000", "--out", str(out)])
+    assert res.exit_code == 1 and "without a screenshot" in res.output and not out.exists()
+
+
 def test_exec_passes_the_command_and_its_exit_code(mgr):
     res = CliRunner().invoke(env_cmd.app, ["exec", "0a1b2c3d", "--", "python3", "-c", "print(1)"])
     assert res.exit_code == 3 and "out" in res.output

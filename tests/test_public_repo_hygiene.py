@@ -59,7 +59,7 @@ _HOME_PATH_RE = re.compile(r"(?:[Cc]:[\\/]+Users[\\/]+|/Users/|/home/)([A-Za-z0-
 _PLACEHOLDER_USERS = {
     "user", "users", "username", "youruser", "user1", "web_user", "test", "testuser",
     "alice", "bob", "example", "me", "admin", "administrator", "public", "root",
-    "runner", "browser", "nobody9x", "windows10fan", "node", "app", "vaf",
+    "runner", "browser", "sandbox", "nobody9x", "windows10fan", "node", "app", "vaf",
     "...", "<user>", "$user", "${user}",
 }
 

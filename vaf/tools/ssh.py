@@ -64,7 +64,11 @@ class SshTool(BaseTool):
         "put it in the command). as_root=true runs the command through sudo (sudo_credential: the "
         "stored sudo password, default login_credential). Commands must not wait for input: "
         "use -y and DEBIAN_FRONTEND=noninteractive. The first connection to a server asks the "
-        "user and names its fingerprint. Use this instead of ssh in host_bash."
+        "user and names its fingerprint. Use this instead of ssh in host_bash. Building "
+        "something AND putting it on a server is the coder's job: start coding_agent with "
+        "deploy_to=\"user@host:/folder\" (a server the user confirmed) and it uploads its own "
+        "result. Use ssh yourself for server work that builds nothing: an update, a restart, a "
+        "look at a log."
     )
     parameters = {
         "type": "object",

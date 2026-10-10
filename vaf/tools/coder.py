@@ -3134,7 +3134,7 @@ class CodingAgentTool(BaseTool):
             },
             "deploy_to": {
                 "type": "string",
-                "description": "Optional, and ONLY when the user asked for the result to go onto a server: user@host[:port]:/folder. The coder then gets the ssh tool for exactly that server (upload the built files into that folder, run commands there such as a restart); without deploy_to it has no ssh at all. The server must already be confirmed by the user: if it is new, connect once with ssh(server=..., command='true') first."
+                "description": "Optional, and ONLY when the user asked for the result to go onto a server: user@host[:port]:/folder. The coder then gets the ssh tool for exactly that server (upload the built files into that folder, run commands there such as a restart); without deploy_to it has no ssh at all. The server must already be confirmed by the user: if it is new, connect once with ssh(server=..., command='true') first. SSH servers only: for a host that offers FTP alone the coder cannot deploy, so build first and upload the result yourself."
             }
         },
         "required": ["task"]

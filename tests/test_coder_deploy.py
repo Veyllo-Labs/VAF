@@ -113,3 +113,14 @@ def test_the_child_cli_hands_the_target_to_the_coder():
     run = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "run_subagent")
     src = ast.unparse(run)
     assert "kwargs['deploy_to'] = deploy_to" in src and "'--deploy-to'" in src
+
+
+def test_the_main_agent_reads_who_deploys_from_both_tools():
+    """The sandbox lesson: a link that runs one way only left the main agent searching. The
+    ssh tool says the coder deploys what it builds; coding_agent says how and for what.
+    MUTATION: drop either sentence - red."""
+    from vaf.tools.ssh import SshTool
+    assert "coding_agent with deploy_to=" in SshTool.description
+    assert "server work that builds nothing" in SshTool.description
+    hint = coder.CodingAgentTool.parameters["properties"]["deploy_to"]["description"]
+    assert "ssh(server=" in hint and "SSH servers only" in hint

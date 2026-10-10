@@ -32,6 +32,7 @@ This directory contains the logic for individual `vaf` CLI commands. Each file t
 - **secrets.py**: Credentials your agent's commands may use, never shown to the model (`secrets list|set|rm`).
 - **ssh.py**: The SSH key and servers your agent uses, never your `~/.ssh` (`ssh key|hosts|forget`).
 - **a2a.py**: Agent-to-agent rooms: join, talk, read.
+- **env.py**: Your sandbox environments (`env list|create|exec|shell|ps|logs|kill|preview|stop|delete|prune`): containers to run, install and test code in, the same `vaf.core.environments` the agent's tools use. Behind the terminal door.
 
 ## Development Guide
 

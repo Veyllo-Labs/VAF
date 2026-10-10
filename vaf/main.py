@@ -339,6 +339,7 @@ _set_credential_verifier(_a2a_credential_verifier)
 
 import typer
 from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup, a2a, repair, usage, top, inbox, outbox, secrets, ssh, audit
+from vaf.cli.cmd import env as env_cmd
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -415,6 +416,9 @@ app.add_typer(secrets.app, name="secrets", help="Credentials your agent's comman
               callback=_terminal_door)
 # The agent's own SSH key and servers: the same door, because `key` may create one.
 app.add_typer(ssh.app, name="ssh", help="The SSH key and servers your agent uses",
+              callback=_terminal_door)
+# Sandbox environments hold the owner's code and run commands: the same door.
+app.add_typer(env_cmd.app, name="env", help="Your sandbox environments: run, install and test code",
               callback=_terminal_door)
 
 # Snapshot/Undo

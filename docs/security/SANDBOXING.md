@@ -335,6 +335,11 @@ on messaging channels:
   requests are not measured this way, and the report says so. A coder bound to an
   environment gets the same lane through `render_check`.
 
+From the terminal, `vaf env` does the same as the machine owner, behind the terminal door:
+`list [--all]`, `create --temp | --project NAME [--path DIR] [--network ...] [--memory MB]`
+(waits for the image the first time), `exec ID -- CMD`, `shell ID`, `ps`, `logs`, `kill`,
+`preview ID TARGET`, `stop`, `delete` and `prune`.
+
 Background processes are listed, read and stopped with `host_process` (ids
 `e-<environment>-<process>`), next to the chat's host commands. The record of who started
 one, from which chat, lives on the host beside the environment's record, so code in the

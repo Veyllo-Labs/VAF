@@ -291,6 +291,7 @@ vaf session list|load|delete|export|search
 vaf snapshot create|list|restore|undo
 vaf automation list|create|run|enable|disable|delete
 vaf a2a create|invite|join|say|report|vote|wait   # Agent rooms (A2A), also for non-VAF agents
+vaf env list|create|exec|shell|ps|logs|kill|preview|stop|delete|prune   # Sandbox environments
 
 vaf secure status       # Where every at-rest key lives, and what is still open
 vaf secure recover      # Restore the data key after a reinstall (recovery key)

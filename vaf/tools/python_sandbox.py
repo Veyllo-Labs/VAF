@@ -248,8 +248,9 @@ class PythonSandboxTool(BaseTool):
             pass
 
     @staticmethod
-    def _exec_env_args(env: Optional[Dict[str, str]]) -> Tuple[List[str], Optional[Dict[str, str]]]:
-        """`docker exec` flags and the client's environment for values a run must see.
+    def _exec_env_flags(env: Optional[Dict[str, str]]) -> List[str]:
+        """`docker exec` flags for values a run must see; the caller passes the values in
+        the docker client's environment (`{**os.environ, **env}`).
 
         Each name goes on the command line as a bare `-e NAME`; the value travels only in
         the environment of the docker client, which hands it to the process in the
@@ -257,18 +258,16 @@ class PythonSandboxTool(BaseTool):
         bridge token once was), the value sat in the cmdline of the host's docker client
         and of the shell inside the shared container, readable from /proc by every other
         run there."""
-        if not env:
-            return [], None
         flags: List[str] = []
-        for name in env:
+        for name in (env or {}):
             flags += ["-e", name]
-        return flags, {**os.environ, **env}
+        return flags
 
     def _execute_in_persistent(self, command: str, timeout: int, workdir: str = "/workspace",
                                env: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
         """Execute command in the persistent sandbox container, stop-aware: a Stop request kills the
         exec promptly instead of letting it run to the timeout."""
-        env_flags, client_env = self._exec_env_args(env)
+        env_flags = self._exec_env_flags(env)
         exec_cmd = [
             "docker", "exec",
             "-w", workdir,
@@ -280,7 +279,7 @@ class PythonSandboxTool(BaseTool):
         try:
             proc = subprocess.Popen(
                 exec_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                env=client_env, **self._get_subprocess_kwargs()
+                env=({**os.environ, **env} if env else None), **self._get_subprocess_kwargs()
             )
         except Exception as e:
             return -1, "", str(e)
@@ -389,7 +388,7 @@ class PythonSandboxTool(BaseTool):
         stub_src: str,
     ) -> Tuple[int, str, str]:
         """Write stub + code into workdir, pass bridge env, execute. The bridge URL and
-        token reach the run as its environment (see _exec_env_args), never as text in
+        token reach the run as its environment (see _exec_env_flags), never as text in
         the command."""
         # Write vaf_tools.py stub (base64 to avoid escaping issues)
         b64_stub = base64.b64encode(stub_src.encode()).decode()

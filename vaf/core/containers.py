@@ -23,11 +23,13 @@ every saved browser profile (logins, history). A test pins it to literal values.
 
 from __future__ import annotations
 
+import collections
 import hashlib
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -186,6 +188,71 @@ def _popen(argv, **kwargs):
     return subprocess.Popen(argv, **kwargs)
 
 
+# What a run's output may hold in memory, per stream: its head and its tail, the middle counted
+# and dropped. communicate() kept everything, so a command that prints without end (`yes`, a
+# runaway log) filled VAF's own memory until its timeout. The tail is kept because that is
+# where a test run's summary is; the head is generous because the page text a preview renders
+# arrives as one dump of the DOM.
+CAPTURE_HEAD_CHARS = 6_000_000
+CAPTURE_TAIL_CHARS = 2_000_000
+
+
+class _Capture:
+    """Drains one stream on a thread of its own, so a child never blocks on a full pipe,
+    and keeps CAPTURE_HEAD_CHARS of the start and CAPTURE_TAIL_CHARS of the end."""
+
+    def __init__(self, stream):
+        self.head: List[str] = []
+        self.head_len = 0
+        self.tail: "collections.deque[str]" = collections.deque()
+        self.tail_len = 0
+        self.dropped = 0
+        self.thread = threading.Thread(target=self._drain, args=(stream,), daemon=True)
+        self.thread.start()
+
+    def _drain(self, stream) -> None:
+        if stream is None:
+            return
+        try:
+            while True:
+                chunk = stream.read(65536)
+                if not chunk:
+                    return
+                self._add(chunk)
+        except (OSError, ValueError):
+            return
+
+    def _add(self, chunk: str) -> None:
+        room = CAPTURE_HEAD_CHARS - self.head_len
+        if room > 0:
+            self.head.append(chunk[:room])
+            self.head_len += min(room, len(chunk))
+            chunk = chunk[room:]
+        if not chunk:
+            return
+        self.tail.append(chunk)
+        self.tail_len += len(chunk)
+        excess = self.tail_len - CAPTURE_TAIL_CHARS
+        while excess > 0:
+            first = self.tail[0]
+            if len(first) <= excess:
+                self.tail.popleft()
+                cut = len(first)
+            else:
+                self.tail[0] = first[excess:]
+                cut = excess
+            self.tail_len -= cut
+            self.dropped += cut
+            excess -= cut
+
+    def text(self, wait: float) -> str:
+        self.thread.join(wait)
+        out = "".join(self.head)
+        if self.dropped:
+            out += f"\n[... {self.dropped} characters of output left out ...]\n"
+        return out + "".join(self.tail)
+
+
 def exec_bounded(container: str, argv: List[str], *, timeout: float, workdir: str,
                  run_id: str, env_values: Optional[Dict[str, str]] = None,
                  check_stop=None, input_text: Optional[str] = None,
@@ -221,7 +288,16 @@ def exec_bounded(container: str, argv: List[str], *, timeout: float, workdir: st
                       **windowless_kwargs())
     except Exception as e:
         return -1, "", str(e), False, False
-    pending_input = input_text
+    out_cap, err_cap = _Capture(proc.stdout), _Capture(proc.stderr)
+    if input_text is not None:
+        def _feed():
+            try:
+                proc.stdin.write(input_text)
+                proc.stdin.close()
+            except (OSError, ValueError):
+                pass
+        # Its own thread: a child that never reads stdin must not hold the clock below.
+        threading.Thread(target=_feed, daemon=True).start()
     started = time.monotonic()
     deadline = started + seconds + 15
     # As the run's own user: a root run's processes cannot be killed by the container's
@@ -229,8 +305,7 @@ def exec_bounded(container: str, argv: List[str], *, timeout: float, workdir: st
     as_user = ["-u", str(user)] if user else []
     while True:
         try:
-            out, err = proc.communicate(input=pending_input, timeout=0.5)
-            rc = proc.returncode
+            rc = proc.wait(timeout=0.5)
             # A child the command put in the background (`server &`) outlives it with the
             # same marker, and an environment with a marked process reads as busy for good:
             # never stopped when idle, never removed when expired. A process meant to keep
@@ -244,9 +319,9 @@ def exec_bounded(container: str, argv: List[str], *, timeout: float, workdir: st
             # out - and so does the memory limit's OOM kill, at any moment. Only a run that
             # lasted its whole budget timed out; one killed early says its exit code.
             ran_out = time.monotonic() - started >= seconds - 1
-            return rc, out or "", err or "", rc in (124, 137) and ran_out, False
+            return rc, out_cap.text(5), err_cap.text(5), rc in (124, 137) and ran_out, False
         except subprocess.TimeoutExpired:
-            pending_input = None
+            pass
         stopped = bool(check_stop and check_stop())
         if stopped or time.monotonic() >= deadline:
             try:
@@ -259,8 +334,9 @@ def exec_bounded(container: str, argv: List[str], *, timeout: float, workdir: st
             except Exception:
                 pass
             try:
-                out, err = proc.communicate(timeout=5)
+                proc.wait(timeout=5)
             except Exception:
-                out, err = "", ""
+                pass
+            out, err = out_cap.text(5), err_cap.text(5)
             note = "cancelled by stop request" if stopped else f"timed out after {seconds}s"
-            return -1, out or "", f"{(err or '').strip()}\n{note}".strip(), not stopped, stopped
+            return -1, out, f"{err.strip()}\n{note}".strip(), not stopped, stopped

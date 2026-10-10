@@ -171,20 +171,32 @@ def test_kill_marked_cmd_only_takes_a_plain_marker():
 
 
 class _Proc:
+    """A docker client process: its output as streams the capture threads drain, its stdin
+    recorded, wait() as the clock sees it."""
+
     def __init__(self, outcome):
+        import io
         self.outcome = outcome          # ("done", rc, out, err) or "hang"
         self.killed = False
         self.returncode = None
-        self.inputs = []
+        out, err = ("partial", "") if outcome == "hang" else (outcome[2], outcome[3])
+        self.stdout, self.stderr = io.StringIO(out), io.StringIO(err)
+        self.fed = []
 
-    def communicate(self, input=None, timeout=None):
-        self.inputs.append(input)
+        class _Stdin:
+            def write(inner, text):
+                self.fed.append(text)
+
+            def close(inner):
+                pass
+
+        self.stdin = _Stdin()
+
+    def wait(self, timeout=None):
         if self.outcome == "hang" and not self.killed:
             raise subprocess.TimeoutExpired("docker", timeout)
-        if self.outcome == "hang":
-            return "partial", ""
-        _, self.returncode, out, err = self.outcome
-        return out, err
+        self.returncode = -9 if self.outcome == "hang" else self.outcome[1]
+        return self.returncode
 
     def kill(self):
         self.killed = True
@@ -212,6 +224,30 @@ def test_exec_bounded_builds_one_marked_bounded_command(monkeypatch):
     assert argv[argv.index("env-c"):] == ["env-c", "timeout", "-s", "KILL", "30", "python3", "x.py"]
     assert not any("s3cr3t" in a for a in argv) and "VAF_BRIDGE_TOKEN" in argv
     assert seen["kw"]["env"]["VAF_BRIDGE_TOKEN"] == "s3cr3t"
+
+
+def test_output_is_bounded_head_and_tail_and_the_middle_counted(monkeypatch):
+    """communicate() kept everything: a command printing without end filled VAF's own memory
+    until its timeout. MUTATION: keep every chunk - red; drop the tail - red (a test run's
+    summary is at its end)."""
+    import io
+    monkeypatch.setattr(containers, "docker", lambda *a, **k: _done())
+    import vaf.core.service_stack as stack
+    monkeypatch.setattr(stack, "resolve_docker_exe", lambda: "docker")
+    monkeypatch.setattr(containers, "CAPTURE_HEAD_CHARS", 1000)
+    monkeypatch.setattr(containers, "CAPTURE_TAIL_CHARS", 500)
+    proc = _Proc(("done", 0, "", ""))
+    proc.stdout = io.StringIO("H" * 1000 + "x" * 200_000 + "T" * 500)
+    monkeypatch.setattr(containers, "_popen", lambda argv, **kw: proc)
+    rc, out, err, _, _ = containers.exec_bounded("c", ["yes"], timeout=30, workdir="/", run_id="r10",
+                                                 input_text="in")
+    assert out.startswith("H" * 1000) and out.endswith("T" * 500)
+    assert "[... 200000 characters of output left out ...]" in out
+    assert len(out) < 2000 and proc.fed == ["in"]
+    # Output inside the bounds arrives whole.
+    small = _Proc(("done", 0, "ok\n", "warn\n"))
+    monkeypatch.setattr(containers, "_popen", lambda argv, **kw: small)
+    assert containers.exec_bounded("c", ["true"], timeout=5, workdir="/", run_id="r11")[1:3] == ("ok\n", "warn\n")
 
 
 def test_a_run_as_another_user_says_so_on_the_exec(monkeypatch):

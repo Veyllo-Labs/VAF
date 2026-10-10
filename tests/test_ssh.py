@@ -353,6 +353,33 @@ def test_upload_and_download_go_through_the_same_login(lab, tmp_path):
     assert not Path(str(back) + ".part").exists()
 
 
+def test_a_folder_uploads_whole_without_links_or_history(lab, tmp_path):
+    """A built site is a folder. MUTATION: drop the folder branch - red: "is not a file";
+    drop the skip of links - red: a link to a file outside the folder travelled along."""
+    from vaf.core import user_secrets
+    user_secrets.set_secret("SERVER_PASS", PASSWORD)
+    owner = {"user_scope_id": None, "username": None, "user_role": "admin"}
+    _tool(command="true", login_credential="SERVER_PASS", _call_confirmed=True, **owner)
+    site = tmp_path / "site"
+    (site / "css").mkdir(parents=True)
+    (site / "index.html").write_text("<h1>hi</h1>")
+    (site / "css" / "a.css").write_text("body{}")
+    (site / ".git").mkdir()
+    (site / ".git" / "HEAD").write_text("ref: refs/heads/main")
+    (tmp_path / "outside.txt").write_text("not part of the site")
+    try:
+        os.symlink(str(tmp_path / "outside.txt"), str(site / "leak"))
+    except (OSError, NotImplementedError):
+        pass
+    remote = tmp_path / "remote-srv" / "www"
+    out = _tool(action="upload", local_path=str(site), remote_path=str(remote),
+                login_credential="SERVER_PASS", **owner)
+    assert "Uploaded the folder" in out and "(2 files)" in out, out
+    assert (remote / "index.html").read_text() == "<h1>hi</h1>"
+    assert (remote / "css" / "a.css").read_text() == "body{}"
+    assert not (remote / ".git").exists() and not os.path.lexists(remote / "leak")
+
+
 def test_a_regular_account_moves_only_its_own_files(lab, tmp_path):
     """The local side is under the account's write jail (file_access), like download_file."""
     _tool(command="true", login_credential="SERVER_PASS", _call_confirmed=True)

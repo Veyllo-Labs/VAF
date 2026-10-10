@@ -20,6 +20,10 @@ line); this module is the tool's contract around it:
   argument named like a secret (vaf/core/arg_preview.py), and the person should see WHICH
   stored credential a call uses - it is a name, not a value.
 - The remote command is checked with the `remote` profile of vaf/core/command_policy.py.
+- `upload` takes a folder as well (a built site): an uncompressed tar stream unpacked into
+  remote_path, without links and without .git and .vaf, within the same 500 MB bound.
+- The coder uses this tool only in a run started with deploy_to, pinned to that one server
+  (vaf/tools/coder.py, _deploy_refusal).
 """
 from __future__ import annotations
 
@@ -51,7 +55,8 @@ class SshTool(BaseTool):
                      "sudo_credential": ["sudo_secret", "sudo_password_name"]}
     description = (
         "Work on ANOTHER machine over SSH, e.g. to update or set up a server. action='run' "
-        "runs `command` there; 'upload' copies local_path to remote_path; 'download' copies "
+        "runs `command` there; 'upload' copies local_path (a file, or a folder: remote_path is "
+        "then the folder it lands in) to remote_path; 'download' copies "
         "remote_path to local_path (default: this chat's workspace); 'install_key' puts this "
         "account's own key on the server once, so later calls need no password. `server` is "
         "user@host or user@host:port. For a password login pass login_credential: the NAME of "
@@ -77,8 +82,8 @@ class SshTool(BaseTool):
             "sudo_credential": {"type": "string",
                             "description": "NAME of the stored sudo password (default: "
                                            "login_credential)."},
-            "local_path": {"type": "string", "description": "For upload/download: the file here."},
-            "remote_path": {"type": "string", "description": "For upload/download: the file there."},
+            "local_path": {"type": "string", "description": "For upload: the file or folder here. For download: the file here."},
+            "remote_path": {"type": "string", "description": "For upload/download: the file there (for a folder upload, the folder it lands in)."},
             "timeout": {"type": "integer", "default": 120,
                         "description": "Seconds (max 600). Raise it for an update that runs "
                                        "for minutes."},
@@ -154,6 +159,7 @@ class SshTool(BaseTool):
         stdin: Any = None
         stdout_path: Optional[Path] = None
         local: Optional[Path] = None
+        uploaded_files: Optional[int] = None
         if action == "run":
             command = str(kwargs.get("command") or "").strip()
             if not command:
@@ -174,9 +180,15 @@ class SshTool(BaseTool):
             if not remote:
                 return f"Error: action '{action}' needs remote_path."
             import shlex
-            if action == "upload":
+            if action == "upload" and local.is_dir():
+                try:
+                    stdin, uploaded_files = self._folder_stream(local, ssh.MAX_TRANSFER_BYTES)
+                except ValueError as e:
+                    return f"Error: {e}"
+                command = f"mkdir -p {shlex.quote(remote)} && tar -xf - -C {shlex.quote(remote)}"
+            elif action == "upload":
                 if not local.is_file():
-                    return f"Error: {local} is not a file."
+                    return f"Error: {local} is not a file or a folder."
                 if local.stat().st_size > ssh.MAX_TRANSFER_BYTES:
                     return "Error: the file is larger than 500 MB."
                 command = "cat > " + shlex.quote(remote)
@@ -204,7 +216,7 @@ class SshTool(BaseTool):
                 stdin.close()
 
         return self._report(action, target, result, local, stdout_path, scope,
-                            secrets_env, clip_middle)
+                            secrets_env, clip_middle, uploaded_files=uploaded_files)
 
     # ── helpers ───────────────────────────────────────────────────────────────
     @staticmethod
@@ -231,9 +243,48 @@ class SshTool(BaseTool):
             raise ValueError(str(resolved))
         return Path(resolved)
 
+    # What a folder upload leaves out: a repository's history and the coder's own notes are
+    # not part of what gets deployed.
+    _FOLDER_SKIP = (".git", ".vaf")
+
+    @classmethod
+    def _folder_stream(cls, folder: Path, limit: int):
+        """A folder as an uncompressed tar in a temporary file, for `tar -xf -` on the server:
+        (open file at its start, number of files). Links are left out - one could point at a
+        file outside the folder - and so are .git and .vaf. Refused above `limit` bytes."""
+        import tarfile
+        import tempfile
+        buf = tempfile.TemporaryFile()
+        count = total = 0
+
+        def _keep(info: tarfile.TarInfo):
+            info.uid = info.gid = 0
+            info.uname = info.gname = ""
+            return info
+
+        try:
+            with tarfile.open(fileobj=buf, mode="w") as tar:
+                for path in sorted(folder.rglob("*")):
+                    rel = path.relative_to(folder)
+                    if any(part in cls._FOLDER_SKIP for part in rel.parts) or path.is_symlink():
+                        continue
+                    if path.is_file():
+                        total += path.stat().st_size
+                        if total > limit:
+                            raise ValueError(f"the folder is larger than {limit // (1024 * 1024)} MB")
+                        count += 1
+                    elif not path.is_dir():
+                        continue
+                    tar.add(str(path), arcname=rel.as_posix(), recursive=False, filter=_keep)
+        except Exception:
+            buf.close()
+            raise
+        buf.seek(0)
+        return buf, count
+
     @staticmethod
     def _report(action, target, result, local, stdout_path, scope, secrets_env,
-                clip_middle) -> str:
+                clip_middle, *, uploaded_files: Optional[int] = None) -> str:
         from vaf.core import ssh, user_secrets
         lines = [f"[SSH {target}]"]
         if result.first_contact:
@@ -266,6 +317,8 @@ class SshTool(BaseTool):
                 lines.append(f"Downloaded {result.bytes_out} bytes to {local}.")
             else:
                 stdout_path.unlink(missing_ok=True)
+        elif action == "upload" and result.returncode == 0 and uploaded_files is not None:
+            lines.append(f"Uploaded the folder {local} ({uploaded_files} files).")
         elif action == "upload" and result.returncode == 0:
             lines.append(f"Uploaded {local} ({local.stat().st_size} bytes).")
         elif action == "install_key" and result.returncode == 0:

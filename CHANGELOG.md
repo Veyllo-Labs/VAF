@@ -13,6 +13,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **The coder can put what it built onto your server, when you ask for it.** The agent
+  starts the coder with the server and folder you named, and only then does the coder get
+  SSH, for that one server and that folder. The server must be one you already confirmed in
+  the chat; a new one is asked about first. The SSH tool also uploads whole folders now.
 - **The agent can build and test in a sandbox environment of its own.** It creates a
   container for the task (temporary, removed a day after its last use, or a project
   environment that keeps its installed packages and can work in one of your project

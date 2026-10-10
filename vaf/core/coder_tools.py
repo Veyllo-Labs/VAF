@@ -77,6 +77,9 @@ _EXECUTE = {
     # The dev servers bash(background=true) starts in the run's sandbox environment:
     # read their output, stop one. It reaches only this chat's own background commands.
     "host_process",
+    # A server, only for a run started with coding_agent(deploy_to=...): advertised and
+    # registered for that run alone and pinned to that one server (vaf/tools/coder.py).
+    "ssh",
     "python_sandbox",
     "python_exec",
     "linter",

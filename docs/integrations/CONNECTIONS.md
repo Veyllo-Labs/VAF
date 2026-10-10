@@ -103,6 +103,16 @@ stores the password with `store_credential` and passes only its NAME (`login_cre
 - **Confirmed in the chat, like `host_bash`.** A trusted folder does not silence it (a server
   is in no folder), and "always" stores only the tool. Not over Telegram, WhatsApp or
   Discord. A regular account gets it only when its tool allowlist names it.
+- **Folders, too.** `upload` takes a file or a folder; a folder travels as a tar stream and
+  is unpacked into `remote_path` there, without links (one could point outside the folder)
+  and without `.git` and `.vaf`, up to 500 MB.
+- **The coder deploys only where it is sent.** The main agent decides, from what the person
+  asked, whether a build goes onto a server, and starts the coder with
+  `coding_agent(deploy_to="user@host:/folder")`. Only then does the coder get `ssh`, for that
+  one server: uploads and downloads under that folder, commands there, never `install_key`.
+  The coder runs unattended, so the server must be one the person already confirmed; a new
+  one is refused before the run starts, with the call that confirms it. Without `deploy_to`
+  the coder has no `ssh` at all.
 - **Named boundaries.** The first connection trusts the key the server shows (compare the
   fingerprint with your hoster's panel if you can). Not on Windows yet. No background runs yet;
   a long update gets up to 600 seconds per call. An account that also has `host_bash` can

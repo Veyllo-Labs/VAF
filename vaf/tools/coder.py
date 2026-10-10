@@ -2891,6 +2891,83 @@ def _coder_funnel(tools, *, scope, role, session_id):
                       gate_enabled=False, max_result_chars=None, authorize=current_authorizer())
 
 
+class DeployTarget:
+    """The ONE server a coder run may deploy to (`coding_agent(deploy_to=...)`): an ssh
+    target and the folder on it uploads must land under."""
+
+    def __init__(self, target, root: str):
+        self.target = target
+        self.root = root
+
+    def __str__(self) -> str:
+        return f"{self.target}:{self.root}"
+
+
+def _deploy_target(raw, user_scope_id):
+    """(DeployTarget, None) for `user@host[:port]:/folder`, or (None, reason).
+
+    Refused before the run starts when the server is not one this account has confirmed:
+    the coder runs unattended, so its ssh lane only reaches servers a person already
+    accepted (vaf/tools/ssh.py), and a run that found out at its very end would have built
+    everything for nothing."""
+    import posixpath
+    from vaf.core import ssh
+    text = str(raw or "").strip()
+    cut = text.find(":/")
+    if cut <= 0:
+        return None, ("deploy_to must be user@host:/folder or user@host:port:/folder, "
+                      f"not {text!r}")
+    root = posixpath.normpath(text[cut + 1:])
+    if root == "/":
+        return None, "deploy_to must name a folder, not the server's root"
+    try:
+        target = ssh.parse_server(text[:cut])
+    except ssh.SshError as e:
+        return None, f"deploy_to: {e}"
+    if not ssh.is_known(target, user_scope_id):
+        return None, (f"the server {target} is not confirmed for this account yet. Connect once "
+                      f"with ssh(server=\"{target}\", command=\"true\") so the user confirms its "
+                      "fingerprint, then start the coder again with deploy_to")
+    return DeployTarget(target, root), None
+
+
+def _deploy_refusal(fn_name: str, fn_args, deploy) -> Optional[str]:
+    """The answer to an ssh call this run may not make, or None (and the call is pinned to
+    the run's server). Without deploy_to a run has no ssh at all; with it, only that server,
+    uploads and downloads only under its folder, and never install_key, which is the main
+    agent's to do with the person."""
+    import posixpath
+    if fn_name != "ssh":
+        return None
+    if deploy is None:
+        return ("ssh is not available in this run: the coder reaches a server only when it was "
+                "started with deploy_to for that server.")
+    if not isinstance(fn_args, dict):
+        return "ssh needs its arguments as an object."
+    from vaf.core import ssh
+    asked = fn_args.get("server")
+    if asked:
+        try:
+            same = str(ssh.parse_server(asked)) == str(deploy.target)
+        except ssh.SshError:
+            same = False
+        if not same:
+            return f"ssh refused: this run may deploy to {deploy.target} only, not {asked}."
+    fn_args["server"] = str(deploy.target)
+    action = str(fn_args.get("action") or "run").strip().lower()
+    if action not in ("run", "upload", "download"):
+        return (f"ssh refused: action {action!r} is not part of a deploy (run, upload, "
+                "download); installing a key is for the main agent, with the user.")
+    if action in ("upload", "download"):
+        remote = str(fn_args.get("remote_path") or "").strip()
+        full = posixpath.normpath(remote if remote.startswith("/") else
+                                  posixpath.join(deploy.root, remote or "."))
+        if full != deploy.root and not full.startswith(deploy.root.rstrip("/") + "/"):
+            return f"ssh refused: this run uploads and downloads under {deploy.root} only."
+        fn_args["remote_path"] = full
+    return None
+
+
 # What a browser_agent task names when it means a page of the run's own environment.
 _ENVIRONMENT_TARGET = re.compile(
     r"file://|/workspace\b|\blocalhost\b|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal",
@@ -3054,6 +3131,10 @@ class CodingAgentTool(BaseTool):
             "environment": {
                 "type": "string",
                 "description": "Optional: the id of one of your sandbox environments (sandbox_manage, kind='project') whose project folder is project_path. The coder then runs its commands, tests and dev servers in that container, with its network and installed packages. Without it, a project environment you already have for that folder is used on its own."
+            },
+            "deploy_to": {
+                "type": "string",
+                "description": "Optional, and ONLY when the user asked for the result to go onto a server: user@host[:port]:/folder. The coder then gets the ssh tool for exactly that server (upload the built files into that folder, run commands there such as a restart); without deploy_to it has no ssh at all. The server must already be confirmed by the user: if it is new, connect once with ssh(server=..., command='true') first."
             }
         },
         "required": ["task"]
@@ -3431,6 +3512,13 @@ Thumbs.db
         # the dispatch loop thousands of lines below needs the answer as locals.
         caller_scope, caller_role = _caller_identity(kwargs)
         caller_allowed = _caller_allowed_tools(caller_scope, caller_role)
+        # The one server this run may deploy to, decided by the caller and checked before
+        # anything is built (parent and child alike). A local of the run, never instance state.
+        _deploy = None
+        if kwargs.get("deploy_to"):
+            _deploy, _deploy_error = _deploy_target(kwargs.get("deploy_to"), caller_scope)
+            if _deploy_error:
+                return f"Error: {_deploy_error}"
         # The chat this run works for: in the parent the dispatcher's context, in the
         # spawned child VAF_SESSION_ID. The policy asks whether it is a messaging channel,
         # and python_exec's own check reads the person's grants for it.
@@ -3572,6 +3660,8 @@ Thumbs.db
             # set here would outlive this spawn in the parent (Rule 4.5), an argument cannot.
             if kwargs.get("environment"):
                 _spawn_args += ("--environment", str(kwargs.get("environment")))
+            if _deploy is not None:
+                _spawn_args += ("--deploy-to", str(_deploy))
             spawned = spawn_subagent(
                 "coding_agent", task,
                 args=_spawn_args,
@@ -4046,6 +4136,12 @@ Thumbs.db
         if HAS_CODING_TOOLS:
             self.local_tools["bash"] = BashTool(base_dir, environment=_env_binding,
                                                 owner_scope=_env_owner)
+        # ssh only for a run started with deploy_to: registered here, never auto-discovered
+        # (MANUALLY_ADDED_TOOLS below), and every call pinned by _deploy_refusal.
+        self.local_tools.pop("ssh", None)
+        if _deploy is not None:
+            from vaf.tools.ssh import SshTool
+            self.local_tools["ssh"] = SshTool()
 
         # ═══════════════════════════════════════════════════════════════════
         # TEMPLATE ANALYSIS - Use LLM with own context BEFORE starting work
@@ -5437,7 +5533,8 @@ Task {task_idx + 1}: {current_task}
                                 MANUALLY_ADDED_TOOLS = [
                                     "set_todos", "task_done", "write_file", "read_file", 
                                     "list_files", "python_sandbox", "web_fetch", "web_deep_search",
-                                    "git_init", "git_add_commit", "git_status", "git_log", "bash"
+                                    "git_init", "git_add_commit", "git_status", "git_log", "bash",
+                                    "ssh",      # only with deploy_to, advertised by hand
                                 ]
                                 if instance.name in MANUALLY_ADDED_TOOLS:
                                     continue
@@ -6406,6 +6503,39 @@ Task {task_idx + 1}: {current_task}
                                 "required": ["command"]
                             }
                         )
+                    }
+                })
+
+            # ssh, only for a run started with deploy_to, in every context (the deploy is
+            # usually the last task). Pinned to that one server by _deploy_refusal.
+            if _deploy is not None:
+                tools_schema.append({
+                    "type": "function",
+                    "function": {
+                        "name": "ssh",
+                        "description": (
+                            f"Deploy to {_deploy.target}, the one server this run may reach. "
+                            f"action='upload' copies local_path (a file, or a folder such as the "
+                            f"built site) to remote_path under {_deploy.root}; action='run' runs a "
+                            "command there (a restart, docker compose up ...; it must not wait "
+                            "for input: -y, DEBIAN_FRONTEND=noninteractive); action='download' "
+                            "fetches a file from there. as_root=true runs the command through "
+                            "sudo (sudo_credential: the NAME of the user's stored sudo password)."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "action": {"type": "string", "enum": ["run", "upload", "download"]},
+                                "command": {"type": "string"},
+                                "local_path": {"type": "string"},
+                                "remote_path": {"type": "string"},
+                                "as_root": {"type": "boolean"},
+                                "sudo_credential": {"type": "string"},
+                                "login_credential": {"type": "string"},
+                                "timeout": {"type": "integer"},
+                            },
+                            "required": ["action"]
+                        }
                     }
                 })
 
@@ -9968,7 +10098,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         session_id=caller_session,
                     )
                     if _refusal is None:
-                        _refusal = _environment_browser_refusal(fn_name, fn_args, _env_binding)
+                        _refusal = (_environment_browser_refusal(fn_name, fn_args, _env_binding)
+                                    or _deploy_refusal(fn_name, fn_args, _deploy))
                     if _refusal is not None:
                         # Answered here and nothing else runs: the file handling further down
                         # judges a result by its wording, and a refused write_file must never

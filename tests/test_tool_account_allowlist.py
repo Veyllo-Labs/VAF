@@ -335,6 +335,7 @@ def test_coder_only_names_match_what_the_coder_actually_builds():
     shared_with_main = {
         "write_file", "edit_file", "read_file", "list_files",
         "python_sandbox", "linter", "codesearch", "render_check", "code_audit",
+        "ssh",          # the main agent's ssh tool, registered for a deploy_to run only
     }
     tree = ast.parse(open(mod.__file__, "rb").read())
     assigned_keys = {

@@ -260,4 +260,4 @@ def test_bound_runs_offer_no_browser_agent_and_say_where_render_check_looks():
     head = src.index('"name": "browser_agent"')
     assert "*([] if _env_binding is not None else [{" in src[head - 400:head]
     assert "Render a page INSIDE sandbox environment {_env_binding.id}" in src
-    assert "_refusal = _environment_browser_refusal(fn_name, fn_args, _env_binding)" in src
+    assert "_refusal = (_environment_browser_refusal(fn_name, fn_args, _env_binding)" in src

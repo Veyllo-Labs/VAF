@@ -1,40 +1,17 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Ephemeral sandbox fallback hardening + temporary per-run pip installs.
+"""python_sandbox in the caller's own scratch environment: temporary per-run pip
+installs, bridge values that never touch a command line, and a run that belongs to
+one person.
 
-The persistent compose sandbox was hardened long ago (own network, cap_drop
-ALL, no-new-privileges) but the ephemeral fallback in DockerSandbox was
-skipped: it landed on the DEFAULT bridge with full caps. And pip installs
-went into the shared container's global site-packages forever. Both fixed;
-these tests pin the contracts.
-"""
-from vaf.tools.sandbox import EPHEMERAL_NETWORK, ephemeral_hardening_flags
+The sandbox used to be one container for every account (python:3.11-slim, root, the
+runs separated by directory names under /tmp) with an ephemeral fallback; each person
+has a scratch environment of their own now (vaf/core/environments.py), and the bounded,
+marker-killed exec lives in vaf/core/containers.py (tests/test_containers.py)."""
+import types
+
 from vaf.tools.python_sandbox import PythonSandboxTool
-
-
-# -- ephemeral container flags -------------------------------------------------
-
-def test_hardening_flags_mirror_the_persistent_container():
-    flags = ephemeral_hardening_flags(EPHEMERAL_NETWORK)
-    joined = " ".join(flags)
-    assert "--cap-drop ALL" in joined
-    assert "--security-opt no-new-privileges:true" in joined
-    assert f"--network {EPHEMERAL_NETWORK}" in joined
-    assert "--add-host host.docker.internal:host-gateway" in joined  # Tool Bridge parity
-
-
-def test_degraded_retry_keeps_caps_drops_only_network():
-    flags = ephemeral_hardening_flags(None)
-    joined = " ".join(flags)
-    assert "--cap-drop ALL" in joined and "no-new-privileges:true" in joined
-    assert "--network" not in joined and "--add-host" not in joined
-
-
-def test_ephemeral_network_is_not_the_compose_name():
-    """docker compose refuses to adopt a same-name network it did not create,
-    so the ephemeral lane must use its own network name."""
-    assert EPHEMERAL_NETWORK != "vaf-sandbox-network"
 
 
 # -- temporary pip installs ----------------------------------------------------
@@ -61,77 +38,64 @@ def test_package_specs_reject_shell_metacharacters():
         assert PythonSandboxTool._validate_packages(evil) is not None
 
 
-# -- targeted timeout kill (the pkill-on-slim gap) ------------------------------
+# -- one person's container, values as environment ---------------------------
 
-def test_run_marker_extracted_from_every_command_shape():
-    from vaf.tools.sandbox import extract_run_marker
-    wd = "/tmp/vaf_ab12cd34ef56_deadbeef"
-    for cmd in (f"mkdir -p {wd}",
-                f"pip install --target {wd}/_pkgs numpy",
-                f"cd {wd} && PIP_TARGET={wd}/_pkgs python3",
-                f"rm -rf {wd}"):
-        assert extract_run_marker(cmd) == wd
-    assert extract_run_marker("docker ps") is None
-    assert extract_run_marker("") is None
+def test_each_run_goes_to_the_callers_scratch_environment(monkeypatch):
+    """MUTATION: hand every run the same scratch environment regardless of scope - red."""
+    import vaf.core.environments as envmod
+    asked = []
 
+    class _Mgr:
+        def scratch_for(self, scope):
+            asked.append(scope)
+            raise envmod.EnvironmentRefused("stop here")
 
-def test_kill_script_is_scoped_and_self_excluding():
-    from vaf.tools.sandbox import kill_run_processes_cmd
-    s = kill_run_processes_cmd("/tmp/vaf_x_1")
-    assert '[ "$p" = "$$" ] && continue' in s          # the scanner never kills itself
-    assert 'readlink "$d/cwd"' in s                     # catches children (pip) via inherited cwd
-    assert 'grep -qa -- "/tmp/vaf_x_1" "$d/cmdline"' in s  # catches the payload shell
-    assert 'kill -9' in s
-    assert "pkill" not in s                             # slim images have no procps
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: _Mgr())
+    monkeypatch.setattr(PythonSandboxTool, "_ensure_docker_available", staticmethod(lambda: (True, "")))
+    out = PythonSandboxTool().run(code="print(1)", user_scope_id="scope-alice")
+    assert asked == ["scope-alice"] and "stop here" in out
 
 
-def test_timeout_kill_uses_marker_and_skips_without_one(monkeypatch):
-    from vaf.tools.python_sandbox import PythonSandboxTool
-
+def test_the_executor_hands_values_over_as_environment_with_one_marker(monkeypatch):
+    """The run's commands share one marker (so a Stop ends exactly this run) and the
+    bridge values travel as env_values, never in the command text. MUTATION: build the
+    command with NAME=value again - red."""
+    import vaf.core.environments as envmod
     calls = []
-    import vaf.tools.python_sandbox as ps
-    monkeypatch.setattr(ps.subprocess, "run", lambda *a, **k: calls.append(a[0]))
 
-    class _P:
-        def kill(self): pass
+    class _Mgr:
+        def exec_in(self, env, argv, **kw):
+            calls.append((argv, kw))
+            return envmod.ExecResult(0, "out", "")
 
-    tool = PythonSandboxTool()
-    tool._kill_sandbox_exec(_P(), "cd /tmp/vaf_scope1_run9 && python3 x.py")
-    assert len(calls) == 1
-    argv = calls[0]
-    assert argv[:3] == ["docker", "exec", ps.SANDBOX_CONTAINER]
-    assert "/tmp/vaf_scope1_run9" in argv[-1] and "kill -9" in argv[-1]
-
-    calls.clear()
-    tool._kill_sandbox_exec(_P(), "echo no marker here")
-    assert calls == []                                  # never falls back to a broad kill
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: _Mgr())
+    execute = PythonSandboxTool()._executor(types.SimpleNamespace(container="c"), "run-1")
+    execute("mkdir -p /tmp/vaf_run_1", 30)
+    execute("python3 x.py", 30, env={"VAF_BRIDGE_TOKEN": "s3cr3t"})
+    assert {kw["run_id"] for _, kw in calls} == {"run-1"}
+    argv, kw = calls[-1]
+    assert kw["env_values"] == {"VAF_BRIDGE_TOKEN": "s3cr3t"}
+    assert not any("s3cr3t" in a for a in argv)
 
 
-# -- bridge values travel in the environment, never in a command line ----------
+def test_a_timeout_and_a_stop_read_as_such(monkeypatch):
+    import vaf.core.environments as envmod
 
-def test_exec_passes_values_as_environment_not_as_command_text(monkeypatch):
-    """`docker exec -e NAME` with the value in the client's environment: the token is
-    neither in the host's process list nor in the shell's cmdline in the shared
-    container. MUTATION: put NAME=value into exec_cmd - red."""
-    import vaf.tools.python_sandbox as ps
-    seen = {}
+    class _Mgr:
+        def __init__(self, result):
+            self.result = result
 
-    class _Proc:
-        returncode = 0
+        def exec_in(self, env, argv, **kw):
+            return self.result
 
-        def communicate(self, timeout=None):
-            return "", ""
-
-    def _popen(args, **kw):
-        seen["args"], seen["env"] = list(args), kw.get("env")
-        return _Proc()
-
-    monkeypatch.setattr(ps.subprocess, "Popen", _popen)
-    PythonSandboxTool()._execute_in_persistent("true", 5, env={"VAF_BRIDGE_TOKEN": "s3cr3t-token"})
-    assert not any("s3cr3t-token" in a for a in seen["args"]), seen["args"]
-    i = seen["args"].index("-e")
-    assert seen["args"][i + 1] == "VAF_BRIDGE_TOKEN"
-    assert seen["env"]["VAF_BRIDGE_TOKEN"] == "s3cr3t-token"
+    monkeypatch.setattr(envmod, "get_environment_manager",
+                        lambda: _Mgr(envmod.ExecResult(-1, "", "", timed_out=True)))
+    rc, _, err = PythonSandboxTool()._executor(None, "r")("sleep 9", 3)
+    assert rc == -1 and "timed out after 3s" in err
+    monkeypatch.setattr(envmod, "get_environment_manager",
+                        lambda: _Mgr(envmod.ExecResult(-1, "", "", cancelled=True)))
+    rc, _, err = PythonSandboxTool()._executor(None, "r")("sleep 9", 3)
+    assert rc == -1 and "cancelled by stop request" in err
 
 
 def test_the_bridge_run_hands_its_values_over_as_env():
@@ -150,22 +114,3 @@ def test_the_bridge_run_hands_its_values_over_as_env():
     assert "tok-123" not in run_cmd and "VAF_BRIDGE_TOKEN" not in run_cmd
     assert run_env == {"VAF_BRIDGE_URL": "http://host.docker.internal:4242",
                        "VAF_BRIDGE_TOKEN": "tok-123"}
-
-
-def test_ephemeral_exec_passes_values_as_environment(monkeypatch):
-    import vaf.tools.sandbox as sb
-    seen = {}
-
-    def _run(args, **kw):
-        seen["args"], seen["env"] = list(args), kw.get("env")
-        import types
-        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(sb.subprocess, "run", _run)
-    box = sb.DockerSandbox.__new__(sb.DockerSandbox)
-    box.is_running = True
-    box.container_name = "vaf_sandbox_test"
-    box.execute("true", timeout=5, env={"VAF_BRIDGE_TOKEN": "tok-9"})
-    assert "tok-9" not in " ".join(seen["args"])
-    assert seen["args"][seen["args"].index("-e") + 1] == "VAF_BRIDGE_TOKEN"
-    assert seen["env"]["VAF_BRIDGE_TOKEN"] == "tok-9"

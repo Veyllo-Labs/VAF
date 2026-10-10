@@ -44,8 +44,8 @@ VAF uses a **`user_scope_id`** (UUID) as the universal isolation key. Every user
 │                              │                                     │
 │  Layer 6: Sandbox (Docker)                                         │
 │  ┌──────────────────────────────────────────────────────────┐      │
-│  │  Per-user working directory: /tmp/vaf_<scope>_<exec_id>  │      │
-│  │  Filesystem isolation within shared container            │      │
+│  │  One container per person (sandbox environments)         │      │
+│  │  Labelled owner, non-root, own network                   │      │
 │  └──────────────────────────────────────────────────────────┘      │
 │                                                                    │
 └────────────────────────────────────────────────────────────────────┘
@@ -607,16 +607,20 @@ Notes and to-dos for the automation calendar are stored per user under `Platform
 
 Thinking workspace data is stored per user under `Platform.data_dir() / "workspaces" / <scope_key> /`, where `scope_key` uses the same normalization as Thinking Mode (`local_admin_scope_id` -> `default`, otherwise user scope id). Tasks, run artifacts, handoff proposals, and approval archives are isolated by this key. Workspace path resolution is boundary-checked to prevent cross-scope traversal.
 
-### Sandbox (`vaf/tools/python_sandbox.py`)
+### Sandbox (`vaf/core/environments.py`, `vaf/tools/python_sandbox.py`, `vaf/tools/sandbox_test_runner.py`)
 
-Code execution in the Docker sandbox uses per-user working directories:
+Code runs in the caller's own sandbox environment: `python_sandbox` and `run_tests` in the
+person's scratch environment (`vaf-env-<scope hash>-scratch`), the environment tools in the
+temporary or project environments the person created. Each is a container of its own,
+labelled with its owner, running non-root on a network of its own. Another person's
+environment answers like a missing one, and an admin may list and delete it but never run
+code in it. A run without a scope belongs to the machine owner; with no owner configured it
+is refused. There is no shared "no scope" container.
 
-```python
-scope_prefix = str(user_scope_id).replace("-", "")[:12] if user_scope_id else "shared"
-workdir = f"/tmp/vaf_{scope_prefix}_{exec_id}"
-```
-
-This prevents users from reading each other's temporary files within the shared sandbox container.
+Before the sandbox environments, every account shared one container (`vaf-sandbox`, root), and the runs were
+kept apart only by directory names under `/tmp`: a concurrent run could list and read another
+account's working directory and copy files out of it through `export_files`. See
+[SANDBOXING.md](SANDBOXING.md#sandbox-environments).
 
 ### Browser agent session store (`vaf/tools/browser_agent.py`)
 
@@ -808,7 +812,7 @@ The connection map (`/api/network/connections`) lists every connected device's a
 | File tools (read AND write) | Per-user jail (contextvar over `is_safe_path`, entered via `user_jail`): non-admin confined to own `VAF_Projects/<uid[:8]>/` - plus, for READS only, the folders of skills visible to them; admin (`is_admin_identity`) full; another user's tree always denied, fail-closed | OS |
 | Web file routes (`/api/file`, converters, `/api/image/describe`, the five save routes) | One decision (`_allowed_file_path`): the four served roots for an admin; every other account only where its own file tools reach (`vaf.jail_allows`, read or write mode); refused before the disk is looked at, so a refusal says nothing about existence; a token without a scope is refused | Application |
 | Outgoing attachments (mail + messengers) | All five senders declare `file_access = "write"`: a non-admin attaches only from their own tree; symlink targets are re-checked by `is_safe_path` itself | OS |
-| Sandbox | Per-user working directory in Docker | Container |
+| Sandbox | One container per person, labelled owner | Container |
 | Sub-agent watchdog (`/api/supervisor/status`, `/cancel`) | Non-admins see and can cancel only units of sessions owned by their scope; unscoped sessions admin-only; fail-closed ownership lookup; admins get all units with username attribution | Application |
 | Security dashboard (`/api/security/*`) | Admin-only by design (`require_admin`); aggregates cross-scope metrics server-side; full scope UUIDs never leave the backend | Application |
 | Browser sessions (cookies/logins) | Per-user `~/.vaf/browser_sessions/<scope>/` store keyed by user_scope_id, encrypted at rest | OS |
@@ -942,7 +946,7 @@ When testing new features, create at least two test users and verify:
 | Area | Current state | Recommendation |
 |------|---------------|----------------|
 | Discord | Single-admin only | Implement per-user Discord bot or multi-guild routing |
-| Sandbox | Shared Docker container with per-user dirs | Consider per-user containers for stronger isolation |
+| Sandbox | One container per person; no disk quota per environment (overlay2 without xfs project quotas) | The number of environments per person is limited (`sandbox_env_max_per_user`) |
 | Rate limiting | No per-user rate limits | Add per-user rate limiting to prevent abuse |
 | Audit logging | Perimeter/auth trail exists: the always-on security event log (`vaf/core/security_events.py`) records blocked IPs, invalid tokens, failed logins/2FA, rejected WebSocket handshakes, messenger pairing changes, and skill blocks/quarantines; admin-readable via `GET /api/security/events`, the `security_<date>.log` file, and the Logs Overview dashboard. The activity timeline (`timeline_<date>.jsonl`) is attributed per user: `vaf/core/identity_binding.py` binds the scope for the turn and `log_timeline_event` stamps it, so an admin can read one user's tool calls via `GET /api/logs/timeline/events?user=<username>` (the name is resolved to a scope server-side; scope ids are never handed to a client). Records written before that stamp existed, and work that belongs to no user, carry no scope and are reported as unattributed rather than folded into somebody's list | Log application-level cross-scope DATA access denials (e.g. a scoped memory query returning "not found" for a foreign id, or a WS session-ownership denial), which are still unrecorded |
 | Memory encryption keys | Shared key across users | Consider per-user encryption keys for stronger data separation |

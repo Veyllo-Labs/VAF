@@ -4,15 +4,15 @@
 """
 VAF Python Sandbox - Secure Docker-based Code Execution
 
-Executes Python code in an isolated Docker container for security.
-Uses a PERSISTENT container (vaf-sandbox) for fast execution.
+Executes Python code in the caller's own scratch environment (vaf/core/environments.py):
+a container of their own, never shared with another person, kept running between calls
+so a run starts in well under a second.
 
 Security features:
-- Process isolation via Docker
-- Memory limit: 512MB
-- CPU limit: 0.5 cores
-- Workspace isolation between executions
-- Auto-cleanup of workspace after each run
+- One container per person, non-root, every capability dropped
+- Memory limit: 512MB, CPU limit: 0.5 cores
+- A working directory per run, removed after it
+- Timeouts and Stop end the run's own processes inside the container
 
 Programmatic Tool Calling (Tool Calling 2.0 — provider-agnostic)
 -----------------------------------------------------------------
@@ -38,9 +38,7 @@ import base64
 import os
 import posixpath
 import shutil
-import subprocess
 import logging
-import time
 import uuid
 import re
 from pathlib import Path
@@ -50,16 +48,10 @@ from vaf.core.channels import CHAT_CHANNELS
 
 logger = logging.getLogger("vaf.python_sandbox")
 
-# Persistent container name (from docker-compose.memory.yml)
-SANDBOX_CONTAINER = "vaf-sandbox"
-
 
 class PythonSandboxTool(BaseTool):
     """
-    Secure Python Sandbox using a persistent Docker container.
-    
-    Uses the pre-started 'vaf-sandbox' container for instant execution.
-    Falls back to creating an ephemeral container if not available.
+    Secure Python Sandbox in the caller's own scratch environment.
     
     Use for:
     - Mathematical calculations
@@ -121,7 +113,7 @@ class PythonSandboxTool(BaseTool):
                 "description": (
                     "Optional: pip packages to install before running (e.g., ['numpy', 'pandas']). "
                     "Installs are TEMPORARY: they go into this run's private directory and are "
-                    "deleted with it after the run - nothing accumulates in the shared sandbox."
+                    "deleted with it after the run - nothing accumulates in your sandbox."
                 )
             },
             "export_files": {
@@ -157,10 +149,6 @@ class PythonSandboxTool(BaseTool):
     # the model's timeout: it is clamped here, like host_bash's, for both execution paths.
     MAX_TIMEOUT_SECONDS = 600
 
-    def __init__(self):
-        super().__init__()
-        self._ephemeral_sandbox = None
-
     @classmethod
     def _run_timeout(cls, kwargs) -> int:
         try:
@@ -168,45 +156,17 @@ class PythonSandboxTool(BaseTool):
         except (TypeError, ValueError):
             requested = 30
         return min(max(1, requested), cls.MAX_TIMEOUT_SECONDS)
-    
-    def _get_subprocess_kwargs(self) -> dict:
-        """Get platform-specific subprocess kwargs."""
-        import platform
-        kwargs = {}
-        if platform.system() == "Windows":
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-        return kwargs
 
-    def _is_persistent_sandbox_running(self) -> bool:
-        """Check if the persistent sandbox container is running."""
+    @staticmethod
+    def _ensure_docker_available() -> Tuple[bool, str]:
+        """Is there a docker daemon to run in? Returns (ok, the reason when not)."""
         try:
-            result = subprocess.run(
-                ["docker", "inspect", "-f", "{{.State.Running}}", SANDBOX_CONTAINER],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                **self._get_subprocess_kwargs()
-            )
-            return result.returncode == 0 and "true" in result.stdout.lower()
-        except Exception:
-            return False
-
-    def _ensure_docker_available(self) -> Tuple[bool, str]:
-        """Check if Docker is available. Returns (success, error_message)."""
-        try:
-            result = subprocess.run(
-                ["docker", "info"],
-                capture_output=True,
-                timeout=10,
-                **self._get_subprocess_kwargs()
-            )
-            if result.returncode != 0:
+            from vaf.core.service_stack import is_docker_daemon_running, resolve_docker_exe
+            if not shutil.which(resolve_docker_exe()) and not os.path.isfile(resolve_docker_exe()):
+                return False, "Docker is not installed. Please install Docker Desktop from https://docker.com"
+            if not is_docker_daemon_running():
                 return False, "Docker daemon is not running. Please start Docker Desktop."
             return True, ""
-        except FileNotFoundError:
-            return False, "Docker is not installed. Please install Docker Desktop from https://docker.com"
-        except subprocess.TimeoutExpired:
-            return False, "Docker daemon is not responding. Please restart Docker Desktop."
         except Exception as e:
             return False, f"Docker check failed: {e}"
 
@@ -223,96 +183,26 @@ class PythonSandboxTool(BaseTool):
         except Exception:
             return lambda: False
 
-    def _kill_sandbox_exec(self, proc, command: str = "") -> None:
-        """Halt a sandbox exec: kill the host docker-exec client and the run's OWN
-        process tree inside the container (docker exec does not propagate the kill,
-        so the code would keep running otherwise). The in-container kill is scoped
-        to this run's workspace marker: the old `pkill -9 -f python` no-opped on
-        slim images (no procps) - a timed-out pip finished its 229MB install into
-        an already-cleaned workspace - and would have killed every other user's
-        run in the shared container if it had existed."""
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        from vaf.tools.sandbox import extract_run_marker, kill_run_processes_cmd
-        marker = extract_run_marker(command)
-        if not marker:
-            return
-        try:
-            subprocess.run(
-                ["docker", "exec", SANDBOX_CONTAINER, "sh", "-c", kill_run_processes_cmd(marker)],
-                capture_output=True, timeout=10, **self._get_subprocess_kwargs()
-            )
-        except Exception:
-            pass
-
-    @staticmethod
-    def _exec_env_flags(env: Optional[Dict[str, str]]) -> List[str]:
-        """`docker exec` flags for values a run must see; the caller passes the values in
-        the docker client's environment (`{**os.environ, **env}`).
-
-        Each name goes on the command line as a bare `-e NAME`; the value travels only in
-        the environment of the docker client, which hands it to the process in the
-        container. Written into the command instead (`NAME="value" sh -c ...`, as the
-        bridge token once was), the value sat in the cmdline of the host's docker client
-        and of the shell inside the shared container, readable from /proc by every other
-        run there."""
-        flags: List[str] = []
-        for name in (env or {}):
-            flags += ["-e", name]
-        return flags
-
-    def _execute_in_persistent(self, command: str, timeout: int, workdir: str = "/workspace",
-                               env: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
-        """Execute command in the persistent sandbox container, stop-aware: a Stop request kills the
-        exec promptly instead of letting it run to the timeout."""
-        env_flags = self._exec_env_flags(env)
-        exec_cmd = [
-            "docker", "exec",
-            "-w", workdir,
-            *env_flags,
-            SANDBOX_CONTAINER,
-            "sh", "-c", command
-        ]
-
-        try:
-            proc = subprocess.Popen(
-                exec_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                env=({**os.environ, **env} if env else None), **self._get_subprocess_kwargs()
-            )
-        except Exception as e:
-            return -1, "", str(e)
-
+    def _executor(self, env, run_id: str):
+        """`execute_fn(command, timeout, env=None) -> (rc, stdout, stderr)` for one run in
+        the scratch environment. Every command of the run carries the same marker, so a
+        timeout or a Stop ends exactly this run's processes (exec_bounded)."""
+        from vaf.core.environments import get_environment_manager
+        mgr = get_environment_manager()
         stopped = self._session_stop_check()
-        deadline = time.monotonic() + max(1.0, float(timeout))
-        while True:
-            try:
-                out, err = proc.communicate(timeout=0.5)
-                return proc.returncode, out, err
-            except subprocess.TimeoutExpired:
-                pass
-            reason = "cancelled by stop request" if stopped() else (
-                f"timed out after {int(timeout)}s" if time.monotonic() >= deadline else None
-            )
-            if reason:
-                self._kill_sandbox_exec(proc, command)
-                try:
-                    out, err = proc.communicate(timeout=5)
-                except Exception:
-                    out, err = "", ""
-                return -1, out or "", f"{(err or '').strip()}\nExecution {reason}.".strip()
-    
-    def _execute_in_ephemeral(self, command: str, timeout: int,
-                              env: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
-        """Execute in an ephemeral container (fallback if persistent not available)."""
-        if self._ephemeral_sandbox is None:
-            from vaf.tools.sandbox import DockerSandbox
-            self._ephemeral_sandbox = DockerSandbox(image="python:3.11-slim")
-            self._ephemeral_sandbox.start()
-        
-        return self._ephemeral_sandbox.execute(command, timeout=timeout, env=env)
-    
+
+        def execute_fn(command: str, timeout: int, env: Optional[Dict[str, str]] = None):
+            r = mgr.exec_in(run_env, ["sh", "-c", command], timeout=timeout, env_values=env,
+                            check_stop=stopped, run_id=run_id)
+            if r.cancelled:
+                return -1, r.stdout, f"{(r.stderr or '').strip()}\nExecution cancelled by stop request.".strip()
+            if r.timed_out:
+                return -1, r.stdout, f"{(r.stderr or '').strip()}\nExecution timed out after {int(timeout)}s.".strip()
+            return r.returncode, r.stdout, r.stderr
+
+        run_env = env
+        return execute_fn
+
     # ------------------------------------------------------------------ #
     #  Programmatic Tool Calling helpers                                   #
     # ------------------------------------------------------------------ #
@@ -345,10 +235,8 @@ class PythonSandboxTool(BaseTool):
     # Packages land in {workdir}/_pkgs via pip --target, and PYTHONPATH /
     # PIP_TARGET point there for the run. The existing end-of-run
     # `rm -rf {workdir}` then removes them together with the workspace, so
-    # installs never accumulate in the SHARED persistent container (before
-    # this, every install went into global site-packages and persisted for
-    # all users until the container was recreated). PIP_TARGET also catches
-    # code that shells out to pip itself.
+    # installs never accumulate in the person's scratch container, which lives
+    # on between runs. PIP_TARGET also catches code that shells out to pip itself.
 
     _PKG_SPEC_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+\[\],~=<>!-]*$")
 
@@ -388,7 +276,7 @@ class PythonSandboxTool(BaseTool):
         stub_src: str,
     ) -> Tuple[int, str, str]:
         """Write stub + code into workdir, pass bridge env, execute. The bridge URL and
-        token reach the run as its environment (see _exec_env_flags), never as text in
+        token reach the run as its environment (containers.exec_bounded), never as text in
         the command."""
         # Write vaf_tools.py stub (base64 to avoid escaping issues)
         b64_stub = base64.b64encode(stub_src.encode()).decode()
@@ -454,10 +342,12 @@ class PythonSandboxTool(BaseTool):
         """The container path one export_files entry names, or None when it lies outside
         this run's own working directory.
 
-        The persistent sandbox is shared: every run's workdir sits next to the others
-        under /tmp. Accepting any /tmp or /workspace path let one user's run copy another
-        user's files out while that run was still going (the workdir names are listed by
-        `ls /tmp`). Normalised first, so `../vaf_other/x` cannot climb out."""
+        Only what this run produced is delivered. The sandbox used to be one container for
+        everyone, with every run's workdir next to the others under /tmp, and accepting any
+        /tmp path let one user's run copy another user's files out. Each person has a
+        container of their own now, and the rule still holds inside it: an earlier run's
+        leftovers are not this call's artifacts. Normalised first, so `../x` cannot climb
+        out."""
         p = str(raw or "").strip()
         if not p:
             return None
@@ -486,7 +376,7 @@ class PythonSandboxTool(BaseTool):
             return "it is a directory"
         return None
 
-    def _export_artifacts(self, export_files, workdir: str, use_persistent: bool,
+    def _export_artifacts(self, export_files, workdir: str, container: str,
                           session_id) -> list:
         """Copy files the code produced OUT of the container into the chat workspace.
 
@@ -501,12 +391,9 @@ class PythonSandboxTool(BaseTool):
         """
         notes = []
         try:
-            if use_persistent:
-                container = SANDBOX_CONTAINER
-            else:
-                container = getattr(self._ephemeral_sandbox, "container_name", None)
             if not container:
                 return ["[export failed: no sandbox container available]"]
+            from vaf.core import containers
             from vaf.core.platform import Platform
             from vaf.core.session import resolve_agent_output_dir
             dest_dir = resolve_agent_output_dir(
@@ -527,11 +414,7 @@ class PythonSandboxTool(BaseTool):
                     # docker cp would write THROUGH a link left at the destination.
                     os.unlink(dest)
                 try:
-                    r = subprocess.run(
-                        ["docker", "cp", f"{container}:{cpath}", dest],
-                        capture_output=True, text=True, timeout=60,
-                        **self._get_subprocess_kwargs(),
-                    )
+                    r = containers.docker(["cp", f"{container}:{cpath}", dest], timeout=60)
                 except Exception as e:
                     notes.append(f"[export failed: {p}: {e}]")
                     continue
@@ -566,7 +449,7 @@ class PythonSandboxTool(BaseTool):
         if with_vaf_tools and current_source in CHAT_CHANNELS:
             logger.warning("python_sandbox: disabling with_vaf_tools for channel source=%s", current_source)
             with_vaf_tools = False
-        # User scope for workspace isolation — each user gets their own temp directory
+        # Whose sandbox: each person gets a container of their own (the scratch environment).
         user_scope_id = kwargs.get("user_scope_id")
 
         if not code:
@@ -585,15 +468,17 @@ class PythonSandboxTool(BaseTool):
             logger.error(f"Docker not available: {docker_error}")
             return f"[SECURITY] Sandbox requires Docker: {docker_error}\n\nCode execution blocked for security reasons."
 
-        # Step 2: Choose execution method (persistent vs ephemeral)
-        use_persistent = self._is_persistent_sandbox_running()
-
-        if use_persistent:
-            logger.debug("Using persistent sandbox (fast)")
-            execute_fn = self._execute_in_persistent
-        else:
-            logger.info("Persistent sandbox not running, using ephemeral container")
-            execute_fn = self._execute_in_ephemeral
+        # Step 2: This person's scratch environment, created or started on demand.
+        from vaf.core.environments import EnvironmentRefused, get_environment_manager
+        try:
+            scratch = get_environment_manager().scratch_for(user_scope_id)
+        except EnvironmentRefused as e:
+            return f"[ERROR] python_sandbox: {e}"
+        except Exception as e:
+            logger.error("python_sandbox: scratch environment unavailable: %s", e)
+            return f"[ERROR] python_sandbox: the sandbox could not be started: {e}"
+        exec_id = uuid.uuid4().hex[:12]
+        execute_fn = self._executor(scratch, exec_id)
 
         # Step 2b: If Programmatic Tool Calling requested, set up the bridge
         bridge = None
@@ -629,10 +514,8 @@ class PythonSandboxTool(BaseTool):
                 return f"[ERROR] python_sandbox: Could not start tool bridge: {exc}"
 
         try:
-            # Step 3: Create unique workspace for this execution (per-user isolated)
-            exec_id = uuid.uuid4().hex[:8]
-            scope_prefix = str(user_scope_id).replace("-", "")[:12] if user_scope_id else "shared"
-            workdir = f"/tmp/vaf_{scope_prefix}_{exec_id}"
+            # Step 3: A working directory for this run, inside this person's own container.
+            workdir = f"/tmp/vaf_run_{exec_id}"
 
             # Create workspace directory. The mkdir is trivial; this budget is really for the
             # docker-exec round-trip, which can be slow on a COLD or busy container (first run after a
@@ -687,11 +570,11 @@ class PythonSandboxTool(BaseTool):
                 except Exception:
                     _sid = kwargs.get("_session_id")
                 export_notes = self._export_artifacts(
-                    _export_files, workdir, use_persistent, _sid
+                    _export_files, workdir, scratch.container, _sid
                 )
 
             # Step 6: Cleanup workspace
-            execute_fn(f"rm -rf {workdir}", timeout=5)
+            execute_fn(f"rm -rf {workdir}", timeout=15)
 
             # Step 7: Format result
             if exit_code != 0:
@@ -717,16 +600,3 @@ class PythonSandboxTool(BaseTool):
         finally:
             if bridge:
                 bridge.stop()
-    
-    def cleanup(self):
-        """Stop ephemeral sandbox if used."""
-        if self._ephemeral_sandbox:
-            try:
-                self._ephemeral_sandbox.stop()
-            except Exception as e:
-                logger.warning(f"Sandbox cleanup failed: {e}")
-            self._ephemeral_sandbox = None
-    
-    def __del__(self):
-        """Cleanup on destruction."""
-        self.cleanup()

@@ -10,7 +10,7 @@ Security is paramount when allowing an AI to execute code. VAF uses **Docker Con
 
 | Tool | Isolation | Use Case |
 |------|-----------|----------|
-| `python_sandbox` | Docker Container | Safe code execution (default) |
+| `python_sandbox` | The caller's own scratch environment (a Docker container of their own) | Safe code execution (default) |
 | `python_exec` | Host System | Only with explicit user trust |
 
 File tools (e.g. `librarian_agent`, `read_file`) block access to the VAF installation directory; the agent is instructed not to request operations on that path.
@@ -19,14 +19,15 @@ File tools (e.g. `librarian_agent`, `read_file`) block access to the VAF install
 
 VAF's sandbox isolation is enforced entirely at the **Docker container level**. There is no Python-level module blocklist - standard-library modules like `subprocess`, `socket`, and `os` are importable inside the container. What prevents abuse is:
 
+- **One container per person** - `python_sandbox` and `run_tests` run in the caller's scratch environment (see "Sandbox environments" below). Another account's code never runs in it, so one person's run cannot read another person's files or processes.
 - **Process namespace isolation** - processes cannot escape the container
-- **Filesystem isolation** - host filesystem is not mounted (code runs in `/tmp/vaf_*` per execution)
+- **Filesystem isolation** - no host path is mounted (code runs in `/tmp/vaf_run_*` per execution, inside the person's container)
+- **Unprivileged** - a non-root user, every Linux capability dropped, `no-new-privileges`, a process limit
 - **Resource limits** - 512 MB memory, 0.5 CPU cores (hard limits via Docker)
-- **No host privilege escalation** - default Docker unprivileged mode
 
 **What is NOT blocked at Python level:**
 - `import subprocess` - works, spawns processes inside the container only
-- `import socket` - works; sandbox has outbound network access (needed for pip and Tool Bridge)
+- `import socket` - works; the scratch environment has outbound network access (needed for pip and the Tool Bridge)
 - `import os` - works; filesystem access is limited to what Docker mounts, not by Python
 
 See [`SANDBOX_MODULES.md`](SANDBOX_MODULES.md) for the full module reference and security details.
@@ -34,18 +35,6 @@ See [`SANDBOX_MODULES.md`](SANDBOX_MODULES.md) for the full module reference and
 The browser container is a separate sandbox with its own design doc and is NOT covered here: see
 [`BROWSER_AGENT.md`](../agents/BROWSER_AGENT.md) for its image, ports and health probe, and section 5 of
 [`USER_ISOLATION.md`](USER_ISOLATION.md) for the per-user browser pool.
-
----
-
-## Smart Auto-Start
-
-VAF automates sandbox startup:
-1. **Detection:** Before running code, VAF checks if the Docker Daemon is running.
-2. **Auto-Start:** If Docker is installed but stopped, VAF attempts to launch it automatically:
-   - **macOS:** Launches `Docker.app`.
-   - **Windows:** Launches `Docker Desktop.exe`.
-   - **Linux:** Triggers `docker.socket` (requires systemd socket activation).
-3. **Polling:** VAF waits up to 30 seconds for the daemon to become ready.
 
 ---
 
@@ -61,39 +50,36 @@ To execute code, you must:
 2. Start the runtime so the daemon is reachable (e.g. `colima start`, or open Docker Desktop)
 3. Re-run your code request
 
+The service stack starts the daemon where it can (`vaf/core/service_stack.py`); the sandbox
+lanes themselves only ask whether it answers.
+
 ---
 
-## Container Configuration
+## The scratch environment (`python_sandbox`, `run_tests`)
 
-VAF uses a **persistent sandbox container** for fast code execution:
-
-```bash
-# The sandbox is part of the VAF Docker stack
-docker compose -f docker-compose.memory.yml up -d
-```
+Each person has one scratch environment, created on first use and kept running between calls
+so a run starts in well under a second (measured: `docker exec` of `python3` in about 80 ms).
 
 | Resource | Detail |
 |----------|--------|
-| **Image** | python:3.11-slim |
-| **Container** | vaf-sandbox (persistent), `sleep infinity` behind docker-init (`init: true`): the init forwards SIGTERM, so a stop takes a moment instead of the 10 s grace and a SIGKILL, and it reaps the orphans `docker exec` runs leave behind |
-| **Memory** | 512MB |
-| **CPU** | 0.5 Cores |
-| **Network** | `vaf-sandbox-network` (isolated bridge). Cannot reach postgres/redis/gotenberg/tts/stt by hostname. Outbound internet (pip install) and Tool Bridge back-channel (`host.docker.internal`) still work. |
-| **Filesystem** | Isolated (no host access). Packages installed via the `packages` parameter are TEMPORARY: pip runs with `--target` into the run's private `_pkgs` dir (plus `--no-cache-dir` so the shared pip cache does not grow), `PYTHONPATH`/`PIP_TARGET` point there for the run - `PIP_TARGET` also redirects code that shells out to pip itself - and the whole directory is deleted with the per-run workspace. Nothing accumulates in the shared container across runs or users. |
-| **Workspace** | Per-execution temp dir under `/tmp/vaf_*` (unique UUID per run, auto-deleted after). Container `working_dir` is `/workspace` (persistent volume), but code always executes in the per-run `/tmp/vaf_*` dir. `export_files` copies only files inside the run's own dir (normalised, so `..` cannot climb out); a symbolic link or a directory that docker cp produced is removed again instead of delivered. |
-| **Capabilities** | `cap_drop: ALL`, `no-new-privileges: true` - container has no Linux capabilities beyond default isolation. |
-| **Module blocking** | None at Python level - `subprocess`, `socket`, `os` are importable. Constraints are enforced by Docker process/filesystem isolation, network isolation, and resource limits, not by a Python import blocklist. |
-| **Timeout kill** | A timed-out or user-stopped execution is killed INSIDE the container, scoped to that run only: a pure-sh procfs scan terminates every process whose cwd or cmdline carries the run's unique workspace path (`kill_run_processes_cmd` in `vaf/tools/sandbox.py`). Slim images ship no procps, so the previous `pkill -9 -f python` silently no-opped (a timed-out pip finished a 229MB install into an already-cleaned workspace) - and would have hit every other user's run in the shared container. Guarded by `tests/test_sandbox_hardening.py`. |
-| **Ephemeral fallback** | When the persistent container is unavailable, executions fall back to a per-instance ephemeral container that carries the SAME hardening: `--cap-drop ALL`, `no-new-privileges`, and its own isolated bridge network `vaf-sandbox-ephemeral` (auto-created; a separate name because docker compose refuses to adopt a same-name network it did not create) plus the `host.docker.internal` alias for the Tool Bridge. If the network cannot be provided, the container starts degraded (capabilities still dropped, default bridge) with a loud warning. Never `--network none`: outbound pip and the Tool Bridge are designed features. |
+| **Container** | `vaf-env-<scope hash>-scratch`: one per person, fixed name, so the web server, the CLI and a coder child converge on the same one |
+| **Image** | The sandbox environment image (`vaf-sandbox-env`, Python 3.12 with pytest, Node.js, git, a compiler). Until it is built, `python:3.12-slim-bookworm`, so execution never waits for a build |
+| **User** | Non-root: the caller's uid on Linux, the image's uid 10001 elsewhere. `--cap-drop ALL`, `no-new-privileges`, `--pids-limit` |
+| **Memory / CPU** | 512 MB / 0.5 cores; exempt from the per-person count and the memory floor of other environments, so this lane keeps answering |
+| **Network** | Its own bridge network with outbound internet (pip) and `host.docker.internal` for the Tool Bridge. No other environment shares it |
+| **Workspace** | A directory per run, `/tmp/vaf_run_<id>`, removed after the run. Packages installed via the `packages` parameter go into that run's `_pkgs` (pip `--target`, `--no-cache-dir`, `PIP_TARGET`/`PYTHONPATH` set), so nothing accumulates. `export_files` copies only files inside the run's own directory, and a link or folder the copy produced is removed instead of delivered |
+| **Timeout and Stop** | Every command of a run carries a marker (`VAF_RUN_ID`) in its environment. A timeout (`timeout -s KILL` inside the container) or a Stop kills exactly that run's processes, found through `/proc/*/environ` (`vaf/core/containers.py`, `exec_bounded`); killing the host's `docker exec` client alone would leave them running |
+| **Lifetime** | Removed whole 24 h after its last use (`sandbox_env_temp_ttl_hours`), stopped at VAF's quit |
 
-### Performance
+`run_tests` copies the project (without `.git`, `node_modules`, virtualenvs and build output; at
+most 50 MB) into a fresh `/tmp/vaf_tests_<id>` in the same scratch environment, runs the command
+there, and removes the copy in a `finally`. The host project is never written. pytest is in the
+image; on the fallback image it is installed on demand into the unprivileged user's site.
 
-Using a persistent container provides:
-- **~800ms** execution time (vs 5–10s for ephemeral containers)
-- Pre-installed packages persist across executions
-- Instant startup (no container creation overhead)
-
----
+Before the scratch environment existed, every account shared one container (`vaf-sandbox`,
+`python:3.11-slim`, running as root), and the runs were kept apart by directory names under `/tmp`:
+a concurrent run could list and read another account's working directory and, through
+`export_files`, copy files out of it.
 
 ## Standard Usage
 
@@ -173,20 +159,20 @@ ToolBridgeServer (random port, daemon) ←── vaf_tools.call("web_search", �
 
 | Property | Detail |
 |---|---|
-| Token | `secrets.token_hex(16)` per execution - mismatches rejected (HTTP 403). It reaches the run as its environment: `docker exec -e VAF_BRIDGE_TOKEN` carries only the name, the value travels in the docker client's environment. Written into the command, it sat in the cmdline of the host client and of the shell in the shared container, readable from `/proc` by every other run there |
+| Token | `secrets.token_hex(16)` per execution - mismatches rejected (HTTP 403). It reaches the run as its environment: `docker exec -e VAF_BRIDGE_TOKEN` carries only the name, the value travels in the docker client's environment. Written into the command, it sat in the cmdline of the host client and of the shell in the container, readable from `/proc` by other runs there |
 | Binding | `0.0.0.0` on host, random ephemeral port. Accessible from any interface on the host; relies on the per-execution token for authentication. |
 | Trust gates | All calls go through `agent.execute_tool()` - full VAF gate pipeline applies |
 | Cleanup | `bridge.stop()` in `finally` block - no port leak on crash |
 
 ### Host gateway by OS
 
-The sandbox container connects back to the host via `host.docker.internal` on all platforms:
+The scratch environment connects back to the host via `host.docker.internal` on all platforms:
 
 | OS | How it resolves |
 |---|---|
 | Windows | Docker Desktop DNS alias - automatic |
 | macOS | Docker Desktop DNS alias - automatic |
-| Linux | `extra_hosts: ["host.docker.internal:host-gateway"]` in `docker-compose.memory.yml` injects the host IP (Docker 20.10+) |
+| Linux | `--add-host host.docker.internal:host-gateway` when the scratch environment is created injects the host IP (Docker 20.10+) |
 
 ---
 
@@ -203,16 +189,15 @@ The sandbox container connects back to the host via `host.docker.internal` on al
 - Linux: `sudo systemctl start docker`
 
 **Error: "Image not found"**
-- The sandbox pulls `python:3.11-slim` automatically on first use
+- Until the sandbox environment image is built, the scratch environment pulls `python:3.12-slim-bookworm` on first use
 - Ensure you have internet access for the first run
-- Manual pull: `docker pull python:3.11-slim`
+- Manual pull: `docker pull python:3.12-slim-bookworm`
 
 **Error: "vaf_tools: bridge unreachable"** (when using `with_vaf_tools=True`)
-- The sandbox container cannot reach the host via `host.docker.internal`
-- Verify the compose stack is running so `extra_hosts` is applied: `docker compose -f docker-compose.memory.yml up -d`
-- From inside the container, check resolution: `docker exec vaf-sandbox getent hosts host.docker.internal`
+- The scratch environment cannot reach the host via `host.docker.internal`
+- From inside it, check resolution: `docker exec vaf-env-<hash>-scratch getent hosts host.docker.internal` (`docker ps --filter label=org.veyllo.vaf.env.kind=scratch` lists the names)
 - Check that no firewall rule blocks the ephemeral port range: `sudo ufw allow 32768:65535/tcp` (temporary test)
-- Requires Docker 20.10+ for the `host-gateway` special value in `extra_hosts`
+- Requires Docker 20.10+ for the `host-gateway` special value
 
 ---
 
@@ -385,10 +370,11 @@ env secrets not leaked, docker always refused).
 ### `run_tests` (`vaf/tools/sandbox_test_runner.py`)
 
 Gives the coder a sanctioned way to actually run its project's tests and get the **real**
-pass/fail, instead of guessing. It copies the project (tar-pipe) into a fresh
-`/workspace/testrun_...` directory in the `vaf-sandbox` container, runs `python3 -m pytest -q`
-under an in-container `timeout -s KILL`, returns the summary, and removes the run directory in a
-`finally`. It is `read`-level (no host side effects).
+pass/fail, instead of guessing. It copies the project into a fresh `/tmp/vaf_tests_<id>` in the
+CALLER's scratch environment (see "The scratch environment" above), runs `python3 -m pytest -q`
+under an in-container `timeout -s KILL`, returns the summary, and removes the copy in a
+`finally`. It is `read`-level (no host side effects). Every refusal starts with
+"Cannot run tests:", which the coder counts as a failed run.
 
 ### `host_bash` - host shell (`vaf/tools/host_bash.py`)
 

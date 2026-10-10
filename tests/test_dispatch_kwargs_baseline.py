@@ -209,7 +209,9 @@ KWARGS_BASELINE = {
     "request_clarification":     ("chat", []),
     "research_agent":            ("chat", []),
     "restore_automation":        ("chat", ["user_role", "user_scope_id"]),
-    "run_tests":                 ("chat", []),
+    # +user_scope_id: the run goes into the CALLER's own scratch environment, not one
+    # container shared by every account.
+    "run_tests":                 ("chat", ["user_scope_id"]),
     "save_thinking_suggestion":  ("chat", []),
     "schedule_reminder":         ("chat", ["user_scope_id", "username"]),
     # DELIBERATE change: the discovery tools answer from the registry as the MODEL

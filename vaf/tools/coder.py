@@ -5023,8 +5023,9 @@ Task {task_idx + 1}: {current_task}
                                 "Run the project's tests and return the REAL pass/fail result. After writing "
                                 "tests, CALL THIS to verify them — never claim tests pass without running them. "
                                 "Default command: pytest. On failure, read the output, fix with write_file/edit_file, "
-                                "run_tests again. NOTE: this runs in an ISOLATED sandbox on a COPY of the project "
-                                "(no .git, no git binary, no network) — it is NOT a shell on your real repo. For git "
+                                "run_tests again. NOTE: this runs in your ISOLATED sandbox on a COPY of the project "
+                                "(no .git, unprivileged user; the internet is reachable, so the command may pip or npm "
+                                "install what the tests need) - it is NOT a shell on your real repo. For git "
                                 "on the real repo use git_log / project_history / project_rollback; to change files "
                                 "use edit_file / write_file."
                             ),

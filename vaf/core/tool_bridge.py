@@ -24,9 +24,10 @@ semantics while working with every backend (OpenAI, Google, local, etc.).
 
 Security
 --------
-- Binds to 0.0.0.0 on the host (random ephemeral port); sandbox connects via
-  host.docker.internal (all platforms; on Linux injected via extra_hosts in
-  docker-compose.memory.yml).
+- Binds to 0.0.0.0 on the host (random ephemeral port); the caller's scratch
+  environment connects via host.docker.internal (all platforms; on Linux injected
+  with --add-host host.docker.internal:host-gateway when the environment is created,
+  vaf/core/environments.py).
 - A single-use secret token per execution prevents stale processes from
   calling arbitrary tools.
 - Tool allowlist: only tools the agent has loaded are callable; the full
@@ -210,14 +211,13 @@ class ToolBridgeServer:
         """
         Docker containers reach the host via host.docker.internal on all platforms:
           - Windows / macOS: Docker Desktop resolves this automatically.
-          - Linux: requires extra_hosts: ["host.docker.internal:host-gateway"] in
-            docker-compose.memory.yml (Docker 20.10+), which injects the host IP.
+          - Linux: the scratch environment is created with
+            --add-host host.docker.internal:host-gateway (Docker 20.10+), which
+            injects the host IP.
 
-        Previously this returned 172.17.0.1 hardcoded on Linux (the docker0 bridge
-        gateway). After moving the sandbox to its own isolated vaf-sandbox-network,
-        that gateway address is no longer reliable — the new network has its own
-        gateway IP. The extra_hosts approach works regardless of which bridge subnet
-        Docker assigns to the sandbox network.
+        A hardcoded docker0 gateway (172.17.0.1) would be wrong: every environment
+        has a network of its own with its own gateway address. The host-gateway alias
+        works whichever bridge subnet Docker assigns.
         """
         return "host.docker.internal"
 

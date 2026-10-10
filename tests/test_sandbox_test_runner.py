@@ -4,15 +4,14 @@
 """Coder run_tests / sandbox test runner.
 
 The coding agent could not run the tests it wrote (the python_sandbox guard blocks file
-I/O and the project lives on the host, not in the sandbox volume), so it shipped
-unverified "tests pass" claims. run_project_tests copies the project into the isolated
-sandbox, runs pytest there, and returns the real result. These tests pin the formatting,
-the error branches, and - guaranteed - that the throwaway copy is always cleaned up.
-
-The hermetic tests mock subprocess; a docker-gated integration test runs real pytest.
+I/O and the project lives on the host), so it shipped unverified "tests pass" claims.
+run_project_tests copies the project into the caller's own scratch environment, runs
+pytest there, and returns the real result. These tests pin the formatting, the error
+branches, whose sandbox it runs in, and - guaranteed - that the throwaway copy is always
+removed. A fake environment manager stands in for docker.
 """
-import shutil
-import subprocess
+import io
+import tarfile
 from types import SimpleNamespace
 
 import pytest
@@ -63,200 +62,143 @@ def test_missing_project_dir():
     assert "project directory not found" in run_project_tests("/no/such/dir")
 
 
-def test_sandbox_not_running(tmp_path, monkeypatch):
-    monkeypatch.setattr(str_mod, "_sandbox_running", lambda: False)
-    assert "sandbox (vaf-sandbox) is not running" in run_project_tests(str(tmp_path))
-
-
 def test_project_too_large(tmp_path, monkeypatch):
-    monkeypatch.setattr(str_mod, "_sandbox_running", lambda: True)
     monkeypatch.setattr(str_mod, "_included_size", lambda _b: str_mod._MAX_COPY_BYTES + 1)
     assert "too large to copy" in run_project_tests(str(tmp_path))
 
 
-# ── the full path with subprocess mocked: cleanup is guaranteed ─────────────
+# ── the full path with a fake environment: cleanup is guaranteed ────────────
 
-class _FakeProc:
-    def __init__(self, wait_rc=0):
-        self.stdout = SimpleNamespace(close=lambda: None)
-        self._wait_rc = wait_rc
-    def wait(self, timeout=None):
-        return self._wait_rc
+class _FakeMgr:
+    """scratch_for and exec_in, recording every command; stages can be made to fail."""
 
+    def __init__(self, exec_rc=0, exec_out="ok", fail_at=None, pytest_present=True,
+                 timed_out=False, refuse=None):
+        self.calls, self.scopes = [], []
+        self.exec_rc, self.exec_out, self.fail_at = exec_rc, exec_out, fail_at
+        self.pytest_present, self.timed_out, self.refuse = pytest_present, timed_out, refuse
 
-def _install_fake_subprocess(monkeypatch, exec_rc=0, exec_out="ok", fail_at=None, tar_rc=0):
-    """Record every subprocess.run argv; simulate mkdir/untar/exec/rm. fail_at lets a
-    stage return non-zero to prove cleanup still runs."""
-    calls = []
+    def scratch_for(self, scope):
+        self.scopes.append(scope)
+        if self.refuse:
+            from vaf.core.environments import EnvironmentRefused
+            raise EnvironmentRefused(self.refuse)
+        return SimpleNamespace(container="vaf-env-ab12cd34ef56-scratch")
 
-    def fake_run(cmd, **kwargs):
-        calls.append(list(cmd))
-        joined = " ".join(str(c) for c in cmd)
-        if "mkdir" in cmd:
-            return SimpleNamespace(returncode=0 if fail_at != "mkdir" else 1, stdout="", stderr="mkdir err")
-        if "tar" in cmd and "xzf" in cmd:  # untar
-            return SimpleNamespace(returncode=0 if fail_at != "untar" else 2, stdout="", stderr="untar err")
-        if "-w" in cmd:  # the exec_bounded test command
-            return SimpleNamespace(returncode=exec_rc, stdout=exec_out, stderr="")
-        if "rm" in cmd:
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    def fake_popen(cmd, **kwargs):
-        calls.append(list(cmd))
-        return _FakeProc(wait_rc=tar_rc)
-
-    monkeypatch.setattr(str_mod, "_sandbox_running", lambda: True)
-    monkeypatch.setattr(str_mod, "_included_size", lambda _b: 100)
-    monkeypatch.setattr(str_mod.subprocess, "run", fake_run)
-    monkeypatch.setattr(str_mod.subprocess, "Popen", fake_popen)
-    return calls
+    def exec_in(self, env, argv, **kw):
+        from vaf.core.environments import ExecResult
+        self.calls.append((argv, kw))
+        if argv[0] == "mkdir":
+            return ExecResult(1 if self.fail_at == "mkdir" else 0, "", "mkdir err")
+        if argv[:3] == ["python3", "-m", "pytest"]:
+            return ExecResult(0 if self.pytest_present else 1, "", "")
+        if argv[:4] == ["python3", "-m", "pip", "install"]:
+            return ExecResult(1 if self.fail_at == "install" else 0, "", "no network")
+        if argv[0] == "rm":
+            return ExecResult(0, "", "")
+        return ExecResult(-1 if self.timed_out else self.exec_rc, self.exec_out, "",
+                          timed_out=self.timed_out)
 
 
-def _rm_was_called(calls):
-    return any("rm" in c and "-rf" in c for c in calls)
+@pytest.fixture
+def fake(monkeypatch):
+    def install(**kw):
+        mgr = _FakeMgr(**kw)
+        import vaf.core.environments as envmod
+        monkeypatch.setattr(envmod, "get_environment_manager", lambda: mgr)
+        mgr.untars = []
+
+        def _docker(args, timeout=60, **k):
+            mgr.untars.append((args, k.get("input")))
+            return SimpleNamespace(returncode=2 if mgr.fail_at == "untar" else 0,
+                                   stdout=b"", stderr=b"untar err")
+
+        monkeypatch.setattr("vaf.core.containers.docker", _docker)
+        return mgr
+    return install
 
 
-def test_happy_path_reports_pass_and_cleans_up(tmp_path, monkeypatch):
-    calls = _install_fake_subprocess(monkeypatch, exec_rc=0, exec_out="17 passed")
-    out = run_project_tests(str(tmp_path))
+def _removed(mgr):
+    return any(argv[:2] == ["rm", "-rf"] for argv, _ in mgr.calls)
+
+
+def test_happy_path_reports_pass_runs_in_the_copy_and_cleans_up(tmp_path, fake):
+    mgr = fake(exec_rc=0, exec_out="17 passed")
+    (tmp_path / "test_a.py").write_text("def test_a(): pass\n")
+    out = run_project_tests(str(tmp_path), user_scope_id="scope-alice")
     assert "TESTS PASSED" in out and "17 passed" in out
-    assert _rm_was_called(calls), "the throwaway sandbox copy must be removed"
+    assert mgr.scopes == ["scope-alice"], "the run must go to the caller's own sandbox"
+    run = [(a, k) for a, k in mgr.calls if a[:2] == ["sh", "-c"]][0]
+    assert run[1]["cwd"].startswith("/tmp/vaf_tests_")
+    assert _removed(mgr), "the throwaway sandbox copy must be removed"
 
 
-def test_cleanup_runs_even_when_the_command_fails(tmp_path, monkeypatch):
-    calls = _install_fake_subprocess(monkeypatch, exec_rc=1, exec_out="1 failed")
+def test_the_copy_carries_the_project_without_heavy_dirs(tmp_path, fake):
+    mgr = fake()
+    (tmp_path / "app.py").write_text("x = 1\n")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref")
+    (tmp_path / "pkg" / "node_modules").mkdir(parents=True)
+    (tmp_path / "pkg" / "node_modules" / "big.js").write_text("//")
+    (tmp_path / "pkg" / "mod.py").write_text("y = 2\n")
+    run_project_tests(str(tmp_path), command="python3 -m unittest")
+    args, payload = mgr.untars[0]
+    assert args[:3] == ["exec", "-i", "vaf-env-ab12cd34ef56-scratch"] and "--no-same-owner" in args
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
+        names = sorted(tar.getnames())
+    assert names == ["app.py", "pkg", "pkg/mod.py"], names
+
+
+def test_cleanup_runs_even_when_the_command_fails(tmp_path, fake):
+    mgr = fake(exec_rc=1, exec_out="1 failed")
     out = run_project_tests(str(tmp_path))
     assert "TESTS FAILED" in out
-    assert _rm_was_called(calls)
+    assert _removed(mgr)
 
 
-def test_incomplete_copy_is_detected(tmp_path, monkeypatch):
-    """A non-zero HOST tar exit means the copy is incomplete - do not run tests on it."""
-    calls = _install_fake_subprocess(monkeypatch, tar_rc=2)
-    out = run_project_tests(str(tmp_path))
-    assert "copy is incomplete" in out
-    assert _rm_was_called(calls)
-
-
-def test_timeout_kills_by_cwd_not_pytest_name(tmp_path, monkeypatch):
-    """On timeout the run's whole process tree (any command) is killed via /proc cwd,
-    never a global 'pkill -f pytest' that would also hit other concurrent runs."""
-    calls = []
-
-    def fake_run(cmd, **kwargs):
-        calls.append(list(cmd))
-        if "mkdir" in cmd:
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        if "tar" in cmd and "xzf" in cmd:
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        if "-w" in cmd:  # the bounded exec -> simulate a timeout
-            raise subprocess.TimeoutExpired(cmd, 1)
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(str_mod, "_sandbox_running", lambda: True)
-    monkeypatch.setattr(str_mod, "_included_size", lambda _b: 100)
-    monkeypatch.setattr(str_mod.subprocess, "run", fake_run)
-    monkeypatch.setattr(str_mod.subprocess, "Popen", lambda cmd, **k: (calls.append(list(cmd)) or _FakeProc()))
-
+def test_a_timeout_reads_as_one(tmp_path, fake):
+    mgr = fake(timed_out=True)
     out = run_project_tests(str(tmp_path), command="npm test", timeout=1)
-    assert "TEST RUN TIMED OUT" in out
-    joined = [" ".join(str(x) for x in c) for c in calls]
-    assert any("readlink" in j and "/cwd" in j for j in joined), "kill must be cwd-scoped"
-    assert not any("pkill" in j and "pytest" in j for j in joined), "must not global-kill pytest"
-    assert _rm_was_called(calls)
+    assert "TEST RUN TIMED OUT" in out and "Timed out after 1s" in out
+    assert _removed(mgr)
 
 
-def test_cleanup_runs_even_when_copy_fails(tmp_path, monkeypatch):
-    calls = _install_fake_subprocess(monkeypatch, fail_at="untar")
+def test_cleanup_runs_even_when_copy_fails(tmp_path, fake):
+    mgr = fake(fail_at="untar")
     out = run_project_tests(str(tmp_path))
-    assert "failed to copy project" in out
-    assert _rm_was_called(calls), "cleanup must run even if the copy-in failed"
+    assert out.startswith("Cannot run tests:") and "failed to copy project" in out
+    assert _removed(mgr), "cleanup must run even if the copy-in failed"
 
 
-def test_tool_is_side_effect_free_metadata():
+def test_a_refused_sandbox_is_a_cannot_run(tmp_path, fake):
+    """The coder counts a run as failed by this prefix (context.py)."""
+    fake(refuse="no account to own the environment")
+    out = run_project_tests(str(tmp_path))
+    assert out.startswith("Cannot run tests:") and "no account" in out
+
+
+def test_pytest_is_installed_on_demand_only_when_missing(tmp_path, fake):
+    """The fallback image the scratch environment runs on while the real one builds has
+    no pytest, and pytest is the DEFAULT command."""
+    mgr = fake(pytest_present=False)
+    run_project_tests(str(tmp_path))
+    assert any(a[:4] == ["python3", "-m", "pip", "install"] for a, _ in mgr.calls)
+    mgr = fake(pytest_present=True)
+    run_project_tests(str(tmp_path))
+    assert not any(a[:4] == ["python3", "-m", "pip", "install"] for a, _ in mgr.calls)
+    mgr = fake(pytest_present=False, fail_at="install")
+    out = run_project_tests(str(tmp_path))
+    assert out.startswith("Cannot run tests:") and "installing it failed" in out
+
+
+def test_tool_metadata_and_identity():
     t = RunTestsTool("/tmp/x")
     assert t.name == "run_tests"
     assert t.side_effect_class == "none"  # never modifies the host project
+    assert RunTestsTool.identity_kwargs == ("user_scope_id",)
 
 
-# ── docker-gated real integration ───────────────────────────────────────────
-
-def _sandbox_available() -> bool:
-    if not shutil.which("docker"):
-        return False
-    try:
-        r = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", "vaf-sandbox"],
-                           capture_output=True, text=True, timeout=5)
-        return r.returncode == 0 and "true" in r.stdout.lower()
-    except Exception:
-        return False
-
-
-@pytest.mark.skipif(not _sandbox_available(), reason="vaf-sandbox container not running")
-def test_integration_real_pytest_pass_and_fail(tmp_path):
-    # The skip above is decided at collection, minutes before this runs in a full suite;
-    # a stack going down in between (measured: one local CI run) turned an environment
-    # change into a red test. Ask again at run time.
-    if not _sandbox_available():
-        pytest.skip("vaf-sandbox container stopped since collection")
-    (tmp_path / "test_pass.py").write_text("def test_ok():\n    assert 1 + 1 == 2\n")
-    passed = run_project_tests(str(tmp_path))
-    assert "TESTS PASSED" in passed, passed
-
-    (tmp_path / "test_fail.py").write_text("def test_bad():\n    assert 1 == 2\n")
-    failed = run_project_tests(str(tmp_path))
-    assert "TESTS FAILED" in failed and "test_bad" in failed, failed
-
-
-def test_pytest_is_installed_on_demand(monkeypatch):
-    """python:3.11-slim ships no pytest while pytest is the DEFAULT command -
-    every container recreation broke default runs until someone shelled in."""
-    import vaf.tools.sandbox_test_runner as r
-
-    calls = []
-
-    def fake_run(cmd, **kw):
-        calls.append(list(cmd))
-        if "--version" in cmd:
-            return SimpleNamespace(returncode=1, stdout="", stderr="No module named pytest")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(r.subprocess, "run", fake_run)
-    assert r._ensure_pytest_in_sandbox() is None
-    assert any("install" in c for c in calls), "the missing pytest was never installed"
-
-
-def test_a_present_pytest_pays_no_install(monkeypatch):
-    import vaf.tools.sandbox_test_runner as r
-
-    calls = []
-    monkeypatch.setattr(r.subprocess, "run",
-                        lambda cmd, **kw: calls.append(list(cmd)) or
-                        SimpleNamespace(returncode=0, stdout="pytest 9.1.1", stderr=""))
-    assert r._ensure_pytest_in_sandbox() is None
-    assert len(calls) == 1, "a satisfied probe still ran an install"
-
-
-def test_a_failed_install_is_an_honest_error(monkeypatch):
-    import vaf.tools.sandbox_test_runner as r
-
-    def fake_run(cmd, **kw):
-        return SimpleNamespace(returncode=1, stdout="", stderr="no network")
-
-    monkeypatch.setattr(r.subprocess, "run", fake_run)
-    out = r._ensure_pytest_in_sandbox()
-    assert out and "installing it failed" in out
-
-
-def test_the_runner_consults_the_ensure_before_running(monkeypatch, tmp_path):
-    """Wiring, not just the helper: with pytest already living in a warm
-    container, the integration test passes even without the ensure call -
-    only this seam goes red when the wiring is dropped."""
-    import vaf.tools.sandbox_test_runner as r
-
-    monkeypatch.setattr(r, "_sandbox_running", lambda: True)
-    monkeypatch.setattr(r, "_ensure_pytest_in_sandbox",
-                        lambda: "Cannot run tests: SENTINEL")
-    (tmp_path / "test_x.py").write_text("def test_a(): pass\n")
-    assert r.run_project_tests(str(tmp_path)) == "Cannot run tests: SENTINEL"
+def test_the_tool_passes_the_callers_scope(tmp_path, fake):
+    mgr = fake()
+    RunTestsTool(str(tmp_path)).run(user_scope_id="scope-bob")
+    assert mgr.scopes == ["scope-bob"]

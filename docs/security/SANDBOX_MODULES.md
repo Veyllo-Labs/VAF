@@ -2,7 +2,7 @@
 
 This file documents the common standard-library modules that are expected to work in sandbox snippets.
 
-> Runtime note: VAF executes `python_sandbox` in a dedicated Docker-based sandbox.  
+> Runtime note: VAF executes `python_sandbox` in the caller's own scratch environment, a Docker container of their own (see [SANDBOXING.md](SANDBOXING.md#the-scratch-environment-python_sandbox-run_tests)).  
 > The exact import policy is enforced by the runtime image and sandbox guardrails, not by this markdown file.
 
 ## Newly Added:
@@ -150,14 +150,15 @@ textwrap.wrap('Long text...', width=10) # → ['Long', 'text...']
 **Constrained by Docker isolation:**
 - `subprocess` / `os.system` - spawn processes inside the container only (no host access)
 - `socket` / network - sandbox has network access for pip installs and the Tool Bridge back-channel; direct outbound connections (e.g. to external APIs) are **not** blocked at Python level
-- Host filesystem - inaccessible from inside the container; only `/tmp/vaf_*` (per-execution, auto-cleaned) is visible to running code
-- Container internal services - the sandbox is on its own isolated `vaf-sandbox-network` and **cannot** reach postgres/redis/gotenberg/tts/stt by hostname; outbound internet and the Tool Bridge back-channel (`host.docker.internal`) still work
+- Host filesystem - inaccessible from inside the container; code runs in `/tmp/vaf_run_*` (per execution, removed after it) inside the person's own container
+- Container internal services - the scratch environment is on a network of its own and **cannot** reach postgres/redis/gotenberg/tts/stt by hostname; outbound internet and the Tool Bridge back-channel (`host.docker.internal`) still work
 
 **Hard limits (enforced by Docker):**
 - Memory: 512 MB max - OOM-killed if exceeded
 - CPU: 0.5 cores - cannot monopolise the host
 - Process isolation: cannot access host PID namespace or host filesystem
-- Installed packages persist in the container between executions (by design, for performance) - user code itself runs in a unique `/tmp/vaf_*` dir that is deleted after each run
+- One container per person, non-root, every capability dropped
+- Packages from the `packages` parameter are installed into the run's own directory and removed with it; nothing accumulates between executions
 
 **Practical allowed usage:**
 - Pure calculations and data processing
@@ -165,7 +166,7 @@ textwrap.wrap('Long text...', width=10) # → ['Long', 'text...']
 - Hashing and Encoding
 - Algorithms and Data Structures
 - Timestamps (read-only, no system modification)
-- `pip install` packages (persist in container for performance)
+- `pip install` packages (temporary, for that run)
 - VAF tool calls via `import vaf_tools` (when `with_vaf_tools=True`)
 
 For architecture and isolation details, see [`SANDBOXING.md`](SANDBOXING.md).

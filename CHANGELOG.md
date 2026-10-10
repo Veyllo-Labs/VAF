@@ -48,13 +48,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   device's address and user name to any signed-in account, and the network status and
   access address were open the same way, although the settings tab that shows them is
   admin-only.
-- **Code one person runs in the Python sandbox can no longer reach another person's run.**
-  All accounts share one sandbox container. Files a run exported could come from anywhere in
-  its scratch area, so one account's code could copy out another account's files while that
-  run was going; exports now come only from the run's own folder, and a link or folder the
-  copy produced is removed instead of delivered. The key that lets sandbox code call VAF tools
-  stood in the command line, where any other run could read it; it travels in the run's
-  environment now.
+- **Every person's code runs in a container of their own.** The Python sandbox and the
+  coder's test runs used one container for every account, running as root, with the runs
+  kept apart only by folder names: one account's code could list and read another
+  account's working folder and copy files out of it, and the key that lets sandbox code
+  call VAF tools stood in a command line any other run could read. Each person now has a
+  sandbox container of their own (non-root, no Linux capabilities, a network of its own),
+  exports come only from the run's own folder, and the key travels in the run's
+  environment. The sandbox now runs Python 3.12 instead of 3.11; its image (about
+  1.6 GB, with Node.js, git, a compiler and a headless browser) is built in the
+  background the first time VAF starts, and until it is ready a plain Python image
+  stands in.
 
 ## [0.1.0a32] - 2026-10-06
 

@@ -18,7 +18,7 @@ Behavior is the tray's, verbatim where it matters:
   Rancher/Docker Desktop (never re-configuring a runtime that is already
   running - that restarts the engine); Linux only probes.
 - Two-phase compose up: CORE registry-image services first (postgres,
-  redis, sandbox, stt, gotenberg), then the OPTIONAL locally-built ones
+  redis, stt, gotenberg), then the OPTIONAL locally-built ones
   (tts, vaf-browser) best-effort - a failed local build must never abort
   the `up` that carries the database.
 - `docker compose` first, legacy `docker-compose` as the fallback when the
@@ -82,7 +82,6 @@ SERVICES: Tuple[ServiceSpec, ...] = (
                 config_url_key="memory_db_url", default_port=5432, probe="postgres"),
     ServiceSpec("redis", "vaf-redis", True,
                 config_url_key="redis_url", default_port=6379, probe="tcp"),
-    ServiceSpec("sandbox", "vaf-sandbox", True),
     # STT gets a TCP probe, not its HTTP health path: the compose healthcheck
     # ends in `|| exit 0`, so the service answers "healthy" while still loading
     # its model and an HTTP probe would report a failure that is not one.
@@ -654,6 +653,42 @@ def _start_was_cancelled(log) -> bool:
     return False
 
 
+# The shared code container earlier versions ran for every account, its volume and its
+# two networks. Code runs in per-person sandbox environments now
+# (vaf/core/environments.py), and compose no longer knows the service, so nothing else
+# would ever remove them: the container has `restart: unless-stopped` and comes back
+# with every docker start, and `compose stop` does not see a service its file dropped.
+LEGACY_SANDBOX_CONTAINER = "vaf-sandbox"
+LEGACY_SANDBOX_VOLUME = "vaf_sandbox_workspace"
+LEGACY_SANDBOX_NETWORKS = ("vaf-sandbox-network", "vaf-sandbox-ephemeral")
+
+
+def _remove_legacy_sandbox(log: Optional[Callable[[str], None]] = None) -> None:
+    """Remove the old shared sandbox once it is there, on every start until it is gone.
+    Safe to repeat: each step checks first and a missing object is simply skipped. The
+    volume held only per-run scratch directories that were deleted after each run."""
+    try:
+        from vaf.core import containers
+        removed = []
+        if containers.container_state(LEGACY_SANDBOX_CONTAINER) is not None:
+            if containers.docker(["rm", "-f", LEGACY_SANDBOX_CONTAINER], timeout=60).returncode == 0:
+                removed.append(LEGACY_SANDBOX_CONTAINER)
+        for net in LEGACY_SANDBOX_NETWORKS:
+            if containers.docker(["network", "inspect", net, "--format", "{{.Name}}"],
+                                 timeout=20).returncode == 0:
+                if containers.docker(["network", "rm", net], timeout=30).returncode == 0:
+                    removed.append(net)
+        if containers.docker(["volume", "inspect", LEGACY_SANDBOX_VOLUME, "--format", "{{.Name}}"],
+                             timeout=20).returncode == 0:
+            if containers.docker(["volume", "rm", LEGACY_SANDBOX_VOLUME], timeout=60).returncode == 0:
+                removed.append(LEGACY_SANDBOX_VOLUME)
+        if removed:
+            _say(log, "Removed the old shared code sandbox (" + ", ".join(removed) + "); "
+                      "code runs in per-person sandbox environments now")
+    except Exception:
+        pass
+
+
 def ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
     """Bring the service stack up (idempotent). Returns True when the CORE
     stack came up (or already ran); False when the engine never became ready,
@@ -709,6 +744,7 @@ def _ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
             return False
         _warn_about_default_db_password(log)
         _write_compose_env_file(project_root, log)
+        _remove_legacy_sandbox(log)
         # Two-phase, blocking, exit-checked: bring up the CORE registry-image
         # services first so a failed OPTIONAL build (tts/vaf-browser - e.g. a
         # VM clock skew breaking apt) can never abort the whole 'up' and leave
@@ -731,7 +767,7 @@ def _ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
                 if _start_was_cancelled(log):
                     return False
                 if result.returncode == 0:
-                    _say(log, "Core service stack (DB/Redis/Sandbox/STT/Gotenberg) started")
+                    _say(log, "Core service stack (DB/Redis/STT/Gotenberg) started")
                     try:  # optional build services: best-effort, never block the core
                         # --build, deliberately. These two are BUILT from this repo rather
                         # than pulled, and plain `up -d` reuses whatever image already

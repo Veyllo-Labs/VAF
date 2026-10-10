@@ -58,7 +58,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   environment. The sandbox now runs Python 3.12 instead of 3.11; its image (about
   1.6 GB, with Node.js, git, a compiler and a headless browser) is built in the
   background the first time VAF starts, and until it is ready a plain Python image
-  stands in.
+  stands in. The old shared container (`vaf-sandbox`), its volume and its networks are
+  removed on the first start; they held only per-run scratch folders.
 
 ## [0.1.0a32] - 2026-10-06
 

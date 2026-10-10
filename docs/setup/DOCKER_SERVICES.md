@@ -8,13 +8,12 @@ VAF uses **one** Docker Compose file for auxiliary services: **`docker-compose.m
 |---------|-----------|---------|-------------|
 | PostgreSQL | `vaf-memory-db` | 5432 | Database (pgvector) for Memory/RAG and Auth/User DB |
 | Redis | `vaf-redis` | 6379 | Cache (embeddings, sessions) |
-| Sandbox | `vaf-sandbox` | - | Python sandbox for safe code execution |
 | Gotenberg | `vaf-gotenberg` | 5005 | LibreOffice-based Office→PDF (DOCX, XLSX, PPTX, ODT, ODS, ODP) |
 | TTS Multi-Lang | `vaf-tts` | 5002 | Piper TTS (single container, multi-language, on-demand model install; local speech lane only) |
 | STT | `vaf-stt` | 5003 | Whisper ASR for speech-to-text (local speech lane only) |
 | **Browser** | `vaf-browser` | 9222, 6901 | Headed Chromium under KasmVNC's X server (CDP on 9222, anti-bot hardened) for the `browser_agent` tool, plus the KasmVNC WebSocket stream of the display on 6901 for the web UI's interactive browser, which requires a credential VAF holds (`VAF_BROWSER_VNC_SECRET`, minted into the keyring and delivered through `compose.env`) - see [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md) |
 
-All services start by default when you run `docker compose up -d`.
+All services start by default when you run `docker compose up -d`. Code execution is not a compose service: VAF creates a sandbox environment per person itself (see [Sandbox environments](#sandbox-environments)).
 
 ---
 
@@ -53,14 +52,13 @@ CONTAINER ID   IMAGE                      PORTS                          NAMES
 ...            whisper-asr-webservice     127.0.0.1:5003->9000/tcp       vaf-stt
 ...            pgvector/pgvector:pg16     127.0.0.1:5432->5432/tcp       vaf-memory-db
 ...            redis:7-alpine             127.0.0.1:6379->6379/tcp       vaf-redis
-...            vaf-sandbox                                                vaf-sandbox
 ```
 
 > **Security:** All ports are bound to `127.0.0.1` - reachable only locally, not on the LAN or the internet. If `0.0.0.0` is shown, the ports are open on all network interfaces; in that case check `docker-compose.memory.yml` and make sure every port mapping uses the `127.0.0.1:PORT:PORT` format.
 >
 > **Network isolation:** Each container joins only the Docker network it needs:
 > - `vaf-network`: postgres, redis, tts, stt, gotenberg
-> - `vaf-sandbox-network`: sandbox (no access to postgres/redis)
+> - one network per sandbox environment (`vaf-env-net-<id>`; no access to postgres/redis)
 > - `vaf-browser-network`: vaf-browser (no access to postgres/redis - SSRF protection)
 
 ### Stop Services
@@ -211,12 +209,24 @@ Important: Gotenberg is a **preview/rendering** service, not the mutable editing
 
 ---
 
-## Sandbox Service
+## Sandbox environments
 
-The `vaf-sandbox` container provides a secure Python environment for code execution.
+Code runs in sandbox environments VAF starts itself with `docker run`, not through compose:
+one scratch environment per person for `python_sandbox` and `run_tests`, plus the temporary
+and project environments a person creates. Their image (`vaf-sandbox-env`) is built from the
+Dockerfile inside the package, in the background the first time the stack starts. They carry
+the label `org.veyllo.vaf.env`:
 
-- **Volume:** `vaf_sandbox_workspace`
-- **Purpose:** Safe execution of generated Python code
+```bash
+docker ps -a --filter label=org.veyllo.vaf.env=1
+```
+
+The model, the network profiles and the limits are in
+[SANDBOXING.md](../security/SANDBOXING.md#sandbox-environments).
+
+Earlier versions ran one shared container, `vaf-sandbox`, with the volume
+`vaf_sandbox_workspace` and the networks `vaf-sandbox-network` and `vaf-sandbox-ephemeral`.
+The stack start removes all four on an existing install.
 
 ---
 
@@ -228,7 +238,6 @@ All data is preserved across container restarts:
 |--------|---------|-------------|
 | `vaf_memory_pgdata` | PostgreSQL data (users, memories) | **NO** |
 | `vaf_redis_data` | Redis cache | Yes |
-| `vaf_sandbox_workspace` | Sandbox working directory | Yes |
 | `vaf_tts_models` | TTS model cache (all languages) | Yes |
 | `vaf_tts_config` | TTS runtime/config cache | Yes |
 | `vaf_stt_models` | STT model cache | Yes |

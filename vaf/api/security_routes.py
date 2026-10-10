@@ -5,8 +5,8 @@
 Admin-only security overview API for the Logs "Overview" dashboard.
 
 GET /api/security/overview -> aggregated protection-module status. Starts with
-the code-sandbox block (live `docker inspect` of the vaf-sandbox container:
-running state + the actually-enforced hardening, not the compose claims);
+the code-sandbox block (live `docker inspect` of the running sandbox
+environments: the actually-enforced hardening, not the configured claims);
 further modules (isolation, phishing, findings, ...) join this response as
 their dashboard rows are wired.
 
@@ -19,10 +19,8 @@ Design rules carried over from the dashboard plan:
 - Absent data is reported as absent ("state": "nodata"), never as a green
   default - the dashboard's honesty floor depends on it.
 """
-import json
 import os
 import re
-import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -38,10 +36,8 @@ from vaf.core.service_stack import SERVICES, is_docker_daemon_running
 
 router = APIRouter(prefix="/api/security", tags=["security"])
 
-# Mirrors vaf/tools/python_sandbox.py SANDBOX_CONTAINER (import avoided: that
-# module pulls the whole tool stack; the name is a stable public contract of
-# docker-compose.memory.yml).
-SANDBOX_CONTAINER = "vaf-sandbox"
+# The internal network postgres and redis live on; no sandbox may join it.
+_INTERNAL_NETWORK = "vaf-network"
 
 
 def _docker_available() -> bool:
@@ -49,82 +45,100 @@ def _docker_available() -> bool:
     return is_docker_daemon_running()
 
 
-def _inspect_sandbox() -> Optional[Dict[str, Any]]:
-    """Raw `docker inspect` JSON for the sandbox container, or None when unavailable."""
+def _environment_container_ids() -> List[str]:
+    """Every running sandbox environment container, whoever owns it (the dashboard is
+    the admin's view of the machine)."""
     try:
-        result = subprocess.run(
-            ["docker", "inspect", SANDBOX_CONTAINER],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode != 0:
-            return None
-        parsed = json.loads(result.stdout)
-        return parsed[0] if isinstance(parsed, list) and parsed else None
+        from vaf.core import containers
+        from vaf.core.environments import LABEL
+        r = containers.docker(["ps", "-q", "--filter", f"label={LABEL}=1",
+                               "--filter", "status=running"], timeout=10)
+        if r.returncode != 0:
+            return []
+        return [line.strip() for line in (r.stdout or "").splitlines() if line.strip()]
     except Exception:
-        return None
+        return []
+
+
+def _inspect_environments() -> List[Dict[str, Any]]:
+    """Raw `docker inspect` JSON for the running sandbox environments (empty when none)."""
+    return inspect_containers(_environment_container_ids())
 
 
 def derive_sandbox_status(docker_available: bool,
-                          inspect: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+                          inspects: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
     """Pure derivation of the sandbox module status from probe results.
 
-    States (dashboard traffic light):
-      ok      -> docker up; execution is container-enforced. Two flavors:
-                 the persistent container is running (hardening live-verified),
-                 or it is not running and executions fall back to ephemeral
-                 containers carrying the same hardening (cap-drop ALL,
-                 no-new-privileges, own isolated bridge network - never
-                 `--network none`: outbound pip and the Tool Bridge are
-                 designed features, see docs/security/SANDBOXING.md).
+    Code runs in per-person sandbox environments (vaf/core/environments.py), created
+    on demand. States (dashboard traffic light):
+      ok      -> docker up; execution is container-enforced. With environments
+                 running, their hardening is read live and reported together: all
+                 of them must drop every capability, set no-new-privileges, run
+                 non-root and sit on a network of their own. Without one running,
+                 they start on demand with that same hardening.
       warn    -> docker daemon down/missing: sandboxed execution is BLOCKED.
                  Fail-closed (nothing escapes to the host), but the feature is
                  unavailable - attention, not critical.
       (nodata is produced by the caller when the probe itself was impossible.)
+
+    The field names (`container_running`, `hardening`) are the ones the shared
+    vaf-sandbox container had, so the dashboard reads the environments unchanged.
     """
     if not docker_available:
         return {"state": "warn", "reason": "docker_unavailable", "container_running": False}
 
-    running = False
-    hardening: Dict[str, Any] = {}
-    if inspect:
-        try:
-            running = bool((inspect.get("State") or {}).get("Running"))
-            host_cfg = inspect.get("HostConfig") or {}
+    running = [i for i in (inspects or []) if (i.get("State") or {}).get("Running")]
+    if not running:
+        return {"state": "ok", "reason": "ephemeral_on_demand", "container_running": False,
+                "environments": 0}
+    try:
+        cap_drop_all = no_new_privileges = non_root = own_network = True
+        networks: List[str] = []
+        memory = cpus = 0
+        for ins in running:
+            host_cfg = ins.get("HostConfig") or {}
             cap_drop = [str(c).upper() for c in (host_cfg.get("CapDrop") or [])]
             security_opt = [str(s) for s in (host_cfg.get("SecurityOpt") or [])]
-            networks = list(((inspect.get("NetworkSettings") or {}).get("Networks") or {}).keys())
-            hardening = {
-                "cap_drop_all": "ALL" in cap_drop,
-                "no_new_privileges": any("no-new-privileges" in s for s in security_opt),
-                "memory_bytes": host_cfg.get("Memory") or 0,
-                "nano_cpus": host_cfg.get("NanoCpus") or 0,
-                "networks": networks,
-                "isolated_network": networks == ["vaf-sandbox-network"],
-            }
-        except Exception:
-            running = False
-            hardening = {}
-
+            nets = list(((ins.get("NetworkSettings") or {}).get("Networks") or {}).keys())
+            user = str((ins.get("Config") or {}).get("User") or "")
+            cap_drop_all &= "ALL" in cap_drop
+            no_new_privileges &= any("no-new-privileges" in s for s in security_opt)
+            non_root &= bool(user) and user.split(":")[0] not in ("0", "root")
+            own_network &= bool(nets) and _INTERNAL_NETWORK not in nets and all(
+                n.startswith("vaf-env-net-") for n in nets)
+            networks.extend(nets)
+            memory = max(memory, int(host_cfg.get("Memory") or 0))
+            cpus = max(cpus, int(host_cfg.get("NanoCpus") or 0))
+        hardening = {
+            "cap_drop_all": cap_drop_all,
+            "no_new_privileges": no_new_privileges,
+            "non_root": non_root,
+            "memory_bytes": memory,
+            "nano_cpus": cpus,
+            "networks": sorted(set(networks)),
+            "isolated_network": own_network,
+        }
+    except Exception:
+        hardening = {}
     return {
         "state": "ok",
-        "reason": "container_running" if running else "ephemeral_on_demand",
-        "container_running": running,
+        "reason": "container_running",
+        "container_running": True,
+        "environments": len(running),
         **({"hardening": hardening} if hardening else {}),
     }
 
 
 def collect_sandbox_status(
     docker_probe=_docker_available,
-    inspect_probe=_inspect_sandbox,
+    inspect_probe=_inspect_environments,
 ) -> Dict[str, Any]:
     """Run the probes (injectable for tests) and derive the sandbox block."""
     docker_ok = docker_probe()
-    inspect: Optional[Dict[str, Any]] = None
+    inspects: Optional[List[Dict[str, Any]]] = None
     if docker_ok:
-        inspect = inspect_probe()
-    return derive_sandbox_status(docker_ok, inspect)
+        inspects = inspect_probe()
+    return derive_sandbox_status(docker_ok, inspects)
 
 
 # ── Firewall / LAN perimeter block ───────────────────────────────────────────
@@ -235,17 +249,17 @@ def security_events(
 
 # ── Docker network isolation (the "inner firewall") ──────────────────────────
 
-_INTERNAL_NETWORK = "vaf-network"
 _LOOPBACK_IPS = ("127.0.0.1", "::1")
 
 
 def derive_docker_isolation(inspects: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Pure derivation of the Docker network-segmentation status.
 
-    This is VAF's inner firewall and exists independent of LAN mode: the
-    sandbox lives on its own bridge (must NOT touch the internal vaf-network),
-    and every published port must bind to loopback only. Any 0.0.0.0/:: binding
-    is LAN exposure -> state warn.
+    This is VAF's inner firewall and exists independent of LAN mode: every sandbox
+    environment lives on a network of its own (must NOT touch the internal
+    vaf-network) and publishes no port, and every published port must bind to
+    loopback only. Any 0.0.0.0/:: binding is LAN exposure -> state warn.
+    `sandbox_off_internal` is None while no environment runs.
     """
     containers: List[Dict[str, Any]] = []
     any_exposed = False
@@ -265,8 +279,9 @@ def derive_docker_isolation(inspects: List[Dict[str, Any]]) -> Dict[str, Any]:
                     if host_ip not in _LOOPBACK_IPS:
                         # "" and 0.0.0.0/:: bind on all interfaces -> reachable from the LAN
                         exposed = True
-            if name == "vaf-sandbox":
-                sandbox_off_internal = _INTERNAL_NETWORK not in networks and not ports
+            if name.startswith("vaf-env-"):
+                off = _INTERNAL_NETWORK not in networks and not ports
+                sandbox_off_internal = off if sandbox_off_internal is None else (sandbox_off_internal and off)
             any_exposed = any_exposed or exposed
             containers.append({
                 "name": name, "running": running, "networks": networks,
@@ -287,12 +302,13 @@ def collect_docker_isolation() -> Optional[Dict[str, Any]]:
 
     The container list comes from the framework's service registry
     (vaf/core/service_stack.py SERVICES), which a CI guard keeps in step with
-    the compose file - this module used to carry its own copy of the names.
+    the compose file - this module used to carry its own copy of the names - plus
+    the running sandbox environments, found by their label.
     """
     if not _docker_available():
         return None
     return derive_docker_isolation(
-        inspect_containers([s.container_name for s in SERVICES])
+        inspect_containers([s.container_name for s in SERVICES] + _environment_container_ids())
     )
 
 

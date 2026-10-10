@@ -1201,7 +1201,7 @@ if (-not $SkipDocker) {
             # --quiet-pull hides the noisy per-layer pull progress.
             & $dockerExe compose version 2>&1 | Out-Null
             if ($LASTEXITCODE -eq 0) {
-                & $dockerExe compose -f docker-compose.memory.yml up -d --quiet-pull postgres redis sandbox stt gotenberg
+                & $dockerExe compose -f docker-compose.memory.yml up -d --quiet-pull postgres redis stt gotenberg
                 $dcExit = $LASTEXITCODE
                 Write-Info "Building optional services (TTS, browser); if this fails the core stack still runs..."
                 & $dockerExe compose -f docker-compose.memory.yml up -d --quiet-pull tts vaf-browser
@@ -1211,7 +1211,7 @@ if (-not $SkipDocker) {
                 }
             } else {
                 Write-Info "docker compose plugin not found - using standalone docker-compose."
-                & docker-compose -f docker-compose.memory.yml up -d postgres redis sandbox stt gotenberg
+                & docker-compose -f docker-compose.memory.yml up -d postgres redis stt gotenberg
                 $dcExit = $LASTEXITCODE
                 & docker-compose -f docker-compose.memory.yml up -d tts vaf-browser 2>&1 | Out-Null
             }

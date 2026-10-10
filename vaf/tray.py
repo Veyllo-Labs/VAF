@@ -1608,7 +1608,7 @@ def run_app():
     from vaf.core import instance as _instance
     _instance.register(_instance.MODE_TRAY)
 
-    # Start Memory stack (Postgres, Redis, Sandbox) automatically if Docker is available
+    # Start the service stack (Postgres, Redis, STT, Gotenberg, ...) automatically if Docker is available
     threading.Thread(target=ensure_memory_stack_up, daemon=True).start()
 
     # Start Garbage Collector

@@ -195,7 +195,7 @@ def _compose_services():
 
 
 def test_the_service_list_is_read():
-    assert {"postgres", "sandbox", "tts", "stt", "vaf-browser"} <= set(_compose_services())
+    assert {"postgres", "tts", "stt", "vaf-browser"} <= set(_compose_services())
 
 
 @pytest.mark.parametrize("service", _compose_services())

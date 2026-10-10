@@ -806,20 +806,20 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
             resolve_docker_bin
             # Two-phase like the Windows installer: bring up the core (registry images) first so a
             # slow local build of tts/vaf-browser can never block the database the app needs to boot.
-            print_info "Starting core services (database, cache, sandbox, STT, document engine)..."
+            print_info "Starting core services (database, cache, STT, document engine)..."
             # Retry the core pull/up a few times: the first pull of the registry images over a
             # flaky connection often hits a transient "TLS handshake timeout" from Docker's CDN.
             # Pulls resume from cached layers, so a retry usually completes. Never abort on this.
             core_up=false
             for _attempt in 1 2 3; do
-                if $DOCKER_SUDO "$DOCKER_BIN" compose -f "$COMPOSE_FILE" up -d postgres redis sandbox stt gotenberg; then
+                if $DOCKER_SUDO "$DOCKER_BIN" compose -f "$COMPOSE_FILE" up -d postgres redis stt gotenberg; then
                     core_up=true; break
                 fi
                 print_warning "Core image pull/start failed (attempt $_attempt/3) - often a transient registry/TLS timeout; retrying in 10s..."
                 sleep 10
             done
             if [ "$core_up" != "true" ]; then
-                $DOCKER_SUDO docker-compose -f "$COMPOSE_FILE" up -d postgres redis sandbox stt gotenberg \
+                $DOCKER_SUDO docker-compose -f "$COMPOSE_FILE" up -d postgres redis stt gotenberg \
                     || print_warning "Core stack not up yet (network/registry). VAF retries on launch; or re-run: ${DOCKER_BIN:-docker} compose -f $COMPOSE_FILE up -d"
             fi
             print_info "Starting optional services (TTS, browser) - these build locally and may take a while..."

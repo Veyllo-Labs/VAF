@@ -1,6 +1,7 @@
 # VAF Memory System - Docker Compose
 # ====================================
-# Containers: postgres (Memory/Auth DB), redis, sandbox, gotenberg, tts, stt.
+# Containers: postgres (Memory/Auth DB), redis, gotenberg, tts, stt, browser.
+# Code runs in per-person sandbox environments VAF creates itself (vaf/core/environments.py).
 #
 # Start (from project root):
 #   docker compose -f docker-compose.memory.yml up -d
@@ -13,7 +14,6 @@
 # Contains:
 #   - PostgreSQL 16 + pgvector (vector DB for Memory/RAG + Auth/User DB – do not remove/alter)
 #   - Redis 7 (cache for embeddings, sessions)
-#   - Python sandbox (safe code execution)
 #   - Gotenberg (LibreOffice) – optional, Office→PDF for Document Viewer (document_conversion_docker_url)
 #   - TTS (Piper HTTP) – optional, for speech_tts_engine=docker
 #   - STT (Whisper HTTP) – optional, for local STT via Docker
@@ -88,49 +88,6 @@ services:
       resources:
         limits:
           memory: 300M
-        reservations:
-          memory: 64M
-
-  # ==========================================================================
-  # Python Sandbox (Persistent, always-ready)
-  # Isolated on vaf-sandbox-network — cannot reach postgres/redis/other VAF
-  # services by hostname. Only the host gateway (Tool Bridge) and outbound
-  # internet (pip install) are reachable.
-  # ==========================================================================
-  sandbox:
-    image: python:3.11-slim
-    container_name: vaf-sandbox
-    restart: unless-stopped
-    # docker-init as PID 1. `sleep` as PID 1 installs no SIGTERM handler, and the
-    # kernel applies no default action to PID 1, so every stop waited out the 10 s
-    # grace and ended in SIGKILL (exit 137). The init forwards the signal and also
-    # reaps the orphans `docker exec` runs leave behind, which `sleep` never did.
-    init: true
-    command: sleep infinity
-    working_dir: /workspace
-    volumes:
-      - vaf_sandbox:/workspace
-    extra_hosts:
-      # Makes host.docker.internal resolve to the host machine IP on Linux
-      # (Docker Desktop does this automatically on Mac/Windows).
-      # Required for the Tool Bridge back-channel (with_vaf_tools=True).
-      - "host.docker.internal:host-gateway"
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    healthcheck:
-      test: ["CMD", "python3", "--version"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    networks:
-      - vaf-sandbox-network
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: "0.5"
         reservations:
           memory: 64M
 
@@ -335,9 +292,6 @@ volumes:
   vaf_redis:
     name: vaf_redis_data
     driver: local
-  vaf_sandbox:
-    name: vaf_sandbox_workspace
-    driver: local
   vaf_tts_models:
     name: vaf_tts_models
     driver: local
@@ -351,11 +305,6 @@ volumes:
 networks:
   vaf-network:
     name: vaf-network
-    driver: bridge
-  # Isolated network for the Python sandbox.
-  # The sandbox is NOT on vaf-network, so it cannot reach postgres/redis by hostname.
-  vaf-sandbox-network:
-    name: vaf-sandbox-network
     driver: bridge
   # Isolated network for the browser container.
   # The browser is NOT on vaf-network, so it cannot reach postgres/redis by hostname.

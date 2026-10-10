@@ -29,11 +29,11 @@ duplicate the install steps.
   AppIndicator + WebKitGTK typelibs (installed by the installer); if they are
   missing the tray icon may not appear, but the Qt app window is unaffected. See
   [SYSTEM_TRAY.md](./SYSTEM_TRAY.md).
-- **Docker services.** The database (PostgreSQL/pgvector), cache, sandbox, STT,
+- **Docker services.** The database (PostgreSQL/pgvector), cache, STT,
   document engine, TTS and browser containers run via
   `docker compose -f docker-compose.memory.yml up -d`. VAF starts them itself when a lane
   that needs them starts (`vaf/core/service_stack.py`: the tray, `vaf start`, the terminal
-  app and `vaf run`), never for a plain command such as `vaf --version` or `vaf stop`. See
+  app and `vaf run`), never for a plain command such as `vaf --version` or `vaf stop`. Code runs in sandbox environments VAF starts itself, one per person, outside compose ([SANDBOXING.md](../security/SANDBOXING.md#sandbox-environments)). See
   [DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md).
 - **Launcher / entry point.** [run_vaf.sh](../../run_vaf.sh) activates `venv/`
   and `exec`s `venv/bin/python -m vaf.main tray` (or

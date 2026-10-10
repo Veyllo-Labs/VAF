@@ -14,7 +14,9 @@ from vaf.core import service_health as sh
 from vaf.core import service_stack as ss
 
 REDIS = next(s for s in ss.SERVICES if s.service_key == "redis")
-SANDBOX = next(s for s in ss.SERVICES if s.service_key == "sandbox")
+# No registered service publishes no port any more (the shared sandbox container was the
+# one); the derivation still has to handle one, so the tests describe a synthetic spec.
+PORTLESS = ss.ServiceSpec("portless", "vaf-portless", True)
 TTS = next(s for s in ss.SERVICES if s.service_key == "tts")
 
 
@@ -76,8 +78,8 @@ def test_unhealthy_and_starting_are_warnings_not_errors():
 
 
 def test_a_service_without_ports_is_never_a_port_mismatch():
-    inspect = {"Name": "/vaf-sandbox", "State": {"Running": True}, "HostConfig": {}}
-    row = sh.derive_service_status(SANDBOX, inspect, None, None)
+    inspect = {"Name": "/vaf-portless", "State": {"Running": True}, "HostConfig": {}}
+    row = sh.derive_service_status(PORTLESS, inspect, None, None)
     assert row["state"] == "ok"
     assert row["port_mismatch"] is False
 
@@ -174,7 +176,7 @@ def test_configured_port_prefers_the_environment_then_config_then_default():
 def test_configured_port_survives_a_hand_edited_url():
     assert sh.configured_port(REDIS, config_get=lambda k, d: "not a url at all",
                               environ={}) == 6379
-    assert sh.configured_port(SANDBOX, config_get=lambda k, d: "", environ={}) is None
+    assert sh.configured_port(PORTLESS, config_get=lambda k, d: "", environ={}) is None
 
 
 # ── the start window ─────────────────────────────────────────────────────────

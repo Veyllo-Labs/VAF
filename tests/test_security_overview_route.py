@@ -8,13 +8,18 @@ ok (container-enforced, running or ephemeral-on-demand), warn (docker down ->
 execution blocked, fail-closed), and honest hardening booleans derived from the
 LIVE docker inspect payload rather than compose claims.
 """
+import pytest
+
 from vaf.api.security_routes import collect_sandbox_status, derive_sandbox_status
 
 
 def _inspect_payload(running=True, cap_drop=("ALL",), sec_opt=("no-new-privileges:true",),
-                     memory=536870912, nano_cpus=500000000, networks=("vaf-sandbox-network",)):
+                     memory=536870912, nano_cpus=500000000, networks=("vaf-env-net-ab12cd34",),
+                     user="1000:1000"):
+    """One sandbox environment as `docker inspect` reports it."""
     return {
         "State": {"Running": running},
+        "Config": {"User": user},
         "HostConfig": {
             "CapDrop": list(cap_drop),
             "SecurityOpt": list(sec_opt),
@@ -25,16 +30,19 @@ def _inspect_payload(running=True, cap_drop=("ALL",), sec_opt=("no-new-privilege
     }
 
 
-def test_running_hardened_container_is_ok():
-    s = derive_sandbox_status(True, _inspect_payload())
+def test_running_hardened_environments_are_ok():
+    s = derive_sandbox_status(True, [_inspect_payload(),
+                                     _inspect_payload(networks=("vaf-env-net-ef56ab78",), memory=1073741824)])
     assert s["state"] == "ok"
     assert s["reason"] == "container_running"
-    assert s["container_running"] is True
+    assert s["container_running"] is True and s["environments"] == 2
     h = s["hardening"]
     assert h["cap_drop_all"] is True
     assert h["no_new_privileges"] is True
+    assert h["non_root"] is True
     assert h["isolated_network"] is True
-    assert h["memory_bytes"] == 536870912
+    assert h["memory_bytes"] == 1073741824
+    assert h["networks"] == ["vaf-env-net-ab12cd34", "vaf-env-net-ef56ab78"]
 
 
 def test_docker_down_is_warn_fail_closed():
@@ -45,21 +53,28 @@ def test_docker_down_is_warn_fail_closed():
     assert s["container_running"] is False
 
 
-def test_stopped_container_with_docker_up_is_still_enforced():
-    """No persistent container: executions fall back to ephemeral --network none runs."""
-    s = derive_sandbox_status(True, None)
-    assert s["state"] == "ok"
-    assert s["reason"] == "ephemeral_on_demand"
-    assert s["container_running"] is False
+def test_no_running_environment_is_still_enforced():
+    """Environments start on demand with the same hardening."""
+    for inspects in (None, [], [_inspect_payload(running=False)]):
+        s = derive_sandbox_status(True, inspects)
+        assert s["state"] == "ok"
+        assert s["reason"] == "ephemeral_on_demand"
+        assert s["container_running"] is False
 
 
-def test_weakened_hardening_is_reported_honestly():
-    """A container without cap_drop ALL / extra networks must not report hardened booleans."""
-    s = derive_sandbox_status(True, _inspect_payload(cap_drop=(), sec_opt=(), networks=("bridge", "vaf-sandbox-network")))
-    h = s["hardening"]
-    assert h["cap_drop_all"] is False
-    assert h["no_new_privileges"] is False
-    assert h["isolated_network"] is False
+@pytest.mark.parametrize("weak, field", [
+    ({"cap_drop": ()}, "cap_drop_all"),
+    ({"sec_opt": ()}, "no_new_privileges"),
+    ({"user": ""}, "non_root"),
+    ({"user": "0:0"}, "non_root"),
+    ({"networks": ("vaf-env-net-ab12cd34", "vaf-network")}, "isolated_network"),
+    ({"networks": ("bridge",)}, "isolated_network"),
+])
+def test_one_weakened_environment_spoils_the_flag(weak, field):
+    """A flag is reported True only when EVERY running environment carries it.
+    MUTATION: report the first environment's hardening only - red."""
+    s = derive_sandbox_status(True, [_inspect_payload(), _inspect_payload(**weak)])
+    assert s["hardening"][field] is False
 
 
 def test_collect_uses_probes_and_skips_inspect_when_docker_down():
@@ -67,7 +82,7 @@ def test_collect_uses_probes_and_skips_inspect_when_docker_down():
 
     def fake_inspect():
         calls["inspect"] += 1
-        return _inspect_payload()
+        return [_inspect_payload()]
 
     s = collect_sandbox_status(docker_probe=lambda: False, inspect_probe=fake_inspect)
     assert s["state"] == "warn"
@@ -112,7 +127,7 @@ def test_docker_isolation_all_loopback_is_ok():
     from vaf.api.security_routes import derive_docker_isolation
     d = derive_docker_isolation([
         _container("vaf-memory-db", bindings={"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": "5432"}]}),
-        _container("vaf-sandbox", networks=("vaf-sandbox-network",)),
+        _container("vaf-env-ab12cd34ef56-scratch", networks=("vaf-env-net-s-ab12cd34ef56",)),
         _container("vaf-browser", networks=("vaf-browser-network",), bindings={"9222/tcp": [{"HostIp": "127.0.0.1", "HostPort": "9222"}]}),
     ])
     assert d["state"] == "ok" and d["any_lan_exposed"] is False
@@ -132,9 +147,17 @@ def test_docker_isolation_flags_lan_exposed_binding():
 def test_docker_isolation_sandbox_on_internal_net_is_not_isolated():
     from vaf.api.security_routes import derive_docker_isolation
     d = derive_docker_isolation([
-        _container("vaf-sandbox", networks=("vaf-sandbox-network", "vaf-network")),
+        _container("vaf-env-ab12cd34ef56-0a1b2c3d", networks=("vaf-env-net-y", "vaf-network")),
+        _container("vaf-env-ab12cd34ef56-scratch", networks=("vaf-env-net-x",)),
     ])
-    assert d["sandbox_off_internal"] is False
+    # The weak one first: a later, well-isolated one must not overwrite the verdict.
+    assert d["sandbox_off_internal"] is False, "one environment on the internal net spoils it"
+    d = derive_docker_isolation([
+        _container("vaf-env-ab12cd34ef56-scratch", networks=("vaf-env-net-x",),
+                   bindings={"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8000"}]}),
+    ])
+    assert d["sandbox_off_internal"] is False, "an environment publishes no port"
+    assert derive_docker_isolation([_container("vaf-memory-db")])["sandbox_off_internal"] is None
 
 
 def test_workspace_metrics_aggregate_per_user(tmp_path):

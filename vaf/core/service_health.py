@@ -113,7 +113,7 @@ def configured_port(spec: ServiceSpec,
 
     Reads the environment override first (the browser lane has no config key),
     then the config URL, then the compose default. None means the service
-    publishes no port at all (the sandbox), and a port comparison is skipped.
+    publishes no port at all, and a port comparison is skipped.
     """
     if not spec.default_port:
         return None

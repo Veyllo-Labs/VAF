@@ -119,11 +119,9 @@ export default function SandboxSection() {
                             <li key={env.id} className="px-3 py-2 rounded-lg border border-gray-200 bg-white">
                                 <div className="flex items-center gap-3">
                                     <Box className="w-4 h-4 text-gray-500 shrink-0" />
-                                    <span className="text-sm font-mono text-gray-800">{env.id}</span>
-                                    {env.name && <span className="text-sm text-gray-700 min-w-0 truncate">{env.name}</span>}
-                                    <span className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-600">{kindLabel(env.kind)}</span>
-                                    <span className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-600">{networkLabel(env.network)}</span>
-                                    <span className={`text-xs flex-1 min-w-0 truncate ${running ? 'text-emerald-600' : 'text-gray-500'}`}>
+                                    <span className="text-sm font-mono text-gray-800 shrink-0">{env.id}</span>
+                                    <span className="text-sm text-gray-700 flex-1 min-w-0 truncate">{env.name}</span>
+                                    <span className={`text-xs shrink-0 whitespace-nowrap ${running ? 'text-emerald-600' : 'text-gray-500'}`}>
                                         {running ? t('running') : t('stopped')}
                                     </span>
                                     {running && (
@@ -135,7 +133,7 @@ export default function SandboxSection() {
                                     )}
                                     {confirming === env.id ? (
                                         <button type="button" disabled={busy === env.id} onClick={() => void act(env, 'delete')}
-                                            className="px-2 py-1 text-xs font-medium rounded-md bg-red-600 hover:bg-red-700 text-white disabled:opacity-50">
+                                            className="px-2 py-1 text-xs font-medium rounded-md bg-red-600 hover:bg-red-700 text-white disabled:opacity-50 shrink-0 whitespace-nowrap">
                                             {t('confirmDelete')}
                                         </button>
                                     ) : (
@@ -146,7 +144,9 @@ export default function SandboxSection() {
                                         </button>
                                     )}
                                 </div>
-                                <div className="mt-1 pl-7 text-xs text-gray-500 flex flex-wrap gap-x-3 gap-y-0.5">
+                                <div className="mt-1 pl-7 text-xs text-gray-500 flex flex-wrap items-center gap-x-3 gap-y-1">
+                                    <span className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-600 whitespace-nowrap">{kindLabel(env.kind)}</span>
+                                    <span className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-600 whitespace-nowrap">{networkLabel(env.network)}</span>
                                     {env.project_path && <span className="font-mono min-w-0 truncate" title={env.project_path}>{env.project_path}</span>}
                                     {left !== null && <span>{t('expiresIn', { hours: left })}</span>}
                                     {procs.length > 0 && <span>{t('processes', { count: procs.length })}</span>}

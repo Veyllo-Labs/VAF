@@ -12,6 +12,14 @@ The one unverified handshake that remains is deliberate and not a request: the A
 bootstrap (vaf/core/a2a/trust.py) fetches a peer's certificate chain WITHOUT trusting it,
 to compare it against a fingerprint that arrived by another route. It is allowlisted by
 path and must keep its ``CERT_NONE`` inside that one function.
+
+The second is the FTP lane's pinned mode (vaf/core/ftp.py, `connect`): a server whose
+certificate no authority vouches for is reached without that check, and its certificate's
+SHA-256 fingerprint is compared with the one remembered at the first connection BEFORE the
+password is sent; a different one is refused. The first connection itself is the person's to
+confirm (the ssh lane's trust-on-first-use, a named boundary there). The authority check
+always runs first; the pinned mode is never a fallback for a server confirmed through an
+authority.
 """
 import re
 from pathlib import Path
@@ -19,7 +27,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent / "vaf"
 
 _UNVERIFIED = re.compile(r"verify\s*=\s*False|_create_unverified_context|CERT_NONE")
-_ALLOWED = {Path("core/a2a/trust.py"): 1}   # the fingerprint-checked bootstrap, once
+_ALLOWED = {Path("core/a2a/trust.py"): 1,   # the fingerprint-checked bootstrap, once
+            Path("core/ftp.py"): 1}         # the pinned FTPS server, compared before login
 
 
 def test_no_request_disables_certificate_verification():

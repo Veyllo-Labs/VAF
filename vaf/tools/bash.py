@@ -220,6 +220,13 @@ Examples:
             parts.append(f"\nTimed out after {timeout}s.")
         parts.append("\nSuccess (exit code: 0)" if r.returncode == 0
                      else f"\nFailed (exit code: {r.returncode})")
+        if r.returncode != 0 and env.network == "none" and _NO_NETWORK_RE.search(f"{out}\n{err}"):
+            # Same reason as in the jail: the failure is the missing network, and the
+            # environment's network is fixed when it is made.
+            parts.append(f"\nEnvironment {env.id} has no network (network none), so nothing can "
+                         "be downloaded in it. An environment created with network 'registries' "
+                         "or 'open' can; or run the same command with host_bash if you have it: "
+                         "it runs on the host, with network.")
         return "\n".join(parts)
 
     def stop_unkept(self) -> list:

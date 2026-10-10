@@ -79,6 +79,10 @@ async def _act(request: Request, env_id: str, action: str, all: int) -> Dict[str
         env = await asyncio.to_thread(fn, user["user_scope_id"], env_id, admin=bool(all))
     except EnvironmentRefused as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        # docker missing, not answering or timing out: the sandbox is unavailable, which
+        # is not the same as "no such environment".
+        raise HTTPException(status_code=503, detail=f"sandbox unavailable: {e}"[:300])
     return {"ok": True, "id": env.id, "action": action}
 
 

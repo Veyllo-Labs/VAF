@@ -235,7 +235,11 @@ class SandboxFilesTool(BaseTool):
                     return _refused(self.name, "write needs the content")
                 return f"Wrote {mgr.write_file(scope, env_id, path, str(content))}."
             if action == "list":
-                return mgr.list_files(scope, env_id, path, depth=int(kwargs.get("depth") or 2)) or "(empty)"
+                try:
+                    depth = int(kwargs.get("depth") or 2)
+                except (TypeError, ValueError):
+                    depth = 2                   # a model-written "two" is not a sandbox outage
+                return mgr.list_files(scope, env_id, path, depth=min(max(depth, 1), 6)) or "(empty)"
             return _refused(self.name, "action must be one of read, write, list")
         except EnvironmentRefused as e:
             return _refused(self.name, e)

@@ -75,6 +75,7 @@ export default function SandboxSection() {
     useEffect(() => { void load(); }, [load]);
 
     const act = async (env: Environment, action: 'stop' | 'delete') => {
+        if (!data || data.all !== everyone) return;      // a row of the other setting's list
         if (action === 'delete' && confirming !== env.id) { setConfirming(env.id); return; }
         setConfirming(null);
         setBusy(env.id);
@@ -96,6 +97,9 @@ export default function SandboxSection() {
     };
 
     if (!data && !loadFailed) return null;
+    // The list on screen belongs to the other "All accounts" setting until the new one has
+    // arrived (or failed to): shown dimmed, and nothing on it can be acted on.
+    const stale = !!data && data.all !== everyone;
     const kindLabel = (k: Environment['kind']) =>
         k === 'project' ? t('kindProject') : k === 'scratch' ? t('kindScratch') : t('kindTemporary');
     const networkLabel = (n: Environment['network']) =>
@@ -131,7 +135,7 @@ export default function SandboxSection() {
             ) : data.environments.length === 0 ? (
                 <p className="text-sm text-gray-500">{t('none')}</p>
             ) : (
-                <ul className="flex flex-col gap-2">
+                <ul className={`flex flex-col gap-2 ${stale ? 'opacity-50' : ''}`} aria-busy={stale}>
                     {data.environments.map(env => {
                         const running = env.state === 'running';
                         const left = hoursLeft(env);
@@ -146,19 +150,19 @@ export default function SandboxSection() {
                                         {running ? t('running') : t('stopped')}
                                     </span>
                                     {running && (
-                                        <button type="button" disabled={busy === env.id} onClick={() => void act(env, 'stop')}
+                                        <button type="button" disabled={stale || busy === env.id} onClick={() => void act(env, 'stop')}
                                             title={t('stop')} aria-label={t('stop')}
                                             className="p-1.5 rounded-md text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-50">
                                             <Square className="w-4 h-4" />
                                         </button>
                                     )}
                                     {confirming === env.id ? (
-                                        <button type="button" disabled={busy === env.id} onClick={() => void act(env, 'delete')}
+                                        <button type="button" disabled={stale || busy === env.id} onClick={() => void act(env, 'delete')}
                                             className="px-2 py-1 text-xs font-medium rounded-md bg-red-600 hover:bg-red-700 text-white disabled:opacity-50 shrink-0 whitespace-nowrap">
                                             {t('confirmDelete')}
                                         </button>
                                     ) : (
-                                        <button type="button" disabled={busy === env.id} onClick={() => void act(env, 'delete')}
+                                        <button type="button" disabled={stale || busy === env.id} onClick={() => void act(env, 'delete')}
                                             title={t('delete')} aria-label={t('delete')}
                                             className="p-1.5 rounded-md text-gray-500 hover:text-red-600 hover:bg-gray-100 disabled:opacity-50">
                                             <Trash2 className="w-4 h-4" />

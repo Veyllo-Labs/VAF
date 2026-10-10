@@ -96,6 +96,20 @@ def test_bash_runs_in_the_environment_and_starts_dev_servers_there(monkeypatch):
     assert len([c for c in rec.calls if c[0] == "stop_process"]) == 1
 
 
+def test_a_download_without_network_says_why(monkeypatch):
+    """MUTATION: drop the hint in _run_in_environment - red: the coder guessed at its build
+    instead of learning the environment has no network."""
+    class _NoNet(_Recorder):
+        def exec_in(self, env, argv, **kw):
+            return envmod.ExecResult(1, "", "Could not resolve host: registry.npmjs.org")
+
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: _NoNet())
+    out = BashTool("/p", environment=_env(network="none"), owner_scope="s").run(command="npm i")
+    assert "has no network (network none)" in out and "Failed (exit code: 1)" in out
+    out = BashTool("/p", environment=_env(network="open"), owner_scope="s").run(command="npm i")
+    assert "has no network" not in out
+
+
 def test_background_processes_end_on_every_exit_of_the_run():
     """run() has many early returns and can raise; the summary at its end was the only
     place that stopped a run's dev servers. MUTATION: drop the decorator from

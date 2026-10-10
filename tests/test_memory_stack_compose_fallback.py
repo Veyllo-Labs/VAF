@@ -14,6 +14,7 @@ delegation is pinned here too.
 
 Hermetic: subprocess.run is monkeypatched; no Docker, no containers.
 """
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -133,6 +134,23 @@ def test_the_tray_delegates_to_the_engine(monkeypatch):
     tray.stop_memory_stack()
     assert started == [True] and stopped == [True], (
         "the tray grew its own stack lifecycle back instead of delegating")
+
+
+def test_the_environment_image_build_starts_even_when_the_optional_phase_times_out(monkeypatch):
+    """The sandbox environments' image is built off the compose path. MUTATION: start
+    the build after the optional compose call again - red: a timeout there skipped it."""
+    import vaf.core.environment_image as ei
+    started = []
+    monkeypatch.setattr(ei, "start_background_build", lambda: started.append(True))
+
+    def fake_run(cmd, **kwargs):
+        if any(s in cmd for s in stack.OPTIONAL_SERVICES) and "up" in cmd:
+            raise subprocess.TimeoutExpired(cmd="docker compose up", timeout=600)
+        return _Result(0)
+
+    _hermetic(monkeypatch, fake_run)
+    assert stack.ensure_service_stack() is True
+    assert started == [True]
 
 
 def test_optional_services_are_rebuilt_while_core_services_are_not(monkeypatch):

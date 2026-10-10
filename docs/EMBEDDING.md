@@ -766,7 +766,10 @@ object.
 import vaf
 
 envs = vaf.get_environment_manager()           # one per process
-env = envs.create("scope-of-alice", kind="temporary", network="registries")
+# wait_for_image: the first create on a machine builds the image (a few minutes);
+# without it, create refuses until the build it started has finished.
+env = envs.create("scope-of-alice", kind="temporary", network="registries",
+                  wait_for_image=True)
 print(envs.exec("scope-of-alice", env.id, "pip install requests && python -c 'import requests'"))
 envs.write_file("scope-of-alice", env.id, "app.py", "print('hi')")
 print(envs.read_file("scope-of-alice", env.id, "app.py"))

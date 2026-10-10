@@ -768,6 +768,15 @@ def _ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
                     return False
                 if result.returncode == 0:
                     _say(log, "Core service stack (DB/Redis/STT/Gotenberg) started")
+                    # The sandbox environments' image is not a compose service (it ships
+                    # inside the package and is built from stdin), so it starts here, off
+                    # this path - before the optional phase, whose compose call can time
+                    # out or raise and would otherwise skip it.
+                    try:
+                        from vaf.core.environment_image import start_background_build
+                        start_background_build()
+                    except Exception:
+                        pass
                     try:  # optional build services: best-effort, never block the core
                         # --build, deliberately. These two are BUILT from this repo rather
                         # than pulled, and plain `up -d` reuses whatever image already
@@ -792,14 +801,6 @@ def _ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
                             return True
                         opt = subprocess.run(base + ["--build"] + list(OPTIONAL_SERVICES),
                                              timeout=600, **kwargs)
-                        # The sandbox environments' image is not a compose service
-                        # (it ships inside the package and is built from stdin), so
-                        # it is started here, in the optional phase, off this path.
-                        try:
-                            from vaf.core.environment_image import start_background_build
-                            start_background_build()
-                        except Exception:
-                            pass
                         if opt.returncode != 0:
                             # Name the real reason. The old wording guessed "VM clock skew"
                             # at every failure, which sent a genuine build error looking for

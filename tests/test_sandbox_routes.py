@@ -87,6 +87,20 @@ def test_stop_and_delete_act_as_the_caller(monkeypatch):
     assert r.status_code == 404 and "no environment" in r.json()["detail"]
 
 
+def test_a_docker_failure_is_unavailable_not_an_internal_error(monkeypatch):
+    """MUTATION: drop the broad except in _act - red: a docker that timed out answered 500."""
+    client, mgr = _client(monkeypatch, "user")
+
+    def _timeout(*a, **k):
+        import subprocess
+        raise subprocess.TimeoutExpired(cmd="docker", timeout=60)
+
+    mgr.stop = _timeout
+    r = client.post("/api/sandbox/0a1b2c3d/stop")
+    assert r.status_code == 503 and r.json()["detail"].startswith("sandbox unavailable")
+    assert client.delete("/api/sandbox/missing").status_code == 404     # still a 404
+
+
 def test_without_docker_the_section_says_so(monkeypatch):
     client, _ = _client(monkeypatch, "user")
     import vaf.core.service_stack as stack

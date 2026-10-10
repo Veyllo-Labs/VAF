@@ -239,8 +239,11 @@ class ExecResult:
 def _host_user() -> str:
     """The uid:gid an environment runs as. The caller's own on a POSIX host, so files
     written into a mounted project belong to them; the image's user elsewhere (Docker
-    Desktop maps ownership on its own)."""
-    if hasattr(os, "getuid") and hasattr(os, "getgid") and os.name == "posix":
+    Desktop maps ownership on its own), and also when VAF itself runs as root - the
+    caller's uid would then be root in the container. NAMED BOUNDARY: under a root VAF
+    a mounted project must be writable by uid 10001, and what the environment writes
+    there belongs to it."""
+    if hasattr(os, "getuid") and hasattr(os, "getgid") and os.name == "posix" and os.getuid() != 0:
         return f"{os.getuid()}:{os.getgid()}"
     return IMAGE_UID
 
@@ -896,6 +899,16 @@ class EnvironmentManager:
         env = self.get(owner_scope, env_id)
         p = _container_path(path)
         parent, base = posixpath.split(p)
+        # Measured inside first: the tar stream is held in memory whole, so a source over
+        # the limit is refused before it is read, not after. The check after the read
+        # stays for what grows in between. A failed measurement leaves the error to tar.
+        size = containers.docker(["exec", env.container, "du", "-sb", "--", p], timeout=60)
+        try:
+            measured = int((size.stdout or "").split()[0]) if size.returncode == 0 else 0
+        except (IndexError, ValueError):
+            measured = 0
+        if measured > TRANSFER_LIMIT_BYTES:
+            raise EnvironmentRefused(f"{p} is larger than {TRANSFER_LIMIT_BYTES // (1024 * 1024)} MB")
         r = containers.docker(["exec", env.container, "tar", "-cf", "-", "-C", parent or "/", base],
                               timeout=300, binary=True)
         if r.returncode != 0:

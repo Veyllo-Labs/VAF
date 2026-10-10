@@ -564,6 +564,40 @@ def test_copy_out_drops_links_and_escapes(docker, mgr, monkeypatch, tmp_path):
     assert not (tmp_path / "escape.txt").exists()
 
 
+def test_copy_out_refuses_an_oversized_source_before_reading_it(docker, mgr, monkeypatch, tmp_path):
+    """The tar stream is held in memory whole. MUTATION: drop the measurement inside the
+    container - red: the stream was read first and measured afterwards."""
+    env = mgr.create(ALICE)
+    real = docker.__call__
+    reads = []
+
+    def _docker(args, timeout=60, **kw):
+        if args[0] == "exec" and "du" in args:
+            return _done(0, f"{envmod.TRANSFER_LIMIT_BYTES + 1}\t/workspace/big\n")
+        if args[0] == "exec" and "tar" in args:
+            reads.append(args)
+            return types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+        return real(args, timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _docker)
+    with pytest.raises(EnvironmentRefused, match="larger than"):
+        mgr.copy_out(ALICE, env.id, "big", str(tmp_path / "dest"))
+    assert reads == []
+
+
+def test_a_root_vaf_still_runs_environments_non_root(monkeypatch):
+    """MUTATION: drop the uid check in _host_user - red: a VAF running as root started
+    every environment as root."""
+    import os
+    monkeypatch.setattr(os, "getuid", lambda: 0, raising=False)
+    monkeypatch.setattr(os, "getgid", lambda: 0, raising=False)
+    assert envmod._host_user() == envmod.IMAGE_UID
+    if os.name == "posix":
+        monkeypatch.setattr(os, "getuid", lambda: 1000)
+        monkeypatch.setattr(os, "getgid", lambda: 1000)
+        assert envmod._host_user() == "1000:1000"
+
+
 # -- limits and their defaults ----------------------------------------------------------
 
 def test_the_module_defaults_match_the_config_defaults():

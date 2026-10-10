@@ -109,6 +109,16 @@ def test_exec_bounds_the_timeout_and_reports_the_exit(mgr):
     assert kw["timeout"] == tools.SandboxExecTool.MAX_TIMEOUT_SECONDS
 
 
+def test_a_depth_that_is_not_a_number_is_the_default(mgr):
+    """MUTATION: back to a bare int() - red: "two" read as a sandbox that could not be reached."""
+    out = tools.SandboxFilesTool().run(environment="0a1b2c3d", action="list", depth="two",
+                                       user_scope_id="s")
+    assert "could not be reached" not in out
+    assert mgr.calls[-1][0] == "list_files" and mgr.calls[-1][2]["depth"] == 2
+    tools.SandboxFilesTool().run(environment="0a1b2c3d", action="list", depth=99, user_scope_id="s")
+    assert mgr.calls[-1][2]["depth"] == 6
+
+
 def test_exec_in_the_background_returns_a_handle(mgr):
     out = tools.SandboxExecTool().run(environment="0a1b2c3d", command="npm run dev", background=True,
                                       user_scope_id="s", session_id="chat-1", username="alice")

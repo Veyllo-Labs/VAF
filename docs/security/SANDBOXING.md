@@ -338,7 +338,9 @@ on messaging channels:
 From the terminal, `vaf env` does the same as the machine owner, behind the terminal door:
 `list [--all]`, `create --temp | --project NAME [--path DIR] [--network ...] [--memory MB]`
 (waits for the image the first time), `exec ID -- CMD`, `shell ID`, `ps`, `logs`, `kill`,
-`preview ID TARGET`, `stop`, `delete` and `prune`.
+`preview ID TARGET`, `stop`, `delete` and `prune`. `exec` keeps each word of `CMD` whole
+(`-- python3 -c "print('a b')"`); a single quoted word is taken as a shell line, so pipes
+and `&&` work (`-- "pip install -r requirements.txt && pytest"`).
 
 Background processes are listed, read and stopped with `host_process` (ids
 `e-<environment>-<process>`), next to the chat's host commands. The record of who started

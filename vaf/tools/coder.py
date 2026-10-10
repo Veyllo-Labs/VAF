@@ -2928,6 +2928,32 @@ def _coder_dispatch_refusal(fn_name: str, tool, *, coder_allowed, caller_allowed
     return None
 
 
+def _ends_background_with_the_run(run):
+    """Background processes a run started in its sandbox environment end with the run on
+    EVERY exit. The summary at the end of run() stops them and names the kept ones, but
+    run() has many earlier returns (a provider that keeps failing, a stop request) and can
+    raise; a dev server left behind there ran on until sandbox_env_process_max_hours, and
+    kept its project environment from ever going idle. A wrapper, because the body is
+    thousands of lines long. Only the bash tool THIS call bound is asked (not a leftover
+    from an earlier run), and stop_unkept forgets what it stopped, so after the normal
+    summary this finds nothing more to do."""
+    import functools
+
+    @functools.wraps(run)
+    def wrapper(self, **kwargs):
+        before = (getattr(self, "local_tools", None) or {}).get("bash")
+        try:
+            return run(self, **kwargs)
+        finally:
+            bash = (getattr(self, "local_tools", None) or {}).get("bash")
+            if bash is not None and bash is not before and hasattr(bash, "stop_unkept"):
+                try:
+                    bash.stop_unkept()
+                except Exception:
+                    pass
+    return wrapper
+
+
 class CodingAgentTool(BaseTool):
     name = "coding_agent"
     # A large edit legitimately takes many minutes; the agentic loop governs itself (idle-based
@@ -3367,6 +3393,7 @@ Thumbs.db
         except Exception:
             return ""  # documentation is best-effort; never break the run
 
+    @_ends_background_with_the_run
     def run(self, **kwargs) -> str:
         # Accept 'prompt' as an alias for 'task' (LLMs sometimes use either name)
         task = kwargs.get('task', '') or kwargs.get('prompt', '')

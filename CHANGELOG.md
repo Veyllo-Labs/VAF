@@ -19,8 +19,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   folders), runs commands and edits files in it, copies results to your folders, and can
   leave a dev server running there; the chat hears back when it stops. Each environment
   chooses its network: none, only package registries through a filtering proxy, or the
-  open internet, and an admin can cap that choice. Nobody else can see or use your
-  environments. The coder works in a project environment too: give it one (or have one
+  open internet, and an admin can cap that choice. Other people cannot see or use your
+  environments; an admin can see, stop and delete any account's, never run anything in them. The coder works in a project environment too: give it one (or have one
   for that folder) and it builds, tests and runs its dev server inside, with the
   packages it installed there. A screenshot of what an environment serves appears
   right in the chat, with the page's console output and text. `vaf env` does all of it

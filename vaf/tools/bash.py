@@ -238,4 +238,6 @@ Examples:
                 mgr.stop_process(self.owner_scope, handle)
             except Exception:
                 pass
+        # Forget what was stopped: the run's wrapper asks again on its way out.
+        self.started = [(handle, True) for handle in kept]
         return kept

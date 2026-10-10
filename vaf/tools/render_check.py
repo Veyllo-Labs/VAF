@@ -129,8 +129,14 @@ class RenderCheckTool(BaseTool):
         from vaf.core.environments import EnvironmentRefused, get_environment_manager
         if not target.lower().startswith(("http://", "https://")):
             full = target if os.path.isabs(os.path.expanduser(target)) else os.path.join(self.base_dir or "", target)
-            rel = os.path.relpath(os.path.realpath(full), os.path.realpath(self.base_dir or full))
-            if rel.startswith(".."):
+            try:
+                rel = os.path.relpath(os.path.realpath(full), os.path.realpath(self.base_dir or full))
+            except ValueError:
+                rel = None                      # another drive (Windows): outside by definition
+            # A climb is the whole `..` component, not the prefix: `..notes.html` is a file
+            # in the project.
+            if (rel is None or os.path.isabs(rel) or rel == os.pardir
+                    or rel.startswith(os.pardir + os.sep)):
                 return "render_check refused: only files inside the project can be rendered here."
             target = "/workspace/" + rel.replace(os.sep, "/")
         try:

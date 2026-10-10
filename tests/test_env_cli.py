@@ -9,6 +9,7 @@ create, the exit code of exec, and that only --all / --all-owners reach other pe
 environments."""
 import pathlib
 import re
+import shlex
 import types
 
 import pytest
@@ -70,7 +71,21 @@ def test_exec_passes_the_command_and_its_exit_code(mgr):
     res = CliRunner().invoke(env_cmd.app, ["exec", "0a1b2c3d", "--", "python3", "-c", "print(1)"])
     assert res.exit_code == 3 and "out" in res.output
     name, args, kw = mgr.calls[-1]
-    assert args == ("scope-owner", "0a1b2c3d", "python3 -c print(1)")
+    assert args == ("scope-owner", "0a1b2c3d", "python3 -c 'print(1)'")
+
+
+def test_exec_keeps_each_word_whole_and_one_word_is_a_shell_line(mgr):
+    """MUTATION: join the words with spaces again - red: `print('a b')` reached sh as
+    two words and python3 saw a syntax error."""
+    r = CliRunner()
+    r.invoke(env_cmd.app, ["exec", "0a1b2c3d", "--", "python3", "-c", "print('a b')"])
+    command = mgr.calls[-1][1][2]
+    assert shlex.split(command) == ["python3", "-c", "print('a b')"]
+    r.invoke(env_cmd.app, ["exec", "0a1b2c3d", "--background", "--", "node", "my server.js"])
+    assert mgr.calls[-1][0] == "start_process"
+    assert shlex.split(mgr.calls[-1][1][2]) == ["node", "my server.js"]
+    r.invoke(env_cmd.app, ["exec", "0a1b2c3d", "--", "pip install x && pytest -q"])
+    assert mgr.calls[-1][1][2] == "pip install x && pytest -q"
 
 
 def test_only_the_flags_reach_other_peoples_environments(mgr):

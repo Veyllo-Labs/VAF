@@ -85,6 +85,18 @@ def create(
         UI.warning(env.degraded)
 
 
+def _command_line(args) -> str:
+    """The shell line the environment runs. Joining the words with spaces lost their
+    boundaries: `python3 -c "print('a b')"` arrived as `python3 -c print('a b')`. Each word
+    is quoted for the container's sh (POSIX, whatever the host is); one word alone is
+    taken as the line the person wrote, so pipes and `&&` keep working."""
+    import shlex
+    words = [str(a) for a in args]
+    if len(words) == 1:
+        return words[0].strip()
+    return shlex.join(words).strip()
+
+
 @app.command("exec", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def exec_cmd(
     ctx: typer.Context,
@@ -92,9 +104,13 @@ def exec_cmd(
     timeout: int = typer.Option(600, "--timeout", help="Seconds the command may run"),
     background: bool = typer.Option(False, "--background", help="Keep it running and return its id"),
 ):
-    """Run a command in an environment: vaf env exec ID -- COMMAND ..."""
+    """Run a command in an environment: vaf env exec ID -- COMMAND ...
+
+    Several words are one command with its arguments, each kept whole
+    (`-- python3 -c "print('a b')"`); a single quoted word is a shell line
+    (`-- "pip install -r requirements.txt && pytest"`)."""
     from vaf.core.environments import EnvironmentRefused
-    command = " ".join(ctx.args).strip()
+    command = _command_line(ctx.args)
     if not command:
         UI.error("No command. Example: vaf env exec ID -- python3 --version")
         raise typer.Exit(2)

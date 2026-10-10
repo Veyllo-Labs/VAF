@@ -2497,7 +2497,7 @@
   },
   "sandboxEnv": {
     "title": "Sandbox environments",
-    "intro": "Containers where your agent runs code, installs packages and tests, without touching this computer. Only you see and use your environments.",
+    "intro": "Containers where your agent runs code, installs packages and tests. The code runs inside the container, but a project folder mounted into it and files copied in or out are real files on this computer. Only you can work in your environments; administrators can also see, stop and delete them.",
     "none": "No environment yet. The agent creates one when a task needs it.",
     "dockerUnavailable": "Docker is not running, so there are no environments right now.",
     "unavailable": "Not available: {reason}",
@@ -2516,7 +2516,9 @@
     "processes": "{count, plural, one {# process running} other {# processes running}}",
     "owner": "account {owner}",
     "showAll": "All accounts",
-    "failed": "That did not work."
+    "failed": "That did not work.",
+    "loadFailed": "The sandbox environments could not be loaded.",
+    "retry": "Try again"
   },
   "grants": {
     "title": "Standing grants",

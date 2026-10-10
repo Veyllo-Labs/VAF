@@ -3,7 +3,7 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Box, Square, Trash2 } from 'lucide-react';
 
@@ -34,6 +34,8 @@ interface Overview {
     environments: Environment[];
     processes: Process[];
     is_admin: boolean;
+    /** Whether this list is everybody's: the actions on its rows ask with the same scope. */
+    all: boolean;
 }
 
 /**
@@ -51,13 +53,23 @@ export default function SandboxSection() {
     const [confirming, setConfirming] = useState<string | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
     const [note, setNote] = useState<string | null>(null);
+    const [loadFailed, setLoadFailed] = useState(false);
+    // Only the latest request may write: a slow answer for the other "All accounts"
+    // setting would otherwise show one list while the checkbox says the other.
+    const latest = useRef(0);
 
     const load = useCallback(async () => {
+        const seq = ++latest.current;
         try {
             const res = await fetch(`${apiBase}/api/sandbox${everyone ? '?all=1' : ''}`, { credentials: 'include' });
-            if (!res.ok) { setData(null); return; }
-            setData(await res.json());
-        } catch { /* a section that cannot be fetched stays as it was */ }
+            const body = res.ok ? await res.json() : null;
+            if (seq !== latest.current) return;
+            if (!body) { setLoadFailed(true); return; }
+            setData({ ...body, all: everyone });
+            setLoadFailed(false);
+        } catch {
+            if (seq === latest.current) setLoadFailed(true);
+        }
     }, [apiBase, everyone]);
 
     useEffect(() => { void load(); }, [load]);
@@ -68,7 +80,7 @@ export default function SandboxSection() {
         setBusy(env.id);
         setNote(null);
         try {
-            const url = `${apiBase}/api/sandbox/${encodeURIComponent(env.id)}${action === 'stop' ? '/stop' : ''}${everyone ? '?all=1' : ''}`;
+            const url = `${apiBase}/api/sandbox/${encodeURIComponent(env.id)}${action === 'stop' ? '/stop' : ''}${data?.all ? '?all=1' : ''}`;
             const res = await fetch(url, { method: action === 'stop' ? 'POST' : 'DELETE', credentials: 'include' });
             if (!res.ok) {
                 const body = await res.json().catch(() => ({}));
@@ -83,7 +95,7 @@ export default function SandboxSection() {
         void load();
     };
 
-    if (!data) return null;
+    if (!data && !loadFailed) return null;
     const kindLabel = (k: Environment['kind']) =>
         k === 'project' ? t('kindProject') : k === 'scratch' ? t('kindScratch') : t('kindTemporary');
     const networkLabel = (n: Environment['network']) =>
@@ -95,7 +107,7 @@ export default function SandboxSection() {
         <div className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 mt-6">
             <div className="flex items-start justify-between gap-3 mb-2">
                 <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">{t('title')}</h3>
-                {data.is_admin && (
+                {data?.is_admin && (
                     <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none">
                         <input type="checkbox" checked={everyone} onChange={e => setEveryone(e.target.checked)} />
                         {t('showAll')}
@@ -103,7 +115,16 @@ export default function SandboxSection() {
                 )}
             </div>
             <p className="text-xs text-gray-600 mb-4">{t('intro')}</p>
-            {!data.available ? (
+            {loadFailed && (
+                <div className="flex items-center gap-3 mb-2">
+                    <p className="text-sm text-red-600">{t('loadFailed')}</p>
+                    <button type="button" onClick={() => void load()}
+                        className="px-2 py-1 text-xs font-medium rounded-md border border-gray-200 text-gray-700 hover:bg-gray-100">
+                        {t('retry')}
+                    </button>
+                </div>
+            )}
+            {!data ? null : !data.available ? (
                 <p className="text-sm text-gray-500">
                     {data.reason === 'docker_unavailable' ? t('dockerUnavailable') : t('unavailable', { reason: data.reason || '' })}
                 </p>
@@ -150,7 +171,7 @@ export default function SandboxSection() {
                                     {env.project_path && <span className="font-mono min-w-0 truncate" title={env.project_path}>{env.project_path}</span>}
                                     {left !== null && <span>{t('expiresIn', { hours: left })}</span>}
                                     {procs.length > 0 && <span>{t('processes', { count: procs.length })}</span>}
-                                    {everyone && env.owner && <span className="font-mono">{t('owner', { owner: env.owner })}</span>}
+                                    {data.all && env.owner && <span className="font-mono">{t('owner', { owner: env.owner })}</span>}
                                 </div>
                                 {env.degraded && <p className="mt-1 pl-7 text-xs text-amber-700">{env.degraded}</p>}
                             </li>

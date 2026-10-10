@@ -225,6 +225,22 @@ def test_the_quit_cancels_the_start_before_it_looks_at_the_stack():
     assert "stop_known_instances()" in quit_fn, "the quit no longer stops the pool's browsers"
 
 
+def test_the_quit_stops_environments_beside_the_browsers_not_behind_them():
+    """Both are `docker run` containers compose stop never sees. MUTATION: call
+    stop_all_at_quit at the end of _stop_browsers again - red: the environments started
+    only after the browsers used up their budget, and os._exit cut them off."""
+    src = (REPO / "vaf" / "tray.py").read_text(encoding="utf-8")
+    quit_fn = src[src.index("def quit_app("):]
+    browsers_fn = quit_fn[quit_fn.index("def _stop_browsers("):quit_fn.index("def _stop_environments(")]
+    assert "stop_all_at_quit" not in browsers_fn
+    env_fn = quit_fn[quit_fn.index("def _stop_environments("):quit_fn.index("browsers = threading.Thread(")]
+    assert "stop_all_at_quit()" in env_fn
+    start = quit_fn.index("environments.start()")
+    assert start < quit_fn.index("stop_memory_stack(still_ours=")
+    assert "for worker in (browsers, environments):" in quit_fn
+    assert "worker.join(timeout=max(0.0, 18.0 - (time.monotonic() - quit_began)))" in quit_fn
+
+
 @pytest.mark.parametrize("found,expected", [(None, True), ("self", True), (4242, False)])
 def test_the_second_pass_referee_asks_for_another_instance(monkeypatch, found, expected):
     import vaf.core.instance as instance

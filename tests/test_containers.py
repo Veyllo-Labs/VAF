@@ -50,6 +50,33 @@ def test_docker_resolves_the_binary_and_opens_no_window_on_windows(monkeypatch):
     assert "creationflags" not in seen["kw"]
 
 
+def test_docker_text_is_utf8_whatever_the_locale(monkeypatch):
+    """A Windows client decodes captured text with the locale's code page (cp1252) and
+    raises on a byte it does not define; a container speaks UTF-8. MUTATION: back to
+    text=True for either call - red."""
+    seen = {}
+
+    def _run(argv, **kw):
+        seen["run"] = kw
+        return _done()
+
+    def _popen(argv, **kw):
+        seen["popen"] = kw
+        return _Proc(("done", 0, "", ""))
+
+    import vaf.core.service_stack as stack
+    monkeypatch.setattr(stack, "resolve_docker_exe", lambda: "docker")
+    monkeypatch.setattr(containers.subprocess, "run", _run)
+    monkeypatch.setattr(containers, "_popen", _popen)
+    containers.docker(["ps"])
+    assert (seen["run"]["encoding"], seen["run"]["errors"]) == ("utf-8", "replace")
+    assert "text" not in seen["run"]
+    containers.docker(["exec", "c", "tar", "-cf", "-", "x"], binary=True)
+    assert "encoding" not in seen["run"] and "text" not in seen["run"]   # a tar stream stays bytes
+    containers.exec_bounded("c", ["true"], timeout=5, workdir="/tmp", run_id="r1")
+    assert (seen["popen"]["encoding"], seen["popen"]["errors"]) == ("utf-8", "replace")
+
+
 def test_container_state_and_running_count(monkeypatch):
     answers = {
         ("inspect", "a"): _done(0, "running\n"),

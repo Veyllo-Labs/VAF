@@ -91,6 +91,41 @@ def test_bash_runs_in_the_environment_and_starts_dev_servers_there(monkeypatch):
     stopped = [c for c in rec.calls if c[0] == "stop_process"]
     assert len(stopped) == 1 and stopped[0][1] == "scope-alice"
     assert len(kept) == 1 and kept[0] not in stopped[0][2]
+    # Asked again (the run's wrapper on its way out): nothing more is stopped.
+    assert tool.stop_unkept() == kept
+    assert len([c for c in rec.calls if c[0] == "stop_process"]) == 1
+
+
+def test_background_processes_end_on_every_exit_of_the_run():
+    """run() has many early returns and can raise; the summary at its end was the only
+    place that stopped a run's dev servers. MUTATION: drop the decorator from
+    CodingAgentTool.run - red."""
+    from vaf.tools import coder
+    wrapper_code = coder._ends_background_with_the_run(lambda self, **kw: None).__code__
+    assert coder.CodingAgentTool.run.__code__ is wrapper_code
+
+    asked = []
+
+    class _Bash:
+        def stop_unkept(self):
+            asked.append(self)
+            return []
+
+    class _Run:
+        def __init__(self, bind):
+            self.bind = bind
+            self.local_tools = {"bash": _Bash()}         # an earlier run's tool
+
+        @coder._ends_background_with_the_run
+        def run(self, **kwargs):
+            if self.bind:
+                self.local_tools = {"bash": _Bash()}
+            raise RuntimeError("the provider kept failing")
+
+    for bind in (True, False):
+        with pytest.raises(RuntimeError):
+            _Run(bind).run(task="x")
+    assert len(asked) == 1        # only the tool the raising run bound; never a leftover
 
 
 def test_bash_without_an_environment_keeps_the_jail(monkeypatch):

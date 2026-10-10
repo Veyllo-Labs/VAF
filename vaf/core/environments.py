@@ -367,8 +367,12 @@ class EnvironmentManager:
             f"{LABEL}.created": str(int(env.created)),
         }
 
-    def _docker_rows(self, owner_hash: Optional[str] = None) -> List[Dict[str, str]]:
-        """Every environment container docker knows, optionally one owner's."""
+    def _docker_rows(self, owner_hash: Optional[str] = None, *,
+                     strict: bool = False) -> List[Dict[str, str]]:
+        """Every environment container docker knows, optionally one owner's. A docker
+        that does not answer reads as none, except with `strict`, which raises instead:
+        the reaper must not take an outage for an empty machine and clear every record
+        as an orphan."""
         args = ["ps", "-a", "--filter", f"label={LABEL}=1"]
         if owner_hash:
             args += ["--filter", f"label={LABEL}.owner={owner_hash}"]
@@ -377,6 +381,9 @@ class EnvironmentManager:
                  "{{.Label \"" + LABEL + ".network\"}}"]
         r = containers.docker(args, timeout=30)
         if r.returncode != 0:
+            if strict:
+                raise EnvironmentRefused(f"docker did not list the environments: "
+                                         f"{(r.stderr or '').strip()[:200]}")
             return []
         rows = []
         for line in (r.stdout or "").splitlines():
@@ -671,6 +678,9 @@ class EnvironmentManager:
         r = containers.docker(args, timeout=120, env=env_values)
         if r.returncode != 0:
             raise EnvironmentRefused(f"the proxy could not be started: {(r.stderr or '').strip()[:200]}")
+        # A new proxy container sits on none of the registries networks the old one had
+        # joined: every other registries environment would lose its package access.
+        self._reconnect_registries()
 
     def _attach_proxy(self, env: Environment) -> None:
         self._ensure_proxy()
@@ -1193,7 +1203,7 @@ class EnvironmentManager:
         now = time.time() if now is None else now
         summary = {"removed": 0, "stopped": 0, "orphans": 0}
         try:
-            rows = self._docker_rows()
+            rows = self._docker_rows(strict=True)
         except Exception:
             return summary
         seen = set()
@@ -1234,6 +1244,11 @@ class EnvironmentManager:
         try:
             for f in self._state_dir().glob("*.json"):
                 env_id = f.stem
+                # `<id>.procs.json` is the process record of an environment, not an
+                # environment: its stem never matches an id, and treating it as one
+                # deleted every live environment's process records on each pass.
+                if f.name.endswith(".procs.json") or not _ID_RE.match(env_id):
+                    continue
                 if env_id in live_ids:
                     continue
                 st = self._read_state(env_id) or {}

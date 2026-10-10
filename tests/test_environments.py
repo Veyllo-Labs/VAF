@@ -406,6 +406,46 @@ def test_the_reaper_clears_orphans_from_a_crash(docker, mgr):
     assert not docker.volumes and "vaf-env-net-dead0001" not in docker.networks
 
 
+def test_the_reaper_keeps_the_process_records_of_live_environments(docker, mgr):
+    """`<id>.procs.json` sits next to the state files. MUTATION: drop the skip in
+    _clear_orphans - red: its stem matched no container, so every pass deleted the record
+    of a running dev server, and with it the wake turn and host_process's handle."""
+    env = mgr.create(ALICE)
+    mgr._write_procs(env.id, {"p0000abcd": {"command": "npm run dev", "session_id": "s1"}})
+    mgr.reap_once()
+    assert mgr._read_procs(env.id) == {"p0000abcd": {"command": "npm run dev", "session_id": "s1"}}
+    assert mgr._read_state(env.id) is not None
+
+
+def test_a_docker_that_does_not_answer_clears_nothing(docker, mgr, monkeypatch):
+    """MUTATION: let reap_once read a failed listing as an empty one - red: during a
+    docker outage every record older than ten minutes was cleared as an orphan."""
+    env = mgr.create(ALICE)
+    env.created = 1.0
+    mgr._write_state(env)
+
+    def _down(args, timeout=60, **kw):
+        if args[0] == "ps":
+            return _done(1, "", "Cannot connect to the Docker daemon")
+        return docker(args, timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _down)
+    assert mgr.reap_once() == {"removed": 0, "stopped": 0, "orphans": 0}
+    assert mgr._read_state(env.id) is not None and env.volume in docker.volumes
+    assert mgr.list(ALICE) == []                    # an ordinary listing still reads it as none
+
+
+def test_a_recreated_proxy_rejoins_every_registries_network(docker, mgr, monkeypatch):
+    """The allowed hosts changed, so the proxy is recreated for the second environment.
+    MUTATION: drop _reconnect_registries from _ensure_proxy - red: the first environment
+    keeps no route to its package registries."""
+    first = mgr.create(ALICE, network="registries")
+    monkeypatch.setenv("VAF_SANDBOX_ENV_REGISTRY_HOSTS", "pypi.org")
+    second = mgr.create(BOB, network="registries")
+    nets = docker.containers[envmod.PROXY_CONTAINER]["networks"]
+    assert {first.net, second.net, envmod.PROXY_NETWORK} <= nets
+
+
 def test_busy_is_asked_of_docker_and_unknown_counts_as_busy(docker, mgr, monkeypatch):
     env = mgr.create(ALICE)
     env.state = "running"

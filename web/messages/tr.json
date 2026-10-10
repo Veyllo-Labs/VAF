@@ -2497,7 +2497,7 @@
   },
   "sandboxEnv": {
     "title": "Sandbox ortamları",
-    "intro": "Ajanının bu bilgisayara dokunmadan kod çalıştırdığı, paket kurduğu ve test ettiği konteynerler. Ortamlarını yalnızca sen görür ve kullanırsın.",
+    "intro": "Ajanının kod çalıştırdığı, paket kurduğu ve test ettiği konteynerler. Kod konteynerin içinde çalışır, ancak içine bağlanan bir proje klasörü ve içeri ya da dışarı kopyalanan dosyalar bu bilgisayardaki gerçek dosyalardır. Ortamlarında yalnızca sen çalışabilirsin, ancak yöneticiler de onları görebilir, durdurabilir ve silebilir.",
     "none": "Henüz ortam yok. Bir görev gerektirdiğinde ajan bir tane oluşturur.",
     "dockerUnavailable": "Docker çalışmıyor, bu yüzden şu anda ortam yok.",
     "unavailable": "Kullanılamıyor: {reason}",
@@ -2516,7 +2516,9 @@
     "processes": "{count, plural, one {# işlem çalışıyor} other {# işlem çalışıyor}}",
     "owner": "hesap {owner}",
     "showAll": "Tüm hesaplar",
-    "failed": "Bu işe yaramadı."
+    "failed": "Bu işe yaramadı.",
+    "loadFailed": "Sandbox ortamları yüklenemedi.",
+    "retry": "Tekrar dene"
   },
   "grants": {
     "title": "Kalıcı izinler",

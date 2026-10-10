@@ -43,15 +43,19 @@ def windowless_kwargs() -> dict:
 def docker(args: List[str], timeout: float = 60, *, input=None,
            env: Optional[Dict[str, str]] = None, binary: bool = False) -> subprocess.CompletedProcess:
     """One docker CLI call, captured as text (bytes with `binary`, for a tar stream).
-    The single seam the tests stub.
+    The single seam the tests stub. Text is UTF-8 whatever the host's locale is - a
+    Windows client would otherwise decode a container's output as cp1252 and fail on
+    the first byte that code page does not define - and an undecodable byte becomes
+    U+FFFD instead of an exception.
 
     `env` replaces the client's environment: it is how a value reaches a container
     without appearing on any command line (`docker exec -e NAME` takes the value from
     the client's environment). Raises what subprocess raises (FileNotFoundError when
     there is no docker, TimeoutExpired); callers decide what a failure means."""
     from vaf.core.service_stack import resolve_docker_exe
-    return subprocess.run([resolve_docker_exe(), *args], capture_output=True, text=not binary,
-                          timeout=timeout, input=input, env=env, **windowless_kwargs())
+    text = {} if binary else {"encoding": "utf-8", "errors": "replace"}
+    return subprocess.run([resolve_docker_exe(), *args], capture_output=True,
+                          timeout=timeout, input=input, env=env, **text, **windowless_kwargs())
 
 
 def scope_hash(scope: str) -> str:
@@ -206,7 +210,8 @@ def exec_bounded(container: str, argv: List[str], *, timeout: float, workdir: st
     cmd += [container, "timeout", "-s", "KILL", str(seconds), *argv]
     try:
         proc = _popen(cmd, stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
-                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                      encoding="utf-8", errors="replace",
                       env=({**os.environ, **env_values} if env_values else None),
                       **windowless_kwargs())
     except Exception as e:

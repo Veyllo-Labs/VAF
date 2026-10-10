@@ -1274,18 +1274,25 @@ def quit_app(icon=None, item=None):
                     stop_known_instances()
                 except Exception as e:
                     print(f"Error stopping browser instances: {e}")
-                # The sandbox environments are `docker run` containers too, invisible
-                # to compose stop; one still running keeps its memory for days. A busy
-                # one (a `vaf env exec` in another terminal) is left running.
+
+            # The sandbox environments are `docker run` containers too, invisible to
+            # compose stop; one still running keeps its memory for days. A busy one (a
+            # `vaf env exec` in another terminal) is left running. A thread of their
+            # own: behind the browsers they would start only after those used up their
+            # budget, and the os._exit below would cut them off.
+            def _stop_environments():
                 try:
                     from vaf.core.environments import get_environment_manager
                     get_environment_manager().stop_all_at_quit()
                 except Exception as e:
                     print(f"Error stopping sandbox environments: {e}")
             browsers = threading.Thread(target=_stop_browsers, daemon=True)
+            environments = threading.Thread(target=_stop_environments, daemon=True)
             browsers.start()
+            environments.start()
             stop_memory_stack(still_ours=_no_other_instance_serves)
-            browsers.join(timeout=max(0.0, 18.0 - (time.monotonic() - quit_began)))
+            for worker in (browsers, environments):
+                worker.join(timeout=max(0.0, 18.0 - (time.monotonic() - quit_began)))
         except Exception as e:
             print(f"Error stopping memory stack: {e}")
     docker_stop = threading.Thread(target=_stop_docker, daemon=True)

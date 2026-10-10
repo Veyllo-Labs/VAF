@@ -2497,7 +2497,7 @@
   },
   "sandboxEnv": {
     "title": "Sandbox-Umgebungen",
-    "intro": "Container, in denen dein Agent Code ausführt, Pakete installiert und testet, ohne diesen Computer anzufassen. Nur du siehst und nutzt deine Umgebungen.",
+    "intro": "Container, in denen dein Agent Code ausführt, Pakete installiert und testet. Der Code läuft im Container. Ein eingebundener Projektordner und hinein- oder herauskopierte Dateien sind aber echte Dateien auf diesem Computer. Nur du kannst in deinen Umgebungen arbeiten, Admins können sie aber sehen, stoppen und löschen.",
     "none": "Noch keine Umgebung. Der Agent legt eine an, wenn eine Aufgabe sie braucht.",
     "dockerUnavailable": "Docker läuft nicht, deshalb gibt es gerade keine Umgebungen.",
     "unavailable": "Nicht verfügbar: {reason}",
@@ -2516,7 +2516,9 @@
     "processes": "{count, plural, one {# Prozess läuft} other {# Prozesse laufen}}",
     "owner": "Konto {owner}",
     "showAll": "Alle Konten",
-    "failed": "Das hat nicht geklappt."
+    "failed": "Das hat nicht geklappt.",
+    "loadFailed": "Die Sandbox-Umgebungen konnten nicht geladen werden.",
+    "retry": "Erneut versuchen"
   },
   "grants": {
     "title": "Dauerhafte Freigaben",

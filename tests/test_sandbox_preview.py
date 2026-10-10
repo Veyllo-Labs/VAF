@@ -94,6 +94,41 @@ def test_the_coders_render_check_maps_project_files_and_refuses_the_rest(monkeyp
     assert seen == [("scope-alice", "0a1b2c3d", "/workspace/dist/index.html"),
                     ("scope-alice", "0a1b2c3d", "http://localhost:5173/")]
     assert "only files inside the project" in tool.run(target="../secrets.html")
+    assert "only files inside the project" in tool.run(target="..")
+
+
+def test_a_file_named_with_two_dots_is_still_in_the_project(monkeypatch, tmp_path):
+    """MUTATION: back to rel.startswith("..") - red: `..draft.html` was refused as a climb."""
+    from vaf.tools.render_check import RenderCheckTool
+    seen = []
+
+    class _M:
+        def render(self, owner, env_id, target, wait_ms=1500):
+            seen.append(target)
+            return {"ok": False, "error": "stop"}
+
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: _M())
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    tool = RenderCheckTool(str(proj), environment=types.SimpleNamespace(id="0a1b2c3d"),
+                           owner_scope="scope-alice")
+    assert "only files inside" not in tool.run(target="..draft.html")
+    assert seen == ["/workspace/..draft.html"]
+
+
+def test_a_path_on_another_drive_is_refused_not_raised(monkeypatch, tmp_path):
+    """os.path.relpath raises ValueError across Windows drives. MUTATION: drop the
+    except - red: the tool raised instead of refusing."""
+    from vaf.tools import render_check as rc
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: None)
+
+    def _other_drive(path, start=None):
+        raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+    monkeypatch.setattr(rc.os.path, "relpath", _other_drive)
+    tool = rc.RenderCheckTool(str(tmp_path), environment=types.SimpleNamespace(id="0a1b2c3d"),
+                              owner_scope="scope-alice")
+    assert "only files inside the project" in tool.run(target="D:/elsewhere/page.html")
 
 
 def test_sandbox_preview_reports_like_render_check(mgr, monkeypatch, tmp_path):

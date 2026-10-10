@@ -2493,6 +2493,7 @@
     "trustPinned": "Gemerktes Zertifikat",
     "trustNone": "Nicht verschlüsselt",
     "forget": "Entfernen; die nächste Verbindung fragt wieder",
+    "confirmForget": "Wirklich entfernen?",
     "failed": "Das hat nicht geklappt.",
     "loadFailed": "Die FTP-Server konnten nicht geladen werden.",
     "retry": "Erneut versuchen"
@@ -2510,6 +2511,7 @@
     "servers": "Von dir bestätigte Server",
     "noServers": "Noch keine.",
     "forget": "Entfernen; die nächste Verbindung fragt wieder",
+    "confirmForget": "Wirklich entfernen?",
     "failed": "Das hat nicht geklappt."
   },
   "sandboxEnv": {

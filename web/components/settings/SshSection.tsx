@@ -35,12 +35,18 @@ export default function SshSection() {
     const [data, setData] = useState<Overview | null>(null);
     const [busy, setBusy] = useState(false);
     const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+    // Removing loses the remembered host key, and the next connection trusts whatever the
+    // server then shows: so the first click asks, the second removes (as SandboxSection does).
+    const [confirming, setConfirming] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         try {
             const res = await fetch(`${apiBase}/api/ssh`, { credentials: 'include' });
             if (!res.ok) { setData(null); return; }
-            setData(await res.json());
+            const body: Overview = await res.json();
+            setData(body);
+            // A confirmation whose server is gone (removed elsewhere) is dropped.
+            setConfirming(c => (c && (body.hosts ?? []).some(h => h.host === c) ? c : null));
         } catch { /* a section that cannot be fetched stays as it was */ }
     }, [apiBase]);
 
@@ -68,6 +74,8 @@ export default function SshSection() {
     };
 
     const forget = async (host: Host) => {
+        if (confirming !== host.host) { setConfirming(host.host); return; }
+        setConfirming(null);
         setNote(null);
         try {
             const res = await fetch(`${apiBase}/api/ssh/hosts/${encodeURIComponent(host.host)}`,
@@ -121,10 +129,17 @@ export default function SshSection() {
                                     <Server className="w-4 h-4 text-gray-500 shrink-0" />
                                     <span className="text-sm font-mono text-gray-800 min-w-0 truncate">{h.host}</span>
                                     <span className="text-xs font-mono text-gray-500 flex-1 min-w-0 truncate" title={`${h.type} ${h.fingerprint}`}>{h.fingerprint}</span>
-                                    <button type="button" onClick={() => void forget(h)} title={t('forget')} aria-label={t('forget')}
-                                        className="p-1.5 rounded-md text-gray-500 hover:text-red-600 hover:bg-gray-100">
-                                        <Trash2 className="w-4 h-4" />
-                                    </button>
+                                    {confirming === h.host ? (
+                                        <button type="button" onClick={() => void forget(h)}
+                                            className="px-2 py-1 text-xs font-medium rounded-md bg-red-600 hover:bg-red-700 text-white shrink-0 whitespace-nowrap">
+                                            {t('confirmForget')}
+                                        </button>
+                                    ) : (
+                                        <button type="button" onClick={() => void forget(h)} title={t('forget')} aria-label={t('forget')}
+                                            className="p-1.5 rounded-md text-gray-500 hover:text-red-600 hover:bg-gray-100">
+                                            <Trash2 className="w-4 h-4" />
+                                        </button>
+                                    )}
                                 </li>
                             ))}
                         </ul>

@@ -2493,6 +2493,7 @@
     "trustPinned": "기억된 인증서",
     "trustNone": "암호화되지 않음",
     "forget": "제거하면 다음 연결 때 다시 확인합니다",
+    "confirmForget": "정말 제거할까요?",
     "failed": "실패했습니다.",
     "loadFailed": "FTP 서버를 불러오지 못했습니다.",
     "retry": "다시 시도"
@@ -2510,6 +2511,7 @@
     "servers": "확인한 서버",
     "noServers": "아직 없어요.",
     "forget": "삭제 (다음 연결 때 다시 물어봐요)",
+    "confirmForget": "정말 삭제할까요?",
     "failed": "실패했어요."
   },
   "sandboxEnv": {

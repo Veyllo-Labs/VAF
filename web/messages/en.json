@@ -2493,6 +2493,7 @@
     "trustPinned": "Remembered certificate",
     "trustNone": "Not encrypted",
     "forget": "Remove; the next connection asks again",
+    "confirmForget": "Really remove?",
     "failed": "That did not work.",
     "loadFailed": "The FTP servers could not be loaded.",
     "retry": "Try again"
@@ -2510,6 +2511,7 @@
     "servers": "Servers you confirmed",
     "noServers": "None yet.",
     "forget": "Remove; the next connection asks again",
+    "confirmForget": "Really remove?",
     "failed": "That did not work."
   },
   "sandboxEnv": {

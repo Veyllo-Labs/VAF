@@ -2493,6 +2493,7 @@
     "trustPinned": "記憶した証明書",
     "trustNone": "暗号化なし",
     "forget": "削除（次回の接続で再確認）",
+    "confirmForget": "本当に削除しますか？",
     "failed": "うまくいきませんでした。",
     "loadFailed": "FTPサーバーを読み込めませんでした。",
     "retry": "再試行"
@@ -2510,6 +2511,7 @@
     "servers": "確認済みのサーバー",
     "noServers": "まだありません。",
     "forget": "削除（次の接続でまた確認します）",
+    "confirmForget": "本当に削除しますか？",
     "failed": "うまくいきませんでした。"
   },
   "sandboxEnv": {

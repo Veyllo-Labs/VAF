@@ -236,3 +236,30 @@ def test_the_settings_route_lists_and_removes_a_server(lab, _resolver_restored):
     assert client.delete(f"/api/ftp/servers/{name}").json() == {"deleted": True}
     assert client.get("/api/ftp").json()["servers"] == []
     assert client.delete(f"/api/ftp/servers/{name}").status_code == 404
+
+
+def test_an_upload_of_nothing_is_refused_before_any_connection(lab):
+    """A missing local file reached the server first (and, the first time, remembered it).
+    MUTATION: drop the check before connect - red: the stub saw a connection."""
+    tmp, root, server = lab
+    out = _tool(server, action="upload", local_path=str(tmp / "missing.html"),
+                remote_path="htdocs/x.html", _call_confirmed=True)
+    assert out.startswith("Error:") and "not a file or a folder" in out
+    assert server.connections == 0
+
+
+def test_a_remembered_server_is_removed_only_on_the_second_click():
+    """Removing loses the pinned certificate or host key, and the next connection trusts what
+    the server then shows. MUTATION: drop the confirming step in either section - red."""
+    import json
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    for name, key in (("FtpSection.tsx", "server.name"), ("SshSection.tsx", "host.host")):
+        src = (root / "web" / "components" / "settings" / name).read_text(encoding="utf-8")
+        forget = src[src.index("const forget = async"):]
+        assert forget.index(f"if (confirming !== {key}) {{ setConfirming({key}); return; }}") \
+            < forget.index("method: 'DELETE'"), name
+        assert "t('confirmForget')" in src, name
+    for loc in ("en", "de", "ja", "zh", "ko", "th", "tr"):
+        cat = json.loads((root / "web" / "messages" / f"{loc}.json").read_text(encoding="utf-8"))
+        assert cat["ftp"]["confirmForget"] and cat["ssh"]["confirmForget"], loc

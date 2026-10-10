@@ -99,7 +99,8 @@ stores the password with `store_credential` and passes only its NAME (`login_cre
   public key to the server's `authorized_keys` once; a hoster's panel usually has a field for
   it as well. **Settings, Connections, SSH** (and `vaf ssh key`) show the public key;
   `vaf ssh hosts` and `vaf ssh forget HOST` list and remove confirmed servers, as the
-  settings section does.
+  settings section does (its remove button asks once more: the remembered host key goes with
+  the server, and the next connection trusts whatever key the server then shows).
 - **Confirmed in the chat, like `host_bash`.** A trusted folder does not silence it (a server
   is in no folder), and "always" stores only the tool. Not over Telegram, WhatsApp or
   Discord. A regular account gets it only when its tool allowlist names it.
@@ -151,8 +152,9 @@ web123@ftp.example.org, the password is ..."; the agent stores the password with
   they already confirmed. Over FTP the login folder itself (`/`) may be the target, because on
   many web spaces that folder is the site.
 - **Removing a server.** Settings, Connections, FTP (and `vaf ftp servers`) lists the
-  confirmed servers and how each one's certificate is trusted; the remove button (or
-  `vaf ftp forget ftps://HOST`) removes one, and the next connection asks again.
+  confirmed servers and how each one's certificate is trusted; the remove button (on its
+  second click, since a remembered certificate goes with the server) or
+  `vaf ftp forget ftps://HOST` removes one, and the next connection asks again.
 - **Named boundaries.** The first connection trusts the server the person confirms (compare
   the fingerprint with the hoster's panel if you can). Implicit FTPS (port 990) is not
   offered; every hoster measured offers explicit TLS on port 21. An upload adds and

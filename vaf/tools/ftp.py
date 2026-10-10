@@ -156,6 +156,10 @@ class FtpTool(BaseTool):
                 local = transfer_local_path(kwargs, download=(action == "download"))
             except ValueError as e:
                 return f"Error: {e}"
+            # Before connecting: a missing local file is no reason to reach (and, the first
+            # time, remember) a server.
+            if action == "upload" and not (local.is_file() or local.is_dir()):
+                return f"Error: {local} is not a file or a folder."
 
         try:
             seconds = min(max(10, int(kwargs.get("timeout") or 300)), MAX_TIMEOUT_SECONDS)

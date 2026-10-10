@@ -2493,6 +2493,7 @@
     "trustPinned": "Hatırlanan sertifika",
     "trustNone": "Şifrelenmemiş",
     "forget": "Kaldır; sonraki bağlantı yeniden sorar",
+    "confirmForget": "Gerçekten kaldırılsın mı?",
     "failed": "Bu işe yaramadı.",
     "loadFailed": "FTP sunucuları yüklenemedi.",
     "retry": "Tekrar dene"
@@ -2510,6 +2511,7 @@
     "servers": "Onayladığın sunucular",
     "noServers": "Henüz yok.",
     "forget": "Kaldır; sonraki bağlantı yine sorar",
+    "confirmForget": "Gerçekten kaldırılsın mı?",
     "failed": "Bu işe yaramadı."
   },
   "sandboxEnv": {

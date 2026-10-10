@@ -55,6 +55,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Removing a confirmed SSH server in Settings asks once more.** One click on the bin removed
+  the server and its remembered host key at once, and the next connection then trusted
+  whatever key the server showed. Now the first click asks and the second removes; the FTP
+  servers in the same tab work the same way.
 - **The built-in browser gets its security updates again.** Once its image was older than
   two weeks, every VAF start rebuilt it with a fresh Chromium and then, seconds later, put
   the old one back, so the browser stayed on an engine three versions behind and each start

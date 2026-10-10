@@ -28,6 +28,9 @@ export default function FtpSection() {
     const [servers, setServers] = useState<FtpServer[] | null>(null);
     const [note, setNote] = useState<string | null>(null);
     const [loadFailed, setLoadFailed] = useState(false);
+    // Removing loses the remembered certificate, and the next connection trusts whatever the
+    // server then shows: so the first click asks, the second removes (as SandboxSection does).
+    const [confirming, setConfirming] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         try {
@@ -36,8 +39,11 @@ export default function FtpSection() {
             if (res.status === 403) { setServers(null); setLoadFailed(false); return; }
             if (!res.ok) { setLoadFailed(true); return; }
             const body = await res.json();
-            setServers(Array.isArray(body.servers) ? body.servers : []);
+            const list: FtpServer[] = Array.isArray(body.servers) ? body.servers : [];
+            setServers(list);
             setLoadFailed(false);
+            // A confirmation whose server is gone (removed elsewhere) is dropped.
+            setConfirming(c => (c && list.some(s => s.name === c) ? c : null));
         } catch {
             setLoadFailed(true);
         }
@@ -46,6 +52,8 @@ export default function FtpSection() {
     useEffect(() => { void load(); }, [load]);
 
     const forget = async (server: FtpServer) => {
+        if (confirming !== server.name) { setConfirming(server.name); return; }
+        setConfirming(null);
         setNote(null);
         try {
             const res = await fetch(`${apiBase}/api/ftp/servers/${encodeURIComponent(server.name)}`,
@@ -94,10 +102,17 @@ export default function FtpSection() {
                                     : 'border-gray-200 text-gray-600'}`}>
                                     {trustLabel(s)}
                                 </span>
-                                <button type="button" onClick={() => void forget(s)} title={t('forget')} aria-label={t('forget')}
-                                    className="p-1.5 rounded-md text-gray-500 hover:text-red-600 hover:bg-gray-100 shrink-0">
-                                    <Trash2 className="w-4 h-4" />
-                                </button>
+                                {confirming === s.name ? (
+                                    <button type="button" onClick={() => void forget(s)}
+                                        className="px-2 py-1 text-xs font-medium rounded-md bg-red-600 hover:bg-red-700 text-white shrink-0 whitespace-nowrap">
+                                        {t('confirmForget')}
+                                    </button>
+                                ) : (
+                                    <button type="button" onClick={() => void forget(s)} title={t('forget')} aria-label={t('forget')}
+                                        className="p-1.5 rounded-md text-gray-500 hover:text-red-600 hover:bg-gray-100 shrink-0">
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                )}
                             </div>
                             {s.fingerprint && (
                                 <p className="mt-1 pl-7 text-xs font-mono text-gray-500 truncate" title={s.fingerprint}>{s.fingerprint}</p>

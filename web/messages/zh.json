@@ -2493,6 +2493,7 @@
     "trustPinned": "已记住的证书",
     "trustNone": "未加密",
     "forget": "移除；下次连接时会重新询问",
+    "confirmForget": "确定移除？",
     "failed": "操作未成功。",
     "loadFailed": "无法加载 FTP 服务器。",
     "retry": "重试"
@@ -2510,6 +2511,7 @@
     "servers": "你确认过的服务器",
     "noServers": "还没有。",
     "forget": "移除（下次连接会再次询问）",
+    "confirmForget": "确定移除？",
     "failed": "没有成功。"
   },
   "sandboxEnv": {

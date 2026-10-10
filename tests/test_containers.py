@@ -257,6 +257,19 @@ def test_an_early_kill_is_not_a_timeout(monkeypatch):
     assert containers.exec_bounded("c", ["sleep", "99"], timeout=60, workdir="/", run_id="r5")[3] is True
 
 
+def test_the_backstop_kills_a_root_run_as_root(monkeypatch):
+    """The container's own user cannot kill root's processes. MUTATION: drop the user from
+    the marker kill - red: a stopped root apt-get kept running."""
+    import vaf.core.service_stack as stack
+    monkeypatch.setattr(stack, "resolve_docker_exe", lambda: "docker")
+    monkeypatch.setattr(containers, "_popen", lambda argv, **kw: _Proc("hang"))
+    kills = []
+    monkeypatch.setattr(containers, "docker", lambda args, timeout=60, **kw: kills.append(args) or _done())
+    containers.exec_bounded("env-c", ["apt-get", "update"], timeout=30, workdir="/", run_id="r8",
+                            check_stop=lambda: True, user="0:0")
+    assert kills[0][:4] == ["exec", "-u", "0:0", "env-c"]
+
+
 def test_the_in_container_clock_reads_as_a_timeout(monkeypatch):
     import vaf.core.service_stack as stack
     monkeypatch.setattr(stack, "resolve_docker_exe", lambda: "docker")

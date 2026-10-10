@@ -101,6 +101,22 @@ def test_a_docker_failure_is_unavailable_not_an_internal_error(monkeypatch):
     assert client.delete("/api/sandbox/missing").status_code == 404     # still a 404
 
 
+def test_a_listing_that_times_out_is_unavailable_not_an_internal_error(monkeypatch):
+    """MUTATION: drop the broad except in _overview - red: the section got a 500."""
+    client, mgr = _client(monkeypatch, "user")
+
+    def _timeout(*a, **k):
+        import subprocess
+        raise subprocess.TimeoutExpired(cmd="docker", timeout=30)
+
+    mgr.list = _timeout
+    r = client.get("/api/sandbox")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["available"] is False and body["reason"].startswith("sandbox unavailable")
+    assert body["environments"] == [] and body["processes"] == []
+
+
 def test_without_docker_the_section_says_so(monkeypatch):
     client, _ = _client(monkeypatch, "user")
     import vaf.core.service_stack as stack

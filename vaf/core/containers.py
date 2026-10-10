@@ -241,8 +241,11 @@ def exec_bounded(container: str, argv: List[str], *, timeout: float, workdir: st
             except Exception:
                 pass
             try:
-                docker(["exec", container, "sh", "-c", kill_marked_cmd("VAF_RUN_ID", run_id)],
-                       timeout=15)
+                # As the run's own user: a root run's processes cannot be killed by the
+                # container's unprivileged user.
+                as_user = ["-u", str(user)] if user else []
+                docker(["exec", *as_user, container, "sh", "-c",
+                        kill_marked_cmd("VAF_RUN_ID", run_id)], timeout=15)
             except Exception:
                 pass
             try:

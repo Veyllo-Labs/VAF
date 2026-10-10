@@ -118,6 +118,27 @@ def test_a_link_or_directory_from_docker_cp_is_removed_not_delivered(export_env,
     assert host_secret.read_text() == "private"
 
 
+def test_an_export_never_lands_on_a_folder_the_person_has(export_env, monkeypatch):
+    """docker cp copies INTO an existing folder, and the non-file check then removed that
+    folder. MUTATION: drop the pre-check - red: the person's folder was deleted."""
+    dest, _ = export_env
+    mine = dest / "report"
+    mine.mkdir()
+    (mine / "notes.txt").write_text("keep me")
+    calls = []
+
+    def _cp(cmd, *a, **kw):
+        calls.append(cmd)
+        Path(cmd[-1], "report").mkdir(exist_ok=True)       # what docker cp into a folder does
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("vaf.core.containers.docker", _cp)
+    notes = PythonSandboxTool()._export_artifacts(
+        ["report"], "/tmp/vaf_abc", container="vaf-env-ab12cd34ef56-scratch", session_id="chat1")
+    assert (mine / "notes.txt").read_text() == "keep me" and calls == []
+    assert any("already exists" in n for n in notes), notes
+
+
 def test_cp_failure_yields_note_not_crash(export_env, monkeypatch):
     monkeypatch.setattr("vaf.core.containers.docker",
                         lambda cmd, *a, **kw: types.SimpleNamespace(returncode=1, stdout="", stderr="no such file"))

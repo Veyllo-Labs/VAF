@@ -53,6 +53,11 @@ def _overview(scope, everyone: bool) -> Dict[str, Any]:
         procs: List[Dict[str, Any]] = mgr.processes(scope)
     except EnvironmentRefused as e:
         return {"available": False, "reason": str(e), "environments": [], "processes": []}
+    except Exception as e:
+        # docker not answering or timing out: the same answer _act gives, as data the
+        # section can show rather than an internal error.
+        return {"available": False, "reason": f"sandbox unavailable: {e}"[:300],
+                "environments": [], "processes": []}
     return {"available": True, "environments": [_row(e, with_owner=everyone) for e in envs],
             "processes": procs}
 

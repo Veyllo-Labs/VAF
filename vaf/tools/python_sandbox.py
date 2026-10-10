@@ -407,6 +407,12 @@ class PythonSandboxTool(BaseTool):
                 if os.path.islink(dest):
                     # docker cp would write THROUGH a link left at the destination.
                     os.unlink(dest)
+                elif os.path.exists(dest) and not os.path.isfile(dest):
+                    # docker cp would copy INTO an existing folder, and the non-file check
+                    # below would then remove that folder - one the person already had.
+                    notes.append(f"[export skipped: {p} - {base} already exists in the chat "
+                                 f"workspace and is not a file]")
+                    continue
                 try:
                     r = containers.docker(["cp", f"{container}:{cpath}", dest], timeout=60)
                 except Exception as e:

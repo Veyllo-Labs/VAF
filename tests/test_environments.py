@@ -594,6 +594,24 @@ def test_container_paths_stay_posix_and_resolve_against_the_workspace():
     assert envmod._container_path("a/../../etc") == "/etc"     # normalised, not jailed: it is the env's own fs
 
 
+def test_a_copy_starts_a_stopped_environment_first(docker, mgr, tmp_path):
+    """MUTATION: drop _ensure_running from copy_in or copy_out - red: the transfer ran
+    docker exec against a stopped container and failed."""
+    env = mgr.create(ALICE)
+    src = tmp_path / "a.txt"
+    src.write_text("x")
+    for move in (lambda: mgr.copy_in(ALICE, env.id, str(src)),
+                 lambda: mgr.copy_out(ALICE, env.id, "a.txt", str(tmp_path / "out"))):
+        mgr.stop(ALICE, env.id)
+        docker.calls.clear()
+        try:
+            move()
+        except Exception:
+            pass                                            # the fake has no tar stream
+        heads = [c[0] for c in docker.calls]
+        assert "start" in heads and heads.index("start") < heads.index("exec")
+
+
 def test_copy_out_drops_links_and_escapes(docker, mgr, monkeypatch, tmp_path):
     import io
     import tarfile

@@ -932,6 +932,7 @@ class EnvironmentManager:
         The caller vouches for the host path (the tool layer runs it through the
         person's file jail); this refuses a path that is not a file or a folder."""
         env = self.get(owner_scope, env_id)
+        self._ensure_running(env)
         src = Path(host_path)
         if not (src.is_file() or src.is_dir()):
             raise EnvironmentRefused(f"{host_path} is not a file or a folder")
@@ -964,6 +965,7 @@ class EnvironmentManager:
         target is dropped, so code in the environment cannot plant a pointer to a host
         file (docker cp would have copied a link as a link)."""
         env = self.get(owner_scope, env_id)
+        self._ensure_running(env)
         p = _container_path(path)
         parent, base = posixpath.split(p)
         # Measured inside first: the tar stream is held in memory whole, so a source over
@@ -1037,7 +1039,9 @@ class EnvironmentManager:
             shot = self.exec_in(env, [*common, f"--user-data-dir={out_dir}/p1", "--enable-logging=stderr",
                                       "--v=0", f"--window-size={width},{height}",
                                       f"--screenshot={out_dir}/shot.png", url], timeout=60)
-            if shot.returncode == 127 or "not found" in (shot.stderr or "")[:400]:
+            # 127 is `timeout` failing to start the binary. Not a text match: the page's
+            # own console output ("404 (Not Found)") lands in the same stderr.
+            if shot.returncode == 127:
                 raise EnvironmentRefused("this environment has no browser for previews (it runs on "
                                          "the fallback image); create a new one once the "
                                          "environment image is built")

@@ -85,6 +85,30 @@ def test_one_weakened_environment_spoils_the_flag(weak, field):
     MUTATION: report the first environment's hardening only - red."""
     s = derive_sandbox_status(True, [_inspect_payload(), _inspect_payload(**weak)])
     assert s["hardening"][field] is False
+    # MUTATION: keep the state ok whatever the flags say - red.
+    assert s["state"] == "warn" and s["reason"] == "hardening_incomplete"
+    assert derive_sandbox_status(True, [_inspect_payload()])["state"] == "ok"
+
+
+def test_unlisted_environments_are_unmeasured_never_green(monkeypatch):
+    """docker answers but `docker ps` for the environments fails. MUTATION: read the failed
+    listing as an empty one - red: the tile went green while nothing had been measured."""
+    import vaf.api.security_routes as sr
+    s = collect_sandbox_status(docker_probe=lambda: True, inspect_probe=lambda: None)
+    assert s["state"] == "nodata"
+    monkeypatch.setattr(sr, "_docker_available", lambda: True)
+    monkeypatch.setattr(sr, "_environment_container_ids", lambda: None)
+    assert sr.collect_docker_isolation() is None
+
+
+def test_a_sandbox_on_the_internal_network_warns():
+    """MUTATION: leave the state to LAN exposure alone - red."""
+    from vaf.api.security_routes import derive_docker_isolation
+    inside = {"Name": "/vaf-env-ab12-cd34", "State": {"Running": True},
+              "NetworkSettings": {"Networks": {"vaf-network": {}}}, "HostConfig": {}}
+    assert derive_docker_isolation([inside])["state"] == "warn"
+    apart = dict(inside, NetworkSettings={"Networks": {"vaf-env-net-cd34": {}}})
+    assert derive_docker_isolation([apart])["state"] == "ok"
 
 
 def test_collect_uses_probes_and_skips_inspect_when_docker_down():

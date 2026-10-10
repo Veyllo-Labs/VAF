@@ -61,6 +61,20 @@ def test_a_page_is_rendered_inside_the_environment(mgr):
     assert mgr.calls[-1][:2] == ["rm", "-rf"]                   # the shot is cleaned up
 
 
+def test_a_page_that_logs_not_found_is_still_rendered(mgr, monkeypatch):
+    """MUTATION: match "not found" in the browser's stderr again - red: a page whose console
+    said "404 (Not Found)" was answered with "this environment has no browser"."""
+    real = mgr.exec_in
+
+    def _exec_in(e, argv, **kw):
+        if argv[0] == "chromium-headless-shell" and "--dump-dom" not in argv:
+            return envmod.ExecResult(0, "", '[1:1:CONSOLE(1)] "Failed to load resource: 404 (Not Found)"')
+        return real(e, argv, **kw)
+
+    monkeypatch.setattr(mgr, "exec_in", _exec_in)
+    assert mgr.render("s", "0a1b2c3d", "http://localhost:8000/")["ok"]
+
+
 def test_a_path_is_a_file_under_the_workspace():
     assert envmod.EnvironmentManager._render_url("index.html") == "file:///workspace/index.html"
     assert envmod.EnvironmentManager._render_url("/workspace/dist/a.html") == "file:///workspace/dist/a.html"

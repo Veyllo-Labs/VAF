@@ -45,24 +45,27 @@ def _docker_available() -> bool:
     return is_docker_daemon_running()
 
 
-def _environment_container_ids() -> List[str]:
+def _environment_container_ids() -> Optional[List[str]]:
     """Every running sandbox environment container, whoever owns it (the dashboard is
-    the admin's view of the machine)."""
+    the admin's view of the machine). None when docker could not be asked: that is an
+    unmeasured state, not an empty machine."""
     try:
         from vaf.core import containers
         from vaf.core.environments import LABEL
         r = containers.docker(["ps", "-q", "--filter", f"label={LABEL}=1",
                                "--filter", "status=running"], timeout=10)
         if r.returncode != 0:
-            return []
+            return None
         return [line.strip() for line in (r.stdout or "").splitlines() if line.strip()]
     except Exception:
-        return []
+        return None
 
 
-def _inspect_environments() -> List[Dict[str, Any]]:
-    """Raw `docker inspect` JSON for the running sandbox environments (empty when none)."""
-    return inspect_containers(_environment_container_ids())
+def _inspect_environments() -> Optional[List[Dict[str, Any]]]:
+    """Raw `docker inspect` JSON for the running sandbox environments (empty when none,
+    None when they could not be listed)."""
+    ids = _environment_container_ids()
+    return None if ids is None else inspect_containers(ids)
 
 
 def derive_sandbox_status(docker_available: bool,
@@ -79,7 +82,8 @@ def derive_sandbox_status(docker_available: bool,
                  they start on demand with that same hardening.
       warn    -> docker daemon down/missing: sandboxed execution is BLOCKED.
                  Fail-closed (nothing escapes to the host), but the feature is
-                 unavailable - attention, not critical.
+                 unavailable - attention, not critical. Also: a running
+                 environment that misses one of the hardening flags above.
       (nodata is produced by the caller when the probe itself was impossible.)
 
     The field names (`container_running`, `hardening`) are the ones the shared
@@ -123,9 +127,11 @@ def derive_sandbox_status(docker_available: bool,
         }
     except Exception:
         hardening = {}
+    weak = [k for k in ("cap_drop_all", "no_new_privileges", "non_root", "isolated_network")
+            if hardening and not hardening.get(k)]
     return {
-        "state": "ok",
-        "reason": "container_running",
+        "state": "warn" if weak else "ok",
+        "reason": "hardening_incomplete" if weak else "container_running",
         "container_running": True,
         "environments": len(running),
         **({"hardening": hardening} if hardening else {}),
@@ -141,6 +147,9 @@ def collect_sandbox_status(
     inspects: Optional[List[Dict[str, Any]]] = None
     if docker_ok:
         inspects = inspect_probe()
+        if inspects is None:
+            # Docker answers but could not list the environments: unmeasured, never green.
+            return {"state": "nodata", "reason": "environments_unlisted", "container_running": False}
     return derive_sandbox_status(docker_ok, inspects)
 
 
@@ -261,7 +270,8 @@ def derive_docker_isolation(inspects: List[Dict[str, Any]]) -> Dict[str, Any]:
     This is VAF's inner firewall and exists independent of LAN mode: every sandbox
     environment lives on a network of its own (must NOT touch the internal
     vaf-network) and publishes no port, and every published port must bind to
-    loopback only. Any 0.0.0.0/:: binding is LAN exposure -> state warn.
+    loopback only. Any 0.0.0.0/:: binding is LAN exposure -> state warn, and so is a
+    sandbox environment on the internal network or with a published port.
     `sandbox_off_internal` is None while no environment runs.
     """
     containers: List[Dict[str, Any]] = []
@@ -293,7 +303,7 @@ def derive_docker_isolation(inspects: List[Dict[str, Any]]) -> Dict[str, Any]:
         except Exception:
             continue
     return {
-        "state": "warn" if any_exposed else "ok",
+        "state": "warn" if (any_exposed or sandbox_off_internal is False) else "ok",
         "any_lan_exposed": any_exposed,
         "sandbox_off_internal": sandbox_off_internal,
         "containers": containers,
@@ -310,8 +320,11 @@ def collect_docker_isolation() -> Optional[Dict[str, Any]]:
     """
     if not _docker_available():
         return None
+    env_ids = _environment_container_ids()
+    if env_ids is None:
+        return None                     # the environments could not be listed: unmeasured
     return derive_docker_isolation(
-        inspect_containers([s.container_name for s in SERVICES] + _environment_container_ids())
+        inspect_containers([s.container_name for s in SERVICES] + env_ids)
     )
 
 

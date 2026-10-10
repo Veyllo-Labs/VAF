@@ -13,7 +13,7 @@ import threading
 
 import pytest
 
-from tests.ftp_stub import FtpStub, make_ca, make_cert
+from ftp_stub import FtpStub, make_ca, make_cert
 from vaf.core import ftp
 
 ALICE, BOB = "scope-alice", "scope-bob"

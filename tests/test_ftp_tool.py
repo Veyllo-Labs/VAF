@@ -9,7 +9,7 @@ password is a stored NAME and never comes back, the transfers land where they sh
 host_bash hands FTP to this tool."""
 import pytest
 
-from tests.ftp_stub import FtpStub, make_cert
+from ftp_stub import FtpStub, make_cert
 from vaf.core import ftp
 
 ALICE, BOB = "scope-alice", "scope-bob"

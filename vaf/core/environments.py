@@ -432,6 +432,16 @@ class EnvironmentManager:
         owner_hash = None if everyone else containers.scope_hash(resolve_owner(owner_scope))
         return [self._from_row(r) for r in self._docker_rows(owner_hash)]
 
+    def summary(self) -> Dict[str, Any]:
+        """The machine's sandbox at a glance, for a status surface: how many environments
+        exist and how many run, everybody's, counted and nobody named, and whether the
+        image is built (until it is, the scratch environment runs on FALLBACK_IMAGE).
+        Raises EnvironmentRefused when docker does not list them: unmeasured is not none."""
+        rows = self._docker_rows(strict=True)
+        return {"environments": len(rows),
+                "running": sum(1 for r in rows if r["state"] == "running"),
+                "image_built": environment_image.image_present(environment_image.image_tag())}
+
     def get(self, owner_scope: Any, env_id: str, *, admin: bool = False) -> Environment:
         """The caller's environment by id. Someone else's answers like a missing one,
         so an id cannot be probed; `admin` lets an admin reach it to stop or delete."""

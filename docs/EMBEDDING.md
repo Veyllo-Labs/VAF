@@ -575,7 +575,9 @@ What an embedded agent can and cannot do on the host - the short version of
   answers what state each container is in and repairs a broken one, with every
   probe injectable so an embedder can test against it without Docker. The
   snapshot's `host` row reports the Linux host's IP forwarding switch (off means
-  every container runs and none reaches the internet), and a repair switches it
+  every container runs and none reaches the internet), its `sandbox` row how many
+  sandbox environments exist and run (`EnvironmentManager.summary()`; never a fault,
+  none existing is the normal state), and a repair switches it
   on through `vaf.network.firewall.elevation_argv`, the one privilege lane of the
   framework (a native polkit dialog on a desktop, non-interactive `sudo -n`
   headless); an embedder with its own dialog replaces that one function. One
@@ -2142,7 +2144,7 @@ Stable public surface (safe to build on):
   container, a volume and a network of one's own per person, to run, install and test
   code in (`create`, `get`, `list`, `exec`, `read_file`, `write_file`, `list_files`,
   `copy_in`, `copy_out`, `stop`, `delete`, `scratch_for`, `start_reaper`,
-  `stop_all_at_quit`, `prune`). The kinds (`temporary`, `project`), the network profiles
+  `stop_all_at_quit`, `prune`, `summary`). The kinds (`temporary`, `project`), the network profiles
   (`none`, `registries`, `open`) and the refusal type `vaf.core.environments.EnvironmentRefused`
   are part of the contract. See "Sandbox environments" above.
 - `vaf.contained_path(root, relative="", *, must_exist=False)` /

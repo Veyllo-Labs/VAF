@@ -40,6 +40,8 @@ def _fake_services():
     return {"docker": {"available": True, "reason": "", "detail": ""},
             "services": [{"name": "vaf-postgres", "service_key": "postgres",
                           "state": "ok", "reason": "Connected."}],
+            "sandbox": {"key": "sandbox", "name": "vaf-env-*", "state": "ok",
+                        "reason": "1 running, 0 stopped."},
             "starting": False, "checked_at": ""}
 
 
@@ -62,6 +64,7 @@ def test_once_renders_one_snapshot_without_probing(monkeypatch):
     assert "@@@g" in result.output, "the Veyllo mark must be part of the header"
     assert "https://srv1:8443" in result.output, "LAN hostname URL must be shown"
     assert "postgres" in result.output
+    assert "1 running, 0 stopped." in result.output, "the sandbox row belongs to the services panel"
     assert "PID 4242" in result.output
     assert "Network" in result.output
     assert "192.168.1.77" in result.output, "LAN clients must be listed per IP"

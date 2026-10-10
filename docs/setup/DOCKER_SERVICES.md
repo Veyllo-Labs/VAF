@@ -221,6 +221,10 @@ the label `org.veyllo.vaf.env`:
 docker ps -a --filter label=org.veyllo.vaf.env=1
 ```
 
+How many exist and run is also shown next to the services: `vaf repair --check` prints them
+as `vaf-env-*`, and Settings, Advanced, Update and Repair draws a Sandbox node (see
+[Status and Repair](#status-and-repair) below).
+
 The model, the network profiles and the limits are in
 [SANDBOXING.md](../security/SANDBOXING.md#sandbox-environments).
 
@@ -390,6 +394,18 @@ carries `net.ipv4.ip_forward = 0`) switches it back off behind Docker's back. Me
 twice on one host. `forwarding_ok` is `null` on macOS and Windows, where the engine runs
 in a VM that forwards for itself. The terminal prints the row as `Host: IP forwarding
 OFF`, and the dialog lists it as `host` above the containers.
+
+And one **sandbox** row, `sandbox: {state, environments, running, image_built, reason}`
+(`derive_sandbox_status`, from `EnvironmentManager.summary()`): how many sandbox
+environments exist and run, everybody's, counted and nobody named, and whether their image
+is built. It sits next to `services`, not among them, because the environments are no
+compose service: VAF starts them itself, on demand, so a repair has nothing to start for
+them, and none existing is the normal state of a machine nobody has run code on yet.
+`state` is `ok` while one runs, `idle` otherwise (none created, or all stopped), and
+`unknown` when docker does not list them. The terminal prints it as `vaf-env-*` after the
+services (`vaf repair --check`, the TUI, and `sandbox` in `vaf top`), and the dialog draws
+it as a Sandbox node below the containers, green while one runs and grey otherwise. It is
+never one of the issues and never fails a check.
 
 **Still starting is not broken.** Right after a start a database does not answer
 yet, so a status that called that "does not answer" would send someone to a

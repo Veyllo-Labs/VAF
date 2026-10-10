@@ -19,6 +19,7 @@ _STATE_STYLE = {
     "warn": "yellow",
     "error": "red",
     "absent": "dim",
+    "idle": "dim",
     "unknown": "dim",
 }
 
@@ -45,6 +46,12 @@ def format_status(status: Dict[str, Any]) -> List[str]:
     for svc in status.get("services", []):
         mark = "ok" if svc.get("state") == "ok" else str(svc.get("state") or "?")
         lines.append(f"  {str(svc.get('name') or ''):16} {mark:8} {svc.get('reason') or ''}")
+    # The sandbox environments: not a service, so after the services and never a
+    # problem to repair (none existing is the normal state).
+    sandbox = status.get("sandbox")
+    if sandbox:
+        lines.append(f"  {str(sandbox.get('name') or ''):16} {str(sandbox.get('state') or '?'):8} "
+                     f"{sandbox.get('reason') or ''}")
     return lines
 
 
@@ -67,6 +74,12 @@ def print_status(status: Dict[str, Any]) -> None:
         style = _STATE_STYLE.get(state, "dim")
         UI.print(f"  {str(svc.get('name') or ''):16} [{style}]{state:8}[/{style}] "
                  f"{svc.get('reason') or ''}")
+    sandbox = status.get("sandbox")
+    if sandbox:
+        state = str(sandbox.get("state") or "unknown")
+        style = _STATE_STYLE.get(state, "dim")
+        UI.print(f"  {str(sandbox.get('name') or ''):16} [{style}]{state:8}[/{style}] "
+                 f"{sandbox.get('reason') or ''}")
 
 
 def format_step(step: Dict[str, Any]) -> str:

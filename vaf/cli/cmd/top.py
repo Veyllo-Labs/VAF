@@ -186,6 +186,13 @@ def _build_view(snap: Dict[str, Any], services: Optional[Dict[str, Any]]):
                 svc_table.add_row(s.get("service_key") or s.get("name") or "?",
                                   f"[{color}]{state}[/{color}]",
                                   s.get("reason") or "")
+            sandbox = services.get("sandbox")
+            if sandbox:
+                # Idle is the normal state of the sandbox (none created, or all stopped).
+                state = sandbox.get("state") or "unknown"
+                color = "green" if state == "ok" else "dim"
+                svc_table.add_row(sandbox.get("key") or "sandbox", f"[{color}]{state}[/{color}]",
+                                  sandbox.get("reason") or "")
         parts.append(Panel(svc_table, title="Docker services", border_style="cyan"))
 
     return Group(*parts)

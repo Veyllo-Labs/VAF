@@ -20,6 +20,17 @@ PORTLESS = ss.ServiceSpec("portless", "vaf-portless", True)
 TTS = next(s for s in ss.SERVICES if s.service_key == "tts")
 
 
+@pytest.fixture(autouse=True)
+def _no_real_environments(monkeypatch):
+    """The snapshot's sandbox row asks the environment manager, which asks docker: a
+    collection here must not list the developer's real environments."""
+    import types
+    from vaf.core import environments
+    fake = types.SimpleNamespace(
+        summary=lambda: {"environments": 0, "running": 0, "image_built": True})
+    monkeypatch.setattr(environments, "get_environment_manager", lambda: fake)
+
+
 def _inspect(running=True, health=None, host_port="6379"):
     state = {"Running": running}
     if health is not None:
@@ -295,3 +306,61 @@ def test_enabling_forwarding_is_one_elevated_shell_with_switch_and_dropin():
         raise subprocess.TimeoutExpired(argv, 1)
 
     assert sh.enable_host_forwarding(run=dismissed, elevation=lambda: ["fake-elevate"])["ok"] is False
+
+
+# -- the sandbox environments: next to the services, never among them -------------------
+
+def test_the_sandbox_row_reads_none_created_as_idle_not_as_a_fault():
+    """None existing is the normal state of a machine nobody has run code on yet: grey,
+    not red. MUTATION: call the row ok without a running environment - red."""
+    idle = sh.derive_sandbox_status({"environments": 0, "running": 0, "image_built": True})
+    assert idle["state"] == "idle" and "None created yet" in idle["reason"]
+    stopped = sh.derive_sandbox_status({"environments": 2, "running": 0, "image_built": True})
+    assert stopped["state"] == "idle" and stopped["reason"] == "0 running, 2 stopped."
+    running = sh.derive_sandbox_status({"environments": 3, "running": 1, "image_built": True})
+    assert running["state"] == "ok" and running["reason"] == "1 running, 2 stopped."
+    assert running["environments"] == 3 and running["running"] == 1
+
+
+def test_the_sandbox_row_says_when_the_image_is_not_built():
+    """Until the image is built the scratch environment runs on the slim fallback, without
+    Node and without a preview; the row says so instead of looking complete."""
+    from vaf.core.environment_image import FALLBACK_IMAGE
+    row = sh.derive_sandbox_status({"environments": 0, "running": 0, "image_built": False})
+    assert row["state"] == "idle" and row["image_built"] is False
+    assert FALLBACK_IMAGE in row["reason"]
+
+
+def test_an_unlisted_sandbox_is_unknown():
+    row = sh.derive_sandbox_status(None)
+    assert row["state"] == "unknown" and row["environments"] is None
+
+
+def test_the_snapshot_carries_the_sandbox_beside_the_services():
+    """Not a row of `services`: a repair starts what is missing there with compose, and
+    there is nothing to start for an environment. MUTATION: drop the sandbox probe from
+    the collection - red."""
+    status = sh.collect_service_status(
+        daemon_probe=lambda: {"ok": True, "reason": "ok", "detail": ""},
+        inspect_probe=lambda names: [],
+        port_reader=lambda spec: spec.default_port or None,
+        service_probe=lambda spec, port: None,
+        host_probe=lambda: None,
+        sandbox_probe=lambda: {"environments": 2, "running": 2, "image_built": True},
+    )
+    assert status["sandbox"]["state"] == "ok" and status["sandbox"]["running"] == 2
+    assert "sandbox" not in {s["service_key"] for s in status["services"]}
+
+
+def test_a_daemon_that_is_down_asks_no_sandbox_question():
+    asked = []
+    status = sh.collect_service_status(
+        daemon_probe=lambda: {"ok": False, "reason": "not_running", "detail": ""},
+        inspect_probe=lambda names: [],
+        port_reader=lambda spec: None,
+        service_probe=lambda spec, port: None,
+        host_probe=lambda: None,
+        sandbox_probe=lambda: asked.append(1),
+    )
+    assert asked == []
+    assert status["sandbox"]["state"] == "unknown" and "not reachable" in status["sandbox"]["reason"]

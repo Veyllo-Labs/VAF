@@ -35,6 +35,17 @@ export interface ServiceRow {
     reason?: string;
 }
 
+/** The sandbox environments (vaf/core/service_health.py derive_sandbox_status). Not a
+ *  compose service: VAF starts them itself, on demand, one set per person, so none
+ *  existing is the normal state and never an issue to repair. */
+export interface SandboxRow {
+    state: 'ok' | 'idle' | 'unknown' | string;
+    environments?: number | null;
+    running?: number | null;
+    image_built?: boolean | null;
+    reason?: string;
+}
+
 interface ServicesSnapshot {
     docker: { available: boolean; reason?: string; detail?: string };
     stack_root?: string | null;
@@ -43,6 +54,7 @@ interface ServicesSnapshot {
      *  where the question does not arise (macOS, Windows). */
     host?: { ip_forward?: number | null; forwarding_ok?: boolean | null; reason?: string };
     services: ServiceRow[];
+    sandbox?: SandboxRow | null;
     /** Something is inside its own start window: repairing it now would only
      *  restart a container that is already on its way up. */
     starting?: boolean;
@@ -557,6 +569,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
     // again: an unbounded loop for as long as `services` is null, which is
     // exactly the state while the server is restarting during an update.
     const rows = useMemo(() => services?.services ?? [], [services]);
+    const sandbox = services?.sandbox ?? null;
     const issues = useMemo(() => rows.filter((s) => healthOf(s) !== 'ok'), [rows]);
     // The host's forwarding switch is a finding of its own, above the containers:
     // with it off they all run and none can reach the internet.
@@ -587,7 +600,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
             return;
         }
         const ROW = 96;
-        const height = (rows.length - 1) * ROW;
+        const height = (rows.length - (sandbox ? 0 : 1)) * ROW;
         const hub = {
             id: 'vaf',
             type: 'input',
@@ -637,8 +650,47 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                 },
             };
         });
-        setNodes([hub, ...serviceNodes] as any);
-        setEdges(rows.map((svc) => {
+        // The sandbox environments below the services: green while one runs, grey
+        // otherwise. Grey is their normal state (none created yet, or all stopped), so
+        // it never joins the issues list and a repair has nothing to start for it.
+        const sandboxHealth: Health = sandbox?.state === 'ok' ? 'ok' : 'idle';
+        const sandboxNodes = sandbox ? [{
+            id: 'sandbox',
+            type: 'output',
+            position: { x: 380, y: rows.length * ROW },
+            targetPosition: Position.Left,
+            draggable: false,
+            style: { border: 'none', background: 'transparent', width: 'auto' },
+            data: {
+                label: (
+                    <div
+                        className="px-3 py-2 rounded-xl bg-white border border-gray-200 shadow-sm min-w-[210px] text-left"
+                        style={{ borderLeft: `4px solid ${COLOR[sandboxHealth]}` }}
+                    >
+                        <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: COLOR[sandboxHealth] }} />
+                            <span className="text-sm font-medium text-gray-800 truncate">{tM('sandboxNode')}</span>
+                            <span className="text-[10px] text-gray-400 font-mono">vaf-env-*</span>
+                        </div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">
+                            {sandbox.state === 'unknown' || sandbox.environments == null
+                                ? tM('statusUnknown')
+                                : sandbox.environments === 0
+                                    ? tM('sandboxNone')
+                                    : tM('sandboxCounts', {
+                                        running: Number(sandbox.running ?? 0),
+                                        stopped: Math.max(0, sandbox.environments - Number(sandbox.running ?? 0)),
+                                    })}
+                        </div>
+                        {sandbox.image_built === false && (
+                            <div className="text-[10px] text-gray-400 mt-0.5">{tM('sandboxNoImage')}</div>
+                        )}
+                    </div>
+                ),
+            },
+        }] : [];
+        setNodes([hub, ...serviceNodes, ...sandboxNodes] as any);
+        setEdges([...rows.map((svc) => {
             const h = healthOf(svc);
             return {
                 id: `e-${svc.service_key}`,
@@ -652,8 +704,18 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                     ...(h === 'ok' ? {} : { strokeDasharray: '4 4' }),
                 },
             };
-        }) as any);
-    }, [rows, repairBusy, version, statusLabel, tM, setNodes, setEdges]);
+        }), ...(sandbox ? [{
+            id: 'e-sandbox',
+            source: 'vaf',
+            target: 'sandbox',
+            style: {
+                stroke: COLOR[sandboxHealth],
+                strokeWidth: 1.5,
+                opacity: 0.6,
+                ...(sandboxHealth === 'ok' ? {} : { strokeDasharray: '4 4' }),
+            },
+        }] : [])] as any);
+    }, [rows, sandbox, repairBusy, version, statusLabel, tM, setNodes, setEdges]);
 
     // ─── render ──────────────────────────────────────────────────────────────
 

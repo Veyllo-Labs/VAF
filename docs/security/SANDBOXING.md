@@ -287,7 +287,9 @@ One image serves every sandbox environment and the registries proxy:
 
 An environment is a container, a volume and a network of its own, per person. The main
 agent and the coder reach the same environment by its id; `vaf env` and the web UI list
-and remove environments. Applications use the same object (`vaf.get_environment_manager()`, see
+and remove environments. How many exist and run, machine-wide, is shown next to the Docker
+services (`vaf repair --check`, `vaf top`, the Update and Repair dialog; see
+[DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md#sandbox-environments)). Applications use the same object (`vaf.get_environment_manager()`, see
 [EMBEDDING.md](../EMBEDDING.md#sandbox-environments-vafenvironmentmanager)).
 
 | Property | Detail |

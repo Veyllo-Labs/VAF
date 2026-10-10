@@ -77,3 +77,23 @@ def test_a_healthy_run_says_so_but_never_over_a_broken_service(monkeypatch):
     assert result.exit_code == 0
     assert "vaf-tts" in result.stdout
     assert "stack is healthy" not in result.stdout
+
+
+def test_the_check_lists_the_sandbox_after_the_services_and_never_fails_on_it(monkeypatch):
+    """Idle is the sandbox's normal state (none created yet), so it is shown and does not
+    turn the check into a failure. MUTATION: drop the sandbox line from print_status - red;
+    from format_status (the TUI's renderer) - red."""
+    def _with_sandbox():
+        status = _status()
+        status["services"][0].update(port_mismatch=False, state="ok", reason="Connected.")
+        status["sandbox"] = {"key": "sandbox", "name": "vaf-env-*", "state": "idle",
+                             "environments": 0, "running": 0, "image_built": True,
+                             "reason": "None created yet; they start when code runs."}
+        return status
+
+    monkeypatch.setattr(repair, "collect_service_status", _with_sandbox)
+    result = CliRunner().invoke(_app(), ["--check"])
+    assert result.exit_code == 0
+    assert "vaf-env-*" in result.stdout and "None created yet" in result.stdout
+    lines = repair.format_status(_with_sandbox())
+    assert lines[-1].split()[:2] == ["vaf-env-*", "idle"]

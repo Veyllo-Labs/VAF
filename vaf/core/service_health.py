@@ -397,14 +397,55 @@ def _startup_seconds_left(inspect: Dict[str, Any], health: str) -> int:
         return 0
 
 
+def probe_sandbox() -> Optional[Dict[str, Any]]:
+    """The sandbox environments at a glance (`EnvironmentManager.summary`), or None
+    when docker does not list them."""
+    try:
+        from vaf.core.environments import get_environment_manager
+        return get_environment_manager().summary()
+    except Exception:
+        return None
+
+
+def derive_sandbox_status(summary: Optional[Dict[str, Any]],
+                          reason: str = "") -> Dict[str, Any]:
+    """Pure: the snapshot's sandbox row.
+
+    The environments are not compose services: VAF starts them itself, on demand,
+    one set per person. So they are reported NEXT TO the services, not among them -
+    a repair has nothing to start for them, and none existing is the normal state of
+    a machine nobody has run code on yet, never a fault. States: ok (at least one
+    runs), idle (none runs, or none exists yet), unknown (not listed; `reason` says
+    why when the caller knows better)."""
+    row = {"key": "sandbox", "name": "vaf-env-*"}
+    if summary is None:
+        return {**row, "state": "unknown", "environments": None, "running": None,
+                "image_built": None,
+                "reason": reason or "Docker did not list the sandbox environments."}
+    from vaf.core.environment_image import FALLBACK_IMAGE
+    total = int(summary.get("environments") or 0)
+    running = min(int(summary.get("running") or 0), total)
+    built = bool(summary.get("image_built"))
+    text = ("None created yet; they start when code runs." if total == 0
+            else f"{running} running, {total - running} stopped.")
+    if not built:
+        text += (f" The image is not built yet; until it is, the scratch environment runs "
+                 f"on {FALLBACK_IMAGE}, without Node and without a preview.")
+    return {**row, "state": "ok" if running else "idle", "environments": total,
+            "running": running, "image_built": built, "reason": text}
+
+
 def collect_service_status(
     daemon_probe: Callable[[], Dict[str, Any]] = diagnose_docker_daemon,
     inspect_probe: Callable[[Sequence[str]], List[Dict[str, Any]]] = inspect_containers,
     port_reader: Callable[[ServiceSpec], Optional[int]] = configured_port,
     service_probe: Callable[[ServiceSpec, Optional[int]], Optional[Dict[str, Any]]] = probe_service,
     host_probe: Callable[[], Optional[Dict[str, Any]]] = probe_host_forwarding,
+    sandbox_probe: Callable[[], Optional[Dict[str, Any]]] = probe_sandbox,
 ) -> Dict[str, Any]:
-    """Every service's state in one snapshot, plus the host's forwarding switch.
+    """Every service's state in one snapshot, plus the host's forwarding switch and
+    the sandbox environments (`derive_sandbox_status`: not a service, so not a row
+    of `services`).
 
     With the daemon down nothing else is attempted: no inspect, no probes. That
     keeps the worst case at one `docker info` (10s) instead of seven timeouts,
@@ -418,6 +459,8 @@ def collect_service_status(
     services: List[Dict[str, Any]] = []
 
     if not daemon.get("ok"):
+        sandbox = derive_sandbox_status(
+            None, "Docker is not reachable, so the sandbox environments' state is unknown.")
         for spec in SERVICES:
             services.append({
                 "name": spec.container_name,
@@ -435,6 +478,7 @@ def collect_service_status(
                 "reason": "Docker is not reachable, so this container's state is unknown.",
             })
     else:
+        sandbox = derive_sandbox_status(sandbox_probe())
         inspects = inspect_probe([s.container_name for s in SERVICES])
         by_name: Dict[str, Dict[str, Any]] = {}
         for ins in inspects:
@@ -463,6 +507,7 @@ def collect_service_status(
         "stack_root": str(root) if root else None,
         "host": host,
         "services": services,
+        "sandbox": sandbox,
         "starting": bool(starting),
         "starting_seconds_left": max([int(s.get("starting_seconds_left") or 0)
                                       for s in starting], default=0),

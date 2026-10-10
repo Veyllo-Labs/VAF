@@ -454,6 +454,28 @@ def test_a_docker_that_does_not_answer_clears_nothing(docker, mgr, monkeypatch):
     assert mgr.list(ALICE) == []                    # an ordinary listing still reads it as none
 
 
+def test_the_summary_counts_everybodys_environments_and_names_nobody(docker, mgr, monkeypatch):
+    """What the health dialog and `vaf repair --check` show. The registries proxy shares
+    the label and has no id: not an environment. MUTATION: count every row as running -
+    red; read a failed listing as an empty machine - red."""
+    a = mgr.create(ALICE)
+    mgr.create(BOB, network="registries")
+    mgr.stop(ALICE, a.id)
+    assert envmod.PROXY_CONTAINER in docker.containers
+    assert mgr.summary() == {"environments": 2, "running": 1, "image_built": True}
+    monkeypatch.setattr(environment_image, "image_present", lambda tag=None: False)
+    assert mgr.summary()["image_built"] is False
+
+    def _down(args, timeout=60, **kw):
+        if args[0] == "ps":
+            return _done(1, "", "Cannot connect to the Docker daemon")
+        return docker(args, timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _down)
+    with pytest.raises(EnvironmentRefused):
+        mgr.summary()
+
+
 def test_a_recreated_proxy_rejoins_every_registries_network(docker, mgr, monkeypatch):
     """The allowed hosts changed, so the proxy is recreated for the second environment.
     MUTATION: drop _reconnect_registries from _ensure_proxy - red: the first environment

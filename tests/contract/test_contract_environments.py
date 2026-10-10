@@ -45,5 +45,5 @@ def test_the_documented_signatures():
         assert _params(getattr(m, name))[:3] == ["self", "owner_scope", "env_id"], name
     assert "admin" in _params(m.delete) and "admin" in _params(m.stop)
     assert _params(m.list)[:2] == ["self", "owner_scope"] and "everyone" in _params(m.list)
-    for name in ("scratch_for", "start_reaper", "stop_all_at_quit", "prune"):
+    for name in ("scratch_for", "start_reaper", "stop_all_at_quit", "prune", "summary"):
         assert callable(getattr(m, name)), name

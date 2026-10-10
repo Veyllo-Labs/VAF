@@ -37,6 +37,14 @@ def _refused(tool: str, exc: Exception) -> str:
     return f"[ERROR] {tool}: {exc}"
 
 
+def _as_int(value: Any, default: int) -> int:
+    """A number the model wrote, or the default: "two" or "" is not a sandbox outage."""
+    try:
+        return int(value) if value not in (None, "") else default
+    except (TypeError, ValueError):
+        return default
+
+
 def _stop_check():
     """True when the current chat asked to stop (the sandbox lanes poll it)."""
     try:
@@ -172,11 +180,7 @@ class SandboxExecTool(BaseTool):
                                            cwd=kwargs.get("cwd") or None)
                 return (f"Started {handle} in the background. host_process(action=\"log\", "
                         f"id=\"{handle}\") shows its output; this chat is woken when it ends.")
-            try:
-                timeout = int(kwargs.get("timeout") or 120)
-            except (TypeError, ValueError):
-                timeout = 120
-            timeout = min(max(1, timeout), self.MAX_TIMEOUT_SECONDS)
+            timeout = min(max(1, _as_int(kwargs.get("timeout"), 120)), self.MAX_TIMEOUT_SECONDS)
             r = mgr.exec(scope, env_id, command, timeout=timeout, cwd=kwargs.get("cwd") or None,
                          check_stop=_stop_check())
         except EnvironmentRefused as e:
@@ -235,11 +239,8 @@ class SandboxFilesTool(BaseTool):
                     return _refused(self.name, "write needs the content")
                 return f"Wrote {mgr.write_file(scope, env_id, path, str(content))}."
             if action == "list":
-                try:
-                    depth = int(kwargs.get("depth") or 2)
-                except (TypeError, ValueError):
-                    depth = 2                   # a model-written "two" is not a sandbox outage
-                return mgr.list_files(scope, env_id, path, depth=min(max(depth, 1), 6)) or "(empty)"
+                depth = min(max(_as_int(kwargs.get("depth"), 2), 1), 6)
+                return mgr.list_files(scope, env_id, path, depth=depth) or "(empty)"
             return _refused(self.name, "action must be one of read, write, list")
         except EnvironmentRefused as e:
             return _refused(self.name, e)
@@ -353,8 +354,9 @@ class SandboxPreviewTool(BaseTool):
         try:
             result = _manager().render(
                 kwargs.get("user_scope_id"), str(kwargs.get("environment") or ""),
-                str(kwargs.get("target") or ""), width=int(kwargs.get("width") or 1280),
-                height=int(kwargs.get("height") or 800), wait_ms=int(kwargs.get("wait_ms") or 1500))
+                str(kwargs.get("target") or ""), width=_as_int(kwargs.get("width"), 1280),
+                height=_as_int(kwargs.get("height"), 800),
+                wait_ms=_as_int(kwargs.get("wait_ms"), 1500))
         except EnvironmentRefused as e:
             return _refused(self.name, e)
         except Exception as e:

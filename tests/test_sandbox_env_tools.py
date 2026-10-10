@@ -119,6 +119,23 @@ def test_a_depth_that_is_not_a_number_is_the_default(mgr):
     assert mgr.calls[-1][2]["depth"] == 6
 
 
+def test_preview_reads_numbers_it_cannot_parse_as_the_defaults(monkeypatch):
+    """MUTATION: back to bare int() for the preview - red: "wide" read as a sandbox that
+    could not be reached."""
+    seen = {}
+
+    class _M:
+        def render(self, scope, env_id, target, width, height, wait_ms):
+            seen.update(width=width, height=height, wait_ms=wait_ms)
+            return {"ok": False, "error": "stop"}
+
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: _M())
+    out = tools.SandboxPreviewTool().run(environment="0a1b2c3d", target="index.html", width="wide",
+                                         height="", wait_ms="soon", user_scope_id="s")
+    assert "could not be reached" not in out
+    assert seen == {"width": 1280, "height": 800, "wait_ms": 1500}
+
+
 def test_exec_in_the_background_returns_a_handle(mgr):
     out = tools.SandboxExecTool().run(environment="0a1b2c3d", command="npm run dev", background=True,
                                       user_scope_id="s", session_id="chat-1", username="alice")

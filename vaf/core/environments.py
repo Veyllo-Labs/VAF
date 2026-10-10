@@ -484,9 +484,12 @@ class EnvironmentManager:
         if network not in NETWORKS:
             raise EnvironmentRefused(f"network must be one of {', '.join(NETWORKS)}")
         cap = setting("network_max")
-        if cap in NETWORKS and self._network_rank(network) > self._network_rank(cap):
+        if cap not in NETWORKS:
+            # A cap that is no profile (a typo) is the narrowest one, never no cap.
+            cap = NETWORKS[0]
+        if self._network_rank(network) > self._network_rank(cap):
             raise EnvironmentRefused(f"network {network!r} is above what the administrator "
-                                     f"allows ({cap!r})")
+                                     f"allows ({cap!r}, sandbox_env_network_max)")
         mem = int(memory_mb or setting("memory_mb"))
         if mem < 128 or mem > int(setting("memory_max_mb")):
             raise EnvironmentRefused(f"memory must be between 128 and "
@@ -1320,14 +1323,19 @@ class EnvironmentManager:
         if housekeeping_off():
             return 0
         names: List[str] = []
+        registries_stay = False
         for row in self._docker_rows():
             if row["state"] != "running":
                 continue
             env = self._from_row(row)
             if not self.busy(env):
                 names.append(env.container)
+            elif env.network == "registries":
+                registries_stay = True
+        # The proxy goes with the last registries environment: one left running because it
+        # is busy (a pip install in another terminal) still needs its package access.
         workers = []
-        for name in names + [PROXY_CONTAINER]:
+        for name in names + ([] if registries_stay else [PROXY_CONTAINER]):
             t = threading.Thread(target=containers.docker, args=(["stop", "-t", "5", name],),
                                  kwargs={"timeout": 60}, daemon=True)
             t.start()

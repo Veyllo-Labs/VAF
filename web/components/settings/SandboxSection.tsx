@@ -73,6 +73,10 @@ export default function SandboxSection() {
     }, [apiBase, everyone]);
 
     useEffect(() => { void load(); }, [load]);
+    // The refresh after an action reloads with the selection of NOW: the closure an action
+    // started with would ask for the old scope, win the race and leave the list stale.
+    const loadNow = useRef(load);
+    useEffect(() => { loadNow.current = load; }, [load]);
 
     const act = async (env: Environment, action: 'stop' | 'delete') => {
         if (!data || data.all !== everyone) return;      // a row of the other setting's list
@@ -93,7 +97,7 @@ export default function SandboxSection() {
             setBusy(null);
         }
         // Either way the list shows what is really there.
-        void load();
+        void loadNow.current();
     };
 
     if (!data && !loadFailed) return null;

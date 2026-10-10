@@ -130,15 +130,22 @@ def _build(tag: str, *, refresh: bool) -> bool:
     return True
 
 
+IMAGE_LABEL = "org.veyllo.vaf.image=sandbox-env"     # the Dockerfile's LABEL
+
+
 def _remove_superseded(current: str) -> None:
-    """Drop the images earlier Dockerfiles produced. One still in use by a container
-    refuses to go, which is right: it goes once that environment is deleted."""
+    """Drop the images earlier Dockerfiles produced, and the untagged ones a refresh
+    leaves behind: the age rebuild takes the same tag, so the old image (1.6 GB) stays
+    as a dangling one. The prune is scoped to this image's label and only takes dangling
+    images; one still in use by a container refuses to go either way, which is right:
+    it goes once that environment is deleted."""
     try:
         r = containers.docker(["image", "ls", IMAGE_REPO, "--format", "{{.Repository}}:{{.Tag}}"],
                               timeout=20)
         for ref in (r.stdout or "").split():
             if ref != current and ref.startswith(IMAGE_REPO + ":"):
                 containers.docker(["image", "rm", ref], timeout=60)
+        containers.docker(["image", "prune", "-f", "--filter", f"label={IMAGE_LABEL}"], timeout=120)
     except Exception:
         pass
 

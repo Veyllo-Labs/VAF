@@ -79,6 +79,8 @@ def docker_seam(monkeypatch):
         if args[:2] == ["image", "rm"]:
             state.present.discard(args[2])
             return _done(0)
+        if args[:2] == ["image", "prune"]:
+            return _done(0)
         if args[0] == "build":
             if state.build_rc == 0:
                 state.present.add(args[args.index("-t") + 1])
@@ -158,6 +160,16 @@ def test_a_successful_build_removes_the_images_of_earlier_dockerfiles(docker_sea
     docker_seam.present.update({"vaf-sandbox-env:000000000000", "vaf-sandbox-env:111111111111"})
     assert ei.ensure_image() == tag
     assert docker_seam.present == {tag}
+
+
+def test_a_build_prunes_only_this_images_dangling_copies(docker_seam):
+    """The age rebuild keeps the tag, so the old 1.6 GB image stays behind untagged.
+    MUTATION: drop the prune - red; widen it past the label or add -a - red: -a would
+    take every unused image of the kind, the current one included."""
+    ei.ensure_image()
+    prunes = [args for args, _ in docker_seam.calls if args[:2] == ["image", "prune"]]
+    assert prunes == [["image", "prune", "-f", "--filter", "label=org.veyllo.vaf.image=sandbox-env"]]
+    assert 'LABEL org.veyllo.vaf.image="sandbox-env"' in ei.dockerfile_text()
 
 
 def test_the_scratch_lane_falls_back_instead_of_waiting(docker_seam):

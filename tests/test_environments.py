@@ -251,6 +251,15 @@ def test_the_admin_cap_on_the_network(docker, mgr, monkeypatch):
     assert mgr.create(ALICE, network="registries")
 
 
+def test_a_cap_that_is_no_profile_is_the_narrowest(docker, mgr, monkeypatch):
+    """MUTATION: back to `cap in NETWORKS and ...` - red: a typo switched the cap off."""
+    monkeypatch.setenv("VAF_SANDBOX_ENV_NETWORK_MAX", "registry")
+    for network in ("open", "registries"):
+        with pytest.raises(EnvironmentRefused, match="above what the administrator allows"):
+            mgr.create(ALICE, network=network)
+    assert mgr.create(ALICE, network="none")
+
+
 def test_limits_refuse_with_a_reason(docker, mgr, monkeypatch):
     monkeypatch.setenv("VAF_SANDBOX_ENV_MAX_PER_USER", "2")
     mgr.create(ALICE)
@@ -472,6 +481,20 @@ def test_quit_stops_what_is_not_busy(docker, mgr, monkeypatch):
     assert mgr.stop_all_at_quit() == 1
     assert docker.containers[a.container]["state"] == "exited"
     assert docker.containers[b.container]["state"] == "running"
+
+
+def test_quit_keeps_the_proxy_for_a_busy_registries_environment(docker, mgr, monkeypatch):
+    """MUTATION: stop the proxy on every quit again - red: a pip install left running in
+    another terminal lost its package access halfway."""
+    monkeypatch.delenv("VAF_SANDBOX_ENV_HOUSEKEEPING_OFF", raising=False)
+    busy = mgr.create(ALICE, network="registries")
+    docker.busy.add(busy.container)
+    mgr.stop_all_at_quit()
+    assert docker.containers[envmod.PROXY_CONTAINER]["state"] == "running"
+    docker.busy.discard(busy.container)
+    mgr.stop_all_at_quit()
+    assert docker.containers[envmod.PROXY_CONTAINER]["state"] == "exited"
+    assert docker.containers[busy.container]["state"] == "exited"
 
 
 def test_revocation_stops_the_accounts_environments(docker, mgr):

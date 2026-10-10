@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -48,6 +49,11 @@ BUILD_TIMEOUT_S = 1800
 _DOCKERFILE = Path(__file__).resolve().parent.parent / "assets" / "sandbox" / "Dockerfile"
 _background_lock = threading.Lock()
 _background_running = False
+# After a background build that ended without an image (offline, a mirror down), the next
+# ones wait this long: scratch_for starts one on every python_sandbox call while the image
+# is missing, and each would fail the same way. ensure_image() itself never waits.
+BACKGROUND_RETRY_S = 600
+_background_failed_at: Optional[float] = None
 
 
 def dockerfile_text() -> str:
@@ -184,22 +190,28 @@ def ensure_image() -> Optional[str]:
 
 def start_background_build() -> None:
     """Build (or refresh) the image off the caller's path, once per process at a time.
-    The stack start calls it; it never raises and never blocks."""
+    The stack start calls it; it never raises and never blocks. After an attempt that
+    ended without an image, the next background start waits BACKGROUND_RETRY_S."""
     global _background_running
     if builds_disabled():
         return
     with _background_lock:
         if _background_running:
             return
+        if (_background_failed_at is not None
+                and time.monotonic() - _background_failed_at < BACKGROUND_RETRY_S):
+            return
         _background_running = True
 
     def _run():
-        global _background_running
+        global _background_running, _background_failed_at
+        built = False
         try:
-            ensure_image()
+            built = ensure_image() is not None
         finally:
             with _background_lock:
                 _background_running = False
+                _background_failed_at = None if built else time.monotonic()
 
     threading.Thread(target=_run, daemon=True, name="sandbox-env-image-build").start()
 

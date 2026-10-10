@@ -280,6 +280,7 @@ def derive_service_status(spec: ServiceSpec,
     """
     exists = inspect is not None
     running = False
+    crashed = False
     health = "none"
     starting_left = 0
     host_ports: List[Dict[str, str]] = []
@@ -287,6 +288,11 @@ def derive_service_status(spec: ServiceSpec,
         try:
             state = inspect.get("State") or {}
             running = bool(state.get("Running"))
+            # Stopped by a stop ends in 0, 143 (SIGTERM) or 137 (SIGKILL after the stop's
+            # grace): measured, `compose stop` leaves tts and stt at 143. Anything else is a
+            # crash, and a stack start under way does not make that "on its way up".
+            crashed = (str(state.get("Status") or "") in ("exited", "dead")
+                       and int(state.get("ExitCode") or 0) not in (0, 137, 143))
             health = str(((state.get("Health") or {}).get("Status") or "none"))
             if running:
                 starting_left = _startup_seconds_left(inspect, health)
@@ -312,7 +318,7 @@ def derive_service_status(spec: ServiceSpec,
     starting = bool(running and (health == "starting" or starting_left > 0))
     # A stack start under way brings the containers up in phases, the optional ones after
     # a build that can take minutes: one it has not reached yet is on its way, not broken.
-    pending = bool(stack_starting and not running)
+    pending = bool(stack_starting and not running and not crashed)
 
     if pending:
         starting = True

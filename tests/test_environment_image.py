@@ -193,3 +193,34 @@ def test_image_age_is_none_when_it_cannot_be_known(monkeypatch):
     assert containers.image_age_days("x") is None
     monkeypatch.setattr(containers, "docker", lambda *a, **k: _done(0, "not a time\n"))
     assert containers.image_age_days("x") is None
+
+
+def test_a_failed_background_build_waits_before_the_next(monkeypatch):
+    """scratch_for starts a background build on every python_sandbox call while the image
+    is missing; offline, each failed the same way. MUTATION: drop the wait - red."""
+    monkeypatch.delenv("VAF_SANDBOX_ENV_NO_BUILD", raising=False)
+    monkeypatch.setattr(ei, "_background_failed_at", None)
+    monkeypatch.setattr(ei, "_background_running", False)
+    started = []
+
+    class _Thread:
+        def __init__(self, target, **kw):
+            self.target = target
+
+        def start(self):
+            started.append(1)
+            self.target()
+
+    monkeypatch.setattr(ei.threading, "Thread", _Thread)
+    monkeypatch.setattr(ei, "ensure_image", lambda: None)            # offline: no image
+    clock = [1000.0]
+    monkeypatch.setattr(ei.time, "monotonic", lambda: clock[0])
+    ei.start_background_build()
+    ei.start_background_build()
+    assert len(started) == 1
+    clock[0] += ei.BACKGROUND_RETRY_S + 1
+    monkeypatch.setattr(ei, "ensure_image", lambda: "vaf-sandbox-env:x")
+    ei.start_background_build()
+    assert len(started) == 2 and ei._background_failed_at is None
+    ei.start_background_build()                                       # built: no wait
+    assert len(started) == 3

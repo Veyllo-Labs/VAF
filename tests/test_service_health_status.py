@@ -422,3 +422,17 @@ def test_start_in_progress_reads_this_process_and_the_process_table(monkeypatch)
     assert ss.start_in_progress() is False
     monkeypatch.setattr(ss._start_active, "is_set", lambda: True)
     assert ss.start_in_progress() is True
+
+
+def test_a_container_that_crashed_is_not_starting_because_a_start_runs():
+    """Stopped by a stop is 0, 143 or 137 (compose stop leaves tts and stt at 143, measured);
+    any other exit code is a crash and stays the error it is. MUTATION: drop the crash check
+    - red."""
+    def _exited(code):
+        return {"Name": "/vaf-redis", "State": {"Running": False, "Status": "exited", "ExitCode": code},
+                "HostConfig": {}}
+    crashed = sh.derive_service_status(REDIS, _exited(1), 6379, None, stack_starting=True)
+    assert crashed["state"] == "error" and crashed["starting"] is False
+    for code in (0, 137, 143):
+        stopped = sh.derive_service_status(REDIS, _exited(code), 6379, None, stack_starting=True)
+        assert stopped["starting"] is True, code

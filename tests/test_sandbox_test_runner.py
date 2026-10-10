@@ -222,3 +222,17 @@ def test_the_tool_passes_the_callers_scope(tmp_path, fake):
     mgr = fake()
     RunTestsTool(str(tmp_path)).run(user_scope_id="scope-bob")
     assert mgr.scopes == ["scope-bob"]
+
+
+def test_a_timeout_that_is_not_a_number_falls_back_instead_of_raising(monkeypatch):
+    """MUTATION: back to int(kwargs["timeout"]) in run - red: the tool raised ValueError."""
+    import vaf.tools.sandbox_test_runner as runner
+    seen = []
+    monkeypatch.setattr(runner, "run_project_tests",
+                        lambda base, cmd, timeout=180, user_scope_id=None: seen.append(timeout) or "ok")
+    monkeypatch.setattr(runner, "run_tests_in_environment",
+                        lambda env, cmd, timeout=180: seen.append(timeout) or "ok")
+    runner.RunTestsTool("/p").run(timeout="soon")
+    runner.RunTestsTool("/p", environment=object()).run(timeout="soon")
+    runner.RunTestsTool("/p").run(timeout="90")
+    assert seen == [180, 180, 90]

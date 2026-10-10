@@ -766,6 +766,14 @@ class EnvironmentManager:
                       "VAF_PROXY_FILTER": self._proxy_filter(setting("registry_hosts"))}
         r = containers.docker(args, timeout=120, env=env_values)
         if r.returncode != 0:
+            # Another process (the web server, the CLI, a coder child) may have started the
+            # same proxy in the same moment: the name is taken, and by the right proxy.
+            again = containers.docker(["inspect", PROXY_CONTAINER, "--format",
+                                       "{{.State.Status}}\t{{index .Config.Labels \"" + LABEL + ".proxy\"}}"],
+                                      timeout=20)
+            status, _, have = (again.stdout or "").strip().partition("\t")
+            if again.returncode == 0 and have == want and status in ("running", "created"):
+                return
             raise EnvironmentRefused(f"the proxy could not be started: {(r.stderr or '').strip()[:200]}")
         # A new proxy container sits on none of the registries networks the old one had
         # joined: every other registries environment would lose its package access.

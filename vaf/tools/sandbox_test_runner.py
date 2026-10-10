@@ -289,14 +289,19 @@ class RunTestsTool(BaseTool):
     # copy 30 s - plus the 15 s backstop exec_bounded keeps behind each bounded step.
     PREPARATION_SECONDS = 30 + 120 + 30 + 180 + 30 + 5 * 15
 
-    def budget_seconds(self, args):
-        # The test command's own timeout (default 180) plus everything around it: the
-        # dispatcher must not stop waiting while pytest is still being installed.
+    @staticmethod
+    def _timeout(args) -> int:
+        """The test command's own timeout: what the call says, else 180. A value that is not
+        a number falls back too, here and in the budget alike, instead of raising."""
         try:
-            own = int((args or {}).get("timeout") or 180)
+            return int((args or {}).get("timeout") or 180)
         except (TypeError, ValueError):
-            own = 180
-        return own + self.PREPARATION_SECONDS
+            return 180
+
+    def budget_seconds(self, args):
+        # The test command's own timeout plus everything around it: the dispatcher must not
+        # stop waiting while pytest is still being installed.
+        return self._timeout(args) + self.PREPARATION_SECONDS
 
     def __init__(self, base_dir: str = ".", environment=None):
         # base_dir defaults so the main agent's tool loader can instantiate the class (obj()) without
@@ -311,9 +316,9 @@ class RunTestsTool(BaseTool):
             self.side_effect_class = "reversible"
 
     def run(self, **kwargs) -> str:
+        timeout = self._timeout(kwargs)
         if self.environment is not None:
             return run_tests_in_environment(self.environment, kwargs.get("command"),
-                                            timeout=int(kwargs.get("timeout", 180) or 180))
-        return run_project_tests(self.base_dir, kwargs.get("command"),
-                                 timeout=int(kwargs.get("timeout", 180) or 180),
+                                            timeout=timeout)
+        return run_project_tests(self.base_dir, kwargs.get("command"), timeout=timeout,
                                  user_scope_id=kwargs.get("user_scope_id"))

@@ -499,6 +499,40 @@ def test_busy_is_asked_of_docker_and_unknown_counts_as_busy(docker, mgr, monkeyp
     assert mgr.busy(env) is True
 
 
+def test_a_proxy_another_process_started_in_the_same_moment_is_taken(docker, mgr, monkeypatch):
+    """Two processes create registries environments at once: both find no proxy, both run
+    one, the second gets a name conflict. MUTATION: raise on any failed run again - red: the
+    second environment was refused while the right proxy was running."""
+    real = containers.docker
+    raced = {"done": False}
+
+    def _racing(args, timeout=60, **kw):
+        if (args[:1] == ["run"] and envmod.PROXY_CONTAINER in args and not raced["done"]):
+            raced["done"] = True
+            real(args, timeout, **kw)                     # the other process's proxy
+            return _done(125, "", 'Conflict. The container name "/vaf-env-proxy" is already in use')
+        return real(args, timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _racing)
+    env = mgr.create(ALICE, network="registries")
+    assert raced["done"] and env.network == "registries"
+    assert docker.containers[envmod.PROXY_CONTAINER]["state"] == "running"
+    # A running proxy of OTHER allowed hosts took the name: no race to accept.
+    del docker.containers[envmod.PROXY_CONTAINER]
+
+    def _foreign(args, timeout=60, **kw):
+        if args[:1] == ["run"] and envmod.PROXY_CONTAINER in args:
+            docker.containers[envmod.PROXY_CONTAINER] = {
+                "state": "running", "labels": {LABEL: "1", LABEL + ".proxy": "other"},
+                "args": [], "networks": set()}
+            return _done(125, "", "Conflict")
+        return real(args, timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _foreign)
+    with pytest.raises(EnvironmentRefused, match="proxy could not be started"):
+        mgr._ensure_proxy()
+
+
 def test_a_running_registries_environment_gets_its_proxy_back(docker, mgr, monkeypatch):
     """The reaper can stop the proxy between its listing and a registries environment's
     start. MUTATION: return early for a running environment again - red: the environment

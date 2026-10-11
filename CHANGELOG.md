@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a33] - 2026-10-11
+
 ### Added
 
 - **The coder can put what it built onto your server, when you ask for it.** The agent

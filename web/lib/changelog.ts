@@ -31,6 +31,30 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a33',
+    date: '2026-10-11',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'Sandbox environments: your agent builds and tests in a container of its own, with the network you choose (none, package registries only, or open). Settings, Connections lists yours with Stop and Delete, and "vaf env" does the same from the terminal.',
+          'The agent works with files on your web space over FTP, encrypted unless you write ftp://. The first connection to a server is yours to confirm.',
+          'Ask the coding agent to put what it built onto your server and it uploads it over SSH or FTP, to the one place you named.',
+          'Reach VAF over a VPN: WireGuard and OpenVPN devices get in, Tailscale and NetBird once you allow them in Settings, Local Network.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'The built-in browser gets its security updates again, and VAF starts no longer wait for a rebuild that was thrown away.',
+          'Update and Repair shows starting containers as starting instead of broken, and lists the sandbox environments next to the Docker services.',
+          'Removing a confirmed SSH or FTP server in Settings asks once more before the remembered key goes.',
+          'Every person\'s code runs in a container of their own: one account can no longer read another account\'s working folder.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a32',
     date: '2026-10-06',
     sections: [

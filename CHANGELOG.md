@@ -11,6 +11,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Security
+
+- **The WhatsApp bridge reads audio length with a patched parser.** Baileys measures a voice
+  message's length with `music-metadata` before it sends one, and the version in use could be
+  made to crash the bridge or loop forever by a crafted audio file (three advisories). It now
+  runs 11.16.1.
+
 ## [0.1.0a33] - 2026-10-11
 
 ### Added

@@ -60,15 +60,19 @@ def _fetch_permissions_row(user_scope_id: str):
     from vaf.auth.models import LocalUser
 
     async def _query():
+        from vaf.auth import account_seal
         async with get_auth_db() as session:
             result = await session.execute(
-                select(LocalUser.permissions, LocalUser.is_active)
-                .where(LocalUser.user_scope_id == user_scope_id)
+                select(LocalUser).where(LocalUser.user_scope_id == user_scope_id)
             )
-            row = result.first()
-            if row is None or not row[1]:
+            user = result.scalar_one_or_none()
+            if user is None or not user.is_active:
                 return _NO_ACCOUNT
-            return row[0]
+            # Permissions edited in the database alone (an empty list is unrestricted) grant
+            # nothing: a row whose seal does not verify is no account.
+            if not account_seal.check(user, where="permissions"):
+                return _NO_ACCOUNT
+            return user.permissions
 
     return asyncio.run(_query())
 
@@ -209,12 +213,14 @@ def list_accounts() -> list:
         from sqlalchemy import select
         from vaf.auth.database import get_auth_db
         from vaf.auth.models import LocalUser
+        from vaf.auth import account_seal
         async with get_auth_db() as db:
-            rows = (await db.execute(select(LocalUser.username, LocalUser.user_scope_id,
-                                            LocalUser.is_active, LocalUser.role))).all()
-        return [{"username": str(name), "user_scope_id": str(scope), "active": bool(active),
-                 "role": str(role or "")}
-                for name, scope, active, role in rows if name and scope]
+            users = (await db.execute(select(LocalUser))).scalars().all()
+        # A row changed outside VAF lists as inactive: the directory answers who is an admin.
+        return [{"username": str(u.username), "user_scope_id": str(u.user_scope_id),
+                 "active": bool(u.is_active) and account_seal.is_sealed(u),
+                 "role": str(u.role or "")}
+                for u in users if u.username and u.user_scope_id]
 
     try:
         try:
@@ -265,14 +271,17 @@ async def account_standing_async(user_scope_id: Optional[str]) -> tuple:
 
         from vaf.auth.database import get_auth_db
         from vaf.auth.models import LocalUser
+        from vaf.auth import account_seal
         async with get_auth_db() as session:
-            row = (await session.execute(
-                select(LocalUser.is_active, LocalUser.role)
-                .where(LocalUser.user_scope_id == scope))).first()
-        if row is None:
+            user = (await session.execute(
+                select(LocalUser).where(LocalUser.user_scope_id == scope))).scalar_one_or_none()
+        if user is None:
             answer = ("missing", "")
+        elif not account_seal.check(user, where="account standing"):
+            # Changed outside VAF: the token that names it no longer stands.
+            answer = ("tampered", "")
         else:
-            answer = ("active" if row[0] else "inactive", str(row[1] or "").strip().lower())
+            answer = ("active" if user.is_active else "inactive", str(user.role or "").strip().lower())
     except Exception:
         return ("unknown", "")
     with _cache_lock:

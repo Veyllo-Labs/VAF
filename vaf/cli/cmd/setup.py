@@ -330,6 +330,7 @@ def run_first_account_setup(
             async with get_auth_db() as db:
                 await create_first_admin(
                     db, username=name, password=secret, agent_name=state["agent"],
+                    allow_established=True,
                 )
         except UserAdminError as e:
             # admin_exists can still happen here if something raced us.

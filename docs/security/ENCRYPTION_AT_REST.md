@@ -80,6 +80,12 @@ THE MASTER KEY, per platform (secure_store_kek_backend = "auto"):
         +-- local_network_jwt_secret     token signing (and, derived, the TOTP column)
         +-- redis_password               the cache that holds DECRYPTED memory
         +-- admin_password_hash          Argon2 hash, so the terminal can verify offline
+        +-- account_seal_key             seals the account rows in Postgres, so a row changed
+        |                                in the database alone grants nothing
+        |                                (vaf/auth/account_seal.py)
+        +-- account_seal_adopted         the existing accounts were sealed once
+        +-- admin_established            this installation has had an admin (the web
+        |                                setup stays closed)
         +-- channel_<name>_<field>       a messaging channel's login (the Telegram and
         |                                Discord bot tokens), vaf/core/channel_secrets.py
         +-- mcp_server.<name>.env        a local MCP server's environment (its API keys)

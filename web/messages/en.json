@@ -531,6 +531,7 @@
     "ovEvToken": "Invalid token rejected",
     "ovEvLogin": "Login failed",
     "ovEv2fa": "2FA failed",
+    "ovEvAccountSeal": "Account record changed outside VAF",
     "ovEvWs": "WebSocket rejected",
     "ovEvForeignOrigin": "Request from another website refused",
     "ovDescAudit": "Every tool call is logged into a SHA-256 hash chain. A later modification or deletion instantly breaks all following links (tamper-evident).",

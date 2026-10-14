@@ -531,6 +531,7 @@
     "ovEvToken": "잘못된 토큰 거부",
     "ovEvLogin": "로그인 실패",
     "ovEv2fa": "2단계 인증 실패",
+    "ovEvAccountSeal": "VAF 밖에서 계정 기록이 변경됨",
     "ovEvWs": "WebSocket 거부",
     "ovEvForeignOrigin": "다른 웹사이트의 요청 거부",
     "ovDescAudit": "도구 호출은 모두 SHA-256 해시 체인에 기록돼요. 나중에 바꾸거나 지우면 그 뒤의 고리가 바로 어긋나서, 변조를 탐지할 수 있어요.",

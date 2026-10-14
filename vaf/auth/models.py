@@ -57,6 +57,9 @@ class LocalUser(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     last_login = Column(DateTime, nullable=True)
+    # HMAC over the columns that grant a login or authority, keyed outside the database
+    # (vaf/auth/account_seal.py). Set by a mapper hook on every write, never by hand.
+    seal = Column(String(80), nullable=True)
 
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
 
@@ -88,3 +91,10 @@ class UserSession(Base):
 
 Index("ix_user_sessions_user_id", UserSession.user_id)
 Index("ix_user_sessions_expires", UserSession.expires_at)
+
+
+# Every ORM write of an account re-seals it, after checking the old seal (vaf/auth/account_seal.py).
+from vaf.auth import account_seal as _account_seal  # noqa: E402
+
+_account_seal.install(LocalUser)
+

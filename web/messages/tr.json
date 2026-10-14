@@ -531,6 +531,7 @@
     "ovEvToken": "Geçersiz token reddedildi",
     "ovEvLogin": "Giriş başarısız",
     "ovEv2fa": "2FA başarısız",
+    "ovEvAccountSeal": "Hesap kaydı VAF dışında değiştirildi",
     "ovEvWs": "WebSocket reddedildi",
     "ovEvForeignOrigin": "Başka bir web sitesinden gelen istek reddedildi",
     "ovDescAudit": "Her araç çağrısı SHA-256 hash zincirine kaydedilir. Sonradan yapılan bir değişiklik ya da silme, sonraki tüm halkaları anında kırar (kurcalama belli olur).",

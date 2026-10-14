@@ -47,6 +47,18 @@ async def init_auth_db() -> None:
 
     logger.info("Auth schema initialized (shared DB)")
 
+    # The rows that predate the account seal are sealed once, here, at the first start that
+    # has it (trust on first use, recorded in the keyring). A failure leaves the seal
+    # unenforced rather than refusing every login: the keyring it needs also holds the JWT
+    # secret, so a machine that cannot read it cannot sign anyone in either way.
+    try:
+        from vaf.auth.account_seal import adopt_once
+        sealed = await adopt_once()
+        if sealed:
+            logger.info("Sealed %d existing account(s)", sealed)
+    except Exception as e:
+        logger.error("Existing accounts could not be sealed: %s", e)
+
 
 async def init_auth_db_with_retry(max_wait_seconds: float = 1800.0) -> bool:
     """

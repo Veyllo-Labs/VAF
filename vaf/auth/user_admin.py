@@ -155,6 +155,7 @@ async def create_first_admin(
     username: str,
     password: str,
     agent_name: Optional[str] = None,
+    allow_established: bool = False,
 ) -> LocalUser:
     """Create THE admin of this machine: the account plus the identity around it.
 
@@ -174,6 +175,15 @@ async def create_first_admin(
     """
     if await active_admin(db) is not None:
         raise UserAdminError("admin_exists", "An admin account already exists", 403)
+    # The keyring knows whether this installation has had an admin; an empty table alone is
+    # not a fresh install (rows deleted or demoted in the database). Only the terminal setup,
+    # behind the terminal door, may set an admin up again (`allow_established`).
+    from vaf.auth import account_seal
+    if not allow_established and account_seal.admin_established():
+        raise UserAdminError(
+            "admin_established",
+            "This installation already had an admin. Restore the database, or set the admin up "
+            "again in a terminal on this machine: vaf setup", 403)
 
     user = await create_local_user(
         db,
@@ -222,6 +232,10 @@ async def create_first_admin(
         mirror_admin_password_hash(user.password_hash)
     except Exception as e:
         logger.warning("The terminal door did not receive the password hash: %s", e)
+    try:
+        account_seal.mark_admin_established()
+    except Exception as e:
+        logger.warning("The keyring did not record the first admin: %s", e)
 
     _prepare_user_home(user.username, agent_name)
     return user

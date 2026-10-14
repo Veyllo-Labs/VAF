@@ -531,6 +531,7 @@
     "ovEvToken": "無効なトークンを拒否",
     "ovEvLogin": "ログイン失敗",
     "ovEv2fa": "2段階認証に失敗",
+    "ovEvAccountSeal": "VAF外でアカウント記録が変更されました",
     "ovEvWs": "WebSocketを拒否",
     "ovEvForeignOrigin": "他のWebサイトからのリクエストを拒否",
     "ovDescAudit": "ツール呼び出しはすべてSHA-256のハッシュチェーンに記録されます。あとから変更や削除をすると、それ以降の連なりがただちに壊れるため、改ざんを検知できます。",

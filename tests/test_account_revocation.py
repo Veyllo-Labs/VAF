@@ -47,11 +47,20 @@ def _wait(predicate, timeout=10.0):
 # ── the permission lookup ────────────────────────────────────────────────────
 
 class _Rows:
+    """The lookup selects the whole account row (the seal needs every sealed column);
+    `row` is (permissions, is_active) or None, as before."""
+
     def __init__(self, row):
         self._row = row
 
     def first(self):
         return self._row
+
+    def scalar_one_or_none(self):
+        if self._row is None:
+            return None
+        from types import SimpleNamespace
+        return SimpleNamespace(permissions=self._row[0], is_active=self._row[1], username="alice")
 
 
 def _fake_store(monkeypatch, row=None, fail=False):

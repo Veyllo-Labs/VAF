@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vaf.auth.models import LocalUser, UserSession
 from vaf.auth.database import get_auth_db
+from vaf.auth import account_seal
 from vaf.auth.crypto import (
     verify_password,
     create_access_token,
@@ -198,6 +199,10 @@ async def needs_setup():
     """
     import asyncio
     last_exc: Exception | None = None
+    # The keyring knows whether this installation has had an admin. Deleting, demoting or
+    # deactivating every admin row in the database does not make it a fresh install again.
+    if account_seal.admin_established():
+        return {"needs_setup": False}
     for attempt in range(3):
         try:
             async with get_auth_db() as db:
@@ -305,7 +310,9 @@ async def test_veyllo_key(body: TestVeylloKeyRequest, request: Request):
     Gated exactly like /bootstrap (refuses once an admin exists) so it can't be abused as an open
     key-probe oracle; also rate-limited (see _RATE_LIMITED_PATHS). Returns {"ok": bool}.
     """
-    # First-run gate: only usable while no admin exists.
+    # First-run gate: only usable while no admin exists, by the keyring and by the table.
+    if account_seal.admin_established():
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Setup already completed")
     try:
         async with get_auth_db() as db:
             result = await db.execute(
@@ -370,6 +377,8 @@ async def setup_2fa(request: Request):
         user = result.scalar_one_or_none()
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        if not account_seal.check(user, where="/api/auth/setup-2fa", ip=_client_ip(request)):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=account_seal.REFUSAL_LOGIN)
 
         # Check if user already has 2FA configured and verified
         if user.totp_secret and user.totp_nonce and not user.requires_2fa_setup:
@@ -414,6 +423,9 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
             select(LocalUser).where(LocalUser.id == user_id_uuid, LocalUser.is_active == True)
         )
         user = result.scalar_one_or_none()
+        if user is not None and not account_seal.check(user, where="/api/auth/verify-2fa",
+                                                       ip=_client_ip(request)):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=account_seal.REFUSAL_LOGIN)
         if not user or not user.totp_secret or not user.totp_nonce:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="2FA not set up")
 
@@ -491,6 +503,11 @@ async def login(body: LoginRequest, request: Request, response: Response):
         if not verify_password(user.password_hash, body.password or ""):
             _log_auth_failure("login_failed", request, username=username_clean, detail="wrong password")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
+        # After the password, so a stranger learns nothing about a row; before the terminal
+        # door's hash copy below and before any token, so a hash set in the database alone
+        # neither signs in nor unlocks the terminal.
+        if not account_seal.check(user, where="/api/auth/login", ip=_client_ip(request)):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=account_seal.REFUSAL_LOGIN)
 
         # Backfill the terminal door's hash copy. Every installation that
         # predates the door has an admin account whose password was set before
@@ -644,7 +661,7 @@ async def _me_user_from_token(request: Request, response: Response, token: str) 
                     select(LocalUser).where(LocalUser.id == user_id, LocalUser.is_active == True)
                 )
                 user = result.scalar_one_or_none()
-                if not user:
+                if not user or not account_seal.check(user, where="/api/auth/me"):
                     return None
 
                 token_hash = token_hash_for_db(token)
@@ -761,6 +778,8 @@ async def refresh(body: RefreshRequest, request: Request, response: Response):
         user = result.scalar_one_or_none()
         if not user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        if not account_seal.check(user, where="/api/auth/refresh", ip=_client_ip(request)):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=account_seal.REFUSAL_LOGIN)
         access = create_access_token(
             str(user.id),
             user.username,

@@ -13,6 +13,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **Changing an account in the database no longer signs anyone in.** Accounts live in the
+  same database as the memories. Whoever could write it (with the database password, which
+  stays a published default until `vaf secure rotate-db`) could put in their own password,
+  clear the 2FA and sign in as admin. Each account now carries a seal under a key that only
+  VAF's own key store holds. A changed account cannot sign in, keeps no token and no tool
+  rights, and shows up in the security log. Existing accounts are sealed once at the first
+  start after the update. Deleting every admin in the database no longer reopens the first-run
+  setup either: after a lost database, the admin is set up again with `vaf setup` in a terminal.
 - **A password alone no longer opens the API.** After a correct password and before the 2FA
   code, the login hands out a short step token for the 2FA screens. The server's check read a
   field that token never carries, so the token opened every other route as well, and the

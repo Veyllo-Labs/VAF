@@ -62,6 +62,9 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "token_rejected": "LAN request with an invalid or expired token (401)",
     "login_failed": "Wrong username or password on /api/auth/login",
     "twofa_failed": "Wrong or expired 2FA code or temp token",
+    "account_seal_broken": "An account row whose seal does not verify (changed in the database "
+                           "outside VAF) was refused for a login, a token or its rights. "
+                           "`path` names the check",
     "ws_rejected": "Rejected network WebSocket handshake (IP/token)",
     "foreign_origin_blocked": "A request or WebSocket that a browser marked as coming from "
                               "another web page (Origin, Sec-Fetch-Site, or a DNS name as "

@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vaf.auth.models import LocalUser, UserRole
 from vaf.auth.database import get_auth_db
 from vaf.auth.crypto import hash_password
+from vaf.auth import account_seal
 from vaf.core.config import get_local_admin_scope_id, is_admin_identity
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,13 @@ async def count_other_active_admins(db, target_id) -> int:
         )
     )
     return len(result.scalars().all())
+
+
+def _refuse_unsealed(user, where: str) -> None:
+    """An admin edit of a row changed outside VAF would re-seal whatever was put there:
+    refused (409); deleting the account stays possible, and the terminal can reset it."""
+    if not account_seal.check(user, where=where):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=account_seal.REFUSAL_EDIT)
 
 
 def caller_identity(caller: dict) -> tuple:
@@ -259,6 +267,7 @@ async def list_users(_: Dict[str, Any] = Depends(require_admin)):
                     "is_active": user.is_active,
                     "online": _is_online(user),
                     "requires_2fa_setup": user.requires_2fa_setup,
+                    "sealed": account_seal.is_sealed(user),
                     "tools": user.permissions.get("tools", []) if user.permissions else [],
                     "workflows": user.permissions.get("workflows", []) if user.permissions else [],
                     "confirmation_bypass": bool(user.permissions.get("confirmation_bypass")) if user.permissions else False,
@@ -407,6 +416,7 @@ async def update_user(user_id: str, data: UserUpdate, admin: Dict[str, Any] = De
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="User not found"
                 )
+            _refuse_unsealed(user, "/api/users update")
 
             if data.role is not None or data.is_active is not None:
                 caller_id, caller_scope = caller_identity(admin)
@@ -489,6 +499,7 @@ async def reset_password(user_id: str, _: Dict[str, Any] = Depends(require_admin
             user = result.scalar_one_or_none()
             if not user:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            _refuse_unsealed(user, "/api/users reset-password")
             new_password = secrets.token_urlsafe(12)
             user.password_hash = hash_password(new_password)
             from vaf.cli.gate import is_local_admin_account, mirror_admin_password_hash
@@ -559,6 +570,7 @@ async def reset_2fa(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
             user = result.scalar_one_or_none()
             if not user:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            _refuse_unsealed(user, "/api/users reset-2fa")
             user.totp_secret = None
             user.totp_nonce = None
             user.requires_2fa_setup = True

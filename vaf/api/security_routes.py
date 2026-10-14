@@ -832,6 +832,9 @@ async def _verify_admin_totp(user: Dict[str, Any], code: str) -> None:
         async with get_auth_db() as db:
             result = await db.execute(select(LocalUser).where(LocalUser.id == _uuid.UUID(user_id)))
             db_user = result.scalar_one_or_none()
+        from vaf.auth import account_seal
+        if db_user is not None and not account_seal.check(db_user, where="step-up 2FA"):
+            raise HTTPException(status_code=403, detail=account_seal.REFUSAL_LOGIN)
         if db_user is None or not db_user.totp_secret or not db_user.totp_nonce:
             raise HTTPException(status_code=400, detail="2FA is not configured for this account")
         secret = decrypt_totp_secret(db_user.totp_secret, db_user.totp_nonce)

@@ -243,6 +243,7 @@ async def adopt_once() -> int:
 
     from vaf.auth.database import get_auth_db
     from vaf.auth.models import LocalUser
+    from vaf.core.config import is_admin_identity
     from vaf.core.data_keyring import set_data_secret
 
     count = 0
@@ -252,7 +253,7 @@ async def adopt_once() -> int:
             for user in (await db.execute(select(LocalUser))).scalars().all():
                 user.seal = compute(values_of(user))
                 count += 1
-                has_admin = has_admin or (str(user.role or "").lower() == "admin")
+                has_admin = has_admin or is_admin_identity(user.role, str(user.user_scope_id or ""))
             await db.commit()
     if has_admin:
         mark_admin_established()

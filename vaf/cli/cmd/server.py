@@ -130,6 +130,22 @@ def server_provision(
     Config.set("server_mode", True)
     UI.success("Server mode enabled (LAN hosting with TLS, locked on).")
 
+    # A server must not keep the database passwords published in this repository: whoever has
+    # one writes every table (vaf/core/db_credentials.py). Replaced here when the database
+    # answers; otherwise said loudly, with the command that does it.
+    from vaf.core.db_credentials import rotate_shipped_passwords, shipped_password_in_use
+    if shipped_password_in_use():
+        try:
+            rotated = rotate_shipped_passwords()
+            UI.success("Database passwords replaced with random ones and verified "
+                       f"({', '.join(rotated)}). Restart VAF so every worker uses them.")
+        except Exception as e:
+            UI.warning("The memory database still uses the published default password, and it "
+                       f"could not be replaced now ({type(e).__name__}). Start the service stack "
+                       "and run `vaf secure rotate-db` before anyone can reach this server.")
+    else:
+        UI.info("The database passwords are not the published defaults.")
+
     try:
         from vaf.network.ssl_utils import ensure_ssl_certificates
         cert_path, _key_path = ensure_ssl_certificates()

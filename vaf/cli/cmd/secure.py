@@ -13,7 +13,6 @@ mid-connection with, and half-succeeding, locks the user out of their own
 memories. Here it is explicit, verified before it is persisted, and reversible
 because the old value is printed nowhere but known to the operator.
 """
-import secrets
 
 import typer
 
@@ -65,9 +64,8 @@ def status():
     # Both DSNs: the owner (DDL) role is the stronger one, and checking only
     # the app DSN reads "all clear" while the superuser still has the
     # published secret (exactly the state a half-done rotation left behind).
-    dsn = (str(Config.get("memory_db_url", "") or "")
-           + " " + str(Config.get("memory_db_owner_url", "") or ""))
-    if "vaf_dev_secret" in dsn or "vaf_app_dev_secret" in dsn:
+    from vaf.core.db_credentials import shipped_password_in_use
+    if shipped_password_in_use():
         UI.warning("The memory database still uses the shipped default password. "
                    "Run `vaf secure rotate-db`.")
     else:
@@ -164,49 +162,10 @@ def rotate_db(
         UI.info("Cancelled.")
         raise typer.Exit(0)
 
-    async def _rotate_dsn(source_dsn: str) -> str:
-        """Rotate the role named in this DSN; return the DSN with the new password.
-
-        Each role gets its OWN fresh password: the two DSNs name different
-        roles with different power, and sharing one secret between them would
-        undo the reason they were separated.
-        """
-        from urllib.parse import urlsplit, urlunsplit
-
-        from sqlalchemy import text
-        from sqlalchemy.ext.asyncio import create_async_engine
-
-        from vaf.memory.database import normalize_async_dsn
-
-        new_password = secrets.token_urlsafe(24)
-        parts = urlsplit(source_dsn)
-        role = parts.username or "vaf"
-        engine = create_async_engine(normalize_async_dsn(source_dsn), poolclass=None)
-        try:
-            async with engine.begin() as conn:
-                # Parameter binding is not allowed in ALTER ROLE; the password is
-                # generated here from token_urlsafe, so it carries no quotes.
-                await conn.execute(text(f"ALTER ROLE {role} WITH PASSWORD '{new_password}'"))
-        finally:
-            await engine.dispose()
-
-        netloc = f"{role}:{new_password}@{parts.hostname or 'localhost'}"
-        if parts.port:
-            netloc += f":{parts.port}"
-        rotated = urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
-
-        # Verify BEFORE persisting: a config pointing at a password that does not
-        # work is the lockout this command exists to avoid.
-        verify = create_async_engine(normalize_async_dsn(rotated), poolclass=None)
-        try:
-            async with verify.connect() as conn:
-                await conn.execute(text("SELECT 1"))
-        finally:
-            await verify.dispose()
-        return rotated
+    from vaf.core.db_credentials import rotate_role_password, shipped_password_in
 
     try:
-        rotated = asyncio.run(_rotate_dsn(dsn))
+        rotated = asyncio.run(rotate_role_password(dsn))
     except Exception as e:
         UI.error(f"Rotation failed, nothing was changed in the config: {type(e).__name__}: {e}")
         raise typer.Exit(1)
@@ -222,9 +181,9 @@ def rotate_db(
     # roll back the app rotation: each DSN is verified before it is persisted,
     # so the config never points at a password that does not work.
     owner = str(Config.get("memory_db_owner_url", "") or "")
-    if owner and ("vaf_dev_secret" in owner or "vaf_app_dev_secret" in owner):
+    if owner and shipped_password_in(owner):
         try:
-            rotated_owner = asyncio.run(_rotate_dsn(owner))
+            rotated_owner = asyncio.run(rotate_role_password(owner))
             Config.set("memory_db_owner_url", rotated_owner)
             UI.success("Owner role rotated and verified as well.")
         except Exception as e:

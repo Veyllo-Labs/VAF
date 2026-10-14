@@ -37,6 +37,8 @@ def seams(monkeypatch):
     monkeypatch.setattr(firewall, "setup_firewall",
                         lambda p, pf: calls["firewall"].append((p, pf)) or "created")
     monkeypatch.setattr(server_cmd.platform, "system", lambda: "Linux")
+    from vaf.core import db_credentials
+    monkeypatch.setattr(db_credentials, "shipped_password_in_use", lambda: False)
     return calls
 
 
@@ -114,3 +116,41 @@ def test_no_admitted_network_means_no_example_rule(seams, monkeypatch):
     said = " ".join(result.output.split())
     assert "192.168.1.0/24" not in said and "firewall-cmd --permanent" not in said
     assert "No admitted network could be determined" in said
+
+
+def test_provision_replaces_the_published_database_passwords(seams, monkeypatch):
+    """A server must not keep them: whoever has one writes every table, the accounts included.
+    MUTATION: drop the rotation from provision - red."""
+    from vaf.core import db_credentials
+    rotated = []
+    monkeypatch.setattr(db_credentials, "shipped_password_in_use", lambda: True)
+    monkeypatch.setattr(db_credentials, "rotate_shipped_passwords",
+                        lambda: rotated.append(1) or ["memory_db_url", "memory_db_owner_url"])
+    result = runner.invoke(server_cmd.app, ["provision"])
+    assert result.exit_code == 0, result.output
+    assert rotated == [1] and "replaced with random ones" in result.output
+
+
+def test_a_database_that_cannot_be_reached_is_said_loudly(seams, monkeypatch):
+    from vaf.core import db_credentials
+
+    def _down():
+        raise ConnectionRefusedError("no database")
+
+    monkeypatch.setattr(db_credentials, "shipped_password_in_use", lambda: True)
+    monkeypatch.setattr(db_credentials, "rotate_shipped_passwords", _down)
+    result = runner.invoke(server_cmd.app, ["provision"])
+    assert result.exit_code == 0 and "vaf secure rotate-db" in result.output
+
+
+def test_the_shipped_password_check_reads_both_roles(monkeypatch):
+    """The owner role is the stronger one; checking only the app DSN read "all clear".
+    MUTATION: read only memory_db_url - red."""
+    from vaf.core import db_credentials
+    cfg = {"memory_db_url": "postgresql://vaf_app:Xq9-random@localhost/vaf_memory",
+           "memory_db_owner_url": "postgresql://vaf:vaf_dev_secret@localhost/vaf_memory"}
+    monkeypatch.setattr(Config, "get", staticmethod(lambda k, d=None: cfg.get(k, d)))
+    assert db_credentials.shipped_password_in_use()
+    cfg["memory_db_owner_url"] = "postgresql://vaf:Zz8-random@localhost/vaf_memory"
+    assert not db_credentials.shipped_password_in_use()
+

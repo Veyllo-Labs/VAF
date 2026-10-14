@@ -25,6 +25,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **Setting up a server replaces the published database passwords.** `vaf server provision`
+  (which the server installer runs) now gives both database roles random passwords when the
+  database is reachable, verified before they are saved. If it cannot reach the database it says
+  so and names `vaf secure rotate-db`.
 - **Changing an account in the database no longer signs anyone in.** Accounts live in the
   same database as the memories. Whoever could write it (with the database password, which
   stays a published default until `vaf secure rotate-db`) could put in their own password,

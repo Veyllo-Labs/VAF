@@ -567,18 +567,17 @@ def _warn_about_default_db_password(log=None) -> bool:
     memories. `vaf secure rotate-db` does it as an explicit, verified step.
     """
     try:
-        from vaf.core.config import Config
         # BOTH DSNs, not just the app one. Since the RLS cutover a default
         # install has two roles, and the owner (DDL) role is the stronger of
         # the two - a check that only reads memory_db_url goes silent while
         # the superuser is still reachable by the published secret. Live run
         # 2026-08-13: the app role was rotated, the owner role was not, and
         # this warning would have said "all clear".
-        dsn = (str(Config.get("memory_db_url", "") or "")
-               + " " + str(Config.get("memory_db_owner_url", "") or ""))
+        from vaf.core.db_credentials import shipped_password_in_use
+        in_use = shipped_password_in_use()
     except Exception:
         return False
-    if "vaf_dev_secret" not in dsn and "vaf_app_dev_secret" not in dsn:
+    if not in_use:
         return False
     _say(log, "SECURITY: the memory database still uses the shipped default password. "
               "Tell your agent to run `vaf secure rotate-db` to set a random one, "

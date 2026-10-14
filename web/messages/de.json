@@ -532,6 +532,7 @@
     "ovEvLogin": "Login fehlgeschlagen",
     "ovEv2fa": "2FA fehlgeschlagen",
     "ovEvAccountSeal": "Kontodaten außerhalb von VAF verändert",
+    "ovEvPasswordChanged": "Passwort neu gesetzt",
     "ovEvWs": "WebSocket abgewiesen",
     "ovEvForeignOrigin": "Anfrage einer fremden Webseite abgewiesen",
     "ovDescAudit": "Jeder Tool-Aufruf wird SHA-256-verkettet protokolliert. Eine nachträgliche Änderung oder Löschung bricht sofort alle folgenden Glieder (manipulations-evident).",

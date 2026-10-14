@@ -294,6 +294,7 @@ vaf a2a create|invite|join|say|report|vote|wait   # Agent rooms (A2A), also for 
 vaf env list|create|exec|shell|ps|logs|kill|preview|stop|delete|prune   # Sandbox environments
 vaf ssh key|hosts|forget        # The SSH key and servers your agent uses
 vaf ftp servers|forget          # The FTP servers your agent confirmed
+vaf users list|reset-password   # The accounts; a new admin password with the recovery key
 
 vaf secure status       # Where every at-rest key lives, and what is still open
 vaf secure recover      # Restore the data key after a reinstall (recovery key)

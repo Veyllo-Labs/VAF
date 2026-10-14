@@ -343,6 +343,7 @@ _set_credential_verifier(_a2a_credential_verifier)
 import typer
 from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup, a2a, repair, usage, top, inbox, outbox, secrets, ssh, ftp, audit
 from vaf.cli.cmd import env as env_cmd
+from vaf.cli.cmd import users as users_cmd
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -426,6 +427,12 @@ app.add_typer(ftp.app, name="ftp", help="The FTP servers your agent confirmed",
 # Sandbox environments hold the owner's code and run commands: the same door.
 app.add_typer(env_cmd.app, name="env", help="Your sandbox environments: run, install and test code",
               callback=_terminal_door)
+
+# The accounts. NOT behind the group door: `reset-password` is the way back in when the
+# admin password is gone, which is the password the door asks for, and the door opens for a
+# caller without a terminal. The command demands a person at the terminal and its own proof
+# (the admin password or the recovery key); `list` asks the door itself.
+app.add_typer(users_cmd.app, name="users", help="The accounts that can sign in to this VAF")
 
 # Snapshot/Undo
 app.add_typer(snapshot_app, name="snapshot", help="Code snapshots and undo")

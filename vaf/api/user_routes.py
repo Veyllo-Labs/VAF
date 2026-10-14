@@ -508,6 +508,12 @@ async def reset_password(user_id: str, _: Dict[str, Any] = Depends(require_admin
                 mirror_admin_password_hash(user.password_hash)
             user.updated_at = _utc_now_naive()
             await db.commit()
+            try:
+                from vaf.core.security_events import log_security_event
+                log_security_event("password_changed", username=str(user.username or ""),
+                                   detail="reset by an admin in Settings")
+            except Exception:
+                pass
             return {"temporary_password": new_password}
     except HTTPException:
         raise

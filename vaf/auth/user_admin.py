@@ -149,6 +149,44 @@ async def create_local_user(
     return user
 
 
+def apply_terminal_reset(user: LocalUser, new_password: str) -> None:
+    """The fields a terminal reset sets: a new password, and the second factor set up again at
+    the next login (the old one may be on a phone the owner no longer has, or the attacker's)."""
+    validate_password(new_password)
+    user.password_hash = hash_password(new_password)
+    user.totp_secret = None
+    user.totp_nonce = None
+    user.requires_2fa_setup = True
+
+
+async def find_user(db, username: str) -> Optional[LocalUser]:
+    result = await db.execute(
+        select(LocalUser).where(func.lower(LocalUser.username) == str(username or "").strip().lower())
+    )
+    return result.scalar_one_or_none()
+
+
+async def reset_password_from_terminal(db, user: LocalUser, new_password: str) -> None:
+    """The way back in when the admin's password is gone (`vaf users reset-password`).
+
+    Only the terminal calls it, after its own proof (a person at the terminal with the admin
+    password or the recovery key). The row is re-sealed as it stands now
+    (`account_seal.trusted_rewrite`), which is what makes this the recovery for a row changed
+    outside VAF as well; the command shows such a row and asks before it gets here.
+    """
+    from vaf.auth import account_seal
+    apply_terminal_reset(user, new_password)
+    with account_seal.trusted_rewrite():
+        await db.commit()
+    try:
+        from vaf.cli.gate import is_local_admin_account, mirror_admin_password_hash
+        if is_local_admin_account(username=str(user.username or ""),
+                                  user_scope_id=str(user.user_scope_id or "")):
+            mirror_admin_password_hash(user.password_hash)
+    except Exception as e:  # the door repairs itself at the next login
+        logger.debug("Password hash was not mirrored to the keyring: %s", e)
+
+
 async def create_first_admin(
     db,
     *,

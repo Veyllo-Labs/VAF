@@ -62,6 +62,9 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "token_rejected": "LAN request with an invalid or expired token (401)",
     "login_failed": "Wrong username or password on /api/auth/login",
     "twofa_failed": "Wrong or expired 2FA code or temp token",
+    "password_changed": "An account's password was set anew: by an admin in Settings, or in a "
+                        "terminal on this machine (`vaf users reset-password`, with the proof "
+                        "it took in `detail`)",
     "account_seal_broken": "An account row whose seal does not verify (changed in the database "
                            "outside VAF) was refused for a login, a token or its rights. "
                            "`path` names the check",

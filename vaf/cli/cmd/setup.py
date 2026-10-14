@@ -306,7 +306,7 @@ def run_first_account_setup(
 
         if existing:
             UI.warning(f'This machine already has an admin account ("{existing}"). '
-                       "Passwords are changed in the web UI under Settings.")
+                       f"A new password for it: vaf users reset-password {existing}")
             return SetupOutcome.ALREADY_EXISTS
 
         if interactive:

@@ -11,6 +11,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+
+- **A way back in when the admin password is forgotten.** `vaf users reset-password NAME` sets a
+  new password in a terminal on this computer, and the second factor is set up again at the
+  next login. It takes the admin password or, when that is gone, the recovery key from
+  `VAF-BackThisUp.md` (`--recovery-key`), and it only runs for a person at the terminal, never
+  from a script or the agent. `vaf users list` shows the accounts. Every password reset, in the
+  terminal or by an admin in Settings, now appears in the security log.
+
 ### Security
 
 - **Changing an account in the database no longer signs anyone in.** Accounts live in the

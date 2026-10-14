@@ -139,6 +139,7 @@ undeclared, undocumented here, or unlabelled in the dashboard.
 | `token_rejected` | LAN request with an invalid/expired token, or one whose account was deactivated, deleted or demoted since it was issued (401) | `vaf/auth/middleware.py` |
 | `login_failed` | Wrong username/password on `/api/auth/login` | `vaf/api/auth_routes.py` |
 | `twofa_failed` | Wrong/expired 2FA code or temp token | `vaf/api/auth_routes.py` |
+| `password_changed` | An account's password set anew, by an admin in Settings or in a terminal on this machine (`vaf users reset-password`, the proof it took in `detail`) | `vaf/api/user_routes.py`, `vaf/cli/cmd/users.py` |
 | `account_seal_broken` | An account row whose seal does not verify (changed in the database outside VAF) refused for a login, a token or its rights; `path` names the check | `vaf/auth/account_seal.py` |
 | `ws_rejected` | Rejected NETWORK WebSocket handshake (IP/token), or a token of an account that no longer stands on either lane, the localhost-only one included (detail `revoked account`); other trusted-localhost paths do not emit | `vaf/core/web_server.py` (`_emit_sec_ws`) |
 | `foreign_origin_blocked` | A request or WebSocket handshake that a browser marked as coming from another web page (a foreign `Origin`, a cross-site `Sec-Fetch-Site`, or a DNS name as `Host`) was refused with 403 / close 4003, in every mode including single-user; `detail` the reason (`origin`, `site`, `host`) and the origin or host | `vaf/auth/middleware.py` (`ForeignOriginGuard`) |

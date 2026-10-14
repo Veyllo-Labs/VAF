@@ -366,7 +366,9 @@ random one and writes the new DSN into the config. Deliberately a command and
 not a startup step: rotating the password of a database the app is mid-connection
 with, and half-succeeding, locks you out of your own memories. It verifies the
 new credentials before persisting them, and refuses to change anything if the
-rotation fails. On a server it is a provisioning step as well: `vaf server
+rotation fails. If the role's password was changed but the new connection does not
+verify, nothing is saved and the error names the new connection string, the only
+copy of the new password, so the operator can get back in. On a server it is a provisioning step as well: `vaf server
 provision` runs the same rotation (`vaf/core/db_credentials.py`, which also holds
 the one check for the published passwords that `vaf secure status` and the stack
 start's warning read) whenever either role still has its published password.

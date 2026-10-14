@@ -366,3 +366,31 @@ def test_the_auth_init_adds_the_seal_column_before_it_seals(monkeypatch):
     asyncio.run(auth_db.init_auth_db())
     assert order == ["create_all", "columns", "adopt"]
 
+
+def test_a_keyring_that_cannot_be_read_is_not_taken_as_adopted(monkeypatch):
+    """Review finding: adopt_once asked enforced(), which counted a failed keyring read as
+    adopted and remembered it, so a passing failure at the first start skipped the adoption
+    and left every unsealed row refused for the life of the process.
+    MUTATION: ask enforced() again in adopt_once, or remember the failure in enforced() - red."""
+    import asyncio
+
+    import vaf.core.data_keyring as data_keyring
+    monkeypatch.setattr(account_seal, "_enforced_cache", False)
+    answers = [RuntimeError("keyring locked"), ""]
+
+    def _peek(_name):
+        a = answers.pop(0) if answers else ""
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+    monkeypatch.setattr(data_keyring, "peek_data_secret", _peek)
+    with pytest.raises(RuntimeError):
+        asyncio.run(account_seal.adopt_once())
+    assert account_seal._enforced_cache is False
+
+    answers[:] = [RuntimeError("keyring locked"), ""]
+    assert account_seal.enforced() is True          # this call fails closed ...
+    assert account_seal.enforced() is False         # ... and the next one reads again
+    account_seal.reset_caches()
+

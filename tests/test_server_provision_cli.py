@@ -154,3 +154,53 @@ def test_the_shipped_password_check_reads_both_roles(monkeypatch):
     cfg["memory_db_owner_url"] = "postgresql://vaf:Zz8-random@localhost/vaf_memory"
     assert not db_credentials.shipped_password_in_use()
 
+
+def test_the_rotation_quotes_the_role_keeps_the_host_and_hands_back_a_password_it_could_not_verify(monkeypatch):
+    """Review finding: the role went into ALTER ROLE unquoted, the DSN was rebuilt from the
+    bare hostname (an IPv6 address lost its brackets), and a new password that did not verify
+    was lost: changed in the database, saved nowhere. MUTATION: drop the quoting, or the DSN
+    from the error - red."""
+    import asyncio
+    import contextlib
+
+    import sqlalchemy.ext.asyncio as sa_async
+
+    from vaf.core import db_credentials
+    statements, verify_fails = [], {"on": False}
+
+    class _Conn:
+        async def execute(self, stmt):
+            statements.append(str(stmt))
+
+    class _Engine:
+        def __init__(self, url):
+            self.url = url
+
+        def begin(self):
+            @contextlib.asynccontextmanager
+            async def _ctx():
+                yield _Conn()
+            return _ctx()
+
+        def connect(self):
+            @contextlib.asynccontextmanager
+            async def _ctx():
+                if verify_fails["on"]:
+                    raise ConnectionRefusedError("pg_hba says no")
+                yield _Conn()
+            return _ctx()
+
+        async def dispose(self):
+            pass
+
+    monkeypatch.setattr(sa_async, "create_async_engine", lambda url, **kw: _Engine(url))
+    dsn = "postgresql://my%22role:vaf_dev_secret@[::1]:5433/vaf_memory"
+    rotated = asyncio.run(db_credentials.rotate_role_password(dsn))
+    assert statements[0].startswith('ALTER ROLE "my""role" WITH PASSWORD ')
+    assert "@[::1]:5433/vaf_memory" in rotated and rotated.startswith("postgresql://my%22role:")
+
+    verify_fails["on"] = True
+    with pytest.raises(RuntimeError) as err:
+        asyncio.run(db_credentials.rotate_role_password("postgresql://vaf:vaf_dev_secret@localhost/vaf_memory"))
+    assert "was changed" in str(err.value) and "postgresql://vaf:" in str(err.value)
+

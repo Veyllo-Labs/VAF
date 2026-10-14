@@ -113,9 +113,10 @@ def enforced() -> bool:
             from vaf.core.data_keyring import peek_data_secret
             _enforced_cache = peek_data_secret(_ADOPTED) == "1"
         except Exception:
-            # An unreadable keyring cannot say "not yet": the seal is enforced, and the
-            # key read below fails closed on its own.
-            _enforced_cache = True
+            # An unreadable keyring cannot say "not yet": enforced for THIS call (the key read
+            # fails closed on its own), but not remembered, so a keyring that comes back is
+            # read again instead of a passing failure deciding for the whole process.
+            return True
     return _enforced_cache
 
 
@@ -237,7 +238,12 @@ async def adopt_once() -> int:
     """Seal every existing row once, the first time this installation starts with the seal,
     and record it in the keyring. Returns how many rows were sealed (0 after the first time)."""
     global _enforced_cache
-    if enforced():
+    # The marker itself, not enforced(): a keyring that cannot be read must not count as
+    # "already adopted". The error propagates (init_auth_db logs it, the next start retries)
+    # and nothing is enforced in this process on the strength of it.
+    from vaf.core.data_keyring import peek_data_secret
+    if _enforced_cache or peek_data_secret(_ADOPTED) == "1":
+        _enforced_cache = True
         return 0
     from sqlalchemy import select
 

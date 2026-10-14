@@ -38,7 +38,7 @@ async def rotate_role_password(source_dsn: str) -> str:
     Verified by a new connection BEFORE it is returned, so a caller never persists a password
     that does not work. Each role gets its own password: the two DSNs name roles with
     different power, and one shared secret would undo the reason they were separated."""
-    from urllib.parse import urlsplit, urlunsplit
+    from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
@@ -47,25 +47,35 @@ async def rotate_role_password(source_dsn: str) -> str:
 
     new_password = secrets.token_urlsafe(24)
     parts = urlsplit(source_dsn)
-    role = parts.username or "vaf"
+    # The role as Postgres knows it (a DSN percent-encodes its user), quoted as an identifier.
+    role = unquote(parts.username or "vaf")
+    ident = '"' + role.replace('"', '""') + '"'
     engine = create_async_engine(normalize_async_dsn(source_dsn), poolclass=None)
     try:
         async with engine.begin() as conn:
             # Parameter binding is not allowed in ALTER ROLE; the password is generated here
             # from token_urlsafe, so it carries no quotes.
-            await conn.execute(text(f"ALTER ROLE {role} WITH PASSWORD '{new_password}'"))
+            await conn.execute(text(f"ALTER ROLE {ident} WITH PASSWORD '{new_password}'"))
     finally:
         await engine.dispose()
 
-    netloc = f"{role}:{new_password}@{parts.hostname or 'localhost'}"
-    if parts.port:
-        netloc += f":{parts.port}"
+    # The host and port exactly as written (an IPv6 address keeps its brackets), the role
+    # encoded again; token_urlsafe needs no encoding.
+    hostport = parts.netloc.rsplit("@", 1)[-1] or "localhost"
+    netloc = f"{quote(role, safe='')}:{new_password}@{hostport}"
     rotated = urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
     verify = create_async_engine(normalize_async_dsn(rotated), poolclass=None)
     try:
         async with verify.connect() as conn:
             await conn.execute(text("SELECT 1"))
+    except Exception as e:
+        # The role's password IS changed at this point and the old one is gone: the operator
+        # needs the new one to get back in. Said here, on the operator's terminal, once.
+        raise RuntimeError(
+            f"The password of the database role {role!r} was changed, but a connection with "
+            f"the new one did not verify ({type(e).__name__}: {e}). Nothing was saved to the "
+            f"config. The new connection string is: {rotated}") from e
     finally:
         await verify.dispose()
     return rotated

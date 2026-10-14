@@ -4164,37 +4164,17 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
     print(f"[WebSocket] Connection attempt from {client_ip}")
     log("API", f"WebSocket connection attempt from {client_ip}")
     
-    # First: check if client is localhost or Docker internal network
+    # Localhost means loopback, the same definition the HTTP middleware uses. The private /12
+    # block Docker's bridges use counted as well ("Docker"), but home and office networks use
+    # that RFC1918 range too, and so do VAF's own containers: a client there reached
+    # the localhost-admin 2FA allowance and, with any expired token, the local-admin floor
+    # below. Nothing shipped needs it: the sandbox reaches VAF through the tool bridge, and
+    # VAF itself does not run in a container.
     try:
-        from vaf.network.binding import is_localhost, is_allowed_ip
-        import ipaddress
-        
-        # Check if localhost OR Docker internal network
+        from vaf.network.binding import is_localhost
         is_localhost_client = is_localhost(client_ip)
-        
-        # In Docker mode, also treat Docker bridge network as "local"
-        # This is safe because Docker network is internal to the host
-        if not is_localhost_client:
-            try:
-                ip_obj = ipaddress.ip_address(client_ip)
-                docker_network = ipaddress.ip_network("172.16.0.0/12")
-                if ip_obj in docker_network:
-                    is_localhost_client = True
-                    log("API", f"WebSocket: Docker network IP {client_ip} treated as localhost")
-            except ValueError:
-                pass
-                
     except ImportError:
-        # Fallback localhost check (including Docker network range 172.16.0.0/12)
-        import ipaddress as _ipaddr
-        _is_docker = False
-        try:
-            _is_docker = _ipaddr.ip_address(client_ip) in _ipaddr.ip_network("172.16.0.0/12")
-        except ValueError:
-            pass
-        is_localhost_client = (
-            client_ip in ["127.0.0.1", "::1", "localhost"] or _is_docker
-        )
+        is_localhost_client = client_ip in ("127.0.0.1", "::1", "localhost")
     
     # Check local network setting
     local_network_enabled = Config.get("local_network_enabled", False)
@@ -4315,7 +4295,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 try:
                     secret = get_jwt_secret()
                     payload = jwt.decode(token, secret, algorithms=["HS256"])
-                    
+                    # Only an ACCESS token: a refresh token carries no scope and no role, and
+                    # the connection it opened was unscoped (read as global by the session
+                    # list and the memory search).
+                    if payload.get("type") != "access":
+                        raise jwt.InvalidTokenError("not an access token")
+
                     # Check 2FA status (the rule every token reader shares)
                     if not second_factor_done(payload):
                         if not is_localhost_client or payload.get("role") != "admin":

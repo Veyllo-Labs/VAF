@@ -316,29 +316,36 @@ def test_the_allowlist_agrees_with_the_stores_own_name_rule():
 
 # ── the older copies, recorded rather than changed ─────────────────────────
 
-def test_the_webui_handshake_is_documented_as_it_stands():
-    """A WATCHMAN, not a fix. Two properties of the WebUI socket were measured and left
-    alone by decision, because changing them changes how the running web interface
-    authenticates and that is its own round:
+def test_the_webui_handshake_demands_an_access_token_and_a_loopback_localhost():
+    """This was a watchman over two measured properties of the WebUI socket, left alone
+    until the round that changed how it authenticates. That round came with the second
+    factor reaching every token reader, and both were tightened then:
 
-      - it decodes a token without demanding type == "access", so a refresh token opens
-        a socket that the same credential could not open over HTTP;
-      - it treats the whole of 172.16.0.0/12 as "Docker", which is a real RFC1918 range
-        that home and office networks use, and a client classified that way can reach
-        the local-admin fallback.
+      - it decoded a token without demanding type == "access", so a refresh token (no
+        scope, no role) opened a socket the same credential could not open over HTTP,
+        and that socket was unscoped;
+      - it counted the whole private /12 block Docker's bridges use as localhost, a range
+        home and office networks use too, and a client there reached the localhost-admin
+        2FA allowance and, with any expired token, the local-admin floor.
 
-    This test pins BOTH as they are today. If somebody later tightens them, it goes red
-    and this docstring is the note explaining what changed and why it was left. If
-    somebody widens them further, it also goes red.
+    The socket now asks binding.is_localhost, the HTTP middleware's definition, and
+    refuses anything but an access token. MUTATION: put either back - red.
     """
     source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
     handshake = source.split("async def websocket_endpoint")[1].split("\n@app.")[0]
 
     assert 'payload = jwt.decode(token, secret, algorithms=["HS256"])' in handshake
-    assert handshake.count('payload.get("type")') == 0, (
-        "the WebUI handshake now checks the token type - update this watchman and say so")
-    assert 'ipaddress.ip_network("172.16.0.0/12")' in handshake, (
-        "the docker window changed - update this watchman and say so")
+    network_lane = handshake[handshake.index("Local network is ENABLED"):]
+    type_check = 'if payload.get("type") != "access":'
+    assert type_check in network_lane, "the socket opens on a token that is not an access token"
+    assert network_lane.index(type_check) < network_lane.index("if not second_factor_done(payload):")
+    assert "172.16" not in handshake and "ip_network(" not in handshake
+    assert [ln.strip() for ln in handshake.splitlines() if "is_localhost_client =" in ln] == [
+        "is_localhost_client = is_localhost(client_ip)",
+        'is_localhost_client = client_ip in ("127.0.0.1", "::1", "localhost")',
+    ]
+    from vaf.network.binding import is_localhost
+    assert not is_localhost("172.17.0.2") and not is_localhost("172.20.10.5")
 
     a2a = _route_source()
     assert "172.16" not in a2a and "jwt.decode" not in a2a, (

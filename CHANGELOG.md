@@ -18,6 +18,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   field that token never carries, so the token opened every other route as well, and the
   second factor protected only the live connection, not the API. It is now refused everywhere
   except the two 2FA screens, and on the agent rooms' door as well.
+- **A device on a 172.16-31.x.x network is no longer treated as the computer itself.** The
+  live connection counted that whole private range as "local", meant for Docker, but home
+  and office networks use it too. A device there could connect as an admin with only the
+  admin's password, and with any expired login it became the local admin. Only this
+  computer counts as local now, and the connection opens only on a regular login token.
 - **No request can wipe the database any more.** `POST /api/memory/init?drop_existing=true`
   had no admin check. It dropped every table, the accounts included, and with no admin left
   the first-run setup opened again for whoever came next. Nothing in VAF used the route; it is

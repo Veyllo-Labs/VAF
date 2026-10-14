@@ -2874,6 +2874,10 @@
     "tooShort": "Das neue Passwort braucht mindestens {n} Zeichen.",
     "mismatch": "Die beiden neuen Passwörter stimmen nicht überein.",
     "failed": "Das Passwort konnte nicht geändert werden.",
+    "errWrongPassword": "Das aktuelle Passwort stimmt nicht.",
+    "errWrongCode": "Der 2FA-Code stimmt nicht.",
+    "errSamePassword": "Das neue Passwort ist das aktuelle.",
+    "errRecordChanged": "Die Kontodaten wurden außerhalb von VAF verändert. Ein Admin findet den Eintrag im Sicherheitsprotokoll.",
     "forgotten": "Passwort vergessen? Ein Admin setzt es unter Lokales Netzwerk, Benutzerverwaltung zurück. Das Passwort des Admins selbst wird in einem Terminal auf diesem Rechner zurückgesetzt: vaf users reset-password."
   }
 }

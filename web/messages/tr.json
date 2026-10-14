@@ -2874,6 +2874,10 @@
     "tooShort": "Yeni parola en az {n} karakter olmalı.",
     "mismatch": "İki yeni parola birbirini tutmuyor.",
     "failed": "Parola değiştirilemedi.",
+    "errWrongPassword": "Mevcut parola doğru değil.",
+    "errWrongCode": "2FA kodu doğru değil.",
+    "errSamePassword": "Yeni parola mevcut parolayla aynı.",
+    "errRecordChanged": "Bu hesabın kaydı VAF dışında değiştirildi. Bir yönetici olayı güvenlik günlüğünde bulur.",
     "forgotten": "Parolanı mı unuttun? Bir yönetici Yerel Ağ, Kullanıcı Yönetimi altında sıfırlar. Yöneticinin kendi parolası bu bilgisayarda bir terminalde sıfırlanır: vaf users reset-password."
   }
 }

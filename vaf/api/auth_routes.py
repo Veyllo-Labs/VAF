@@ -827,7 +827,9 @@ async def change_password(body: ChangePasswordRequest, request: Request):
                     _log_auth_failure("login_failed" if e.code == "wrong_password" else "twofa_failed",
                                       request, username=user.username or "",
                                       detail="change-password: " + e.code.replace("_", " "))
-                raise HTTPException(status_code=e.http_status, detail=e.message)
+                # The code travels with the sentence so the page can say it in the reader's
+                # language; the sentence stays for every other client.
+                return JSONResponse(status_code=e.http_status, content={"detail": e.message, "code": e.code})
             username = user.username or ""
     except HTTPException:
         raise

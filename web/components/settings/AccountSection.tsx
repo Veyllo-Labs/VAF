@@ -45,7 +45,13 @@ export default function AccountSection() {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                setNote({ ok: false, text: String(data.detail || t('failed')) });
+                // A known refusal is said in the reader's language; anything else as sent.
+                const known: Record<string, string> = {
+                    wrong_password: t('errWrongPassword'), wrong_code: t('errWrongCode'),
+                    same_password: t('errSamePassword'), record_changed: t('errRecordChanged'),
+                    password_too_short: t('tooShort', { n: MIN_PASSWORD_LEN }),
+                };
+                setNote({ ok: false, text: known[String(data.code || '')] || String(data.detail || t('failed')) });
                 return;
             }
             setCurrent('');

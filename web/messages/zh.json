@@ -2874,6 +2874,10 @@
     "tooShort": "新密码至少需要 {n} 个字符。",
     "mismatch": "两次输入的新密码不一致。",
     "failed": "无法修改密码。",
+    "errWrongPassword": "当前密码不正确。",
+    "errWrongCode": "2FA 验证码不正确。",
+    "errSamePassword": "新密码与当前密码相同。",
+    "errRecordChanged": "此账户的记录已在 VAF 之外被修改。管理员可以在安全日志中查看。",
     "forgotten": "忘记密码？管理员可以在“本地网络”下的“用户管理”中重置。管理员自己的密码需要在这台电脑的终端中重置：vaf users reset-password。"
   }
 }

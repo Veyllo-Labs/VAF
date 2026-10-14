@@ -2874,6 +2874,10 @@
     "tooShort": "The new password needs at least {n} characters.",
     "mismatch": "The two new passwords do not match.",
     "failed": "The password could not be changed.",
+    "errWrongPassword": "The current password is not right.",
+    "errWrongCode": "The 2FA code is not right.",
+    "errSamePassword": "The new password is the current one.",
+    "errRecordChanged": "This account's record was changed outside VAF. An admin finds the event in the security log.",
     "forgotten": "Forgot your password? An admin resets it under Local Network, User Management. The admin's own is reset in a terminal on this computer: vaf users reset-password."
   }
 }

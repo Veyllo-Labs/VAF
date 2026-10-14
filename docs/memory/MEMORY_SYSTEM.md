@@ -336,7 +336,6 @@ ingestion uses the same `RagPipeline.ingest()` as other memories with
 | `/api/memory/search` | POST | Semantic search (no LLM) |
 | `/api/memory/stats` | GET | System statistics |
 | `/api/memory/health` | GET | Health check |
-| `/api/memory/init` | POST | Initialize database schema |
 
 ### Create Memory
 

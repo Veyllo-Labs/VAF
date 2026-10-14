@@ -498,7 +498,7 @@ async def init_db(drop_existing: bool = False):
         await conn.execute(text("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO vaf_app"))
 
         # Row-Level Security on memories: fail-CLOSED, matching scripts/rls_enforce.sql so init_db (a fresh
-        # install, or a POST /api/memory/init) produces the SAME enforced state as the cutover and can never
+        # install) produces the SAME enforced state as the cutover and can never
         # silently revert it to fail-open. A row is visible/writable ONLY when its user_scope_id equals the
         # per-transaction GUC; NULLIF maps an unset/empty GUC to NULL so an unscoped session matches nothing
         # (deny) and NULL-scoped rows are not blanket-visible. Enforcement applies to the app role (vaf_app,

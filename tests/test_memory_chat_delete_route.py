@@ -87,3 +87,24 @@ def test_a_missing_scope_or_a_malformed_key_is_refused(monkeypatch):
     scope = uuid4()
     asyncio.run(routes.delete_chat_namespace("whatsapp_Max Müller_491701234567", user_scope_id=scope))
     assert _FakePipeline.cleared == [("whatsapp_Max Müller_491701234567", scope)]
+
+
+def test_no_route_can_drop_or_recreate_the_schema():
+    """POST /api/memory/init?drop_existing=true had no admin check, and dropping the tables took
+    the accounts with them: with no admin row left, /api/auth/bootstrap reopened for the next
+    caller. Nothing in VAF called it; the schema is created at startup. MUTATION: put the route
+    back - red."""
+    import ast
+    from pathlib import Path
+
+    from vaf.memory.routes import memory_router
+    assert not [r.path for r in memory_router.routes if r.path.rstrip("/").endswith("/init")]
+    root = Path(__file__).resolve().parents[1] / "vaf"
+    callers = []
+    for f in list(root.rglob("*routes*.py")) + [root / "core" / "web_server.py"]:
+        for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", "")) in (
+                    "init_db", "init_db_sync"):
+                callers.append(f"{f.relative_to(root)}:{node.lineno}")
+    assert callers == [], callers
+

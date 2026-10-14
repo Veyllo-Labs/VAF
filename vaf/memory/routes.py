@@ -16,7 +16,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from vaf.memory.database import get_db, init_db, check_db_connection, get_db_stats
+from vaf.memory.database import get_db, check_db_connection, get_db_stats
 from vaf.memory.rag import RagPipeline, RagSource
 from vaf.memory.graph import GraphManager
 from vaf.memory.cache import get_cache
@@ -167,20 +167,10 @@ async def health_check():
         }
 
 
-# Database initialization (admin)
-@memory_router.post("/init")
-async def initialize_database(drop_existing: bool = False):
-    """
-    Initialize the memory database.
-    
-    WARNING: drop_existing=True will delete all data!
-    """
-    try:
-        await init_db(drop_existing=drop_existing)
-        return {"status": "success", "message": "Database initialized"}
-    except Exception as e:
-        logger.error(f"Database init failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# No route initializes or drops the schema. The server creates it at startup (init_auth_db,
+# get_engine's migrations); a `POST /init?drop_existing=true` used to sit here with no admin
+# check at all, and dropping the tables took the accounts with them, which reopened the
+# first-run bootstrap to whoever called next.
 
 
 # Stats

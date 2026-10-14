@@ -320,3 +320,49 @@ def test_an_installation_that_had_an_admin_is_never_a_fresh_install_again(monkey
     c = TestClient(app, raise_server_exceptions=False)
     assert c.get("/api/auth/needs-setup").json() == {"needs_setup": False}
     assert c.post("/api/auth/test-veyllo-key", json={"api_key": "k"}).status_code == 403
+
+
+def test_the_auth_init_adds_the_seal_column_before_it_seals(monkeypatch):
+    """In the tray the web server runs off the main thread, where get_engine skips the schema
+    reconcile: measured live, the seal column was missing after a start, the adoption failed and
+    every query on the model would have. init_auth_db reconciles the columns itself, first.
+    MUTATION: drop that reconcile - red."""
+    import asyncio
+
+    import vaf.auth.account_seal as seal_mod
+    import vaf.auth.database as auth_db
+    import vaf.memory.database as mem_db
+    order = []
+
+    class _Conn:
+        async def run_sync(self, _fn):
+            order.append("create_all")
+
+    class _Engine:
+        def begin(self):
+            @contextlib.asynccontextmanager
+            async def _ctx():
+                yield _Conn()
+            return _ctx()
+
+        async def dispose(self):
+            pass
+
+    async def _engine():
+        return _Engine()
+
+    async def _reconcile(_conn):
+        order.append("columns")
+        return {}
+
+    async def _adopt():
+        order.append("adopt")
+        return 0
+
+    monkeypatch.setattr(auth_db, "get_engine", _engine)
+    monkeypatch.setattr(mem_db, "get_owner_engine", _engine)
+    monkeypatch.setattr(mem_db, "_reconcile_columns", _reconcile)
+    monkeypatch.setattr(seal_mod, "adopt_once", _adopt)
+    asyncio.run(auth_db.init_auth_db())
+    assert order == ["create_all", "columns", "adopt"]
+

@@ -47,6 +47,28 @@ async def init_auth_db() -> None:
 
     logger.info("Auth schema initialized (shared DB)")
 
+    # A column the auth models gained (seal) must exist before anything selects them, or
+    # every login fails on it. The generic reconcile in get_engine runs on the main thread
+    # only, and in the tray the web server starts on another one: measured, the seal column
+    # was still missing after a start and the adoption below had failed. Idempotent
+    # (ADD COLUMN IF NOT EXISTS), on the owner engine like every other DDL.
+    try:
+        from vaf.memory.database import _reconcile_columns, get_owner_engine
+        owner = await get_owner_engine()
+        try:
+            async with owner.begin() as conn:
+                added = await _reconcile_columns(conn)
+            if added:
+                logger.info("Auth schema columns added: %s", added)
+        finally:
+            if threading.current_thread() is not threading.main_thread():
+                try:
+                    await owner.dispose()
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.error("Auth schema columns could not be reconciled: %s", e)
+
     # The rows that predate the account seal are sealed once, here, at the first start that
     # has it (trust on first use, recorded in the keyring). A failure leaves the seal
     # unenforced rather than refusing every login: the keyring it needs also holds the JWT

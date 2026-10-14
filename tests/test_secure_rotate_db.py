@@ -109,3 +109,45 @@ def test_an_owner_password_changed_but_not_saved_is_not_called_shipped(monkeypat
     assert result.exit_code == 1
     assert "postgresql://vaf:NEW@localhost/db Save it as memory_db_owner_url" in out
     assert "still has the shipped password" not in out
+
+
+def test_a_password_the_config_did_not_save_is_shown_for_both_roles(monkeypatch):
+    """Review finding: Config.set ran bare after a verified rotation. A refused write left the
+    role on a new password nobody had: a traceback for the app role, and "still has the
+    shipped password" for the owner. MUTATION: call Config.set unwrapped again - red."""
+    from typer.testing import CliRunner
+
+    from vaf.cli.cmd import secure
+    from vaf.core import db_credentials
+    from vaf.core.config import Config
+
+    values = {"memory_db_url": "postgresql://vaf_app:vaf_app_dev_secret@localhost/db",
+              "memory_db_owner_url": "postgresql://vaf:vaf_dev_secret@localhost/db"}
+    refuse = {"memory_db_url"}
+
+    def _set(k, v):
+        if k in refuse:
+            raise OSError("read-only config")
+        values[k] = v
+
+    async def _rotate(dsn):
+        return dsn.replace("dev_secret", "NEW")
+
+    monkeypatch.setattr(Config, "get", lambda k, d=None: values.get(k, d))
+    monkeypatch.setattr(Config, "set", _set)
+    monkeypatch.setattr(db_credentials, "rotate_role_password", _rotate)
+
+    result = CliRunner().invoke(secure.app, ["rotate-db", "--yes"])
+    out = " ".join(result.output.split())
+    assert result.exit_code == 1 and isinstance(result.exception, SystemExit)  # said, not a traceback
+    assert "postgresql://vaf_app:vaf_app_NEW@localhost/db Save it as memory_db_url" in out
+    assert "nothing was changed" not in out   # the role's password was
+
+    refuse.clear()
+    refuse.add("memory_db_owner_url")
+    values["memory_db_url"] = "postgresql://vaf_app:vaf_app_dev_secret@localhost/db"
+    result = CliRunner().invoke(secure.app, ["rotate-db", "--yes"])
+    out = " ".join(result.output.split())
+    assert result.exit_code == 1
+    assert "postgresql://vaf:vaf_NEW@localhost/db Save it as memory_db_owner_url" in out
+    assert "still has the shipped password" not in out

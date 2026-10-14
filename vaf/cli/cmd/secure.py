@@ -145,8 +145,6 @@ def rotate_db(
     yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation"),
 ):
     """Replace the Postgres password with a fresh random one."""
-    import asyncio
-
     from vaf.core.config import Config
 
     dsn = str(Config.get("memory_db_url", "") or "")
@@ -162,15 +160,17 @@ def rotate_db(
         UI.info("Cancelled.")
         raise typer.Exit(0)
 
-    from vaf.core.db_credentials import RotationUnsaved, rotate_role_password, shipped_password_in
+    from vaf.core.db_credentials import RotationUnsaved, rotate_and_save, shipped_password_in
 
     try:
-        rotated = asyncio.run(rotate_role_password(dsn))
+        rotate_and_save("memory_db_url", dsn)
+    except RotationUnsaved as e:
+        # The password changed and was not saved; the error carries the only copy.
+        UI.error(str(e))
+        raise typer.Exit(1)
     except Exception as e:
         UI.error(f"Rotation failed, nothing was changed in the config: {type(e).__name__}: {e}")
         raise typer.Exit(1)
-
-    Config.set("memory_db_url", rotated)
 
     # The owner role gets the same treatment, not a warning. A default install
     # has TWO roles since the RLS cutover - vaf_app for data, vaf as owner for
@@ -183,14 +183,12 @@ def rotate_db(
     owner = str(Config.get("memory_db_owner_url", "") or "")
     if owner and shipped_password_in(owner):
         try:
-            rotated_owner = asyncio.run(rotate_role_password(owner))
-            Config.set("memory_db_owner_url", rotated_owner)
+            rotate_and_save("memory_db_owner_url", owner)
             UI.success("Owner role rotated and verified as well.")
         except RotationUnsaved as e:
             # Not "still has the shipped password": it does not any more, and the error
             # carries the only copy of the new one.
-            UI.error(f"The app role IS rotated. {e} Save it as memory_db_owner_url in the "
-                     "config, then restart VAF.")
+            UI.error(f"The app role IS rotated. {e}")
             raise typer.Exit(1)
         except Exception as e:
             UI.error(f"Owner role rotation failed ({type(e).__name__}: {e}). The app "

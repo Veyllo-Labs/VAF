@@ -149,7 +149,7 @@ def server_provision(
                            "worker uses them.")
             unsaved = isinstance(e.cause, RotationUnsaved)
             if unsaved:
-                UI.error(f"{e.cause} Save it as {e.key} in the config, then restart VAF.")
+                UI.error(str(e.cause))
             left = [k for k in keys_on_shipped_password() if not (unsaved and k == e.key)]
             if left:
                 cause = "" if unsaved else f" ({type(e.cause).__name__}: {e.cause})"

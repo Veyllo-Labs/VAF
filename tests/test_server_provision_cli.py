@@ -181,7 +181,7 @@ def test_a_password_changed_but_not_saved_is_handed_to_the_operator(seams, monke
     out = _provision_stopped(monkeypatch, ["memory_db_url"], "memory_db_owner_url", cause,
                              {"memory_db_url": "postgresql://vaf_app:Xq9-random@localhost/m",
                               "memory_db_owner_url": _OWNER_SHIPPED})
-    assert "postgresql://vaf:NEW-pass@localhost/m Save it as memory_db_owner_url" in out
+    assert "postgresql://vaf:NEW-pass@localhost/m" in out
     assert "published default password" not in out
 
 
@@ -269,6 +269,7 @@ def test_a_stopped_rotation_says_what_is_done_and_what_changed_unsaved(monkeypat
     assert err.value.done == ["memory_db_url"] and saved == ["memory_db_url"]
     assert err.value.key == "memory_db_owner_url"
     assert isinstance(err.value.cause, db_credentials.RotationUnsaved)
+    assert str(err.value.cause).endswith("Save it as memory_db_owner_url in the config, then restart VAF.")
 
     async def _fine(dsn):
         return "postgresql://vaf_app:NEW-app@localhost/m"
@@ -281,5 +282,5 @@ def test_a_stopped_rotation_says_what_is_done_and_what_changed_unsaved(monkeypat
     with pytest.raises(db_credentials.RotationIncomplete) as err:
         db_credentials.rotate_shipped_passwords()
     assert err.value.done == [] and isinstance(err.value.cause, db_credentials.RotationUnsaved)
-    assert "postgresql://vaf_app:NEW-app@localhost/m" in str(err.value.cause)
+    assert "postgresql://vaf_app:NEW-app@localhost/m Save it as memory_db_url" in str(err.value.cause)
 

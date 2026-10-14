@@ -108,13 +108,35 @@ async def rotate_role_password(source_dsn: str) -> str:
     return rotated
 
 
+def rotate_and_save(key: str, dsn: str) -> str:
+    """Rotate the role behind `dsn` and save the verified DSN as config `key`; return it.
+
+    The one path `vaf secure rotate-db` and `vaf server provision` share. A RotationUnsaved
+    from here (the new password did not verify, or the config refused it) ends with the new
+    connection string and the key to save it under; any other error means nothing changed."""
+    import asyncio
+
+    from vaf.core.config import Config
+    save = f" Save it as {key} in the config, then restart VAF."
+    try:
+        rotated = asyncio.run(rotate_role_password(dsn))
+    except RotationUnsaved as e:
+        raise RotationUnsaved(f"{e}{save}", e.rotated) from e
+    try:
+        Config.set(key, rotated)
+    except Exception as e:
+        raise RotationUnsaved(
+            f"The password behind {key} was changed and verified, but the config did not save "
+            f"it ({type(e).__name__}: {e}). The new connection string is: {rotated}{save}",
+            rotated) from e
+    return rotated
+
+
 def rotate_shipped_passwords() -> List[str]:
     """Replace every role password that is still the shipped one, and persist each verified
     DSN. Returns the config keys that were rotated. Stops at the first failure with
     RotationIncomplete: what was rotated before it stays rotated and persisted (each DSN is
     verified first), and the error says whether the failing role's password changed anyway."""
-    import asyncio
-
     from vaf.core.config import Config
     done: List[str] = []
     for key in _DSN_KEYS:
@@ -122,15 +144,8 @@ def rotate_shipped_passwords() -> List[str]:
         if not dsn or not shipped_password_in(dsn):
             continue
         try:
-            rotated = asyncio.run(rotate_role_password(dsn))
+            rotate_and_save(key, dsn)
         except Exception as e:
             raise RotationIncomplete(done, key, e) from e
-        try:
-            Config.set(key, rotated)
-        except Exception as e:
-            raise RotationIncomplete(done, key, RotationUnsaved(
-                f"The password behind {key} was changed and verified, but the config did not "
-                f"save it ({type(e).__name__}: {e}). The new connection string is: {rotated}",
-                rotated)) from e
         done.append(key)
     return done

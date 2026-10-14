@@ -165,7 +165,11 @@ def _own_change(monkeypatch, user, caller_user_id=None):
         yield _Db()
 
     monkeypatch.setattr(auth_routes, "get_auth_db", _get_db)
-    monkeypatch.setattr(rate_limit, "record_login_failure", lambda key: failures.append(key))
+    # The real limiter, middleware and route both, counting what reaches its window.
+    tracker = rate_limit._AttemptTracker()
+    count_into = tracker.record_failure
+    tracker.record_failure = lambda key: failures.append(key) or count_into(key)
+    monkeypatch.setattr(rate_limit, "_tracker", tracker)
     import vaf.core.security_events as security_events
     monkeypatch.setattr(security_events, "log_security_event",
                         lambda kind, **kw: events.append((kind, kw.get("detail", ""))))
@@ -178,6 +182,7 @@ def _own_change(monkeypatch, user, caller_user_id=None):
         return await call_next(request)
 
     app.include_router(auth_routes.router)
+    app.add_middleware(rate_limit.RateLimitMiddleware)
     return TestClient(app, raise_server_exceptions=False), events, failures
 
 
@@ -193,7 +198,8 @@ def _account(password="old-password-123", totp=False):
 
 
 def test_a_wrong_current_password_changes_nothing_and_counts_as_a_failed_login(monkeypatch):
-    """MUTATION: drop the current-password check - red."""
+    """Counted ONCE: the 401 is the rate limiter's to count (review finding: the route counted it
+    a second time). MUTATION: drop the current-password check, or count it in the route - red."""
     import vaf.auth.crypto as crypto
     monkeypatch.setattr(crypto, "_get_jwt_secret", lambda: "x" * 48)
     user = _account()
@@ -201,7 +207,7 @@ def test_a_wrong_current_password_changes_nothing_and_counts_as_a_failed_login(m
     r = c.post("/api/auth/change-password", json={"current_password": "nope",
                                                   "new_password": "brand-new-password"})
     assert r.status_code == 401 and not user.committed
-    assert failures and events[0][0] == "login_failed"
+    assert len(failures) == 1 and events[0][0] == "login_failed"
 
 
 def test_with_2fa_on_the_code_is_needed_too(monkeypatch):
@@ -211,10 +217,11 @@ def test_with_2fa_on_the_code_is_needed_too(monkeypatch):
     import vaf.auth.crypto as crypto
     monkeypatch.setattr(crypto, "_get_jwt_secret", lambda: "x" * 48)
     user = _account(totp=True)
-    c, events, _ = _own_change(monkeypatch, user, caller_user_id=str(user.id))
+    c, events, failures = _own_change(monkeypatch, user, caller_user_id=str(user.id))
     body = {"current_password": "old-password-123", "new_password": "brand-new-password"}
     assert c.post("/api/auth/change-password", json=dict(body, code="000000")).status_code == 400
-    assert not user.committed
+    # A 400 the limiter does not see on its own: the route counts it. MUTATION: drop that - red.
+    assert not user.committed and len(failures) == 1
     ok = c.post("/api/auth/change-password",
                 json=dict(body, code=pyotp.TOTP("JBSWY3DPEHPK3PXP").now()))
     assert ok.status_code == 200 and user.committed

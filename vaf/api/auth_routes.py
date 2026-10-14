@@ -822,8 +822,11 @@ async def change_password(body: ChangePasswordRequest, request: Request):
             try:
                 await change_own_password(db, user, body.current_password, body.new_password, body.code)
             except UserAdminError as e:
-                if e.code in ("wrong_password", "wrong_code"):
+                if e.code == "wrong_code":
+                    # A 400, which RateLimitMiddleware does not count. A wrong password is a
+                    # 401 and is counted there already; counting it here too made it two.
                     record_login_failure(client_key(request))
+                if e.code in ("wrong_password", "wrong_code"):
                     _log_auth_failure("login_failed" if e.code == "wrong_password" else "twofa_failed",
                                       request, username=user.username or "",
                                       detail="change-password: " + e.code.replace("_", " "))

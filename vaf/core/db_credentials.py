@@ -21,15 +21,42 @@ SHIPPED_PASSWORDS = ("vaf_dev_secret", "vaf_app_dev_secret")
 _DSN_KEYS = ("memory_db_url", "memory_db_owner_url")
 
 
+class RotationUnsaved(RuntimeError):
+    """The role's password WAS changed, but the new connection string was not saved: it did
+    not verify, or the config refused it. `rotated` is the only copy of the new password, and
+    the message ends with it."""
+
+    def __init__(self, message: str, rotated: str):
+        super().__init__(message)
+        self.rotated = rotated
+
+
+class RotationIncomplete(RuntimeError):
+    """`rotate_shipped_passwords` stopped at `key`: `done` names the config keys already
+    rotated and saved, `cause` says why. A RotationUnsaved cause means the role behind `key`
+    no longer has the published password either."""
+
+    def __init__(self, done: List[str], key: str, cause: Exception):
+        super().__init__(f"{key}: {type(cause).__name__}: {cause}")
+        self.done = list(done)
+        self.key = key
+        self.cause = cause
+
+
 def shipped_password_in(dsn: str) -> bool:
     return any(p in str(dsn or "") for p in SHIPPED_PASSWORDS)
+
+
+def keys_on_shipped_password() -> List[str]:
+    """The config keys whose DSN still carries a published password."""
+    from vaf.core.config import Config
+    return [k for k in _DSN_KEYS if shipped_password_in(str(Config.get(k, "") or ""))]
 
 
 def shipped_password_in_use() -> bool:
     """Either role still on its published password. Both DSNs: the owner role is the stronger
     one, and checking only the app DSN read "all clear" while the superuser still had it."""
-    from vaf.core.config import Config
-    return any(shipped_password_in(str(Config.get(k, "") or "")) for k in _DSN_KEYS)
+    return bool(keys_on_shipped_password())
 
 
 async def rotate_role_password(source_dsn: str) -> str:
@@ -72,10 +99,10 @@ async def rotate_role_password(source_dsn: str) -> str:
     except Exception as e:
         # The role's password IS changed at this point and the old one is gone: the operator
         # needs the new one to get back in. Said here, on the operator's terminal, once.
-        raise RuntimeError(
+        raise RotationUnsaved(
             f"The password of the database role {role!r} was changed, but a connection with "
             f"the new one did not verify ({type(e).__name__}: {e}). Nothing was saved to the "
-            f"config. The new connection string is: {rotated}") from e
+            f"config. The new connection string is: {rotated}", rotated) from e
     finally:
         await verify.dispose()
     return rotated
@@ -83,8 +110,9 @@ async def rotate_role_password(source_dsn: str) -> str:
 
 def rotate_shipped_passwords() -> List[str]:
     """Replace every role password that is still the shipped one, and persist each verified
-    DSN. Returns the config keys that were rotated. Raises on the first failure; what was
-    rotated before it stays rotated and persisted (each DSN is verified first)."""
+    DSN. Returns the config keys that were rotated. Stops at the first failure with
+    RotationIncomplete: what was rotated before it stays rotated and persisted (each DSN is
+    verified first), and the error says whether the failing role's password changed anyway."""
     import asyncio
 
     from vaf.core.config import Config
@@ -93,6 +121,16 @@ def rotate_shipped_passwords() -> List[str]:
         dsn = str(Config.get(key, "") or "")
         if not dsn or not shipped_password_in(dsn):
             continue
-        Config.set(key, asyncio.run(rotate_role_password(dsn)))
+        try:
+            rotated = asyncio.run(rotate_role_password(dsn))
+        except Exception as e:
+            raise RotationIncomplete(done, key, e) from e
+        try:
+            Config.set(key, rotated)
+        except Exception as e:
+            raise RotationIncomplete(done, key, RotationUnsaved(
+                f"The password behind {key} was changed and verified, but the config did not "
+                f"save it ({type(e).__name__}: {e}). The new connection string is: {rotated}",
+                rotated)) from e
         done.append(key)
     return done

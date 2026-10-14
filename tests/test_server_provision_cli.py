@@ -131,16 +131,58 @@ def test_provision_replaces_the_published_database_passwords(seams, monkeypatch)
     assert rotated == [1] and "replaced with random ones" in result.output
 
 
-def test_a_database_that_cannot_be_reached_is_said_loudly(seams, monkeypatch):
+_APP_SHIPPED = "postgresql://vaf_app:vaf_app_dev_secret@localhost/m"
+_OWNER_SHIPPED = "postgresql://vaf:vaf_dev_secret@localhost/m"
+
+
+def _provision_stopped(monkeypatch, done, key, cause, config):
+    """provision with a rotation that stopped at `key`; `config` is what the DSNs say after."""
     from vaf.core import db_credentials
 
-    def _down():
-        raise ConnectionRefusedError("no database")
+    def _stop():
+        raise db_credentials.RotationIncomplete(done, key, cause)
 
     monkeypatch.setattr(db_credentials, "shipped_password_in_use", lambda: True)
-    monkeypatch.setattr(db_credentials, "rotate_shipped_passwords", _down)
+    monkeypatch.setattr(db_credentials, "rotate_shipped_passwords", _stop)
+    monkeypatch.setattr(Config, "get", staticmethod(lambda k, d=None: config.get(k, d)))
     result = runner.invoke(server_cmd.app, ["provision"])
-    assert result.exit_code == 0 and "vaf secure rotate-db" in result.output
+    assert result.exit_code == 0, result.output
+    return " ".join(result.output.split())
+
+
+def test_a_database_that_cannot_be_reached_is_said_loudly(seams, monkeypatch):
+    out = _provision_stopped(monkeypatch, [], "memory_db_url", ConnectionRefusedError("no database"),
+                             {"memory_db_url": _APP_SHIPPED, "memory_db_owner_url": _OWNER_SHIPPED})
+    assert "published default password for memory_db_url, memory_db_owner_url" in out
+    assert "vaf secure rotate-db" in out
+
+
+def test_a_partial_rotation_names_what_is_done_and_what_is_left(seams, monkeypatch):
+    """Review finding: after the app role was replaced, one warning still said the database
+    "still uses the published default password". MUTATION: drop the done line, or warn for
+    every key - red."""
+    out = _provision_stopped(monkeypatch, ["memory_db_url"], "memory_db_owner_url",
+                             ConnectionRefusedError("owner refused"),
+                             {"memory_db_url": "postgresql://vaf_app:Xq9-random@localhost/m",
+                              "memory_db_owner_url": _OWNER_SHIPPED})
+    assert "Replaced and verified: memory_db_url" in out
+    assert "published default password for memory_db_owner_url, and" in out
+
+
+def test_a_password_changed_but_not_saved_is_handed_to_the_operator(seams, monkeypatch):
+    """Review finding: a verification failure was reported as "still uses the published
+    default password" - false, the role's password was already new, and the connection
+    string in the error is the only way back in. MUTATION: treat it like any failure - red."""
+    from vaf.core import db_credentials
+    cause = db_credentials.RotationUnsaved(
+        "The password of the database role 'vaf' was changed, but a connection with the new one "
+        "did not verify. The new connection string is: postgresql://vaf:NEW-pass@localhost/m",
+        "postgresql://vaf:NEW-pass@localhost/m")
+    out = _provision_stopped(monkeypatch, ["memory_db_url"], "memory_db_owner_url", cause,
+                             {"memory_db_url": "postgresql://vaf_app:Xq9-random@localhost/m",
+                              "memory_db_owner_url": _OWNER_SHIPPED})
+    assert "postgresql://vaf:NEW-pass@localhost/m Save it as memory_db_owner_url" in out
+    assert "published default password" not in out
 
 
 def test_the_shipped_password_check_reads_both_roles(monkeypatch):
@@ -200,7 +242,44 @@ def test_the_rotation_quotes_the_role_keeps_the_host_and_hands_back_a_password_i
     assert "@[::1]:5433/vaf_memory" in rotated and rotated.startswith("postgresql://my%22role:")
 
     verify_fails["on"] = True
-    with pytest.raises(RuntimeError) as err:
+    with pytest.raises(db_credentials.RotationUnsaved) as err:
         asyncio.run(db_credentials.rotate_role_password("postgresql://vaf:vaf_dev_secret@localhost/vaf_memory"))
     assert "was changed" in str(err.value) and "postgresql://vaf:" in str(err.value)
+    assert str(err.value).endswith(err.value.rotated)
+
+
+def test_a_stopped_rotation_says_what_is_done_and_what_changed_unsaved(monkeypatch):
+    """The two ways a role's password ends up new but unsaved: it did not verify, or the config
+    refused it. Either way the error carries the connection string. MUTATION: let the
+    Config.set failure escape bare, or drop `done` - red."""
+    from vaf.core import db_credentials
+    cfg = {"memory_db_url": _APP_SHIPPED, "memory_db_owner_url": _OWNER_SHIPPED}
+    monkeypatch.setattr(Config, "get", staticmethod(lambda k, d=None: cfg.get(k, d)))
+    saved = []
+    monkeypatch.setattr(Config, "set", staticmethod(lambda k, v: saved.append(k)))
+
+    async def _owner_unverified(dsn):
+        if "vaf_app" in dsn:
+            return "postgresql://vaf_app:NEW-app@localhost/m"
+        raise db_credentials.RotationUnsaved("did not verify", "postgresql://vaf:NEW@localhost/m")
+
+    monkeypatch.setattr(db_credentials, "rotate_role_password", _owner_unverified)
+    with pytest.raises(db_credentials.RotationIncomplete) as err:
+        db_credentials.rotate_shipped_passwords()
+    assert err.value.done == ["memory_db_url"] and saved == ["memory_db_url"]
+    assert err.value.key == "memory_db_owner_url"
+    assert isinstance(err.value.cause, db_credentials.RotationUnsaved)
+
+    async def _fine(dsn):
+        return "postgresql://vaf_app:NEW-app@localhost/m"
+
+    def _refuse(key, value):
+        raise OSError("read-only config")
+
+    monkeypatch.setattr(db_credentials, "rotate_role_password", _fine)
+    monkeypatch.setattr(Config, "set", staticmethod(_refuse))
+    with pytest.raises(db_credentials.RotationIncomplete) as err:
+        db_credentials.rotate_shipped_passwords()
+    assert err.value.done == [] and isinstance(err.value.cause, db_credentials.RotationUnsaved)
+    assert "postgresql://vaf_app:NEW-app@localhost/m" in str(err.value.cause)
 

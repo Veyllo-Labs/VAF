@@ -79,3 +79,33 @@ def test_warning_is_silent_once_both_are_rotated(monkeypatch):
     assert _warn_with(monkeypatch,
                       "postgresql://vaf_app:rotated123@localhost/db",
                       "postgresql://vaf:alsorotated456@localhost/db") is False
+
+
+def test_an_owner_password_changed_but_not_saved_is_not_called_shipped(monkeypatch):
+    """The owner role's password changed and did not verify: saying it "still has the shipped
+    password" is false and hides the connection string the operator must keep. MUTATION:
+    drop the RotationUnsaved branch - red."""
+    from typer.testing import CliRunner
+
+    from vaf.cli.cmd import secure
+    from vaf.core import db_credentials
+    from vaf.core.config import Config
+
+    values = {"memory_db_url": "postgresql://vaf_app:vaf_app_dev_secret@localhost/db",
+              "memory_db_owner_url": "postgresql://vaf:vaf_dev_secret@localhost/db"}
+    monkeypatch.setattr(Config, "get", lambda k, d=None: values.get(k, d))
+    monkeypatch.setattr(Config, "set", lambda k, v: values.__setitem__(k, v))
+
+    async def _rotate(dsn):
+        if "vaf_app" in dsn:
+            return "postgresql://vaf_app:NEW-app@localhost/db"
+        raise db_credentials.RotationUnsaved(
+            "did not verify. The new connection string is: postgresql://vaf:NEW@localhost/db",
+            "postgresql://vaf:NEW@localhost/db")
+
+    monkeypatch.setattr(db_credentials, "rotate_role_password", _rotate)
+    result = CliRunner().invoke(secure.app, ["rotate-db", "--yes"])
+    out = " ".join(result.output.split())
+    assert result.exit_code == 1
+    assert "postgresql://vaf:NEW@localhost/db Save it as memory_db_owner_url" in out
+    assert "still has the shipped password" not in out

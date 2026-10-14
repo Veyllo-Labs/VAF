@@ -133,16 +133,31 @@ def server_provision(
     # A server must not keep the database passwords published in this repository: whoever has
     # one writes every table (vaf/core/db_credentials.py). Replaced here when the database
     # answers; otherwise said loudly, with the command that does it.
-    from vaf.core.db_credentials import rotate_shipped_passwords, shipped_password_in_use
+    from vaf.core.db_credentials import (RotationIncomplete, RotationUnsaved,
+                                         keys_on_shipped_password, rotate_shipped_passwords,
+                                         shipped_password_in_use)
     if shipped_password_in_use():
         try:
             rotated = rotate_shipped_passwords()
             UI.success("Database passwords replaced with random ones and verified "
                        f"({', '.join(rotated)}). Restart VAF so every worker uses them.")
-        except Exception as e:
-            UI.warning("The memory database still uses the published default password, and it "
-                       f"could not be replaced now ({type(e).__name__}: {e}). Start the service stack "
-                       "and run `vaf secure rotate-db` before anyone can reach this server.")
+        except RotationIncomplete as e:
+            # Each part as it is: what is done, a password that WAS changed but not saved (the
+            # error carries its only copy), and what really still has the published one.
+            if e.done:
+                UI.success(f"Replaced and verified: {', '.join(e.done)}. Restart VAF so every "
+                           "worker uses them.")
+            unsaved = isinstance(e.cause, RotationUnsaved)
+            if unsaved:
+                UI.error(f"{e.cause} Save it as {e.key} in the config, then restart VAF.")
+            left = [k for k in keys_on_shipped_password() if not (unsaved and k == e.key)]
+            if left:
+                cause = "" if unsaved else f" ({type(e.cause).__name__}: {e.cause})"
+                then = " once that connection string is saved" if unsaved else ""
+                UI.warning("The memory database still uses the published default password for "
+                           f"{', '.join(left)}, and it could not be replaced now{cause}. Start the "
+                           f"service stack and run `vaf secure rotate-db`{then}, before anyone can "
+                           "reach this server.")
     else:
         UI.info("The database passwords are not the published defaults.")
 

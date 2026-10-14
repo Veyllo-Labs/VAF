@@ -162,7 +162,7 @@ def rotate_db(
         UI.info("Cancelled.")
         raise typer.Exit(0)
 
-    from vaf.core.db_credentials import rotate_role_password, shipped_password_in
+    from vaf.core.db_credentials import RotationUnsaved, rotate_role_password, shipped_password_in
 
     try:
         rotated = asyncio.run(rotate_role_password(dsn))
@@ -186,6 +186,12 @@ def rotate_db(
             rotated_owner = asyncio.run(rotate_role_password(owner))
             Config.set("memory_db_owner_url", rotated_owner)
             UI.success("Owner role rotated and verified as well.")
+        except RotationUnsaved as e:
+            # Not "still has the shipped password": it does not any more, and the error
+            # carries the only copy of the new one.
+            UI.error(f"The app role IS rotated. {e} Save it as memory_db_owner_url in the "
+                     "config, then restart VAF.")
+            raise typer.Exit(1)
         except Exception as e:
             UI.error(f"Owner role rotation failed ({type(e).__name__}: {e}). The app "
                      "role IS rotated; the owner role still has the shipped password. "

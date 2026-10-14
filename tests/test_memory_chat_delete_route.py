@@ -105,6 +105,6 @@ def test_no_route_can_drop_or_recreate_the_schema():
         for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", "")) in (
                     "init_db", "init_db_sync"):
-                callers.append(f"{f.relative_to(root)}:{node.lineno}")
+                callers.append(f"{f.relative_to(root).as_posix()}:{node.lineno}")
     assert callers == [], callers
 

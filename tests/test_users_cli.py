@@ -229,3 +229,28 @@ def test_with_2fa_on_the_code_is_needed_too(monkeypatch):
     assert verify_password(user.password_hash, "brand-new-password")
     assert ("password_changed", "changed by the account itself in Settings") in events
 
+
+def test_every_refusal_of_the_own_change_is_said_in_the_readers_language():
+    """The page maps each refusal code to a translated sentence and shows the server's English
+    one for any code it does not know. Review finding: `twofa_unreadable` was missing. Every
+    code the change can raise must be in the map, and every key it uses in the catalogue.
+    MUTATION: drop a code from the map, or raise a new one in user_admin - red."""
+    import inspect
+    import json
+    import re
+    from pathlib import Path
+
+    from vaf.auth import user_admin
+    raised = set()
+    for fn in (user_admin.change_own_password, user_admin.validate_password):
+        raised |= set(re.findall(r'UserAdminError\(\s*"(\w+)"', inspect.getsource(fn)))
+    assert {"wrong_password", "wrong_code", "password_too_short"} <= raised   # the scan works
+
+    root = Path(__file__).resolve().parents[1]
+    page = (root / "web/components/settings/AccountSection.tsx").read_text(encoding="utf-8")
+    known = page.split("const known", 1)[1].split("};", 1)[0]
+    mapped = dict(re.findall(r"(\w+): t\('(\w+)'", known))
+    assert raised <= set(mapped), sorted(raised - set(mapped))
+    catalogue = json.loads((root / "web/messages/en.json").read_text(encoding="utf-8"))["account"]
+    assert set(mapped.values()) <= set(catalogue), sorted(set(mapped.values()) - set(catalogue))
+

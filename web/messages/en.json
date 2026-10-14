@@ -2878,6 +2878,7 @@
     "errWrongCode": "The 2FA code is not right.",
     "errSamePassword": "The new password is the current one.",
     "errRecordChanged": "This account's record was changed outside VAF. An admin finds the event in the security log.",
+    "errTwofaUnreadable": "The 2FA secret of this account cannot be read on this computer. Sign out and sign in again to set up 2FA anew.",
     "forgotten": "Forgot your password? An admin resets it under Local Network, User Management. The admin's own is reset in a terminal on this computer: vaf users reset-password."
   }
 }

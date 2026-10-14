@@ -49,6 +49,7 @@ export default function AccountSection() {
                 const known: Record<string, string> = {
                     wrong_password: t('errWrongPassword'), wrong_code: t('errWrongCode'),
                     same_password: t('errSamePassword'), record_changed: t('errRecordChanged'),
+                    twofa_unreadable: t('errTwofaUnreadable'),
                     password_too_short: t('tooShort', { n: MIN_PASSWORD_LEN }),
                 };
                 setNote({ ok: false, text: known[String(data.code || '')] || String(data.detail || t('failed')) });

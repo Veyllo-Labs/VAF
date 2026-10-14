@@ -2878,6 +2878,7 @@
     "errWrongCode": "2FA 验证码不正确。",
     "errSamePassword": "新密码与当前密码相同。",
     "errRecordChanged": "此账户的记录已在 VAF 之外被修改。管理员可以在安全日志中查看。",
+    "errTwofaUnreadable": "无法在这台电脑上读取此账户的 2FA 密钥。请退出并重新登录，重新设置 2FA。",
     "forgotten": "忘记密码？管理员可以在“本地网络”下的“用户管理”中重置。管理员自己的密码需要在这台电脑的终端中重置：vaf users reset-password。"
   }
 }

@@ -2878,6 +2878,7 @@
     "errWrongCode": "Der 2FA-Code stimmt nicht.",
     "errSamePassword": "Das neue Passwort ist das aktuelle.",
     "errRecordChanged": "Die Kontodaten wurden außerhalb von VAF verändert. Ein Admin findet den Eintrag im Sicherheitsprotokoll.",
+    "errTwofaUnreadable": "Der 2FA-Schlüssel dieses Kontos lässt sich auf diesem Rechner nicht lesen. Melde dich ab und wieder an, dann richtest du 2FA neu ein.",
     "forgotten": "Passwort vergessen? Ein Admin setzt es unter Lokales Netzwerk, Benutzerverwaltung zurück. Das Passwort des Admins selbst wird in einem Terminal auf diesem Rechner zurückgesetzt: vaf users reset-password."
   }
 }

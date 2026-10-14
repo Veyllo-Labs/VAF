@@ -147,7 +147,7 @@ def test_a_network_token_of_an_account_that_no_longer_stands_is_401(monkeypatch,
     import vaf.auth.permissions as permissions
     monkeypatch.setattr(crypto, "decode_token", lambda tok: {
         "type": "access", "sub": "u1", "username": "alice", "role": "user",
-        "user_scope_id": SCOPE})
+        "user_scope_id": SCOPE, "is_2fa_verified": True})
 
     async def _standing(scope):
         return standing

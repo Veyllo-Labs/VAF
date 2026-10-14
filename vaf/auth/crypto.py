@@ -114,6 +114,20 @@ def create_refresh_token(user_id: str, expires_days: int = 7) -> str:
     )
 
 
+def second_factor_done(payload: dict[str, Any]) -> bool:
+    """Whether an ACCESS token may open anything beyond the 2FA endpoints.
+
+    `/login` answers a correct password with a full access token minted BEFORE the
+    second factor (`is_2fa_verified: False`, the `temp_token`); only `/setup-2fa` and
+    `/verify-2fa` may take it, and they check it themselves. Every other reader of a
+    token asks here, so a password alone never opens the API. When 2FA is not
+    required (`local_network_require_2fa` off), every access token counts as done.
+    """
+    if not Config.get("local_network_require_2fa", True):
+        return True
+    return payload.get("is_2fa_verified") is True
+
+
 def decode_token(token: str) -> Optional[dict[str, Any]]:
     """Decode and validate JWT; returns payload or None."""
     try:

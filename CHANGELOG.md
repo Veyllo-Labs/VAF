@@ -13,6 +13,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **A password alone no longer opens the API.** After a correct password and before the 2FA
+  code, the login hands out a short step token for the 2FA screens. The server's check read a
+  field that token never carries, so the token opened every other route as well, and the
+  second factor protected only the live connection, not the API. It is now refused everywhere
+  except the two 2FA screens, and on the agent rooms' door as well.
 - **The WhatsApp bridge reads audio length with a patched parser.** Baileys measures a voice
   message's length with `music-metadata` before it sends one, and the version in use could be
   made to crash the bridge or loop forever by a crafted audio file (three advisories). It now

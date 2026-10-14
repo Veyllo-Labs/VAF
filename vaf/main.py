@@ -328,9 +328,12 @@ from vaf.core.a2a.wire import set_credential_verifier as _set_credential_verifie
 
 
 def _a2a_credential_verifier(credential: str):
-    from vaf.auth.crypto import decode_token
+    from vaf.auth.crypto import decode_token, second_factor_done
     payload = decode_token(credential)
     if not payload or payload.get("type") != "access":
+        return None
+    # A token from before the second factor opens no room, as it opens no route.
+    if not second_factor_done(payload):
         return None
     return payload
 

@@ -64,7 +64,8 @@ def test_valid_access_token_allows(monkeypatch):
     import vaf.auth.crypto as crypto
     monkeypatch.setattr(crypto, "decode_token",
                         lambda tok: {"type": "access", "sub": "u1", "username": "alice",
-                                     "role": "user", "user_scope_id": "s1"})
+                                     "role": "user", "user_scope_id": "s1",
+                                     "is_2fa_verified": True})
     c = TestClient(_app(), client=LAN)
     r = c.get("/api/supervisor/status", headers={"Authorization": "Bearer x"})
     assert r.status_code == 200
@@ -76,3 +77,52 @@ def test_non_access_token_is_401(monkeypatch):
     c = TestClient(_app(), client=LAN)
     r = c.get("/api/supervisor/status", headers={"Authorization": "Bearer x"})
     assert r.status_code == 401
+
+
+def _pre_2fa(monkeypatch, *, verified):
+    import vaf.auth.crypto as crypto
+    monkeypatch.setattr(crypto, "decode_token",
+                        lambda tok: {"type": "access", "sub": "u1", "username": "alice",
+                                     "role": "admin", "user_scope_id": "s1",
+                                     "is_2fa_verified": verified})
+
+
+def test_a_token_from_before_the_second_factor_opens_nothing(monkeypatch):
+    """/login answers a correct password with a full access token minted before the 2FA
+    code (the temp_token). The check read a `requires_2fa_setup` claim no token carries,
+    so that token opened every route: measured 200 on /api/users with a password alone.
+    MUTATION: drop the second_factor_done check - red (200)."""
+    _pre_2fa(monkeypatch, verified=False)
+    c = TestClient(_app(), client=LAN)
+    r = c.get("/api/supervisor/status", headers={"Authorization": "Bearer x"})
+    assert r.status_code == 403 and "2FA" in r.json()["detail"]
+    # The 2FA endpoints are exempt and take it (they check it themselves).
+    assert c.get("/api/auth/login", headers={"Authorization": "Bearer x"}).status_code == 200
+
+
+def test_the_verified_token_and_a_2fa_free_setup_still_pass(monkeypatch):
+    from vaf.core.config import Config
+    _pre_2fa(monkeypatch, verified=True)
+    c = TestClient(_app(), client=LAN)
+    assert c.get("/api/supervisor/status", headers={"Authorization": "Bearer x"}).status_code == 200
+    _pre_2fa(monkeypatch, verified=False)
+    real_get = Config.get
+    monkeypatch.setattr(Config, "get", staticmethod(
+        lambda k, d=None: False if k == "local_network_require_2fa" else real_get(k, d)))
+    assert c.get("/api/supervisor/status", headers={"Authorization": "Bearer x"}).status_code == 200
+
+
+def test_every_token_reader_asks_the_same_question():
+    """The WebSocket's network lane and the A2A room door read tokens without this middleware.
+    The localhost-only socket lane (local network off) is deliberately not asked: there a
+    tokenless localhost request is the machine owner anyway, so a second factor guards nothing.
+    MUTATION: inline the old check in either place - red."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    src = (root / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    handshake = src[src.index("async def websocket_endpoint"):]
+    handshake = handshake[:handshake.index("elif type == ")]
+    assert handshake.count("if not second_factor_done(payload):") == 1
+    main = (root / "vaf" / "main.py").read_text(encoding="utf-8")
+    verifier = main.split("def _a2a_credential_verifier")[1].split("\n\n\n")[0]
+    assert "if not second_factor_done(payload):" in verifier

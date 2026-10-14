@@ -29,7 +29,6 @@ from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse
 from starlette.websockets import WebSocketClose
 
-from vaf.core.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -262,13 +261,24 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 payload = None
 
             if payload and payload.get("type") == "access":
-                # Optional: enforce 2FA verification
-                require_2fa = Config.get("local_network_require_2fa", True)
-                if require_2fa and payload.get("requires_2fa_setup"):
-                    return JSONResponse(
-                        status_code=403,
-                        content={"detail": "2FA setup required before accessing resources"},
-                    )
+                # A token from before the second factor (the login's temp_token) is for the
+                # 2FA endpoints only, which are exempt above and check it themselves. This
+                # used to read a `requires_2fa_setup` claim no token carries, so a password
+                # alone opened every route. A localhost client falls through to the tokenless
+                # path like a stale cookie does: what that path allows needs no token at all.
+                from vaf.auth.crypto import second_factor_done
+                if not second_factor_done(payload):
+                    if not is_localhost(client_ip):
+                        _emit_security_event("token_rejected", ip=client_ip, path=request.url.path,
+                                             username=str(payload.get("username") or ""),
+                                             detail="second factor not given")
+                        return JSONResponse(
+                            status_code=403,
+                            content={"detail": "2FA verification required"},
+                        )
+                    payload = None
+
+            if payload and payload.get("type") == "access":
 
                 # Attach user info to request state for downstream handlers
                 request.state.user_id = payload.get("sub")

@@ -4278,7 +4278,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         # Local network is ENABLED - authenticate network users
         try:
             from vaf.network.binding import is_allowed_ip
-            from vaf.auth.crypto import get_jwt_secret
+            from vaf.auth.crypto import get_jwt_secret, second_factor_done
             import jwt
             
             # Validate IP is from local network
@@ -4316,9 +4316,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     secret = get_jwt_secret()
                     payload = jwt.decode(token, secret, algorithms=["HS256"])
                     
-                    # Check 2FA status
-                    require_2fa = Config.get("local_network_require_2fa", True)
-                    if require_2fa and not payload.get("is_2fa_verified", False):
+                    # Check 2FA status (the rule every token reader shares)
+                    if not second_factor_done(payload):
                         if not is_localhost_client or payload.get("role") != "admin":
                             log("API", f"WebSocket rejected: 2FA not verified for {payload.get('username')}")
                             await websocket.close(code=4003, reason="2FA verification required")

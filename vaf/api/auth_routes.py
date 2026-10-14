@@ -156,6 +156,12 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+    code: str = ""
+
+
 class TestVeylloKeyRequest(BaseModel):
     api_key: str
 
@@ -789,3 +795,51 @@ async def refresh(body: RefreshRequest, request: Request, response: Response):
         )
     _set_auth_cookie(request, response, access)
     return {"access_token": access}
+
+
+@router.post("/change-password")
+async def change_password(body: ChangePasswordRequest, request: Request):
+    """The caller changes their OWN password: the current one, and the 2FA code when 2FA is set
+    up (vaf/auth/user_admin.py change_own_password). The account is the authenticated caller's;
+    the tokenless desktop is the machine owner's account. Rate-limited like the login, and a
+    wrong password or code counts against the same window."""
+    from vaf.auth.rate_limit import client_key, record_login_failure
+    from vaf.auth.user_admin import UserAdminError, change_own_password
+    caller = getattr(request.state, "user", None) or {}
+    try:
+        async with get_auth_db() as db:
+            if caller.get("user_id"):
+                user = (await db.execute(select(LocalUser).where(
+                    LocalUser.id == uuid_module.UUID(str(caller["user_id"])),
+                    LocalUser.is_active == True))).scalar_one_or_none()  # noqa: E712
+            else:
+                user = (await db.execute(select(LocalUser).where(
+                    func.lower(LocalUser.username) == get_local_admin_username().lower(),
+                    LocalUser.is_active == True))).scalar_one_or_none()  # noqa: E712
+            if user is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                    detail="No account to change the password of")
+            try:
+                await change_own_password(db, user, body.current_password, body.new_password, body.code)
+            except UserAdminError as e:
+                if e.code in ("wrong_password", "wrong_code"):
+                    record_login_failure(client_key(request))
+                    _log_auth_failure("login_failed" if e.code == "wrong_password" else "twofa_failed",
+                                      request, username=user.username or "",
+                                      detail="change-password: " + e.code.replace("_", " "))
+                raise HTTPException(status_code=e.http_status, detail=e.message)
+            username = user.username or ""
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("change-password failed: %s", e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="The password could not be changed")
+    try:
+        from vaf.core.security_events import log_security_event
+        log_security_event("password_changed", ip=_client_ip(request), username=username,
+                           detail="changed by the account itself in Settings")
+    except Exception:
+        pass
+    return {"ok": True}
+

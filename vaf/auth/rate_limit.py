@@ -31,6 +31,9 @@ _RATE_LIMITED_PATHS: set[str] = {
     "/api/auth/login",
     "/api/auth/bootstrap",
     "/api/auth/verify-2fa",
+    # A logged-in caller's own password change asks for the current password (and the 2FA
+    # code): a session left open must not become an unlimited guessing oracle.
+    "/api/auth/change-password",
     # Credential-testing endpoint: brute-force surface for mailbox passwords. The route
     # records a failure (via record_login_failure) when a login test fails, so the same
     # IP-based sliding-window block applies here as for /api/auth/login.

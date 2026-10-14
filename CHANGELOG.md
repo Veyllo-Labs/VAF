@@ -13,6 +13,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **Change your own password in Settings, Account.** There was no page for it: only an admin
+  could reset passwords. It asks for the current password and, when 2FA is set up, the code
+  from your authenticator app.
 - **A way back in when the admin password is forgotten.** `vaf users reset-password NAME` sets a
   new password in a terminal on this computer, and the second factor is set up again at the
   next login. It takes the admin password or, when that is gone, the recovery key from

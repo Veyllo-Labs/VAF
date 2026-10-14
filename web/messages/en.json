@@ -782,7 +782,8 @@
       "usage": "Usage",
       "automations": "Automations",
       "localNetwork": "Local Network",
-      "about": "About"
+      "about": "About",
+      "account": "Account"
     },
     "usage": {
       "title": "Token usage",
@@ -2859,5 +2860,20 @@
       "sent": "Sent.",
       "failed": "Could not be sent: {error}"
     }
+  },
+  "account": {
+    "passwordTitle": "Change password",
+    "passwordIntro": "Your current password, a new one, and the code from your authenticator app if 2FA is set up for you.",
+    "current": "Current password",
+    "new": "New password",
+    "repeat": "New password again",
+    "code": "2FA code",
+    "codeHint": "Only needed when 2FA is set up for your account.",
+    "submit": "Change password",
+    "changed": "Your password was changed.",
+    "tooShort": "The new password needs at least {n} characters.",
+    "mismatch": "The two new passwords do not match.",
+    "failed": "The password could not be changed.",
+    "forgotten": "Forgot your password? An admin resets it under Local Network, User Management. The admin's own is reset in a terminal on this computer: vaf users reset-password."
   }
 }

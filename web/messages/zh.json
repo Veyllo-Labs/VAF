@@ -782,7 +782,8 @@
       "usage": "用量",
       "automations": "自动化",
       "localNetwork": "本地网络",
-      "about": "关于"
+      "about": "关于",
+      "account": "账户"
     },
     "usage": {
       "title": "Token 用量",
@@ -2859,5 +2860,20 @@
       "sent": "已发送。",
       "failed": "无法发送：{error}"
     }
+  },
+  "account": {
+    "passwordTitle": "修改密码",
+    "passwordIntro": "输入当前密码和新密码；如果你设置了 2FA，还需要验证器应用中的验证码。",
+    "current": "当前密码",
+    "new": "新密码",
+    "repeat": "再次输入新密码",
+    "code": "2FA 验证码",
+    "codeHint": "仅当你的账户设置了 2FA 时需要。",
+    "submit": "修改密码",
+    "changed": "密码已修改。",
+    "tooShort": "新密码至少需要 {n} 个字符。",
+    "mismatch": "两次输入的新密码不一致。",
+    "failed": "无法修改密码。",
+    "forgotten": "忘记密码？管理员可以在“本地网络”下的“用户管理”中重置。管理员自己的密码需要在这台电脑的终端中重置：vaf users reset-password。"
   }
 }

@@ -166,6 +166,39 @@ async def find_user(db, username: str) -> Optional[LocalUser]:
     return result.scalar_one_or_none()
 
 
+async def change_own_password(db, user: LocalUser, current_password: str, new_password: str,
+                              code: str = "") -> None:
+    """An account changes its own password (Settings, Account): the current password, and the
+    second factor's code when one is set up, so a session left open on someone else's screen
+    is not enough. The row must still verify (vaf/auth/account_seal.py); the write re-seals it.
+    The owner's account also refreshes the terminal door's hash copy."""
+    from vaf.auth import account_seal
+    from vaf.auth.crypto import decrypt_totp_secret, verify_password, verify_totp
+    if not account_seal.check(user, where="change own password"):
+        raise UserAdminError("record_changed", account_seal.REFUSAL_LOGIN, 403)
+    if not verify_password(user.password_hash, current_password or ""):
+        raise UserAdminError("wrong_password", "The current password is not right", 401)
+    if user.totp_secret and user.totp_nonce and not user.requires_2fa_setup:
+        try:
+            secret = decrypt_totp_secret(user.totp_secret, user.totp_nonce)
+        except Exception:
+            raise UserAdminError("twofa_unreadable", "The 2FA secret cannot be read on this machine", 400)
+        if not verify_totp(secret, str(code or "").strip().replace(" ", "")):
+            raise UserAdminError("wrong_code", "The 2FA code is not right", 400)
+    validate_password(new_password)
+    if verify_password(user.password_hash, new_password):
+        raise UserAdminError("same_password", "The new password is the current one", 400)
+    user.password_hash = hash_password(new_password)
+    await db.commit()
+    try:
+        from vaf.cli.gate import is_local_admin_account, mirror_admin_password_hash
+        if is_local_admin_account(username=str(user.username or ""),
+                                  user_scope_id=str(user.user_scope_id or "")):
+            mirror_admin_password_hash(user.password_hash)
+    except Exception as e:  # the door repairs itself at the next login
+        logger.debug("Password hash was not mirrored to the keyring: %s", e)
+
+
 async def reset_password_from_terminal(db, user: LocalUser, new_password: str) -> None:
     """The way back in when the admin's password is gone (`vaf users reset-password`).
 

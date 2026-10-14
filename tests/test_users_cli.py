@@ -141,3 +141,84 @@ def test_the_terminal_reset_sets_a_fresh_second_factor_and_reseals(monkeypatch):
         assert account_seal.is_sealed(user)
     account_seal.reset_caches()
     _ = uuid
+
+
+# -- an account changes its own password (Settings, Account) -----------------------
+
+def _own_change(monkeypatch, user, caller_user_id=None):
+    from fastapi import FastAPI, Request
+    from starlette.testclient import TestClient
+
+    import vaf.api.auth_routes as auth_routes
+    import vaf.auth.rate_limit as rate_limit
+    events, failures = [], []
+
+    class _Db:
+        async def execute(self, *_a, **_k):
+            return SimpleNamespace(scalar_one_or_none=lambda: user)
+
+        async def commit(self):
+            user.committed = True
+
+    @contextlib.asynccontextmanager
+    async def _get_db(*_a, **_k):
+        yield _Db()
+
+    monkeypatch.setattr(auth_routes, "get_auth_db", _get_db)
+    monkeypatch.setattr(rate_limit, "record_login_failure", lambda key: failures.append(key))
+    import vaf.core.security_events as security_events
+    monkeypatch.setattr(security_events, "log_security_event",
+                        lambda kind, **kw: events.append((kind, kw.get("detail", ""))))
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def _as_caller(request: Request, call_next):
+        if caller_user_id:
+            request.state.user = {"user_id": caller_user_id}
+        return await call_next(request)
+
+    app.include_router(auth_routes.router)
+    return TestClient(app, raise_server_exceptions=False), events, failures
+
+
+def _account(password="old-password-123", totp=False):
+    from vaf.auth.crypto import encrypt_totp_secret, hash_password
+    secret = nonce = None
+    if totp:
+        secret, nonce = encrypt_totp_secret("JBSWY3DPEHPK3PXP")
+    return SimpleNamespace(id=uuid.uuid4(), username="bob", password_hash=hash_password(password),
+                           role="user", totp_secret=secret, totp_nonce=nonce,
+                           requires_2fa_setup=not totp, is_active=True, user_scope_id=uuid.uuid4(),
+                           permissions={}, seal=None, committed=False)
+
+
+def test_a_wrong_current_password_changes_nothing_and_counts_as_a_failed_login(monkeypatch):
+    """MUTATION: drop the current-password check - red."""
+    import vaf.auth.crypto as crypto
+    monkeypatch.setattr(crypto, "_get_jwt_secret", lambda: "x" * 48)
+    user = _account()
+    c, events, failures = _own_change(monkeypatch, user, caller_user_id=str(user.id))
+    r = c.post("/api/auth/change-password", json={"current_password": "nope",
+                                                  "new_password": "brand-new-password"})
+    assert r.status_code == 401 and not user.committed
+    assert failures and events[0][0] == "login_failed"
+
+
+def test_with_2fa_on_the_code_is_needed_too(monkeypatch):
+    """A session left open on another screen must not be enough. MUTATION: skip the code - red."""
+    import pyotp
+
+    import vaf.auth.crypto as crypto
+    monkeypatch.setattr(crypto, "_get_jwt_secret", lambda: "x" * 48)
+    user = _account(totp=True)
+    c, events, _ = _own_change(monkeypatch, user, caller_user_id=str(user.id))
+    body = {"current_password": "old-password-123", "new_password": "brand-new-password"}
+    assert c.post("/api/auth/change-password", json=dict(body, code="000000")).status_code == 400
+    assert not user.committed
+    ok = c.post("/api/auth/change-password",
+                json=dict(body, code=pyotp.TOTP("JBSWY3DPEHPK3PXP").now()))
+    assert ok.status_code == 200 and user.committed
+    from vaf.auth.crypto import verify_password
+    assert verify_password(user.password_hash, "brand-new-password")
+    assert ("password_changed", "changed by the account itself in Settings") in events
+

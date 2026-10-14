@@ -782,7 +782,8 @@
       "usage": "Kullanım",
       "automations": "Otomasyonlar",
       "localNetwork": "Yerel ağ",
-      "about": "Hakkında"
+      "about": "Hakkında",
+      "account": "Hesap"
     },
     "usage": {
       "title": "Token kullanımı",
@@ -2859,5 +2860,20 @@
       "sent": "Gönderildi.",
       "failed": "Gönderilemedi: {error}"
     }
+  },
+  "account": {
+    "passwordTitle": "Parolayı değiştir",
+    "passwordIntro": "Mevcut parolan, yeni bir parola ve senin için 2FA ayarlıysa doğrulama uygulamandaki kod.",
+    "current": "Mevcut parola",
+    "new": "Yeni parola",
+    "repeat": "Yeni parola (tekrar)",
+    "code": "2FA kodu",
+    "codeHint": "Yalnızca hesabın için 2FA ayarlıysa gerekir.",
+    "submit": "Parolayı değiştir",
+    "changed": "Parolan değiştirildi.",
+    "tooShort": "Yeni parola en az {n} karakter olmalı.",
+    "mismatch": "İki yeni parola birbirini tutmuyor.",
+    "failed": "Parola değiştirilemedi.",
+    "forgotten": "Parolanı mı unuttun? Bir yönetici Yerel Ağ, Kullanıcı Yönetimi altında sıfırlar. Yöneticinin kendi parolası bu bilgisayarda bir terminalde sıfırlanır: vaf users reset-password."
   }
 }

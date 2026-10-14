@@ -33,6 +33,7 @@ import LanguagePicker from './settings/LanguagePicker';
 import SecretsSection from './settings/SecretsSection';
 import SshSection from './settings/SshSection';
 import FtpSection from './settings/FtpSection';
+import AccountSection from './settings/AccountSection';
 import SandboxSection from './settings/SandboxSection';
 import RemoteAccessSection from './settings/RemoteAccessSection';
 import StandingGrantsSection from './settings/StandingGrantsSection';
@@ -258,6 +259,8 @@ const CATEGORIES = [
     { id: 'advanced', labelKey: 'advanced', icon: Zap, adminOnly: true },
     { id: 'automations', labelKey: 'automations', icon: Check },
     { id: 'local_network', labelKey: 'localNetwork', icon: Network, adminOnly: true },
+    // Every account's own: its password (and later, its own sessions).
+    { id: 'account', labelKey: 'account', icon: Lock },
     { id: 'about', labelKey: 'about', icon: Globe },
 ];
 
@@ -5426,6 +5429,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             </div>
                         )}
 
+                        {activeTab === 'account' && <AccountSection />}
                         {activeTab === 'about' && (
                             <div className="space-y-6 pb-8">
                                 <div className="text-center py-6">

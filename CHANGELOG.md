@@ -25,6 +25,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **The agent can no longer use VAF's terminal commands as the machine owner.** The terminal
+  door let every caller without a terminal through, and the agent's shell (`host_bash`,
+  `python_exec`) has none, so any account's agent could run `vaf session export`,
+  `vaf outbox send` or `vaf secrets` as the owner. Commands VAF starts for the agent are now
+  marked, and `vaf run`, the `session`, `inbox`, `outbox`, `secrets`, `ssh`, `ftp` and `env`
+  groups, `vaf users` refuse them. The agent has its own tools for all of these.
 - **Setting up a server replaces the published database passwords.** `vaf server provision`
   (which the server installer runs) now gives both database roles random passwords when the
   database is reachable, verified before they are saved. If it cannot reach the database it says

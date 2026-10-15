@@ -485,6 +485,14 @@ account has it unless the admin takes it away). How each use is controlled:
    chat and person that started it, and it ends with VAF. It is refused in a messaging-channel
    chat and inside a sub-agent's process, where nobody could be told when it ends. Details:
    [TOOL_SUPERVISION.md](../agents/TOOL_SUPERVISION.md), "Background host commands".
+5. **VAF's own terminal commands refuse it.** Every command started for the agent (this
+   tool, `python_exec`, a background command) gets its environment from `agent_env` in
+   `vaf/core/processes.py`, which marks it, and the terminal door and `vaf users
+   reset-password` refuse a marked caller: `vaf session`, `inbox`, `outbox`, `secrets`,
+   `ssh`, `ftp` and `env` act as the machine owner, and the agent has its own tools for each
+   that know whose turn it is ([ENCRYPTION_AT_REST.md](ENCRYPTION_AT_REST.md), "The
+   doors"). It closes the easy path, not the account permission: a command that clears its
+   environment, or reads files directly, is what an account with `host_bash` can do.
 
 An offline classifier (`vaf/core/command_policy.py`, shared with `bash` but run with the
 strict `host` profile) refuses the catastrophic set even after confirmation: code fetched

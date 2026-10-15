@@ -71,6 +71,16 @@ def test_a_reset_needs_a_person_at_the_terminal(world, monkeypatch):
     assert r.exit_code == 1 and world["resets"] == []
 
 
+def test_the_agents_own_command_cannot_reset_even_with_a_terminal(world, monkeypatch):
+    """The agent can give its command a terminal of its own (`script`), and could read a
+    recovery note left on the machine. MUTATION: drop the refuse_agent_command check - red."""
+    from vaf.core.processes import AGENT_COMMAND_ENV
+    monkeypatch.setenv(AGENT_COMMAND_ENV, "1")
+    world["answers"] = ["the-real-key", "new-password-123", "new-password-123"]
+    r = _run(["reset-password", "alice", "--recovery-key"])
+    assert r.exit_code == 1 and world["resets"] == []
+
+
 def test_a_wrong_recovery_key_resets_nothing_and_is_recorded(world):
     world["answers"] = ["guessed"]
     r = _run(["reset-password", "alice", "--recovery-key"])

@@ -74,7 +74,10 @@ def list_users():
 
 def _proof(recovery_key: bool) -> str:
     """What proved the caller, or '' when nothing did. A person at the terminal only."""
-    from vaf.cli.gate import _stored_hash, is_interactive
+    from vaf.cli.gate import _stored_hash, is_interactive, refuse_agent_command
+    if refuse_agent_command():
+        # Before the terminal check: the agent can give its command a terminal of its own.
+        return ""
     if not is_interactive():
         UI.error("A password reset needs a person at the terminal: it does not run from a "
                  "script or the agent's shell.")

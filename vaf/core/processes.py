@@ -32,6 +32,15 @@ stops sub-agent children: a command run through a shell is only the child of tha
 ``run_foreground()`` is the waiting counterpart (host_bash, python_exec): the call waits for
 the command, and Stop ends the command and everything it started instead of only freeing
 the agent.
+
+Every command started for the agent gets its environment from ``agent_env()``, which marks
+it (``AGENT_COMMAND_ENV``). VAF's terminal commands act as the machine owner and are for a
+person at the terminal, so they refuse a caller that carries the mark (vaf/cli/gate.py): the
+agent has tools of its own that know whose turn it is. NAMED BOUNDARY: a command that
+deliberately clears its environment is not stopped by this; what an account with
+``host_bash`` can do on this computer is an account permission (docs/security/SANDBOXING.md).
+Not on the facade: its callers are VAF's own host tools (host_bash, python_exec, ``start``),
+and the door it serves is VAF's own terminal.
 """
 from __future__ import annotations
 
@@ -47,12 +56,27 @@ from typing import Any, Dict, List, Optional
 
 MAX_PER_CHAT = 8
 
+# The mark on every command VAF starts for the agent; see the module docstring.
+AGENT_COMMAND_ENV = "VAF_AGENT_COMMAND"
+
 # How much of the log's end a wake turn carries. The agent reads more with the log action.
 WAKE_TAIL_CHARS = 1500
 
 
 class ProcessRefused(Exception):
     """A start that this module will not perform; the message says why, for the model."""
+
+
+def agent_env(secret_env: Optional[Dict[str, str]] = None, **extra: str) -> Dict[str, str]:
+    """The environment of a command started for the agent: this process's, UTF-8 output,
+    ``extra``, the person's named credentials, and the mark."""
+    return {**os.environ, "PYTHONIOENCODING": "utf-8", **extra, **(secret_env or {}),
+            AGENT_COMMAND_ENV: "1"}
+
+
+def started_by_agent(environ: Optional[Dict[str, str]] = None) -> bool:
+    """Whether this process runs inside a command VAF started for the agent."""
+    return (os.environ if environ is None else environ).get(AGENT_COMMAND_ENV) == "1"
 
 
 @dataclass
@@ -218,8 +242,7 @@ def start(command: str, *, session_id: str, user_scope_id: Any = None,
     kwargs: Dict[str, Any] = {
         "shell": True, "stdin": subprocess.PIPE, "stdout": log_file,
         "stderr": subprocess.STDOUT, "cwd": cwd or None,
-        "env": {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1",
-                **(secret_env or {})},
+        "env": agent_env(secret_env, PYTHONUNBUFFERED="1"),
     }
     kwargs.update(_own_group())
     try:

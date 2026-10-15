@@ -293,9 +293,10 @@ compose with it; see [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md).
 ## The doors
 
 - **Web UI**: unchanged - login, JWT, 2FA.
-- **Interactive terminal** (`vaf run`, the TUI, and the whole `vaf session`
-  group): asks for the admin password, verified offline against the hash
-  mirrored into the keyring, so a stopped database cannot lock you out.
+- **Interactive terminal** (`vaf run`, the TUI, and the whole `vaf session`,
+  `inbox`, `outbox`, `secrets`, `ssh`, `ftp` and `env` groups, plus
+  `vaf users list`): asks for the admin password, verified offline against the
+  hash mirrored into the keyring, so a stopped database cannot lock you out.
   `vaf session export/search/list/load` prints the very chats the encryption
   protects, so gating only `vaf run` would lock the front door and leave the
   window open. `cli_password_gate` turns it off.
@@ -303,6 +304,18 @@ compose with it; see [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md).
   spawns, the workflow engine, automations, and any non-tty stdin. They are
   already inside the shield, and prompting there would mean an unattended
   machine stops working after a reboot.
+- **Refused: the agent's own commands.** A command VAF starts for the agent
+  (`host_bash`, `python_exec`, a background command) has no terminal either,
+  and "no terminal" let it through, so any account's agent could run
+  `vaf session export` or `vaf outbox send` as the machine owner. Each such
+  command now carries a mark in its environment (`agent_env` in
+  `vaf/core/processes.py`), and the door, and `vaf users reset-password`,
+  refuse it before anything else, whatever `cli_password_gate` or
+  `VAF_SKIP_PASSWORD_GATE` say: the agent is never the person at the terminal,
+  and it has tools of its own that know whose turn it is. NAMED BOUNDARY: a
+  command that deliberately clears its environment is not stopped by the mark;
+  what an account with `host_bash` can do on this computer is an account
+  permission ([SANDBOXING.md](SANDBOXING.md)).
 - **No account yet**: there is nothing to verify against, so the door has
   always let you through. It now offers to create the account on the spot
   (`vaf setup`, see [FIRST_RUN.md](../setup/FIRST_RUN.md)); declining, or a

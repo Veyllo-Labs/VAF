@@ -415,6 +415,20 @@ def _browser_pool_off():
         os.environ["VAF_BROWSER_POOL_MAX"] = previous
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _not_inside_an_agent_command():
+    """The suite may be started by the agent's own shell (a coder running VAF's tests). The
+    mark that shell carries would close the terminal door in every CLI test; the tests that
+    are about the mark set it themselves."""
+    import os
+
+    from vaf.core.processes import AGENT_COMMAND_ENV
+    previous = os.environ.pop(AGENT_COMMAND_ENV, None)
+    yield
+    if previous is not None:
+        os.environ[AGENT_COMMAND_ENV] = previous
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _sandbox_env_housekeeping_off():
     """No reaper, quit stop or revocation stop for sandbox environments in the suite.

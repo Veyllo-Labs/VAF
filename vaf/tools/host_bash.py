@@ -114,9 +114,8 @@ class HostBashTool(BaseTool):
         # Stop ends the command and what it started, not only the wait for it.
         from vaf.core import processes
         try:
-            proc = processes.run_foreground(
-                command, timeout=timeout,
-                env={**os.environ, "PYTHONIOENCODING": "utf-8", **secret_env})
+            proc = processes.run_foreground(command, timeout=timeout,
+                                            env=processes.agent_env(secret_env))
         except subprocess.TimeoutExpired:
             return f"[HOST] Command timed out after {timeout}s: {command}"
         except processes.ForegroundCancelled:

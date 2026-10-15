@@ -15,7 +15,6 @@ For safe code execution, use python_sandbox instead.
 
 from __future__ import annotations
 
-import os
 import sys
 import subprocess
 import logging
@@ -119,7 +118,7 @@ class PythonExecTool(BaseTool):
         try:
             proc = processes.run_foreground(
                 [sys.executable, "-c", code], timeout=timeout, shell=False,
-                env={**os.environ, "PYTHONIOENCODING": "utf-8", **secret_env})
+                env=processes.agent_env(secret_env))
         except subprocess.TimeoutExpired:
             return f"[ERROR] python_exec: timeout after {timeout}s"
         except processes.ForegroundCancelled:

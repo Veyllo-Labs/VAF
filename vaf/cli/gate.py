@@ -26,6 +26,14 @@ Two rules follow from the shield model, and both are load-bearing:
   keyring, not the auth database: the Postgres container is frequently down on
   a desktop, and a door that cannot be opened when the database is asleep is a
   lockout, not a security feature.
+
+A third rule closes what the first one opened: a caller without a terminal used to
+be let through, and the agent's own commands (host_bash, python_exec) have none, so
+`vaf session export`, `vaf outbox send` or `vaf secrets` ran as the machine owner
+from any account's agent. Every command VAF starts for the agent carries a mark
+(`vaf.core.processes.agent_env`), and the door refuses it before anything else,
+whatever the gate setting: the agent is never the person at the terminal, and it has
+tools of its own that know whose turn it is.
 """
 from __future__ import annotations
 
@@ -167,16 +175,32 @@ def _offer_setup() -> None:
           file=sys.stderr)
 
 
+def refuse_agent_command() -> bool:
+    """True, with the reason said, when this process runs inside a command VAF started for
+    the agent. Every terminal entry that acts as the machine owner asks it first."""
+    from vaf.core.processes import started_by_agent
+    if not started_by_agent():
+        return False
+    print("VAF: this command acts as the machine owner and is for a person at the terminal; "
+          "it does not run from the agent's own commands. The agent has its own tools for "
+          "this (chats, inbox, outbox, credentials, ssh, ftp, sandbox environments), or the "
+          "person runs it in a terminal.", file=sys.stderr)
+    return True
+
+
 def require_admin_password(*, force: bool = False) -> bool:
     """Ask for the admin password once per process. True = may proceed.
 
-    Returns True without asking when there is nothing to verify against (a
+    Refuses a command VAF started for the agent, before anything else (see the module
+    docstring). Returns True without asking when there is nothing to verify against (a
     fresh install whose web account was never created), when the gate is turned
     off, or when this is not an interactive terminal. Those are not silent
     weakenings: each is a case where prompting would lock a working setup out
     rather than keep an intruder in.
     """
     global _unlocked
+    if refuse_agent_command():
+        return False
     if _unlocked and not force:
         return True
     if not gate_enabled():

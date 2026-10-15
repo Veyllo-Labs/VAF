@@ -316,6 +316,14 @@ compose with it; see [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md).
   command that deliberately clears its environment is not stopped by the mark;
   what an account with `host_bash` can do on this computer is an account
   permission ([SANDBOXING.md](SANDBOXING.md)).
+- **Not behind the door, deliberately**: `vaf security`, `secure`, `server`,
+  `memory`, `automation` and the rest of the groups not listed above. A door
+  in front of them would not take anything away from the one caller it is
+  about, the agent's shell: an account that runs a command there has
+  `host_bash`, which reaches the same files, the same database and `crontab`
+  directly. What decides that is who gets `host_bash`, not which group asks.
+  `vaf a2a` must stay open in any case: it is the door foreign agents walk
+  through ([A2A_PROTOCOL.md](../agents/A2A_PROTOCOL.md)).
 - **No account yet**: there is nothing to verify against, so the door has
   always let you through. It now offers to create the account on the spot
   (`vaf setup`, see [FIRST_RUN.md](../setup/FIRST_RUN.md)); declining, or a

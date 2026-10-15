@@ -391,7 +391,8 @@ app.add_typer(git.app, name="git", help="Git with AI support")
 # Self-update (check for / apply new VAF releases)
 app.add_typer(update.app, name="update", help="Check for and apply VAF updates")
 
-# Session management
+# Session management. Which groups get the door, and why the others deliberately do not:
+# docs/security/ENCRYPTION_AT_REST.md, "The doors".
 def _terminal_door() -> None:
     """The same door as the interactive run, in front of the chat-reading groups.
 

@@ -28,10 +28,10 @@ npm build that must download dependencies fails in here, and that is deliberate:
 `--unshare-net` is what keeps the host-loopback services (the memory DB, the VAF API) out of
 reach, and bubblewrap has only all or nothing. "Only Maven Central and the Paper repository"
 would need a user-space network stack (pasta or slirp4netns) in front of a filtering proxy,
-which is infrastructure of its own. Measured, it is not needed today: such a build runs through
-host_bash, which the coder uses without asking (an account permission, outside this jail). The
-gap it leaves is an account WITHOUT host_bash, whose coder cannot build against a dependency
-repository; no such request has been measured, and that is when the filtered profile is earned.
+which is infrastructure of its own. Not needed: such a build runs through host_bash, which the
+coder uses without asking where the account has it (granted by name, outside this jail), or in a
+project sandbox environment, whose `registries` network profile is exactly that filter, one
+layer out - the way for a regular account, which has no host_bash unless the admin names it.
 """
 from __future__ import annotations
 

@@ -377,6 +377,18 @@ def _opt_in_caller(**kw):
     return ToolCaller({"probe": _OptInProbe()}, **kw)
 
 
+def test_the_host_tools_are_granted_by_name():
+    """host_bash and python_exec are this computer, as the user VAF runs as: the standard
+    preset and "no list" leave them out, the admin names them per account. MUTATION: drop
+    account_opt_in from either - red."""
+    from vaf.core.tool_contract import tool_list_entry
+    from vaf.tools.host_bash import HostBashTool
+    from vaf.tools.python_exec import PythonExecTool
+    for cls in (HostBashTool, PythonExecTool):
+        assert cls.account_opt_in is True, cls.name
+        assert tool_list_entry(cls.name, cls)["account_opt_in"] is True, cls.name
+
+
 @pytest.mark.parametrize("answer", [None, "unregistered"])
 def test_an_opt_in_tool_is_not_part_of_everything(answer):
     """A missing or empty list means "everything" for the other tools (the admin UI's creation

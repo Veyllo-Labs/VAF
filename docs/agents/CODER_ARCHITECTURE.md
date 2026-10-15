@@ -262,7 +262,10 @@ any lane, including a messaging channel. Now:
 1. `_coder_dispatch_refusal()` asks the questions only this lane has, by the name the MODEL
    used (an alias such as `web_search` is authorised as itself): the coder allow-list (a name
    outside it is refused, not only hidden) and the account allowlist, whose ANSWER travels
-   into the coder's process as data;
+   into the coder's process as data and is asked with the framework's rule (`_account_lets`,
+   which calls `allowlist_permits` in `vaf/core/tool_dispatch.py`), so a tool granted only by
+   name (`host_bash`, `python_exec`) is neither offered nor run for an account whose list does
+   not name it - the schema chokepoint asks the same helper;
 2. every local tool then RUNS through the framework's `ToolCaller` (`_coder_funnel()`), the
    pipeline every other lane shares: the declarative policy (`admin_only`,
    `channel_restrictions`), the account allowlist again where a resolver is registered, the

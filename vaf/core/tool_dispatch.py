@@ -973,7 +973,17 @@ def account_allows_tool(tool_name: str, user_scope_id: str | None,
         return True
     if policy_admin_flag(user_role, user_scope_id):
         return True
-    allowed = resolve_account_allowlist(user_scope_id)
+    return allowlist_permits(tool_name, resolve_account_allowlist(user_scope_id), tool=tool)
+
+
+def allowlist_permits(tool_name: str, allowed, *, tool=None) -> bool:
+    """The list rule alone, for an answer already resolved (``allowed`` None = no list).
+
+    ``account_allows_tool`` asks it after the exemptions; a lane that carries the answer as
+    data across a process boundary (the coder's ``VAF_ALLOWED_TOOLS``) asks it with the same
+    exemptions of its own, so the opt-in rule has one home. Not on the facade: an embedder's
+    in-process lane asks ``account_allows_tool``.
+    """
     if getattr(tool, "account_opt_in", False):
         # Only a list that NAMES it: "no list" means everything for the other tools.
         return allowed is not None and tool_name in allowed

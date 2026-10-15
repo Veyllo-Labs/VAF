@@ -3054,6 +3054,17 @@ def _environment_browser_refusal(fn_name: str, fn_args, environment) -> Optional
             "bash(background=true)) and reports page errors, console output and the rendered text.")
 
 
+def _account_lets(fn_name: str, tool, caller_allowed, scope, role) -> bool:
+    """The account allowlist's answer for one coder tool, from the answer this run already
+    holds (``caller_allowed``, None = no list): the framework's rule, so a tool that declares
+    ``account_opt_in`` (host_bash, python_exec) needs a list that names it. A caller without
+    a scope or with the admin role is exempt, as everywhere."""
+    from vaf.core.tool_dispatch import allowlist_permits, policy_admin_flag
+    if not scope or policy_admin_flag(role, scope):
+        return True
+    return allowlist_permits(fn_name, caller_allowed, tool=tool)
+
+
 def _coder_dispatch_refusal(fn_name: str, tool, *, coder_allowed, caller_allowed,
                             scope, role, session_id) -> Optional[str]:
     """Why the coder must NOT run this call, or None when it may: the questions only this
@@ -3074,7 +3085,7 @@ def _coder_dispatch_refusal(fn_name: str, tool, *, coder_allowed, caller_allowed
     if fn_name not in coder_allowed:
         return (f"Security Error: '{fn_name}' is not a coding-agent tool. "
                 f"Use the tools you were given.")
-    if caller_allowed is not None and fn_name not in caller_allowed:
+    if not _account_lets(fn_name, tool, caller_allowed, scope, role):
         return f"Security Error: The tool '{fn_name}' is not enabled for your account."
     if tool is not None:
         return None     # the funnel asks the policy when the tool runs
@@ -5547,10 +5558,10 @@ Task {task_idx + 1}: {current_task}
             """
             out = [e for e in schema
                    if e.get("function", {}).get("name") in _coder_allowed]
-            if caller_allowed is None:
-                return out
             return [e for e in out
-                    if e.get("function", {}).get("name") in caller_allowed]
+                    if _account_lets(e.get("function", {}).get("name"),
+                                     self.local_tools.get(e.get("function", {}).get("name")),
+                                     caller_allowed, caller_scope, caller_role)]
 
         def get_tools_schema_for_context(is_main_context: bool) -> List[Dict]:
             """The schema the model sees, minus tools the coder or the account may not use.

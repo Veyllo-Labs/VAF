@@ -25,6 +25,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **Host access is given per account.** `host_bash` and `python_exec` run on this computer as
+  the user VAF runs as, outside every sandbox. A regular account now gets them only when the
+  admin ticks them in user management, like `ssh` and `ftp`; the Standard and Read-only presets
+  and an account without a tool list leave them out, and such an account works in its sandbox
+  environments. Admins keep them. Accounts whose saved list already names them keep them until
+  the admin unticks them.
 - **The agent can no longer use VAF's terminal commands as the machine owner.** The terminal
   door let every caller without a terminal through, and the agent's shell (`host_bash`,
   `python_exec`) has none, so any account's agent could run `vaf session export`,

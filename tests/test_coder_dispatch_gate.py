@@ -49,6 +49,15 @@ def _host_bash():
     return HostBashTool()
 
 
+@pytest.fixture
+def host_granted(monkeypatch):
+    """An account the admin gave the host tools BY NAME: host_bash and python_exec declare
+    account_opt_in, so "no list" no longer includes them."""
+    from vaf.core import tool_dispatch
+    monkeypatch.setattr(tool_dispatch, "_account_allowlist_resolver",
+                        lambda scope: {"host_bash", "python_exec"})
+
+
 def _refusal(name, tool, *, allowed=None, caller_allowed=None, scope=SCOPE, role="user",
              session_id=CHAT):
     return _coder_dispatch_refusal(
@@ -96,21 +105,50 @@ def test_the_account_allowlist_still_refuses():
 # ── host_bash, at full strength ────────────────────────────────────────────────────
 
 def test_the_coder_runs_host_bash_without_asking():
-    """No grant, no dialog: the lane's decision. MUTATION: put a confirmation gate back
-    into _coder_dispatch_refusal - this goes red."""
-    assert _refusal("host_bash", _host_bash()) is None
+    """No grant, no dialog: the lane's decision, for an account the admin gave it.
+    MUTATION: put a confirmation gate back into _coder_dispatch_refusal - this goes red."""
+    assert _refusal("host_bash", _host_bash(), caller_allowed={"host_bash"}) is None
 
 
-def test_also_for_a_chat_that_started_on_a_messaging_channel():
+def test_the_host_is_only_for_an_account_that_was_given_it_by_name():
+    """host_bash and python_exec declare account_opt_in: "no list" (everything for the other
+    tools) does not include them, in the coder's own check as in the funnel. Admins and a
+    caller without a scope keep them. MUTATION: ask the plain list rule in
+    _coder_dispatch_refusal again - red."""
+    from vaf.tools.python_exec import PythonExecTool
+    for tool in (_host_bash(), PythonExecTool()):
+        out = _refusal(tool.name, tool, caller_allowed=None)
+        assert out is not None and "not enabled for your account" in out, tool.name
+        assert _refusal(tool.name, tool, caller_allowed={tool.name}) is None
+        assert _refusal(tool.name, tool, caller_allowed=None, role="admin") is None
+        assert _refusal(tool.name, tool, caller_allowed=None, scope=None) is None
+
+
+def test_the_coders_schema_asks_the_same_rule():
+    """The schema filter is a closure deep inside run(); it must ask _account_lets, or a
+    regular account without a list would see host_bash and be refused when it calls it.
+    MUTATION: filter on `name in caller_allowed` again - red."""
+    import inspect
+
+    import vaf.tools.coder as coder
+    src = inspect.getsource(coder)
+    body = src[src.index("def _apply_tool_allowlists"):]
+    body = body[:body.index("def get_tools_schema_for_context")]
+    assert "_account_lets(" in body and "in caller_allowed" not in body
+    assert "allowlist_permits(" in inspect.getsource(coder._account_lets)
+
+
+def test_also_for_a_chat_that_started_on_a_messaging_channel(host_granted):
     """The channel guard protects the chat turn, where somebody would have been asked.
     The coder is not handed the flag, so a coder started from Telegram can still build."""
-    assert _refusal("host_bash", _host_bash(), session_id=CHANNEL_CHAT) is None
+    assert _refusal("host_bash", _host_bash(), caller_allowed={"host_bash"},
+                    session_id=CHANNEL_CHAT) is None
     # Handed the channel flag, host_bash would refuse; it runs, so it was not handed it.
     assert "coder-ok" in _run("host_bash", _host_bash(), {"command": "echo coder-ok"},
                               session_id=CHANNEL_CHAT)
 
 
-def test_an_admin_who_keeps_channel_restrictions_on_is_still_obeyed(monkeypatch):
+def test_an_admin_who_keeps_channel_restrictions_on_is_still_obeyed(monkeypatch, host_granted):
     """channel_restrictions is a policy the admin can keep ON (channel_tools_unrestricted
     = false); the coder must not be the way around it."""
     monkeypatch.setattr("vaf.core.config.Config.get",
@@ -286,7 +324,7 @@ def test_a_root_command_waits_for_its_files_to_be_handed_back_too():
 
 # ── "only this time" reaches the tool (the funnel's confirmation, N13) ──────────────
 
-def test_only_this_time_now_runs_python_exec(tmp_path):
+def test_only_this_time_now_runs_python_exec(tmp_path, host_granted):
     """The dialog offered "only this time" and python_exec's own check refused it, because
     the tool could not tell it had been given for THIS call. The funnel now assigns
     `_call_confirmed` to a tool that declares accepts_call_confirmation. MUTATION: drop the
@@ -309,7 +347,7 @@ def test_only_this_time_now_runs_python_exec(tmp_path):
     assert not trust.has_chat_grant("python_exec", SCOPE, CHAT), "once remembers nothing"
 
 
-def test_the_model_cannot_claim_the_confirmation():
+def test_the_model_cannot_claim_the_confirmation(host_granted):
     """Assigned, never defaulted: without a gate (a workflow step, the coder) the value is
     False whatever the model wrote into it."""
     from vaf.core.subagent_ipc import session_context
@@ -323,7 +361,7 @@ def test_the_model_cannot_claim_the_confirmation():
     assert out.startswith("[SECURITY]"), out
 
 
-def test_an_inline_coder_puts_its_inner_calls_to_the_application(tmp_path):
+def test_an_inline_coder_puts_its_inner_calls_to_the_application(tmp_path, host_granted):
     """The chat lane hands the embedder's authorizer on for the call; the coder's funnel,
     built inside, consults it. Outside the scope (a coder in a process of its own) there is
     none. MUTATION: build _coder_funnel without current_authorizer() - red."""

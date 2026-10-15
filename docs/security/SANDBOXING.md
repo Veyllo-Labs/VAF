@@ -402,10 +402,11 @@ command is confined by the **kernel**:
   `bash` also refuses if no project workspace is bound (it would otherwise root the jail at `$HOME`).
 - **No network, also not for a dependency repository** (named boundary, in the module docstring
   of `vaf/tools/workspace_exec.py`). A Maven, Gradle or npm build that downloads dependencies
-  runs through `host_bash`, which the coder uses without asking where the account has it. An
-  allowlisted network for the jail (only Maven Central, only the Paper repository) would need a
-  user-space network stack behind a filtering proxy; it is earned by the first measured request
-  from an account without `host_bash`. So that the coder does not find this out by failing:
+  runs through `host_bash`, which the coder uses without asking where the account has it, or
+  in a project sandbox environment, whose network profile decides what it reaches (the way for
+  a regular account, which has no `host_bash` unless the admin names it). An allowlisted
+  network for the jail itself would need a user-space network stack behind a filtering proxy;
+  the environment's `registries` profile is that filter, one layer out. So that the coder does not find this out by failing:
   `bash` describes itself as offline and sends downloads to `host_bash`, and a failed command
   whose output shows a missing network (an unresolved host, a failed artifact transfer) says so
   in its result.
@@ -442,9 +443,13 @@ the project itself instead (`/workspace`, with the environment's packages), and 
 
 Some tasks genuinely need the real host - "check my running docker container", inspect host
 services, run a host CLI, a local build. `host_bash` runs **unsandboxed on the host and
-outside the per-user file jail, on purpose**. Who may use it is an **account permission**
-(the account allowlist in user management; the standard preset includes it, so a new
-account has it unless the admin takes it away). How each use is controlled:
+outside the per-user file jail, on purpose**. Who may use it is an **account permission the
+admin grants by name** (`account_opt_in`): it is this computer, as the user VAF runs as, so
+the standard and read-only presets leave it out, an account without a list does not have it,
+and a regular account works in its sandbox environments instead. Admins and the machine owner
+always have it. `python_exec` (unsandboxed Python on the host) is granted the same way.
+Accounts whose stored list already names them keep them until the admin takes them away. How
+each use is controlled:
 
 1. **`permission_level = "dangerous"`** → the framework's confirmation gate fires, and the
    person sees the command, not just the tool name - in the Web UI, the TUI modal and the

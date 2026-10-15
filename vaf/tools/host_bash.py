@@ -5,8 +5,10 @@
 
 It runs outside every sandbox and outside the per-user file jail, on purpose - some tasks
 genuinely need the real host ("check my running docker container", a host CLI, a local
-build). WHO may use it is an account permission (the account allowlist in user management;
-the standard preset includes it). HOW each use is controlled:
+build). WHO may use it is an account permission the admin grants BY NAME (`account_opt_in`):
+it is this computer, as the user VAF runs as, so the standard and read-only presets leave it
+out and a regular account works in its sandbox environments instead. Admins and the machine
+owner always have it. HOW each use is controlled:
 
   1. permission_level = "dangerous" -> the framework's confirmation gate. In the chat the
      person sees tool, command and reason, and answers: only this time, for this chat,
@@ -41,6 +43,9 @@ class HostBashTool(BaseTool):
     permission_level = "dangerous"   # -> confirmation gate in execute_tool
     channel_restrictions = ("channel",)  # hard-blocked on every chat channel
     side_effect_class = "irreversible"
+    # The whole computer, as the user VAF runs as: a regular account gets it only when the
+    # admin names it (the module docstring).
+    account_opt_in = True
     coder_only = False               # offered to the main agent; the coder may call it too
     # Whose command it is: a background command belongs to this person's chat, and the
     # turn that wakes the chat when it ends runs as them.

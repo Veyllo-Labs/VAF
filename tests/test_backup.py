@@ -410,3 +410,129 @@ def test_restoring_needs_a_person_and_a_stopped_vaf(monkeypatch, tmp_path):
     assert out.exit_code == 1 and "running" in out.output and not ran
     monkeypatch.setattr(instance, "find_service", lambda: None)
     assert _run().exit_code == 0 and ran == [1], "with all three in place it runs"
+
+
+# ── review findings ─────────────────────────────────────────────────────────────────
+
+def test_the_configured_backup_folder_stays_out_when_writing_elsewhere(install, monkeypatch):
+    """`--to` another folder, while `backup_dir` sits inside a root (VAF_Projects counts
+    everything as data): the earlier backups there must not ride along. MUTATION: exclude
+    only the destination - red."""
+    from vaf.core.config import Config
+    home_backups = install["roots"]["projects"] / "my-backups"
+    home_backups.mkdir()
+    (home_backups / "vaf-backup-20260101T000000Z.tar.age").write_bytes(b"an earlier backup")
+    real_get = Config.get
+    monkeypatch.setattr(Config, "get", classmethod(
+        lambda cls, k, d=None: str(home_backups) if k == "backup_dir" else real_get(k, d)))
+    result = backup.create_backup(install["out"], include_volumes=False)
+    assert not any("my-backups" in name for name, _ in _members(result.path))
+
+
+def test_plaintext_in_transit_stays_on_this_machine_and_out_of_the_backup(install, monkeypatch):
+    """The database dump, SQLite copies, volume tars and the machine key are staged before
+    they are encrypted. In `dest` they sat on whatever that is (a USB stick, a network mount,
+    where a deleted copy is recoverable); now in an owner-only folder of the local data
+    directory, which the walk must not take. MUTATION: stage in `dest`, or drop the staging
+    from the exclusions - red."""
+    from vaf.core.platform import Platform
+    data = install["roots"]["data"]
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: data))
+    seen = {}
+    fake_dump = backup._dump_postgres
+
+    def _spy(staging, container=None):
+        seen["staging"] = staging
+        return fake_dump(staging, container)
+
+    monkeypatch.setattr(backup, "_dump_postgres", _spy)
+    crashed = data / ".backup-staging-crashed"
+    (crashed / "postgres").mkdir(parents=True)
+    (crashed / "postgres" / "database.dump").write_bytes(b"plaintext from a crashed run")
+    import os as _os
+    _os.utime(crashed, (0, 0))
+    result = backup.create_backup(install["out"], include_volumes=False)
+    assert not crashed.exists(), "a crashed run's plaintext is removed"
+    assert seen["staging"].parent == data and not backup._inside(seen["staging"], install["out"])
+    assert not any(".backup-staging" in s for s in result.skipped)
+    assert not any(".backup-staging" in name for name, _ in _members(result.path))
+    assert not any(p.name.startswith(".backup-staging") for p in data.iterdir())
+
+
+def test_the_sandbox_environments_come_back_for_a_backup_without_volumes(target, monkeypatch):
+    """An environment that mounts a host folder has no volume; its record must get its
+    container back all the same, or the reaper clears it. MUTATION: call readopt only when
+    the backup has volume tars - red."""
+    from vaf.core import environments
+    calls = []
+    monkeypatch.setattr(environments.EnvironmentManager, "readopt",
+                        lambda self: calls.append(1) or {})
+    made = backup.create_backup(target["out"], include_volumes=False)
+    backup.restore_backup(made.path, pre_restore=False)
+    assert calls == [1]
+
+
+def test_the_safety_backup_still_opens_after_the_keyring_was_replaced(target, monkeypatch):
+    """The safety backup is encrypted to this machine's identity, which lives in the keyring
+    the restore replaces with the backup's. The former identity is kept as a previous one.
+    MUTATION: drop _keep_previous_identity - the safety backup no longer opens - red."""
+    from pyrage import x25519
+
+    from vaf.core.data_keyring import set_data_secret
+    real_place = backup._place_files
+
+    def _place_and_replace(staging):
+        placed = real_place(staging)
+        set_data_secret(backup.IDENTITY_SECRET, str(x25519.Identity.generate()))
+        return placed
+
+    monkeypatch.setattr(backup, "_place_files", _place_and_replace)
+    made = backup.create_backup(target["out"], include_volumes=False)
+    result = backup.restore_backup(made.path)
+    assert result.pre_restore is not None
+    check = backup.verify_backup(result.pre_restore)
+    assert check.ok, check.problems
+
+
+def test_an_interrupted_volume_read_never_leaves_docker_cp_blocked(tmp_path, monkeypatch):
+    """After a read that stopped half-way, docker cp may be blocked writing into a full
+    pipe; reading its stderr or waiting on it first would hang. MUTATION: wait before
+    closing its stdout - red."""
+    events = []
+
+    class _Out(io.BytesIO):
+        def close(self):
+            events.append("stdout closed")
+            super().close()
+
+    class _Proc:
+        def __init__(self, *a, **k):
+            self.stdout = _Out(b"this is not a tar stream" * 100)
+            self.stderr = io.BytesIO(b"")
+
+        def wait(self, timeout=None):
+            events.append("wait")
+            return 0
+
+        def kill(self):
+            events.append("kill")
+
+    monkeypatch.setattr(backup.subprocess, "Popen", _Proc)
+    monkeypatch.setattr(backup, "_docker_exe", lambda: "docker")
+    with pytest.raises(Exception):
+        backup._docker_cp_tar("vaf-backup-carrier-ab12cd34", "/v", tmp_path / "x.tar")
+    assert events.index("stdout closed") < events.index("wait")
+
+
+def test_the_kit_carries_the_machine_key_also_under_a_passphrase(monkeypatch):
+    """A store wrapped under the machine key before the passphrase came is upgraded only
+    when it is next opened; until then the machine key opens it. MUTATION: return None
+    when a passphrase is set - red."""
+    from vaf.core import secure_store
+    from vaf.core.recovery_kit import _machine_kek_for_kit
+    key = secure_store._config_kek(create=True)
+    secure_store.set_passphrase("a passphrase")
+    try:
+        assert _machine_kek_for_kit() == key
+    finally:
+        secure_store.set_passphrase(None)

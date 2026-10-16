@@ -83,6 +83,9 @@ logger = logging.getLogger("vaf.core.backup")
 BACKUP_FORMAT = "vafbackup-1-5e2c90"
 SUFFIX = ".tar.age"
 IDENTITY_SECRET = "backup_identity"
+# Identities this machine held before a restore replaced its keyring: a safety backup was
+# written to one of them, and must still open (a JSON list in the data keyring).
+PREVIOUS_IDENTITIES_SECRET = "backup_identities_previous"
 PG_CONTAINER = "vaf-memory-db"
 _SQLITE_MAGIC = b"SQLite format 3\x00"
 _SQLITE_SIDECARS = ("-wal", "-shm", "-journal")
@@ -157,6 +160,31 @@ def machine_identity():
     return x25519.Identity.from_str(value)
 
 
+def decrypting_identities() -> List[object]:
+    """Every identity this machine may open a backup with: the current one, then those it
+    held before a restore replaced its keyring."""
+    from pyrage import x25519
+
+    from vaf.core.data_keyring import peek_data_secret
+    out = [machine_identity()]
+    try:
+        for value in json.loads(peek_data_secret(PREVIOUS_IDENTITIES_SECRET) or "[]"):
+            out.append(x25519.Identity.from_str(str(value)))
+    except Exception as e:
+        logger.warning("The previous backup identities could not be read: %s", e)
+    return out
+
+
+def _keep_previous_identity(previous: Optional[str]) -> None:
+    from vaf.core.data_keyring import peek_data_secret, set_data_secret
+    current = peek_data_secret(IDENTITY_SECRET)
+    if not previous or previous == current:
+        return
+    known = json.loads(peek_data_secret(PREVIOUS_IDENTITIES_SECRET) or "[]")
+    if previous not in known:
+        set_data_secret(PREVIOUS_IDENTITIES_SECRET, json.dumps(known + [previous]))
+
+
 def recipients() -> List[Tuple[str, object]]:
     """(label, age recipient) for every key a backup is encrypted to."""
     from pyrage import x25519
@@ -202,9 +230,11 @@ def create_backup(dest: Optional[Path] = None, *, include_projects: bool = True,
         lock.acquire()
     except Exception:
         raise BackupError("Another backup is running.")
-    staging = Path(tempfile.mkdtemp(prefix=".staging-", dir=dest))
+    # The plaintext parts (database dump, SQLite copies, volume tars, the machine key) are
+    # staged on THIS machine, owner-only, never in `dest`: a backup folder can be a USB stick
+    # or a network mount, where a deleted plaintext copy is still recoverable.
+    staging = _private_staging(".backup-staging-")
     try:
-        os.chmod(staging, 0o700)
         say("Collecting files")
         members = _collect_files(staging, include_projects, skipped, warnings, dest)
         say("Dumping the memory database")
@@ -254,6 +284,24 @@ def create_backup(dest: Optional[Path] = None, *, include_projects: bool = True,
             lock.release()
         except Exception:
             pass
+
+
+def _private_staging(prefix: str) -> Path:
+    """An owner-only folder in the local data directory for plaintext in transit. A folder
+    of the same kind older than a day is a run that crashed before its cleanup, holding
+    plaintext nobody needs: it goes first."""
+    from vaf.core.platform import Platform
+    data = Platform.data_dir()
+    data.mkdir(parents=True, exist_ok=True)
+    for stale in data.glob(prefix + "*"):
+        try:
+            if stale.is_dir() and time.time() - stale.stat().st_mtime > 86400:
+                shutil.rmtree(stale, ignore_errors=True)
+        except OSError:
+            pass
+    staging = Path(tempfile.mkdtemp(prefix=prefix, dir=data))
+    os.chmod(staging, 0o700)
+    return staging
 
 
 class _NoLock:
@@ -311,19 +359,28 @@ def _collect_files(staging: Path, include_projects: bool, skipped: List[str],
 
     members: List[Tuple[str, Path]] = []
     sqlite_bases = set()
+    # Never the backups themselves: neither the destination of this one nor the configured
+    # backup folder (`--to` elsewhere, or the pre-restore folder below it, while backup_dir
+    # sits inside a root). Staging folders are left out by name below.
+    excluded = [dest]
+    try:
+        excluded.append(backup_dir())
+    except Exception:
+        pass
     walked = list(data_stores.walk(include_projects=include_projects))
     for _root, path, row in walked:
         if data_stores.backed_up(row) and path.is_file() and not path.is_symlink() \
                 and _is_sqlite(path):
             sqlite_bases.add(str(path))
     for n, (root, path, row) in enumerate(walked):
+        if any(_inside(path, folder) for folder in excluded) or \
+                path.name.startswith((".backup-staging-", ".restore-")):
+            continue                     # backups, and plaintext in transit: never taken
         if row is None:
             skipped.append(f"{path} (not one of VAF's stores)")
             continue
         if not data_stores.backed_up(row):
             continue
-        if _inside(path, dest):
-            continue                     # a backup folder inside a root: never itself
         if path.is_symlink():
             warnings.append(f"{path} is a link and was not followed.")
             continue
@@ -439,8 +496,17 @@ def _docker_cp_tar(container: str, path: str, out: Path, drop: frozenset = froze
                     dst.addfile(member)
                 kept += 1
     finally:
+        # Our end of its stdout first: after an interrupted read, docker cp may be blocked
+        # writing into a full pipe, and waiting on it (or reading its stderr) would hang.
+        if proc.stdout:
+            proc.stdout.close()
+        try:
+            code = proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            code = proc.wait(timeout=30)
         err = proc.stderr.read().decode("utf-8", "replace") if proc.stderr else ""
-        if proc.wait(timeout=60) != 0:
+        if code != 0:
             raise BackupError(f"docker cp {container}:{path} failed: {err.strip()[:200]}")
     return kept
 
@@ -657,7 +723,7 @@ def verify_backup(path: Path, identity: Optional[str] = None) -> VerifyResult:
             return VerifyResult(False, problems=["the file changed after it was written "
                                                  "(its .sha256 does not match)"])
     try:
-        ident = x25519.Identity.from_str(identity.strip()) if identity else machine_identity()
+        idents = [x25519.Identity.from_str(identity.strip())] if identity else decrypting_identities()
     except Exception as e:
         return VerifyResult(False, problems=[f"that is not an age identity: {e}"])
 
@@ -667,7 +733,7 @@ def verify_backup(path: Path, identity: Optional[str] = None) -> VerifyResult:
     def decrypt() -> None:
         try:
             with open(path, "rb") as src, os.fdopen(write_fd, "wb") as pipe:
-                pyrage.decrypt_io(src, pipe, [ident])
+                pyrage.decrypt_io(src, pipe, idents)
         except BaseException as e:      # noqa: BLE001 - reported below
             failure.append(e)
 
@@ -758,13 +824,13 @@ class RestoreResult:
 def read_manifest(path: Path, identity: Optional[str] = None) -> Dict:
     """The manifest alone (the first member), to show what a backup is before restoring it."""
     import pyrage
-    ident = _identity(identity)
+    idents = _identities(identity)
     read_fd, write_fd = os.pipe()
 
     def decrypt() -> None:
         try:
             with open(path, "rb") as src, os.fdopen(write_fd, "wb") as pipe:
-                pyrage.decrypt_io(src, pipe, [ident])
+                pyrage.decrypt_io(src, pipe, idents)
         except Exception:       # noqa: BLE001 - a short read below says enough
             pass
 
@@ -782,14 +848,14 @@ def read_manifest(path: Path, identity: Optional[str] = None) -> Dict:
         raise BackupError(f"This file does not open with that key: {type(e).__name__}") from e
 
 
-def _identity(identity: Optional[str]):
+def _identities(identity: Optional[str]) -> List[object]:
     from pyrage import x25519
     if identity:
         try:
-            return x25519.Identity.from_str(identity.strip().upper())
+            return [x25519.Identity.from_str(identity.strip().upper())]
         except Exception as e:
             raise BackupError(f"That is not a recovery key ({e}).") from e
-    return machine_identity()
+    return decrypting_identities()
 
 
 def _safe_member(name: str) -> bool:
@@ -812,14 +878,14 @@ def _extract_verified(path: Path, identity: Optional[str], staging: Path) -> Tup
     """Decrypt and unpack into ``staging``, checking every member's name, type and checksum.
     Raises BackupError on the first thing that does not fit; returns (manifest, members)."""
     import pyrage
-    ident = _identity(identity)
+    idents = _identities(identity)
     read_fd, write_fd = os.pipe()
     failure: List[BaseException] = []
 
     def decrypt() -> None:
         try:
             with open(path, "rb") as src, os.fdopen(write_fd, "wb") as pipe:
-                pyrage.decrypt_io(src, pipe, [ident])
+                pyrage.decrypt_io(src, pipe, idents)
         except BaseException as e:      # noqa: BLE001 - reported below
             failure.append(e)
 
@@ -1046,13 +1112,9 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
 
     say = progress or (lambda _msg: None)
     container = pg_container or PG_CONTAINER
-    from vaf.core.platform import Platform
-    data = Platform.data_dir()
-    data.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=".restore-", dir=data))
+    staging = _private_staging(".restore-")
     warnings: List[str] = []
     try:
-        os.chmod(staging, 0o700)
         say("Opening and checking the backup")
         manifest, _members = _extract_verified(Path(path), identity, staging)
         _check_version(manifest)
@@ -1071,6 +1133,13 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
             say("Writing a backup of the current state first")
             pre = create_backup(backup_dir() / "pre-restore", include_volumes=True,
                                 pg_container=container).path
+        # This machine's backup identity, read before the keyring is replaced: the safety
+        # backup above is encrypted to it, and must still open after the restore.
+        try:
+            from vaf.core.data_keyring import peek_data_secret
+            previous_identity = peek_data_secret(IDENTITY_SECRET) or None
+        except Exception:
+            previous_identity = None
         say("Placing the files")
         _clear_target(manifest)
         files = _place_files(staging)
@@ -1083,27 +1152,35 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
         else:
             warnings.append("The backup carries no machine key, so its stores were sealed under "
                             "a passphrase: set VAF_MASTER_PASSPHRASE as on the old machine.")
+        try:
+            _keep_previous_identity(previous_identity)
+        except Exception as e:
+            if pre is not None:
+                warnings.append(f"This machine's former backup key could not be kept ({e}): the "
+                                f"safety backup {pre.name} opens with the recovery key only.")
         say("Restoring the database")
         _restore_postgres(staging, manifest, container)
+        # Every restore, with volumes or without: an environment that mounts a host folder has
+        # no volume, and its record would be cleared by the reaper all the same.
+        say("Recreating the sandbox environments")
+        from vaf.core.environments import EnvironmentManager, _host_user
+        manager = EnvironmentManager()
+        try:
+            report = manager.readopt()
+        except Exception as e:
+            report = {}
+            warnings.append(f"The sandbox environments could not be recreated ({e}); their "
+                            "records are kept.")
+        for key, text in (("dropped", "temporary sandbox environments were dropped (they "
+                                      "would have expired)"),
+                          ("missing_folder", "project environments mount a folder that does "
+                                             "not exist on this machine"),
+                          ("failed", "sandbox environments could not be recreated")):
+            if report.get(key):
+                warnings.append(f"{len(report[key])} {text}: {', '.join(report[key])}.")
         volumes = 0
         vol_dir = staging / "volumes"
         if vol_dir.is_dir() and any(vol_dir.glob("*.tar")):
-            say("Recreating the sandbox environments")
-            from vaf.core.environments import EnvironmentManager, _host_user
-            manager = EnvironmentManager()
-            try:
-                report = manager.readopt()
-            except Exception as e:
-                report = {}
-                warnings.append(f"The sandbox environments could not be recreated ({e}); their "
-                                "volumes are restored and the records kept.")
-            for key, text in (("dropped", "temporary sandbox environments were dropped (they "
-                                          "would have expired)"),
-                              ("missing_folder", "project environments mount a folder that does "
-                                                 "not exist on this machine"),
-                              ("failed", "sandbox environments could not be recreated")):
-                if report.get(key):
-                    warnings.append(f"{len(report[key])} {text}: {', '.join(report[key])}.")
             say("Restoring the volumes")
             image = _carrier_image(container)
             for tar_path in sorted(vol_dir.glob("*.tar")):

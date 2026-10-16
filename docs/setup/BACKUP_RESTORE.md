@@ -88,6 +88,14 @@ Inside, in this order:
 | `volumes/vaf-browser-profile-<hash>.tar` | each personal browser's profile, without its caches, the components Chromium downloads again, and the Workspace and Downloads folders (they mirror the person's own files) |
 | `checksums.json` | the SHA-256 of every member above |
 
+The parts that are plaintext before they are encrypted (the database dump, the
+SQLite copies, the volume tars, the machine key) are staged in an owner-only
+folder of the local data directory, never in the destination: that can be a USB
+stick or a network mount, where a deleted copy is still recoverable. A staging
+folder left by a run that crashed is removed by the next one after a day. Neither
+the destination nor the configured backup folder is ever taken into a backup,
+also when one of them sits inside a root.
+
 Volumes are read by NAME through a carrier container that mounts them read-only
 and is never started: a personal browser's container is recreated while its
 profile volume stays, so going by container lost one of three profiles on a live
@@ -155,7 +163,10 @@ after the one before succeeded:
 2. **Version.** A backup written by a newer VAF is refused; update first.
 3. **Safety backup.** The current state is backed up into
    `<backup folder>/pre-restore/` (`--no-safety-backup` skips it), so a wrong
-   restore can be undone.
+   restore can be undone. It is encrypted to this machine's backup identity, which
+   lives in the keyring the restore replaces: the former identity is therefore kept
+   as a previous one (`backup_identities_previous`), and this machine opens the
+   safety backup afterwards as well as the backups made with the restored keyring.
 4. **Files.** Every entry of the roots that is backed up, derived or runtime is
    removed and the backup's files are placed. Logs, entries that are not VAF's,
    the backup folder and THIS machine's key stay.
@@ -164,8 +175,9 @@ after the one before succeeded:
    backup carries that key (`keys/machine_key`).
 6. **Database.** The roles from `globals.sql` (their password hashes, so the
    restored `config.json` connects), then a fresh database from the dump.
-7. **Sandbox environments.** `EnvironmentManager.readopt()` gives each project
-   environment its container back (see [SANDBOXING.md](../security/SANDBOXING.md)).
+7. **Sandbox environments.** On every restore, with volumes or without (an
+   environment that mounts a host folder has none), `EnvironmentManager.readopt()`
+   gives each project environment its container back (see [SANDBOXING.md](../security/SANDBOXING.md)).
 8. **Volumes.** Each is emptied and filled from the backup with its owners
    (`docker cp -a`); an environment volume is then handed to this machine's
    environment user. A browser profile keeps its Workspace, Downloads and cache

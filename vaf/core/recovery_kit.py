@@ -110,11 +110,11 @@ class RecoveredKeys:
 
 
 def _machine_kek_for_kit() -> Optional[bytes]:
-    """The machine key the stores are wrapped under, or None when they are wrapped under
-    a passphrase (`VAF_MASTER_PASSPHRASE`): the person holds that one, not the machine."""
-    from vaf.core.secure_store import _config_kek, _get_passphrase
-    if _get_passphrase():
-        return None
+    """The machine key, or None when this machine has none. Taken also when a passphrase
+    (`VAF_MASTER_PASSPHRASE`) is set: a store wrapped under the machine key before the
+    passphrase came is upgraded only when it is next opened, and until then the machine
+    key is what opens it. A store already under the passphrase still needs the passphrase."""
+    from vaf.core.secure_store import _config_kek
     return _config_kek(create=False)
 
 

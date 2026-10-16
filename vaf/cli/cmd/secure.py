@@ -76,8 +76,12 @@ def status():
         UI.success("The memory database password is not the shipped default.")
 
     from vaf.core.recovery_kit import kit_covers_machine_key, kit_path, kit_version, recovery_wrap_path
+    from vaf.core.secure_store import _get_passphrase
     if recovery_wrap_path().exists():
-        if kit_covers_machine_key():
+        if kit_version() == 2 and _get_passphrase():
+            UI.success(f"Recovery key set up (file: {recovery_wrap_path().name}); the password "
+                       "stores are sealed under your passphrase, which it does not replace.")
+        elif kit_covers_machine_key():
             UI.success(f"Recovery key set up (file: {recovery_wrap_path().name}); it opens the "
                        "key store and every password store.")
         elif kit_version() == 2:
@@ -204,7 +208,9 @@ def renew_recovery_key(
     except Exception as e:
         UI.error(str(e))
         raise typer.Exit(1)
-    covers = ("the key store and every password store" if kit_covers_machine_key()
+    from vaf.core.secure_store import _get_passphrase
+    covers = ("the key store and every password store"
+              if kit_covers_machine_key() and not _get_passphrase()
               else "the key store; the password stores stay sealed under your passphrase")
     UI.success(f"New recovery key written to {path}. It opens {covers}.")
     UI.warning("Move that file off this machine and delete it here. The old key no longer "

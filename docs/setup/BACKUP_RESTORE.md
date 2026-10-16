@@ -115,7 +115,8 @@ Each file is opened before its entry is written, and the size in the archive is
 the size of the open file: a file replaced in between cannot give the entry one
 size and the read another. A file deleted while the backup runs (a chat removed
 in that moment) is left out and named in the warnings; the rest of the backup
-stands.
+stands. A file or folder that is there but cannot be read fails the backup and is
+named: left out, it would be missing without a word.
 
 Every backup is verified right after it is written: decrypted with this machine's
 key and every member compared with its checksum. `vaf backup verify` does the

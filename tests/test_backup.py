@@ -577,6 +577,25 @@ def test_a_restore_that_replaces_the_recovery_key_says_which_key_opens_it_now(
         assert "age1thebackups" in named[0] and "renew-recovery-key" in named[0]
 
 
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="POSIX permission bits, which root ignores")
+def test_a_backup_does_not_quietly_lack_a_folder_it_cannot_read(install):
+    """A working folder the backup could not read was left out and the backup reported
+    success. MUTATION: let the walk pass over unreadable directories again - red."""
+    locked = install["roots"]["projects"] / "ab12cd34" / "locked"
+    locked.mkdir()
+    (locked / "work.py").write_text("print(1)", encoding="utf-8")
+    os.chmod(locked, 0)
+    try:
+        with pytest.raises(backup.BackupError) as err:
+            backup.create_backup(install["out"], include_volumes=False)
+        assert "locked" in str(err.value)
+        assert not list(install["out"].glob("*.tar.age")), "nothing is left behind"
+    finally:
+        os.chmod(locked, 0o700)
+
+
 @pytest.mark.parametrize("name", ["../escape.txt", "files/app/../../escape.txt", "/etc/passwd",
                                   "files/elsewhere/x", "volumes/not-a-vaf-volume.tar",
                                   "files\\app\\config.json"])

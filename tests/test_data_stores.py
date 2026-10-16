@@ -9,6 +9,7 @@ code. The guard that matters is the static one: every literal name the code join
 root must have a row, so a new store cannot ship without somebody deciding whether it is
 backed up.
 """
+import os
 import re
 from pathlib import Path
 
@@ -153,3 +154,19 @@ def test_a_link_is_never_followed(fake_roots, tmp_path):
         pytest.skip("this platform cannot create a symlink here")
     walked = _walked()
     assert link in walked and outside / "secret.txt" not in walked
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="POSIX permission bits, which root ignores")
+def test_a_directory_that_cannot_be_read_is_not_passed_over(fake_roots):
+    """The walk skipped a directory it could not read, so a backup lacked it without a word
+    (an unreadable FILE already failed the backup). MUTATION: suppress the error again - red."""
+    locked = fake_roots["app"] / "sessions" / "locked"
+    locked.mkdir()
+    (locked / "chat.json").write_text("{}", encoding="utf-8")
+    os.chmod(locked, 0)
+    try:
+        with pytest.raises(PermissionError):
+            _walked()
+    finally:
+        os.chmod(locked, 0o700)

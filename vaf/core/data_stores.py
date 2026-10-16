@@ -269,7 +269,9 @@ def walk(include_projects: bool = True) -> Iterator[Tuple[Path, Path, Optional[S
     """(root, file, row) for every file under every root; row None = not in the list.
 
     Descends into a directory unless its row says it is not backed up AND no more specific
-    row below it is (``logs`` is a LOG, ``logs/security_*`` is AUDIT)."""
+    row below it is (``logs`` is a LOG, ``logs/security_*`` is AUDIT). A directory that
+    cannot be read raises (OSError): skipped, it would be missing from a backup without a
+    word, while an unreadable FILE already fails the backup."""
     proj = projects_dir()
     for root, rows in distinct_roots():
         if not include_projects and _same(root, proj):
@@ -279,11 +281,7 @@ def walk(include_projects: bool = True) -> Iterator[Tuple[Path, Path, Optional[S
         stack = [root]
         while stack:
             current = stack.pop()
-            try:
-                entries = sorted(current.iterdir())
-            except OSError:
-                continue
-            for entry in entries:
+            for entry in sorted(current.iterdir()):
                 rel = entry.relative_to(root).as_posix()
                 row = classify(rel, rows)
                 if entry.is_symlink():

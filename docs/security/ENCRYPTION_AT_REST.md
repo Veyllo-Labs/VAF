@@ -157,8 +157,9 @@ was no checksum, and two encodings of one secret double the transcription and
 leak surface.
 
 With the recovery key plus the key directory (`data_keys.enc`,
-`data_keys.recovery.json` and the other `*.enc` stores beside them) you can open
-your data on a new machine - no OS keyring, no old computer, no password:
+`data_keys.recovery.json`, and every other store's `*.enc` together with its
+`*.key.json`, which holds that store's key) you can open your data on a new
+machine - no OS keyring, no old computer, no password:
 
 ```
 vaf secure recover
@@ -385,8 +386,9 @@ worse than saying nothing.
 
 ### `vaf secure recover`
 
-The way back after a reinstall or a disk swap. Put `data_keys.enc` and
-`data_keys.recovery.json` back into the key directory, restore your data, then:
+The way back after a reinstall or a disk swap. Put the key directory back
+(`data_keys.enc`, `data_keys.recovery.json`, and every other store's `*.enc`
+with its `*.key.json`), restore your data, then:
 
 ```
 $ vaf secure recover

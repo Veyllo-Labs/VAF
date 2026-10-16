@@ -82,6 +82,7 @@ Also present in `requirements.txt`.
 | pyotp | >=2.9.0 | MIT |
 | qrcode[pil] | >=7.4.0 | BSD |
 | cryptography | >=41.0.0 | Apache-2.0 OR BSD-3-Clause |
+| pyrage | >=1.4.0,<2 | MIT |
 
 ## Python - runtime dependencies (optional extras)
 

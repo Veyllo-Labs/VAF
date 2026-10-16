@@ -128,19 +128,34 @@ It prints locations, never values, and names anything still left in config.json.
 ### The recovery key
 
 When the keyring is created, VAF writes **`VAF-BackThisUp.md` to your Desktop**
-(the key directory if there is no Desktop). It contains a recovery key: 256 bits
-of randomness as ONE base64 string, under which the same data key is wrapped a
-second time (scrypt, stored beside the keyring as `data_keys.recovery.json`).
+(the key directory if there is no Desktop). It contains a recovery key: an `age`
+identity (`AGE-SECRET-KEY-1...`, the X25519 key of the published age file
+format, with a bech32 checksum, so a mistyped character is reported instead of
+taken for the wrong file). Beside the keyring, `data_keys.recovery.json` is
+encrypted TO that key (`vaf/core/recovery_kit.py`, format tag
+`recovery-2-3d8a51`) and holds two keys: the keyring's data key AND the machine
+key (KEK) under which every other encrypted store is sealed - the provider API
+keys, the mail and cloud passwords, the credentials stored for commands. The
+machine keeps only the PUBLIC half of the identity.
+
+Both keys, because measured: the first kit wrapped the data key alone (scrypt
+over a base64 secret), so a recovery brought the chats and memories back and lost
+every API key, mail password and stored credential with the old machine. Such a
+version 1 kit keeps working for what it covers; `vaf secure status` and
+`vaf security doctor` (`recovery_key_partial`) say what it does not, and
+`vaf secure renew-recovery-key` replaces it (a person at the terminal, the admin
+password, never from the agent's own commands; the old key stops opening
+anything). Stores sealed under `VAF_MASTER_PASSPHRASE` instead of a machine key
+open with that passphrase on any machine; the kit does not replace it.
 
 One encoding, deliberately. An earlier draft also printed 24 words from a
 home-made 64-word list and called them 256 bits - six bits per word is 144, there
-was no checksum, so a mistyped word was indistinguishable from the wrong backup
-file, and two encodings of one secret double the transcription and leak surface.
-If hand-transcription ever becomes the real scenario the answer is BIP-39, not a
-private word list.
+was no checksum, and two encodings of one secret double the transcription and
+leak surface.
 
-With the recovery key plus `data_keys.enc` and `data_keys.recovery.json` you can
-open your data on a new machine - no OS keyring, no old computer, no password:
+With the recovery key plus the key directory (`data_keys.enc`,
+`data_keys.recovery.json` and the other `*.enc` stores beside them) you can open
+your data on a new machine - no OS keyring, no old computer, no password:
 
 ```
 vaf secure recover
@@ -166,8 +181,8 @@ every encrypted row silently stops opening.
 `data_keys.enc`, `data_keys.key.json` and the master key (the OS keyring entry on
 Windows, `~/.vaf/secure_store.kek` on Linux and macOS). **Without all three this
 machine stops opening the store**, and the way back without that backup is `vaf secure recover`: the
-recovery key plus `data_keys.enc` and `data_keys.recovery.json`, which re-wraps
-the data key under the new machine key. Lose the backup AND the recovery key and the data is gone -
+recovery key plus the key directory, which re-wraps the data key and every store
+the old machine key sealed under the new machine key. Lose the backup AND the recovery key and the data is gone -
 no vendor can help, which is the honest price of local encryption.
 
 One consequence of a whole-home backup: on macOS, Time Machine's default job
@@ -350,7 +365,8 @@ $ vaf secure status
 | Success No key material left in config.json.
 | Info    Chats and files:  encrypted at rest
 | Success The memory database password is not the shipped default.
-| Success Recovery key set up (file: data_keys.recovery.json).
+| Success Recovery key set up (file: data_keys.recovery.json); it opens the key
+          store and every password store.
 | Warning The recovery note is still on this machine: /home/user/Desktop/VAF-BackThisUp.md
           - it is a key in plain text. Move it somewhere else and delete it here.
 
@@ -375,9 +391,13 @@ Recovery key: <paste from VAF-BackThisUp.md>
 | Success Recovered. Keys available again: file_store_encryption_key, ...
 ```
 
-It unwraps the data key with the recovery key and re-wraps it under the NEW
-machine's key, so normal unattended operation resumes and the recovery key is
-not needed again. `--key <value>` skips the prompt for scripted restores; the
+It unwraps the data key and the old machine key with the recovery key, re-wraps
+the data key under the NEW machine's key, and then re-wraps every store in the
+key directory that the old machine key sealed and the new one does not open
+(`rewrap_from_kek` in `vaf/core/secure_store.py`; it names them), so normal
+unattended operation resumes and the recovery key is not needed again. A
+version 1 key recovers the key store and says that the password stores stay
+sealed. `--key <value>` skips the prompt for scripted restores; the
 value then lands in your shell history, which is why it is not the default.
 
 ### `vaf secure rotate-db`

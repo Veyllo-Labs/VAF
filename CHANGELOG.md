@@ -25,6 +25,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **The recovery key now brings back every password store.** It used to open the key store
+  alone, so after a reinstall the chats and memories came back while the stored API keys, mail
+  passwords and credentials for commands were lost. A new recovery key also carries the machine
+  key that seals those stores, and `vaf secure recover` opens them again on the new machine. It
+  is now an `age` key with a checksum, so a mistyped character is reported. Existing recovery
+  keys keep working for what they covered; `vaf secure status` says what they do not, and
+  `vaf secure renew-recovery-key` (in a terminal, with the admin password) replaces one.
 - **Host access is given per account.** `host_bash` and `python_exec` run on this computer as
   the user VAF runs as, outside every sandbox. A regular account now gets them only when the
   admin ticks them in user management, like `ssh` and `ftp`; the Standard and Read-only presets

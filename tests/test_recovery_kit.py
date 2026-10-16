@@ -105,15 +105,17 @@ def test_the_note_ships_exactly_one_encoding_of_the_secret(_desktop):
     get_data_key("file_store_encryption_key")
     text = (_desktop / recovery_kit.KIT_FILENAME).read_text(encoding="utf-8")
 
-    import base64 as _b64
     import re
+
+    from pyrage import x25519
 
     assert not hasattr(recovery_kit, "_phrase_from_secret")
     body = text.split("## Your recovery key")[1].split("##")[0]
-    # Exactly one indented secret line, and it decodes to the 32 bytes claimed.
+    # Exactly one indented secret line, and it is the age identity the wrap answers to.
     candidates = [ln.strip() for ln in body.splitlines() if ln.startswith("    ") and ln.strip()]
     assert len(candidates) == 1, f"one encoding, not {len(candidates)}"
-    assert len(_b64.b64decode(candidates[0])) == 32
+    identity = x25519.Identity.from_str(candidates[0])
+    assert str(identity.to_public()) == recovery_kit.recipient()
     assert not re.search(r"\b\d+ words\b", text), "no word-count claim survives"
 
 
@@ -128,3 +130,108 @@ def test_a_failure_to_write_the_kit_never_blocks_a_key(monkeypatch, _desktop):
 
     assert len(key) == 32
     assert peek_data_secret("file_store_encryption_key")
+
+
+# ── version 2: the machine key travels too ─────────────────────────────────────────
+
+def _identity_from_note(desktop):
+    body = (desktop / recovery_kit.KIT_FILENAME).read_text(encoding="utf-8")
+    body = body.split("## Your recovery key")[1].split("##")[0]
+    return next(ln.strip() for ln in body.splitlines() if ln.startswith("    ") and ln.strip())
+
+
+def _lose_the_machine():
+    """No machine key, no marker, no cached keys: a reinstall."""
+    import vaf.core.secure_store as ss
+    _ring().wrap_path.unlink()
+    _ring()._dek_cache = None
+    ss._kek_file_path().unlink(missing_ok=True)
+    ss._kek_marker_path().unlink(missing_ok=True)
+    data_files.reset_key_cache()
+
+
+def test_the_recovery_key_brings_back_the_password_stores_too(_desktop):
+    """Measured on the first kit: it wrapped the key store's key alone, so a recovery
+    brought the chats back and lost every API key, mail password and stored credential -
+    each sealed under the machine key in a store of its own. MUTATION: leave the machine
+    key out of the wrap, or drop the re-wrap from `vaf secure recover` - red."""
+    from typer.testing import CliRunner
+
+    from vaf.cli.cmd import secure
+    from vaf.core.platform import Platform
+    from vaf.core.secure_store import SecureBlobStore
+
+    store = SecureBlobStore("provider_probe", Platform.data_dir() / "provider_probe.enc")
+    store.update(lambda d: d.update({"openai": "sk-the-real-one"}))
+    get_data_key("file_store_encryption_key")
+    identity = _identity_from_note(_desktop)
+
+    _lose_the_machine()
+    with pytest.raises(Exception):
+        SecureBlobStore("provider_probe", Platform.data_dir() / "provider_probe.enc").load_strict()
+
+    result = CliRunner().invoke(secure.app, ["recover", "--key", identity])
+    assert result.exit_code == 0, result.output
+    assert "provider_probe" in result.output
+    reopened = SecureBlobStore("provider_probe", Platform.data_dir() / "provider_probe.enc")
+    assert reopened.load_strict() == {"openai": "sk-the-real-one"}
+
+
+def test_a_version_1_kit_still_opens_the_key_store_and_says_what_it_does_not(_desktop):
+    """An installation keeps working with the kit it has. MUTATION: drop the version 1
+    branch of unwrap_keys - red."""
+    import base64 as _b64
+    import json as _json
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    dek = _ring()._get_dek(create=True)
+    secret = _b64.b64encode(secrets.token_bytes(32)).decode()
+    salt, nonce = secrets.token_bytes(16), secrets.token_bytes(12)
+    key = recovery_kit._derive(secret, salt)
+    recovery_kit.persist_recovery_wrap({
+        "v": 1, "kdf": "scrypt", "salt": _b64.b64encode(salt).decode(),
+        "n": recovery_kit._SCRYPT_N, "r": recovery_kit._SCRYPT_R, "p": recovery_kit._SCRYPT_P,
+        "nonce": _b64.b64encode(nonce).decode(),
+        "wrapped": _b64.b64encode(AESGCM(key).encrypt(nonce, dek, None)).decode()})
+
+    keys = recovery_kit.unwrap_keys(secret)
+    assert keys is not None and keys.dek == dek and keys.kek is None and keys.version == 1
+    assert recovery_kit.kit_version() == 1 and recovery_kit.recipient() is None
+    from vaf.core.security_misconfig import collect_security_findings
+    assert "recovery_key_partial" in {f["code"] for f in collect_security_findings({})}
+    assert _json.loads(recovery_kit.recovery_wrap_path().read_text())["v"] == 1
+
+
+def test_renewing_needs_a_person_and_retires_the_old_key(_desktop, monkeypatch):
+    """It writes a new secret in plain text: never from the agent's shell or a script, and
+    only with the admin password. MUTATION: drop any of the three checks - red."""
+    from typer.testing import CliRunner
+
+    import vaf.cli.gate as gate
+    from vaf.cli.cmd import secure
+    from vaf.core.processes import AGENT_COMMAND_ENV
+
+    get_data_key("file_store_encryption_key")
+    old = _identity_from_note(_desktop)
+    runner = CliRunner()
+
+    monkeypatch.setattr(gate, "is_interactive", lambda: True)
+    monkeypatch.setattr(gate, "require_admin_password", lambda force=False: True)
+    monkeypatch.setenv(AGENT_COMMAND_ENV, "1")
+    assert runner.invoke(secure.app, ["renew-recovery-key", "--yes"]).exit_code == 1
+    monkeypatch.delenv(AGENT_COMMAND_ENV)
+    monkeypatch.setattr(gate, "is_interactive", lambda: False)
+    assert runner.invoke(secure.app, ["renew-recovery-key", "--yes"]).exit_code == 1
+    monkeypatch.setattr(gate, "is_interactive", lambda: True)
+    monkeypatch.setattr(gate, "require_admin_password", lambda force=False: False)
+    assert runner.invoke(secure.app, ["renew-recovery-key", "--yes"]).exit_code == 1
+    assert _identity_from_note(_desktop) == old
+
+    monkeypatch.setattr(gate, "require_admin_password", lambda force=False: True)
+    result = runner.invoke(secure.app, ["renew-recovery-key", "--yes"])
+    assert result.exit_code == 0, result.output
+    new = _identity_from_note(_desktop)
+    assert new != old
+    assert recovery_kit.unwrap_keys(old) is None
+    assert recovery_kit.unwrap_keys(new).kek is not None

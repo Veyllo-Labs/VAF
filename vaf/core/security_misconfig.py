@@ -157,4 +157,21 @@ def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict
                 )
             )
 
+    # A version 1 recovery key opens the key store only; the stores sealed under the machine
+    # key (API keys, mail passwords, stored credentials) would be lost with the machine.
+    try:
+        from vaf.core.recovery_kit import kit_version
+        if kit_version() == 1:
+            findings.append(
+                _finding(
+                    "medium",
+                    "recovery_key_partial",
+                    "The recovery key opens the key store only: API keys, mail passwords and "
+                    "stored credentials would be lost with this machine. Run "
+                    "`vaf secure renew-recovery-key` in a terminal on it.",
+                )
+            )
+    except Exception:
+        pass
+
     return findings

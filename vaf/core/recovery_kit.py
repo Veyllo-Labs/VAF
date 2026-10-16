@@ -10,24 +10,36 @@ keyring is created, VAF writes a recovery kit the user can put somewhere else.
 
 ## What the recovery key actually is
 
-A SECOND wrapping of the same data-encryption key. The keyring's DEK is already
-wrapped once under the machine KEK (OS keyring or a 0600 file); the recovery
-wrap stores it a second time under a key derived from that secret with scrypt.
+An `age` identity (`AGE-SECRET-KEY-1...`, the X25519 key of the age file
+encryption format), and `data_keys.recovery.json` is a small file encrypted TO it
+that holds two keys: the keyring's DEK and the machine key (KEK) that wraps every
+other encrypted store. Both, because measured: the first version wrapped the DEK
+alone, so it brought back the chats and memories while the API keys, the mail
+passwords and the people's stored credentials - each in a store of its own,
+wrapped under the KEK - stayed lost with the machine.
+
+Why age rather than a key of our own: it is a published format with a bech32
+checksum (a mistyped character is reported, not taken for the wrong file), a
+reference implementation (pyrage binds it) and a standalone CLI, and the machine
+needs only the PUBLIC half (`recipient`) to encrypt to it - which is what lets a
+scheduled backup be addressed to a key that is not on the machine.
+
 Two consequences worth stating plainly:
 
-- **The key plus `data_keys.enc` and `data_keys.recovery.json` is enough.**
-  No OS keyring, no original machine, no password. That is the point.
+- **The key plus the key folder is enough.** No OS keyring, no original
+  machine, no password. That is the point.
 - **The key alone is not**, and neither are the files alone. The kit says so,
   because a recovery instruction that overstates what it covers is worse than
   none.
 
-It is written as ONE base64 string. An earlier version also printed 24 words
-from a 64-word list and called them 256 bits; six bits per word makes 144, and
-there was no checksum, so a mistyped word was indistinguishable from the wrong
-backup file. Two encodings of one secret is also twice the transcription and
-leak surface, and no comparable product ships both. If hand-transcription ever
-becomes the real scenario, the answer is BIP-39 - 2048 words with a checksum -
-not a home-made list.
+Version 1 kits (a base64 secret, scrypt, the DEK only) stay readable: an
+installation keeps working with the kit it has, `vaf secure status` says what it
+does not cover, and `vaf secure renew-recovery-key` replaces it.
+
+It is ONE string. An earlier version also printed 24 words from a 64-word list
+and called them 256 bits; six bits per word makes 144, and there was no
+checksum. Two encodings of one secret is also twice the transcription and leak
+surface, and no comparable product ships both.
 
 ## Where the note goes
 
@@ -42,7 +54,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import secrets
 from pathlib import Path
 from typing import Optional
 
@@ -50,6 +61,10 @@ logger = logging.getLogger("vaf.core.recovery_kit")
 
 KIT_FILENAME = "VAF-BackThisUp.md"
 RECOVERY_WRAP_NAME = "data_keys.recovery.json"
+# The format tag of a version 2 wrap. Chosen once; pinned in
+# tests/test_persisted_format_tags.py. A wrap without it is version 1.
+RECOVERY_FORMAT = "recovery-2-3d8a51"
+_AGE_IDENTITY_PREFIX = "AGE-SECRET-KEY-1"
 _SCRYPT_N = 2 ** 15
 _SCRYPT_R = 8
 _SCRYPT_P = 1
@@ -83,28 +98,49 @@ def kit_path() -> Path:
     return recovery_wrap_path().with_name(KIT_FILENAME)
 
 
-def build_recovery_wrap(dek: bytes) -> tuple:
-    """Wrap `dek` under a fresh recovery secret IN MEMORY. Writes nothing.
+class RecoveredKeys:
+    """What a recovery key opens: the keyring's DEK and, from version 2 on, the machine
+    key (None for a version 1 kit, or for an installation whose stores are wrapped under
+    a passphrase instead of a machine key)."""
 
-    Split out from the write so the caller can order the two persistent steps.
-    Which order matters: see `ensure_recovery_kit`.
+    def __init__(self, dek: bytes, kek: Optional[bytes], version: int):
+        self.dek = dek
+        self.kek = kek
+        self.version = version
+
+
+def _machine_kek_for_kit() -> Optional[bytes]:
+    """The machine key the stores are wrapped under, or None when they are wrapped under
+    a passphrase (`VAF_MASTER_PASSPHRASE`): the person holds that one, not the machine."""
+    from vaf.core.secure_store import _config_kek, _get_passphrase
+    if _get_passphrase():
+        return None
+    return _config_kek(create=False)
+
+
+def build_recovery_wrap(dek: bytes, kek: Optional[bytes] = None) -> tuple:
+    """A fresh recovery identity and the wrap encrypted to it, IN MEMORY. Writes nothing.
+
+    Returns (identity string, wrap document). Split out from the write so the caller
+    can order the two persistent steps. Which order matters: see `ensure_recovery_kit`.
     """
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    import pyrage
+    from pyrage import x25519
 
-    secret = secrets.token_bytes(32)
-    secret_b64 = base64.b64encode(secret).decode()
-    salt = secrets.token_bytes(16)
-    key = _derive(secret_b64, salt)
-    nonce = secrets.token_bytes(12)
+    identity = x25519.Identity.generate()
+    recipient = identity.to_public()
+    payload = json.dumps({
+        "dek": base64.b64encode(dek).decode(),
+        "kek": base64.b64encode(kek).decode() if kek else None,
+    }).encode("utf-8")
     doc = {
-        "v": 1,
-        "kdf": "scrypt",
-        "salt": base64.b64encode(salt).decode(),
-        "n": _SCRYPT_N, "r": _SCRYPT_R, "p": _SCRYPT_P,
-        "nonce": base64.b64encode(nonce).decode(),
-        "wrapped": base64.b64encode(AESGCM(key).encrypt(nonce, dek, None)).decode(),
+        "v": 2,
+        "format": RECOVERY_FORMAT,
+        "recipient": str(recipient),
+        "covers": ["keyring"] + (["machine_key"] if kek else []),
+        "age": base64.b64encode(pyrage.encrypt(payload, [recipient])).decode(),
     }
-    return secret_b64, doc
+    return str(identity), doc
 
 
 def persist_recovery_wrap(doc: dict) -> Path:
@@ -117,29 +153,76 @@ def persist_recovery_wrap(doc: dict) -> Path:
     return path
 
 
-def create_recovery_wrap(dek: bytes) -> str:
-    """Wrap `dek` a second time under a fresh recovery secret. Returns it (base64)."""
-    secret_b64, doc = build_recovery_wrap(dek)
+def create_recovery_wrap(dek: bytes, kek: Optional[bytes] = None) -> str:
+    """Wrap `dek` (and `kek`) for a fresh recovery identity. Returns the identity."""
+    identity, doc = build_recovery_wrap(dek, kek)
     persist_recovery_wrap(doc)
-    return secret_b64
+    return identity
 
 
-def unwrap_with_secret(secret_b64: str) -> Optional[bytes]:
-    """The DEK, from the recovery wrap and the secret. None when it does not fit."""
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
+def _read_wrap() -> Optional[dict]:
     try:
-        doc = json.loads(recovery_wrap_path().read_text(encoding="utf-8"))
-        key = _derive(
-            secret_b64.strip(),
-            base64.b64decode(doc["salt"]),
-        )
-        return AESGCM(key).decrypt(
-            base64.b64decode(doc["nonce"]), base64.b64decode(doc["wrapped"]), None
-        )
+        return json.loads(recovery_wrap_path().read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def kit_version() -> int:
+    """2 for an age wrap that carries the machine key too, 1 for the scrypt wrap of the
+    DEK alone, 0 when there is no recovery wrap."""
+    doc = _read_wrap()
+    if not doc:
+        return 0
+    return 2 if doc.get("format") == RECOVERY_FORMAT else 1
+
+
+def kit_covers_machine_key() -> bool:
+    doc = _read_wrap() or {}
+    return doc.get("format") == RECOVERY_FORMAT and "machine_key" in (doc.get("covers") or [])
+
+
+def recipient() -> Optional[str]:
+    """The PUBLIC half of the recovery identity (`age1...`), from a version 2 wrap: what
+    a file can be encrypted to so that only the holder of the recovery key opens it."""
+    doc = _read_wrap() or {}
+    if doc.get("format") != RECOVERY_FORMAT:
+        return None
+    value = str(doc.get("recipient") or "").strip()
+    return value or None
+
+
+def unwrap_keys(secret: str) -> Optional[RecoveredKeys]:
+    """What the recovery key opens, from the wrap beside the keyring. None when it does
+    not fit. Takes either kit: an age identity for version 2, the base64 secret for 1."""
+    doc = _read_wrap()
+    secret = str(secret or "").strip()
+    if not doc or not secret:
+        return None
+    try:
+        if doc.get("format") == RECOVERY_FORMAT:
+            if not secret.upper().startswith(_AGE_IDENTITY_PREFIX):
+                return None
+            import pyrage
+            from pyrage import x25519
+            identity = x25519.Identity.from_str(secret.upper())
+            payload = json.loads(pyrage.decrypt(base64.b64decode(doc["age"]), [identity]))
+            kek = payload.get("kek")
+            return RecoveredKeys(base64.b64decode(payload["dek"]),
+                                 base64.b64decode(kek) if kek else None, 2)
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        key = _derive(secret, base64.b64decode(doc["salt"]))
+        dek = AESGCM(key).decrypt(
+            base64.b64decode(doc["nonce"]), base64.b64decode(doc["wrapped"]), None)
+        return RecoveredKeys(dek, None, 1)
     except Exception as e:
         logger.warning("Recovery unwrap failed: %s", e)
         return None
+
+
+def unwrap_with_secret(secret: str) -> Optional[bytes]:
+    """The keyring's DEK, from the recovery wrap and the key. None when it does not fit."""
+    keys = unwrap_keys(secret)
+    return keys.dek if keys else None
 
 
 def write_kit(secret_b64: str) -> Optional[Path]:
@@ -167,32 +250,37 @@ recovery key is the second way in.
 
     {secret_b64}
 
-Copy it exactly, including the trailing characters. It is 256 bits of
-randomness and there is no second copy anywhere.
+Copy it exactly. It is an `age` key: 256 bits of randomness with a checksum, so a
+mistyped character is reported instead of silently failing. There is no second
+copy anywhere.
+
+## What it opens
+
+The key store (chats, memories, mail) and the machine key under which every other
+encrypted store is sealed: your API keys, mail passwords and the credentials
+stored for commands. On a new machine all of them open again.
 
 ## What you need to recover
 
-Three things, and the key alone is not enough:
+Two things, and the key alone is not enough:
 
 1. this recovery key,
-2. a backup of `{ring.name}`,
-3. a backup of `{ring.with_name('data_keys.enc').name}`.
+2. a backup of the folder
 
-Both files live in:
+       {ring.parent}
 
-    {ring.parent}
-
-Back up that whole folder. It does not contain your chats, only the keys that
-open them, so it is small.
+   It holds `{ring.name}`, `{ring.with_name('data_keys.enc').name}` and the other
+   encrypted stores, and also the message, mail, calendar and contact databases.
+   Your chats live elsewhere (`~/.vaf`), so back that folder up as well.
 
 ## How to recover
 
-On the new machine, after installing VAF, put the two files back into the folder
-above, restore your data, then run:
+On the new machine, after installing VAF, put the folder back, restore your data,
+then run:
 
     vaf secure recover
 
-It asks for the key and puts it back where VAF looks for it. Verify with:
+It asks for the key and puts the keys back where VAF looks for them. Verify with:
 
     vaf secure status
 
@@ -242,7 +330,7 @@ def ensure_recovery_kit(dek: bytes) -> Optional[Path]:
     """
     if recovery_wrap_path().exists():
         return None
-    secret, doc = build_recovery_wrap(dek)
+    secret, doc = build_recovery_wrap(dek, _machine_kek_for_kit())
     path = write_kit(secret)
     if path is None:
         # Deliberately without naming the directory: resolving it means calling
@@ -259,4 +347,20 @@ def ensure_recovery_kit(dek: bytes) -> Optional[Path]:
         logger.error("Recovery key written to %s but its wrap could not be stored (%s); "
                      "the next start will replace both.", path, e)
         return None
+    return path
+
+
+def renew_recovery_kit(dek: bytes) -> Path:
+    """Replace the recovery key with a new one: a fresh identity, a wrap that carries the
+    machine key, a new note. The previous key stops opening anything. Raises when the
+    note cannot be written; the wrap is replaced only after it was.
+
+    Same order as `ensure_recovery_kit`, for the same reason: the note is the only copy
+    of the secret, so the durable half is written second."""
+    secret, doc = build_recovery_wrap(dek, _machine_kek_for_kit())
+    path = write_kit(secret)
+    if path is None:
+        raise RuntimeError("The recovery note could not be written, so the recovery key was "
+                           "not replaced; the previous one still works.")
+    persist_recovery_wrap(doc)
     return path

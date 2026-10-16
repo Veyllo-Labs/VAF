@@ -7,6 +7,10 @@
 live, is anything still lying in config.json, and are the shipped default
 database passwords still in use. It prints no secret, only locations.
 
+`renew-recovery-key` replaces the recovery key with one that also carries the
+machine key, so a version 1 kit (the key store only) can be brought up to what
+`recover` needs to open every encrypted store on a new machine.
+
 `rotate-db` replaces the published default Postgres password. Deliberately a
 command and not a startup step: rotating the password of a database the app is
 mid-connection with, and half-succeeding, locks the user out of their own
@@ -71,9 +75,18 @@ def status():
     else:
         UI.success("The memory database password is not the shipped default.")
 
-    from vaf.core.recovery_kit import kit_path, recovery_wrap_path
+    from vaf.core.recovery_kit import kit_covers_machine_key, kit_path, kit_version, recovery_wrap_path
     if recovery_wrap_path().exists():
-        UI.success(f"Recovery key set up (file: {recovery_wrap_path().name}).")
+        if kit_covers_machine_key():
+            UI.success(f"Recovery key set up (file: {recovery_wrap_path().name}); it opens the "
+                       "key store and every password store.")
+        elif kit_version() == 2:
+            UI.success(f"Recovery key set up (file: {recovery_wrap_path().name}); the password "
+                       "stores are sealed under your passphrase, which it does not replace.")
+        else:
+            UI.warning("The recovery key opens the key store only: API keys, mail passwords and "
+                       "stored credentials would be lost with this machine. Run "
+                       "`vaf secure renew-recovery-key` in a terminal here.")
         if kit_path().exists():
             UI.warning(f"The recovery note is still on this machine: {kit_path()} - "
                        f"it is a key in plain text. Move it somewhere else and delete it here.")
@@ -103,8 +116,8 @@ def recover(
     import getpass
 
     from vaf.core.data_keyring import _ring
-    from vaf.core.recovery_kit import recovery_wrap_path, unwrap_with_secret
-    from vaf.core.secure_store import _machine_kek
+    from vaf.core.recovery_kit import recovery_wrap_path, unwrap_keys
+    from vaf.core.secure_store import _machine_kek, rewrap_from_kek
 
     if not recovery_wrap_path().exists():
         UI.error(f"No recovery file at {recovery_wrap_path()}. Restore it from your "
@@ -116,10 +129,11 @@ def recover(
         UI.error("Nothing entered.")
         raise typer.Exit(1)
 
-    dek = unwrap_with_secret(secret)
-    if dek is None:
+    keys = unwrap_keys(secret)
+    if keys is None:
         UI.error("That key does not open the recovery file.")
         raise typer.Exit(1)
+    dek = keys.dek
 
     # Re-wrap the recovered DEK under THIS machine's key, so normal operation
     # resumes without the recovery key.
@@ -137,7 +151,64 @@ def recover(
         raise typer.Exit(1)
 
     UI.success(f"Recovered. Keys available again: {', '.join(entries) or '(none)'}")
+
+    # The other encrypted stores (API keys, mail passwords, stored credentials) were sealed
+    # under the old machine's key, which a version 2 kit carries: re-wrap each one this
+    # machine's key does not open yet. A version 1 kit carries only the key store's key.
+    if keys.kek:
+        try:
+            rewrapped = rewrap_from_kek(keys.kek)
+        except Exception as e:
+            UI.error(f"The password stores could not be re-wrapped: {e}")
+            raise typer.Exit(1)
+        UI.success("Password stores opened again: " + (", ".join(rewrapped) or
+                                                      "none needed it"))
+    elif keys.version == 1:
+        UI.warning("This recovery key is version 1 and opens the key store only. API keys, mail "
+                   "passwords and stored credentials of the old machine stay sealed unless you "
+                   "also restored its machine key (secure_store.kek).")
     UI.info("Run `vaf secure status` to confirm, and keep your recovery key.")
+
+
+@app.command("renew-recovery-key")
+def renew_recovery_key(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation"),
+):
+    """Replace the recovery key with a new one that opens every encrypted store."""
+    from vaf.cli.gate import is_interactive, refuse_agent_command, require_admin_password
+
+    # It writes a new secret in plain text, so: a person at this terminal, proved.
+    if refuse_agent_command():
+        raise typer.Exit(1)
+    if not is_interactive():
+        UI.error("A new recovery key needs a person at the terminal: it does not run from a "
+                 "script or the agent's shell.")
+        raise typer.Exit(1)
+    if not require_admin_password(force=True):
+        raise typer.Exit(1)
+    if not yes and not typer.confirm(
+        "Write a new recovery key? The current one stops working, so keep the new note "
+        "where the old one was."
+    ):
+        UI.info("Cancelled.")
+        raise typer.Exit(0)
+
+    from vaf.core.data_keyring import _ring
+    from vaf.core.recovery_kit import kit_covers_machine_key, renew_recovery_kit
+    dek = _ring()._get_dek(create=False)
+    if dek is None:
+        UI.error("There is no key store on this machine yet, so there is nothing to recover.")
+        raise typer.Exit(1)
+    try:
+        path = renew_recovery_kit(dek)
+    except Exception as e:
+        UI.error(str(e))
+        raise typer.Exit(1)
+    covers = ("the key store and every password store" if kit_covers_machine_key()
+              else "the key store; the password stores stay sealed under your passphrase")
+    UI.success(f"New recovery key written to {path}. It opens {covers}.")
+    UI.warning("Move that file off this machine and delete it here. The old key no longer "
+               "opens anything.")
 
 
 @app.command("rotate-db")

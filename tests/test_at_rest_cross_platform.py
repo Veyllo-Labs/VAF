@@ -225,10 +225,11 @@ def test_the_wrap_document_is_built_without_touching_disk(tmp_path, monkeypatch)
     secret, doc = recovery_kit.build_recovery_wrap(b"k" * 32)
 
     assert not recovery_kit.recovery_wrap_path().exists()
-    assert set(doc) >= {"v", "kdf", "salt", "nonce", "wrapped"}
+    assert set(doc) >= {"v", "format", "recipient", "age"}
     recovery_kit.persist_recovery_wrap(doc)
     assert recovery_kit.unwrap_with_secret(secret) == b"k" * 32
-    assert json.loads(recovery_kit.recovery_wrap_path().read_text())["kdf"] == "scrypt"
+    assert json.loads(recovery_kit.recovery_wrap_path().read_text())["format"] == \
+        recovery_kit.RECOVERY_FORMAT
 
 
 # ── where a NEW master key goes, per platform ───────────────────────────────────

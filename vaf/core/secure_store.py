@@ -36,7 +36,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
@@ -667,6 +667,49 @@ def _config_kek(create: bool = True) -> Optional[bytes]:
 # ---------------------------------------------------------------------------
 #  Secure blob store
 # ---------------------------------------------------------------------------
+
+def rewrap_from_kek(old_kek: bytes, directory: Optional[Path] = None) -> List[str]:
+    """Re-wrap every store in ``directory`` (the data directory) that the CURRENT machine
+    key does not open but ``old_kek`` does - the stores of a previous machine, after a
+    recovery key brought that machine's key back. Returns the names re-wrapped.
+
+    Only ``kdf: raw`` wraps: a passphrase wrap was never sealed under a machine key and
+    opens with the passphrase on any machine. A store neither key opens is left as it is
+    and reported by its own read, never overwritten.
+    """
+    from vaf.core.platform import Platform
+
+    current = _config_kek(create=True)
+    if current is None:
+        raise SecureStoreUnreadable("The machine key is not reachable, so nothing can be "
+                                    "re-wrapped under it.")
+    rewrapped: List[str] = []
+    for wrap_path in sorted(Path(directory or Platform.data_dir()).glob("*.key.json")):
+        try:
+            doc = json.loads(wrap_path.read_text("utf-8"))
+            if doc.get("kdf") != "raw":
+                continue
+            nonce = base64.b64decode(doc["nonce"])
+            wrapped = base64.b64decode(doc["wrapped"])
+        except Exception:
+            continue
+        try:
+            AESGCM(current).decrypt(nonce, wrapped, None)
+            continue                                   # already this machine's
+        except Exception:
+            pass
+        try:
+            dek = AESGCM(old_kek).decrypt(nonce, wrapped, None)
+        except Exception:
+            continue                                   # neither key: not ours to touch
+        new_nonce = secrets.token_bytes(_NONCE_SIZE)
+        doc.update({"nonce": base64.b64encode(new_nonce).decode(),
+                    "wrapped": base64.b64encode(AESGCM(current).encrypt(new_nonce, dek, None)).decode()})
+        _atomic_write_bytes(wrap_path, json.dumps(doc).encode("utf-8"))
+        harden_path(wrap_path)
+        rewrapped.append(wrap_path.name[:-len(".key.json")])
+    return rewrapped
+
 
 class SecureBlobStore:
     """A single encrypted JSON blob on disk with envelope encryption and locking.

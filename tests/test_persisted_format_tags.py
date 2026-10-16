@@ -118,6 +118,8 @@ def test_format_identities_are_pinned_literals():
     from vaf.core.automation import _RUN_LOG_FORMAT, AUTOMATION_FORMAT
     assert _RUN_LOG_FORMAT == "autorun-1-7c41d9"
     assert AUTOMATION_FORMAT == "automation-1-4e9b27"
+    from vaf.core.recovery_kit import RECOVERY_FORMAT
+    assert RECOVERY_FORMAT == "recovery-2-3d8a51"
 
 
 def test_chain_with_versioned_seed_verifies():

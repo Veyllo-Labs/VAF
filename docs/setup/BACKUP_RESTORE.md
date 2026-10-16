@@ -197,7 +197,11 @@ after the one before succeeded:
    machine key sealed is re-wrapped under it (`rewrap_from_kek`), which is why a
    backup carries that key (`keys/machine_key`). The keyring on disk is now the
    backup's, so what the running restore read before it is dropped from memory
-   (the file-store key above all) before anything reads the keyring again.
+   (the file-store key above all) before anything reads the keyring again. The
+   restored recovery wrap still carries the backup's machine key, so it is
+   rebuilt with this machine's key for the same recovery key, as
+   `vaf secure recover` does (see [ENCRYPTION_AT_REST.md](../security/ENCRYPTION_AT_REST.md));
+   if that fails, the warnings say to renew the recovery key.
 6. **Database.** The roles from `globals.sql` (their password hashes, so the
    restored `config.json` connects), then a fresh database from the dump.
 7. **Sandbox environments.** On every restore, with volumes or without (an

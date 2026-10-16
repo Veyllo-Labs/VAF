@@ -167,6 +167,15 @@ def recover(
             raise typer.Exit(1)
         UI.success("Password stores opened again: " + (", ".join(rewrapped) or
                                                       "none needed it"))
+        # They are sealed under THIS machine's key now: the recovery key must carry it, or
+        # the next recovery opens the key store alone.
+        try:
+            from vaf.core.recovery_kit import refresh_recovery_wrap
+            refresh_recovery_wrap(dek)
+        except Exception as e:
+            UI.warning(f"The recovery key still carries the old machine's key ({e}), so it "
+                       "would bring back the key store but not the password stores. Run "
+                       "`vaf secure renew-recovery-key`.")
     elif keys.version == 1:
         UI.warning("This recovery key is version 1 and opens the key store only. API keys, mail "
                    "passwords and stored credentials of the old machine stay sealed unless you "

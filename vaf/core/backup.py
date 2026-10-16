@@ -1196,6 +1196,18 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
         from vaf.core import data_files, data_keyring
         data_keyring.reset_ring()
         data_files.reset_key_cache()
+        # The restored recovery wrap carries the machine key the backup's stores were sealed
+        # under; they are sealed under THIS machine's key now, and the recovery key must
+        # carry that one, or the next recovery opens the key store alone.
+        try:
+            from vaf.core.recovery_kit import refresh_recovery_wrap
+            dek = data_keyring._ring()._get_dek(create=False)
+            if dek is not None:
+                refresh_recovery_wrap(dek)
+        except Exception as e:
+            warnings.append(f"The recovery key still carries the old machine's key ({e}), so it "
+                            "would bring back the key store but not the password stores: run "
+                            "`vaf secure renew-recovery-key`.")
         try:
             _keep_previous_identity(previous_identity)
         except Exception as e:

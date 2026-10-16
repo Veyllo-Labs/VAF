@@ -415,6 +415,39 @@ def test_a_backup_from_another_machine_opens_under_this_machines_key(target, tmp
     assert store.load_strict() == {"openai": "sk-from-the-old-machine"}
 
 
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_a_restore_gives_the_recovery_key_this_machines_key(install, target, monkeypatch, fails):
+    """The restored recovery wrap carries the backup's machine key, and the stores are sealed
+    under this machine's now: the wrap is refreshed with the restored keyring's key, and a
+    failure is said, not swallowed. MUTATION: drop the refresh from restore_backup - red."""
+    from vaf.core import data_files, data_keyring
+    from vaf.core.platform import Platform
+    data, app = install["roots"]["data"], install["roots"]["app"]
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: data))
+    monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: app))
+    data_keyring.reset_ring()
+    data_files.reset_key_cache()
+    calls = []
+
+    def _refresh(dek):
+        calls.append(dek)
+        if fails:
+            raise OSError("disk full")
+        return True
+
+    try:
+        backup.machine_identity()
+        made = backup.create_backup(install["out"], include_volumes=False)
+        monkeypatch.setattr(recovery_kit, "refresh_recovery_wrap", _refresh)
+        result = backup.restore_backup(made.path, pre_restore=False)
+        assert calls == [data_keyring._ring()._get_dek(create=False)] and calls[0]
+        assert any("renew-recovery-key" in w for w in result.warnings) is fails
+    finally:
+        data_keyring.reset_ring()
+        data_files.reset_key_cache()
+
+
 @pytest.mark.parametrize("name", ["../escape.txt", "files/app/../../escape.txt", "/etc/passwd",
                                   "files/elsewhere/x", "volumes/not-a-vaf-volume.tar",
                                   "files\\app\\config.json"])

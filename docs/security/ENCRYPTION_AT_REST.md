@@ -398,8 +398,13 @@ It unwraps the data key and the old machine key with the recovery key, re-wraps
 the data key under the NEW machine's key, and then re-wraps every store in the
 key directory that the old machine key sealed and the new one does not open
 (`rewrap_from_kek` in `vaf/core/secure_store.py`; it names them), so normal
-unattended operation resumes and the recovery key is not needed again. A
-version 1 key recovers the key store and says that the password stores stay
+unattended operation resumes and the recovery key is not needed again. Last, the
+recovery wrap gets the NEW machine key in place of the old one, which now opens
+nothing (`refresh_recovery_wrap` in `vaf/core/recovery_kit.py`). It is encrypted
+to the recovery key's public half, so this needs no secret and the same key
+keeps working: without it, the next machine loss would bring back the key store
+and skip every password store. If it fails, the command says so and
+`vaf secure renew-recovery-key` writes a new key. A version 1 key recovers the key store and says that the password stores stay
 sealed. `--key <value>` skips the prompt for scripted restores; the
 value then lands in your shell history, which is why it is not the default.
 

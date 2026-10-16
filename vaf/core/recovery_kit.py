@@ -124,23 +124,49 @@ def build_recovery_wrap(dek: bytes, kek: Optional[bytes] = None) -> tuple:
     Returns (identity string, wrap document). Split out from the write so the caller
     can order the two persistent steps. Which order matters: see `ensure_recovery_kit`.
     """
-    import pyrage
     from pyrage import x25519
 
     identity = x25519.Identity.generate()
-    recipient = identity.to_public()
+    return str(identity), _wrap_doc(identity.to_public(), dek, kek)
+
+
+def _wrap_doc(recipient, dek: bytes, kek: Optional[bytes]) -> dict:
+    """The version 2 wrap of ``dek`` and ``kek``, encrypted to the age ``recipient``."""
+    import pyrage
+
     payload = json.dumps({
         "dek": base64.b64encode(dek).decode(),
         "kek": base64.b64encode(kek).decode() if kek else None,
     }).encode("utf-8")
-    doc = {
+    return {
         "v": 2,
         "format": RECOVERY_FORMAT,
         "recipient": str(recipient),
         "covers": ["keyring"] + (["machine_key"] if kek else []),
         "age": base64.b64encode(pyrage.encrypt(payload, [recipient])).decode(),
     }
-    return str(identity), doc
+
+
+def refresh_recovery_wrap(dek: bytes) -> bool:
+    """Put this machine's keys into the recovery wrap, for the SAME recovery key.
+
+    Called after the stores were re-wrapped under this machine's key (`vaf secure
+    recover`, a restore from another machine). The wrap still carried the old machine's
+    key, which now opens nothing: the next recovery would bring back the key store and
+    skip every password store, while `vaf secure status` said the key opens them all.
+    The wrap is encrypted to the recovery key's PUBLIC half, so it is rebuilt without the
+    secret and the key the person filed away stays the one that opens it.
+
+    Returns False when there is nothing to refresh: no wrap, or a version 1 wrap, which
+    carries no machine key. Raises when the new wrap cannot be built or stored."""
+    from pyrage import x25519
+
+    doc = _read_wrap()
+    if not doc or doc.get("format") != RECOVERY_FORMAT:
+        return False
+    target = x25519.Recipient.from_str(str(doc.get("recipient") or "").strip())
+    persist_recovery_wrap(_wrap_doc(target, dek, _machine_kek_for_kit()))
+    return True
 
 
 def persist_recovery_wrap(doc: dict) -> Path:

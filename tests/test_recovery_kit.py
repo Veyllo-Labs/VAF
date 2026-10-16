@@ -10,6 +10,7 @@ away, and open the data again with nothing but that key and the two key files.
 Anything less than that end-to-end run does not prove a recovery path exists.
 """
 import base64
+import json
 import secrets
 
 import pytest
@@ -253,3 +254,47 @@ def test_a_renewal_that_cannot_store_its_wrap_puts_the_old_note_back(_desktop, m
     assert "previous one still works" in str(err.value)
     assert (_desktop / recovery_kit.KIT_FILENAME).read_bytes() == old_note
     assert recovery_kit.unwrap_keys(old) is not None
+
+
+def test_refreshing_the_wrap_puts_this_machines_key_in_for_the_same_recovery_key(_desktop,
+                                                                               monkeypatch):
+    """The wrap is rebuilt from its public half alone: the person's key keeps opening it,
+    and what it opens is this machine's key. A version 1 wrap carries no machine key and is
+    left alone. MUTATION: keep the old machine key in the refresh - red."""
+    dek, old_kek, new_kek = (secrets.token_bytes(32) for _ in range(3))
+    identity = recovery_kit.create_recovery_wrap(dek, old_kek)
+    before = recovery_kit.recipient()
+    monkeypatch.setattr(recovery_kit, "_machine_kek_for_kit", lambda: new_kek)
+
+    assert recovery_kit.refresh_recovery_wrap(dek) is True
+
+    keys = recovery_kit.unwrap_keys(identity)
+    assert keys.dek == dek and keys.kek == new_kek
+    assert recovery_kit.recipient() == before and recovery_kit.kit_covers_machine_key()
+
+    recovery_kit.persist_recovery_wrap({"v": 1, "kdf": "scrypt"})
+    assert recovery_kit.refresh_recovery_wrap(dek) is False
+    assert json.loads(recovery_kit.recovery_wrap_path().read_text()) == {"v": 1, "kdf": "scrypt"}
+
+
+def test_the_recovery_key_survives_a_second_machine_loss(_desktop):
+    """After a recovery the stores are sealed under the new machine's key; the wrap still
+    carried the first machine's, so the next loss brought back the key store and skipped
+    every password store, while the command said it had worked. MUTATION: drop the refresh
+    from `vaf secure recover` - red."""
+    from typer.testing import CliRunner
+
+    from vaf.cli.cmd import secure
+    from vaf.core.platform import Platform
+    from vaf.core.secure_store import SecureBlobStore
+
+    path = Platform.data_dir() / "provider_probe.enc"
+    SecureBlobStore("provider_probe", path).update(lambda d: d.update({"openai": "sk-kept"}))
+    get_data_key("file_store_encryption_key")
+    identity = _identity_from_note(_desktop)
+
+    for loss in (1, 2):
+        _lose_the_machine()
+        result = CliRunner().invoke(secure.app, ["recover", "--key", identity])
+        assert result.exit_code == 0, result.output
+        assert SecureBlobStore("provider_probe", path).load_strict() == {"openai": "sk-kept"}, loss

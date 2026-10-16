@@ -26,6 +26,7 @@ Docs are grouped into category folders. Full index by category:
 - [NGINX_REVERSE_PROXY.md](setup/NGINX_REVERSE_PROXY.md) - Reverse proxy + HTTPS (`nginx-vaf-https.conf.example`).
 - [RELEASING.md](setup/RELEASING.md) - Cutting a release; how `vaf update` updates installed clients.
 - [SERVER_MODE.md](setup/SERVER_MODE.md) - Always-on server installation profile: systemd service, TLS, LAN access, multi-user concurrency.
+- [BACKUP_RESTORE.md](setup/BACKUP_RESTORE.md) - What VAF keeps where (one list of every store), and what a backup has to carry.
 - [PROCESS_MANAGEMENT.md](setup/PROCESS_MANAGEMENT.md) - Process lifecycle management.
 - [NETWORK_FEATURES.md](setup/NETWORK_FEATURES.md) - Network-mode security model, doctor checks.
 

@@ -298,3 +298,18 @@ def test_the_recovery_key_survives_a_second_machine_loss(_desktop):
         result = CliRunner().invoke(secure.app, ["recover", "--key", identity])
         assert result.exit_code == 0, result.output
         assert SecureBlobStore("provider_probe", path).load_strict() == {"openai": "sk-kept"}, loss
+
+
+def test_a_recovery_whose_wrap_could_not_be_refreshed_says_so(_desktop, monkeypatch):
+    """A refresh that finds nothing to refresh (the file gone, or no longer version 2) left
+    the old machine's key in place without a word. MUTATION: ignore the False - red."""
+    from typer.testing import CliRunner
+
+    from vaf.cli.cmd import secure
+    get_data_key("file_store_encryption_key")
+    identity = _identity_from_note(_desktop)
+    _lose_the_machine()
+    monkeypatch.setattr(recovery_kit, "refresh_recovery_wrap", lambda dek: False)
+    result = CliRunner().invoke(secure.app, ["recover", "--key", identity])
+    assert result.exit_code == 0, result.output
+    assert "renew-recovery-key" in result.output

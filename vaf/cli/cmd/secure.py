@@ -171,7 +171,8 @@ def recover(
         # the next recovery opens the key store alone.
         try:
             from vaf.core.recovery_kit import refresh_recovery_wrap
-            refresh_recovery_wrap(dek)
+            if not refresh_recovery_wrap(dek):
+                raise RuntimeError("the recovery file is gone or no longer version 2")
         except Exception as e:
             UI.warning(f"The recovery key still carries the old machine's key ({e}), so it "
                        "would bring back the key store but not the password stores. Run "

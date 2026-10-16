@@ -149,6 +149,8 @@ SCRATCH_MEMORY_MB = 512
 SCRATCH_CPUS = 0.5
 
 _ID_RE = re.compile(r"^[a-z0-9-]{1,40}$")
+_OWNER_RE = re.compile(r"^[0-9a-f]{12}$")        # containers.scope_hash
+MIN_MEMORY_MB = 128
 
 
 def housekeeping_off() -> bool:
@@ -506,6 +508,21 @@ class EnvironmentManager:
     def _network_rank(self, network: str) -> int:
         return NETWORKS.index(network)
 
+    @staticmethod
+    def _network_cap() -> str:
+        """The widest network profile the administrator allows. A cap that is no profile
+        (a typo) is the narrowest one, never no cap."""
+        cap = setting("network_max")
+        return cap if cap in NETWORKS else NETWORKS[0]
+
+    @staticmethod
+    def _names(env_id: str, owner_hash: str, mount: str) -> tuple:
+        """(container, volume, net) of a temporary or project environment, from its id and
+        owner. Never read back from a record: a record is data from a file (a restored one
+        among them), and these are the names removing an environment deletes."""
+        return (f"vaf-env-{owner_hash}-{env_id}", "" if mount else f"vaf-env-vol-{env_id}",
+                f"vaf-env-net-{env_id}")
+
     def create(self, owner_scope: Any, *, kind: str = "temporary", name: str = "",
                project_path: Optional[str] = None, network: Optional[str] = None,
                memory_mb: Optional[int] = None, session_id: str = "",
@@ -520,16 +537,13 @@ class EnvironmentManager:
         network = (network or ("registries" if kind == "project" else "none")).strip()
         if network not in NETWORKS:
             raise EnvironmentRefused(f"network must be one of {', '.join(NETWORKS)}")
-        cap = setting("network_max")
-        if cap not in NETWORKS:
-            # A cap that is no profile (a typo) is the narrowest one, never no cap.
-            cap = NETWORKS[0]
+        cap = self._network_cap()
         if self._network_rank(network) > self._network_rank(cap):
             raise EnvironmentRefused(f"network {network!r} is above what the administrator "
                                      f"allows ({cap!r}, sandbox_env_network_max)")
         mem = int(memory_mb or setting("memory_mb"))
-        if mem < 128 or mem > int(setting("memory_max_mb")):
-            raise EnvironmentRefused(f"memory must be between 128 and "
+        if mem < MIN_MEMORY_MB or mem > int(setting("memory_max_mb")):
+            raise EnvironmentRefused(f"memory must be between {MIN_MEMORY_MB} and "
                                      f"{setting('memory_max_mb')} MB")
         owner_hash = containers.scope_hash(owner_scope)
         mine = [r for r in self._docker_rows(owner_hash) if r["kind"] in KINDS]
@@ -553,11 +567,10 @@ class EnvironmentManager:
                                          "built now (the first time takes a few minutes)")
         env_id = secrets.token_hex(4)
         now = time.time()
+        container, volume, net = self._names(env_id, owner_hash, mount)
         env = Environment(
             id=env_id, kind=kind, network=network, owner=owner_hash,
-            container=f"vaf-env-{owner_hash}-{env_id}",
-            volume="" if mount else f"vaf-env-vol-{env_id}",
-            net=f"vaf-env-net-{env_id}",
+            container=container, volume=volume, net=net,
             name=str(name or "")[:80], project_path=mount or "", image=image,
             created=now, last_used=now, memory_mb=mem, session_id=str(session_id or ""),
             expires=now + float(setting("temp_ttl_hours")) * 3600 if kind == "temporary" else 0.0,
@@ -1442,8 +1455,11 @@ class EnvironmentManager:
                     continue
                 st = self._read_state(env_id) or {}
                 if now - float(st.get("created") or 0) > 600:
-                    for kind, name in (("volume", st.get("volume")), ("network", st.get("net"))):
-                        if name:
+                    # Only the name VAF gives this id: the record is data from a file (a
+                    # restored one among them), and the name it carries is what gets deleted.
+                    for kind, name, own in (("volume", st.get("volume"), f"vaf-env-vol-{env_id}"),
+                                            ("network", st.get("net"), f"vaf-env-net-{env_id}")):
+                        if name and name == own:
                             containers.docker([kind, "rm", name], timeout=30)
                     with self._locked():
                         self._delete_state(env_id)
@@ -1472,7 +1488,8 @@ class EnvironmentManager:
         the record, with today's image: a project environment comes back as it was. A
         temporary one is dropped instead, record and volume (it would have expired), and a
         project environment whose host folder does not exist on this machine is reported
-        and left to the reaper. Returns {"readopted", "dropped", "missing_folder",
+        and left to the reaper. A record is held to what `create` allows (see the comment
+        in the loop). Returns {"readopted", "dropped", "missing_folder",
         "failed"}: lists of ids. Raises EnvironmentsUnlisted when docker cannot be asked."""
         live = {row["id"] for row in self._docker_rows(strict=True)}
         out: Dict[str, List[str]] = {"readopted": [], "dropped": [], "missing_folder": [],
@@ -1486,7 +1503,7 @@ class EnvironmentManager:
                 continue
             if st.get("kind") == "temporary":
                 if st.get("volume"):
-                    containers.docker(["volume", "rm", str(st["volume"])], timeout=30)
+                    containers.docker(["volume", "rm", f"vaf-env-vol-{env_id}"], timeout=30)
                 with self._locked():
                     self._delete_state(env_id)
                 out["dropped"].append(env_id)
@@ -1495,20 +1512,33 @@ class EnvironmentManager:
                 out["missing_folder"].append(env_id)
                 continue
             try:
-                # A restored record is data from a file: its mount passes the same checks a
-                # new environment's does before anything is mounted (`:z` relabels it). The
-                # account's file jail cannot be asked here - the record names the owner only
-                # by hash - and the restore runs as the machine owner at the terminal.
+                # A restored record is data from a file, held to what create() allows. Its
+                # mount passes the same checks (`:z` relabels it); the account's file jail
+                # cannot be asked here - the record names the owner only by hash - and the
+                # restore runs as the machine owner at the terminal. The id is the file's,
+                # the names are derived from it, and the network and memory are capped by
+                # today's limits rather than refused: refusing would hand the person's work
+                # to the reaper.
+                owner = str(st.get("owner") or "")
+                if not _OWNER_RE.match(owner):
+                    raise EnvironmentRefused("the record names no owner")
                 mount = self._safe_mount_path(st["project_path"]) if st.get("project_path") else ""
                 image = environment_image.ensure_image()
                 if not image:
                     raise EnvironmentRefused("the environment image could not be built")
                 fields = {k: v for k, v in st.items() if k in Environment.__dataclass_fields__}
                 env = Environment(**fields)
-                env.project_path = mount
+                env.id, env.owner, env.project_path = env_id, owner, mount
+                env.container, env.volume, env.net = self._names(env_id, owner, mount)
+                network = env.network if env.network in NETWORKS else NETWORKS[0]
+                cap = self._network_cap()
+                if self._network_rank(network) > self._network_rank(cap):
+                    network = cap
+                env.network = network
+                env.memory_mb = min(max(int(env.memory_mb or setting("memory_mb")), MIN_MEMORY_MB),
+                                    int(setting("memory_max_mb")))
                 env.image, env.state, env.last_used = image, "", time.time()
-                self._start_new(env, memory_mb=int(env.memory_mb or setting("memory_mb")),
-                                cpus=float(setting("cpus")))
+                self._start_new(env, memory_mb=env.memory_mb, cpus=float(setting("cpus")))
                 out["readopted"].append(env_id)
             except Exception as e:
                 logger.warning("Environment %s could not be recreated: %s", env_id, e)

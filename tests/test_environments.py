@@ -962,3 +962,63 @@ def test_a_restored_record_cannot_mount_what_create_would_refuse(docker, mgr, mo
     docker.containers.clear()
     report = mgr.readopt()
     assert report["failed"] == [env.id] and env.container not in docker.containers
+
+
+@pytest.mark.parametrize("network, cap, expected", [
+    ("bogus", "open", "none"),          # no profile at all: the narrowest, never "open"
+    ("open", "registries", "registries"),
+])
+def test_a_restored_record_is_held_to_what_create_allows(docker, mgr, monkeypatch,
+                                                         network, cap, expected):
+    """A restored record is data from a file. Its id is the file's, its names are derived
+    (they are what removing an environment deletes), an unknown network profile is not the
+    open one `_start_new` falls through to, and network and memory are capped by today's
+    limits - capped, not refused, which would hand the work to the reaper.
+    MUTATION: build the container from the record's fields again - red."""
+    monkeypatch.setattr(environment_image, "ensure_image", lambda: "vaf-sandbox-env:test")
+    monkeypatch.setenv("VAF_SANDBOX_ENV_NETWORK_MAX", cap)
+    env = mgr.create(ALICE, kind="project", name="tampered", network="none")
+    st = mgr._read_state(env.id)
+    st.update({"id": "someone-else", "container": "vaf-memory-db", "volume": "precious",
+               "net": "bridge", "network": network, "memory_mb": 999999})
+    (mgr._state_dir() / f"{env.id}.json").write_text(json.dumps(st), encoding="utf-8")
+    docker.containers.clear()
+    docker.containers["vaf-memory-db"] = {"state": "running", "labels": {}, "args": [],
+                                          "networks": set()}
+    docker.volumes["precious"] = {}
+
+    report = mgr.readopt()
+
+    assert report["readopted"] == [env.id]
+    args = _run_args(docker, env.container)
+    assert args[args.index("--memory") + 1] == f"{envmod.setting('memory_max_mb')}m"
+    assert args[args.index("--network") + 1] == env.net
+    assert docker.networks[env.net]["internal"] is (expected != "open")
+    assert f"{env.volume}:/workspace" in args
+    kept = mgr._read_state(env.id)
+    assert (kept["id"], kept["container"], kept["volume"], kept["network"]) == \
+        (env.id, env.container, env.volume, expected)
+    assert "precious" in docker.volumes and docker.containers["vaf-memory-db"]["state"] == "running"
+
+
+def test_a_record_names_only_its_own_volume_and_network_for_removal(docker, mgr, monkeypatch):
+    """The reaper clears a record without a container together with the volume and network
+    it names, and readopt drops a temporary one with its volume: a record naming a volume
+    or network that is not this environment's must not get it deleted. MUTATION: remove
+    the record's names as they are - red."""
+    monkeypatch.setattr(environment_image, "ensure_image", lambda: "vaf-sandbox-env:test")
+    for env_id, kind in (("deadbeef", "project"), ("cafef00d", "temporary")):
+        (mgr._state_dir()).mkdir(parents=True, exist_ok=True)
+        (mgr._state_dir() / f"{env_id}.json").write_text(json.dumps({
+            "id": env_id, "kind": kind, "owner": "ab12cd34ef56", "created": 0,
+            "volume": "precious", "net": "user-net", "project_path": "/nowhere/at/all"}),
+            encoding="utf-8")
+    docker.volumes.update({"precious": {}, "vaf-env-vol-cafef00d": {}})
+    docker.networks["user-net"] = {"labels": {}, "internal": False, "options": []}
+
+    report = mgr.readopt()
+    mgr.reap_once(now=__import__("time").time())
+
+    assert report["dropped"] == ["cafef00d"] and "vaf-env-vol-cafef00d" not in docker.volumes
+    assert mgr._read_state("deadbeef") is None, "the orphan record itself is cleared"
+    assert "precious" in docker.volumes and "user-net" in docker.networks

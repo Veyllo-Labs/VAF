@@ -209,7 +209,8 @@ after the one before succeeded:
    gives each project environment its container back (see [SANDBOXING.md](../security/SANDBOXING.md)).
    A restored record is data from a file: the host folder it names passes the same
    checks as a new environment's (no home directory, no system folder) and is
-   stored resolved; a refused one counts as failed. Failed and missing ones are
+   stored resolved; a refused one counts as failed. Its names, network profile and
+   memory are held to what a new environment gets, too. Failed and missing ones are
    named in the warnings with what follows from them: VAF deletes them at its next
    start unless the restore is run again first.
 8. **Volumes.** Each is emptied and filled from the backup with its owners

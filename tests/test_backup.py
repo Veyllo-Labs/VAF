@@ -448,6 +448,32 @@ def test_a_restore_gives_the_recovery_key_this_machines_key(install, target, mon
         data_files.reset_key_cache()
 
 
+
+def test_a_backup_that_cannot_be_opened_is_reported_not_waited_on(target, tmp_path):
+    """The decrypting worker opened the file before it took the pipe: a file that was gone
+    left the pipe's write end open, and the reader waited on it forever - `vaf backup verify`
+    of a mistyped path hung. MUTATION: open the file before the pipe again - red."""
+    import threading
+    gone = tmp_path / "gone.tar.age"
+    calls = {"verify": lambda: backup.verify_backup(gone),
+             "manifest": lambda: backup.read_manifest(gone),
+             "restore": lambda: backup.restore_backup(gone, pre_restore=False)}
+    for name, call in calls.items():
+        out = {}
+
+        def _run():
+            try:
+                out["result"] = call()
+            except backup.BackupError as e:
+                out["error"] = str(e)
+
+        worker = threading.Thread(target=_run, daemon=True)
+        worker.start()
+        worker.join(20)
+        assert not worker.is_alive(), f"{name} waits forever on a file that is not there"
+        assert "error" in out or not out["result"].ok, name
+
+
 @pytest.mark.parametrize("name", ["../escape.txt", "files/app/../../escape.txt", "/etc/passwd",
                                   "files/elsewhere/x", "volumes/not-a-vaf-volume.tar",
                                   "files\\app\\config.json"])

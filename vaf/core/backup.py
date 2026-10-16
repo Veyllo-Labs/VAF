@@ -744,7 +744,9 @@ def verify_backup(path: Path, identity: Optional[str] = None) -> VerifyResult:
 
     def decrypt() -> None:
         try:
-            with open(path, "rb") as src, os.fdopen(write_fd, "wb") as pipe:
+            # The pipe first: a backup that does not open (gone, unreadable) must still
+            # close the write end, or the reader waits on it forever.
+            with os.fdopen(write_fd, "wb") as pipe, open(path, "rb") as src:
                 pyrage.decrypt_io(src, pipe, idents)
         except BaseException as e:      # noqa: BLE001 - reported below
             failure.append(e)
@@ -841,7 +843,9 @@ def read_manifest(path: Path, identity: Optional[str] = None) -> Dict:
 
     def decrypt() -> None:
         try:
-            with open(path, "rb") as src, os.fdopen(write_fd, "wb") as pipe:
+            # The pipe first: a backup that does not open (gone, unreadable) must still
+            # close the write end, or the reader waits on it forever.
+            with os.fdopen(write_fd, "wb") as pipe, open(path, "rb") as src:
                 pyrage.decrypt_io(src, pipe, idents)
         except Exception:       # noqa: BLE001 - a short read below says enough
             pass
@@ -896,7 +900,9 @@ def _extract_verified(path: Path, identity: Optional[str], staging: Path) -> Tup
 
     def decrypt() -> None:
         try:
-            with open(path, "rb") as src, os.fdopen(write_fd, "wb") as pipe:
+            # The pipe first: a backup that does not open (gone, unreadable) must still
+            # close the write end, or the reader waits on it forever.
+            with os.fdopen(write_fd, "wb") as pipe, open(path, "rb") as src:
                 pyrage.decrypt_io(src, pipe, idents)
         except BaseException as e:      # noqa: BLE001 - reported below
             failure.append(e)

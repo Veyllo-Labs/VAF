@@ -353,8 +353,9 @@ def ensure_recovery_kit(dek: bytes) -> Optional[Path]:
 
 def renew_recovery_kit(dek: bytes) -> Path:
     """Replace the recovery key with a new one: a fresh identity, a wrap that carries the
-    machine key, a new note. The previous key stops opening anything. Raises when the
-    note cannot be written; the wrap is replaced only after it was.
+    machine key, a new note. The previous key stops opening the key store; backups written
+    before keep opening with it (they are encrypted to it), not with the new one. Raises
+    when the note cannot be written; the wrap is replaced only after it was.
 
     Same order as `ensure_recovery_kit`, for the same reason: the note is the only copy
     of the secret, so the durable half is written second."""

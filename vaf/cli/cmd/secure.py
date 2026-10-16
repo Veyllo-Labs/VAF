@@ -191,8 +191,8 @@ def renew_recovery_key(
     if not require_admin_password(force=True):
         raise typer.Exit(1)
     if not yes and not typer.confirm(
-        "Write a new recovery key? The current one stops working, so keep the new note "
-        "where the old one was."
+        "Write a new recovery key? The current one stops opening the key store, so keep the "
+        "new note where the old one was."
     ):
         UI.info("Cancelled.")
         raise typer.Exit(0)
@@ -214,7 +214,8 @@ def renew_recovery_key(
               else "the key store; the password stores stay sealed under your passphrase")
     UI.success(f"New recovery key written to {path}. It opens {covers}.")
     UI.warning("Move that file off this machine and delete it here. The old key no longer "
-               "opens anything.")
+               "opens the key store, but backups written before now open only with the old "
+               "key or this machine: run `vaf backup create` for one the new key opens.")
 
 
 @app.command("rotate-db")

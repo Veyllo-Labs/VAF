@@ -132,7 +132,9 @@ write it - what lets a scheduled backup run unattended:
 - **the recovery key** (its public half, `recovery_kit.recipient()`): the key you
   keep off the machine opens the backup on a new one. A version 1 recovery key
   has no public half; the backup then says that only this machine can open it,
-  and `vaf secure renew-recovery-key` fixes that.
+  and `vaf secure renew-recovery-key` fixes that. A backup opens with the
+  recovery key it was written to: after a renewal, the earlier ones still need
+  the old key (or this machine), so write a new one.
 
 ### Not in the backup (named boundaries)
 
@@ -156,7 +158,11 @@ vaf backup restore <file> --recovery-key   # on a new machine
 It replaces everything VAF keeps on this machine with the backup's, so it asks
 for a person at the terminal (never the agent's own commands, never a script)
 and for proof: the admin password of this machine, or the recovery key, which is
-also what opens the backup on a machine that never saw it. It does not go through
+also what opens the backup on a machine that never saw it. On a machine that
+already has an admin account, the recovery key counts only when it opens THIS
+machine's recovery file; otherwise the admin password is asked. A key that merely
+opens the backup proves nothing about the machine, since anyone can write a backup
+to a key of their own. It does not go through
 the terminal door the rest of the group uses: the door asks for the admin
 password, which may be exactly what is gone, and on a new machine without an
 account it offers to create one that the restore then replaces. It refuses the

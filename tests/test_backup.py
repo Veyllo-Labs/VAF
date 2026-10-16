@@ -216,6 +216,14 @@ def test_every_backup_command_but_restore_asks_the_terminal_door(monkeypatch, tm
 
     import vaf.cli.gate as gate
     from vaf.cli.cmd import backup as backup_cmd
+    from vaf.core.processes import AGENT_COMMAND_ENV
+    ran = []        # the runner turns any exception into exit code 1: count the calls
+    monkeypatch.setattr(backup, "create_backup", lambda *a, **k: ran.append(1))
+    runner = CliRunner()
+    # The real door, from the agent's own command: refused before any password is asked.
+    monkeypatch.setenv(AGENT_COMMAND_ENV, "1")
+    assert runner.invoke(backup_cmd.app, ["create"]).exit_code == 1 and ran == []
+    monkeypatch.delenv(AGENT_COMMAND_ENV)
     asked = []
 
     def _door(force=False):
@@ -223,11 +231,10 @@ def test_every_backup_command_but_restore_asks_the_terminal_door(monkeypatch, tm
         return False
 
     monkeypatch.setattr(gate, "require_admin_password", _door)
-    monkeypatch.setattr(backup, "create_backup", lambda *a, **k: pytest.fail("ran past the door"))
-    runner = CliRunner()
-    assert runner.invoke(backup_cmd.app, ["create"]).exit_code == 1 and asked == [1]
+    assert runner.invoke(backup_cmd.app, ["create"]).exit_code == 1 and asked == [1] and ran == []
 
     import vaf.core.instance as instance
+    monkeypatch.setattr(gate, "_stored_hash", lambda: ("", False))      # a new machine
     monkeypatch.setattr(gate, "is_interactive", lambda: True)
     monkeypatch.setattr(instance, "find_service", lambda: None)
     monkeypatch.setattr(backup_cmd.typer, "confirm", lambda *a, **k: False)
@@ -238,6 +245,47 @@ def test_every_backup_command_but_restore_asks_the_terminal_door(monkeypatch, tm
     out = runner.invoke(backup_cmd.app, ["restore", str(archive), "--recovery-key"])
     assert asked == [1], "restore with the recovery key never asks the admin password"
     assert "Backup of h" in out.output
+
+
+
+@pytest.mark.parametrize("stored, unreadable, opens_here, asked_password", [
+    ("hash", False, True, False),        # this machine's own recovery key
+    ("hash", False, False, True),        # a key of anybody's: the admin password decides
+    ("", True, False, True),             # an unreadable keyring counts as an account
+])
+def test_a_recovery_key_restore_over_an_admin_account_is_this_machines_key(
+        monkeypatch, tmp_path, stored, unreadable, opens_here, asked_password):
+    """Anyone can write a backup to a key of their own, so a key that opens the backup
+    proves nothing about the machine it replaces. Where an admin account exists, the key
+    must open this machine's recovery file, or the admin password is asked.
+    MUTATION: drop the check - a foreign key restores over the admin's machine - red."""
+    from typer.testing import CliRunner
+
+    import vaf.cli.gate as gate
+    import vaf.core.instance as instance
+    from vaf.cli.cmd import backup as backup_cmd
+    asked = []
+
+    def _door(force=False):
+        asked.append(force)
+        return False
+
+    monkeypatch.setattr(gate, "require_admin_password", _door)
+    monkeypatch.setattr(gate, "_stored_hash", lambda: (stored, unreadable))
+    monkeypatch.setattr(gate, "is_interactive", lambda: True)
+    monkeypatch.setattr(instance, "find_service", lambda: None)
+    monkeypatch.setattr(recovery_kit, "unwrap_with_secret",
+                        lambda secret: b"d" * 32 if opens_here else None)
+    monkeypatch.setattr(backup_cmd.typer, "confirm", lambda *a, **k: False)
+    monkeypatch.setattr("getpass.getpass", lambda prompt="": "AGE-SECRET-KEY-1X")
+    monkeypatch.setattr(backup, "read_manifest", lambda path, identity=None: {"host": "h"})
+    archive = tmp_path / "x.tar.age"
+    archive.write_bytes(b"x")
+    out = CliRunner().invoke(backup_cmd.app, ["restore", str(archive), "--recovery-key"])
+    if asked_password:
+        assert asked == [True] and out.exit_code == 1 and "Backup of h" not in out.output
+    else:
+        assert asked == [] and "Backup of h" in out.output
 
 
 def test_volumes_are_taken_by_name_read_only_even_without_their_container(tmp_path, monkeypatch):

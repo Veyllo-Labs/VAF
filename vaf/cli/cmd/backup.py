@@ -10,7 +10,8 @@ write or read. A script without a terminal (a cron job) passes the door as every
 `restore` is the exception: it proves the person itself, by the admin password OR the
 recovery key. The door would ask for exactly that password - the one that may be gone,
 which is when the recovery key is the way in - and on a new machine without an account it
-would offer to create one, which the restore then replaces.
+would offer to create one, which the restore then replaces. On a machine that has an admin
+account, the recovery key counts only when it opens THIS machine's recovery file.
 """
 from pathlib import Path
 from typing import Optional
@@ -132,10 +133,21 @@ def restore(
                  "folders while they are replaced.")
         raise typer.Exit(1)
     identity = None
+    stored, unreadable = _stored_hash()
     if recovery_key:
         identity = getpass.getpass("Recovery key (from VAF-BackThisUp.md): ").strip()
+        # A key that opens the backup proves nothing about THIS machine: anyone can write a
+        # backup to a key of their own. Where an admin account exists (or may: an unreadable
+        # keyring counts), the key must open this machine's recovery file, or the admin
+        # password proves the person instead. A new machine has neither to check against.
+        if stored or unreadable:
+            from vaf.core.recovery_kit import unwrap_with_secret
+            if not identity or unwrap_with_secret(identity) is None:
+                UI.warning("That is not this machine's recovery key, and this machine has an "
+                           "admin account: prove it is you with the admin password.")
+                if not require_admin_password(force=True):
+                    raise typer.Exit(1)
     else:
-        stored, unreadable = _stored_hash()
         if unreadable or not stored:
             UI.error("This machine has no admin password to prove who you are. Restore with "
                      "--recovery-key.")

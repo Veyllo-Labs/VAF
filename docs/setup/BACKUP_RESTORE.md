@@ -129,3 +129,51 @@ write it - what lets a scheduled backup run unattended:
   person's own folder.
 - Entries in VAF's folders that are not in the list (old copies, debris, other
   tools' files) are listed as skipped, never taken.
+
+## Restoring
+
+```
+vaf backup restore <file>                  # on the machine the backup came from
+vaf backup restore <file> --recovery-key   # on a new machine
+```
+
+It replaces everything VAF keeps on this machine with the backup's, so it asks
+for a person at the terminal (never the agent's own commands, never a script)
+and for proof: the admin password of this machine, or the recovery key, which is
+also what opens the backup on a machine that never saw it. VAF must be stopped;
+the database container must exist (on a new machine, start VAF's services once).
+It shows what the backup is (host, time, VAF version, what it holds) and asks
+before it starts.
+
+`restore_backup` in `vaf/core/backup.py` then works in this order, each step only
+after the one before succeeded:
+
+1. **Open and check.** Every member is decrypted, its name checked against the
+   shape a VAF backup has (no absolute path, no `..`, only the known prefixes and
+   volume names, only regular files; anything else refuses the whole archive),
+   and its checksum compared. Nothing lands from a backup that does not verify.
+2. **Version.** A backup written by a newer VAF is refused; update first.
+3. **Safety backup.** The current state is backed up into
+   `<backup folder>/pre-restore/` (`--no-safety-backup` skips it), so a wrong
+   restore can be undone.
+4. **Files.** Every entry of the roots that is backed up, derived or runtime is
+   removed and the backup's files are placed. Logs, entries that are not VAF's,
+   the backup folder and THIS machine's key stay.
+5. **Keys.** This machine's key is never replaced: every store the backup's
+   machine key sealed is re-wrapped under it (`rewrap_from_kek`), which is why a
+   backup carries that key (`keys/machine_key`).
+6. **Database.** The roles from `globals.sql` (their password hashes, so the
+   restored `config.json` connects), then a fresh database from the dump.
+7. **Sandbox environments.** `EnvironmentManager.readopt()` gives each project
+   environment its container back (see [SANDBOXING.md](../security/SANDBOXING.md)).
+8. **Volumes.** Each is emptied and filled from the backup with its owners
+   (`docker cp -a`); an environment volume is then handed to this machine's
+   environment user. A browser profile keeps its Workspace, Downloads and cache
+   folders, which the backup deliberately did not carry.
+
+Measured on a desktop install, restored into an empty home with a fresh database
+container: 9417 files placed, five encrypted stores re-wrapped under the new
+machine's key, the keyring (13 keys), the API keys and stored credentials open,
+a chat with 66 messages decrypts, the database holds both accounts and 836
+memories, a memory decrypts, and both account records pass their seal, so the
+accounts can sign in.

@@ -918,3 +918,30 @@ def test_copy_in_never_enters_a_linked_folder(docker, mgr, monkeypatch, tmp_path
     with tarfile.open(fileobj=io.BytesIO(sent[-1])) as tar:
         names = sorted(tar.getnames())
     assert names == ["site", "site/src", "site/src/app.py"]
+
+
+def test_a_restored_environment_gets_its_container_back_instead_of_being_reaped(
+        docker, mgr, tmp_path, monkeypatch):
+    """A restore on another machine brings back the records and the volumes, never the
+    containers, and the reaper cleared such a record AND its volume as an orphan: the
+    restored work was deleted ten minutes after the first start. readopt() recreates the
+    container from the record; a temporary environment is dropped (it would have expired);
+    one whose host folder is missing here is reported. MUTATION: skip the recreate - red."""
+    monkeypatch.setattr(environment_image, "ensure_image", lambda: "vaf-sandbox-env:test")
+    folder = tmp_path / "site"
+    folder.mkdir()
+    keep = mgr.create(ALICE, kind="project", name="kept")
+    temp = mgr.create(ALICE, kind="temporary")
+    mounted = mgr.create(ALICE, kind="project", project_path=str(folder))
+    folder.rmdir()
+    docker.containers.clear()                      # the new machine: no containers
+
+    report = mgr.readopt()
+
+    assert report["readopted"] == [keep.id]
+    assert keep.container in docker.containers
+    assert report["dropped"] == [temp.id] and mgr._read_state(temp.id) is None
+    assert temp.volume not in docker.volumes
+    assert report["missing_folder"] == [mounted.id]
+    mgr.reap_once(now=__import__("time").time() + 3600)
+    assert mgr._read_state(keep.id) is not None and keep.volume in docker.volumes

@@ -88,6 +88,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 import posixpath
 import re
@@ -100,6 +101,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from vaf.core import containers, environment_image
+
+logger = logging.getLogger("vaf.core.environments")
 
 LABEL = "org.veyllo.vaf.env"
 KINDS = ("temporary", "project")
@@ -1451,6 +1454,52 @@ class EnvironmentManager:
             except Exception:
                 continue
         return cleared
+
+    def readopt(self) -> Dict[str, List[str]]:
+        """Recreate the container of every recorded environment that has none.
+
+        A restore on another machine (vaf/core/backup.py) brings back the records and the
+        volumes, never the containers; the reaper would then clear such a record AND its
+        volume as an orphan ten minutes later. Here each one gets its container again, from
+        the record, with today's image: a project environment comes back as it was. A
+        temporary one is dropped instead, record and volume (it would have expired), and a
+        project environment whose host folder does not exist on this machine is reported
+        and left to the reaper. Returns {"readopted", "dropped", "missing_folder",
+        "failed"}: lists of ids. Raises EnvironmentsUnlisted when docker cannot be asked."""
+        live = {row["id"] for row in self._docker_rows(strict=True)}
+        out: Dict[str, List[str]] = {"readopted": [], "dropped": [], "missing_folder": [],
+                                     "failed": []}
+        for f in sorted(self._state_dir().glob("*.json")):
+            env_id = f.stem
+            if f.name.endswith(".procs.json") or not _ID_RE.match(env_id) or env_id in live:
+                continue
+            st = self._read_state(env_id) or {}
+            if st.get("kind") not in KINDS:
+                continue
+            if st.get("kind") == "temporary":
+                if st.get("volume"):
+                    containers.docker(["volume", "rm", str(st["volume"])], timeout=30)
+                with self._locked():
+                    self._delete_state(env_id)
+                out["dropped"].append(env_id)
+                continue
+            if st.get("project_path") and not os.path.isdir(str(st["project_path"])):
+                out["missing_folder"].append(env_id)
+                continue
+            try:
+                image = environment_image.ensure_image()
+                if not image:
+                    raise EnvironmentRefused("the environment image could not be built")
+                fields = {k: v for k, v in st.items() if k in Environment.__dataclass_fields__}
+                env = Environment(**fields)
+                env.image, env.state, env.last_used = image, "", time.time()
+                self._start_new(env, memory_mb=int(env.memory_mb or setting("memory_mb")),
+                                cpus=float(setting("cpus")))
+                out["readopted"].append(env_id)
+            except Exception as e:
+                logger.warning("Environment %s could not be recreated: %s", env_id, e)
+                out["failed"].append(env_id)
+        return out
 
     def prune(self) -> Dict[str, int]:
         """What `vaf env prune` runs: one reaper pass now. Raises EnvironmentRefused when

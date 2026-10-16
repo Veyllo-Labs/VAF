@@ -45,7 +45,7 @@ def install(tmp_path, monkeypatch):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
 
-    def _fake_dump(staging):
+    def _fake_dump(staging, container=None):
         dump = staging / "postgres" / "database.dump"
         dump.parent.mkdir(parents=True, exist_ok=True)
         dump.write_bytes(b"PGDMP stand-in")
@@ -252,3 +252,161 @@ def test_volumes_are_taken_by_name_read_only_even_without_their_container(tmp_pa
     assert len(creates) == 2 and all(any(x.endswith(":/v:ro") for x in a) for a in creates)
     assert len([a for a in calls if a[:2] == ["rm", "-f"]]) == 2, "every carrier is removed"
     assert not warnings
+
+
+# ── restore ─────────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def target(install, monkeypatch):
+    """A restore target: the database container answers, the database step is recorded."""
+    from vaf.core import containers
+    calls = {"pg": 0}
+    monkeypatch.setattr(containers, "container_state", lambda name: "running")
+    monkeypatch.setattr(backup, "_restore_postgres",
+                        lambda staging, manifest, container: calls.__setitem__("pg", calls["pg"] + 1))
+    install["calls"] = calls
+    return install
+
+
+def _encrypt_tar(path, members, manifest=None):
+    """An age file holding a tar of ``members`` (name -> bytes), for archives a real
+    backup would never write."""
+    import hashlib
+
+    import pyrage
+    raw = io.BytesIO()
+    checksums = {}
+    with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as tar:
+        items = [("manifest.json", json.dumps(manifest or {"format": backup.BACKUP_FORMAT,
+                                                           "vaf_version": "0.0.1"}).encode())]
+        items += list(members.items())
+        for name, data in items:
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+            checksums[name] = hashlib.sha256(data).hexdigest()
+        data = json.dumps(checksums).encode()
+        info = tarfile.TarInfo("checksums.json")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    path.write_bytes(pyrage.encrypt(raw.getvalue(), [backup.machine_identity().to_public()]))
+    return path
+
+
+def test_a_restore_puts_back_exactly_the_backup_and_keeps_this_machines_key(target):
+    """The round trip: back up, change the installation, restore. The backed-up entries come
+    back as they were, what was added since is gone, entries that are not VAF's stay, and
+    the machine key on THIS machine is never replaced: the stores are re-wrapped under it.
+    MUTATION: place the backup's key file, or skip the clearing - red."""
+    home = target["roots"]["app"]
+    (home / "secure_store.kek").write_text("the backed-up machine's key", encoding="utf-8")
+    made = backup.create_backup(target["out"], include_volumes=False)
+    (home / "sessions" / "web_chat-1.json").write_text("changed", encoding="utf-8")
+    (home / "sessions" / "web_chat-new.json").write_text("added later", encoding="utf-8")
+    (home / "secure_store.kek").write_text("this machine's key", encoding="utf-8")
+
+    result = backup.restore_backup(made.path, pre_restore=False)
+
+    assert (home / "sessions" / "web_chat-1.json").read_text() == '{"messages": ["hello"]}'
+    assert not (home / "sessions" / "web_chat-new.json").exists()
+    assert (home / "vm-backups" / "dump.sql.gz").exists(), "not VAF's, never touched"
+    assert (target["roots"]["projects"] / "ab12cd34" / "web_chat-1" / "notes.md").exists()
+    assert target["calls"]["pg"] == 1
+    assert (home / "secure_store.kek").read_text() == "this machine's key"
+    assert result.files >= 5
+
+
+def test_a_backup_from_another_machine_opens_under_this_machines_key(target, tmp_path):
+    """The stores travel sealed under the OLD machine key; on the new machine every one is
+    re-wrapped under ITS key and opens. MUTATION: drop the re-wrap from restore_backup - red."""
+    import base64
+    import secrets as _secrets
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    old_kek, dek = _secrets.token_bytes(32), _secrets.token_bytes(32)
+    nonce = _secrets.token_bytes(12)
+    wrap = json.dumps({"v": 1, "kdf": "raw", "nonce": base64.b64encode(nonce).decode(),
+                       "wrapped": base64.b64encode(AESGCM(old_kek).encrypt(nonce, dek, None)).decode()})
+    payload_nonce = _secrets.token_bytes(12)
+    enc = payload_nonce + AESGCM(dek).encrypt(payload_nonce, b'{"openai": "sk-from-the-old-machine"}', None)
+    archive = _encrypt_tar(tmp_path / "old.tar.age", {
+        "keys/machine_key": old_kek,
+        "files/data/probe_store.key.json": wrap.encode(),
+        "files/data/probe_store.enc": enc,
+        "postgres/database.dump": b"PGDMP",
+        "postgres/globals.sql": b"",
+    })
+    result = backup.restore_backup(archive, pre_restore=False)
+    assert "probe_store" in result.rewrapped
+    from vaf.core.secure_store import SecureBlobStore
+    store = SecureBlobStore("probe_store", target["roots"]["data"] / "probe_store.enc")
+    assert store.load_strict() == {"openai": "sk-from-the-old-machine"}
+
+
+@pytest.mark.parametrize("name", ["../escape.txt", "files/app/../../escape.txt", "/etc/passwd",
+                                  "files/elsewhere/x", "volumes/not-a-vaf-volume.tar",
+                                  "files\\app\\config.json"])
+def test_an_archive_with_a_foreign_entry_restores_nothing(target, tmp_path, name):
+    """A restore unpacks into the machine's own folders; a name outside the shape a VAF
+    backup has is a foreign or tampered archive. MUTATION: drop the name check - red."""
+    archive = _encrypt_tar(tmp_path / "evil.tar.age", {name: b"x"})
+    before = sorted(p.name for p in target["roots"]["app"].iterdir())
+    with pytest.raises(backup.BackupError):
+        backup.restore_backup(archive, pre_restore=False)
+    assert sorted(p.name for p in target["roots"]["app"].iterdir()) == before
+    assert not (tmp_path / "escape.txt").exists()
+
+
+def test_a_backup_from_a_newer_vaf_is_refused_before_anything_changes(target, tmp_path):
+    archive = _encrypt_tar(tmp_path / "new.tar.age", {"postgres/globals.sql": b""},
+                           manifest={"format": backup.BACKUP_FORMAT, "vaf_version": "99.0"})
+    with pytest.raises(backup.BackupError) as err:
+        backup.restore_backup(archive, pre_restore=False)
+    assert "newer" in str(err.value)
+    assert target["calls"]["pg"] == 0
+
+
+def test_the_current_state_is_backed_up_before_a_restore(target):
+    """A wrong restore must be undoable. MUTATION: skip the safety backup - red."""
+    made = backup.create_backup(target["out"], include_volumes=False)
+    result = backup.restore_backup(made.path)
+    assert result.pre_restore is not None and result.pre_restore.exists()
+    assert backup.verify_backup(result.pre_restore).ok
+
+
+def test_restoring_needs_a_person_and_a_stopped_vaf(monkeypatch, tmp_path):
+    """It replaces every account and key: never from the agent's shell or a script, never
+    under a running VAF. MUTATION: drop any of the three checks - red."""
+    from typer.testing import CliRunner
+
+    import vaf.cli.gate as gate
+    import vaf.core.instance as instance
+    from vaf.cli.cmd import backup as backup_cmd
+    from vaf.core.processes import AGENT_COMMAND_ENV
+    ran = []
+    monkeypatch.setattr(backup, "restore_backup", lambda *a, **k: ran.append(1) or
+                        backup.RestoreResult({}, 0, [], 0, None))
+    monkeypatch.setattr(backup, "read_manifest", lambda path, identity=None: {})
+    monkeypatch.setattr(gate, "_stored_hash", lambda: ("a stored hash", False))
+    monkeypatch.setattr(gate, "require_admin_password", lambda force=False: True)
+    archive = tmp_path / "x.tar.age"
+    archive.write_bytes(b"x")
+    runner = CliRunner()
+
+    def _run():
+        return runner.invoke(backup_cmd.app, ["restore", str(archive), "--yes"])
+
+    monkeypatch.setattr(gate, "is_interactive", lambda: True)
+    monkeypatch.setattr(instance, "find_service", lambda: None)
+    monkeypatch.setenv(AGENT_COMMAND_ENV, "1")
+    assert _run().exit_code == 1 and not ran
+    monkeypatch.delenv(AGENT_COMMAND_ENV)
+    monkeypatch.setattr(gate, "is_interactive", lambda: False)
+    assert _run().exit_code == 1 and not ran
+    monkeypatch.setattr(gate, "is_interactive", lambda: True)
+    monkeypatch.setattr(instance, "find_service", lambda: object())
+    out = _run()
+    assert out.exit_code == 1 and "running" in out.output and not ran
+    monkeypatch.setattr(instance, "find_service", lambda: None)
+    assert _run().exit_code == 0 and ran == [1], "with all three in place it runs"

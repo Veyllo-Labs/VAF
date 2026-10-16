@@ -92,3 +92,73 @@ def list_cmd(
         return
     for row in rows:
         print(f"{row.created}  {_mb(row.size):>10}  {row.path.name}")
+
+
+@app.command("restore")
+def restore(
+    path: Path = typer.Argument(..., help="The backup file"),
+    recovery_key: bool = typer.Option(False, "--recovery-key",
+                                      help="Open it with the recovery key (on a new machine)"),
+    no_safety_backup: bool = typer.Option(False, "--no-safety-backup",
+                                          help="Do not write a backup of the current state first"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation"),
+):
+    """Replace everything VAF keeps on this machine with a backup's."""
+    import getpass
+
+    from vaf.cli.gate import _stored_hash, is_interactive, refuse_agent_command, require_admin_password
+    from vaf.core.backup import BackupError, read_manifest, restore_backup
+    from vaf.core.instance import find_service
+
+    # It replaces every account, key and chat: a person at this terminal, never a script.
+    if refuse_agent_command():
+        raise typer.Exit(1)
+    if not is_interactive():
+        UI.error("A restore needs a person at the terminal: it does not run from a script or "
+                 "the agent's shell.")
+        raise typer.Exit(1)
+    if find_service() is not None:
+        UI.error("VAF is running. Stop it first (`vaf stop`): a running VAF would write into the "
+                 "folders while they are replaced.")
+        raise typer.Exit(1)
+    identity = None
+    if recovery_key:
+        identity = getpass.getpass("Recovery key (from VAF-BackThisUp.md): ").strip()
+    else:
+        stored, unreadable = _stored_hash()
+        if unreadable or not stored:
+            UI.error("This machine has no admin password to prove who you are. Restore with "
+                     "--recovery-key.")
+            raise typer.Exit(1)
+        if not require_admin_password():
+            raise typer.Exit(1)
+    try:
+        manifest = read_manifest(path, identity)
+    except BackupError as e:
+        UI.error(str(e))
+        raise typer.Exit(1)
+    includes = manifest.get("includes") or {}
+    UI.info(f"Backup of {manifest.get('host', '?')}, written {manifest.get('created_at', '?')} by "
+            f"VAF {manifest.get('vaf_version', '?')}; working folders "
+            f"{'included' if includes.get('projects', True) else 'left out'}, volumes "
+            f"{'included' if includes.get('volumes', True) else 'left out'}.")
+    if not yes and not typer.confirm(
+        "Replace everything VAF keeps on this machine with this backup?"
+        + ("" if no_safety_backup else " A backup of the current state is written first.")
+    ):
+        UI.info("Cancelled.")
+        raise typer.Exit(0)
+    try:
+        result = restore_backup(path, identity=identity, pre_restore=not no_safety_backup,
+                                progress=lambda msg: UI.info(msg + " ..."))
+    except BackupError as e:
+        UI.error(str(e))
+        raise typer.Exit(1)
+    UI.success(f"Restored: {result.files} files, the database, {result.volumes} volumes.")
+    if result.rewrapped:
+        UI.info("Opened with this machine's key: " + ", ".join(result.rewrapped) + ".")
+    if result.pre_restore:
+        UI.info(f"The state before the restore is in {result.pre_restore}.")
+    for warning in result.warnings:
+        UI.warning(warning)
+    UI.info("Start VAF again. `vaf secure status` shows the keys.")

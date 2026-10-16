@@ -19,8 +19,11 @@ without VAF: ``age -d -i key.txt backup.tar.age | tar x``. Inside:
   container: row-level security hides every row from the app role) and
   ``postgres/globals.sql`` (the roles with their password hashes, so the connection
   strings in the restored ``config.json`` fit the restored database).
-- ``volumes/*.tar``: the ``/workspace`` of each project sandbox environment that keeps
-  its files in a volume, and each personal browser's profile without its caches.
+- ``keys/machine_key``: the machine key (KEK) the encrypted stores are sealed under, so a
+  restore on another machine re-wraps them under that machine's key (absent when the
+  stores are sealed under a passphrase instead).
+- ``volumes/*.tar``: each sandbox environment volume and each personal browser's profile
+  without its caches, read by volume name through a carrier container.
 - ``checksums.json`` last: the SHA-256 of every member.
 
 ## Who can open it
@@ -34,6 +37,14 @@ write it, which is what lets a scheduled backup run unattended:
 - the recovery key's public half (``recovery_kit.recipient()``): the key the owner keeps
   off the machine opens the backup on a new one. A version 1 recovery key has no public
   half; the backup says so and `vaf secure renew-recovery-key` fixes it.
+
+## Restore
+
+`restore_backup` checks every member before anything lands, refuses a backup from a newer
+VAF, backs up the current state first, places the files, re-wraps the stores under THIS
+machine's key (which it never replaces), restores the database with its roles, gives the
+sandbox environments their containers back (`EnvironmentManager.readopt`) and fills the
+volumes. docs/setup/BACKUP_RESTORE.md has the order and the live measurement.
 
 ## Named boundaries
 
@@ -161,7 +172,7 @@ def recipients() -> List[Tuple[str, object]]:
 # ── create ────────────────────────────────────────────────────────────────────────
 
 def create_backup(dest: Optional[Path] = None, *, include_projects: bool = True,
-                  include_volumes: bool = True,
+                  include_volumes: bool = True, pg_container: Optional[str] = None,
                   progress: Optional[Callable[[str], None]] = None) -> BackupResult:
     """Write one backup into ``dest`` (default `backup_dir()`), verify it, return what it is.
 
@@ -197,12 +208,22 @@ def create_backup(dest: Optional[Path] = None, *, include_projects: bool = True,
         say("Collecting files")
         members = _collect_files(staging, include_projects, skipped, warnings, dest)
         say("Dumping the memory database")
-        pg_members, pg_info = _dump_postgres(staging)
+        container = pg_container or PG_CONTAINER
+        pg_members, pg_info = _dump_postgres(staging, container)
         members += pg_members
+        # The machine key, so a restore on another machine can re-wrap every store it sealed,
+        # whatever backend held it here (an OS keyring entry is not a file the walk finds).
+        from vaf.core.recovery_kit import _machine_kek_for_kit
+        machine_key = _machine_kek_for_kit()
+        if machine_key:
+            keyfile = staging / "keys" / "machine_key"
+            keyfile.parent.mkdir(parents=True, exist_ok=True)
+            keyfile.write_bytes(machine_key)
+            members.append(("keys/machine_key", keyfile))
         volume_info: List[Dict] = []
         if include_volumes:
             say("Copying sandbox and browser volumes")
-            vol_members, volume_info = _collect_volumes(staging, warnings)
+            vol_members, volume_info = _collect_volumes(staging, warnings, container)
             members += vol_members
         _note_keyring(warnings)
         manifest = _manifest(include_projects, include_volumes, pg_info, volume_info,
@@ -339,57 +360,57 @@ def _docker_exe() -> str:
     return resolve_docker_exe()
 
 
-def _wait_for_postgres(role: str, timeout: float = 90) -> None:
+def _wait_for_postgres(role: str, container: str = PG_CONTAINER, timeout: float = 90) -> None:
     from vaf.core import containers
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        r = containers.docker(["exec", PG_CONTAINER, "pg_isready", "-U", role], timeout=15)
+        r = containers.docker(["exec", container, "pg_isready", "-U", role], timeout=15)
         if r.returncode == 0:
             return
         time.sleep(2)
     raise BackupError("The memory database did not become ready.")
 
 
-def _dump_postgres(staging: Path) -> Tuple[List[Tuple[str, Path]], Dict]:
+def _dump_postgres(staging: Path, container: str = PG_CONTAINER) -> Tuple[List[Tuple[str, Path]], Dict]:
     """The database and its roles, dumped inside the database container as the owner."""
     from vaf.core import containers
 
     target = _pg_target()
     try:
-        state = containers.container_state(PG_CONTAINER)
+        state = containers.container_state(container)
     except Exception as e:
         raise BackupError(f"Docker does not answer, so the memory database cannot be dumped: {e}")
     if state is None:
-        raise BackupError(f"There is no {PG_CONTAINER} container, so the memory database cannot "
+        raise BackupError(f"There is no {container} container, so the memory database cannot "
                           "be dumped. A backup without it would not restore the accounts or the "
                           "memories.")
     started = False
     if state != "running":
-        r = containers.docker(["start", PG_CONTAINER], timeout=60)
+        r = containers.docker(["start", container], timeout=60)
         if r.returncode != 0:
             raise BackupError(f"The memory database could not be started: {(r.stderr or '').strip()[:200]}")
         started = True
     try:
-        _wait_for_postgres(target["role"])
+        _wait_for_postgres(target["role"], container)
         dump = staging / "postgres" / "database.dump"
         roles = staging / "postgres" / "globals.sql"
         dump.parent.mkdir(parents=True, exist_ok=True)
         for out, argv in ((dump, ["pg_dump", "-U", target["role"], "-d", target["database"], "-Fc"]),
                           (roles, ["pg_dumpall", "-U", target["role"], "--globals-only"])):
             with open(out, "wb") as f:
-                r = subprocess.run([_docker_exe(), "exec", PG_CONTAINER, *argv], stdout=f,
+                r = subprocess.run([_docker_exe(), "exec", container, *argv], stdout=f,
                                    stderr=subprocess.PIPE, timeout=3600,
                                    **containers.windowless_kwargs())
             if r.returncode != 0:
                 raise BackupError(f"{argv[0]} failed: {r.stderr.decode('utf-8', 'replace').strip()[:300]}")
-        version = containers.docker(["exec", PG_CONTAINER, "psql", "-U", target["role"], "-d",
+        version = containers.docker(["exec", container, "psql", "-U", target["role"], "-d",
                                      target["database"], "-Atc", "show server_version"], timeout=30)
-        info = {"container": PG_CONTAINER, "database": target["database"], "role": target["role"],
+        info = {"container": container, "database": target["database"], "role": target["role"],
                 "server_version": (version.stdout or "").strip()}
         return [("postgres/database.dump", dump), ("postgres/globals.sql", roles)], info
     finally:
         if started:
-            containers.docker(["stop", PG_CONTAINER], timeout=60)
+            containers.docker(["stop", container], timeout=60)
 
 
 def _docker_cp_tar(container: str, path: str, out: Path, drop: frozenset = frozenset(),
@@ -424,11 +445,11 @@ def _docker_cp_tar(container: str, path: str, out: Path, drop: frozenset = froze
     return kept
 
 
-def _carrier_image() -> str:
+def _carrier_image(container: str = PG_CONTAINER) -> str:
     """An image that is surely here: the database's. A carrier container is only CREATED
     from it, never started - it exists to mount a volume for `docker cp`."""
     from vaf.core import containers
-    r = containers.docker(["inspect", PG_CONTAINER, "--format", "{{.Config.Image}}"], timeout=30)
+    r = containers.docker(["inspect", container, "--format", "{{.Config.Image}}"], timeout=30)
     image = (r.stdout or "").strip()
     if r.returncode != 0 or not image:
         raise BackupError("No image to read the volumes with (the database container is missing).")
@@ -464,14 +485,15 @@ def _volumes(prefix: str) -> List[str]:
     return sorted(n.strip() for n in (r.stdout or "").splitlines() if n.strip().startswith(prefix))
 
 
-def _collect_volumes(staging: Path, warnings: List[str]) -> Tuple[List[Tuple[str, Path]], List[Dict]]:
+def _collect_volumes(staging: Path, warnings: List[str],
+                     container: str = PG_CONTAINER) -> Tuple[List[Tuple[str, Path]], List[Dict]]:
     """Every sandbox environment volume (a person's work, when the environment keeps it in a
     volume rather than a host folder) and every personal browser profile volume."""
     members: List[Tuple[str, Path]] = []
     info: List[Dict] = []
     vol_dir = staging / "volumes"
     vol_dir.mkdir(parents=True, exist_ok=True)
-    image = _carrier_image()
+    image = _carrier_image(container)
     for volume in _volumes("vaf-env-vol-"):
         out = vol_dir / f"{volume}.tar"
         _volume_tar(volume, out, image)
@@ -604,6 +626,14 @@ def _add_bytes(tar: tarfile.TarFile, name: str, data: bytes, checksums: Optional
 
 # ── verify, list ──────────────────────────────────────────────────────────────────
 
+def _drain(pipe) -> None:
+    """Read what follows the archive's end marker. tarfile stops at the first zero block, and
+    the writer still has the rest of the last record to put into the pipe: closing it early
+    broke that write, and the backup read as "does not open" (measured, intermittently)."""
+    while pipe.read(_CHUNK):
+        pass
+
+
 def file_sha256(path: Path) -> str:
     sha = hashlib.sha256()
     with open(path, "rb") as f:
@@ -665,6 +695,7 @@ def verify_backup(path: Path, identity: Optional[str] = None) -> VerifyResult:
                     declared = json.loads(data)
                 else:
                     seen[member.name] = sha.hexdigest()
+            _drain(pipe)
     except Exception as e:
         problems.append(f"the archive could not be read: {type(e).__name__}: {e}")
     worker.join(timeout=60)
@@ -701,3 +732,390 @@ def list_backups(dest: Optional[Path] = None) -> List[BackupInfo]:
         stamp = p.name[len("vaf-backup-"):-len(SUFFIX)]
         out.append(BackupInfo(p, p.stat().st_size, stamp))
     return sorted(out, key=lambda b: b.created, reverse=True)
+
+
+# ── restore ───────────────────────────────────────────────────────────────────────
+
+# What a backup may contain, member by member. Anything else is a foreign or tampered
+# archive, and the whole restore is refused before one byte lands.
+_ROOT_NAMES = ("app", "vaf", "data", "config", "projects")
+_VOLUME_NAME = __import__("re").compile(r"^vaf-(env-vol|browser-profile)-[A-Za-z0-9_.-]+$")
+# Never placed from a backup: the TARGET machine's key stays, and the stores are re-wrapped
+# under it (`rewrap_from_kek`). Overwriting it would orphan every store this machine sealed.
+_KEEP_ON_TARGET = frozenset({"secure_store.kek", "secure_store.kek.where", "secure_store.kek.lock"})
+
+
+@dataclass
+class RestoreResult:
+    manifest: Dict
+    files: int
+    rewrapped: List[str]
+    volumes: int
+    pre_restore: Optional[Path]
+    warnings: List[str] = field(default_factory=list)
+
+
+def read_manifest(path: Path, identity: Optional[str] = None) -> Dict:
+    """The manifest alone (the first member), to show what a backup is before restoring it."""
+    import pyrage
+    ident = _identity(identity)
+    read_fd, write_fd = os.pipe()
+
+    def decrypt() -> None:
+        try:
+            with open(path, "rb") as src, os.fdopen(write_fd, "wb") as pipe:
+                pyrage.decrypt_io(src, pipe, [ident])
+        except Exception:       # noqa: BLE001 - a short read below says enough
+            pass
+
+    worker = threading.Thread(target=decrypt, daemon=True)
+    worker.start()
+    try:
+        with os.fdopen(read_fd, "rb") as pipe, tarfile.open(fileobj=pipe, mode="r|") as tar:
+            first = next(iter(tar), None)
+            if first is None or first.name != "manifest.json":
+                raise BackupError("This file does not open with that key, or it is not a VAF backup.")
+            return json.loads(tar.extractfile(first).read())
+    except BackupError:
+        raise
+    except Exception as e:
+        raise BackupError(f"This file does not open with that key: {type(e).__name__}") from e
+
+
+def _identity(identity: Optional[str]):
+    from pyrage import x25519
+    if identity:
+        try:
+            return x25519.Identity.from_str(identity.strip().upper())
+        except Exception as e:
+            raise BackupError(f"That is not a recovery key ({e}).") from e
+    return machine_identity()
+
+
+def _safe_member(name: str) -> bool:
+    if not name or name.startswith("/") or "\\" in name or ":" in name:
+        return False
+    parts = name.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        return False
+    if name in ("manifest.json", "checksums.json", "keys/machine_key",
+                "postgres/database.dump", "postgres/globals.sql"):
+        return True
+    if parts[0] == "files" and len(parts) >= 3 and parts[1] in _ROOT_NAMES:
+        return True
+    if parts[0] == "volumes" and len(parts) == 2 and parts[1].endswith(".tar"):
+        return bool(_VOLUME_NAME.match(parts[1][:-len(".tar")]))
+    return False
+
+
+def _extract_verified(path: Path, identity: Optional[str], staging: Path) -> Tuple[Dict, List[str]]:
+    """Decrypt and unpack into ``staging``, checking every member's name, type and checksum.
+    Raises BackupError on the first thing that does not fit; returns (manifest, members)."""
+    import pyrage
+    ident = _identity(identity)
+    read_fd, write_fd = os.pipe()
+    failure: List[BaseException] = []
+
+    def decrypt() -> None:
+        try:
+            with open(path, "rb") as src, os.fdopen(write_fd, "wb") as pipe:
+                pyrage.decrypt_io(src, pipe, [ident])
+        except BaseException as e:      # noqa: BLE001 - reported below
+            failure.append(e)
+
+    worker = threading.Thread(target=decrypt, name="vaf-restore-decrypt", daemon=True)
+    worker.start()
+    seen: Dict[str, str] = {}
+    declared: Optional[Dict[str, str]] = None
+    manifest: Dict = {}
+    try:
+        with os.fdopen(read_fd, "rb") as pipe, tarfile.open(fileobj=pipe, mode="r|") as tar:
+            for member in tar:
+                if not member.isfile() or not _safe_member(member.name):
+                    raise BackupError(f"The backup holds an entry a VAF backup never has "
+                                      f"({member.name!r}); nothing was restored.")
+                src = tar.extractfile(member)
+                sha = hashlib.sha256()
+                if member.name in ("manifest.json", "checksums.json"):
+                    data = src.read()
+                    sha.update(data)
+                    if member.name == "manifest.json":
+                        manifest = json.loads(data)
+                    else:
+                        declared = json.loads(data)
+                        continue
+                else:
+                    out = staging.joinpath(*member.name.split("/"))
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    with open(out, "wb") as f:
+                        for chunk in iter(lambda: src.read(_CHUNK), b""):
+                            sha.update(chunk)
+                            f.write(chunk)
+                    os.chmod(out, 0o600)
+                seen[member.name] = sha.hexdigest()
+            _drain(pipe)
+    except BackupError:
+        raise
+    except Exception as e:
+        raise BackupError(f"The backup could not be read: {type(e).__name__}: {e}") from e
+    finally:
+        worker.join(timeout=120)
+    if failure:
+        raise BackupError(f"The backup does not open with this key: {type(failure[0]).__name__}")
+    if manifest.get("format") != BACKUP_FORMAT:
+        raise BackupError(f"Not a VAF backup of a known format ({manifest.get('format')!r}).")
+    if declared is None or set(declared) != set(seen) or any(seen[n] != d for n, d in declared.items()):
+        raise BackupError("The backup does not match its checksums; nothing was restored.")
+    return manifest, sorted(seen)
+
+
+def _check_version(manifest: Dict) -> None:
+    """A backup written by a NEWER VAF may carry a format this one cannot read."""
+    from packaging.version import InvalidVersion, Version
+
+    from vaf.version import __version__
+    try:
+        if Version(str(manifest.get("vaf_version", "0"))) > Version(__version__):
+            raise BackupError(f"This backup was written by VAF {manifest.get('vaf_version')}, "
+                              f"newer than this one ({__version__}). Update VAF first.")
+    except InvalidVersion:
+        raise BackupError(f"The backup names no readable VAF version ({manifest.get('vaf_version')!r}).")
+
+
+def _psql(container: str, role: str, sql: str, database: str = "postgres") -> None:
+    from vaf.core import containers
+    r = containers.docker(["exec", container, "psql", "-U", role, "-d", database,
+                           "-v", "ON_ERROR_STOP=1", "-c", sql], timeout=300)
+    if r.returncode != 0:
+        raise BackupError(f"The database refused {sql.split()[0]}: {(r.stderr or '').strip()[:300]}")
+
+
+def _restore_postgres(staging: Path, manifest: Dict, container: str) -> None:
+    """Replace the memory database with the backup's: the roles first (their password hashes,
+    so the restored connection strings fit), then a fresh database from the dump."""
+    from vaf.core import containers
+    info = manifest.get("postgres") or {}
+    role = str(info.get("role") or "vaf")
+    database = str(info.get("database") or "vaf_memory")
+    quoted_db = '"' + database.replace('"', '""') + '"'
+    quoted_role = '"' + role.replace('"', '""') + '"'
+    _wait_for_postgres(role, container)
+    _psql(container, role, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                           f"WHERE datname = '{database.replace(chr(39), chr(39) * 2)}' "
+                           "AND pid <> pg_backend_pid()")
+    _psql(container, role, f"DROP DATABASE IF EXISTS {quoted_db}")
+    # CREATE ROLE for a role that exists fails and is skipped; the ALTER ROLE after it sets
+    # the backup's attributes and password hash, which is the point.
+    with open(staging / "postgres" / "globals.sql", "rb") as f:
+        subprocess.run([_docker_exe(), "exec", "-i", container, "psql", "-U", role, "-d", "postgres",
+                        "-q"], stdin=f, capture_output=True, timeout=300,
+                       **containers.windowless_kwargs())
+    _psql(container, role, f"CREATE DATABASE {quoted_db} OWNER {quoted_role}")
+    with open(staging / "postgres" / "database.dump", "rb") as f:
+        r = subprocess.run([_docker_exe(), "exec", "-i", container, "pg_restore", "-U", role,
+                            "-d", database, "--exit-on-error"], stdin=f, capture_output=True,
+                           timeout=3600, **containers.windowless_kwargs())
+    if r.returncode != 0:
+        raise BackupError("pg_restore failed: " + r.stderr.decode("utf-8", "replace").strip()[:400])
+
+
+def _restore_volume(tar_path: Path, volume: str, image: str,
+                    keep_top: frozenset = frozenset(), owner: Optional[str] = None) -> None:
+    """Empty the volume (creating it when missing) and unpack the backup's copy into it,
+    owners included (`docker cp -a`), through a carrier container. Top-level entries named
+    in ``keep_top`` are left alone: what the backup deliberately did not carry (a browser's
+    Downloads not yet handed over) is not the backup's to delete."""
+    import secrets as _secrets
+
+    from vaf.core import containers
+    users = containers.docker(["ps", "-q", "--filter", f"volume={volume}"], timeout=30)
+    for cid in (users.stdout or "").split():
+        containers.docker(["stop", cid], timeout=60)
+    containers.docker(["volume", "create", volume], timeout=60)
+    spare = " ".join(f"! -name '{name}'" for name in sorted(keep_top))
+    r = containers.docker(["run", "--rm", "-v", f"{volume}:/v", "--entrypoint", "sh", image, "-c",
+                           f"find /v -mindepth 1 -maxdepth 1 {spare} -exec rm -rf {{}} +"],
+                          timeout=300)
+    if r.returncode != 0:
+        raise BackupError(f"The volume {volume} could not be emptied: {(r.stderr or '').strip()[:200]}")
+    carrier = f"vaf-backup-carrier-{_secrets.token_hex(4)}"
+    r = containers.docker(["create", "--name", carrier, "-v", f"{volume}:/v", image, "true"], timeout=60)
+    if r.returncode != 0:
+        raise BackupError(f"The volume {volume} could not be mounted: {(r.stderr or '').strip()[:200]}")
+    try:
+        with open(tar_path, "rb") as f:
+            r = subprocess.run([_docker_exe(), "cp", "-a", "-", f"{carrier}:/"], stdin=f,
+                               capture_output=True, timeout=3600, **containers.windowless_kwargs())
+        if r.returncode != 0:
+            raise BackupError(f"The volume {volume} could not be filled: "
+                              + r.stderr.decode("utf-8", "replace").strip()[:200])
+    finally:
+        containers.docker(["rm", "-f", carrier], timeout=60)
+    if owner:
+        # A sandbox environment runs as this machine's user (environments._host_user), which
+        # need not be the uid the files had on the old one.
+        r = containers.docker(["run", "--rm", "-v", f"{volume}:/v", "--entrypoint", "chown", image,
+                               "-R", owner, "/v"], timeout=600)
+        if r.returncode != 0:
+            raise BackupError(f"The volume {volume} could not be handed to its user: "
+                              f"{(r.stderr or '').strip()[:200]}")
+
+
+def _old_machine_key(staging: Path) -> Optional[bytes]:
+    """The backed-up machine's key: the ``keys/machine_key`` member, else the key FILE among
+    the backed-up files (a file-backend machine; the member was added for keyring backends)."""
+    member = staging / "keys" / "machine_key"
+    if member.exists():
+        return member.read_bytes()
+    import base64
+    keyfile = staging / "files" / "app" / "secure_store.kek"
+    try:
+        key = base64.b64decode(keyfile.read_text(encoding="utf-8").strip())
+        return key if len(key) == 32 else None
+    except Exception:
+        return None
+
+
+def _clear_target(manifest: Dict) -> None:
+    """Remove what the backup replaces: every entry of the roots that is backed up, derived
+    or runtime state (a cache or queue of the old state would only confuse the restored
+    one). Logs, unknown entries, the backup folder and this machine's key stay."""
+    from vaf.core import data_stores
+    replaced = {data_stores.DATA, data_stores.KEY, data_stores.RECREATABLE, data_stores.AUDIT,
+                data_stores.DERIVED, data_stores.RUNTIME}
+    include_projects = bool((manifest.get("includes") or {}).get("projects", True))
+    projects = data_stores.projects_dir()
+    folder = backup_dir()
+    for root, rows in data_stores.distinct_roots():
+        if not root.is_dir():
+            continue
+        if not include_projects and data_stores._same(root, projects):
+            continue
+        for entry in list(root.iterdir()):
+            row = data_stores.classify(entry.name, rows)
+            if row is None or row.kind not in replaced or entry.name in _KEEP_ON_TARGET:
+                continue
+            if _inside(folder, entry) or _inside(entry, folder) or entry.name.startswith(".restore-"):
+                continue
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+
+
+def _place_files(staging: Path) -> int:
+    from vaf.core import data_stores
+    from vaf.core.secure_store import harden_path
+    roots = data_stores.roots()
+    placed = 0
+    files_dir = staging / "files"
+    if not files_dir.is_dir():
+        return 0
+    for root_name in _ROOT_NAMES:
+        base = files_dir / root_name
+        if not base.is_dir():
+            continue
+        for src in sorted(base.rglob("*")):
+            if not src.is_file():
+                continue
+            rel = src.relative_to(base)
+            if root_name == "app" and rel.as_posix() in _KEEP_ON_TARGET:
+                continue
+            target = roots[root_name] / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(target))
+            harden_path(target)
+            placed += 1
+    return placed
+
+
+def restore_backup(path: Path, *, identity: Optional[str] = None,
+                   pg_container: Optional[str] = None, pre_restore: bool = True,
+                   progress: Optional[Callable[[str], None]] = None) -> RestoreResult:
+    """Replace everything VAF keeps on this machine with the backup's.
+
+    In this order, each step only after the one before succeeded: open and check every
+    member (nothing lands from a backup that does not verify); refuse a backup from a newer
+    VAF; write a backup of the CURRENT state first, so a wrong restore can be undone; clear
+    and place the files; re-wrap every store the backup's machine key sealed under THIS
+    machine's key (never overwriting it); replace the database; fill the volumes.
+
+    VAF must not be running: the callers check, because a running instance would write
+    into the folders while they are replaced."""
+    from vaf.core.secure_store import rewrap_from_kek
+
+    say = progress or (lambda _msg: None)
+    container = pg_container or PG_CONTAINER
+    from vaf.core.platform import Platform
+    data = Platform.data_dir()
+    data.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".restore-", dir=data))
+    warnings: List[str] = []
+    try:
+        os.chmod(staging, 0o700)
+        say("Opening and checking the backup")
+        manifest, _members = _extract_verified(Path(path), identity, staging)
+        _check_version(manifest)
+        from vaf.core import containers
+        state = containers.container_state(container)
+        if state is None:
+            raise BackupError(f"There is no {container} container to restore the database into. "
+                              "Start VAF's services once (vaf service start), then stop VAF "
+                              "and restore again.")
+        if state != "running":
+            r = containers.docker(["start", container], timeout=60)
+            if r.returncode != 0:
+                raise BackupError(f"The database could not be started: {(r.stderr or '').strip()[:200]}")
+        pre: Optional[Path] = None
+        if pre_restore:
+            say("Writing a backup of the current state first")
+            pre = create_backup(backup_dir() / "pre-restore", include_volumes=True,
+                                pg_container=container).path
+        say("Placing the files")
+        _clear_target(manifest)
+        files = _place_files(staging)
+        rewrapped: List[str] = []
+        old_key = _old_machine_key(staging)
+        if old_key:
+            say("Opening the stores with this machine's key")
+            from vaf.core import data_stores
+            rewrapped = rewrap_from_kek(old_key, data_stores.roots()["data"])
+        else:
+            warnings.append("The backup carries no machine key, so its stores were sealed under "
+                            "a passphrase: set VAF_MASTER_PASSPHRASE as on the old machine.")
+        say("Restoring the database")
+        _restore_postgres(staging, manifest, container)
+        volumes = 0
+        vol_dir = staging / "volumes"
+        if vol_dir.is_dir() and any(vol_dir.glob("*.tar")):
+            say("Recreating the sandbox environments")
+            from vaf.core.environments import EnvironmentManager, _host_user
+            manager = EnvironmentManager()
+            try:
+                report = manager.readopt()
+            except Exception as e:
+                report = {}
+                warnings.append(f"The sandbox environments could not be recreated ({e}); their "
+                                "volumes are restored and the records kept.")
+            for key, text in (("dropped", "temporary sandbox environments were dropped (they "
+                                          "would have expired)"),
+                              ("missing_folder", "project environments mount a folder that does "
+                                                 "not exist on this machine"),
+                              ("failed", "sandbox environments could not be recreated")):
+                if report.get(key):
+                    warnings.append(f"{len(report[key])} {text}: {', '.join(report[key])}.")
+            say("Restoring the volumes")
+            image = _carrier_image(container)
+            for tar_path in sorted(vol_dir.glob("*.tar")):
+                volume = tar_path.name[:-len(".tar")]
+                if volume.startswith("vaf-browser-profile-"):
+                    _restore_volume(tar_path, volume, image, keep_top=_BROWSER_NOT_PROFILE)
+                else:
+                    env_id = volume[len("vaf-env-vol-"):]
+                    if not (manager._state_dir() / f"{env_id}.json").exists():
+                        continue          # its environment was dropped: no orphan volume
+                    _restore_volume(tar_path, volume, image, owner=_host_user())
+                volumes += 1
+        return RestoreResult(manifest, files, rewrapped, volumes, pre, warnings)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)

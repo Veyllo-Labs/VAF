@@ -68,7 +68,8 @@ def _ring() -> SecureBlobStore:
 
 
 def reset_ring() -> None:
-    """Testing hook: drop the cached store so a patched data_dir takes effect."""
+    """Drop the cached store: a patched data_dir takes effect (tests), and a restore that
+    replaced the keyring on disk is read from the new files (vaf/core/backup.py)."""
     global _store
     with _store_lock:
         _store = None

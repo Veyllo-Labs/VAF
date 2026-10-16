@@ -359,9 +359,30 @@ def renew_recovery_kit(dek: bytes) -> Path:
     Same order as `ensure_recovery_kit`, for the same reason: the note is the only copy
     of the secret, so the durable half is written second."""
     secret, doc = build_recovery_wrap(dek, _machine_kek_for_kit())
+    # The note on disk may be the only copy of the CURRENT key: kept, so that a wrap that
+    # cannot be stored does not leave a note naming a key that opens nothing.
+    previous: Optional[bytes] = None
+    try:
+        current = kit_path()
+        previous = current.read_bytes() if current.exists() else None
+    except Exception:
+        previous = None
     path = write_kit(secret)
     if path is None:
         raise RuntimeError("The recovery note could not be written, so the recovery key was "
                            "not replaced; the previous one still works.")
-    persist_recovery_wrap(doc)
+    try:
+        persist_recovery_wrap(doc)
+    except Exception as e:
+        from vaf.core.secure_store import _atomic_write_bytes, harden_path
+        try:
+            if previous is not None:
+                _atomic_write_bytes(path, previous)
+                harden_path(path)
+            else:
+                path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise RuntimeError(f"The new recovery key could not be stored ({e}); the previous one "
+                           "still works and its note was put back.") from e
     return path

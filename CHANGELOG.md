@@ -22,7 +22,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `vaf backup restore` puts one back, on the same machine or a new one (with the recovery
   key): it checks every file first, backs up the current state, keeps the new machine's own
   key and re-opens every encrypted store under it, restores the database with its roles and
-  brings the sandbox environments back.
+  brings the sandbox environments back. A restore whose sandbox environments could not come
+  back on this machine is refused before anything changes.
 
 - **Change your own password in Settings, Account.** There was no page for it: only an admin
   could reset passwords. It asks for the current password and, when 2FA is set up, the code

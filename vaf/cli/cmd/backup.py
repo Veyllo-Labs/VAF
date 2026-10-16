@@ -6,6 +6,11 @@
 Behind the terminal door like `vaf secrets`: a backup holds every key of the machine,
 encrypted, and this machine can open it, so it is not something the agent's own commands
 write or read. A script without a terminal (a cron job) passes the door as everywhere.
+
+`restore` is the exception: it proves the person itself, by the admin password OR the
+recovery key. The door would ask for exactly that password - the one that may be gone,
+which is when the recovery key is the way in - and on a new machine without an account it
+would offer to create one, which the restore then replaces.
 """
 from pathlib import Path
 from typing import Optional
@@ -18,8 +23,13 @@ app = typer.Typer(help="Encrypted backups of everything VAF keeps")
 
 
 @app.callback()
-def _group():
+def _group(ctx: typer.Context):
     """Encrypted backups of everything VAF keeps."""
+    if ctx.invoked_subcommand == "restore":
+        return                  # its own checks: the agent, a terminal, then its proof
+    from vaf.cli.gate import require_admin_password
+    if not require_admin_password():
+        raise typer.Exit(1)
 
 
 def _mb(size: int) -> str:

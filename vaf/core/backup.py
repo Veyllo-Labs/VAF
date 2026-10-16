@@ -259,8 +259,11 @@ def create_backup(dest: Optional[Path] = None, *, include_projects: bool = True,
         manifest = _manifest(include_projects, include_volumes, pg_info, volume_info,
                              [label for label, _ in to], skipped, warnings)
         say("Encrypting")
+        vanished: List[str] = []
         size, digest, count = _write_encrypted(partial, manifest, members,
-                                               [r for _, r in to], pyrage)
+                                               [r for _, r in to], pyrage, vanished)
+        for name in vanished:
+            warnings.append(f"{name} was removed while the backup ran and is not in it.")
         os.replace(partial, final)
         harden_path(final)
         sidecar = final.with_name(final.name + ".sha256")
@@ -636,11 +639,13 @@ class _HashingReader:
 
 
 def _write_encrypted(out_path: Path, manifest: Dict, members: List[Tuple[str, Path]],
-                     to: List, pyrage) -> Tuple[int, str, int]:
-    """Stream the tar through age into ``out_path``: no plaintext archive on disk."""
+                     to: List, pyrage, vanished: Optional[List[str]] = None) -> Tuple[int, str, int]:
+    """Stream the tar through age into ``out_path``: no plaintext archive on disk. A file
+    removed since the walk is skipped and named in ``vanished``."""
     read_fd, write_fd = os.pipe()
     failure: List[BaseException] = []
     count = [0]
+    gone = vanished if vanished is not None else []
 
     def produce() -> None:
         try:
@@ -650,12 +655,19 @@ def _write_encrypted(out_path: Path, manifest: Dict, members: List[Tuple[str, Pa
                 _add_bytes(tar, "manifest.json", json.dumps(manifest, indent=1).encode("utf-8"),
                            checksums)
                 for arc, src in members:
-                    st = src.stat()
-                    info = tarfile.TarInfo(arc)
-                    info.size = st.st_size
-                    info.mtime = int(st.st_mtime)
-                    info.mode = 0o600
-                    with open(src, "rb") as f:
+                    # Opened first, measured on the open file: replaced between a stat and
+                    # the open, the header named one size and the read another.
+                    try:
+                        f = open(src, "rb")
+                    except FileNotFoundError:
+                        gone.append(str(src))
+                        continue
+                    with f:
+                        st = os.fstat(f.fileno())
+                        info = tarfile.TarInfo(arc)
+                        info.size = st.st_size
+                        info.mtime = int(st.st_mtime)
+                        info.mode = 0o600
                         reader = _HashingReader(f)
                         tar.addfile(info, reader)
                     checksums[arc] = reader.sha.hexdigest()
@@ -1042,6 +1054,20 @@ def _old_machine_key(staging: Path) -> Optional[bytes]:
         return None
 
 
+def _staged_project_environments(staging: Path) -> List[str]:
+    """The ids of the project sandbox environments among the staged files."""
+    out = []
+    for record in sorted((staging / "files" / "vaf" / "environments").glob("*.json")):
+        if record.name.endswith(".procs.json"):
+            continue
+        try:
+            if json.loads(record.read_text(encoding="utf-8")).get("kind") == "project":
+                out.append(record.stem)
+        except Exception:
+            continue
+    return out
+
+
 def _clear_target(manifest: Dict) -> None:
     """Remove what the backup replaces: every entry of the roots that is backed up, derived
     or runtime state (a cache or queue of the old state would only confuse the restored
@@ -1128,6 +1154,17 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
             r = containers.docker(["start", container], timeout=60)
             if r.returncode != 0:
                 raise BackupError(f"The database could not be started: {(r.stderr or '').strip()[:200]}")
+        # A project environment comes back only with a container, and a container needs the
+        # environment image. Without it the records would land, nothing could recreate them,
+        # and the reaper would delete them with their volumes at the next start: refuse now,
+        # before anything is replaced.
+        if _staged_project_environments(staging):
+            say("Making sure the sandbox environment image is here")
+            from vaf.core import environment_image
+            if not environment_image.ensure_image():
+                raise BackupError("The backup holds project sandbox environments, and the image "
+                                  "they run on is not available here (Docker cannot build it). "
+                                  "Restoring now would lose them; nothing was changed.")
         pre: Optional[Path] = None
         if pre_restore:
             say("Writing a backup of the current state first")
@@ -1152,6 +1189,13 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
         else:
             warnings.append("The backup carries no machine key, so its stores were sealed under "
                             "a passphrase: set VAF_MASTER_PASSPHRASE as on the old machine.")
+        # The keyring on disk is now the backup's (re-wrapped): nothing read before may answer
+        # from memory. The file-store key is held for the life of the process and would keep
+        # this machine's key; the ring re-checks its wrap file by mtime and size, which a
+        # coarse-mtime file system can leave unchanged.
+        from vaf.core import data_files, data_keyring
+        data_keyring.reset_ring()
+        data_files.reset_key_cache()
         try:
             _keep_previous_identity(previous_identity)
         except Exception as e:
@@ -1169,13 +1213,16 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
             report = manager.readopt()
         except Exception as e:
             report = {}
-            warnings.append(f"The sandbox environments could not be recreated ({e}); their "
-                            "records are kept.")
+            warnings.append(f"The sandbox environments could not be recreated ({e}). VAF "
+                            "deletes them at its next start unless you run this restore again "
+                            "first.")
         for key, text in (("dropped", "temporary sandbox environments were dropped (they "
                                       "would have expired)"),
                           ("missing_folder", "project environments mount a folder that does "
                                              "not exist on this machine"),
-                          ("failed", "sandbox environments could not be recreated")):
+                          ("failed", "sandbox environments could not be recreated; VAF deletes "
+                                     "them at its next start unless you run this restore again "
+                                     "first")):
             if report.get(key):
                 warnings.append(f"{len(report[key])} {text}: {', '.join(report[key])}.")
         volumes = 0

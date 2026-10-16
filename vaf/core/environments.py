@@ -576,6 +576,21 @@ class EnvironmentManager:
         """The resolved project directory to mount at /workspace, or "" for none."""
         if not project_path:
             return ""
+        p = self._safe_mount_path(project_path)
+        try:
+            from vaf.tools.filesystem import jail_allows
+            allowed = jail_allows(p, user_scope_id=owner_scope, user_role=user_role, mode="write")
+        except Exception:
+            allowed = False
+        if not allowed:
+            raise EnvironmentRefused(f"{p} is outside your own project folder")
+        return p
+
+    @staticmethod
+    def _safe_mount_path(project_path: str) -> str:
+        """The resolved directory, when it may be mounted at /workspace at all: not the home
+        directory or a folder above it, not VAF's own data or code (the `:z` relabel must
+        never reach those). Raises EnvironmentRefused."""
         from vaf.core.workspace_guard import assert_safe_workspace, is_unsafe_project_dir
         p = os.path.realpath(os.path.expanduser(str(project_path)))
         if not os.path.isdir(p):
@@ -587,13 +602,6 @@ class EnvironmentManager:
             assert_safe_workspace(p)
         except ValueError as e:
             raise EnvironmentRefused(str(e))
-        try:
-            from vaf.tools.filesystem import jail_allows
-            allowed = jail_allows(p, user_scope_id=owner_scope, user_role=user_role, mode="write")
-        except Exception:
-            allowed = False
-        if not allowed:
-            raise EnvironmentRefused(f"{p} is outside your own project folder")
         return p
 
     def _start_new(self, env: Environment, *, memory_mb: int, cpus: float,
@@ -1487,11 +1495,17 @@ class EnvironmentManager:
                 out["missing_folder"].append(env_id)
                 continue
             try:
+                # A restored record is data from a file: its mount passes the same checks a
+                # new environment's does before anything is mounted (`:z` relabels it). The
+                # account's file jail cannot be asked here - the record names the owner only
+                # by hash - and the restore runs as the machine owner at the terminal.
+                mount = self._safe_mount_path(st["project_path"]) if st.get("project_path") else ""
                 image = environment_image.ensure_image()
                 if not image:
                     raise EnvironmentRefused("the environment image could not be built")
                 fields = {k: v for k, v in st.items() if k in Environment.__dataclass_fields__}
                 env = Environment(**fields)
+                env.project_path = mount
                 env.image, env.state, env.last_used = image, "", time.time()
                 self._start_new(env, memory_mb=int(env.memory_mb or setting("memory_mb")),
                                 cpus=float(setting("cpus")))

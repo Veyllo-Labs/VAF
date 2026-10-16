@@ -235,3 +235,21 @@ def test_renewing_needs_a_person_and_retires_the_old_key(_desktop, monkeypatch):
     assert new != old
     assert recovery_kit.unwrap_keys(old) is None
     assert recovery_kit.unwrap_keys(new).kek is not None
+
+
+def test_a_renewal_that_cannot_store_its_wrap_puts_the_old_note_back(_desktop, monkeypatch):
+    """The note may be the only copy of the CURRENT key: a failed renewal must not leave a
+    note naming a key that opens nothing. MUTATION: skip the restore of the old note - red."""
+    get_data_key("file_store_encryption_key")
+    old_note = (_desktop / recovery_kit.KIT_FILENAME).read_bytes()
+    old = _identity_from_note(_desktop)
+
+    def _no_disk(doc):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(recovery_kit, "persist_recovery_wrap", _no_disk)
+    with pytest.raises(RuntimeError) as err:
+        recovery_kit.renew_recovery_kit(_ring()._get_dek(create=False))
+    assert "previous one still works" in str(err.value)
+    assert (_desktop / recovery_kit.KIT_FILENAME).read_bytes() == old_note
+    assert recovery_kit.unwrap_keys(old) is not None

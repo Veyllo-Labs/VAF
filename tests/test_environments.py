@@ -945,3 +945,20 @@ def test_a_restored_environment_gets_its_container_back_instead_of_being_reaped(
     assert report["missing_folder"] == [mounted.id]
     mgr.reap_once(now=__import__("time").time() + 3600)
     assert mgr._read_state(keep.id) is not None and keep.volume in docker.volumes
+
+
+@pytest.mark.parametrize("where", ["home", "root"])
+def test_a_restored_record_cannot_mount_what_create_would_refuse(docker, mgr, monkeypatch, where):
+    """A restored record is data from a file. Its mount is relabelled with `:z`; one naming
+    the home directory or `/` must be refused like a new environment's. MUTATION: skip the
+    mount checks in readopt - red."""
+    import os
+    from pathlib import Path
+    monkeypatch.setattr(environment_image, "ensure_image", lambda: "vaf-sandbox-env:test")
+    env = mgr.create(ALICE, kind="project", name="tampered")
+    st = mgr._read_state(env.id)
+    st["project_path"] = str(Path.home()) if where == "home" else os.path.abspath(os.sep)
+    (mgr._state_dir() / f"{env.id}.json").write_text(json.dumps(st), encoding="utf-8")
+    docker.containers.clear()
+    report = mgr.readopt()
+    assert report["failed"] == [env.id] and env.container not in docker.containers

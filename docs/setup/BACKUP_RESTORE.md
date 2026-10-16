@@ -68,6 +68,8 @@ vaf backup list
 The `vaf backup` group sits behind the terminal door: a backup holds every key of
 the machine, encrypted to a key this machine has, so the agent's own commands do
 not write or read one; a script without a terminal passes as everywhere.
+`restore` is the one command that does not go through the door, because it proves
+the person itself (see [Restoring](#restoring)).
 
 It is a tar archive (POSIX/pax) encrypted with [age](https://age-encryption.org),
 the format the recovery key already uses. In an emergency it opens without VAF:
@@ -105,6 +107,12 @@ machine.
 container, or `pg_dump` fails, the backup fails and leaves nothing behind: a
 backup that silently lacks the accounts and memories would be trusted and restore
 nothing.
+
+Each file is opened before its entry is written, and the size in the archive is
+the size of the open file: a file replaced in between cannot give the entry one
+size and the read another. A file deleted while the backup runs (a chat removed
+in that moment) is left out and named in the warnings; the rest of the backup
+stands.
 
 Every backup is verified right after it is written: decrypted with this machine's
 key and every member compared with its checksum. `vaf backup verify` does the
@@ -148,7 +156,11 @@ vaf backup restore <file> --recovery-key   # on a new machine
 It replaces everything VAF keeps on this machine with the backup's, so it asks
 for a person at the terminal (never the agent's own commands, never a script)
 and for proof: the admin password of this machine, or the recovery key, which is
-also what opens the backup on a machine that never saw it. VAF must be stopped;
+also what opens the backup on a machine that never saw it. It does not go through
+the terminal door the rest of the group uses: the door asks for the admin
+password, which may be exactly what is gone, and on a new machine without an
+account it offers to create one that the restore then replaces. It refuses the
+agent's own commands and a script itself. VAF must be stopped;
 the database container must exist (on a new machine, start VAF's services once).
 It shows what the backup is (host, time, VAF version, what it holds) and asks
 before it starts.
@@ -160,7 +172,12 @@ after the one before succeeded:
    shape a VAF backup has (no absolute path, no `..`, only the known prefixes and
    volume names, only regular files; anything else refuses the whole archive),
    and its checksum compared. Nothing lands from a backup that does not verify.
-2. **Version.** A backup written by a newer VAF is refused; update first.
+2. **Version.** A backup written by a newer VAF is refused; update first. When the
+   backup holds project sandbox environments, the image they run on must be here
+   (it is built when it is missing). Without it the restore refuses before
+   anything changes: the records would land with nothing to recreate their
+   containers, and the reaper would delete them, volumes included, at the next
+   start.
 3. **Safety backup.** The current state is backed up into
    `<backup folder>/pre-restore/` (`--no-safety-backup` skips it), so a wrong
    restore can be undone. It is encrypted to this machine's backup identity, which
@@ -172,12 +189,19 @@ after the one before succeeded:
    the backup folder and THIS machine's key stay.
 5. **Keys.** This machine's key is never replaced: every store the backup's
    machine key sealed is re-wrapped under it (`rewrap_from_kek`), which is why a
-   backup carries that key (`keys/machine_key`).
+   backup carries that key (`keys/machine_key`). The keyring on disk is now the
+   backup's, so what the running restore read before it is dropped from memory
+   (the file-store key above all) before anything reads the keyring again.
 6. **Database.** The roles from `globals.sql` (their password hashes, so the
    restored `config.json` connects), then a fresh database from the dump.
 7. **Sandbox environments.** On every restore, with volumes or without (an
    environment that mounts a host folder has none), `EnvironmentManager.readopt()`
    gives each project environment its container back (see [SANDBOXING.md](../security/SANDBOXING.md)).
+   A restored record is data from a file: the host folder it names passes the same
+   checks as a new environment's (no home directory, no system folder) and is
+   stored resolved; a refused one counts as failed. Failed and missing ones are
+   named in the warnings with what follows from them: VAF deletes them at its next
+   start unless the restore is run again first.
 8. **Volumes.** Each is emptied and filled from the backup with its owners
    (`docker cp -a`); an environment volume is then handed to this machine's
    environment user. A browser profile keeps its Workspace, Downloads and cache

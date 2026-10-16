@@ -207,14 +207,37 @@ def test_browser_caches_stay_out_of_a_profile(tmp_path, monkeypatch):
         assert tar.getnames() == ["v/.config/chromium/Default/Cookies"]
 
 
-def test_the_backup_group_sits_behind_the_terminal_door():
-    """A backup holds every key of the machine, encrypted to a key this machine has.
-    MUTATION: register the group without the door - red."""
-    from pathlib import Path
-    main = (Path(__file__).resolve().parents[1] / "vaf" / "main.py").read_text(encoding="utf-8")
-    line = next(ln for ln in main.splitlines() if 'name="backup"' in ln)
-    following = main[main.index(line):main.index(line) + 300]
-    assert "callback=_terminal_door" in following
+def test_every_backup_command_but_restore_asks_the_terminal_door(monkeypatch, tmp_path):
+    """A backup holds every key of the machine, encrypted to a key this machine has: create,
+    verify and list ask the door. Restore proves the person itself - with the recovery key
+    when the admin password is gone, which is exactly what the door would ask for.
+    MUTATION: ask the door for restore too, or for nothing - red."""
+    from typer.testing import CliRunner
+
+    import vaf.cli.gate as gate
+    from vaf.cli.cmd import backup as backup_cmd
+    asked = []
+
+    def _door(force=False):
+        asked.append(1)
+        return False
+
+    monkeypatch.setattr(gate, "require_admin_password", _door)
+    monkeypatch.setattr(backup, "create_backup", lambda *a, **k: pytest.fail("ran past the door"))
+    runner = CliRunner()
+    assert runner.invoke(backup_cmd.app, ["create"]).exit_code == 1 and asked == [1]
+
+    import vaf.core.instance as instance
+    monkeypatch.setattr(gate, "is_interactive", lambda: True)
+    monkeypatch.setattr(instance, "find_service", lambda: None)
+    monkeypatch.setattr(backup_cmd.typer, "confirm", lambda *a, **k: False)
+    monkeypatch.setattr("getpass.getpass", lambda prompt="": "AGE-SECRET-KEY-1X")
+    monkeypatch.setattr(backup, "read_manifest", lambda path, identity=None: {"host": "h"})
+    archive = tmp_path / "x.tar.age"
+    archive.write_bytes(b"x")
+    out = runner.invoke(backup_cmd.app, ["restore", str(archive), "--recovery-key"])
+    assert asked == [1], "restore with the recovery key never asks the admin password"
+    assert "Backup of h" in out.output
 
 
 def test_volumes_are_taken_by_name_read_only_even_without_their_container(tmp_path, monkeypatch):
@@ -536,3 +559,87 @@ def test_the_kit_carries_the_machine_key_also_under_a_passphrase(monkeypatch):
         assert _machine_kek_for_kit() == key
     finally:
         secure_store.set_passphrase(None)
+
+
+def test_a_file_removed_while_the_backup_runs_is_skipped_and_named(install, monkeypatch):
+    """A chat deleted between the walk and the archive used to fail the whole backup; the
+    size is also taken from the file that is read, not from a stat before it. MUTATION:
+    stat before opening again - red."""
+    real = backup._collect_files
+
+    def _collect(*a, **k):
+        members = real(*a, **k)
+        gone = install["roots"]["app"] / "sessions" / "deleted-meanwhile.json"
+        return members + [("files/vaf/sessions/deleted-meanwhile.json", gone)]
+
+    monkeypatch.setattr(backup, "_collect_files", _collect)
+    result = backup.create_backup(install["out"], include_volumes=False)
+    assert result.verified
+    assert any("deleted-meanwhile" in w for w in result.warnings)
+    assert not any("deleted-meanwhile" in n for n, _ in _members(result.path))
+
+
+def test_restoring_a_keyring_file_reads_the_new_one_and_keeps_the_safety_backup(install, target,
+                                                                                monkeypatch):
+    """The keyring FILES are replaced on disk: the restored secrets must be what VAF reads
+    afterwards - the file-store key too, which the process holds in memory - and the safety
+    backup (encrypted to the identity in the replaced keyring) must still open.
+    MUTATION: drop _keep_previous_identity, or the reset of the file-store key - red."""
+    import base64
+    import os
+
+    from pyrage import x25519
+
+    from vaf.core import data_files, data_keyring
+    from vaf.core.data_keyring import peek_data_secret, set_data_secret
+    from vaf.core.platform import Platform
+    data, app = install["roots"]["data"], install["roots"]["app"]
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: data))
+    # The file-store key looks for sealed files before it mints one: in this installation,
+    # not in whatever home the rest of the suite left sealed chats in.
+    monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: app))
+    data_keyring.reset_ring()
+    data_files.reset_key_cache()
+    try:
+        backup.machine_identity()
+        set_data_secret("probe", "from the backup")
+        chat = install["roots"]["app"] / "sessions" / "sealed.json"
+        chat.write_bytes(data_files.encrypt_bytes(b"the backup's chat"))
+        saved_identity = peek_data_secret(backup.IDENTITY_SECRET)
+        made = backup.create_backup(install["out"], include_volumes=False)
+        this_machine = str(x25519.Identity.generate())
+        set_data_secret(backup.IDENTITY_SECRET, this_machine)
+        set_data_secret("probe", "from this machine")
+        set_data_secret("file_store_encryption_key", base64.b64encode(os.urandom(32)).decode())
+        data_files.reset_key_cache()
+        data_files.encrypt_bytes(b"this machine writes")      # its key is now held in memory
+
+        result = backup.restore_backup(made.path, identity=saved_identity)
+
+        assert peek_data_secret("probe") == "from the backup"
+        assert peek_data_secret(backup.IDENTITY_SECRET) == saved_identity
+        assert data_files.decrypt_bytes(chat.read_bytes()) == b"the backup's chat"
+        check = backup.verify_backup(result.pre_restore)
+        assert check.ok, check.problems
+    finally:
+        data_keyring.reset_ring()
+        data_files.reset_key_cache()
+
+
+def test_a_restore_of_project_environments_without_their_image_changes_nothing(target, tmp_path,
+                                                                              monkeypatch):
+    """Without the environment image no container can be recreated, and the reaper would
+    delete the restored records and volumes at the next start. MUTATION: drop the preflight
+    - the restore goes ahead - red."""
+    from vaf.core import environment_image
+    record = json.dumps({"id": "e1", "kind": "project", "volume": "vaf-env-vol-e1"}).encode()
+    archive = _encrypt_tar(tmp_path / "envs.tar.age", {
+        "files/vaf/environments/e1.json": record,
+        "postgres/database.dump": b"PGDMP", "postgres/globals.sql": b""})
+    monkeypatch.setattr(environment_image, "ensure_image", lambda: None)
+    before = sorted(p.name for p in target["roots"]["app"].iterdir())
+    with pytest.raises(backup.BackupError) as err:
+        backup.restore_backup(archive, pre_restore=False)
+    assert "nothing was changed" in str(err.value)
+    assert sorted(p.name for p in target["roots"]["app"].iterdir()) == before
+    assert target["calls"]["pg"] == 0

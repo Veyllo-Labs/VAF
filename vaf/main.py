@@ -429,9 +429,10 @@ app.add_typer(ftp.app, name="ftp", help="The FTP servers your agent confirmed",
 # Sandbox environments hold the owner's code and run commands: the same door.
 app.add_typer(env_cmd.app, name="env", help="Your sandbox environments: run, install and test code",
               callback=_terminal_door)
-# Backups hold every key of the machine, encrypted to a key this machine has: the same door.
-app.add_typer(backup_cmd.app, name="backup", help="Encrypted backups of everything VAF keeps",
-              callback=_terminal_door)
+# Backups hold every key of the machine, encrypted to a key this machine has: the same door,
+# asked by the group itself, because `restore` proves the person on its own (the admin
+# password or the recovery key, which is the way in when that password is gone).
+app.add_typer(backup_cmd.app, name="backup", help="Encrypted backups of everything VAF keeps")
 
 # The accounts. NOT behind the group door: `reset-password` is the way back in when the
 # admin password is gone, which is the password the door asks for, and the door opens for a

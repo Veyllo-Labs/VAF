@@ -13,6 +13,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **Backups.** `vaf backup create` writes everything VAF keeps into one encrypted file: the
+  chats, memories and accounts (a dump of the database), the keys, the mail, message,
+  calendar and contact databases, the people's working folders, the sandbox environment
+  volumes and the browser profiles. It is an `age`-encrypted tar that this machine and your
+  recovery key can open, verified right after it is written; `vaf backup verify` checks one
+  later and `vaf backup list` shows them. Without the database no backup is written.
+
 - **Change your own password in Settings, Account.** There was no page for it: only an admin
   could reset passwords. It asks for the current password and, when 2FA is set up, the code
   from your authenticator app.

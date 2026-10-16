@@ -188,6 +188,7 @@ STORES: Tuple[Store, ...] = (
     _s("data", "debug", LOG, "vaf/tools/search.py"),
     _s("data", "QtWebEngine", DERIVED, "the desktop window"),
     _s("data", ".telegram_backfill_done", RUNTIME, "vaf/api/telegram_bridge.py"),
+    _s("data", "backups", NEVER, "vaf/core/backup.py", "backups do not carry backups"),
     # ── config: Platform.config_dir() ────────────────────────────────────────────
     _s("config", "trust", DATA, "vaf/core/trust.py", "the tool grants per account"),
     _s("config", "trust.json*", DATA, "vaf/core/trust.py", "legacy"),

@@ -604,6 +604,7 @@ class Config:
         "secure_store_kek_backend": "auto",                        # Where the master key lives: "auto" (keyring on Windows where chmod protects nothing, file elsewhere), "file" (0600), or "keyring" (OS keyring)
         "allow_plaintext_at_rest": True,                           # Accept files WITHOUT the encryption header on read. Needed while migrating; the sweep turns it off after a clean pass
         "file_encryption_enabled": True,
+        "backup_dir": "",                                          # Where `vaf backup` writes its encrypted backups ("" = <data dir>/backups). Held owner-only
         "prompt_log_full_enabled": False,                          # Log the ENTIRE assembled system prompt (profile, retrieved memories, contacts) to prompt_*.log. Debug only
         "context_archive_max_age_days": 14,                        # Age sweep for pre-compression conversation snapshots (0 = keep forever)
         "context_compress_tokens": 45000,                          # "Context effort": API providers only: compress the history once it exceeds this token budget, instead of waiting for the model window. Pay-per-token bill grows with EVERY resent token, so the window (128k) is the wrong ceiling. Settings offer it as fixed rungs from 8000 up to the model's real window (vaf/core/context.py). 0 = window-based only
@@ -1058,6 +1059,9 @@ class Config:
         # Sandbox environments: per-person limits, the network a person's code may reach,
         # the hosts the registries proxy lets through. One policy for the whole instance.
         "sandbox_env_",
+        # Backups: where every backup of the instance lands and who it is encrypted to. A
+        # per-user write would send the encrypted copy of everyone's data where they choose.
+        "backup_",
     )
     GLOBAL_CONFIG_KEYS = frozenset([
         "provider", "model", "n_ctx", "gpu_layers", "n_parallel", "llama_cache_ram",

@@ -344,6 +344,7 @@ import typer
 from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup, a2a, repair, usage, top, inbox, outbox, secrets, ssh, ftp, audit
 from vaf.cli.cmd import env as env_cmd
 from vaf.cli.cmd import users as users_cmd
+from vaf.cli.cmd import backup as backup_cmd
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -427,6 +428,9 @@ app.add_typer(ftp.app, name="ftp", help="The FTP servers your agent confirmed",
               callback=_terminal_door)
 # Sandbox environments hold the owner's code and run commands: the same door.
 app.add_typer(env_cmd.app, name="env", help="Your sandbox environments: run, install and test code",
+              callback=_terminal_door)
+# Backups hold every key of the machine, encrypted to a key this machine has: the same door.
+app.add_typer(backup_cmd.app, name="backup", help="Encrypted backups of everything VAF keeps",
               callback=_terminal_door)
 
 # The accounts. NOT behind the group door: `reset-password` is the way back in when the

@@ -120,6 +120,8 @@ def test_format_identities_are_pinned_literals():
     assert AUTOMATION_FORMAT == "automation-1-4e9b27"
     from vaf.core.recovery_kit import RECOVERY_FORMAT
     assert RECOVERY_FORMAT == "recovery-2-3d8a51"
+    from vaf.core.backup import BACKUP_FORMAT
+    assert BACKUP_FORMAT == "vafbackup-1-5e2c90"
 
 
 def test_chain_with_versioned_seed_verifies():

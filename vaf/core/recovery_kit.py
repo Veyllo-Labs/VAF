@@ -258,7 +258,8 @@ copy anywhere.
 
 The key store (chats, memories, mail) and the machine key under which every other
 encrypted store is sealed: your API keys, mail passwords and the credentials
-stored for commands. On a new machine all of them open again.
+stored for commands. On a new machine all of them open again. It also opens the
+backups VAF writes (`vaf backup`).
 
 ## What you need to recover
 

@@ -11,6 +11,7 @@ in docs/setup/BACKUP_RESTORE.md.
 """
 import io
 import json
+import os
 import sqlite3
 import tarfile
 
@@ -472,6 +473,108 @@ def test_a_backup_that_cannot_be_opened_is_reported_not_waited_on(target, tmp_pa
         worker.join(20)
         assert not worker.is_alive(), f"{name} waits forever on a file that is not there"
         assert "error" in out or not out["result"].ok, name
+
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits (harden_dir is a no-op there)")
+def test_a_named_folder_keeps_its_permissions_and_a_new_one_is_owner_only(install, tmp_path):
+    """`--to ~/Documents` made the person's folder owner-only as a side effect. A folder the
+    backup creates is owner-only; one that was there keeps its mode, and the backup file in
+    it is owner-only either way. MUTATION: harden every destination again - red."""
+    import stat
+    existing = tmp_path / "Documents"
+    existing.mkdir(mode=0o755)
+    os.chmod(existing, 0o755)
+    made = backup.create_backup(existing, include_volumes=False)
+    assert stat.S_IMODE(existing.stat().st_mode) == 0o755
+    assert stat.S_IMODE(made.path.stat().st_mode) == 0o600
+    fresh = tmp_path / "new" / "backups"
+    backup.create_backup(fresh, include_volumes=False)
+    assert stat.S_IMODE(fresh.stat().st_mode) == 0o700
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_the_working_folders_keep_their_modes_and_the_rest_comes_back_owner_only(target):
+    """Every file came back owner-only, so a script in a working folder lost its executable
+    bit. The working folders keep their modes (no write bit for others); VAF's own stores
+    stay owner-only. MUTATION: archive 0o600 for every file again - red."""
+    import stat
+    script = target["roots"]["projects"] / "ab12cd34" / "web_chat-1" / "build.sh"
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    os.chmod(script, 0o777)
+    config = target["roots"]["app"] / "config.json"
+    os.chmod(config, 0o644)
+    made = backup.create_backup(target["out"], include_volumes=False)
+    backup.restore_backup(made.path, pre_restore=False)
+    assert stat.S_IMODE(script.stat().st_mode) == 0o755
+    assert stat.S_IMODE(config.stat().st_mode) == 0o600
+
+
+def test_a_failing_role_restore_stops_the_restore(tmp_path, monkeypatch):
+    """psql runs past a failing statement and exits 0, so the exit code was never looked
+    at; a psql that cannot connect exits non-zero, and no role then has the backup's password
+    hash: the restored config could not connect. MUTATION: ignore the exit code - red."""
+    import subprocess as sp
+    (tmp_path / "postgres").mkdir()
+    (tmp_path / "postgres" / "globals.sql").write_bytes(b"CREATE ROLE vaf;")
+    (tmp_path / "postgres" / "database.dump").write_bytes(b"PGDMP")
+    monkeypatch.setattr(backup, "_wait_for_postgres", lambda role, container=None: None)
+    monkeypatch.setattr(backup, "_psql", lambda *a, **k: None)
+    monkeypatch.setattr(backup, "_docker_exe", lambda: "docker")
+
+    def _run(args, **kw):
+        failed = "psql" in args and "pg_restore" not in args
+        return sp.CompletedProcess(args, 2 if failed else 0, b"", b"could not connect" if failed else b"")
+
+    monkeypatch.setattr(backup.subprocess, "run", _run)
+    with pytest.raises(backup.BackupError) as err:
+        backup._restore_postgres(tmp_path, {"postgres": {"role": "vaf", "database": "vaf_memory"}},
+                                 "vaf-memory-db")
+    assert "roles" in str(err.value) and "could not connect" in str(err.value)
+
+
+@pytest.mark.parametrize("failure", [OSError("No space left on device"),
+                                     backup.BackupError("pg_restore failed: boom")])
+def test_a_restore_that_stops_half_way_says_so_and_where_the_state_before_is(
+        target, monkeypatch, failure):
+    """Past the clearing, a failure left a machine holding part of the backup, and an
+    unexpected one reached the person as a traceback, without the safety backup's place.
+    MUTATION: let the error through unchanged - red."""
+    made = backup.create_backup(target["out"], include_volumes=False)
+
+    def _boom(*a, **k):
+        raise failure
+
+    monkeypatch.setattr(backup, "_restore_postgres", _boom)
+    with pytest.raises(backup.BackupError) as err:
+        backup.restore_backup(made.path)
+    text = str(err.value)
+    assert "half way" in text and str(failure).rstrip(".") in text
+    assert "pre-restore" in text and "vaf backup restore" in text
+
+
+@pytest.mark.parametrize("changes", [True, False])
+def test_a_restore_that_replaces_the_recovery_key_says_which_key_opens_it_now(
+        target, monkeypatch, changes):
+    """The recovery file comes from the backup: after a restore from another machine, or of
+    a backup older than a renewal, the key this machine had opens nothing. MUTATION: drop
+    the comparison - red."""
+    made = backup.create_backup(target["out"], include_volumes=False)
+    holder = {"recipient": "age1thismachine"}
+    monkeypatch.setattr(recovery_kit, "recipient", lambda: holder["recipient"])
+    place = backup._place_files
+
+    def _place(staging):
+        if changes:
+            holder["recipient"] = "age1thebackups"
+        return place(staging)
+
+    monkeypatch.setattr(backup, "_place_files", _place)
+    result = backup.restore_backup(made.path, pre_restore=False)
+    named = [w for w in result.warnings if "age1thismachine" in w]
+    assert bool(named) is changes
+    if changes:
+        assert "age1thebackups" in named[0] and "renew-recovery-key" in named[0]
 
 
 @pytest.mark.parametrize("name", ["../escape.txt", "files/app/../../escape.txt", "/etc/passwd",

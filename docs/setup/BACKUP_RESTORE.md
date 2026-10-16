@@ -65,6 +65,9 @@ vaf backup list
 
 `vaf/core/backup.py` writes ONE file, `vaf-backup-<UTC time>.tar.age`, with a
 `.sha256` beside it, into `backup_dir` (default `<data dir>/backups`, owner-only).
+A folder named with `--to` that already exists keeps its permissions (it may be
+the person's Documents folder or a mounted drive); one the backup creates is
+owner-only, and the backup file and its `.sha256` are owner-only either way.
 The `vaf backup` group sits behind the terminal door: a backup holds every key of
 the machine, encrypted to a key this machine has, so the agent's own commands do
 not write or read one; a script without a terminal passes as everywhere.
@@ -83,7 +86,7 @@ Inside, in this order:
 | Member | What |
 |--------|------|
 | `manifest.json` | format tag `vafbackup-1-5e2c90`, VAF version, the roots as they were, what was included and skipped, the warnings |
-| `files/<root>/<path>` | every entry the list above marks as backed up. SQLite databases are copied with SQLite's own online backup, so a database in use (WAL mode) is captured consistent, and their `-wal`/`-shm` files are not taken |
+| `files/<root>/<path>` | every entry the list above marks as backed up. SQLite databases are copied with SQLite's own online backup, so a database in use (WAL mode) is captured consistent, and their `-wal`/`-shm` files are not taken. Archived owner-only, except the working folders (`files/projects/`), which keep their permission bits so a script stays executable |
 | `postgres/database.dump` | `pg_dump -Fc` of the memory database, run inside the `vaf-memory-db` container as the owner role (row-level security shows the app role no rows). A stopped container is started for it and stopped again |
 | `postgres/globals.sql` | the roles with their password hashes, so the connection strings in the restored `config.json` fit the restored database |
 | `volumes/vaf-env-vol-<id>.tar` | the `/workspace` of each sandbox environment that keeps its files in a volume |
@@ -192,7 +195,9 @@ after the one before succeeded:
    safety backup afterwards as well as the backups made with the restored keyring.
 4. **Files.** Every entry of the roots that is backed up, derived or runtime is
    removed and the backup's files are placed. Logs, entries that are not VAF's,
-   the backup folder and THIS machine's key stay.
+   the backup folder and THIS machine's key stay. VAF's own files are placed
+   owner-only; the working folders keep the modes they had, without write bits
+   for anyone but the owner.
 5. **Keys.** This machine's key is never replaced: every store the backup's
    machine key sealed is re-wrapped under it (`rewrap_from_kek`), which is why a
    backup carries that key (`keys/machine_key`). The keyring on disk is now the
@@ -201,9 +206,15 @@ after the one before succeeded:
    restored recovery wrap still carries the backup's machine key, so it is
    rebuilt with this machine's key for the same recovery key, as
    `vaf secure recover` does (see [ENCRYPTION_AT_REST.md](../security/ENCRYPTION_AT_REST.md));
-   if that fails, the warnings say to renew the recovery key.
+   if that fails, the warnings say to renew the recovery key. The recovery file
+   is the backup's now: when it is not the one this machine had (a backup from
+   another machine, or from before a renewal), the warnings name the key that
+   opens this machine now and the one that no longer does.
 6. **Database.** The roles from `globals.sql` (their password hashes, so the
-   restored `config.json` connects), then a fresh database from the dump.
+   restored `config.json` connects), then a fresh database from the dump. A role
+   that already exists makes its `CREATE ROLE` fail and is updated by the
+   `ALTER ROLE` after it; a `psql` that cannot apply the file at all stops the
+   restore.
 7. **Sandbox environments.** On every restore, with volumes or without (an
    environment that mounts a host folder has none), `EnvironmentManager.readopt()`
    gives each project environment its container back (see [SANDBOXING.md](../security/SANDBOXING.md)).
@@ -217,6 +228,10 @@ after the one before succeeded:
    (`docker cp -a`); an environment volume is then handed to this machine's
    environment user. A browser profile keeps its Workspace, Downloads and cache
    folders, which the backup deliberately did not carry.
+
+From step 4 on, the machine holds part of the backup. A failure there, an
+unexpected error or an interruption included, is reported as such, with the
+safety backup it can go back to and the command that does it.
 
 Measured on a desktop install, restored into an empty home with a fresh database
 container: 9417 files placed, five encrypted stores re-wrapped under the new

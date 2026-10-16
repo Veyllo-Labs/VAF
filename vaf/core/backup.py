@@ -90,6 +90,7 @@ PG_CONTAINER = "vaf-memory-db"
 _SQLITE_MAGIC = b"SQLite format 3\x00"
 _SQLITE_SIDECARS = ("-wal", "-shm", "-journal")
 _CHUNK = 1024 * 1024
+_PROJECTS_PREFIX = "files/projects/"
 # What a Chromium profile rebuilds on its own, by directory name wherever it sits; taking it
 # would make a profile several times the size of what is worth keeping (cookies, logins,
 # settings, extensions). Measured on a live profile: 243 MB with the caches, most of it
@@ -211,9 +212,14 @@ def create_backup(dest: Optional[Path] = None, *, include_projects: bool = True,
 
     say = progress or (lambda _msg: None)
     dest = Path(dest) if dest else backup_dir()
+    created = not dest.exists()
     dest.mkdir(parents=True, exist_ok=True)
     from vaf.core.secure_store import _get_filelock_cls, harden_dir, harden_path
-    harden_dir(dest)
+    if created:
+        # A folder this call made is owner-only. One the person named that was already there
+        # (`--to /mnt/usb`, a Documents folder) keeps its permissions: the backup file and its
+        # checksum are owner-only either way, and the configured folder hardens itself.
+        harden_dir(dest)
     lock_cls = _get_filelock_cls()
     lock = lock_cls(str(dest / ".backup.lock"), timeout=5) if lock_cls else _NoLock()
 
@@ -667,7 +673,7 @@ def _write_encrypted(out_path: Path, manifest: Dict, members: List[Tuple[str, Pa
                         info = tarfile.TarInfo(arc)
                         info.size = st.st_size
                         info.mtime = int(st.st_mtime)
-                        info.mode = 0o600
+                        info.mode = _archived_mode(arc, st.st_mode)
                         reader = _HashingReader(f)
                         tar.addfile(info, reader)
                     checksums[arc] = reader.sha.hexdigest()
@@ -690,6 +696,18 @@ def _write_encrypted(out_path: Path, manifest: Dict, members: List[Tuple[str, Pa
     if failure:
         raise failure[0]
     return writer.size, writer.sha.hexdigest(), count[0]
+
+
+def _archived_mode(arc: str, st_mode: int) -> int:
+    """Owner-only, except in the person's working folders: a script there keeps its
+    executable bit, and a file its read bits, through a backup and a restore."""
+    return (st_mode & 0o777) if arc.startswith(_PROJECTS_PREFIX) else 0o600
+
+
+def _restored_mode(name: str, mode: int) -> int:
+    """The mode a member gets back: the working folders' as they were, without write bits
+    for anyone but the owner (a Windows source reports 0o666); owner-only for the rest."""
+    return ((mode & 0o755) | 0o600) if name.startswith(_PROJECTS_PREFIX) else 0o600
 
 
 def _add_bytes(tar: tarfile.TarFile, name: str, data: bytes, checksums: Optional[Dict]) -> None:
@@ -935,7 +953,7 @@ def _extract_verified(path: Path, identity: Optional[str], staging: Path) -> Tup
                         for chunk in iter(lambda: src.read(_CHUNK), b""):
                             sha.update(chunk)
                             f.write(chunk)
-                    os.chmod(out, 0o600)
+                    os.chmod(out, _restored_mode(member.name, member.mode))
                 seen[member.name] = sha.hexdigest()
             _drain(pipe)
     except BackupError:
@@ -991,9 +1009,14 @@ def _restore_postgres(staging: Path, manifest: Dict, container: str) -> None:
     # CREATE ROLE for a role that exists fails and is skipped; the ALTER ROLE after it sets
     # the backup's attributes and password hash, which is the point.
     with open(staging / "postgres" / "globals.sql", "rb") as f:
-        subprocess.run([_docker_exe(), "exec", "-i", container, "psql", "-U", role, "-d", "postgres",
-                        "-q"], stdin=f, capture_output=True, timeout=300,
-                       **containers.windowless_kwargs())
+        r = subprocess.run([_docker_exe(), "exec", "-i", container, "psql", "-U", role, "-d",
+                            "postgres", "-q"], stdin=f, capture_output=True, timeout=300,
+                           **containers.windowless_kwargs())
+    # Without ON_ERROR_STOP psql runs past a failing statement and still exits 0; a non-zero
+    # exit is psql itself failing (no connection), and then no role has the backup's password.
+    if r.returncode != 0:
+        raise BackupError("The roles could not be restored: "
+                          + r.stderr.decode("utf-8", "replace").strip()[:300])
     _psql(container, role, f"CREATE DATABASE {quoted_db} OWNER {quoted_role}")
     with open(staging / "postgres" / "database.dump", "rb") as f:
         r = subprocess.run([_docker_exe(), "exec", "-i", container, "pg_restore", "-U", role,
@@ -1122,7 +1145,8 @@ def _place_files(staging: Path) -> int:
             target = roots[root_name] / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(target))
-            harden_path(target)
+            if root_name != "projects":       # the working folders keep their modes
+                harden_path(target)
             placed += 1
     return placed
 
@@ -1146,6 +1170,8 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
     container = pg_container or PG_CONTAINER
     staging = _private_staging(".restore-")
     warnings: List[str] = []
+    pre: Optional[Path] = None
+    changed = False
     try:
         say("Opening and checking the backup")
         manifest, _members = _extract_verified(Path(path), identity, staging)
@@ -1171,7 +1197,6 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
                 raise BackupError("The backup holds project sandbox environments, and the image "
                                   "they run on is not available here (Docker cannot build it). "
                                   "Restoring now would lose them; nothing was changed.")
-        pre: Optional[Path] = None
         if pre_restore:
             say("Writing a backup of the current state first")
             pre = create_backup(backup_dir() / "pre-restore", include_volumes=True,
@@ -1183,7 +1208,10 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
             previous_identity = peek_data_secret(IDENTITY_SECRET) or None
         except Exception:
             previous_identity = None
+        from vaf.core.recovery_kit import recipient as recovery_recipient
+        previous_recipient = _quiet(recovery_recipient)
         say("Placing the files")
+        changed = True
         _clear_target(manifest)
         files = _place_files(staging)
         rewrapped: List[str] = []
@@ -1214,6 +1242,16 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
             warnings.append(f"The recovery key still carries the old machine's key ({e}), so it "
                             "would bring back the key store but not the password stores: run "
                             "`vaf secure renew-recovery-key`.")
+        # The recovery file is the backup's now: the key that opens this machine is the one
+        # it was written for, which is not the key this machine had if the backup came from
+        # another machine or from before a renewal.
+        restored_recipient = _quiet(recovery_recipient)
+        if previous_recipient and restored_recipient != previous_recipient:
+            warnings.append(f"The recovery key is now the backup's"
+                            f"{f' ({restored_recipient})' if restored_recipient else ''}; the key "
+                            f"this machine had ({previous_recipient}) no longer opens it. Keep the "
+                            "backup's recovery note, or run `vaf secure renew-recovery-key` for "
+                            "a new one.")
         try:
             _keep_previous_identity(previous_identity)
         except Exception as e:
@@ -1259,5 +1297,32 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
                     _restore_volume(tar_path, volume, image, owner=_host_user())
                 volumes += 1
         return RestoreResult(manifest, files, rewrapped, volumes, pre, warnings)
+    except (Exception, KeyboardInterrupt) as e:
+        if not changed:
+            raise
+        # Past the clearing, this machine holds part of the backup: whatever stopped it, the
+        # person needs to know that, and where the state before it is.
+        raise BackupError(_half_way(e, pre)) from e
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+
+
+def _quiet(read: Callable[[], Optional[str]]) -> Optional[str]:
+    try:
+        return read()
+    except Exception:
+        return None
+
+
+def _half_way(error: BaseException, pre: Optional[Path]) -> str:
+    if isinstance(error, BackupError):
+        reason = str(error).rstrip(".")
+    elif isinstance(error, KeyboardInterrupt):
+        reason = "it was interrupted"
+    else:
+        reason = f"{type(error).__name__}: {error}"
+    where = (f" The state before it is in the safety backup {pre}: `vaf backup restore {pre}` "
+             "puts it back (with --recovery-key if this machine's key no longer opens it)."
+             if pre else " There is no safety backup of the state before it "
+             "(--no-safety-backup).")
+    return f"The restore stopped half way, so this machine holds part of the backup: {reason}.{where}"

@@ -19,7 +19,11 @@ API providers you set in Settings. Which of the two an installation does is its
 
 The sizes are measured on the machine this was written on (images with `docker image
 ls`, models on disk); the memory limits are the ones in `docker-compose.memory.yml`.
-Limits are ceilings, not what the services use.
+Limits are ceilings, not what the services use. What they use, measured idle with
+`docker stats` right after a start: the lean stack about 0.43 GB (the browser 342 MB, the
+database, cache and document conversion under 40 MB each), the full stack about 1.43 GB
+(the speech-to-text container alone 931 MB with its model loaded), plus the chat model in
+RAM or VRAM when it runs.
 
 The lean profile is meant for a small rented server (a VPS) that should carry VAF without
 a GPU and without 15 GB of models: see

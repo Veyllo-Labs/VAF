@@ -33,6 +33,8 @@ export interface ServiceRow {
     starting_seconds_left?: number;
     state?: string;
     reason?: string;
+    /** False for a service the inference profile leaves out (state "off"). */
+    needed?: boolean;
 }
 
 /** The sandbox environments (vaf/core/service_health.py derive_sandbox_status). Not a
@@ -118,6 +120,8 @@ type Health = 'ok' | 'degraded' | 'down' | 'idle';
  *  amber, not green: "running" was never the question. */
 export function healthOf(svc: ServiceRow): Health {
     if (svc.state === 'unknown') return 'idle';
+    // Left out by the inference profile: grey, never a fault, never an issue to repair.
+    if (svc.state === 'off') return 'idle';
     // Before the existence checks: the stack start has not reached it yet (still building
     // or about to run it), which is on its way up and not broken.
     if (svc.starting) return 'degraded';
@@ -578,7 +582,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
     // exactly the state while the server is restarting during an update.
     const rows = useMemo(() => services?.services ?? [], [services]);
     const sandbox = services?.sandbox ?? null;
-    const issues = useMemo(() => rows.filter((s) => healthOf(s) !== 'ok'), [rows]);
+    const issues = useMemo(() => rows.filter((s) => s.state !== 'off' && healthOf(s) !== 'ok'), [rows]);
     issuesRef.current = issues;
     // The host's forwarding switch is a finding of its own, above the containers:
     // with it off they all run and none can reach the internet.
@@ -623,6 +627,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
     const statusLabel = useCallback((svc: ServiceRow): string => {
         const h = healthOf(svc);
         if (svc.state === 'unknown') return tM('statusUnknown');
+        if (svc.state === 'off') return tM('statusOff');
         if (svc.starting && !svc.running) return tM('startingWait');
         if (svc.exists === false) return tM('statusAbsent');
         if (!svc.running) return tM('statusDown');

@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from vaf import __version__
@@ -74,6 +75,37 @@ async def system_services(_: Dict[str, Any] = Depends(require_admin)) -> Dict[st
     """Every container's state, including whether it ANSWERS - not just whether
     it runs. Blocking probes go to the threadpool like the security overview."""
     return await run_in_threadpool(collect_service_status)
+
+
+@router.get("/inference-profile")
+def get_inference_profile(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The installation's inference profile (vaf/core/inference_profile.py), the services it
+    runs and the settings that contradict it - what `vaf profile` prints."""
+    from vaf.core import inference_profile, service_stack
+    needed = service_stack.needed_services()
+    return {
+        "profile": inference_profile.current(),
+        "services": [s.service_key for s in needed],
+        "left_out": [s.service_key for s in service_stack.SERVICES if s not in needed],
+        "conflicts": inference_profile.conflicts(),
+    }
+
+
+class _ProfileSwitch(BaseModel):
+    profile: str
+    prune: bool = False
+
+
+@router.post("/inference-profile")
+async def set_inference_profile(body: _ProfileSwitch,
+                                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Switch the profile: the same implementation as `vaf profile` (stopping or starting
+    the speech containers takes a while, so it runs in the threadpool)."""
+    from vaf.core import inference_profile
+    try:
+        return await run_in_threadpool(inference_profile.apply, body.profile, prune=body.prune)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 def _run_repair() -> None:

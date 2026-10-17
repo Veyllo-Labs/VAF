@@ -18,9 +18,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   speech containers; chat and speech go to the API providers set in Settings. That halves
   the container memory limits (about 4 GB instead of 8) and leaves out a 7.5 GB speech image.
   `./install.sh --server --profile api` sets up a rented server this way, `vaf profile api`
-  switches an existing installation (`--prune` also removes the speech images), and
-  `vaf profile` shows what is left out and which setting still points at a local model. The
-  browser stays in both profiles.
+  or the switch at the top of Settings > AI & Model changes an existing installation
+  (`--prune` also removes the speech images), and both show what is left out and which
+  setting still points at a local model. The browser stays in both profiles.
 - **Backups.** `vaf backup create` writes everything VAF keeps into one encrypted file: the
   chats, memories and accounts (a dump of the database), the keys, the mail, message,
   calendar and contact databases, the people's working folders, the sandbox environment

@@ -75,36 +75,29 @@ def profile_cmd(
         return
 
     wanted = name.strip().lower()
-    if wanted not in ip.PROFILES:
-        UI.error(f"Unknown profile {name!r}: use local or api.")
+    if wanted == ip.LOCAL and not no_stack:
+        UI.info("Starting the speech containers (the first start downloads their images)...")
+    try:
+        result = ip.apply(wanted, prune=prune, stack=not no_stack)
+    except ValueError as e:
+        UI.error(str(e))
         raise typer.Exit(2)
-    if prune and wanted != ip.API:
-        UI.error("--prune goes with api: it removes what the local profile runs.")
-        raise typer.Exit(2)
-
-    from vaf.core.config import Config
-    previous = ip.current()
-    Config.set("inference_profile", wanted)
-    UI.success(f"Profile set to {wanted}." + ("" if previous != wanted else " (unchanged)"))
-
+    UI.success(f"Profile set to {wanted}." + ("" if result["previous"] != wanted else " (unchanged)"))
     if no_stack:
         return
     if wanted == ip.API:
-        result = ss.retire_local_inference_services(prune=prune, log=lambda m: None)
         if result["stopped"]:
             UI.info("The speech containers are stopped" + (" and removed." if prune else "."))
         for name_removed in result["removed"]:
             UI.info(f"Removed {name_removed}")
-        for problem in result["errors"]:
-            UI.warning(problem)
         if _local_models():
             UI.info(f"{_gb(_local_models())} of local models stay in the models folder; "
                     "delete them yourself when you need the space.")
-        for sentence in ip.conflicts():
-            UI.warning(sentence)
+    elif result["started"]:
+        UI.success("The stack runs with the speech containers.")
     else:
-        UI.info("Starting the speech containers (the first start downloads their images)...")
-        if ss.ensure_service_stack():
-            UI.success("The stack runs with the speech containers.")
-        else:
-            UI.warning("The stack did not start now; VAF starts it at its next launch.")
+        UI.warning("The stack did not start now; VAF starts it at its next launch.")
+    for problem in result["errors"]:
+        UI.warning(problem)
+    for sentence in result["conflicts"]:
+        UI.warning(sentence)

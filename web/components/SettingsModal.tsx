@@ -19,6 +19,7 @@ import {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import TTSSettings from './settings/TTSSettings';
+import InferenceProfileSection from './settings/InferenceProfileSection';
 import MemoryGraph from './memory/MemoryGraph';
 import { useMemoryStore } from './memory/stores/memoryStore';
 import { SpeakerTest } from './SpeakerTest';
@@ -577,6 +578,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const uiTheme = useThemeStore((s) => s.theme);
     const setUiTheme = useThemeStore((s) => s.setTheme);
     const [localConfig, setLocalConfig] = useState<any>(config || {});
+    // An installation without local models (inference_profile = api, vaf/core/inference_profile.py):
+    // the local options stay listed but cannot be picked, so the page says what this machine runs.
+    const leanProfile = localConfig.inference_profile === 'api';
     const [appVersion, setAppVersion] = useState<string>('');
     const [activeTab, setActiveTab] = useState('general');
 
@@ -3104,20 +3108,24 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'ai' && currentUser?.role === 'admin' && (
                             <div className="space-y-6">
+                                <InferenceProfileSection onChanged={onRefreshConfig} />
                                 <Section title={tAi('provider')}>
                                     <Select
                                         label={tAi('primaryProvider')}
                                         value={localConfig.provider || 'local'}
                                         onChange={(v: string) => handleChange('provider', v)}
                                         options={[
-                                            { value: 'local', label: tAi('localLlama') },
+                                            { value: 'local', label: leanProfile ? tAi('localLlamaUnavailable') : tAi('localLlama'), disabled: leanProfile },
                                             { value: 'veyllo', label: 'Veyllo' },
                                             ...PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label }))
                                         ]}
                                     />
+                                    {leanProfile && (!localConfig.provider || localConfig.provider === 'local') && (
+                                        <p className="text-xs text-amber-700 mt-2">{tAi('needsProvider')}</p>
+                                    )}
                                 </Section>
 
-                                {(!localConfig.provider || localConfig.provider === 'local') && (
+                                {!leanProfile && (!localConfig.provider || localConfig.provider === 'local') && (
                                     <Section title={tAi('localModelSettings')}>
                                         <div className="flex gap-2 items-end">
                                             <div className="flex-1">
@@ -4090,6 +4098,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 {currentUser?.role === 'admin' && (
                                     <Section title={tVoice('provider')}>
                                         <div className="space-y-4">
+                                            {leanProfile && (
+                                                <p className="text-xs text-gray-600">{tVoice('profileApiNote')}</p>
+                                            )}
                                             <Select
                                                 label={tVoice('ttsProvider')}
                                                 value={localConfig.speech_tts_provider || 'local'}
@@ -4105,7 +4116,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     }
                                                 }}
                                                 options={[
-                                                    { value: 'local', label: tVoice('providerLocal') },
+                                                    { value: 'local', label: leanProfile ? tVoice('localUnavailable') : tVoice('providerLocal'), disabled: leanProfile },
                                                     { value: 'elevenlabs', label: 'ElevenLabs' },
                                                     { value: 'openai', label: 'OpenAI' },
                                                 ]}
@@ -4213,8 +4224,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     }
                                                 }}
                                                 options={[
-                                                    { value: 'local_docker', label: tVoice('dockerStt') },
-                                                    { value: 'local_whisper', label: tVoice('localStt') },
+                                                    { value: 'local_docker', label: leanProfile ? tVoice('localUnavailable') : tVoice('dockerStt'), disabled: leanProfile },
+                                                    { value: 'local_whisper', label: leanProfile ? tVoice('localUnavailable') : tVoice('localStt'), disabled: leanProfile },
                                                     { value: 'veyllo', label: 'Veyllo' },
                                                     { value: 'elevenlabs', label: 'ElevenLabs' },
                                                     { value: 'openai', label: 'OpenAI' },

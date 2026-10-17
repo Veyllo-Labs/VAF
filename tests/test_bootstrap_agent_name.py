@@ -67,6 +67,9 @@ def test_setup_mode_offers_a_name_and_normal_mode_does_not(monkeypatch):
     assert data["needs_setup"] is True
     assert isinstance(data.get("agent_name_suggestion"), str)
     assert data["agent_name_suggestion"].strip()
+    # The wizard says whether skipping the provider step leaves a local model; the
+    # profile travels only with the setup answer, like the name.
+    assert data.get("inference_profile") in ("local", "api")
 
     c2 = _client(monkeypatch, _db(_AdminResult()))
     assert c2.get("/api/auth/needs-setup").json() == {"needs_setup": False}

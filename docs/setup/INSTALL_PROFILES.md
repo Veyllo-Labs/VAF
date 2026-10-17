@@ -62,6 +62,12 @@ behind the terminal door, like `vaf server`: what it changes is the machine's, a
 account that could run it from the agent's shell has `host_bash`, which reaches the same
 config and the same docker directly.
 
+In the web app the profile sits at the top of **Settings > AI & Model** (admin only), with
+the same switch (`POST /api/system/inference-profile`, the same `inference_profile.apply`
+behind it). Under Lean the local choices there and under **Voice & Speech** stay listed but
+cannot be picked, and the first-run wizard says that skipping the provider step leaves no
+local model to fall back on.
+
 The profile is admin-only (`GLOBAL_CONFIG_KEYS`): it starts and stops containers and
 decides about downloads for every account at once.
 

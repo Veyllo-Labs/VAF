@@ -220,3 +220,26 @@ def test_a_local_lane_on_an_api_installation_is_named_not_refused(config):
     codes = [f["code"] for f in collect_security_findings(cfg)]
     assert codes.count("inference_profile_conflict") == len(sentences)
     assert ip.conflicts({**cfg, "inference_profile": "local"}) == []
+
+
+def test_apply_is_the_one_switch_and_refuses_what_it_does_not_know(config, monkeypatch):
+    """MUTATION: let apply prune under local, or skip the container step - red."""
+    from vaf.core.config import Config
+    written = {}
+    monkeypatch.setattr(Config, "set", staticmethod(lambda k, v: written.__setitem__(k, v)))
+    monkeypatch.setattr(Config, "load", staticmethod(lambda: {}))
+    calls = []
+    monkeypatch.setattr(ss, "retire_local_inference_services",
+                        lambda prune=False, log=None: calls.append(("retire", prune))
+                        or {"stopped": True, "removed": ["img"], "errors": []})
+    monkeypatch.setattr(ss, "ensure_service_stack", lambda log=None: calls.append("up") or True)
+    out = ip.apply("api", prune=True)
+    assert written == {"inference_profile": "api"} and calls == [("retire", True)]
+    assert out["stopped"] is True and out["removed"] == ["img"]
+    assert ip.apply("local")["started"] is True and calls[-1] == "up"
+    calls.clear()
+    ip.apply("api", stack=False)
+    assert calls == []
+    for bad in (("cloud", False), ("local", True)):
+        with pytest.raises(ValueError):
+            ip.apply(bad[0], prune=bad[1])

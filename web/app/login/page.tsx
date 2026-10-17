@@ -73,6 +73,9 @@ export default function LoginPage() {
     // so its shape is never duplicated in JavaScript.
     const [agentName, setAgentName] = useState('');
     const [agentNameSuggestion, setAgentNameSuggestion] = useState('');
+    // inference_profile from /needs-setup: "api" means skipping the key leaves no local
+    // model to fall back on (vaf/core/inference_profile.py).
+    const [setupProfile, setSetupProfile] = useState<string>('local');
     const [pendingSoul, setPendingSoul] = useState<string | null>(null);
     const [onboardingConfig, setOnboardingConfig] = useState<Record<string, unknown>>({});
     const [backendUnreachable, setBackendUnreachable] = useState(false);
@@ -159,6 +162,9 @@ export default function LoginPage() {
                                 setLoginError(null);
                                 if (typeof data?.agent_name_suggestion === 'string') {
                                     setAgentNameSuggestion(data.agent_name_suggestion);
+                                }
+                                if (typeof data?.inference_profile === 'string') {
+                                    setSetupProfile(data.inference_profile);
                                 }
                                 sessionStorage.setItem('vaf_onboarding', 'true');
                                 setStep('language');
@@ -1136,6 +1142,9 @@ export default function LoginPage() {
                                 {/* Right: the actual form */}
                                 <div className="md:w-3/5 p-8">
                                     <p className="text-sm text-gray-600 leading-relaxed mb-4">{t('veylloBody')}</p>
+                                    {setupProfile === 'api' && (
+                                        <p className="text-sm text-amber-700 leading-relaxed mb-4">{t('veylloApiProfileNote')}</p>
+                                    )}
                                     <a
                                         href={VEYLLO_CREATE_URL}
                                         target="_blank"

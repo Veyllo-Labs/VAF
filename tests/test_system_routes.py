@@ -314,3 +314,33 @@ def test_desktop_mode_with_a_pidfile_is_fine(monkeypatch, tmp_path):
     (tmp_path / ".vaf").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".vaf" / "service.pid").write_text("1234")
     assert sr._restart_blocker() is None
+
+
+# ── the inference profile ────────────────────────────────────────────────────
+
+def test_the_profile_is_read_and_switched_through_the_framework(client, monkeypatch):
+    """The web switch is `vaf profile`'s implementation, not a second one. MUTATION: write
+    the config key here instead of calling inference_profile.apply - red."""
+    from vaf.core import inference_profile
+    monkeypatch.setattr(inference_profile, "current", lambda config=None: "api")
+    monkeypatch.setattr(inference_profile, "conflicts", lambda config=None: ["one"])
+    body = client.get("/api/system/inference-profile").json()
+    assert body["profile"] == "api" and "stt" in body["left_out"] and body["conflicts"] == ["one"]
+    calls = []
+    monkeypatch.setattr(inference_profile, "apply",
+                        lambda profile, prune=False, stack=True: calls.append((profile, prune))
+                        or {"profile": profile, "errors": []})
+    assert client.post("/api/system/inference-profile",
+                       json={"profile": "api", "prune": True}).status_code == 200
+    assert calls == [("api", True)]
+
+
+def test_an_unknown_profile_is_a_400_not_a_write(client, monkeypatch):
+    from vaf.core import inference_profile
+
+    def refuse(profile, prune=False, stack=True):
+        raise ValueError("Unknown profile")
+
+    monkeypatch.setattr(inference_profile, "apply", refuse)
+    answer = client.post("/api/system/inference-profile", json={"profile": "cloud"})
+    assert answer.status_code == 400 and "Unknown profile" in answer.json()["detail"]

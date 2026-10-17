@@ -223,7 +223,11 @@ async def needs_setup():
             # duplicated in JavaScript, which is also why the dice button in the
             # wizard simply asks this endpoint again.
             from vaf.auth.user_admin import suggest_agent_name
-            return {"needs_setup": True, "agent_name_suggestion": suggest_agent_name()}
+            from vaf.core.inference_profile import current as inference_profile
+            # The profile tells the wizard whether skipping the provider step leaves a
+            # local model to fall back on (only while no admin exists, like the rest).
+            return {"needs_setup": True, "agent_name_suggestion": suggest_agent_name(),
+                    "inference_profile": inference_profile()}
         except Exception as exc:
             if not _is_db_not_ready_error(exc):
                 raise

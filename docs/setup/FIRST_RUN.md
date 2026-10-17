@@ -99,7 +99,10 @@ machine has limited GPU/VRAM. The key is verified live; on success VAF sets Veyl
 default provider (including vision, and speech-to-text when no STT provider was chosen
 yet - it always falls back to the local engine and an explicit later choice overrides it).
 **Skip** to keep the local default model. You can add
-this or other providers later under **Settings → AI & Model**.
+this or other providers later under **Settings → AI & Model**. On an installation without
+local models (the Lean (API) profile, [INSTALL_PROFILES.md](INSTALL_PROFILES.md)) there is
+no local model to keep: the step says so, and after a skip a provider is set under
+Settings after the login.
 
 > Discord, Telegram, and Email connections are no longer part of first-run setup - add them
 > anytime under **Settings → Connections** (see [CONNECTIONS.md](../integrations/CONNECTIONS.md)).

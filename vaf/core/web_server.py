@@ -8153,11 +8153,17 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 lambda: speech_client.transcribe(temp_path, mime=mime_type, filename=filename, cache_key=_stt_key),
                             )
                             if not stt_text:
-                                # Detail is in the server log (speech_client warns).
-                                await websocket.send_json({
-                                    "type": "stt_error",
-                                    "error": "Docker STT failed. Is the STT container running (e.g. docker compose -f docker-compose.memory.yml up -d)?"
-                                })
+                                # Detail is in the server log (speech_client warns). Without
+                                # local models there is no container to blame: the provider
+                                # answered nothing, or none is set.
+                                if not _inference_profile.local_inference_allowed():
+                                    _stt_err = ("Speech-to-text gave no text: the provider set under "
+                                                "Settings > Voice did not answer, or none is set "
+                                                "(this installation runs without local models).")
+                                else:
+                                    _stt_err = ("Docker STT failed. Is the STT container running "
+                                                "(e.g. docker compose -f docker-compose.memory.yml up -d)?")
+                                await websocket.send_json({"type": "stt_error", "error": _stt_err})
                                 continue
                             text = stt_text
                         else:

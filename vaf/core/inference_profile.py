@@ -93,6 +93,36 @@ def refuse(what: str = "a local model") -> str:
     return text
 
 
+def apply(profile: str, *, prune: bool = False, stack: bool = True) -> Dict:
+    """Switch the installation to ``profile`` - the one implementation behind `vaf profile`
+    and the web settings. Writes the key, then (unless ``stack`` is False, the installers'
+    case) stops the speech containers for ``api`` (``prune`` also removes their containers,
+    images and volumes) or starts the stack with them for ``local``.
+
+    Raises ValueError for an unknown profile, or ``prune`` without ``api``. Returns
+    {"profile", "previous", "stopped", "started", "removed", "errors", "conflicts"}."""
+    wanted = str(profile or "").strip().lower()
+    if wanted not in PROFILES:
+        raise ValueError(f"Unknown profile {profile!r}: use local or api.")
+    if prune and wanted != API:
+        raise ValueError("Pruning goes with api: it removes what the local profile runs.")
+    from vaf.core.config import Config
+    previous = current()
+    Config.set("inference_profile", wanted)
+    out: Dict = {"profile": wanted, "previous": previous, "stopped": False, "started": False,
+                 "removed": [], "errors": [], "conflicts": []}
+    if stack:
+        from vaf.core import service_stack
+        if wanted == API:
+            result = service_stack.retire_local_inference_services(prune=prune)
+            out.update({"stopped": result["stopped"], "removed": result["removed"],
+                        "errors": result["errors"]})
+        else:
+            out["started"] = bool(service_stack.ensure_service_stack())
+    out["conflicts"] = conflicts()
+    return out
+
+
 def conflicts(config: Optional[Dict] = None) -> List[str]:
     """Settings that name a local lane while the profile is ``api``, one sentence each.
     Empty under ``local``. Read by ``vaf doctor`` and the status; nothing is refused."""

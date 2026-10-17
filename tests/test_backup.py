@@ -441,6 +441,11 @@ def test_a_restore_gives_the_recovery_key_this_machines_key(install, target, mon
     data, app = install["roots"]["data"], install["roots"]["app"]
     monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: data))
     monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: app))
+    # The "a ring existed here" marker belongs to the ring it was written for (conftest
+    # rule): left at the test's default, a key minted there - by this test's fixtures or a
+    # background thread of an earlier one - made this ring look vanished (seen once, under
+    # the hostile environment).
+    monkeypatch.setattr(data_keyring, "_established_marker", lambda: data / "data_keys.established")
     data_keyring.reset_ring()
     data_files.reset_key_cache()
     calls = []
@@ -841,6 +846,7 @@ def test_restoring_a_keyring_file_reads_the_new_one_and_keeps_the_safety_backup(
     # The file-store key looks for sealed files before it mints one: in this installation,
     # not in whatever home the rest of the suite left sealed chats in.
     monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: app))
+    monkeypatch.setattr(data_keyring, "_established_marker", lambda: data / "data_keys.established")
     data_keyring.reset_ring()
     data_files.reset_key_cache()
     try:

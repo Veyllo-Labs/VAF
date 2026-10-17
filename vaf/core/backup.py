@@ -742,7 +742,6 @@ def verify_backup(path: Path, identity: Optional[str] = None) -> VerifyResult:
     """Open the backup and check every member against its checksum. ``identity`` is an age
     identity (the recovery key); without one, this machine's backup identity is used."""
     import pyrage
-    from pyrage import x25519
 
     path = Path(path)
     problems: List[str] = []
@@ -752,10 +751,14 @@ def verify_backup(path: Path, identity: Optional[str] = None) -> VerifyResult:
         if file_sha256(path) != expected:
             return VerifyResult(False, problems=["the file changed after it was written "
                                                  "(its .sha256 does not match)"])
+    # The same reading of the key as a restore: a key verify accepts must also restore, and
+    # a retyped key with a mixed-case body is invalid Bech32 until it is upper-cased.
     try:
-        idents = [x25519.Identity.from_str(identity.strip())] if identity else decrypting_identities()
+        idents = _identities(identity)
+    except BackupError as e:
+        return VerifyResult(False, problems=[str(e)])
     except Exception as e:
-        return VerifyResult(False, problems=[f"that is not an age identity: {e}"])
+        return VerifyResult(False, problems=[f"this machine's backup key could not be read: {e}"])
 
     read_fd, write_fd = os.pipe()
     failure: List[BaseException] = []

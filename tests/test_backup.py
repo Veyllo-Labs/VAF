@@ -84,6 +84,13 @@ def test_a_backup_opens_with_this_machine_and_with_the_recovery_key(install):
     from pyrage import x25519
     stranger = backup.verify_backup(result.path, str(x25519.Identity.generate()))
     assert not stranger.ok
+    # A retyped key with a mixed-case body is invalid Bech32 as typed; verify reads it the way
+    # restore does (upper-cased), so a key verify accepts also restores. MUTATION: parse it
+    # as typed in verify_backup - red.
+    retyped = install["recovery"][:15] + install["recovery"][15:].lower()
+    assert backup.verify_backup(result.path, retyped).ok
+    garbage = backup.verify_backup(result.path, "not a key")
+    assert not garbage.ok and "not a recovery key" in garbage.problems[0]
 
     names = dict(_members(result.path, install["recovery"]))
     home = install["roots"]["app"]

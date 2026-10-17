@@ -989,9 +989,8 @@ def check_activity_loop(update_icon_callback):
         # re-sends the start once the model reports ready. See docs/agents/VOICE_AGENT.md.
         if (is_cloud_provider and tray_context.model_loaded
                 and not thinking_defer and not work_busy):
-            log("Tray", (f"Cloud provider '{provider}' active" if provider != "local"
-                         else "No local models on this installation (profile api)")
-                + " - unloading local model to free memory.")
+            why = f"Cloud provider '{provider}' active" if provider != "local" else "Profile api"
+            log("Tray", f"{why} - unloading local model to free memory.")
             try:
                 server_mgr.stop_server(force_external=True)
             except Exception as e:

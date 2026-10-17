@@ -50,6 +50,7 @@ python_version_supported() {
 SKIP_DOCKER=false
 VERBOSE=false
 INSTALL_MODE=""   # "" = undecided; set by --server/--desktop or the interactive prompt
+INSTALL_PROFILE="" # "" = keep what is set; local | api via --profile or the prompt
 
 # Colors
 RED='\033[0;31m'
@@ -92,6 +93,15 @@ while [[ $# -gt 0 ]]; do
             INSTALL_MODE="desktop"
             shift
             ;;
+        --profile|--profile=*)
+            if [[ "$1" == --profile=* ]]; then _p="${1#--profile=}"; shift
+            else _p="${2:-}"; shift; [[ $# -gt 0 ]] && shift; fi
+            if [[ "$_p" != "local" && "$_p" != "api" ]]; then
+                echo "--profile takes local or api"
+                exit 1
+            fi
+            INSTALL_PROFILE="$_p"
+            ;;
         --verbose|-v)
             VERBOSE=true
             shift
@@ -105,6 +115,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --skip-docker    Skip Docker installation/setup"
             echo "  --server         Server mode: always-on service, LAN via HTTPS, boot autostart (Linux only)"
             echo "  --desktop        Desktop mode: personal use, local only, system tray (default)"
+            echo "  --profile local  Local models and speech run on this machine (default)"
+            echo "  --profile api    No local models: chat and speech through API providers (small servers)"
             echo "  --verbose, -v    Show verbose output"
             echo "  --help, -h       Show this help message"
             echo ""
@@ -295,6 +307,35 @@ else
         exit 1
     fi
     INSTALL_MODE="desktop"
+fi
+
+# ============================================================================
+# INFERENCE PROFILE (local models or none) - docs/setup/INSTALL_PROFILES.md
+# ============================================================================
+if [[ -n "$INSTALL_PROFILE" ]]; then
+    print_success "Profile: $INSTALL_PROFILE (via flag)"
+elif [[ -t 0 ]]; then
+    # A re-run offers what is set as the default, so Enter never switches a lean server
+    # back to downloading models.
+    _profile_default=1
+    if grep -qs '"inference_profile": *"api"' "$HOME/.vaf/config.json"; then
+        _profile_default=2
+    fi
+    echo ""
+    print_step "Profile..."
+    echo ""
+    echo -e "  ${CYAN}[1] Full (local)${NC}  local models and speech run on this machine"
+    echo -e "  ${CYAN}[2] Lean (API)${NC}    no local models; chat and speech through API providers"
+    echo -e "                     (for small servers: about 4 GB of memory limits instead of 8)"
+    echo ""
+    read -p "  Choose [1/2, default $_profile_default]: " _profile_response
+    _profile_response="${_profile_response:-$_profile_default}"
+    if [[ "$_profile_response" == "2" ]]; then
+        INSTALL_PROFILE="api"
+    else
+        INSTALL_PROFILE="local"
+    fi
+    print_success "Profile: $INSTALL_PROFILE"
 fi
 
 # ============================================================================
@@ -749,6 +790,13 @@ python3 -m pip install -r requirements.txt --quiet 2>/dev/null || {
 
 print_success "Python dependencies installed"
 
+# The profile decides which services start below and whether models are ever downloaded,
+# so it is written before the stack comes up. No flag and no prompt keeps what is set.
+if [[ -n "$INSTALL_PROFILE" ]]; then
+    "$PROJECT_ROOT/venv/bin/python3" -m vaf.main profile "$INSTALL_PROFILE" --no-stack \
+        || print_warning "Could not write the profile - run: vaf profile $INSTALL_PROFILE"
+fi
+
 # ============================================================================
 # 8. WEB UI SETUP
 # ============================================================================
@@ -806,25 +854,38 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
             resolve_docker_bin
             # Two-phase like the Windows installer: bring up the core (registry images) first so a
             # slow local build of tts/vaf-browser can never block the database the app needs to boot.
-            print_info "Starting core services (database, cache, STT, document engine)..."
+            # Which services start is VAF's answer, not a list kept here: the profile leaves
+            # the speech containers out (vaf/core/service_stack.py needed_services).
+            CORE_SERVICES=$("$PROJECT_ROOT/venv/bin/python3" -m vaf.main profile --services core 2>/dev/null | tr '\n' ' ')
+            OPTIONAL_SERVICES=$("$PROJECT_ROOT/venv/bin/python3" -m vaf.main profile --services optional 2>/dev/null | tr '\n' ' ')
+            if [[ -z "${CORE_SERVICES// /}" ]]; then
+                print_warning "VAF could not name its services here; it starts them at its first launch."
+            else
+            print_info "Starting core services ($CORE_SERVICES)..."
             # Retry the core pull/up a few times: the first pull of the registry images over a
             # flaky connection often hits a transient "TLS handshake timeout" from Docker's CDN.
             # Pulls resume from cached layers, so a retry usually completes. Never abort on this.
             core_up=false
             for _attempt in 1 2 3; do
-                if $DOCKER_SUDO "$DOCKER_BIN" compose -f "$COMPOSE_FILE" up -d postgres redis stt gotenberg; then
+                # shellcheck disable=SC2086 - the service names are separate words on purpose
+                if $DOCKER_SUDO "$DOCKER_BIN" compose -f "$COMPOSE_FILE" up -d $CORE_SERVICES; then
                     core_up=true; break
                 fi
                 print_warning "Core image pull/start failed (attempt $_attempt/3) - often a transient registry/TLS timeout; retrying in 10s..."
                 sleep 10
             done
             if [ "$core_up" != "true" ]; then
-                $DOCKER_SUDO docker-compose -f "$COMPOSE_FILE" up -d postgres redis stt gotenberg \
+                # shellcheck disable=SC2086
+                $DOCKER_SUDO docker-compose -f "$COMPOSE_FILE" up -d $CORE_SERVICES \
                     || print_warning "Core stack not up yet (network/registry). VAF retries on launch; or re-run: ${DOCKER_BIN:-docker} compose -f $COMPOSE_FILE up -d"
             fi
-            print_info "Starting optional services (TTS, browser) - these build locally and may take a while..."
-            $DOCKER_SUDO "$DOCKER_BIN" compose -f "$COMPOSE_FILE" up -d tts vaf-browser 2>/dev/null \
-                || $DOCKER_SUDO docker-compose -f "$COMPOSE_FILE" up -d tts vaf-browser 2>/dev/null || true
+            if [[ -n "${OPTIONAL_SERVICES// /}" ]]; then
+                print_info "Starting optional services ($OPTIONAL_SERVICES) - these build locally and may take a while..."
+                # shellcheck disable=SC2086
+                $DOCKER_SUDO "$DOCKER_BIN" compose -f "$COMPOSE_FILE" up -d $OPTIONAL_SERVICES 2>/dev/null \
+                    || $DOCKER_SUDO docker-compose -f "$COMPOSE_FILE" up -d $OPTIONAL_SERVICES 2>/dev/null || true
+            fi
+            fi
 
             sleep 2
             if $DOCKER_SUDO "$DOCKER_BIN" ps | grep -q "vaf-memory-db"; then

@@ -89,7 +89,9 @@ def _build_view(snap: Dict[str, Any], services: Optional[Dict[str, Any]]):
     provider = vaf.get("provider") or "n/a"
     provider_kind = "local" if provider == "local" else "API"
     model = vaf.get("model") or ""
-    info.add_row("VAF", f"[bold]v{vaf.get('version', 'unknown')}[/bold]  mode [bold]{mode}[/bold]")
+    profile = vaf.get("inference_profile") or "n/a"
+    info.add_row("VAF", f"[bold]v{vaf.get('version', 'unknown')}[/bold]  mode [bold]{mode}[/bold]"
+                        f"  profile [bold]{profile}[/bold]")
     info.add_row("Provider", f"[bold]{provider}[/bold] ({provider_kind})"
                              + (f"  model [bold]{model}[/bold]" if model else ""))
     info.add_row("OS", f"{host.get('os', '')}  kernel {host.get('kernel', '')}  {host.get('arch', '')}")
@@ -182,7 +184,10 @@ def _build_view(snap: Dict[str, Any], services: Optional[Dict[str, Any]]):
         else:
             for s in services.get("services") or []:
                 state = s.get("state") or "unknown"
-                color = {"ok": "green", "starting": "yellow"}.get(state, "red")
+                # off: the inference profile leaves it out; absent: an optional service that
+                # is not installed. Neither is a fault, so neither is red.
+                color = {"ok": "green", "starting": "yellow", "off": "dim",
+                         "absent": "dim"}.get(state, "red")
                 svc_table.add_row(s.get("service_key") or s.get("name") or "?",
                                   f"[{color}]{state}[/{color}]",
                                   s.get("reason") or "")

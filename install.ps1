@@ -16,13 +16,18 @@
     .\install.ps1
     .\install.ps1 -SkipDocker
     .\install.ps1 -Verbose
+    .\install.ps1 -InferenceProfile api   # no local models: chat and speech via API providers
 #>
 
 [CmdletBinding()]
 param(
     [switch]$SkipDocker,
     [switch]$SkipShortcuts,
-    [switch]$Force
+    [switch]$Force,
+    # local = local models and speech run here; api = none (docs/setup/INSTALL_PROFILES.md).
+    # Empty keeps what is set.
+    [ValidateSet("", "local", "api")]
+    [string]$InferenceProfile = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -964,6 +969,13 @@ if ($pipExit -eq 0) {
     exit 1
 }
 
+# The profile decides which services start below and whether models are ever downloaded,
+# so it is written before the stack comes up. Empty keeps what is set.
+if ($InferenceProfile) {
+    & python -m vaf.main profile $InferenceProfile --no-stack
+    if ($LASTEXITCODE -ne 0) { Write-Warn "Could not write the profile - run: vaf profile $InferenceProfile" }
+}
+
 # Fix pywin32 COM registration. fix_venv.py prints failures to stdout (and now exits
 # non-zero on failure), so capture + inspect instead of swallowing with 2>$null.
 Write-Info "Registering Windows COM components..."
@@ -1199,21 +1211,33 @@ if (-not $SkipDocker) {
             # 'docker compose up' builds every image first and starts nothing if one build fails).
             # Phase 1 = registry-image services (no build); phase 2 = the build services, best-effort.
             # --quiet-pull hides the noisy per-layer pull progress.
+            # Which services start is VAF's answer, not a list kept here: the profile leaves
+            # the speech containers out (vaf/core/service_stack.py needed_services).
+            $coreServices = @(& python -m vaf.main profile --services core 2>$null | Where-Object { $_ })
+            $optionalServices = @(& python -m vaf.main profile --services optional 2>$null | Where-Object { $_ })
             & $dockerExe compose version 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) {
-                & $dockerExe compose -f docker-compose.memory.yml up -d --quiet-pull postgres redis stt gotenberg
+            $hasPlugin = ($LASTEXITCODE -eq 0)
+            if ($coreServices.Count -eq 0) {
+                Write-Warn "VAF could not name its services here; it starts them at its first launch."
+                $dcExit = 1
+            } elseif ($hasPlugin) {
+                & $dockerExe compose -f docker-compose.memory.yml up -d --quiet-pull @coreServices
                 $dcExit = $LASTEXITCODE
-                Write-Info "Building optional services (TTS, browser); if this fails the core stack still runs..."
-                & $dockerExe compose -f docker-compose.memory.yml up -d --quiet-pull tts vaf-browser
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Warn "Optional TTS/browser did not build - the core stack is up; VAF will retry them later."
-                    Write-Info "(Usually a VM CLOCK SKEW breaking apt in the build: fix the Windows time, then 'wsl --shutdown'.)"
+                if ($optionalServices.Count -gt 0) {
+                    Write-Info "Building optional services ($($optionalServices -join ', ')); if this fails the core stack still runs..."
+                    & $dockerExe compose -f docker-compose.memory.yml up -d --quiet-pull @optionalServices
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Warn "Optional services did not build - the core stack is up; VAF will retry them later."
+                        Write-Info "(Usually a VM CLOCK SKEW breaking apt in the build: fix the Windows time, then 'wsl --shutdown'.)"
+                    }
                 }
             } else {
                 Write-Info "docker compose plugin not found - using standalone docker-compose."
-                & docker-compose -f docker-compose.memory.yml up -d postgres redis stt gotenberg
+                & docker-compose -f docker-compose.memory.yml up -d @coreServices
                 $dcExit = $LASTEXITCODE
-                & docker-compose -f docker-compose.memory.yml up -d tts vaf-browser 2>&1 | Out-Null
+                if ($optionalServices.Count -gt 0) {
+                    & docker-compose -f docker-compose.memory.yml up -d @optionalServices 2>&1 | Out-Null
+                }
             }
             $ErrorActionPreference = $prevEAP
             Pop-Location

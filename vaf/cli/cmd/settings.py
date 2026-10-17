@@ -134,6 +134,12 @@ def search_models_menu():
             UI.console.input("[dim]Press Enter to continue...[/dim]")
 
 def download_model_flow(repo_id: str, preselected_filename: str = None):
+    # A model downloaded by hand is a model too: an installation without local models
+    # (inference_profile = api) takes none, by this lane either.
+    from vaf.core import inference_profile
+    if not inference_profile.local_inference_allowed():
+        UI.error(inference_profile.refusal("downloading a local model"))
+        return
     try:
         api = HfApi()
         

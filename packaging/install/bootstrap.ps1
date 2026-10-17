@@ -22,7 +22,10 @@
 param(
     [string]$Repo       = "Veyllo-Labs/VAF",                       # single source of truth
     [string]$Ref        = "main",                                  # branch or release tag
-    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "Veyllo\VAF")
+    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "Veyllo\VAF"),
+    # local | api, handed to install.ps1 (docs/setup/INSTALL_PROFILES.md). Through `irm | iex`
+    # no parameter reaches the script, so VAF_INFERENCE_PROFILE in the environment does.
+    [string]$InferenceProfile = $env:VAF_INFERENCE_PROFILE
 )
 
 $ErrorActionPreference = "Stop"
@@ -91,7 +94,9 @@ Ok "Repository ready: $InstallDir"
 
 # --- 4. hand off to the full installer -------------------------------------
 Info "Running install.ps1 ..."
-& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $InstallDir "install.ps1")
+$installArgs = @()
+if ($InferenceProfile) { $installArgs += @("-InferenceProfile", $InferenceProfile) }
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $InstallDir "install.ps1") @installArgs
 if ($LASTEXITCODE -ne 0) {
     Write-Host "`n== install.ps1 FAILED (exit $LASTEXITCODE). VAF is NOT installed - see the errors above. ==`n" -ForegroundColor Red
     exit $LASTEXITCODE

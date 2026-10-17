@@ -345,6 +345,7 @@ from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, 
 from vaf.cli.cmd import env as env_cmd
 from vaf.cli.cmd import users as users_cmd
 from vaf.cli.cmd import backup as backup_cmd
+from vaf.cli.cmd import profile as profile_cmd
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -474,6 +475,8 @@ app.command(name="info")(info.info)
 app.command(name="install-gpu")(info.install_gpu)
 app.command(name="doctor")(security.doctor)
 app.command(name="repair", help="Check and repair the Docker services")(repair.cmd_repair)
+app.command(name="profile", help="Local models or none: what this installation runs itself")(
+    profile_cmd.profile_cmd)
 
 app.command(name="start",   help="Start VAF as a background service")(service.cmd_start)
 app.command(name="stop",    help="Stop the VAF background service")(service.cmd_stop)

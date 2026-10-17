@@ -13,6 +13,11 @@ Server mode is an installation profile for running VAF as a persistent backgroun
 | Settings → Local Network tab | Visible | Visible (LAN toggle replaced by locked notice) |
 | Settings → Start Tray on Login | Visible | Hidden |
 
+Server or desktop is one choice; whether the machine runs its own models is another, the
+**inference profile** ([INSTALL_PROFILES.md](INSTALL_PROFILES.md)). Either install can be
+`local` (the models and the speech containers run here) or `api` (none of them; chat and
+speech go to the providers set in Settings). A rented server usually wants `api`.
+
 ## Installation
 
 Server mode is selected during installation, either interactively or with a flag:
@@ -20,6 +25,7 @@ Server mode is selected during installation, either interactively or with a flag
 ```bash
 chmod +x install.sh && ./install.sh    # interactive prompt
 ./install.sh --server                  # non-interactive server install
+./install.sh --server --profile api    # ... without local models
 ```
 
 The hosted one-liner accepts the same flag (`bash -s --` forwards it):
@@ -47,6 +53,26 @@ The installer then:
 6. Installs a systemd user service at `~/.config/systemd/user/vaf.service`, enables it, enables linger so it starts at boot without an active login session (`loginctl enable-linger`), and starts it immediately.
 
 `vaf server provision` is idempotent and can be re-run at any time (for example after moving the machine to another subnet), and re-running `./install.sh --server` upgrades an existing server install in place. Immutable/transactional distributions (openSUSE MicroOS, Leap Micro) are detected early and refused with a clear message. This is a current limitation of the alpha installer, not a design decision: support via `transactional-update` is planned, and exactly these systems are attractive server targets. Until then, run VAF on a standard distribution or inside a container/VM on the immutable host.
+
+## On a rented server (VPS)
+
+A server you rent from a hosting provider differs from a home server in two ways that
+decide how it is set up: it usually has no GPU and little memory, and it sits on the
+internet rather than behind a router. The setup that fits both:
+
+1. **Install without local models.** `./install.sh --server --profile api` installs the
+   service and leaves out the chat model and the speech containers
+   ([INSTALL_PROFILES.md](INSTALL_PROFILES.md)): about 4 GB of container memory limits
+   instead of 8, and no 7.5 GB speech-to-text image on a small disk. Set the chat
+   provider and, if you use speech, the speech providers under Settings after the first
+   login; `vaf profile` names anything still missing.
+2. **Reach it over a VPN, not the internet.** Keep the access port closed in the
+   provider's firewall and open only the VPN's own port (and SSH) there, then run
+   `vaf server provision --no-firewall`, since the provider's firewall is the one that
+   faces the internet. See [Over a VPN](#over-a-vpn).
+3. **Back it up off the machine.** A backup on the server's own disk is lost with the
+   server. `vaf backup create` writes one encrypted file; copy it elsewhere
+   ([BACKUP_RESTORE.md](BACKUP_RESTORE.md)).
 
 ## Service Management
 

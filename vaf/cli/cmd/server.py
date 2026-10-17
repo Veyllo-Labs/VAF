@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 import platform
+from typing import Optional
+
 import typer
 from vaf.core.config import Config
 from vaf.cli.ui import UI
@@ -65,6 +67,8 @@ def server_status():
     UI.print(f"  Hosting Enabled: {'[green]YES[/green]' if enabled else '[red]NO (Localhost only)[/red]'}")
     UI.print(f"  SSL/TLS Active:  {'[green]YES[/green]' if tls else '[red]NO (Plain HTTP)[/red]'}")
     UI.print(f"  Primary Port:    [cyan]{port}[/cyan]")
+    from vaf.core.inference_profile import current as inference_profile
+    UI.print(f"  Profile:         [cyan]{inference_profile()}[/cyan] (`vaf profile` shows what it runs)")
 
     if enabled:
         try:
@@ -113,6 +117,10 @@ def server_provision(
         "--firewall/--no-firewall",
         help="Open the OS firewall for the LAN access port (subnet-scoped)",
     ),
+    profile: Optional[str] = typer.Option(
+        None, "--profile",
+        help="local (models and speech run here) or api (none; chat and speech via providers)",
+    ),
 ):
     """One-shot server-mode provisioning (idempotent; install.sh server mode calls this).
 
@@ -126,9 +134,17 @@ def server_provision(
         UI.error("Server provisioning is Linux-only (systemd service plus firewall automation).")
         raise typer.Exit(1)
 
+    from vaf.core import inference_profile
+    if profile is not None and profile.strip().lower() not in inference_profile.PROFILES:
+        UI.error(f"Unknown profile {profile!r}: use local or api.")
+        raise typer.Exit(2)
+
     _enable_lan_keys()
     Config.set("server_mode", True)
     UI.success("Server mode enabled (LAN hosting with TLS, locked on).")
+    if profile is not None:
+        Config.set("inference_profile", profile.strip().lower())
+        UI.success(f"Inference profile: {profile.strip().lower()} (`vaf profile` shows what it runs).")
 
     # A server must not keep the database passwords published in this repository: whoever has
     # one writes every table (vaf/core/db_credentials.py). Replaced here when the database

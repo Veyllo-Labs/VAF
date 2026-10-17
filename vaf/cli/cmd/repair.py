@@ -19,6 +19,7 @@ _STATE_STYLE = {
     "warn": "yellow",
     "error": "red",
     "absent": "dim",
+    "off": "dim",
     "idle": "dim",
     "unknown": "dim",
 }

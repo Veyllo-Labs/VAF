@@ -84,7 +84,9 @@ Linux is the one platform where the installer asks, once:
 
 Press **Enter** for **Desktop** (using VAF on this computer). Choose **Server** only for a home server / NAS / headless box that other devices should reach - see [SERVER_MODE.md](SERVER_MODE.md).
 
-The choice can also be made non-interactively with `./install.sh --server` or `./install.sh --desktop` - required for scripted installs, where there is no prompt and the default is Desktop. A server install additionally opens the OS firewall for the LAN port, enables Docker at boot, disables sleep/suspend, and offers a master passphrase for headless credential encryption; the details are in [SERVER_MODE.md](SERVER_MODE.md).
+The choice can also be made non-interactively with `./install.sh --server` or `./install.sh --desktop` - required for scripted installs, where there is no prompt and the default is Desktop.
+
+The installer then asks for the profile: **Full (local)**, the default, runs the models and the speech containers on this machine; **Lean (API)** runs none of them and sends chat and speech to the API providers you set after the first login - for a small server without a GPU. `--profile local` or `--profile api` answers it without a prompt, on any platform (`-InferenceProfile` on Windows); see [INSTALL_PROFILES.md](INSTALL_PROFILES.md). A server install additionally opens the OS firewall for the LAN port, enables Docker at boot, disables sleep/suspend, and offers a master passphrase for headless credential encryption; the details are in [SERVER_MODE.md](SERVER_MODE.md).
 
 ### 5. Start VAF
 

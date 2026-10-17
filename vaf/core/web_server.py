@@ -23,6 +23,7 @@ from vaf.core.session import SessionManager, Session
 from vaf.cli.autosuggest import autosuggest_for
 import json
 from vaf.core.config import Config, is_admin_identity
+from vaf.core import inference_profile as _inference_profile
 from vaf.core.channels import CHAT_SESSION_PREFIXES
 from vaf.core.channel_secrets import has_channel_secret
 from vaf.version import __version__
@@ -5475,6 +5476,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "type": "model_download_done",
                             "success": False,
                             "error": "repo_id is required (e.g. Nanbeige/Nanbeige4.1-3B)",
+                            "models": []
+                        })
+                    elif not _inference_profile.local_inference_allowed():
+                        # A model downloaded by hand is a model too (inference_profile = api).
+                        await websocket.send_json({
+                            "type": "model_download_done",
+                            "success": False,
+                            "error": _inference_profile.refusal("downloading a local model"),
                             "models": []
                         })
                     else:

@@ -961,7 +961,10 @@ def check_activity_loop(update_icon_callback):
         # Kept provider-agnostic on purpose: a hardcoded allowlist used to omit newer providers (e.g.
         # `veyllo`), which made the tray load a phantom local model while in API mode.
         provider = Config.get("provider", "local")
-        is_cloud_provider = provider != "local"
+        # An installation without local models (inference_profile = api) never wants the
+        # local model loaded: the same unload, and no load, as with an API provider.
+        from vaf.core.inference_profile import local_inference_allowed
+        is_cloud_provider = provider != "local" or not local_inference_allowed()
 
         # Provider switched at runtime -> manage the local model directly. The steady-state unload branch
         # below is gated on `not is_cloud_provider`, so a model loaded BEFORE a switch to a cloud/API
@@ -986,7 +989,9 @@ def check_activity_loop(update_icon_callback):
         # re-sends the start once the model reports ready. See docs/agents/VOICE_AGENT.md.
         if (is_cloud_provider and tray_context.model_loaded
                 and not thinking_defer and not work_busy):
-            log("Tray", f"Cloud provider '{provider}' active — unloading local model to free memory.")
+            log("Tray", (f"Cloud provider '{provider}' active" if provider != "local"
+                         else "No local models on this installation (profile api)")
+                + " - unloading local model to free memory.")
             try:
                 server_mgr.stop_server(force_external=True)
             except Exception as e:

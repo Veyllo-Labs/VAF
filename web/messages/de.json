@@ -1575,6 +1575,7 @@
       "failoverDesc": "Wenn der Hauptanbieter nicht erreichbar ist oder Fehler liefert, wird die Anfrage automatisch über eine Backup-API oder ein lokales Modell erneut versucht.",
       "failoverLevelOff": "Aus",
       "failoverLevelBasic": "Einfach",
+      "failoverLeanNote": "Diese Installation hat kein lokales Modell, deshalb fehlt es in der Kette (Einfach hat dann kein Glied mehr).",
       "failoverLevelBalanced": "Ausgewogen",
       "failoverLevelMaximum": "Maximum",
       "failoverLevelOffDesc": "Keine Ausfallsicherung — nur dein Hauptanbieter. Ist er nicht erreichbar, schlägt die Anfrage fehl.",

@@ -1575,6 +1575,7 @@
       "failoverDesc": "주 공급자에 연결할 수 없거나 오류가 나면, 백업 API나 로컬 모델로 요청을 저절로 다시 시도해요.",
       "failoverLevelOff": "사용 안 함",
       "failoverLevelBasic": "기본",
+      "failoverLeanNote": "이 설치에는 로컬 모델이 없어 체인에서 빠집니다(기본 수준에는 남는 링크가 없습니다).",
       "failoverLevelBalanced": "균형",
       "failoverLevelMaximum": "최대",
       "failoverLevelOffDesc": "장애 조치를 쓰지 않고 주 공급자만 써요. 연결할 수 없으면 요청이 실패해요.",

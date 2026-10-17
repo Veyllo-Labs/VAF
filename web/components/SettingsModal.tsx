@@ -3381,7 +3381,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     /* 'local' added HERE, not in VISION_PROVIDERS:
                                                        the voice-agent select reuses that array and
                                                        adds its own local entry (would duplicate). */
-                                                    { value: 'local', label: tAi('visionLocal') },
+                                                    { value: 'local', label: leanProfile ? tAi('localLlamaUnavailable') : tAi('visionLocal'), disabled: leanProfile },
                                                     { value: 'veyllo', label: 'Veyllo' },
                                                     ...VISION_PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label }))
                                                 ]}
@@ -3524,7 +3524,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 { value: 'deepseek', label: 'DeepSeek' },
                                                 { value: 'google', label: 'Google' },
                                                 { value: 'openrouter', label: 'OpenRouter' },
-                                                { value: 'local', label: 'Local' },
+                                                { value: 'local', label: leanProfile ? tAi('localLlamaUnavailable') : 'Local', disabled: leanProfile },
                                             ]}
                                         />
                                     </div>
@@ -3594,7 +3594,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             { value: 'deepseek', label: 'DeepSeek' },
                                             { value: 'google', label: 'Google' },
                                             { value: 'openrouter', label: 'OpenRouter' },
-                                            { value: 'local', label: 'Local' },
+                                            { value: 'local', label: leanProfile ? tAi('localLlamaUnavailable') : 'Local', disabled: leanProfile },
                                         ]}
                                     />
                                     {(localConfig.thinking_provider && localConfig.thinking_provider !== 'inherit') && (() => {
@@ -4285,7 +4285,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     }}
                                                     options={[
                                                         { value: '', label: tVoice('agentLlmMain') },
-                                                        { value: 'local', label: tVoice('agentLlmLocal') },
+                                                        { value: 'local', label: leanProfile ? tVoice('localUnavailable') : tVoice('agentLlmLocal'), disabled: leanProfile },
                                                         { value: 'veyllo', label: 'Veyllo' },
                                                         ...VISION_PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label })),
                                                     ]}
@@ -4954,7 +4954,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         const idx = Math.max(0, LEVELS.indexOf(level));
                                         const isOff = level === 'off';
                                         const showBackup = level === 'balanced' || level === 'maximum';
-                                        const showLocal = level !== 'off';
+                                        // No local link where the installation runs no local model (inference_profile
+                                        // = api): the backend chain leaves it out too (APIBackendManager).
+                                        const showLocal = level !== 'off' && !leanProfile;
                                         const LEVEL_LABELS = [tAdvanced('failoverLevelOff'), tAdvanced('failoverLevelBasic'), tAdvanced('failoverLevelBalanced'), tAdvanced('failoverLevelMaximum')];
                                         const LEVEL_DESCS = [tAdvanced('failoverLevelOffDesc'), tAdvanced('failoverLevelBasicDesc'), tAdvanced('failoverLevelBalancedDesc'), tAdvanced('failoverLevelMaximumDesc')];
 
@@ -5040,6 +5042,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         <span className="bg-gray-100 text-gray-700 rounded-full px-2.5 py-1 text-xs font-medium">{tAdvanced('failoverLocal')}</span>
                                                     </>)}
                                                 </div>
+                                                {leanProfile && !isOff && (
+                                                    <p className="text-xs text-gray-500 mt-2">{tAdvanced('failoverLeanNote')}</p>
+                                                )}
 
                                                 {showBackup && (
                                                     <div className="mt-3 grid grid-cols-2 gap-3 max-md:grid-cols-1">

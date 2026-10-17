@@ -1575,6 +1575,7 @@
       "failoverDesc": "主服务商连不上或者报错时，请求会自动改用备用 API 或本地模型重试。",
       "failoverLevelOff": "关闭",
       "failoverLevelBasic": "基础",
+      "failoverLeanNote": "此安装没有本地模型，因此链中不包含它（「基础」级别不再有任何链接）。",
       "failoverLevelBalanced": "均衡",
       "failoverLevelMaximum": "最高",
       "failoverLevelOffDesc": "不做故障转移，只用主服务商。它连不上，请求就失败。",

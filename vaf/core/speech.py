@@ -770,8 +770,11 @@ $player.Close()
                             UI.event("Debug", f"Docker TTS play failed: {e}", style="dim")
                     # Fall through to system/piper
                 
-                # 1b. Piper (High Quality) - local binary
-                if preferred_engine == "piper" and self._check_piper():
+                # 1b. Piper (High Quality) - local binary. It downloads the binary and the
+                # voices, so not on an installation without local models.
+                from vaf.core import inference_profile as _profile
+                if (preferred_engine == "piper" and _profile.local_inference_allowed()
+                        and self._check_piper()):
                     # Attempt to get voice for requested language
                     model_path = self._ensure_voice_model(lang)
                     

@@ -1317,7 +1317,10 @@ class APIBackendManager:
                                                     caller_config=self.caller_config), bm))
                     seen.add(bp)
                 elif kind == "local":
-                    if "local" in seen:
+                    # The local model is a link only where local models run at all
+                    # (inference_profile = api leaves it out; the backup link stays).
+                    from vaf.core.inference_profile import local_inference_allowed
+                    if "local" in seen or not local_inference_allowed():
                         continue
                     lm = str(self._failover_cfg("failover_local_model", "") or "").strip() or None
                     chain.append((APIBackendManager("local", config=self.config), lm))

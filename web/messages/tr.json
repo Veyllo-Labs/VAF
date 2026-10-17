@@ -1575,6 +1575,7 @@
       "failoverDesc": "Ana sağlayıcıya ulaşılamıyorsa ya da hata veriyorsa, istek otomatik olarak bir yedek API ya da yerel bir modelle yeniden denenir.",
       "failoverLevelOff": "Kapalı",
       "failoverLevelBasic": "Temel",
+      "failoverLeanNote": "Bu kurulumda yerel model yok, bu yüzden zincirde yer almaz (Temel düzeyde hiç halka kalmaz).",
       "failoverLevelBalanced": "Dengeli",
       "failoverLevelMaximum": "En yüksek",
       "failoverLevelOffDesc": "Yük devretme yok, yalnızca ana sağlayıcın. Ona ulaşılamıyorsa istek başarısız olur.",

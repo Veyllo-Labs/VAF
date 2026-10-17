@@ -1265,16 +1265,25 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except Exception as _heal_e:
                         print(f"[Headless] provider self-heal failed: {_heal_e}")
                     from vaf.core import inference_profile
+                    from vaf.core.channels import CHANNEL_LABELS
                     _no_local = not inference_profile.local_inference_allowed()
-                    if _no_local and agent.provider == "local" and not agent.api_backend:
+                    if (_no_local and agent.provider == "local" and not agent.api_backend
+                            and getattr(task, "source", None) not in CHANNEL_LABELS):
                         # Nothing will be downloaded here (inference_profile = api): say why
-                        # in the chat instead of a placeholder promising a download.
+                        # in the chat, close the turn and skip the rest of it. Running it
+                        # anyway ended in "[Error] No response was produced" under the
+                        # reason. A messenger turn keeps its own lane: an admin's setup
+                        # message is not for whoever wrote in.
+                        _why = inference_profile.refusal("the local model")
                         try:
                             get_web_interface().emit_agent_message(
-                                "assistant", inference_profile.refusal("the local model"),
-                                session_id=task.session_id)
+                                "assistant", _why, session_id=task.session_id)
+                            get_web_interface().emit_message_complete(
+                                content=_why, session_id=task.session_id)
                         except Exception:
                             pass
+                        tq.task_done()
+                        continue
                     if not _no_local and agent.provider == "local" and not agent.api_backend and not agent.llm and not agent.use_server:
                         from vaf.core.model_download_state import MODEL_DOWNLOAD
                         # On first use the load below downloads the model (blocking, filelock-serialized so it

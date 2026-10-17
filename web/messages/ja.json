@@ -1575,6 +1575,7 @@
       "failoverDesc": "メインのプロバイダーに接続できない、またはエラーになった場合は、バックアップのAPIやローカルモデルで自動的にやり直します。",
       "failoverLevelOff": "オフ",
       "failoverLevelBasic": "基本",
+      "failoverLeanNote": "このインストールにはローカルモデルがないため、チェーンから外れます（「基本」ではリンクが残りません）。",
       "failoverLevelBalanced": "バランス",
       "failoverLevelMaximum": "最大",
       "failoverLevelOffDesc": "フェイルオーバーなし。メインのプロバイダーだけを使い、接続できなければリクエストは失敗します。",

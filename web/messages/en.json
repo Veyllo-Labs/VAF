@@ -1575,6 +1575,7 @@
       "failoverDesc": "If the primary provider is unreachable or errors out, automatically retry the request on a backup API or a local model.",
       "failoverLevelOff": "Off",
       "failoverLevelBasic": "Basic",
+      "failoverLeanNote": "This installation runs no local model, so the chain leaves it out (Basic has no link left).",
       "failoverLevelBalanced": "Balanced",
       "failoverLevelMaximum": "Maximum",
       "failoverLevelOffDesc": "No failover — only your primary provider. If it is unreachable, the request fails.",

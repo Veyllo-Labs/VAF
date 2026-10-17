@@ -8,9 +8,10 @@ provision --profile``, the installers) and is one of:
 
 - ``local`` (the default, and what every installation ran before the key existed): the
   chat model, the speech containers and the voice model can run on this machine.
-- ``api``: nothing that infers runs here. Chat, speech-to-text and text-to-speech go to
-  the providers set under Settings; no model is downloaded and the speech containers are
-  not started. What a small rented server (a VPS) can carry.
+- ``api``: no chat, voice or speech model runs here. Chat, speech-to-text and
+  text-to-speech go to the providers set under Settings; none of those models is
+  downloaded and the speech containers are not started. Two small CPU models stay (see
+  below). What a small rented server (a VPS) can carry.
 
 Measured before this existed, on the desktop that wrote it: the speech-to-text image is
 7.53 GB on disk with a 2 GB memory limit, the text-to-speech image 1.13 GB with another
@@ -30,7 +31,12 @@ the code:
 - ``service_stack.needed_services``, the one list of the services to run, read by the
   stack start, the status, the repair and the installers;
 - the speech clients' local fallback (``speech_api.resolve_stt_engine``,
-  ``speech_client.transcribe``, ``speech.TTSEngine.synthesize``).
+  ``speech_client.transcribe``, ``SpeechManager.synthesize_audio`` and the Piper lane of
+  ``SpeechManager.speak``);
+- the failover chain, whose local link is left out (``APIBackendManager``);
+- a running agent and a running server: ``Agent.chat_step`` refuses a local backend that
+  was loaded before a switch, and the tray unloads the local model as it does for an API
+  provider.
 
 A setting that names a local lane while the profile is ``api`` is not refused when it is
 written: ``config.json`` stays editable by hand, and the choke points above are the
@@ -149,10 +155,11 @@ def conflicts(config: Optional[Dict] = None) -> List[str]:
                        ("subagent_provider", "the sub-agents")):
         if _v(key) == LOCAL:
             out.append(f"{key} is \"local\": {label} would need a local model.")
-    if _v("failover_level", "off") not in ("", "off"):
-        out.append("failover_level adds the local model as the last link: it is never "
-                   "reached here.")
-    if config.get("speech_stt_enabled") and not _v("speech_stt_provider"):
+    if _v("failover_level", "off") == "basic":
+        out.append("failover_level is \"basic\", whose only link is the local model: it adds "
+                   "nothing here (\"balanced\" keeps a backup API provider).")
+    stt_on = config.get("speech_stt_enabled") or config.get("stt_enabled")
+    if stt_on and not _v("speech_stt_provider"):
         out.append("Speech-to-text is on without a provider (speech_stt_provider): there is "
                    "no local engine to fall back to here.")
     if config.get("speech_tts_enabled") and not _v("speech_tts_provider") \

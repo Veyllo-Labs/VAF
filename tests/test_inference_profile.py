@@ -243,3 +243,73 @@ def test_apply_is_the_one_switch_and_refuses_what_it_does_not_know(config, monke
     for bad in (("cloud", False), ("local", True)):
         with pytest.raises(ValueError):
             ip.apply(bad[0], prune=bad[1])
+
+
+@pytest.mark.parametrize("state, profile, expected", [
+    ({"llm": None, "use_server": True, "api_backend": None, "provider": "local"}, "api",
+     "without local models"),                                  # loaded before the switch
+    ({"llm": None, "use_server": True, "api_backend": None, "provider": "local"}, "local", ""),
+    ({"llm": None, "use_server": False, "api_backend": None, "provider": "openai",
+      "_api_init_error": "AuthenticationError: bad key"}, "api", "openai is not set up"),
+    ({"llm": None, "use_server": False, "api_backend": None, "provider": "local"}, "api",
+     "without local models"),
+    ({"llm": None, "use_server": False, "api_backend": object(), "provider": "openai"}, "api", ""),
+])
+def test_a_turn_says_which_backend_is_missing(config, state, profile, expected):
+    """A failed API provider was reported as a missing local model, and a local model
+    loaded before a switch to api kept answering. MUTATION: drop either branch - red."""
+    from vaf.core.agent import Agent
+    config["inference_profile"] = profile
+    reason = Agent._no_backend_reason(types.SimpleNamespace(**state))
+    assert (expected in reason) if expected else reason == ""
+    if expected == "openai is not set up":
+        assert "bad key" in reason and "local" not in reason
+
+
+def test_the_failover_chain_has_no_local_link_under_the_api_profile(config):
+    """MUTATION: drop the profile check on the local link - red."""
+    from vaf.core.api_backend import APIBackendManager
+    manager = APIBackendManager.__new__(APIBackendManager)
+    manager.provider_name, manager.caller_config = "openai", None
+    manager.config = {"failover_level": "basic"}
+    config["inference_profile"] = "api"
+    assert [m for m, _ in manager._build_failover_chain("gpt")] == [manager]
+    config["inference_profile"] = "local"
+    assert len(manager._build_failover_chain("gpt")) == 2
+
+
+def test_the_legacy_stt_toggle_counts_for_the_conflict_too():
+    """MUTATION: read only speech_stt_enabled - red."""
+    cfg = {"inference_profile": "api", "provider": "openai", "stt_enabled": True}
+    assert any("Speech-to-text" in s for s in ip.conflicts(cfg))
+    assert not any("failover" in s for s in ip.conflicts({**cfg, "failover_level": "balanced"}))
+    assert any("basic" in s for s in ip.conflicts({**cfg, "failover_level": "basic"}))
+
+
+def test_speaking_through_piper_downloads_nothing_under_the_api_profile(config, monkeypatch):
+    """speak() has a Piper lane of its own, which installs the binary and fetches voices.
+    MUTATION: drop the guard in front of _check_piper - red."""
+    import threading
+
+    from vaf.core import speech, speech_api
+    config.update({"inference_profile": "api", "speech_tts_enabled": True,
+                   "speech_tts_engine": "piper"})
+    monkeypatch.setattr(speech_api, "select_tts_backend", lambda: (None, None))
+    manager = speech.SpeechManager.__new__(speech.SpeechManager)
+    manager._clean_markdown = lambda text: text
+    manager._speech_generation = 0
+    manager._tts_lock = threading.Lock()
+    manager.on_speech_loading = manager.on_speech_start = manager.on_speech_end = None
+    manager._check_piper = lambda: pytest.fail("Piper reached")
+    manager._ensure_voice_model = lambda lang: pytest.fail("a voice download reached")
+
+    class _Now:
+        def __init__(self, target=None, daemon=None, **kw):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(speech.threading, "Thread", _Now)
+    monkeypatch.setattr(speech.platform, "system", lambda: "Linux")
+    manager.speak("Hallo", "de")

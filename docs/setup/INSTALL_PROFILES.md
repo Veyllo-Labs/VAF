@@ -1,8 +1,10 @@
 # Installation profiles: local models, or none
 
-VAF can run its models on the machine it is installed on, or leave all inference to the
-API providers you set in Settings. Which of the two an installation does is its
-**inference profile** (`inference_profile`, `vaf/core/inference_profile.py`):
+VAF can run its chat, voice and speech models on the machine it is installed on, or leave
+them to the API providers you set in Settings. Which of the two an installation does is
+its **inference profile** (`inference_profile`, `vaf/core/inference_profile.py`). Two
+small models run on the CPU in both: the memory's embedding model and the speaker
+recognition.
 
 | | Full (`local`, the default) | Lean (`api`) |
 |---|---|---|
@@ -13,8 +15,8 @@ API providers you set in Settings. Which of the two an installation does is its
 | Database, cache, document conversion | yes | yes |
 | Browser (agent tool) | yes | yes |
 | Sandbox environments | yes | yes |
-| Memory embedding model | yes (130 MB, CPU) | yes (130 MB, CPU) |
-| Speaker recognition | yes (27 MB, CPU) | yes (27 MB, CPU) |
+| Memory embedding model | yes (130 MB, CPU) | yes, the same (130 MB, CPU): every stored memory is a vector of it |
+| Speaker recognition | yes (27 MB, CPU) | yes, the same (27 MB, CPU) |
 | Compose memory limits | about 8.3 GB, plus the chat model in RAM or VRAM | about 4.3 GB |
 
 The sizes are measured on the machine this was written on (images with `docker image
@@ -68,17 +70,19 @@ config and the same docker directly.
 
 In the web app the profile sits at the top of **Settings > AI & Model** (admin only), with
 the same switch (`POST /api/system/inference-profile`, the same `inference_profile.apply`
-behind it). Under Lean the local choices there and under **Voice & Speech** stay listed but
-cannot be picked, and the first-run wizard says that skipping the provider step leaves no
-local model to fall back on.
+behind it). Under Lean every local choice stays listed but cannot be picked: the chat
+provider, vision, sub-agents and the thinker, the voice call's model and the speech
+engines; the failover chain shows no local link. The first-run wizard says that skipping
+the provider step leaves no local model to fall back on.
 
 The profile is admin-only (`GLOBAL_CONFIG_KEYS`): it starts and stops containers and
 decides about downloads for every account at once.
 
 ## What the lean profile guarantees, and where
 
-Nothing that infers is downloaded or started, whatever a setting says. The profile is
-decided at the places that exist once each, not by checks spread over the code:
+No chat, voice or speech model is downloaded or started, whatever a setting says (the
+two small CPU models above stay). The profile is decided at the places that exist once
+each, not by checks spread over the code:
 
 - `backend.ensure_model_available`, the one download entry for a model, returns nothing
   and downloads nothing. Every lane passes it: chat, the voice call, thinking runs,
@@ -87,22 +91,27 @@ decided at the places that exist once each, not by checks spread over the code:
 - `ServerManager.start_server`, the one start of the local server, refuses, also for the
   voice lane, which otherwise asks past the provider gate.
 - `Agent.load_model` loads no local model; a chat turn that has no provider says so in the
-  chat instead of promising a download.
+  chat and closes the turn instead of promising a download. An agent that loaded a local
+  model before the profile was switched does not run its next turn on it, and the tray
+  unloads the model as it does for an API provider.
+- The failover chain leaves its local link out; a backup API provider stays.
 - `service_stack.needed_services` leaves the speech containers out. The stack start, the
   status, the repair, `vaf top` and the installers read this one list: a container the
   profile leaves out is shown as `off`, never as a fault, and a repair does not bring it
   back.
 - Speech-to-text and text-to-speech use the provider's answer or none: without local
   models there is no container to fall back to, so a provider error is reported rather
-  than retried against a service that does not run.
+  than retried against a service that does not run. The local Piper lane, which downloads
+  its binary and voices, is not used either.
 
 ## A setting that contradicts the profile
 
 Nothing is refused when it is written: `config.json` stays editable by hand, and the
 places above are the guarantee. A setting that names a local lane on a lean installation
 (the chat provider still `local`, a voice, thinking, sub-agent or vision lane on `local`,
-the local failover link, speech switched on without a provider) is named by `vaf profile`
-and `vaf doctor` (`inference_profile_conflict`), with what to do.
+the failover level `basic`, whose only link is the local model, speech switched on
+without a provider) is named by `vaf profile` and `vaf doctor`
+(`inference_profile_conflict`), with what to do.
 
 A fresh lean installation starts in exactly that state: no chat provider yet. Set one
 under Settings > AI & Model, or give the Veyllo key in the first-run wizard.
@@ -111,7 +120,7 @@ under Settings > AI & Model, or give the Veyllo key in the first-run wizard.
 
 - **One profile, not one switch per lane.** A machine that should run its own
   speech-to-text but chat through an API is a `local` installation with an API chat
-  provider; the lean profile is for machines that run no model at all.
+  provider; the lean profile is for machines that run no chat, voice or speech model.
 - **No browser-less profile yet.** The browser is an agent tool, not a model, and stays in
   both profiles. Whether a smaller server needs to go without it (about 2 GB of memory
   limits) is decided when a pilot measures the real use.

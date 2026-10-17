@@ -1578,12 +1578,14 @@ class Agent:
         self._backend_swap_lock = threading.Lock()  # serializes runtime provider/backend swaps
         
         # Initialize API backend immediately if using API provider
+        self._api_init_error = ""
         if self.provider != "local":
             try:
                 self.api_backend = self._build_api_backend(self.provider)
             except Exception as e:
-                # If API backend fails, we'll fallback to local in load_model()
-                pass
+                # Kept for chat_step: an API provider that could not be set up is that,
+                # not a missing local model (load_model returns early for API providers).
+                self._api_init_error = f"{type(e).__name__}: {e}"
         
         self.history = []
         self._tokenizer_instance = None
@@ -5089,6 +5091,25 @@ class Agent:
             return get_ipc().has_pending_results()
         except Exception:
             return False
+
+    def _no_backend_reason(self) -> str:
+        """Why this turn cannot run, or "" when a backend is ready. Three different causes,
+        said apart: a local backend loaded before the profile was switched to api (the turn
+        does not run on it), an API provider that could not be set up (its error, not a
+        missing local model), and no local model on an installation without them."""
+        from vaf.core import inference_profile
+        local_ok = inference_profile.local_inference_allowed()
+        if (self.llm or self.use_server) and not self.api_backend:
+            return "" if local_ok else inference_profile.refusal("the local model")
+        if self.api_backend:
+            return ""
+        if self.provider != "local":
+            detail = getattr(self, "_api_init_error", "") or "no backend was built"
+            return (f"The API provider {self.provider} is not set up ({detail}). "
+                    "Check its key under Settings > AI & Model.")
+        if not local_ok:
+            return inference_profile.refusal("the local model")
+        return "Agent not initialized. Run 'vaf run' first."
 
     def load_model(self, skip_download_check: bool = False):
         """Make the local backend ready; no-op for API providers.
@@ -9674,12 +9695,9 @@ class Agent:
                 pass
 
         # Check if any backend is available (local, server, or API)
-        if not self.llm and not self.use_server and not self.api_backend:
-            from vaf.core import inference_profile
-            if not inference_profile.local_inference_allowed():
-                UI.error(inference_profile.refusal("the local model"))
-            else:
-                UI.error("Agent not initialized. Run 'vaf run' first.")
+        _no_backend = self._no_backend_reason()
+        if _no_backend:
+            UI.error(_no_backend)
             return
         
         # Clean old workflow messages from context (prevents clutter)

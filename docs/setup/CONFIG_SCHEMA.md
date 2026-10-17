@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (371 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (372 keys).
 
 ## How configuration is set
 
@@ -346,6 +346,7 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `server_mode` | `False` | Run as a standalone server. |
+| `inference_profile` | `"local"` | What this installation runs itself. `local`: the chat model, the speech containers and the voice model may run here. `api`: none of them; chat, speech-to-text and text-to-speech go to the providers set in Settings, no model is downloaded and the speech containers are not started. Anything but the literal `api` means `local`. Set with `vaf profile`, `vaf server provision --profile` or the installers; see [INSTALL_PROFILES.md](INSTALL_PROFILES.md). Admin-only. |
 | `server_persistence_enabled` | `False` | Persist the server process. |
 | `server_idle_timeout` | `15` | Idle minutes before idle handling. |
 | `local_network_enabled` | `False` | Allow LAN access. |

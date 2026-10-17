@@ -1,0 +1,132 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
+"""Which inference this installation runs itself: all of it, or none of it.
+
+``inference_profile`` is chosen when VAF is set up (``vaf profile``, ``vaf server
+provision --profile``, the installers) and is one of:
+
+- ``local`` (the default, and what every installation ran before the key existed): the
+  chat model, the speech containers and the voice model can run on this machine.
+- ``api``: nothing that infers runs here. Chat, speech-to-text and text-to-speech go to
+  the providers set under Settings; no model is downloaded and the speech containers are
+  not started. What a small rented server (a VPS) can carry.
+
+Measured before this existed, on the desktop that wrote it: the speech-to-text image is
+7.53 GB on disk with a 2 GB memory limit, the text-to-speech image 1.13 GB with another
+2 GB, and the chat model 2.7 to 17.9 GB depending on the GPU. The compose memory limits
+add up to about 8.3 GB with them and about 4.3 GB without. With an API provider the chat
+model was already loaded only on demand, but three settings still pulled a local model
+onto the machine: a voice lane, a thinking or sub-agent lane on ``local``, and the local
+failover link.
+
+The profile is enforced at the places that exist once each, never by checks spread over
+the code:
+
+- ``backend.ensure_model_available``, the one download entry for a model;
+- ``ServerManager.start_server``, the one start of the local server (also when the voice
+  lane bypasses the provider gate);
+- ``Agent.load_model``, the one local backend entry of an agent;
+- ``service_stack.needed_services``, the one list of the services to run, read by the
+  stack start, the status, the repair and the installers;
+- the speech clients' local fallback (``speech_api.resolve_stt_engine``,
+  ``speech_client.transcribe``, ``speech.TTSEngine.synthesize``).
+
+A setting that names a local lane while the profile is ``api`` is not refused when it is
+written: ``config.json`` stays editable by hand, and the choke points above are the
+guarantee. ``conflicts()`` names such settings for ``vaf doctor`` and the status.
+
+What stays local in both profiles, deliberately: the database, the cache, the document
+conversion, the browser (an agent tool, not a model), the sandbox environments, the
+embedding model of the memory (130 MB on the CPU; every stored memory is a vector of
+it, so an API embedding would mean re-embedding everything and sending every memory
+out), and the speaker recognition (27 MB). A text-to-speech server the admin runs
+elsewhere (``speech_tts_engine = chatterbox``) and the macOS voice (``system``) download
+nothing here and stay usable.
+
+Not on the facade: an embedder chooses the provider per agent; this is a rule about what
+an installation of the product carries.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Dict, List, Optional
+
+logger = logging.getLogger("vaf.core.inference_profile")
+
+LOCAL = "local"
+API = "api"
+PROFILES = (LOCAL, API)
+DEFAULT = LOCAL
+
+
+def current(config: Optional[Dict] = None) -> str:
+    """The profile of this installation. Anything that is not the literal ``api`` is
+    ``local``: an unreadable or mistyped value must not take the local models away from
+    an installation that has run on them."""
+    try:
+        if config is None:
+            from vaf.core.config import Config
+            value = Config.get("inference_profile", DEFAULT)
+        else:
+            value = config.get("inference_profile", DEFAULT)
+        return API if str(value or "").strip().lower() == API else LOCAL
+    except Exception:
+        return DEFAULT
+
+
+def local_inference_allowed(config: Optional[Dict] = None) -> bool:
+    return current(config) == LOCAL
+
+
+def refusal(what: str = "a local model") -> str:
+    """The sentence every choke point says, so a person sees one reason in one wording."""
+    return (f"This installation runs without local models (profile \"api\"), so {what} is "
+            "not used here. Choose an AI provider under Settings > AI & Model, or switch "
+            "the profile with `vaf profile local`.")
+
+
+def refuse(what: str = "a local model") -> str:
+    """Log the refusal once per call site and return its text."""
+    text = refusal(what)
+    logger.info(text)
+    return text
+
+
+def conflicts(config: Optional[Dict] = None) -> List[str]:
+    """Settings that name a local lane while the profile is ``api``, one sentence each.
+    Empty under ``local``. Read by ``vaf doctor`` and the status; nothing is refused."""
+    try:
+        if config is None:
+            from vaf.core.config import Config
+            config = Config.load()
+    except Exception:
+        return []
+    if local_inference_allowed(config):
+        return []
+
+    def _v(key: str, default: str = "") -> str:
+        return str(config.get(key, default) or default).strip().lower()
+
+    out: List[str] = []
+    if _v("provider", LOCAL) == LOCAL:
+        out.append("The chat provider is the local model: choose an AI provider under "
+                   "Settings > AI & Model.")
+    for key, label in (("vision_provider", "image understanding"),
+                       ("voice_agent_provider", "the voice call"),
+                       ("browser_agent_provider", "the browser agent"),
+                       ("thinking_provider", "the thinking runs"),
+                       ("subagent_provider", "the sub-agents")):
+        if _v(key) == LOCAL:
+            out.append(f"{key} is \"local\": {label} would need a local model.")
+    if _v("failover_level", "off") not in ("", "off"):
+        out.append("failover_level adds the local model as the last link: it is never "
+                   "reached here.")
+    if config.get("speech_stt_enabled") and not _v("speech_stt_provider"):
+        out.append("Speech-to-text is on without a provider (speech_stt_provider): there is "
+                   "no local engine to fall back to here.")
+    if config.get("speech_tts_enabled") and not _v("speech_tts_provider") \
+            and _v("speech_tts_engine", "docker") in ("docker", "piper"):
+        out.append("Text-to-speech is on without a provider (speech_tts_provider): there is "
+                   "no local engine to fall back to here.")
+    return out

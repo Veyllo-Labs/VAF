@@ -28,6 +28,7 @@ The gates:
 | `self.api_backend` / `self.use_server` / `self.llm` | the active backend (API / llama-server 8080 / in-process library) | `load_model()` (`agent.py`) |
 | `APIProvider.provider_name` | which API provider inside `api_backend.py` | `APIBackendManager` |
 | `self.is_gemma_local` / `self.model_mode` | local Gemma (any version) / `"gemma4"` \| `"gemma3n"` \| `None` | `agent.py.__init__` |
+| `inference_profile.local_inference_allowed()` | whether this installation runs local models at all (`inference_profile` = `local`) or none (`api`); above every provider choice: under `api` no model is downloaded and no local server starts, whatever `provider`, the voice, thinking, sub-agent or failover lanes say | config `inference_profile`; enforced in `backend.ensure_model_available`, `ServerManager.start_server`, `Agent.load_model` ([INSTALL_PROFILES.md](../setup/INSTALL_PROFILES.md)) |
 
 Backend selection order: a configured API provider (`api_backend`) wins over the local server (:8080), which wins over the in-process library (`agent.py.load_model`).
 

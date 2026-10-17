@@ -174,6 +174,9 @@ def resolve_stt_engine() -> str:
     try:
         if select_stt_backend()[0]:
             return "docker"
+        from vaf.core import inference_profile
+        if not inference_profile.local_inference_allowed():
+            return "docker"     # the shared client, which then has no local lane either
         from vaf.core.config import Config
         engine = (Config.get("speech_stt_engine", "docker") or "docker").strip().lower()
         return "local" if engine == "local" else "docker"

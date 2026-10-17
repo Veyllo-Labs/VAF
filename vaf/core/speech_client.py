@@ -177,6 +177,13 @@ def transcribe(
                 # auto-detects instead of re-sending a possibly-rejected code.
                 _lang_cache_forget(cache_key)
 
+        # Without local models (inference_profile = api) there is no container to fall
+        # back to: the provider's answer, or nothing.
+        from vaf.core import inference_profile
+        if not inference_profile.local_inference_allowed():
+            logger.warning("STT: %s", inference_profile.refusal("the speech-to-text container"))
+            return None, None
+
         base_url = _stt_base_url()
         resp = _post_stt(f"{base_url}/asr", payload, mime, filename)
         if resp is not None and resp.status_code == 404:
@@ -248,6 +255,12 @@ def synthesize(
                 return audio
     except Exception as e:
         logger.warning("TTS provider lane error: %s", e)
+    # Without local models (inference_profile = api) the container this falls back to does
+    # not run: the provider's audio, or nothing.
+    from vaf.core import inference_profile
+    if not inference_profile.local_inference_allowed():
+        logger.warning("TTS: %s", inference_profile.refusal("the text-to-speech container"))
+        return None
     return synthesize_docker(text, lang, want_format=want_format, base_url=docker_url)
 
 

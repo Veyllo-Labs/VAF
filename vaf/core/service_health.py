@@ -60,6 +60,7 @@ from vaf.core.service_stack import (
     find_stack_root,
     start_in_progress,
     is_docker_daemon_running,
+    needed_services,
     resolve_docker_exe,
     service_by_container,
 )
@@ -270,11 +271,13 @@ def derive_service_status(spec: ServiceSpec,
                           inspect: Optional[Dict[str, Any]],
                           cfg_port: Optional[int],
                           probe: Optional[Dict[str, Any]],
-                          stack_starting: bool = False) -> Dict[str, Any]:
+                          stack_starting: bool = False,
+                          needed: bool = True) -> Dict[str, Any]:
     """Pure: one service's row from its probe results.
 
     States: ok, warn (something is off but nothing the user depends on is
-    down), error (a required service is unusable), absent (never created).
+    down), error (a required service is unusable), absent (never created),
+    off (the inference profile leaves it out: `service_stack.needed_services`).
     `reason` is one honest sentence, because it is what the dialog and the
     terminal both print.
     """
@@ -320,6 +323,18 @@ def derive_service_status(spec: ServiceSpec,
     # a build that can take minutes: one it has not reached yet is on its way, not broken.
     pending = bool(stack_starting and not running and not crashed)
 
+    if not needed:
+        # Left out by the inference profile: never started, never repaired, never a fault.
+        return {
+            "name": spec.container_name, "service_key": spec.service_key,
+            "required": False, "needed": False, "exists": exists, "running": running,
+            "health": health, "host_ports": host_ports, "configured_port": cfg_port,
+            "port_mismatch": False, "probe": None, "probe_ok": None,
+            "starting": False, "starting_seconds_left": 0, "state": "off",
+            "reason": ("Not used: this installation runs without local models (profile "
+                       "\"api\")." + (" It still runs from before; `vaf profile api "
+                                        "--prune` stops and removes it." if running else "")),
+        }
     if pending:
         starting = True
         state = "warn"
@@ -355,6 +370,7 @@ def derive_service_status(spec: ServiceSpec,
         "name": spec.container_name,
         "service_key": spec.service_key,
         "required": spec.required,
+        "needed": True,
         "exists": exists,
         "running": running,
         "health": health,
@@ -474,10 +490,14 @@ def collect_service_status(
     host = derive_host_status(host_probe())
     services: List[Dict[str, Any]] = []
 
+    needed = {s.service_key for s in needed_services()}
     if not daemon.get("ok"):
         sandbox = derive_sandbox_status(
             None, "Docker is not reachable, so the sandbox environments' state is unknown.")
         for spec in SERVICES:
+            if spec.service_key not in needed:
+                services.append(derive_service_status(spec, None, None, None, needed=False))
+                continue
             services.append({
                 "name": spec.container_name,
                 "service_key": spec.service_key,
@@ -508,6 +528,9 @@ def collect_service_status(
                 continue
         for spec in SERVICES:
             ins = by_name.get(spec.container_name)
+            if spec.service_key not in needed:
+                services.append(derive_service_status(spec, ins, None, None, needed=False))
+                continue
             cfg_port = port_reader(spec)
             probe = None
             if ins is not None and bool((ins.get("State") or {}).get("Running")):
@@ -603,7 +626,7 @@ def repair_service_stack(
         # can SEE listed as a problem is still down is how a report stops
         # being believed.
         degraded = [str(s.get("name")) for s in final_status.get("services", [])
-                    if s.get("state") not in ("ok", "absent")]
+                    if s.get("state") not in ("ok", "absent", "off")]
         return {
             "ok": not failed_required and all(s["ok"] for s in steps),
             "degraded": degraded,
@@ -681,7 +704,7 @@ def repair_service_stack(
     #    and a stopped optional container is shown to the user as a problem, so
     #    a repair that skips it answers a question nobody asked.
     down = [s for s in before.get("services", [])
-            if not s.get("exists") or not s.get("running")]
+            if s.get("state") != "off" and (not s.get("exists") or not s.get("running"))]
     if down:
         names = ", ".join(str(s.get("name")) for s in down)
         lines: List[str] = []
@@ -698,7 +721,7 @@ def repair_service_stack(
     #    about which port to use, it only hides the reason for a while.
     after_up = status_probe()
     for svc in after_up.get("services", []):
-        if not svc.get("running") or svc.get("port_mismatch"):
+        if not svc.get("running") or svc.get("port_mismatch") or svc.get("state") == "off":
             continue
         if svc.get("starting"):
             # Restarting a container that is still booting throws away the

@@ -598,6 +598,14 @@ $player.Close()
             print(f"[TTS Debug] Cloud provider TTS SUCCESS ({len(api_audio)} bytes)")
             return api_audio
 
+        # Without local models (inference_profile = api) neither the container nor the
+        # Piper binary runs here; a server the admin runs elsewhere (chatterbox) and the
+        # macOS voice download nothing and stay.
+        from vaf.core import inference_profile
+        if preferred_engine in ("docker", "piper") and not inference_profile.local_inference_allowed():
+            print(f"[TTS Debug] {inference_profile.refusal('the local text-to-speech')}")
+            return None
+
         # Docker/Chatterbox TTS: HTTP service (e.g. Piper in Docker or Chatterbox).
         # New: Multi-language All-in-One container uses /synthesize endpoint with language auto-detection.
         if preferred_engine in ("docker", "chatterbox"):

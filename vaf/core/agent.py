@@ -5106,6 +5106,12 @@ class Agent:
         if self.provider != "local":
             UI.event("Backend", f"Using API provider: {self.provider}, skipping model load", style="dim")
             return
+
+        # An installation without local models (inference_profile = api) loads none.
+        from vaf.core import inference_profile
+        if not inference_profile.local_inference_allowed():
+            UI.event("Backend", inference_profile.refuse("the local model"), style="warning")
+            return
         
         if not skip_download_check:
             self.ensure_model_exists()
@@ -9669,7 +9675,11 @@ class Agent:
 
         # Check if any backend is available (local, server, or API)
         if not self.llm and not self.use_server and not self.api_backend:
-            UI.error("Agent not initialized. Run 'vaf run' first.")
+            from vaf.core import inference_profile
+            if not inference_profile.local_inference_allowed():
+                UI.error(inference_profile.refusal("the local model"))
+            else:
+                UI.error("Agent not initialized. Run 'vaf run' first.")
             return
         
         # Clean old workflow messages from context (prevents clutter)

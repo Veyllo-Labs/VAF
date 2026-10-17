@@ -62,14 +62,17 @@ def _config_summary() -> Dict[str, Any]:
         else:
             model = (str(Config.get(f"api_model_{provider}", "") or "")
                      or Config.get_default_model(provider))
+        from vaf.core.inference_profile import current as inference_profile
         return {
             "server_mode": bool(Config.get("server_mode", False)),
+            "inference_profile": inference_profile(),
             "provider": provider,
             "model": model,
             "lan_enabled": bool(Config.get("local_network_enabled", False)),
         }
     except Exception:
-        return {"server_mode": None, "provider": None, "model": None, "lan_enabled": None}
+        return {"server_mode": None, "inference_profile": None, "provider": None,
+                "model": None, "lan_enabled": None}
 
 
 def gpu_inventory() -> List[Dict[str, Any]]:

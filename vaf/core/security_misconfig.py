@@ -174,4 +174,13 @@ def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict
     except Exception:
         pass
 
+    # Settings that name a local lane on an installation without local models: nothing is
+    # refused when they are written, so this is where the person hears about it.
+    try:
+        from vaf.core.inference_profile import conflicts
+        for sentence in conflicts(cfg):
+            findings.append(_finding("low", "inference_profile_conflict", sentence))
+    except Exception:
+        pass
+
     return findings

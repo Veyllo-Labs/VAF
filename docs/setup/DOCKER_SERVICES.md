@@ -13,7 +13,7 @@ VAF uses **one** Docker Compose file for auxiliary services: **`docker-compose.m
 | STT | `vaf-stt` | 5003 | Whisper ASR for speech-to-text (local speech lane only) |
 | **Browser** | `vaf-browser` | 9222, 6901 | Headed Chromium under KasmVNC's X server (CDP on 9222, anti-bot hardened) for the `browser_agent` tool, plus the KasmVNC WebSocket stream of the display on 6901 for the web UI's interactive browser, which requires a credential VAF holds (`VAF_BROWSER_VNC_SECRET`, minted into the keyring and delivered through `compose.env`) - see [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md) |
 
-All services start by default when you run `docker compose up -d`. Code execution is not a compose service: VAF creates a sandbox environment per person itself (see [Sandbox environments](#sandbox-environments)).
+All services start by default when you run `docker compose up -d`. VAF itself starts the services its **inference profile** needs (`service_stack.needed_services`): every one under `local`, all but the two speech containers (`vaf-stt`, `vaf-tts`) under `api`, the installation without local models ([INSTALL_PROFILES.md](INSTALL_PROFILES.md)). Code execution is not a compose service: VAF creates a sandbox environment per person itself (see [Sandbox environments](#sandbox-environments)).
 
 ---
 
@@ -308,6 +308,9 @@ When a runtime is present (or has just been set up), the installer manages the s
 4. **Apply Changes - two-phase**: it brings up the core registry-image services first
    (`postgres redis stt gotenberg`) so a slow local build of `tts`/`vaf-browser` can never block the
    database the app needs to boot, then starts those optional services best-effort with `--build`.
+   The installer does not keep this list itself: it asks `vaf profile --services core` and
+   `--services optional`, so the `api` profile leaves `stt` and `tts` out here as well
+   (`tests/test_inference_profile_cli.py` refuses a service list written into an installer).
    `up -d`:
    - Starts new services (e.g., Gotenberg after an update that adds it)
    - Recreates services whose configuration changed
@@ -333,7 +336,7 @@ When a runtime is present (or has just been set up), the installer manages the s
 
 ### When VAF Starts (`vaf tray` or `vaf run`)
 
-When you start VAF (Desktop shortcut, `vaf tray`, or the terminal app `vaf run`), it brings up the Docker stack if Docker is available. The lifecycle lives in one place, `vaf/core/service_stack.py`: engine bootstrap (macOS starts Docker Desktop or Colima, Windows starts Rancher/Docker Desktop), then a two-phase compose up - core registry-image services first (postgres, redis, stt, gotenberg), the locally built ones (tts, vaf-browser) best-effort afterwards, so a failed local build can never take the database down with it. `vaf run` starts the stack in the background so booting the model never waits on a compose up.
+When you start VAF (Desktop shortcut, `vaf tray`, or the terminal app `vaf run`), it brings up the Docker stack if Docker is available. The lifecycle lives in one place, `vaf/core/service_stack.py`: engine bootstrap (macOS starts Docker Desktop or Colima, Windows starts Rancher/Docker Desktop), then a two-phase compose up - core registry-image services first (postgres, redis, stt, gotenberg), the locally built ones (tts, vaf-browser) best-effort afterwards, so a failed local build can never take the database down with it. Under the `api` inference profile both phases leave the speech containers out. `vaf run` starts the stack in the background so booting the model never waits on a compose up.
 
 Note that quitting the TRAY stops the stack (containers and data survive for a fast restart) - and the terminal app starts it as well (see below).
 
@@ -386,7 +389,8 @@ service):
 | `configured_port` / `port_mismatch` | the port VAF is configured to reach it on, and whether the two disagree |
 | `probe_ok` | whether the service ANSWERED (TCP connect, HTTP GET, or `SELECT 1` for the database) |
 | `starting` / `starting_seconds_left` | the container is inside its own start window: booting, not broken |
-| `state` | `ok`, `warn`, `error`, `absent`, or `unknown` when the daemon is down |
+| `state` | `ok`, `warn`, `error`, `absent`, `off` (the inference profile leaves it out), or `unknown` when the daemon is down |
+| `needed` | false for a service the inference profile leaves out; such a row is never an issue, never started by a repair, and `vaf top` shows it grey |
 | `reason` | one sentence, the same text the dialog and the terminal print |
 
 The snapshot also carries one **host** row, `host: {ip_forward, forwarding_ok, reason}`:

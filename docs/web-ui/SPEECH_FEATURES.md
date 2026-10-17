@@ -145,6 +145,13 @@ the rule below. Two things it settles:
   value means `docker`, because faster-whisper is an optional extra and audio must
   not be routed into an engine that may not be installed.
 
+Under the `api` inference profile (an installation without local models,
+[INSTALL_PROFILES.md](../setup/INSTALL_PROFILES.md)) there is no local lane at all: the
+resolver never answers `local`, and when the provider gives no text the turn reports
+that instead of sending the audio to a container that does not run. Text-to-speech
+behaves the same for the `docker` and `piper` engines; a `chatterbox` server you run
+elsewhere and the macOS `system` voice stay usable.
+
 A configured provider whose key is missing does NOT win - it cannot run - so the
 engine toggle decides again. The Settings selector therefore also resets
 `speech_stt_engine` to `docker` when a cloud provider is picked, so that case lands

@@ -482,6 +482,7 @@ class Config:
 
         # System Settings
         "server_mode": False,                  # True = server installation (LAN always on, no desktop UI controls)
+        "inference_profile": "local",          # local = models and speech containers may run here; api = none, everything via providers (vaf/core/inference_profile.py)
         "web_ui_enabled": True,                # Start Web UI automatically
         "server_persistence_enabled": False,   # Keep server running after exit
         "tray_autostart": False,               # Auto-start tray on OS login
@@ -1065,6 +1066,9 @@ class Config:
     )
     GLOBAL_CONFIG_KEYS = frozenset([
         "provider", "model", "n_ctx", "gpu_layers", "n_parallel", "llama_cache_ram",
+        # What the installation runs itself: switching it starts or stops containers and
+        # decides whether models are downloaded, for every account at once.
+        "inference_profile",
         "auto_start_local_server", "tray_autostart", "web_ui_enabled", "server_persistence_enabled",
         "debug_logs_enabled", "server_idle_timeout", "telegram_idle_timeout", "telegram_debounce_seconds",
         "redis_url", "redis_enabled", "use_docker",

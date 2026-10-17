@@ -33,6 +33,7 @@ Every public function takes an optional `log` callable for the caller's
 own voice (the tray logs, a boot phase prints); without one, lines go to
 this module's logger.
 """
+import json
 import logging
 import os
 import platform
@@ -41,7 +42,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ class ServiceSpec:
     env_url_var: str = ""     # environment override (browser: VAF_BROWSER_CDP_URL)
     default_port: int = 0     # compose default host port; 0 = publishes none
     probe: str = ""           # "" | "tcp" | "postgres" | "http:<path>"
+    local_inference: bool = False  # runs a model on this machine: off under the api profile
 
 
 # Kept in the compose file's own order. Ports are the compose defaults
@@ -86,17 +88,37 @@ SERVICES: Tuple[ServiceSpec, ...] = (
     # ends in `|| exit 0`, so the service answers "healthy" while still loading
     # its model and an HTTP probe would report a failure that is not one.
     ServiceSpec("stt", "vaf-stt", True,
-                config_url_key="speech_stt_docker_url", default_port=5003, probe="tcp"),
+                config_url_key="speech_stt_docker_url", default_port=5003, probe="tcp",
+                local_inference=True),
     ServiceSpec("gotenberg", "vaf-gotenberg", True,
                 config_url_key="document_conversion_docker_url", default_port=5005, probe="tcp"),
     ServiceSpec("tts", "vaf-tts", False,
-                config_url_key="speech_tts_docker_url", default_port=5002, probe="http:/health"),
+                config_url_key="speech_tts_docker_url", default_port=5002, probe="http:/health",
+                local_inference=True),
     ServiceSpec("vaf-browser", "vaf-browser", False,
                 env_url_var="VAF_BROWSER_CDP_URL", default_port=9222, probe="http:/json/version"),
 )
 
 CORE_SERVICES = tuple(s.service_key for s in SERVICES if s.required)
 OPTIONAL_SERVICES = tuple(s.service_key for s in SERVICES if not s.required)
+
+
+def needed_services(config: Optional[dict] = None) -> Tuple[ServiceSpec, ...]:
+    """The services this installation runs: all of them, except the ones that run a model
+    under the ``api`` inference profile (vaf/core/inference_profile.py). The one answer the
+    stack start, the status, the repair and the installers (`vaf profile --services`) read,
+    so a service the profile leaves out is neither started nor reported as broken."""
+    from vaf.core.inference_profile import local_inference_allowed
+    allowed = local_inference_allowed(config)
+    return tuple(s for s in SERVICES if allowed or not s.local_inference)
+
+
+def needed_core_services(config: Optional[dict] = None) -> Tuple[str, ...]:
+    return tuple(s.service_key for s in needed_services(config) if s.required)
+
+
+def needed_optional_services(config: Optional[dict] = None) -> Tuple[str, ...]:
+    return tuple(s.service_key for s in needed_services(config) if not s.required)
 
 
 def service_by_container(name: str) -> Optional[ServiceSpec]:
@@ -824,11 +846,12 @@ def _ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
                           "env": _compose_env()}
                 if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
                     kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-                result = subprocess.run(base + list(CORE_SERVICES), timeout=600, **kwargs)
+                core = needed_core_services()
+                result = subprocess.run(base + list(core), timeout=600, **kwargs)
                 if _start_was_cancelled(log):
                     return False
                 if result.returncode == 0:
-                    _say(log, "Core service stack (DB/Redis/STT/Gotenberg) started")
+                    _say(log, f"Core service stack ({', '.join(core)}) started")
                     # The sandbox environments' image is not a compose service (it ships
                     # inside the package and is built from stdin), so it starts here, off
                     # this path - before the optional phase, whose compose call can time
@@ -860,7 +883,10 @@ def _ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
                         _maybe_rebuild_stale_browser_image(base, kwargs, log)
                         if _start_was_cancelled(log):
                             return True
-                        opt = subprocess.run(base + ["--build"] + list(OPTIONAL_SERVICES),
+                        optional = needed_optional_services()
+                        if not optional:
+                            return True
+                        opt = subprocess.run(base + ["--build"] + list(optional),
                                              timeout=600, **kwargs)
                         if opt.returncode != 0:
                             # Name the real reason. The old wording guessed "VM clock skew"
@@ -868,8 +894,8 @@ def _ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
                             # a clock problem that was not there.
                             _detail = ((opt.stderr or "") or (opt.stdout or "")).strip().splitlines()
                             _tail = _detail[-1].strip()[:200] if _detail else "no output"
-                            _say(log, f"Optional TTS/browser did not build - core stack is up. "
-                                      f"Last line: {_tail}")
+                            _say(log, f"Optional services ({', '.join(optional)}) did not "
+                                      f"build - core stack is up. Last line: {_tail}")
                     except Exception:
                         pass
                     return True
@@ -928,6 +954,73 @@ def stop_service_stack(log: Optional[Callable[[str], None]] = None,
     except Exception as e:
         _say(log, f"Service stack stop failed: {e}")
         return False
+
+
+def retire_local_inference_services(prune: bool = False,
+                                    log: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
+    """Stop the services that run a model (``ServiceSpec.local_inference``: the speech
+    containers), for a switch to the ``api`` inference profile. With ``prune`` their
+    containers, images and named volumes go too - measured, 8.7 GB of images plus the
+    models in the volumes. Only these services: the volumes of every other one (the
+    database's above all) are never named here. The images and volumes come from
+    ``docker compose config``, so the compose file stays the one place they are written.
+
+    Returns {"stopped": bool, "removed": [names], "errors": [sentences]}."""
+    keys = [s.service_key for s in SERVICES if s.local_inference]
+    out: Dict[str, Any] = {"stopped": False, "removed": [], "errors": []}
+    root = find_stack_root()
+    if root is None or not keys:
+        out["errors"].append(f"{COMPOSE_FILENAME} not found, so there is no stack to change here.")
+        return out
+    docker = resolve_docker_exe()
+    env_args = ["--env-file", str(compose_env_file())] if compose_env_file().exists() else []
+    base = [docker, "compose", *env_args, "-f", COMPOSE_FILENAME]
+    kwargs: Dict[str, Any] = {"cwd": str(root), "capture_output": True, "text": True}
+    if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+    def run(args, timeout=300):
+        try:
+            r = subprocess.run(args, timeout=timeout, **kwargs)
+            return r.returncode == 0, ((r.stderr or "") or (r.stdout or "")).strip()[:200]
+        except Exception as e:      # noqa: BLE001 - reported to the caller
+            return False, str(e)[:200]
+
+    ok, detail = run(base + ["stop", *keys])
+    out["stopped"] = ok
+    if not ok:
+        out["errors"].append(f"Could not stop {', '.join(keys)}: {detail}")
+    if not prune:
+        return out
+    images: List[str] = []
+    volumes: List[str] = []
+    try:
+        r = subprocess.run(base + ["config", "--format", "json"], timeout=60, **kwargs)
+        resolved = json.loads(r.stdout or "{}")
+        named = resolved.get("volumes") or {}
+        for key in keys:
+            svc = (resolved.get("services") or {}).get(key) or {}
+            if svc.get("image"):
+                images.append(str(svc["image"]))
+            for vol in svc.get("volumes") or []:
+                if vol.get("type") == "volume" and vol.get("source"):
+                    volumes.append(str((named.get(vol["source"]) or {}).get("name") or vol["source"]))
+    except Exception as e:          # noqa: BLE001 - reported to the caller
+        out["errors"].append(f"The compose file could not be read: {e}")
+        return out
+    ok, detail = run(base + ["rm", "-f", "-s", *keys])
+    if not ok:
+        out["errors"].append(f"Could not remove the containers: {detail}")
+    for kind, names in (("image", images), ("volume", volumes)):
+        for name in names:
+            ok, detail = run([docker, kind, "rm", name], timeout=120)
+            if ok:
+                out["removed"].append(name)
+            else:
+                out["errors"].append(f"Could not remove the {kind} {name}: {detail}")
+    _say(log, f"Retired {', '.join(keys)}" + (f"; removed {', '.join(out['removed'])}"
+                                             if out["removed"] else ""))
+    return out
 
 
 def _compose_stop(project_root: Path, log) -> bool:

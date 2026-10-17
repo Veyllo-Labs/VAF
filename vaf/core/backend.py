@@ -201,7 +201,15 @@ def ensure_model_available(model_name, models_dir) -> str:
       download THAT -- so "no model at all" recovers to a model that fits the GPU, never a dead start.
 
     Never ``sys.exit()``s. If even the VRAM default cannot be obtained (e.g. offline) the returned path
-    may still be missing -- callers must check ``os.path.exists`` and surface a clear error."""
+    may still be missing -- callers must check ``os.path.exists`` and surface a clear error.
+
+    Under the ``api`` inference profile nothing is downloaded and "" comes back: this is the
+    one entry every lane passes (chat, voice, thinking, sub-agents, failover), so the profile
+    is decided here once (vaf/core/inference_profile.py)."""
+    from vaf.core import inference_profile
+    if not inference_profile.local_inference_allowed():
+        inference_profile.refuse(f"the local model {model_name or 'auto'}")
+        return ""
     from vaf.core.gpu_detection import recommended_default_model
     models_dir = Path(models_dir)
 
@@ -1057,6 +1065,13 @@ class ServerManager:
             if not auto_start:
                 UI.event("Backend", "Local server auto-start disabled in settings", style="dim")
                 return True
+
+        # The api inference profile runs no local server at all - also not for the voice
+        # lane, which asks past the provider gate (vaf/core/inference_profile.py).
+        from vaf.core import inference_profile
+        if not inference_profile.local_inference_allowed():
+            UI.event("Backend", inference_profile.refuse("the local server"), style="dim")
+            return False
 
         if not self.ensure_server_exists():
             return False

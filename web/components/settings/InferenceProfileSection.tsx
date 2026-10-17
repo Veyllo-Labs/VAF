@@ -20,7 +20,9 @@ interface ProfileState {
  * implementation as `vaf profile` - Lean stops the speech containers, Full starts them - so it
  * asks once on the button before it does anything. Admin only, like the tab it sits on.
  */
-export default function InferenceProfileSection({ onChanged }: { onChanged?: () => void }) {
+/** `onChanged` receives the profile now set; the caller decides what to refresh (the settings
+ *  keep unsaved edits, so they update only this key while there are any). */
+export default function InferenceProfileSection({ onChanged }: { onChanged?: (profile: 'local' | 'api') => void }) {
     const t = useTranslations('inferenceProfile');
     const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
     const [data, setData] = useState<ProfileState | null>(null);
@@ -65,7 +67,7 @@ export default function InferenceProfileSection({ onChanged }: { onChanged?: () 
                 setNote(errors.length
                     ? { text: errors.join(' '), error: true }
                     : { text: t('done', { profile: target === 'api' ? t('api') : t('local') }), error: false });
-                onChanged?.();
+                onChanged?.(target);
             }
         } catch {
             setNote({ text: t('failed'), error: true });

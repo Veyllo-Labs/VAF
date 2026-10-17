@@ -328,13 +328,15 @@ elif [[ -t 0 ]]; then
     echo -e "  ${CYAN}[2] Lean (API)${NC}    no local models; chat and speech through API providers"
     echo -e "                     (for small servers: about 4 GB of memory limits instead of 8)"
     echo ""
-    read -p "  Choose [1/2, default $_profile_default]: " _profile_response
-    _profile_response="${_profile_response:-$_profile_default}"
-    if [[ "$_profile_response" == "2" ]]; then
-        INSTALL_PROFILE="api"
-    else
-        INSTALL_PROFILE="local"
-    fi
+    while true; do
+        read -p "  Choose [1/2, default $_profile_default]: " _profile_response
+        _profile_response="${_profile_response:-$_profile_default}"
+        case "$_profile_response" in
+            1) INSTALL_PROFILE="local"; break ;;
+            2) INSTALL_PROFILE="api"; break ;;
+            *) print_warning "Type 1 or 2, or press Enter for $_profile_default." ;;
+        esac
+    done
     print_success "Profile: $INSTALL_PROFILE"
 fi
 
@@ -792,9 +794,13 @@ print_success "Python dependencies installed"
 
 # The profile decides which services start below and whether models are ever downloaded,
 # so it is written before the stack comes up. No flag and no prompt keeps what is set.
+# A profile that could not be written stops here: the services below would otherwise
+# start by the old one, the speech containers and their 7.5 GB image included.
 if [[ -n "$INSTALL_PROFILE" ]]; then
-    "$PROJECT_ROOT/venv/bin/python3" -m vaf.main profile "$INSTALL_PROFILE" --no-stack \
-        || print_warning "Could not write the profile - run: vaf profile $INSTALL_PROFILE"
+    if ! "$PROJECT_ROOT/venv/bin/python3" -m vaf.main profile "$INSTALL_PROFILE" --no-stack; then
+        print_error "Could not write the profile '$INSTALL_PROFILE'. Fix the error above and run the installer again."
+        exit 1
+    fi
 fi
 
 # ============================================================================
@@ -854,6 +860,13 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
             resolve_docker_bin
             # Two-phase like the Windows installer: bring up the core (registry images) first so a
             # slow local build of tts/vaf-browser can never block the database the app needs to boot.
+            # Switching an existing installation to api: the speech containers it ran keep
+            # running unless they are stopped, and `vaf profile api` does that (it names the
+            # services itself, so no list is kept here either).
+            if [[ "$INSTALL_PROFILE" == "api" ]]; then
+                "$PROJECT_ROOT/venv/bin/python3" -m vaf.main profile api \
+                    || print_warning "Could not stop the speech containers - run: vaf profile api"
+            fi
             # Which services start is VAF's answer, not a list kept here: the profile leaves
             # the speech containers out (vaf/core/service_stack.py needed_services).
             CORE_SERVICES=$("$PROJECT_ROOT/venv/bin/python3" -m vaf.main profile --services core 2>/dev/null | tr '\n' ' ')

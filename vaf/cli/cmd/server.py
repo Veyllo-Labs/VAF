@@ -143,8 +143,13 @@ def server_provision(
     Config.set("server_mode", True)
     UI.success("Server mode enabled (LAN hosting with TLS, locked on).")
     if profile is not None:
-        Config.set("inference_profile", profile.strip().lower())
-        UI.success(f"Inference profile: {profile.strip().lower()} (`vaf profile` shows what it runs).")
+        # The one switch (vaf profile, the web settings): on an installation that already
+        # runs, the speech containers follow the profile. The installers do not pass
+        # --profile here; they set it with `vaf profile` before the stack starts.
+        switched = inference_profile.apply(profile.strip().lower())
+        UI.success(f"Inference profile: {switched['profile']} (`vaf profile` shows what it runs).")
+        for problem in switched["errors"]:
+            UI.warning(problem)
 
     # A server must not keep the database passwords published in this repository: whoever has
     # one writes every table (vaf/core/db_credentials.py). Replaced here when the database

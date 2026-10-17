@@ -971,9 +971,14 @@ if ($pipExit -eq 0) {
 
 # The profile decides which services start below and whether models are ever downloaded,
 # so it is written before the stack comes up. Empty keeps what is set.
+# A profile that could not be written stops here: the services below would otherwise start
+# by the old one, the speech containers and their 7.5 GB image included.
 if ($InferenceProfile) {
     & python -m vaf.main profile $InferenceProfile --no-stack
-    if ($LASTEXITCODE -ne 0) { Write-Warn "Could not write the profile - run: vaf profile $InferenceProfile" }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "Could not write the profile '$InferenceProfile'. Fix the error above and run the installer again."
+        exit 1
+    }
 }
 
 # Fix pywin32 COM registration. fix_venv.py prints failures to stdout (and now exits
@@ -1211,6 +1216,13 @@ if (-not $SkipDocker) {
             # 'docker compose up' builds every image first and starts nothing if one build fails).
             # Phase 1 = registry-image services (no build); phase 2 = the build services, best-effort.
             # --quiet-pull hides the noisy per-layer pull progress.
+            # Switching an existing installation to api: the speech containers it ran keep
+            # running unless they are stopped, and `vaf profile api` does that (it names the
+            # services itself, so no list is kept here either).
+            if ($InferenceProfile -eq "api") {
+                & python -m vaf.main profile api
+                if ($LASTEXITCODE -ne 0) { Write-Warn "Could not stop the speech containers - run: vaf profile api" }
+            }
             # Which services start is VAF's answer, not a list kept here: the profile leaves
             # the speech containers out (vaf/core/service_stack.py needed_services).
             $coreServices = @(& python -m vaf.main profile --services core 2>$null | Where-Object { $_ })

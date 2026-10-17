@@ -142,3 +142,38 @@ def test_a_model_is_not_downloaded_by_hand_under_the_api_profile(config, monkeyp
     config["inference_profile"] = "api"
     monkeypatch.setattr(settings, "HfApi", lambda: pytest.fail("reached the model hub"))
     settings.download_model_flow("unsloth/Qwen3.5-4B-GGUF", "model.gguf")
+
+
+@pytest.mark.parametrize("installer, write, fail, retire", [
+    ("install.sh", 'profile "$INSTALL_PROFILE" --no-stack', "exit 1",
+     'vaf.main profile api \\'),
+    ("install.ps1", "profile $InferenceProfile --no-stack", "exit 1",
+     "& python -m vaf.main profile api"),
+])
+def test_the_installers_stop_on_an_unwritten_profile_and_retire_the_speech_containers(
+        installer, write, fail, retire):
+    """A profile that could not be written left the services to start by the old one; and
+    a switch to api with --no-stack left the speech containers of a local install running.
+    MUTATION: warn and go on, or drop the retire call before the services start - red."""
+    text = (ROOT / installer).read_text(encoding="utf-8")
+    at = text.index(write)
+    assert fail in text[at:at + 400], "an unwritten profile must stop the installer"
+    assert retire in text, "switching to api must stop the speech containers through VAF"
+    assert text.index(retire) < text.index("--services core"), "before the services start"
+
+
+def test_provision_switches_through_the_one_implementation(config, monkeypatch):
+    """On a running installation the speech containers follow the profile. MUTATION: set
+    the key directly again - red."""
+    from vaf.cli.cmd import server
+    from vaf.core import inference_profile
+    monkeypatch.setattr(server.platform, "system", lambda: "Linux")
+    calls = []
+
+    def _apply(profile, prune=False, stack=True):
+        calls.append(profile)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(inference_profile, "apply", _apply)
+    CliRunner().invoke(server.app, ["provision", "--profile", "api", "--no-firewall"])
+    assert calls == ["api"]

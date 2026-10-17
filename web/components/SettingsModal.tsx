@@ -3108,7 +3108,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'ai' && currentUser?.role === 'admin' && (
                             <div className="space-y-6">
-                                <InferenceProfileSection onChanged={onRefreshConfig} />
+                                <InferenceProfileSection onChanged={(profile) => {
+                                    // A config refresh resets the draft (setLocalConfig(config) below):
+                                    // with unsaved edits only this key is taken over, never the rest.
+                                    setLocalConfig((prev: any) => ({ ...prev, inference_profile: profile }));
+                                    if (!changed) onRefreshConfig?.();
+                                }} />
                                 <Section title={tAi('provider')}>
                                     <Select
                                         label={tAi('primaryProvider')}
@@ -4476,7 +4481,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 </Section>
 
                                 <Section title={tVoice('tts')}>
-                                    {(localConfig.speech_tts_provider || 'local') === 'local' ? (
+                                    {leanProfile && (localConfig.speech_tts_provider || 'local') === 'local' ? (
+                                        // No local voice on this installation: the container settings and
+                                        // the switch that would turn on nothing stay hidden until a
+                                        // provider is chosen above.
+                                        <p className="text-xs text-gray-600">{tVoice('ttsNeedsProvider')}</p>
+                                    ) : (localConfig.speech_tts_provider || 'local') === 'local' ? (
                                         <TTSSettings
                                             ttsEnabled={localConfig.speech_tts_enabled || false}
                                             ttsUrl={localConfig.speech_tts_docker_url || 'http://localhost:5002'}

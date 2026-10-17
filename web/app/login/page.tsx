@@ -1185,7 +1185,7 @@ export default function LoginPage() {
                                         disabled={veylloTesting}
                                         className="w-full mt-3 py-2 text-sm text-gray-500 hover:text-gray-800 transition-colors disabled:opacity-50"
                                     >
-                                        {t('veylloSkip')}
+                                        {setupProfile === 'api' ? t('veylloSkipApi') : t('veylloSkip')}
                                     </button>
                                     <p className="text-xs text-gray-400 text-center mt-4 leading-relaxed">{t('veylloOtherProviders')}</p>
                                 </div>

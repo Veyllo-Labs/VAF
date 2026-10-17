@@ -47,10 +47,13 @@ At installation:
 $env:VAF_INFERENCE_PROFILE = "api"; irm https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/packaging/install/bootstrap.ps1 | iex
 ```
 
-A re-run of `install.sh` offers the profile that is set as its default, and a run
-without a flag and without a terminal keeps what is set, so an upgrade never switches a
-lean server back to downloading models. On a server, `vaf server provision --profile api`
-sets it too.
+A re-run of `install.sh` offers the profile that is set as its default (it takes only
+1, 2 or Enter), and a run without a flag and without a terminal keeps what is set, so an
+upgrade never switches a lean server back to downloading models. Re-running it with
+`api` on an installation that ran the speech containers stops them (through
+`vaf profile api`), and a profile the installer cannot write stops it before any service
+starts. On a server, `vaf server provision --profile api` switches the same way
+(`inference_profile.apply`).
 
 Afterwards:
 

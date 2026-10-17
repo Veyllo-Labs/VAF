@@ -43,6 +43,13 @@ locally, in the time the suite already takes:
                   A home moved to another disk and linked back is the same case
                   on any OS. Where the host cannot create a link the real
                   directory is used and the axis says so.
+  NO DOCKER       DOCKER_HOST points at a socket that does not exist, so every
+                  docker call fails the way it does on a runner without VAF's
+                  containers (macOS has no docker at all). This workstation has
+                  the database container, and a test that reached it stayed
+                  green here while it failed on every runner: the restore tests'
+                  safety backup read the real volumes (five tests, the backup
+                  round).
   OLD MAIL PARSER email.utils as Python 3.10.11 and 3.11.9 ship it, the last
                   Windows and macOS installers of those series and what
                   setup-python runs there: getaddresses and parseaddr without
@@ -165,6 +172,10 @@ if getattr(_email_utils, "supports_strict_parsing", False):
 '''
 
 
+_NO_DOCKER = ("npipe:////./pipe/vaf-hostile-no-docker" if os.name == "nt"
+              else "unix:///nonexistent/vaf-hostile/docker.sock")
+
+
 def main() -> int:
     args = sys.argv[1:] or ["tests/", "--ignore=tests/test_gpu_inference.py", "-q"]
 
@@ -191,6 +202,7 @@ def main() -> int:
             VAF_SIMULATED_WINDOWS_HOME="1",
             PYTHONIOENCODING="cp1252",
             PYTHONPATH=os.pathsep.join([str(site), str(ROOT)]),
+            DOCKER_HOST=_NO_DOCKER,
         )
 
         print("Running the suite with:")
@@ -200,6 +212,7 @@ def main() -> int:
         print(f"  windows home    '~' reads USERPROFILE, not HOME")
         print(f"  linked home     " + (f"{home} -> {real_home}" if linked
                                      else "not available here (no symlinks)"))
+        print(f"  no docker       DOCKER_HOST={_NO_DOCKER}")
         print(f"  old mail parser email.utils without strict parsing (3.10.11, 3.11.9)")
         print()
         return subprocess.run([sys.executable, "-m", "pytest", *args],

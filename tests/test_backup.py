@@ -56,6 +56,11 @@ def install(tmp_path, monkeypatch):
                 {"database": "vaf_memory", "role": "vaf"})
 
     monkeypatch.setattr(backup, "_dump_postgres", _fake_dump)
+    # No test reaches the machine's Docker: a restore's safety backup takes the volumes, and
+    # on this workstation that read the real ones through carrier containers, while a CI
+    # runner without the database container failed the backup (measured: five tests red on
+    # every runner, green here). The volume lane has tests of its own with a fake docker.
+    monkeypatch.setattr(backup, "_collect_volumes", lambda staging, warnings, container=None: ([], []))
     wrap = tmp_path / "recovery.json"
     monkeypatch.setattr(recovery_kit, "recovery_wrap_path", lambda: wrap)
     identity = recovery_kit.create_recovery_wrap(b"d" * 32, b"k" * 32)
@@ -341,6 +346,8 @@ def target(install, monkeypatch):
     from vaf.core import containers
     calls = {"pg": 0}
     monkeypatch.setattr(containers, "container_state", lambda name: "running")
+    from vaf.core import environments
+    monkeypatch.setattr(environments.EnvironmentManager, "readopt", lambda self: {})
     monkeypatch.setattr(backup, "_restore_postgres",
                         lambda staging, manifest, container: calls.__setitem__("pg", calls["pg"] + 1))
     install["calls"] = calls

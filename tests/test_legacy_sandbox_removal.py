@@ -55,7 +55,7 @@ def test_it_runs_before_the_core_services_come_up():
     would hold its memory through the whole start."""
     import inspect
     src = inspect.getsource(ss._ensure_service_stack)
-    assert src.index("_remove_legacy_sandbox(log)") < src.index("list(CORE_SERVICES)")
+    assert src.index("_remove_legacy_sandbox(log)") < src.index("needed_core_services()")
 
 
 def test_the_registry_no_longer_lists_it():

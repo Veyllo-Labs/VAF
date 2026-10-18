@@ -146,7 +146,7 @@ Note: the `desktop` extra intentionally uses **PySide6 (LGPL-3.0)**, not PyQt6
 | pyaudio | >=0.2.14 | MIT |
 | sherpa-onnx | >=1.13 | Apache-2.0 |
 | faster-whisper | >=1.0.0 | MIT |
-| transformers | >=4.40.0 | Apache-2.0 |
+| transformers | >=5.0.0 | Apache-2.0 |
 
 ### browser (python_version >= 3.11)
 | Package | Min version | License |

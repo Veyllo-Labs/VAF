@@ -81,7 +81,16 @@ def profile_cmd(
         raise typer.Exit(2)
     if wanted == ip.LOCAL and not no_stack:
         UI.info("Starting the speech containers (the first start downloads their images)...")
-    result = ip.apply(wanted, prune=prune, stack=not no_stack)
+    try:
+        result = ip.apply(wanted, prune=prune, stack=not no_stack)
+    except Exception as e:
+        # The key or its lock could not be written: nothing was switched. The installers
+        # stop on this exit; a person gets the command to run again.
+        retry = (f"vaf profile {wanted}" + (" --prune" if prune else "")
+                 + (" --no-stack" if no_stack else ""))
+        UI.error(f"The profile could not be switched ({e}). Run `{retry}` again once that "
+                 "is fixed.")
+        raise typer.Exit(1)
     UI.success(f"Profile set to {wanted}." + ("" if result["previous"] != wanted else " (unchanged)"))
     if no_stack:
         return

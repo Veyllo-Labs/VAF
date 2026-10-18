@@ -48,7 +48,7 @@ tzdata>=2024.1  # IANA tz database for zoneinfo on Windows (no system tz db); us
 # It stays available as the optional `vaf[speech]` extra (setup.py); the runtime import is guarded,
 # so CLI microphone input degrades gracefully without it. Web/desktop mic capture is unaffected.
 SpeechRecognition>=3.10.0
-transformers>=4.40.0  # WhisperFeatureExtractor only: the log-mel front end of the Smart Turn judge (vaf/core/voice_vad.py); needs no torch
+transformers>=5.0.0  # 4.x needs huggingface_hub<1.0, which the hub floor above excludes; WhisperFeatureExtractor only: the log-mel front end of the Smart Turn judge (vaf/core/voice_vad.py); needs no torch
 # openai-whisper>=20231117  # Recommended for high-quality offline STT (DE, TR, CN...)
 # openwakeword>=0.6.0  # Wake Word Detection (100% local & free) - DISABLED on Mac due to install issues
 # onnxruntime>=1.16.0  # Required for openWakeWord inference

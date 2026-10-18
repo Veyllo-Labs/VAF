@@ -203,7 +203,12 @@ export default function LoginPage() {
                         // /needs-setup stops answering it once the admin exists; the admin's own
                         // endpoint does. The step waits for it, so a Lean installation never
                         // flashes the local texts.
-                        fetch(`${apiPrefix}/api/system/inference-profile`, { credentials: 'include', cache: 'no-store' })
+                        // Bounded: a request that never answers would hold the step back for good.
+                        const profileAbort = new AbortController();
+                        const profileTimer = window.setTimeout(() => profileAbort.abort(), 5000);
+                        fetch(`${apiPrefix}/api/system/inference-profile`, {
+                            credentials: 'include', cache: 'no-store', signal: profileAbort.signal,
+                        })
                             .then((r) => (r.ok ? r.json() : null))
                             .then((d) => {
                                 if (cancelled) return;
@@ -220,6 +225,7 @@ export default function LoginPage() {
                                 if (!cancelled && kept) setSetupProfile(kept);
                             })
                             .finally(() => {
+                                window.clearTimeout(profileTimer);
                                 if (cancelled) return;
                                 setStep(savedStep === 'veyllo_api' ? 'veyllo_api' : 'soul_wizard');
                                 setCheckingSetup(false);

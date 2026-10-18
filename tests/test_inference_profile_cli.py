@@ -337,3 +337,19 @@ def test_two_switches_never_interleave(config, monkeypatch, tmp_path):
     second.join(5)
     assert events == ["retire-start", "retire-end", "start"]
     assert config["inference_profile"] == "local"
+
+
+def test_a_switch_that_raises_names_the_retry_and_exits_1(config, monkeypatch):
+    """apply() raising (an unwritable key or lock) ended `vaf profile` in a traceback; the
+    installers stop on a non-zero exit, a person needs the command to run again. MUTATION:
+    call apply unguarded again - red."""
+    from vaf.core import inference_profile
+
+    def _apply(profile, prune=False, stack=True):
+        raise PermissionError("config.json is read-only")
+
+    monkeypatch.setattr(inference_profile, "apply", _apply)
+    out = CliRunner().invoke(_app(), ["api", "--prune"])
+    said = " ".join(out.output.split())
+    assert out.exit_code == 1 and isinstance(out.exception, SystemExit)
+    assert "could not be switched" in said and "`vaf profile api --prune`" in said

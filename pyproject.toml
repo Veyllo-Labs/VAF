@@ -123,9 +123,11 @@ memory = [
 # because its native runtime (ctranslate2) is a large platform-specific wheel
 # and the recommended engine is the Whisper container.
 # transformers is imported for WhisperFeatureExtractor alone (the log-mel front end
-# of the Smart Turn judge, vaf/core/voice_vad.py); it runs without torch.
+# of the Smart Turn judge, vaf/core/voice_vad.py); it runs without torch. 5.0 is the
+# first release that accepts huggingface_hub 1.x, which the base floor requires (4.x
+# declares huggingface-hub<1.0).
 speech = ["SpeechRecognition>=3.10.0", "pyaudio>=0.2.14", "sherpa-onnx>=1.13",
-          "faster-whisper>=1.0.0", "transformers>=4.40.0"]
+          "faster-whisper>=1.0.0", "transformers>=5.0.0"]
 browser = [
     "browser-use>=0.12.9; python_version >= '3.11'",
     "playwright>=1.49.0; python_version >= '3.11'",

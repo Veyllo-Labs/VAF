@@ -41,6 +41,18 @@ def _lazy_load_sr():
             HAS_STT = False
     return _sr
 
+def tts_unavailable_message() -> str:
+    """What speak() says when no lane produced audio and no local voice is left. Without
+    local models (inference_profile = api) the Docker TTS it used to recommend does not run
+    here; the provider is the lane to check."""
+    from vaf.core import inference_profile
+    if not inference_profile.local_inference_allowed():
+        return ("No text-to-speech on this installation without local models: choose or "
+                "check a text-to-speech provider (speech_tts_provider and its key) under "
+                "Settings > Voice & Speech.")
+    return "Local TTS disabled (causes RAM explosion). Use Docker TTS instead."
+
+
 def stt_failure_message() -> str:
     """What the terminal mic says when the shared client gave no text. Without local
     models (inference_profile = api) only the provider was asked, so the container and the
@@ -884,7 +896,7 @@ $player.Close()
                     # NO LOCAL TTS! pyttsx3 causes 1-4GB RAM explosion via Windows SAPI/comtypes
                     # User must use Docker TTS (speech_tts_engine=docker or chatterbox)
                     from vaf.cli.ui import UI
-                    UI.warning("Local TTS disabled (causes RAM explosion). Use Docker TTS instead.")
+                    UI.warning(tts_unavailable_message())
                     return
 
         threading.Thread(target=_speak_worker, daemon=True).start()

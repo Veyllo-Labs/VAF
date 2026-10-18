@@ -526,3 +526,15 @@ def test_a_messenger_turn_without_a_backend_gets_no_reply(tmp_path, monkeypatch)
     with pytest.raises(FileNotFoundError):
         mgr.load("telegram_123")
     assert logged and "without a reply" in logged[0]
+
+
+@pytest.mark.parametrize("profile, says, never", [
+    ("api", "text-to-speech provider", "Docker"),
+    ("local", "Docker TTS", "provider"),
+])
+def test_speak_names_the_right_lane_when_no_voice_is_left(config, profile, says, never):
+    """Under api the warning recommended Docker TTS, which does not run there. MUTATION:
+    one message for both profiles - red."""
+    from vaf.core.speech import tts_unavailable_message
+    config["inference_profile"] = profile
+    assert says in tts_unavailable_message() and never not in tts_unavailable_message()

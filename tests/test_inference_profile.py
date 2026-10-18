@@ -485,3 +485,16 @@ def test_a_settings_save_never_carries_the_profile(monkeypatch):
     assert state["inference_profile"] == "api" and state["tts_auto_speak"] is True
     assert ip.without_profile_key({"inference_profile": "local", "a": 1}) == {"a": 1}
     assert "_inference_profile.without_profile_key(new_config)" in inspect.getsource(web_server)
+
+
+def test_no_model_resolved_leaves_the_configured_model_alone(monkeypatch):
+    """Under api ensure_model_available returns "": the agent kept an empty model path and
+    file name, which every later message about the model then named. MUTATION: assign the
+    empty path again - red."""
+    from vaf.core import backend
+    from vaf.core.agent import Agent
+    monkeypatch.setattr(backend, "ensure_model_available", lambda name, models_dir: "")
+    agent = types.SimpleNamespace(config={"model": "auto"}, models_dir="/models",
+                                  model_path="/models/qwen.gguf", filename="qwen.gguf")
+    Agent.ensure_model_exists(agent)
+    assert (agent.model_path, agent.filename) == ("/models/qwen.gguf", "qwen.gguf")

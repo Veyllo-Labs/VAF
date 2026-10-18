@@ -5382,10 +5382,14 @@ class Agent:
         ensure_model_available -- ONE implementation shared with the tray/server path. It fixes a bare
         config filename to its real repo, serializes concurrent downloads (filelock), self-heals a
         missing/unknown model to the VRAM-adaptive default, and never sys.exit()s. Updates
-        self.model_path/filename to the resolved (possibly self-healed) file."""
+        self.model_path/filename to the resolved (possibly self-healed) file - unless nothing
+        was resolved: on an installation without local models ensure_model_available
+        returns "", and an empty path would only replace the configured model's name."""
         from vaf.core.backend import ensure_model_available
         model_cfg = os.environ.get("VAF_MODEL_OVERRIDE", "").strip() or self.config.get("model")
         path = ensure_model_available(model_cfg, self.models_dir)
+        if not path:
+            return
         self.model_path = path
         self.filename = os.path.basename(path)
 

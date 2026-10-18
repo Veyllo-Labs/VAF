@@ -146,10 +146,17 @@ def server_provision(
         # The one switch (vaf profile, the web settings): on an installation that already
         # runs, the speech containers follow the profile. The installers do not pass
         # --profile here; they set it with `vaf profile` before the stack starts.
-        switched = inference_profile.apply(profile.strip().lower())
-        UI.success(f"Inference profile: {switched['profile']} (`vaf profile` shows what it runs).")
-        for problem in switched["errors"]:
-            UI.warning(problem)
+        # A switch that fails must not end the provisioning: the steps below (the database
+        # passwords, the certificates, the firewall) protect the server either way.
+        try:
+            switched = inference_profile.apply(profile.strip().lower())
+        except Exception as e:
+            UI.warning(f"The inference profile could not be switched ({e}); run "
+                       f"`vaf profile {profile.strip().lower()}` once the rest is done.")
+        else:
+            UI.success(f"Inference profile: {switched['profile']} (`vaf profile` shows what it runs).")
+            for problem in switched["errors"]:
+                UI.warning(problem)
 
     # A server must not keep the database passwords published in this repository: whoever has
     # one writes every table (vaf/core/db_credentials.py). Replaced here when the database

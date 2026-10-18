@@ -250,20 +250,30 @@ def test_the_installers_stop_on_an_unwritten_profile_and_retire_the_speech_conta
 
 
 def test_provision_switches_through_the_one_implementation(config, monkeypatch):
-    """On a running installation the speech containers follow the profile. MUTATION: set
-    the key directly again - red."""
+    """On a running installation the speech containers follow the profile, and a switch that
+    fails does not end the provisioning: the database passwords, the certificates and the
+    firewall come after it. MUTATION: set the key directly again, or let the failure end
+    the command - red."""
     from vaf.cli.cmd import server
-    from vaf.core import inference_profile
+    from vaf.core import db_credentials, inference_profile
     monkeypatch.setattr(server.platform, "system", lambda: "Linux")
-    calls = []
+    calls, reached = [], []
 
     def _apply(profile, prune=False, stack=True):
         calls.append(profile)
-        raise RuntimeError("stop here")
+        raise RuntimeError("the lock file is not writable")
+
+    def _next_step():
+        # The step after the switch; stopped here, so no test ever touches a database.
+        reached.append(True)
+        raise KeyboardInterrupt
 
     monkeypatch.setattr(inference_profile, "apply", _apply)
-    CliRunner().invoke(server.app, ["provision", "--profile", "api", "--no-firewall"])
-    assert calls == ["api"]
+    monkeypatch.setattr(db_credentials, "shipped_password_in_use", _next_step)
+    out = CliRunner().invoke(server.app, ["provision", "--profile", "api", "--no-firewall"])
+    assert calls == ["api"] and reached == [True]
+    said = " ".join(out.output.split())         # the console wraps long lines
+    assert "could not be switched" in said and "the lock file is not writable" in said
 
 
 @pytest.mark.parametrize("root, errors, exit_code", [

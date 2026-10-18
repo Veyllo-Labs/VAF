@@ -73,16 +73,20 @@ class _ModelDownloadState:
 MODEL_DOWNLOAD = _ModelDownloadState()
 
 
-def make_state_tqdm():
+def make_state_tqdm(should_abort=None):
     """Return a ``tqdm`` subclass usable as ``hf_hub_download(tqdm_class=...)`` that mirrors byte
     progress into :data:`MODEL_DOWNLOAD`. Mirrors the pattern of ``make_progress_tqdm`` in
-    ``web_server.py`` but writes to the shared state instead of a per-websocket queue."""
+    ``web_server.py`` but writes to the shared state instead of a per-websocket queue.
+    ``should_abort`` is called on every tick and ends the download by raising
+    (``inference_profile.download_guard``)."""
     from tqdm import tqdm as _tqdm
 
     state = MODEL_DOWNLOAD
 
     class _StateTqdm(_tqdm):  # type: ignore[misc]
         def update(self, n=1):
+            if should_abort is not None:
+                should_abort()
             res = super().update(n)
             try:
                 state.update(self.n, self.total or 0)

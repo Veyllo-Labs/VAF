@@ -222,6 +222,9 @@ def ensure_model_available(model_name, models_dir) -> str:
         from filelock import FileLock
         # Serialize downloads across threads AND processes (filelock is already used in secure_store.py).
         with FileLock(str(models_dir / ".download.lock")):
+            # The profile may have been switched while this caller waited on the lock.
+            if not inference_profile.local_inference_allowed():
+                raise InterruptedError(inference_profile.refusal("downloading a local model"))
             if local.is_file():                       # another caller finished while we waited on the lock
                 return str(local)
             from vaf.core.model_download_state import MODEL_DOWNLOAD, make_state_tqdm
@@ -238,7 +241,7 @@ def ensure_model_available(model_name, models_dir) -> str:
                 _stop_broadcast = None
             try:
                 hf_hub_download(repo_id=repo_id, filename=fname, local_dir=str(models_dir),
-                                tqdm_class=make_state_tqdm())
+                                tqdm_class=make_state_tqdm(inference_profile.download_guard()))
             finally:
                 MODEL_DOWNLOAD.finish()
                 if _stop_broadcast:
@@ -282,6 +285,9 @@ def ensure_model_available(model_name, models_dir) -> str:
         except Exception as e:
             UI.error(f"Download of {filename} failed: {e}")
 
+    # A switch to the api profile during the download above ended it: no fallback download.
+    if not inference_profile.local_inference_allowed():
+        return ""
     # 2) self-heal -- nothing usable was configured/downloadable: pick a model that fits this VRAM
     auto_repo, auto_file = _resolve_model_ref(recommended_default_model())
     if _present(auto_file):
@@ -294,6 +300,8 @@ def ensure_model_available(model_name, models_dir) -> str:
             UI.error(f"Fallback download failed: {e}")
 
     # 3) last resort -- return the resolved path so the caller surfaces a clear missing-file error
+    if not inference_profile.local_inference_allowed():
+        return ""
     return str(models_dir / (filename or auto_file or "model.gguf"))
 
 

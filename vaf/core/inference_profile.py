@@ -56,7 +56,8 @@ an installation of the product carries.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
+import time
+from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger("vaf.core.inference_profile")
 
@@ -109,6 +110,38 @@ def validate(profile: str, prune: bool = False) -> str:
     if prune and wanted != API:
         raise ValueError("Pruning goes with api: it removes what the local profile runs.")
     return wanted
+
+
+def download_guard(interval: float = 2.0) -> Callable[[], None]:
+    """For a model download's progress hook: a callable that raises InterruptedError once
+    the profile is ``api``, reading it at most every ``interval`` seconds. The check at the
+    start of a download cannot see a switch made while it runs, and a chat model is up to
+    17.9 GB: without this the download finished, on exactly the small server the switch was
+    for. Every download lane passes one (the automatic one in ``backend``, the web
+    settings, the terminal settings)."""
+    last = [0.0]
+
+    def check() -> None:
+        now = time.monotonic()
+        if now - last[0] < interval:
+            return
+        last[0] = now
+        if not local_inference_allowed():
+            raise InterruptedError(refusal("downloading a local model"))
+
+    return check
+
+
+def without_profile_key(payload: Dict) -> Dict:
+    """A Settings save without ``inference_profile``. The key changes only through
+    ``apply``, which also stops or starts the speech containers; a save sends the whole
+    page, and a page loaded before a switch (another tab, another admin, the terminal, or
+    the switch still running) would write the old profile back without touching a
+    container. Both save lanes pass it: the WebSocket ``save_config`` and
+    ``PATCH /api/config``."""
+    if isinstance(payload, dict) and "inference_profile" in payload:
+        return {k: v for k, v in payload.items() if k != "inference_profile"}
+    return payload
 
 
 def apply(profile: str, *, prune: bool = False, stack: bool = True) -> Dict:

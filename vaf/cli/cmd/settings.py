@@ -247,7 +247,9 @@ def download_model_flow(repo_id: str, preselected_filename: str = None):
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         models_dir = os.path.join(base_dir, "models")
         
-        hf_hub_download(repo_id=repo_id, filename=filename, local_dir=models_dir)
+        from vaf.core.model_download_state import make_state_tqdm
+        hf_hub_download(repo_id=repo_id, filename=filename, local_dir=models_dir,
+                        tqdm_class=make_state_tqdm(inference_profile.download_guard()))
         
         UI.event("Success", "Download verified.", style="success")
         

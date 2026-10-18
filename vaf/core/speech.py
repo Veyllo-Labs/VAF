@@ -41,6 +41,19 @@ def _lazy_load_sr():
             HAS_STT = False
     return _sr
 
+def stt_failure_message() -> str:
+    """What the terminal mic says when the shared client gave no text. Without local
+    models (inference_profile = api) only the provider was asked, so the container and the
+    speech stack are no part of the answer."""
+    from vaf.core import inference_profile
+    if not inference_profile.local_inference_allowed():
+        return ("Transcription failed: the speech-to-text provider gave no text, and this "
+                "installation has no local engine to fall back to. Choose or check it "
+                "(speech_stt_provider and its key) under Settings > Voice & Speech.")
+    return ("Transcription failed: no speech-to-text provider gave text and the Whisper "
+            "container did not answer - `vaf repair` starts the speech stack.")
+
+
 class SpeechManager:
     _instance = None
     _lock = threading.Lock()
@@ -1052,10 +1065,7 @@ $player.Close()
                     if api_text:
                         self._play_success_sound()
                         return api_text
-                    UI.warning(
-                        "Transcription failed: no cloud STT configured and the "
-                        "Whisper container did not answer - is the speech stack "
-                        "running (start_vaf.sh)?")
+                    UI.warning(stt_failure_message())
                     return None
 
                 # No cloud lane call here any more: a resolving provider already

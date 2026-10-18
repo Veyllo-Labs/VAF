@@ -5494,6 +5494,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         ws_id = id(websocket)
                         _active_model_download_cancels[ws_id] = cancel_event
 
+                        _profile_guard = _inference_profile.download_guard()
+
                         def make_progress_tqdm(pq: queue.Queue, ce: threading.Event):
                             class ProgressTqdm:
                                 def __init__(self, total=None, **kwargs):
@@ -5506,6 +5508,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     self.n += n
                                     if self._ce.is_set():
                                         raise InterruptedError("Download cancelled")
+                                    _profile_guard()
                                     if self.total and self._pq is not None:
                                         pct = 100.0 * self.n / self.total
                                         elapsed = time.time() - self._start
@@ -5556,8 +5559,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 new_models = [f.name for f in models_dir.glob("*.gguf")
                                               if is_selectable_model(f.name)]
                                 return True, None, new_models
-                            except InterruptedError:
-                                return False, "Download cancelled", []
+                            except InterruptedError as e:
+                                return False, str(e) or "Download cancelled", []
                             except Exception as e:
                                 return False, str(e), []
 
@@ -5721,6 +5724,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         stored_role = manager.get_connection_user_role(websocket) if manager else None
                         is_admin = is_admin_identity(stored_role, user_scope_id)
                         existing = Config.load()
+                        new_config = _inference_profile.without_profile_key(new_config)
                         new_config = Config.split_connection_toggles(
                             existing, new_config, str(user_scope_id) if user_scope_id else None, is_admin=is_admin)
                         # Keys leave the payload for the encrypted store; see

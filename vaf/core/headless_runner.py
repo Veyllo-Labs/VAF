@@ -655,6 +655,23 @@ def new_session_for_task(task) -> Session:
     return session
 
 
+def turn_refusal_reason(agent, task) -> str:
+    """Why this turn cannot run at all, or "" - decided before chat_step, which would only
+    log the reason and leave the chat with "[Error] No response was produced". Two cases:
+    an installation without local models whose chat provider is still the local one, and
+    an API provider whose backend could not be built (no key, a failed setup); the wording
+    is the agent's own (``Agent._no_backend_reason``). A local provider on an installation
+    with local models is no case: its model is loaded below, on first use. A messenger turn
+    keeps its own lane: an admin's setup message is not for whoever wrote in."""
+    from vaf.core import inference_profile
+    from vaf.core.channels import CHANNEL_LABELS
+    if getattr(task, "source", None) in CHANNEL_LABELS or agent.api_backend:
+        return ""
+    if agent.provider == "local" and inference_profile.local_inference_allowed():
+        return ""
+    return agent._no_backend_reason()
+
+
 def refuse_turn_without_backend(task, why: str, session_mgr) -> None:
     """Close a turn that has no backend on this installation (inference_profile = api and
     no provider yet): the reason goes to the chat and the turn ends. The exchange is
@@ -1312,17 +1329,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except Exception as _heal_e:
                         print(f"[Headless] provider self-heal failed: {_heal_e}")
                     from vaf.core import inference_profile
-                    from vaf.core.channels import CHANNEL_LABELS
                     _no_local = not inference_profile.local_inference_allowed()
-                    if (_no_local and agent.provider == "local" and not agent.api_backend
-                            and getattr(task, "source", None) not in CHANNEL_LABELS):
-                        # Nothing will be downloaded here (inference_profile = api): say why
-                        # in the chat, close the turn and skip the rest of it. Running it
-                        # anyway ended in "[Error] No response was produced" under the
-                        # reason. A messenger turn keeps its own lane: an admin's setup
-                        # message is not for whoever wrote in.
-                        refuse_turn_without_backend(
-                            task, inference_profile.refusal("the local model"), session_mgr)
+                    _why = turn_refusal_reason(agent, task)
+                    if _why:
+                        refuse_turn_without_backend(task, _why, session_mgr)
                         tq.task_done()
                         continue
                     if not _no_local and agent.provider == "local" and not agent.api_backend and not agent.llm and not agent.use_server:

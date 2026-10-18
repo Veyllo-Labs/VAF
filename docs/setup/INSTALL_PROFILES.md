@@ -87,7 +87,9 @@ engines; the failover chain shows no local link. The first-run wizard says that 
 the provider step leaves no local model to fall back on.
 
 The profile is admin-only (`GLOBAL_CONFIG_KEYS`): it starts and stops containers and
-decides about downloads for every account at once.
+decides about downloads for every account at once. A Settings save never writes it
+(`inference_profile.without_profile_key` in both save lanes): a page loaded before a switch
+would otherwise write the old profile back without stopping or starting anything.
 
 ## What the lean profile guarantees, and where
 
@@ -98,11 +100,16 @@ each, not by checks spread over the code:
 - `backend.ensure_model_available`, the one download entry for a model, returns nothing
   and downloads nothing. Every lane passes it: chat, the voice call, thinking runs,
   sub-agents, the local failover link. The two lanes that download a model chosen by hand
-  (the model download in the terminal settings and in the web settings) refuse as well.
+  (the model download in the terminal settings and in the web settings) refuse as well. A
+  download that was already running when the profile was switched ends within two seconds
+  (`inference_profile.download_guard` in each lane's progress hook), and a caller that was
+  waiting on the download lock reads the profile again before it starts.
 - `ServerManager.start_server`, the one start of the local server, refuses, also for the
   voice lane, which otherwise asks past the provider gate.
 - `Agent.load_model` loads no local model; a chat turn that has no provider says so in the
-  chat and closes the turn instead of promising a download. An agent that loaded a local
+  chat, closes the turn and stores it, instead of promising a download. The same goes for
+  an API provider whose backend could not be built (no key, a failed setup), on either
+  profile (`turn_refusal_reason` in `headless_runner.py`). An agent that loaded a local
   model before the profile was switched does not run its next turn on it, and the tray
   unloads the model as it does for an API provider.
 - The failover chain leaves its local link out; a backup API provider stays.

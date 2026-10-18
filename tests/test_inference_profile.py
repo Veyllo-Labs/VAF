@@ -341,4 +341,147 @@ def test_a_refused_turn_is_stored_so_a_reload_keeps_it(tmp_path, monkeypatch):
     assert session.metadata.get("user_scope_id") == "ab12cd34"
     assert session.metadata.get("username") == "alice"
     assert emitted[1] == "done"
-    assert "refuse_turn_without_backend(" in inspect.getsource(hr.run_headless_agent)
+    runner = inspect.getsource(hr.run_headless_agent)
+    assert "turn_refusal_reason(agent, task)" in runner and "refuse_turn_without_backend(" in runner
+
+
+def test_a_switch_during_a_download_ends_it_and_downloads_no_fallback(config, monkeypatch,
+                                                                     tmp_path):
+    """The check at the start of a download cannot see a switch made while it runs, and a
+    chat model is up to 17.9 GB. The progress hook now reads the profile, and the self-heal
+    does not start a second download after it. MUTATION: drop the guard from the progress
+    hook, or the profile check before the self-heal - red."""
+    import huggingface_hub
+    pulled = []
+
+    def fake_download(*a, **k):
+        pulled.append(k["filename"])
+        config["inference_profile"] = "api"          # switched while this runs
+        bar = k["tqdm_class"](total=100)
+        bar.update(10)
+        pytest.fail("the download went on after the switch")
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_download)
+    config["inference_profile"] = "local"
+    from vaf.core import backend
+    said = []
+    monkeypatch.setattr(backend.UI, "event", lambda *a, **k: said.append(" ".join(map(str, a))))
+    assert backend.ensure_model_available(
+        "unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf", tmp_path) == ""
+    assert len(pulled) == 1, "no fallback download after the switch"
+    assert not any("falling back" in line for line in said), "no self-heal attempt either"
+
+
+def test_every_model_download_lane_passes_the_profile_guard():
+    """The automatic download, the web settings and the terminal settings each start their
+    own hf_hub_download. MUTATION: drop the guard from one lane - red."""
+    import inspect
+
+    from vaf.cli.cmd import settings
+    from vaf.core import backend, web_server
+    for source in (inspect.getsource(backend.ensure_model_available),
+                   inspect.getsource(settings.download_model_flow)):
+        assert "make_state_tqdm(inference_profile.download_guard())" in source
+    web = inspect.getsource(web_server)
+    assert "_profile_guard = _inference_profile.download_guard()" in web
+    assert web.count("_profile_guard()") == 1
+
+
+def test_the_download_guard_reads_the_profile_at_most_every_interval(config, monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(ip.time, "monotonic", lambda: clock[0])
+    config["inference_profile"] = "local"
+    guard = ip.download_guard(interval=2.0)
+    guard()
+    config["inference_profile"] = "api"
+    guard()                                   # within the interval: not read again
+    clock[0] += 2.5
+    with pytest.raises(InterruptedError, match="without local models"):
+        guard()
+
+
+def test_a_caller_waiting_on_the_download_lock_rechecks_the_profile(config, monkeypatch,
+                                                                    tmp_path):
+    """A second caller waits on the download lock while the first one downloads; when the
+    profile was switched meanwhile it must not start its own download after the wait.
+    MUTATION: drop the recheck after the lock - red."""
+    import filelock
+    import huggingface_hub
+
+    class _Lock:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            config["inference_profile"] = "api"      # switched while this caller waited
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(filelock, "FileLock", _Lock)
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download",
+                        lambda *a, **k: pytest.fail("downloaded after the wait"))
+    config["inference_profile"] = "local"
+    from vaf.core.backend import ensure_model_available
+    assert ensure_model_available("unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf", tmp_path) == ""
+
+
+@pytest.mark.parametrize("profile, provider, backend, source, expected", [
+    ("api", "local", None, None, "without local models"),
+    ("local", "openai", None, None, "The API provider openai is not set up (no key)"),
+    ("api", "openai", None, None, "The API provider openai is not set up (no key)"),
+    ("local", "local", None, None, ""),          # loaded below, on first use
+    ("api", "openai", object(), None, ""),       # a backend: the turn runs
+    ("api", "local", None, "telegram", ""),      # a messenger turn keeps its own lane
+])
+def test_a_turn_without_any_backend_is_refused_before_chat_step(config, profile, provider,
+                                                                backend, source, expected):
+    """chat_step only logs a missing backend, and the chat then read "[Error] No response
+    was produced", for an API provider whose backend could not be built as well. MUTATION:
+    keep refusing only the local provider - red."""
+    from vaf.core import headless_runner as hr
+    from vaf.core.agent import Agent
+    config["inference_profile"] = profile
+    agent = types.SimpleNamespace(provider=provider, api_backend=backend, llm=None,
+                                  use_server=False, _api_init_error="no key")
+    agent._no_backend_reason = lambda: Agent._no_backend_reason(agent)
+    reason = hr.turn_refusal_reason(agent, types.SimpleNamespace(source=source))
+    assert (expected in reason) if expected else reason == ""
+
+
+@pytest.mark.parametrize("profile, says, never", [
+    ("api", "no local engine to fall back to", "container"),
+    ("local", "vaf repair", "start_vaf.sh"),
+])
+def test_the_terminal_mic_names_the_right_lane_when_nothing_was_transcribed(config, profile,
+                                                                          says, never):
+    """Under api only the provider was asked; the message used to send people to the
+    Whisper container and start_vaf.sh. MUTATION: one message for both profiles - red."""
+    from vaf.core.speech import stt_failure_message
+    config["inference_profile"] = profile
+    assert says in stt_failure_message() and never not in stt_failure_message()
+
+
+def test_a_settings_save_never_carries_the_profile(monkeypatch):
+    """The profile changes through apply, which also stops or starts the containers; a page
+    loaded before a switch sent the old value back with every save. MUTATION: drop the
+    filter from either save lane - red."""
+    import asyncio
+    import inspect
+
+    from vaf.api import config_routes
+    from vaf.core import web_server
+    from vaf.core.config import Config
+    state = {"inference_profile": "api", "server_mode": False}
+    monkeypatch.setattr(Config, "load", classmethod(lambda cls: dict(state)))
+    monkeypatch.setattr(Config, "save", classmethod(
+        lambda cls, cfg: (state.clear(), state.update(cfg))[0]))
+    user = {"role": "admin", "user_scope_id": "ab12cd34-0000-0000-0000-000000000000",
+            "username": "Alice"}
+    asyncio.run(config_routes.patch_config(
+        {"inference_profile": "local", "tts_auto_speak": True},
+        types.SimpleNamespace(state=types.SimpleNamespace(user=user)), user))
+    assert state["inference_profile"] == "api" and state["tts_auto_speak"] is True
+    assert ip.without_profile_key({"inference_profile": "local", "a": 1}) == {"a": 1}
+    assert "_inference_profile.without_profile_key(new_config)" in inspect.getsource(web_server)

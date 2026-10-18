@@ -1434,6 +1434,7 @@
       "localUnavailable": "Yerel (bu kurulumda yok)",
       "profileApiNote": "Bu kurulum yerel model olmadan çalışıyor: konuşma için burada seçilen sağlayıcılar kullanılır.",
       "ttsNeedsProvider": "Bu kurulumda yerel ses yok: yukarıdan bir metin okuma sağlayıcısı seçin.",
+      "sttNeedsProvider": "Bu kurulumda yerel konuşma tanıma yok: sesli giriş için yukarıdan bir konuşmadan metne sağlayıcısı seçin.",
       "elevenVoiceId": "ElevenLabs ses kimliği",
       "openaiVoice": "OpenAI sesi",
       "ttsModel": "TTS modeli",

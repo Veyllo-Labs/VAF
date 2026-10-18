@@ -4368,7 +4368,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 )}
 
                                 <Section title={tVoice('stt')}>
-                                    {currentUser?.role === 'admin' ? (
+                                    {currentUser?.role === 'admin' && leanProfile && !localConfig.speech_stt_provider ? (
+                                        // No local speech recognition on this installation: the switch
+                                        // that would turn on nothing and the container's URL stay hidden
+                                        // until a provider is chosen above, as for text-to-speech.
+                                        <p className="text-xs text-gray-600">{tVoice('sttNeedsProvider')}</p>
+                                    ) : currentUser?.role === 'admin' ? (
                                         <>
                                             <Switch
                                                 label={tVoice('enableVoiceInput')}

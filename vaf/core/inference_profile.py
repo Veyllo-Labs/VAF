@@ -117,6 +117,12 @@ def apply(profile: str, *, prune: bool = False, stack: bool = True) -> Dict:
     case) stops the speech containers for ``api`` (``prune`` also removes their containers,
     images and volumes) or starts the stack with them for ``local``.
 
+    The key is written first, deliberately, and stays written when the stop fails: every
+    choke point above reads it, so downloads and the local server are refused from that
+    moment, and keeping the old profile because Docker did not answer would leave them
+    open too. A stop or removal that failed is in ``errors``; callers treat a non-empty
+    ``errors`` as an incomplete switch (`vaf profile` exits 1, the web switch reports it).
+
     Raises ValueError as ``validate`` does. Returns
     {"profile", "previous", "stopped", "started", "removed", "errors", "conflicts"}."""
     wanted = validate(profile, prune)

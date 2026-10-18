@@ -64,6 +64,11 @@ vaf profile api --prune    # ... and their containers, images and volumes are re
 vaf profile local          # switch back: the speech containers start again
 ```
 
+The profile is written first and holds from that moment, also when the speech containers
+cannot be stopped (Docker does not answer): the downloads and the local server are refused
+either way. `vaf profile api` then names what failed and exits with 1, the installers warn
+on that, and the same command run again finishes the stop.
+
 `--prune` frees the disk the speech containers took (their images and the models in their
 volumes). It does not delete chat models you downloaded earlier: `vaf profile` says how
 much is left in the `models` folder, and deleting it is yours to do. The command is not

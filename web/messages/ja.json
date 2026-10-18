@@ -1434,6 +1434,7 @@
       "localUnavailable": "ローカル（このインストールでは利用不可）",
       "profileApiNote": "このインストールはローカルモデルなしで動作します。音声にはここで選んだプロバイダーが使われます。",
       "ttsNeedsProvider": "このインストールにはローカル音声がありません。上で音声合成のプロバイダーを選択してください。",
+      "sttNeedsProvider": "このインストールにはローカル音声認識がありません。音声入力を使うには、上で音声認識のプロバイダーを選択してください。",
       "elevenVoiceId": "ElevenLabsの音声ID",
       "openaiVoice": "OpenAIの音声",
       "ttsModel": "TTSモデル",

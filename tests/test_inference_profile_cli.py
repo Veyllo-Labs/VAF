@@ -72,8 +72,23 @@ def test_switching_writes_the_profile_and_retires_or_starts_the_speech_container
 
 @pytest.mark.parametrize("args", [["bogus"], ["local", "--prune"], ["--services", "all"]])
 def test_a_wrong_profile_or_combination_changes_nothing(config, args):
+    """MUTATION: announce the container start before the request is checked - red on
+    `local --prune`, which used to say it was starting and then refuse."""
     out = CliRunner().invoke(_app(), args)
     assert out.exit_code == 2 and "inference_profile" not in config
+    assert "Starting" not in out.output
+
+
+def test_a_stop_that_failed_is_an_incomplete_switch_not_a_success(config, monkeypatch):
+    """The profile stays written (the choke points read it at once), but the exit code says
+    the containers did not stop: the installers warn on it. MUTATION: drop the exit - red."""
+    monkeypatch.setattr(ss, "retire_local_inference_services",
+                        lambda prune=False, log=None: {
+                            "stopped": False, "removed": [],
+                            "errors": ["Could not stop stt, tts: Cannot connect to the Docker daemon"]})
+    out = CliRunner().invoke(_app(), ["api"])
+    assert out.exit_code == 1 and config["inference_profile"] == "api"
+    assert "Cannot connect to the Docker daemon" in out.output and "not complete" in out.output
 
 
 def test_retiring_names_only_the_speech_services_and_their_own_volumes(monkeypatch, tmp_path):

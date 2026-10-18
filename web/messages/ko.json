@@ -1434,6 +1434,7 @@
       "localUnavailable": "로컬 (이 설치에서는 사용 불가)",
       "profileApiNote": "이 설치는 로컬 모델 없이 실행됩니다. 음성에는 여기서 선택한 제공자를 사용합니다.",
       "ttsNeedsProvider": "이 설치에는 로컬 음성이 없습니다. 위에서 텍스트 음성 변환 제공자를 선택하세요.",
+      "sttNeedsProvider": "이 설치에는 로컬 음성 인식이 없습니다. 음성 입력을 쓰려면 위에서 음성 텍스트 변환 제공자를 선택하세요.",
       "elevenVoiceId": "ElevenLabs 음성 ID",
       "openaiVoice": "OpenAI 음성",
       "ttsModel": "TTS 모델",

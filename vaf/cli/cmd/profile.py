@@ -74,14 +74,14 @@ def profile_cmd(
                     "delete them yourself when you need the space.")
         return
 
-    wanted = name.strip().lower()
-    if wanted == ip.LOCAL and not no_stack:
-        UI.info("Starting the speech containers (the first start downloads their images)...")
     try:
-        result = ip.apply(wanted, prune=prune, stack=not no_stack)
+        wanted = ip.validate(name, prune)
     except ValueError as e:
         UI.error(str(e))
         raise typer.Exit(2)
+    if wanted == ip.LOCAL and not no_stack:
+        UI.info("Starting the speech containers (the first start downloads their images)...")
+    result = ip.apply(wanted, prune=prune, stack=not no_stack)
     UI.success(f"Profile set to {wanted}." + ("" if result["previous"] != wanted else " (unchanged)"))
     if no_stack:
         return
@@ -101,3 +101,9 @@ def profile_cmd(
         UI.warning(problem)
     for sentence in result["conflicts"]:
         UI.warning(sentence)
+    if result["errors"]:
+        # The profile holds from the moment it is written; what did not happen is the stop
+        # (or the removal) of the speech containers. A non-zero exit says so to the
+        # installers, which warn on it.
+        UI.error("The switch is not complete: run `vaf profile api` again once Docker answers.")
+        raise typer.Exit(1)

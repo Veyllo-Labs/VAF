@@ -1434,6 +1434,7 @@
       "localUnavailable": "Local (not on this installation)",
       "profileApiNote": "This installation runs without local models: speech uses the providers chosen here.",
       "ttsNeedsProvider": "This installation has no local voice: choose a text-to-speech provider above.",
+      "sttNeedsProvider": "This installation has no local speech recognition: choose a speech-to-text provider above to use voice input.",
       "elevenVoiceId": "ElevenLabs voice ID",
       "openaiVoice": "OpenAI voice",
       "ttsModel": "TTS model",

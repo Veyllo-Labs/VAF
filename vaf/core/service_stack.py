@@ -996,6 +996,13 @@ def retire_local_inference_services(prune: bool = False,
     volumes: List[str] = []
     try:
         r = subprocess.run(base + ["config", "--format", "json"], timeout=60, **kwargs)
+        if r.returncode != 0:
+            # An empty answer would parse as "nothing to remove": the prune would report
+            # success with the images and volumes still on the disk.
+            detail = ((r.stderr or "") or (r.stdout or "")).strip()[:200]
+            out["errors"].append("The compose file could not be read: "
+                                 + (detail or f"docker compose config exited {r.returncode}"))
+            return out
         resolved = json.loads(r.stdout or "{}")
         named = resolved.get("volumes") or {}
         for key in keys:

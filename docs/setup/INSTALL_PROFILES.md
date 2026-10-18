@@ -102,10 +102,13 @@ each, not by checks spread over the code:
   status, the repair, `vaf top` and the installers read this one list: a container the
   profile leaves out is shown as `off`, never as a fault, and a repair does not bring it
   back.
-- Speech-to-text and text-to-speech use the provider's answer or none: without local
-  models there is no container to fall back to, so a provider error is reported rather
-  than retried against a service that does not run. The local Piper lane, which downloads
-  its binary and voices, is not used either.
+- Speech-to-text uses the provider's answer or none: without local models there is no
+  container to fall back to, so a provider error is reported rather than retried against
+  a service that does not run.
+- Text-to-speech uses the provider first. When it gives no audio, the two local lanes
+  stay unused: the container (`docker`) does not run, and the Piper lane, which downloads
+  its binary and voices, is skipped. Two lanes that download nothing here stay usable: a
+  TTS server you run elsewhere (`speech_tts_engine = chatterbox`) and the macOS voice.
 
 ## A setting that contradicts the profile
 

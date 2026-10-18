@@ -1136,12 +1136,14 @@ export default function LoginPage() {
                                     <ul className="space-y-3 w-full text-[13px] text-gray-200 relative z-[1]">
                                         <li className="flex items-start gap-2.5"><Zap size={16} className="mt-0.5 shrink-0 text-yellow-300" /><span>{t('veylloValueSpeed')}</span></li>
                                         <li className="flex items-start gap-2.5"><Cpu size={16} className="mt-0.5 shrink-0 text-sky-300" /><span>{t('veylloValueNoGpu')}</span></li>
-                                        <li className="flex items-start gap-2.5"><HardDrive size={16} className="mt-0.5 shrink-0 text-emerald-300" /><span>{t('veylloValueLocalOk')}</span></li>
+                                        {setupProfile !== 'api' && (
+                                            <li className="flex items-start gap-2.5"><HardDrive size={16} className="mt-0.5 shrink-0 text-emerald-300" /><span>{t('veylloValueLocalOk')}</span></li>
+                                        )}
                                     </ul>
                                 </div>
                                 {/* Right: the actual form */}
                                 <div className="md:w-3/5 p-8">
-                                    <p className="text-sm text-gray-600 leading-relaxed mb-4">{t('veylloBody')}</p>
+                                    <p className="text-sm text-gray-600 leading-relaxed mb-4">{t(setupProfile === 'api' ? 'veylloBodyApi' : 'veylloBody')}</p>
                                     {setupProfile === 'api' && (
                                         <p className="text-sm text-amber-700 leading-relaxed mb-4">{t('veylloApiProfileNote')}</p>
                                     )}
@@ -1187,7 +1189,7 @@ export default function LoginPage() {
                                     >
                                         {setupProfile === 'api' ? t('veylloSkipApi') : t('veylloSkip')}
                                     </button>
-                                    <p className="text-xs text-gray-400 text-center mt-4 leading-relaxed">{t('veylloOtherProviders')}</p>
+                                    <p className="text-xs text-gray-400 text-center mt-4 leading-relaxed">{t(setupProfile === 'api' ? 'veylloOtherProvidersApi' : 'veylloOtherProviders')}</p>
                                 </div>
                             </div>
                         </div>

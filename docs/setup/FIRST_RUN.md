@@ -101,7 +101,8 @@ yet - it always falls back to the local engine and an explicit later choice over
 **Skip** to keep the local default model. You can add
 this or other providers later under **Settings → AI & Model**. On an installation without
 local models (the Lean (API) profile, [INSTALL_PROFILES.md](INSTALL_PROFILES.md)) there is
-no local model to keep: the step says so, its skip button says a provider is chosen in
+no local model to keep: the step says so, leaves out its lines about staying local (and
+the local model among the other providers), its skip button says a provider is chosen in
 Settings instead of "run locally", and after a skip a provider is set there after the
 login.
 
@@ -117,10 +118,13 @@ previous steps (admin account, Soul, any Veyllo key) and logs you in.
 
 ## What about the model / provider?
 
-The only provider the wizard offers is **Veyllo** (the optional step 4). If you skip it, VAF
-starts with a sensible default (a local model, VRAM-adaptive). To switch to another cloud
-provider or a different model - or to set Veyllo up later - open **Settings → AI & Model**
-after login, choose the provider, and paste your API key. The available providers and model
+The only provider the wizard offers is **Veyllo** (the optional step 4). What a skip leaves
+depends on the installation profile ([INSTALL_PROFILES.md](INSTALL_PROFILES.md)): on the
+Full profile VAF starts with a local model, chosen by the GPU memory; on the Lean profile
+there is no local model, so until a provider is chosen in **Settings → AI & Model** a chat
+message is answered with the note that one is missing. To switch to another cloud provider or a different model - or
+to set Veyllo up later - open **Settings → AI & Model** after login, choose the provider,
+and paste your API key. The available providers and model
 switching are covered in the main [README](../../README.md) and
 [API_INTEGRATION.md](../llm/API_INTEGRATION.md).
 

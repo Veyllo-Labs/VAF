@@ -114,6 +114,29 @@ def test_retiring_names_only_the_speech_services_and_their_own_volumes(monkeypat
     assert stop[-2:] == ["stt", "tts"]
 
 
+def test_a_compose_config_that_fails_is_reported_not_taken_as_nothing_to_remove(
+        monkeypatch, tmp_path):
+    """A failed `compose config` prints nothing on stdout, which parsed as an empty config:
+    the prune removed nothing and reported no error. MUTATION: drop the returncode check -
+    red."""
+    (tmp_path / ss.COMPOSE_FILENAME).write_text("services: {}\n", encoding="utf-8")
+    monkeypatch.setattr(ss, "find_stack_root", lambda: tmp_path)
+    monkeypatch.setattr(ss, "resolve_docker_exe", lambda: "docker")
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(list(cmd))
+        if "config" in cmd:
+            return subprocess.CompletedProcess(cmd, 1, "", "invalid interpolation format\n")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(ss.subprocess, "run", fake_run)
+    result = ss.retire_local_inference_services(prune=True)
+    assert result["stopped"] is True and result["removed"] == []
+    assert result["errors"] == ["The compose file could not be read: invalid interpolation format"]
+    assert not any("rm" in c for c in seen), "nothing is removed from a config that was not read"
+
+
 @pytest.mark.parametrize("installer", ["install.sh", "install.ps1"])
 def test_no_installer_keeps_its_own_list_of_services(installer):
     """A list written into an installer is the copy the next service forgets. MUTATION:

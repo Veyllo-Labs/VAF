@@ -110,7 +110,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **A chat with an API provider that is not set up says so.** With no key for the chosen
   provider, or a provider whose setup failed, the chat answered "[Error] No response was
   produced ... context too large". It now answers with the reason ("The API provider ... is
-  not set up"), and the message and the reason stay in the chat after a reload.
+  not set up"), and the message and the reason stay in the chat after a reload. On WhatsApp,
+  Telegram, Discord and Slack such a turn now gets no reply instead of that error text, which
+  went to whoever had written in.
 - **The documented way to start the containers by hand no longer breaks Redis and the
   browser.** The docs showed `docker compose -f docker-compose.memory.yml up -d`, but VAF
   keeps the Redis password and the browser's stream credential in `~/.vaf/compose.env`,

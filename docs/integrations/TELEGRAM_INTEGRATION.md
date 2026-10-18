@@ -151,68 +151,38 @@ Proactive delivery now works in both the main VAF process and in background/subp
 When a user sends a voice message:
 
 1. **Download**: Audio file is downloaded from Telegram (OGA/Opus format)
-2. **Transcription**: Sent to Docker Whisper STT container
-3. **Language Detection**: Whisper returns detected language
+2. **Transcription**: Sent through the shared speech client (`vaf/core/speech_client.py`): the provider set in Settings first, the Whisper container only on the Full profile
+3. **Language Detection**: The lane returns the detected language
 4. **Processing**: Transcribed text is processed by the agent
 5. **Voice Reply**: Response is synthesized and sent as voice message
 
 ### Transcription Flow
 
 ```python
+# Excerpt: the download through the Bot API, the known-bad check and the cleanup are left out.
 async def _transcribe_voice(bot_token: str, file_id: str) -> tuple[Optional[str], Optional[str]]:
-    """Download voice message and transcribe via Docker Whisper STT."""
-
-    # 1. Get file info from Telegram
-    bot = telegram.Bot(token=bot_token)
-    file_info = await bot.get_file(file_id)
-
-    # 2. Download audio
-    audio_bytes = await file_info.download_as_bytearray()
-
-    # 3. Send to Whisper STT
-    stt_url = Config.get("speech_stt_docker_url", "http://localhost:5003")
-    response = requests.post(
-        f"{stt_url}/asr",
-        files={"audio_file": ("voice.oga", audio_bytes, "audio/ogg")},
-        params={"encode": "true", "output": "json"}
-    )
-
-    # 4. Parse response
-    result = response.json()
-    return result.get("text"), result.get("language")
+    ...  # download the voice note to temp_path
+    from vaf.core import speech_client
+    text, language = speech_client.transcribe(temp_path, mime="audio/ogg", filename="voice.ogg")
+    if not text:
+        return None, None
+    return text, language or "en"
 ```
 
 ### Voice Reply Flow
 
 ```python
+# Excerpt: the send through the Bot API and the error handling are left out.
 async def _send_voice_reply(bot_token: str, chat_id: str, text: str, language: str) -> bool:
-    """Synthesize TTS and send as Telegram voice message."""
-
-    # 1. Request OGG format from TTS
-    tts_url = Config.get("speech_tts_docker_url", "http://localhost:5002")
-    response = requests.post(
-        f"{tts_url}/synthesize",
-        json={
-            "text": text,
-            "language": language[:2].lower(),
-            "format": "ogg"
-        },
-        timeout=60
-    )
-
-    # 2. Send as voice message
-    bot = telegram.Bot(token=bot_token)
-    await bot.send_voice(
-        chat_id=chat_id,
-        voice=BytesIO(response.content),
-        filename="response.ogg"
-    )
-    return True
+    from vaf.core import speech_client
+    # The text-to-speech provider first; the TTS container only on the Full profile.
+    audio_data = speech_client.synthesize(text, language, want_format="ogg")
+    ...  # send audio_data as a voice note
 ```
 
 ### Language Detection
 
-Whisper automatically detects the spoken language and returns it in the response:
+The speech-to-text lane (the provider, or Whisper on the Full profile) detects the spoken language and returns it:
 
 ```json
 {

@@ -877,6 +877,8 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
             # own, and an upgrade without it recreated Redis with no password. A first
             # install has no file yet: VAF writes it at its first start and recreates the
             # two containers then.
+            # The plain "${COMPOSE_ENV_ARGS[@]}" below is safe empty on macOS Bash 3.2 too: its
+            # unbound-variable error needs nounset, and this script runs with set -e only.
             COMPOSE_ENV_ARGS=()
             if [[ -f "$HOME/.vaf/compose.env" ]]; then
                 COMPOSE_ENV_ARGS=(--env-file "$HOME/.vaf/compose.env")

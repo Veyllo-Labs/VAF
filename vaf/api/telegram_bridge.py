@@ -368,7 +368,8 @@ def _append_chat_activity(chat_id: str, user_scope_id: Any, direction: str = "in
 
 async def _transcribe_voice(bot_token: str, file_id: str) -> tuple[Optional[str], Optional[str]]:
     """
-    Download voice message from Telegram and transcribe via Docker Whisper STT.
+    Download voice message from Telegram and transcribe it through the shared speech client:
+    the STT provider first, the Whisper container only on the Full profile.
     Returns (transcribed_text, detected_language) or (None, None) on error.
     """
     try:

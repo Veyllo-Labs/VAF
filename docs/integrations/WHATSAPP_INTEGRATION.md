@@ -266,7 +266,11 @@ Each WhatsApp chat has a **session** `whatsapp_{username}_{digits}` (e.g. `whats
 
 ## Voice Message Support
 
-WhatsApp uses the same STT and TTS services as Telegram (`speech_stt_docker_url`, default port 5003; `speech_tts_docker_url`, default port 5002). Voice flows are bidirectional.
+WhatsApp uses the same speech lanes as Telegram, through the shared speech client
+(`vaf/core/speech_client.py`): the speech providers set in Settings first, and on the Full
+profile the local containers behind them (`speech_stt_docker_url`, default port 5003;
+`speech_tts_docker_url`, default port 5002). A Lean installation has no containers, so
+there a provider error means no transcript or no voice note. Voice flows are bidirectional.
 
 ### Incoming Voice Messages
 
@@ -274,7 +278,7 @@ When a user sends a voice message:
 
 1. **Node (Baileys)**: Detects `audioMessage`, downloads content from `msg.message.audioMessage` via `downloadContentFromMessage` (PTT → .ogg, else .opus), writes to a temp file (e.g. `os.tmpdir()/vaf_wa_voice_*.ogg`), logs the download (`voice downloaded: <path> (<bytes> bytes)`), and emits a JSON line: `{ "type": "message", "body": "<voice>", "voice_path": "/path/to/file.ogg", "from": "<jid>", ... }`.
 2. **Python**: `_read_user_process()` receives the line; when `voice_path` is set and `body === "<voice>"`, it calls `_transcribe_voice_file(voice_path)`.
-3. **Transcription**: The file is POSTed to the STT service (`/asr`, or `/transcribe` on 404) with the correct MIME type (audio/ogg or audio/opus). The response is parsed for `text` or `transcript` or `results[0].transcript`; the detected language is returned.
+3. **Transcription**: The file goes through the shared speech client (`vaf/core/speech_client.py`): the provider set in Settings first, the Whisper container only on the Full profile (`/asr`, or `/transcribe` on 404), with the MIME type from its extension (audio/ogg or audio/opus). It returns the text and the detected language.
 4. **Enqueue**: The transcribed text (or `<media:audio>` on failure) is enqueued as the user message. The detected language is stored in `_voice_reply_pending` so the agent reply can be sent as voice (TTS) in the same language.
 
 ### Transcription Flow (Python)
@@ -282,37 +286,22 @@ When a user sends a voice message:
 Implemented in `vaf/api/whatsapp_bridge.py` as `_transcribe_voice_file(voice_path)`:
 
 ```python
+# Excerpt: the known-bad check, the logging and the file cleanup are left out.
 def _transcribe_voice_file(voice_path: str) -> tuple[Optional[str], Optional[str]]:
-    """Transcribe a voice file via Docker Whisper STT. Returns (text, language) or (None, None)."""
-    path_obj = Path(voice_path)
-    if not path_obj.is_file():
-        logger.warning("WhatsApp STT: voice file not found: %s", voice_path)
+    ext = Path(voice_path).suffix.lower()
+    mime = "audio/opus" if ext == ".opus" else "audio/ogg"
+    from vaf.core import speech_client
+    text, language = speech_client.transcribe(voice_path, mime=mime, filename=f"voice{ext or '.ogg'}")
+    if not text:
         return None, None
-    file_size = path_obj.stat().st_size
-    stt_url = (Config.get("speech_stt_docker_url") or "http://localhost:5003").strip().rstrip("/")
-    asr_endpoint = f"{stt_url}/asr"
-    logger.info("WhatsApp STT: transcribing %s (%d bytes) via %s", voice_path, file_size, asr_endpoint)
-    with open(voice_path, "rb") as f:
-        stt_resp = requests.post(
-            asr_endpoint,
-            files={"audio_file": ("voice.ogg", f, "audio/ogg")},
-            params={"encode": "true", "output": "json"},
-            timeout=60,
-        )
-    if not stt_resp.ok:
-        logger.warning("WhatsApp STT failed: %s - %s", stt_resp.status_code, stt_resp.text[:200])
-        return None, None
-    data = stt_resp.json()
-    text = (data.get("text") or "").strip()
-    language = data.get("language", "en")
-    return text or None, language
+    return text, language or "en"
 ```
 
 ### Outgoing Voice (Auto-Reply)
 
 When the agent sends a reply and the user had previously sent a voice message, the bridge checks `_voice_reply_pending` for that chat. If a language is present:
 
-1. **TTS**: `_synthesize_voice_for_reply(text, lang)` POSTs to the TTS service (`/synthesize`, JSON: `text`, `language`, `format`: `"ogg"`), receives OGG bytes, writes to a temp file. Logs the TTS URL, response status, and file size on success; logs detailed error info on failure.
+1. **TTS**: `_synthesize_voice_for_reply(text, lang)` calls `speech_client.synthesize(text, lang, want_format="ogg")`: the text-to-speech provider set in Settings first, the TTS container (`/synthesize`) only on the Full profile. The OGG (or WAV) bytes go to a temp file; the file size is logged on success, the reason on failure.
 2. **Queue**: The reply is put on `_outgoing_queue` as `(username, chat_jid, text, voice_path, None, None)` (no req_id for this path).
 3. **Sender**: `_sender_loop()` sends a JSON command to Node: `{ "cmd": "send_voice", "to": "<jid>", "path": "<absolute path>" }`.
 4. **Node**: Reads the file, calls `sendMessage(to, { audio: buf, mimetype: "audio/ogg; codecs=opus" }, { sendAudioAsVoice: true })`, and emits `send_result` with success/failure.
@@ -321,12 +310,12 @@ When the agent sends a reply and the user had previously sent a voice message, t
 
 When the agent calls `send_whatsapp(message="...", voice_lang="de")` (in `vaf/tools/send_whatsapp.py`):
 
-1. **TTS**: The tool calls its own `_synthesize_voice(text, lang)` (same TTS URL and `/synthesize` payload).
+1. **TTS**: The tool calls its own `_synthesize_voice(text, lang)`, which goes through the same `speech_client.synthesize` lane.
 2. **Confirmation**: The tool calls `send_whatsapp_with_confirmation(..., voice_path=path, timeout=45)` so that the bridge can wait for Node’s `send_result` (req_id) and return a clear success or error message to the agent.
 
 ### Language Detection
 
-Whisper returns the detected language in the STT response. VAF uses it to:
+The speech-to-text lane (the provider, or Whisper on the Full profile) returns the detected language. VAF uses it to:
 
 - Route the auto-reply to the correct TTS voice
 - Maintain conversation language consistency

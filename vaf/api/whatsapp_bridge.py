@@ -500,7 +500,8 @@ def _synthesize_voice_for_reply(text: str, lang: str) -> Optional[str]:
 
 def _transcribe_voice_file(voice_path: str) -> tuple[Optional[str], Optional[str]]:
     """
-    Transcribe a voice file via Docker Whisper STT.
+    Transcribe a voice file through the shared speech client: the STT provider first,
+    the Whisper container only on the Full profile.
     Returns (transcribed_text, detected_language) or (None, None) on error.
     """
     try:

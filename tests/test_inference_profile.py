@@ -119,6 +119,12 @@ def test_the_stack_start_leaves_the_speech_containers_out_under_the_api_profile(
     monkeypatch.setattr(ss, "resolve_docker_exe", lambda: "docker")
     monkeypatch.setattr(ss, "_maybe_rebuild_stale_browser_image", lambda *a, **k: None)
     monkeypatch.setattr(environment_image, "start_background_build", lambda: None)
+    # The start's side work touches the keyring, the home folder and the checkout's .env;
+    # none of it is under test here.
+    monkeypatch.setattr(ss, "_write_compose_env_file", lambda *a, **k: None)
+    monkeypatch.setattr(ss, "_retire_repo_env_file", lambda *a, **k: None)
+    monkeypatch.setattr(ss, "_warn_about_default_db_password", lambda *a, **k: False)
+    monkeypatch.setattr(ss, "_remove_legacy_sandbox", lambda *a, **k: None)
     ups = []
     monkeypatch.setattr(ss.subprocess, "run",
                         lambda cmd, **kw: (ups.append(list(cmd)) if "up" in cmd else None)
@@ -433,7 +439,7 @@ def test_a_caller_waiting_on_the_download_lock_rechecks_the_profile(config, monk
     ("api", "openai", None, None, "The API provider openai is not set up (no key)"),
     ("local", "local", None, None, ""),          # loaded below, on first use
     ("api", "openai", object(), None, ""),       # a backend: the turn runs
-    ("api", "local", None, "telegram", ""),      # a messenger turn keeps its own lane
+    ("api", "local", None, "telegram", "without local models"),   # closed without a reply
 ])
 def test_a_turn_without_any_backend_is_refused_before_chat_step(config, profile, provider,
                                                                 backend, source, expected):
@@ -498,3 +504,25 @@ def test_no_model_resolved_leaves_the_configured_model_alone(monkeypatch):
                                   model_path="/models/qwen.gguf", filename="qwen.gguf")
     Agent.ensure_model_exists(agent)
     assert (agent.model_path, agent.filename) == ("/models/qwen.gguf", "qwen.gguf")
+
+
+def test_a_messenger_turn_without_a_backend_gets_no_reply(tmp_path, monkeypatch):
+    """Running such a turn sent the contact "[Error] No response was produced ... try
+    closing the Document Editor" (the outbound sanitizer lets it pass), and the reason is the
+    admin's setup, not theirs to read. The turn ends without a reply and is logged; nothing
+    reaches the web or the session. MUTATION: drop the messenger branch - red."""
+    from vaf.core import headless_runner as hr
+    from vaf.core.session import SessionManager
+    logged, emitted = [], []
+    monkeypatch.setattr(hr, "append_domain_log_always", lambda domain, line: logged.append(line))
+    monkeypatch.setattr(hr, "get_web_interface", lambda: types.SimpleNamespace(
+        emit_agent_message=lambda *a, **k: emitted.append(a),
+        emit_message_complete=lambda *a, **k: emitted.append(k)))
+    mgr = SessionManager(storage_dir=str(tmp_path))
+    task = types.SimpleNamespace(session_id="telegram_123", source="telegram",
+                                 input_text="hello", metadata={})
+    hr.refuse_turn_without_backend(task, ip.refusal("the local model"), mgr)
+    assert emitted == []
+    with pytest.raises(FileNotFoundError):
+        mgr.load("telegram_123")
+    assert logged and "without a reply" in logged[0]

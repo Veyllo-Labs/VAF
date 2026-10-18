@@ -514,8 +514,8 @@ provider; `tts_state` drives the loading/playing indicators):
 ### Overview
 
 VAF supports bidirectional voice communication on Telegram:
-1. **Incoming:** User sends voice message → Whisper transcribes → Agent processes
-2. **Outgoing:** Agent response → TTS synthesizes → Sent as voice message
+1. **Incoming:** User sends voice message → the speech client transcribes (provider first, Whisper on the Full profile) → Agent processes
+2. **Outgoing:** Agent response → the speech client synthesizes (provider first, the TTS container on the Full profile) → Sent as voice message
 
 ### Voice Message Flow
 
@@ -532,7 +532,7 @@ User Voice Message (OGA/Opus)
 ┌─────────────────────┐
 │ _transcribe_voice() │
 │ - Download from TG  │
-│ - Send to Whisper   │
+│ - speech_client     │
 │ - Get text+language │
 └─────────────────────┘
          │
@@ -557,50 +557,27 @@ User Voice Message (OGA/Opus)
 **Voice Transcription (`_transcribe_voice`):**
 
 ```python
+# Excerpt: the download, the known-bad check and the cleanup are left out.
 async def _transcribe_voice(bot_token: str, file_id: str) -> tuple[Optional[str], Optional[str]]:
-    """Download voice message from Telegram and transcribe via Docker Whisper STT."""
-    # 1. Get file path from Telegram
-    file_info = await bot.get_file(file_id)
-
-    # 2. Download audio file
-    audio_bytes = await file_info.download_as_bytearray()
-
-    # 3. Send to Whisper STT
-    stt_url = Config.get("speech_stt_docker_url", "http://localhost:5003")
-    response = requests.post(
-        f"{stt_url}/asr",
-        files={"audio_file": ("voice.oga", audio_bytes, "audio/ogg")},
-        params={"encode": "true", "output": "json"}
-    )
-
-    # 4. Return transcription and detected language
-    result = response.json()
-    return result.get("text"), result.get("language")
+    ...  # download the voice note to temp_path
+    from vaf.core import speech_client
+    text, language = speech_client.transcribe(temp_path, mime="audio/ogg", filename="voice.ogg")
+    return (text, language or "en") if text else (None, None)
 ```
 
 **Voice Reply (`_send_voice_reply`):**
 
 ```python
+# Excerpt: the send through the Bot API and the error handling are left out.
 async def _send_voice_reply(bot_token: str, chat_id: str, text: str, language: str) -> bool:
-    """Synthesize TTS audio and send as voice message to Telegram."""
-    # 1. Request OGG format from TTS
-    tts_url = Config.get("speech_tts_docker_url", "http://localhost:5002")
-    response = requests.post(
-        f"{tts_url}/synthesize",
-        json={"text": text, "language": language[:2].lower(), "format": "ogg"}
-    )
-
-    # 2. Send as Telegram voice message
-    await bot.send_voice(
-        chat_id=chat_id,
-        voice=BytesIO(response.content),
-        filename="response.ogg"
-    )
+    from vaf.core import speech_client
+    audio_data = speech_client.synthesize(text, language, want_format="ogg")
+    ...  # send audio_data as a voice note
 ```
 
 ### Language Detection
 
-Whisper returns the detected language in the response. VAF uses this to:
+The speech-to-text lane (the provider, or Whisper on the Full profile) returns the detected language. VAF uses this to:
 1. Route the agent response to the correct TTS voice
 2. Maintain conversation language consistency
 3. Enable multilingual voice conversations
@@ -609,11 +586,11 @@ Whisper returns the detected language in the response. VAF uses this to:
 
 WhatsApp supports the same bidirectional voice flow as Telegram:
 
-1. **Incoming:** User sends voice message → Node bridge downloads via Baileys → Python transcribes via Whisper STT → Agent processes text
-2. **Outgoing:** Agent response → TTS synthesizes → Sent as voice via Node bridge (`sendAudioAsVoice`)
+1. **Incoming:** User sends voice message → Node bridge downloads via Baileys → Python transcribes through the speech client (provider first, Whisper on the Full profile) → Agent processes text
+2. **Outgoing:** Agent response → the speech client synthesizes → Sent as voice via Node bridge (`sendAudioAsVoice`)
 3. **Proactive voice:** The agent can explicitly send voice via `send_whatsapp(voice_lang="de")` or `send_telegram(voice_lang="de")` when the user requests it (e.g. "send as voice via WhatsApp")
 
-Requires `speech_stt_docker_url` (port 5003) and `speech_tts_docker_url` (port 5002). See [CONNECTIONS.md](../integrations/CONNECTIONS.md) for WhatsApp setup.
+Needs a speech provider set in Settings, or on the Full profile the containers at `speech_stt_docker_url` (port 5003) and `speech_tts_docker_url` (port 5002). See [CONNECTIONS.md](../integrations/CONNECTIONS.md) for WhatsApp setup.
 
 ---
 

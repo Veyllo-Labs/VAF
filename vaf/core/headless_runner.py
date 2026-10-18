@@ -662,10 +662,9 @@ def turn_refusal_reason(agent, task) -> str:
     an API provider whose backend could not be built (no key, a failed setup); the wording
     is the agent's own (``Agent._no_backend_reason``). A local provider on an installation
     with local models is no case: its model is loaded below, on first use. A messenger turn
-    keeps its own lane: an admin's setup message is not for whoever wrote in."""
+    is a case too; ``refuse_turn_without_backend`` decides that it gets no reply."""
     from vaf.core import inference_profile
-    from vaf.core.channels import CHANNEL_LABELS
-    if getattr(task, "source", None) in CHANNEL_LABELS or agent.api_backend:
+    if agent.api_backend:
         return ""
     if agent.provider == "local" and inference_profile.local_inference_allowed():
         return ""
@@ -676,7 +675,17 @@ def refuse_turn_without_backend(task, why: str, session_mgr) -> None:
     """Close a turn that has no backend on this installation (inference_profile = api and
     no provider yet): the reason goes to the chat and the turn ends. The exchange is
     stored like any turn's, so a reload shows the message and why it got no answer
-    instead of losing both. Never raises."""
+    instead of losing both. Never raises.
+
+    A messenger turn (WhatsApp, Telegram, Discord, Slack) ends without a reply and is only
+    logged: the reason is the admin's setup, not something to tell whoever wrote in, and
+    running the turn anyway sent them "[Error] No response was produced ... try closing the
+    Document Editor" (measured through _prepare_channel_outbound, which lets it pass)."""
+    from vaf.core.channels import CHANNEL_LABELS
+    if getattr(task, "source", None) in CHANNEL_LABELS:
+        append_domain_log_always("headless", f"{task.source} turn closed without a reply, no "
+                                             f"backend: session={task.session_id} ({why[:160]})")
+        return
     try:
         get_web_interface().emit_agent_message("assistant", why, session_id=task.session_id)
         get_web_interface().emit_message_complete(content=why, session_id=task.session_id)

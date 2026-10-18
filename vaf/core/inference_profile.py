@@ -120,7 +120,7 @@ def apply(profile: str, *, prune: bool = False, stack: bool = True) -> Dict:
     The key is written first, deliberately, and stays written when the stop fails: every
     choke point above reads it, so downloads and the local server are refused from that
     moment, and keeping the old profile because Docker did not answer would leave them
-    open too. A stop or removal that failed is in ``errors``; callers treat a non-empty
+    open too. A stop, removal or start that failed is in ``errors``; callers treat a non-empty
     ``errors`` as an incomplete switch (`vaf profile` exits 1, the web switch reports it).
 
     Raises ValueError as ``validate`` does. Returns
@@ -139,6 +139,12 @@ def apply(profile: str, *, prune: bool = False, stack: bool = True) -> Dict:
                         "errors": result["errors"]})
         else:
             out["started"] = bool(service_stack.ensure_service_stack())
+            # Without a compose file (a pip install) there is no stack to start, which is
+            # no failure; with one, a start that did not come up leaves the switch
+            # incomplete: the speech containers stay down until a repair or the next launch.
+            if not out["started"] and service_stack.find_stack_root() is not None:
+                out["errors"].append("The service stack did not start; `vaf repair` names "
+                                     "why and starts it.")
     out["conflicts"] = conflicts()
     return out
 

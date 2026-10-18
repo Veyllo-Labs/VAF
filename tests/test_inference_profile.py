@@ -329,11 +329,16 @@ def test_a_refused_turn_is_stored_so_a_reload_keeps_it(tmp_path, monkeypatch):
         emit_agent_message=lambda role, text, session_id=None: emitted.append(text),
         emit_message_complete=lambda content=None, session_id=None: emitted.append("done")))
     mgr = SessionManager(storage_dir=str(tmp_path))
-    task = types.SimpleNamespace(session_id="green123456", input_text="  hello  ")
+    task = types.SimpleNamespace(session_id="green123456", input_text="  hello  ",
+                                 metadata={"username": "alice", "user_scope_id": "ab12cd34"})
     hr.refuse_turn_without_backend(task, ip.refusal("the local model"), mgr)
     hr.refuse_turn_without_backend(task, ip.refusal("the local model"), mgr)
-    stored = mgr.load("green123456").messages
-    assert [(m.role, m.content) for m in stored] == [
+    session = mgr.load("green123456")
+    assert [(m.role, m.content) for m in session.messages] == [
         ("user", "hello"), ("assistant", ip.refusal("the local model"))] * 2
+    # A chat stored without its owner belongs to nobody: the person who wrote could not
+    # open it. MUTATION: create the session bare again - red.
+    assert session.metadata.get("user_scope_id") == "ab12cd34"
+    assert session.metadata.get("username") == "alice"
     assert emitted[1] == "done"
     assert "refuse_turn_without_backend(" in inspect.getsource(hr.run_headless_agent)

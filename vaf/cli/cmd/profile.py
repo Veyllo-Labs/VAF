@@ -95,8 +95,8 @@ def profile_cmd(
                     "delete them yourself when you need the space.")
     elif result["started"]:
         UI.success("The stack runs with the speech containers.")
-    else:
-        UI.warning("The stack did not start now; VAF starts it at its next launch.")
+    elif not result["errors"]:
+        UI.info("No service stack here (no compose file), so there is nothing to start.")
     for problem in result["errors"]:
         UI.warning(problem)
     for sentence in result["conflicts"]:

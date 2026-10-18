@@ -264,3 +264,32 @@ def test_provision_switches_through_the_one_implementation(config, monkeypatch):
     monkeypatch.setattr(inference_profile, "apply", _apply)
     CliRunner().invoke(server.app, ["provision", "--profile", "api", "--no-firewall"])
     assert calls == ["api"]
+
+
+@pytest.mark.parametrize("root, errors, exit_code", [
+    (Path("/srv/vaf"), 1, 1),
+    (None, 0, 0),
+])
+def test_a_stack_that_did_not_start_is_an_incomplete_switch_where_there_is_one(
+        config, monkeypatch, root, errors, exit_code):
+    """Back to local, a start that did not come up leaves the speech containers down until
+    a repair: an error, and `vaf profile` exits 1. A pip install has no compose file and
+    nothing to start: no error. MUTATION: drop the error, or the stack-root check - red."""
+    monkeypatch.setattr(ss, "ensure_service_stack", lambda log=None: False)
+    monkeypatch.setattr(ss, "find_stack_root", lambda: root)
+    out = CliRunner().invoke(_app(), ["local"])
+    assert out.exit_code == exit_code and config["inference_profile"] == "local"
+    from vaf.core import inference_profile
+    assert len(inference_profile.apply("local")["errors"]) == errors
+
+
+def test_no_compose_file_means_nothing_to_retire_not_a_failure(config, monkeypatch):
+    """A pip install has no stack and no speech containers: switching it to api is complete.
+    It used to report a missing compose file, and `vaf profile api` asked to be run again
+    forever. MUTATION: report the missing file as an error again - red."""
+    monkeypatch.setattr(ss, "find_stack_root", lambda: None)
+    monkeypatch.setattr(ss.subprocess, "run", lambda *a, **k: pytest.fail("ran docker"))
+    assert ss.retire_local_inference_services(prune=True) == {
+        "stopped": False, "removed": [], "errors": []}
+    out = CliRunner().invoke(_app(), ["api"])
+    assert out.exit_code == 0 and "stopped" not in out.output

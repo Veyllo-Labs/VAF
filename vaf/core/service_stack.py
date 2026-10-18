@@ -970,7 +970,11 @@ def retire_local_inference_services(prune: bool = False,
     out: Dict[str, Any] = {"stopped": False, "removed": [], "errors": []}
     root = find_stack_root()
     if root is None or not keys:
-        out["errors"].append(f"{COMPOSE_FILENAME} not found, so there is no stack to change here.")
+        # Nothing to retire, which is no failure: a pip install has no compose file and so
+        # no speech containers. "stopped" stays False because no stop ran; the caller then
+        # claims nothing about containers.
+        _say(log, "No speech containers here to stop" if keys
+             else "No service runs a model; nothing to stop")
         return out
     docker = resolve_docker_exe()
     env_args = ["--env-file", str(compose_env_file())] if compose_env_file().exists() else []

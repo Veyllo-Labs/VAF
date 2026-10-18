@@ -633,6 +633,28 @@ def deliver_stray_room_answer(agent, room_wake: dict, answer, hist_before: int) 
         return False
 
 
+def new_session_for_task(task) -> Session:
+    """The session for a task whose chat has no file yet (a first message from Telegram,
+    Discord or WhatsApp, a refused web turn), so its first exchange is stored. It carries
+    the caller's username and scope like every saved chat: a session without them belongs
+    to nobody, and the person who wrote could not open it."""
+    sid = task.session_id
+    meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+    if sid.startswith("telegram_"):
+        label = f"Telegram {sid.replace('telegram_', '', 1)}"
+    elif sid.startswith("discord_"):
+        label = f"Discord {sid.replace('discord_', '', 1)}"
+    elif sid.startswith("whatsapp_"):
+        label = f"WhatsApp {sid.replace('whatsapp_', '', 1)}"
+    else:
+        label = sid
+    session = Session(id=sid, name=label)
+    for key in ("whatsapp_chat_jid", "username", "user_scope_id"):
+        if meta.get(key) is not None:
+            session.metadata[key] = meta[key]
+    return session
+
+
 def refuse_turn_without_backend(task, why: str, session_mgr) -> None:
     """Close a turn that has no backend on this installation (inference_profile = api and
     no provider yet): the reason goes to the chat and the turn ends. The exchange is
@@ -647,7 +669,7 @@ def refuse_turn_without_backend(task, why: str, session_mgr) -> None:
         try:
             session = session_mgr.load(task.session_id)
         except FileNotFoundError:
-            session = Session(id=task.session_id, name=task.session_id)
+            session = new_session_for_task(task)
         text = str(getattr(task, "input_text", "") or "").strip()
         if text:
             session.add_message(role="user", content=text)
@@ -2560,24 +2582,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         try:
                             session = session_mgr.load(task.session_id)
                         except FileNotFoundError:
-                            # New session from Telegram, Discord, WhatsApp, etc.: create so first exchange is persisted
-                            _sid = task.session_id
-                            meta_save = (task.metadata or {}) if getattr(task, "metadata", None) else {}
-                            if _sid.startswith("telegram_"):
-                                _label = f"Telegram {_sid.replace('telegram_', '', 1)}"
-                            elif _sid.startswith("discord_"):
-                                _label = f"Discord {_sid.replace('discord_', '', 1)}"
-                            elif _sid.startswith("whatsapp_"):
-                                _label = f"WhatsApp {_sid.replace('whatsapp_', '', 1)}"
-                            else:
-                                _label = _sid
-                            session = Session(id=task.session_id, name=_label)
-                            if meta_save.get("whatsapp_chat_jid") is not None:
-                                session.metadata["whatsapp_chat_jid"] = meta_save["whatsapp_chat_jid"]
-                            if meta_save.get("username") is not None:
-                                session.metadata["username"] = meta_save["username"]
-                            if meta_save.get("user_scope_id") is not None:
-                                session.metadata["user_scope_id"] = meta_save["user_scope_id"]
+                            session = new_session_for_task(task)
                         _user_input = input_text or ""
                         _assistant_response = "".join(response_parts) if response_parts else str(response_text or "")
                         if _turn_ends_at_draft:

@@ -110,7 +110,8 @@ each, not by checks spread over the code:
   chat, closes the turn and stores it, instead of promising a download. The same goes for
   an API provider whose backend could not be built (no key, a failed setup), on either
   profile (`turn_refusal_reason` in `headless_runner.py`). An agent that loaded a local
-  model before the profile was switched does not run its next turn on it, and the tray
+  model before the profile was switched does not run its next turn on it, nor a one-shot
+  completion (`Agent.complete`, the shared `completion.complete`), and the tray
   unloads the model as it does for an API provider.
 - The failover chain leaves its local link out; a backup API provider stays.
 - `service_stack.needed_services` leaves the speech containers out. The stack start, the

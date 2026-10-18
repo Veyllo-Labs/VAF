@@ -721,7 +721,8 @@ docker compose -f docker-compose.memory.yml logs -f
 # Stop and remove volume
 docker compose -f docker-compose.memory.yml down -v
 
-# Restart
+# Create them again, with an empty database (`down -v` removed the containers, so a
+# plain `restart` has nothing to restart)
 docker compose --env-file ~/.vaf/compose.env -f docker-compose.memory.yml up -d postgres redis
 ```
 

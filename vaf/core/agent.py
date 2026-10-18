@@ -6427,6 +6427,12 @@ class Agent:
                              max_tokens=max_tokens, temperature=temperature,
                              timeout=timeout, strip_think=strip_think,
                              caller="agent.complete")
+        # The local lanes below, as chat_step's own gate: a model loaded before a switch to
+        # the api profile does not answer (vaf/core/inference_profile.py).
+        from vaf.core import inference_profile
+        if not inference_profile.local_inference_allowed():
+            inference_profile.refuse("the local model (agent.complete)")
+            return None
         if self.use_server:
             return _complete(messages, provider="local",
                              max_tokens=max_tokens, temperature=temperature,

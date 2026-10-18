@@ -120,3 +120,34 @@ def test_no_lane_touches_the_history(monkeypatch, kind):
     }[kind]()
     agent.complete("q")
     assert agent.history == [], f"the {kind} lane wrote into the conversation"
+
+
+@pytest.mark.parametrize("use_server, llm", [(True, None), (False, "in-process")])
+def test_no_local_lane_answers_under_the_api_profile(monkeypatch, use_server, llm):
+    """chat_step refuses a local backend loaded before a switch to the api profile; a
+    one-shot completion used to run on it anyway, the in-process model and the server the
+    tray had not unloaded yet. MUTATION: drop the profile check in complete(), or in the
+    shared primitive's local lane - red."""
+    import vaf.core.completion as comp
+    from vaf.core import inference_profile
+    from vaf.core.config import Config
+    real_get = Config.get
+    monkeypatch.setattr(Config, "get", staticmethod(
+        lambda key, default=None: "api" if key == "inference_profile" else real_get(key, default)))
+
+    ran = []
+
+    class _Llm:
+        # Recorded, not raised: complete() catches what the in-process model raises.
+        def create_chat_completion(self, **kw):
+            ran.append(kw)
+            return {"choices": [{"message": {"content": "LOCAL_ANSWER"}}]}
+
+    agent = _agent(provider="local", use_server=use_server, llm=_Llm() if llm else None)
+    import requests
+    monkeypatch.setattr(requests, "post",
+                        lambda *a, **k: pytest.fail("the local server was asked"))
+    assert agent.complete("q") is None and ran == []
+    # The shared primitive's local lane on its own, as every other caller reaches it.
+    assert comp.complete([{"role": "user", "content": "q"}], provider="local") is None
+    assert not inference_profile.local_inference_allowed()

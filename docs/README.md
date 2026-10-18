@@ -149,8 +149,8 @@ docker ps --filter "name=vaf-"
 |---------|------|-------------|
 | PostgreSQL | 5432 | Memory database |
 | Redis | 6379 | Cache |
-| TTS | 5002 | Text-to-Speech |
-| STT | 5003 | Speech-to-Text |
+| TTS | 5002 | Text-to-Speech (Full profile only) |
+| STT | 5003 | Speech-to-Text (Full profile only) |
 | Gotenberg | 5005 | Document conversion (Office→PDF) |
 | Web UI | 3000 | Browser interface |
 | API | 8000 | Backend API |

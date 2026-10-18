@@ -25,7 +25,7 @@ discord.py>=2.3.2
 python-telegram-bot>=21.0
 
 # AI/ML
-huggingface_hub[hf_xet]>=0.20.0
+huggingface_hub[hf_xet]>=1.1.0  # first with tqdm_class on hf_hub_download and its Xet path; every model download passes one (progress + the profile guard)
 tqdm>=4.65.0  # Progress bars for downloads
 openai>=1.12.0
 anthropic>=0.18.0

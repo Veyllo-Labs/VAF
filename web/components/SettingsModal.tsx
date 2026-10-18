@@ -3110,7 +3110,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'ai' && currentUser?.role === 'admin' && (
                             <div className="space-y-6">
-                                <InferenceProfileSection onChanged={(profile) => {
+                                <InferenceProfileSection currentProfile={localConfig.inference_profile || 'local'} onChanged={(profile) => {
                                     // A config refresh resets the draft (setLocalConfig(config) below):
                                     // with unsaved edits only this key is taken over, never the rest.
                                     setLocalConfig((prev: any) => ({ ...prev, inference_profile: profile }));

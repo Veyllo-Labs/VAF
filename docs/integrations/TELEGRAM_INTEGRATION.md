@@ -391,7 +391,7 @@ transcribes and speaks through the speech providers set in Settings):
 vaf repair
 ```
 
-Required containers:
+Required on the Full profile for the local speech lane (a Lean installation runs neither):
 - `vaf-stt` (port 5003) - Whisper STT for transcription
 - `vaf-tts` (port 5002) - Piper TTS for voice synthesis
 

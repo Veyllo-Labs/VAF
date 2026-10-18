@@ -64,7 +64,7 @@ Also present in `requirements.txt`.
 | PyGithub | >=2.1.1 | LGPL-3.0 |
 | beautifulsoup4 | >=4.12.0 | MIT |
 | markdownify | >=1.0.0 | MIT |
-| huggingface_hub[hf_xet] | >=0.20.0 | Apache-2.0 |
+| huggingface_hub[hf_xet] | >=1.1.0 | Apache-2.0 |
 | tqdm | >=4.65.0 | MPL-2.0 AND MIT |
 | openai | >=1.12.0 | Apache-2.0 |
 | anthropic | >=0.18.0 | MIT |

@@ -26,7 +26,7 @@
     "veylloTitle": "Do you have a Veyllo API?",
     "veylloBody": "Your machine hitting its limits — or want to save on power, heat and fan noise? With the hosted Veyllo API your agent runs lightning-fast in the cloud, no powerful PC required. Just paste your key below — or skip it and stay fully local.",
     "veylloBodyApi": "With the hosted Veyllo API your agent runs lightning-fast in the cloud, no powerful PC required. Just paste your key below.",
-    "veylloApiProfileNote": "This installation runs without local models: skip the key here and choose an AI provider under Settings after the login.",
+    "veylloApiProfileNote": "This installation runs without local models: if you skip the key here, choose an AI provider under Settings after you sign in.",
     "veylloCreate": "Create a Veyllo API key",
     "veylloKeyLabel": "Veyllo API key",
     "veylloKeyPlaceholder": "vaf_live_…",

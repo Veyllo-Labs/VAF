@@ -306,9 +306,11 @@ def test_two_switches_never_interleave(config, monkeypatch, tmp_path):
     from vaf.core.config import Config
     monkeypatch.setattr(Config, "APP_DIR", tmp_path)
     events = []
+    first_holds_the_lock = threading.Event()
 
     def slow_retire(prune=False, log=None):
         events.append("retire-start")
+        first_holds_the_lock.set()
         _time.sleep(0.3)
         events.append("retire-end")
         return {"stopped": True, "removed": [], "errors": []}
@@ -318,7 +320,7 @@ def test_two_switches_never_interleave(config, monkeypatch, tmp_path):
                         lambda log=None: events.append("start") or True)
     first = threading.Thread(target=inference_profile.apply, args=("api",))
     first.start()
-    _time.sleep(0.05)
+    assert first_holds_the_lock.wait(5), "the first switch never reached its container work"
     second = threading.Thread(target=inference_profile.apply, args=("local",))
     second.start()
     first.join(5)

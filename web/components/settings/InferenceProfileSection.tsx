@@ -34,8 +34,13 @@ const SWITCH_POLL_MISS_LIMIT = 20;
  * speech images outlasts any proxy in front of a server. Admin only, like the tab it sits on.
  */
 /** `onChanged` receives the profile now set; the caller decides what to refresh (the settings
- *  keep unsaved edits, so they update only this key while there are any). */
-export default function InferenceProfileSection({ onChanged }: { onChanged?: (profile: 'local' | 'api') => void }) {
+ *  keep unsaved edits, so they update only this key while there are any). `currentProfile` is
+ *  the profile the caller shows: when the loaded one differs (a switch that ended while this
+ *  section was not mounted, or one made elsewhere), `onChanged` is called with it. */
+export default function InferenceProfileSection({ onChanged, currentProfile }: {
+    onChanged?: (profile: 'local' | 'api') => void;
+    currentProfile?: string;
+}) {
     const t = useTranslations('inferenceProfile');
     const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
     const [data, setData] = useState<ProfileState | null>(null);
@@ -115,6 +120,13 @@ export default function InferenceProfileSection({ onChanged }: { onChanged?: (pr
     useEffect(() => {
         if (data?.switch?.running) void followSwitch();
     }, [data?.switch?.running, followSwitch]);
+
+    // A switch that ended while this section was unmounted (its follow loop stops with it), or
+    // one made in another tab or the terminal: the caller still shows the old profile.
+    useEffect(() => {
+        if (!data || data.switch?.running || !currentProfile) return;
+        if ((currentProfile === 'api' ? 'api' : 'local') !== data.profile) onChangedRef.current?.(data.profile);
+    }, [data, currentProfile]);
 
     const target: 'local' | 'api' = data?.profile === 'api' ? 'local' : 'api';
 

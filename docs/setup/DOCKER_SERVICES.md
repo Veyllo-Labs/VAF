@@ -58,13 +58,16 @@ Lean installation that pulls the 7.5 GB speech-to-text image the profile exists 
 docker ps --filter "name=vaf-"
 ```
 
-Expected output (on the Full profile; the Lean profile runs no `vaf-tts` and `vaf-stt`):
+Expected output (on the Full profile; the Lean profile runs no `vaf-tts` and `vaf-stt`; the
+browser image is named after the compose project, here `vaf`):
 ```
-CONTAINER ID   IMAGE                      PORTS                          NAMES
-...            vaf-tts-multilang:latest   127.0.0.1:5002->5000/tcp       vaf-tts
-...            whisper-asr-webservice     127.0.0.1:5003->9000/tcp       vaf-stt
-...            pgvector/pgvector:pg16     127.0.0.1:5432->5432/tcp       vaf-memory-db
-...            redis:7-alpine             127.0.0.1:6379->6379/tcp       vaf-redis
+CONTAINER ID   IMAGE                      PORTS                                              NAMES
+...            vaf-tts-multilang:latest   127.0.0.1:5002->5000/tcp                           vaf-tts
+...            whisper-asr-webservice     127.0.0.1:5003->9000/tcp                           vaf-stt
+...            pgvector/pgvector:pg16     127.0.0.1:5432->5432/tcp                           vaf-memory-db
+...            redis:7-alpine             127.0.0.1:6379->6379/tcp                           vaf-redis
+...            gotenberg/gotenberg:8      127.0.0.1:5005->3000/tcp                           vaf-gotenberg
+...            vaf-vaf-browser            127.0.0.1:6901->6901/tcp, 127.0.0.1:9222->9222/tcp vaf-browser
 ```
 
 > **Security:** All ports are bound to `127.0.0.1` - reachable only locally, not on the LAN or the internet. If `0.0.0.0` is shown, the ports are open on all network interfaces; in that case check `docker-compose.memory.yml` and make sure every port mapping uses the `127.0.0.1:PORT:PORT` format.

@@ -117,10 +117,18 @@ def _note_error(text: str) -> None:
 
 def _local_complete(messages, model, max_tokens, temperature, timeout,
                     allow_reasoning_fallback, caller) -> Optional[str]:
-    """One non-streaming call against the ONE local llama server. Never starts it."""
+    """One non-streaming call against the ONE local llama server. Never starts it.
+
+    None on an installation without local models (inference_profile = api): a server
+    started before a switch may still be running until the tray unloads it, and no
+    completion may run on it meanwhile."""
     import requests
 
+    from vaf.core import inference_profile
     from vaf.core.config import Config
+    if not inference_profile.local_inference_allowed():
+        inference_profile.refuse(f"the local model ({caller})")
+        return None
 
     payload = {
         "messages": messages,

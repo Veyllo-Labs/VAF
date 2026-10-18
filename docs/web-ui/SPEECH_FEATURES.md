@@ -9,7 +9,7 @@ VAF's speech processing is local by default: Docker containers provide high-qual
 ### Key Features
 
 - **Local by Default**: All processing runs locally via Docker unless an admin selects a cloud voice provider
-- **Optional Cloud Providers**: ElevenLabs and OpenAI for TTS and STT, plus Veyllo for STT (`veyllo-transcribe`), selectable independently (`speech_tts_provider` / `speech_stt_provider`), with automatic fallback to the local lane on any API error
+- **Optional Cloud Providers**: ElevenLabs and OpenAI for TTS and STT, plus Veyllo for STT (`veyllo-transcribe`), selectable independently (`speech_tts_provider` / `speech_stt_provider`), with automatic fallback to the local lane on any API error on the Full profile (the Lean profile has no local lane and reports the error)
 - **Multi-Language Support**: Automatic language detection and routing to appropriate TTS voices
 - **Multi-Interface**: Speech works across CLI, Web UI, and Telegram
 - **Bidirectional Voice**: Telegram and WhatsApp support receiving and sending voice messages (STT for incoming, TTS for outgoing)
@@ -62,7 +62,8 @@ VAF supports multiple TTS engines configured via `speech_tts_engine`:
 
 When `speech_tts_provider` is set (`elevenlabs` or `openai`), the cloud lane takes
 precedence over `speech_tts_engine`. On any provider error (quota, rate limit,
-network) the request falls back to the configured local engine. See
+network) the request falls back to the configured local engine; on the Lean profile only
+to an engine that runs no local model (`chatterbox`, `system`). See
 [Cloud provider lane](#cloud-provider-lane-elevenlabs--openai).
 
 ### Multi-Language Docker TTS
@@ -138,8 +139,9 @@ the rule below. Two things it settles:
 
 - When `speech_stt_provider` is set (`veyllo`, `elevenlabs`, or `openai`) AND
   resolves (known, STT-capable, key present), the cloud lane takes precedence over
-  `speech_stt_engine`. On any API error the turn degrades to the **Docker container**,
-  not to faster-whisper - both live behind `speech_client.transcribe`. See
+  `speech_stt_engine`. On any API error the turn degrades to the **Docker container**
+  on the Full profile, not to faster-whisper - both live behind `speech_client.transcribe`.
+  The Lean profile runs no container, so there the error is reported. See
   [Cloud provider lane](#cloud-provider-lane-elevenlabs--openai).
 - Only the literal `local` selects faster-whisper. An unset, empty or unrecognised
   value means `docker`, because faster-whisper is an optional extra and audio must
@@ -147,8 +149,9 @@ the rule below. Two things it settles:
 
 Under the `api` inference profile (an installation without local models,
 [INSTALL_PROFILES.md](../setup/INSTALL_PROFILES.md)) there is no local lane at all: the
-resolver never answers `local`, and when the provider gives no text the turn reports
-that instead of sending the audio to a container that does not run. Text-to-speech
+resolver never answers `local`, and whatever goes wrong with the provider (an API error,
+a timeout, no text at all) the turn reports it instead of sending the audio to a container
+that does not run. Text-to-speech
 behaves the same for the `docker` and `piper` engines; a `chatterbox` server you run
 elsewhere and the macOS `system` voice stay usable.
 
@@ -191,7 +194,8 @@ the local engine dispatch. Selection is explicit opt-in only; an empty provider
 key means the local Docker lane. On ANY provider problem (missing key, quota
 402, rate limit 429, timeout, non-audio response) the functions return `None`
 and the caller degrades to the local engine - a voice turn never breaks because
-a cloud API is down. All call sites go through `vaf/core/speech_client.py`, so
+a cloud API is down. On the Lean profile there is no local engine to degrade to, and the
+caller reports the failure instead. All call sites go through `vaf/core/speech_client.py`, so
 the Web UI, Telegram, WhatsApp, and the CLI mic all honour the same provider
 selection.
 
@@ -686,7 +690,7 @@ hand is in [DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md#start-the-services).
 docker ps --filter "name=vaf-"
 ```
 
-Expected containers:
+Expected containers on the Full profile (the Lean profile runs neither):
 - `vaf-tts` (port 5002)
 - `vaf-stt` (port 5003)
 

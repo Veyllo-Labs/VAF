@@ -34,9 +34,9 @@ the code:
   ``speech_client.transcribe``, ``SpeechManager.synthesize_audio`` and the Piper lane of
   ``SpeechManager.speak``);
 - the failover chain, whose local link is left out (``APIBackendManager``);
-- a running agent and a running server: ``Agent.chat_step`` refuses a local backend that
-  was loaded before a switch, and the tray unloads the local model as it does for an API
-  provider.
+- a running agent and a running server: ``Agent.chat_step`` and ``Agent.complete`` (with
+  the shared ``completion.complete``) refuse a local backend that was loaded before a
+  switch, and the tray unloads the local model as it does for an API provider.
 
 A setting that names a local lane while the profile is ``api`` is not refused when it is
 written: ``config.json`` stays editable by hand, and the choke points above are the

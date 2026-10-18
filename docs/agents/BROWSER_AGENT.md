@@ -39,9 +39,15 @@ The browser container is part of `docker-compose.memory.yml` and starts automati
 
 ### Start the browser container
 
+VAF starts it with the rest of the stack (on both installation profiles); on its own:
+
 ```bash
-docker compose -f docker-compose.memory.yml up -d
+docker compose --env-file ~/.vaf/compose.env -f docker-compose.memory.yml up -d --build vaf-browser
 ```
+
+`--env-file` carries the stream credential (`VAF_BROWSER_VNC_SECRET`); a container
+created without it has no working interactive stream. See
+[DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md#start-the-services).
 
 On first run, Docker builds the `vaf-browser` image from `docker/browser/Dockerfile` (~30 seconds). Later starts pass `--build` too: an unchanged build context is a cache hit and costs seconds, while a changed one is rebuilt rather than silently reused. Without that, a checkout that moves ahead of its images keeps running the old ones with nothing to show for it.
 
@@ -1110,7 +1116,7 @@ started with `--build`. The command below is what to run when you build by hand,
 for when the log says the KasmVNC stream did not answer.
 
 ```bash
-docker compose -f docker-compose.memory.yml up -d --build vaf-browser
+docker compose --env-file ~/.vaf/compose.env -f docker-compose.memory.yml up -d --build vaf-browser
 ```
 
 **Chromium updates are the age gate's job, not `--build`'s.** The apt layer that installs
@@ -1128,8 +1134,8 @@ minutes each. To force the same thing by hand:
 
 ```bash
 docker pull debian:bookworm-slim
-docker compose -f docker-compose.memory.yml build --no-cache vaf-browser
-docker compose -f docker-compose.memory.yml up -d vaf-browser
+docker compose --env-file ~/.vaf/compose.env -f docker-compose.memory.yml build --no-cache vaf-browser
+docker compose --env-file ~/.vaf/compose.env -f docker-compose.memory.yml up -d vaf-browser
 ```
 
 ---
@@ -1158,7 +1164,7 @@ Chromium runs headed under Xkasmvnc (display `:99`). If a previous run crashed w
 The entrypoint (`docker/browser/entrypoint.sh`) removes the stale lock/socket on start and waits for the X server to be genuinely alive, so this self-heals on the next start. If you still hit it, recreate the container so it gets a clean `/tmp`:
 
 ```bash
-docker compose -f docker-compose.memory.yml up -d --force-recreate vaf-browser
+docker compose --env-file ~/.vaf/compose.env -f docker-compose.memory.yml up -d --force-recreate vaf-browser
 ```
 
 ### Container is `(unhealthy)` after a rebuild / logs show `Trace/breakpoint trap` (SIGTRAP)
@@ -1173,7 +1179,7 @@ and the healthcheck flips the container to `(unhealthy)`. This is Debian bug #11
 before that fix, rebuild:
 
 ```bash
-docker compose -f docker-compose.memory.yml up -d --build vaf-browser
+docker compose --env-file ~/.vaf/compose.env -f docker-compose.memory.yml up -d --build vaf-browser
 ```
 
 ### Container is `(unhealthy)`, logs repeat `The profile appears to be in use by another Chromium process ... on another computer`

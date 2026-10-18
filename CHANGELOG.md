@@ -102,6 +102,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   made to crash the bridge or loop forever by a crafted audio file (three advisories). It now
   runs 11.16.1.
 
+### Fixed
+
+- **The documented way to start the containers by hand no longer breaks Redis and the
+  browser.** The docs showed `docker compose -f docker-compose.memory.yml up -d`, but VAF
+  keeps the Redis password and the browser's stream credential in `~/.vaf/compose.env`,
+  which compose reads only with `--env-file`; the command recreated Redis without a password
+  (every cache call then failed) and the browser without its stream. The docs now say
+  `vaf repair`, which starts the services the installation profile needs, and show the
+  by-hand command with `--env-file` and the profile's service list.
+
 ## [0.1.0a33] - 2026-10-11
 
 ### Added

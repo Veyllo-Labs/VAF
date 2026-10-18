@@ -102,8 +102,10 @@ def profile_cmd(
     for sentence in result["conflicts"]:
         UI.warning(sentence)
     if result["errors"]:
-        # The profile holds from the moment it is written; what did not happen is the stop
-        # (or the removal) of the speech containers. A non-zero exit says so to the
-        # installers, which warn on it.
-        UI.error("The switch is not complete: run `vaf profile api` again once Docker answers.")
+        # The profile holds from the moment it is written; what did not happen is the
+        # container part of the switch. The retry names the same request, --prune included:
+        # a plain retry would stop the containers and leave the images on the disk. A
+        # non-zero exit says so to the installers, which warn on it.
+        retry = f"vaf profile {wanted}" + (" --prune" if prune else "")
+        UI.error(f"The switch is not complete: run `{retry}` again once Docker answers.")
         raise typer.Exit(1)

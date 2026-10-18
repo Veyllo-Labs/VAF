@@ -383,10 +383,12 @@ They respect per-user scope isolation. History that predates this feature is imp
 
 ## Docker Requirements
 
-For voice message support, ensure these containers are running:
+For voice message support with the local speech lane, ensure these containers are running
+(`vaf repair` starts them on the Full installation profile; the Lean profile has none and
+transcribes and speaks through the speech providers set in Settings):
 
 ```bash
-docker compose -f docker-compose.memory.yml up -d
+vaf repair
 ```
 
 Required containers:

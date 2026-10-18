@@ -91,13 +91,16 @@ In chat, retrieval runs in the **input phase** before the LLM is called: the use
 ### 1. Start the Services
 
 ```bash
-# From the VAF root directory
-docker compose -f docker-compose.memory.yml up -d
+vaf repair
 ```
 
-This starts:
+VAF starts the stack itself when it starts; `vaf repair` does it on its own. Among the
+services the installation profile needs are the two the memory uses:
 - **PostgreSQL 16** with pgvector extension (port 5432)
 - **Redis 7** for caching (port 6379)
+
+The same by hand, with the Redis password VAF keeps, is in
+[DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md#start-the-services).
 
 ### 2. Enable Memory System
 
@@ -694,10 +697,11 @@ the supported ones. There is no PyTorch fallback.
 ### Start Services
 
 ```bash
-docker compose -f docker-compose.memory.yml up -d
+docker compose --env-file ~/.vaf/compose.env -f docker-compose.memory.yml up -d postgres redis
 ```
 
-This starts both PostgreSQL and Redis.
+This starts both PostgreSQL and Redis; `--env-file` carries the Redis password VAF keeps,
+without it Redis is recreated with none and every cache call fails to authenticate.
 
 ### Stop Services
 
@@ -718,7 +722,7 @@ docker compose -f docker-compose.memory.yml logs -f
 docker compose -f docker-compose.memory.yml down -v
 
 # Restart
-docker compose -f docker-compose.memory.yml up -d
+docker compose --env-file ~/.vaf/compose.env -f docker-compose.memory.yml up -d postgres redis
 ```
 
 ### Connection Details

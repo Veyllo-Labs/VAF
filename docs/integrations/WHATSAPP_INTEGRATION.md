@@ -415,10 +415,12 @@ Sessions (chats) in the dashboard are keyed by E.164-style `chat_id` (e.g. `+491
 
 ## Docker Requirements
 
-For voice message support (STT and TTS), the same containers as for Telegram are used:
+For voice message support (STT and TTS) with the local speech lane, the same containers as
+for Telegram are used (`vaf repair` starts them on the Full installation profile; the Lean
+profile has none and uses the speech providers set in Settings):
 
 ```bash
-docker compose -f docker-compose.memory.yml up -d
+vaf repair
 ```
 
 Required containers:

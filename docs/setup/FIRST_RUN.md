@@ -97,7 +97,9 @@ and can be changed later in Settings.
 Optionally paste a **Veyllo API key** to use the hosted Veyllo models - handy if your
 machine has limited GPU/VRAM. The key is verified live; on success VAF sets Veyllo as the
 default provider (including vision, and speech-to-text when no STT provider was chosen
-yet - it always falls back to the local engine and an explicit later choice overrides it).
+yet; an explicit later choice overrides it). On the Full profile a failed Veyllo
+transcription falls back to the local engine; the Lean profile has no local engine, so
+there the error is reported instead.
 What **Skip** does depends on the installation profile
 ([INSTALL_PROFILES.md](INSTALL_PROFILES.md)):
 

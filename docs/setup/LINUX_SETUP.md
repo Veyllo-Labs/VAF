@@ -136,8 +136,9 @@ so pick one lane per machine rather than mixing them.
 ### Docker containers (standalone)
 
 ```bash
-# Start
-/usr/bin/docker compose -f docker-compose.memory.yml up -d
+# Start (the services the installation profile needs, with VAF's secrets;
+# by hand see DOCKER_SERVICES.md "Start the Services")
+vaf repair
 
 # Stop (data is preserved)
 /usr/bin/docker compose -f docker-compose.memory.yml down

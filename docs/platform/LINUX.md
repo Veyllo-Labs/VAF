@@ -30,8 +30,8 @@ duplicate the install steps.
   missing the tray icon may not appear, but the Qt app window is unaffected. See
   [SYSTEM_TRAY.md](./SYSTEM_TRAY.md).
 - **Docker services.** The database (PostgreSQL/pgvector), cache, STT,
-  document engine, TTS and browser containers run via
-  `docker compose -f docker-compose.memory.yml up -d`. VAF starts them itself when a lane
+  document engine, TTS and browser containers run from `docker-compose.memory.yml`
+  (STT and TTS only on the Full installation profile). VAF starts them itself when a lane
   that needs them starts (`vaf/core/service_stack.py`: the tray, `vaf start`, the terminal
   app and `vaf run`), never for a plain command such as `vaf --version` or `vaf stop`. Code runs in sandbox environments VAF starts itself, one per person, outside compose ([SANDBOXING.md](../security/SANDBOXING.md#sandbox-environments)). See
   [DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md).

@@ -133,8 +133,11 @@ See individual files for detailed documentation.
 The installer (`install.sh` / `install.ps1`) handles this automatically - it detects changes to `docker-compose.memory.yml` after `git pull`, starts Docker if needed, and applies updates. To start services manually:
 
 ```bash
-docker compose -f docker-compose.memory.yml up -d
+vaf repair
 ```
+
+It starts the services the installation profile needs (the speech containers only on the
+Full profile); the same by hand is in [DOCKER_SERVICES.md](setup/DOCKER_SERVICES.md#start-the-services).
 
 ### Verify Services
 ```bash

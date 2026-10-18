@@ -89,6 +89,10 @@ def test_a_stop_that_failed_is_an_incomplete_switch_not_a_success(config, monkey
     out = CliRunner().invoke(_app(), ["api"])
     assert out.exit_code == 1 and config["inference_profile"] == "api"
     assert "Cannot connect to the Docker daemon" in out.output and "not complete" in out.output
+    # The retry repeats the request: without --prune it would leave the images behind.
+    # MUTATION: drop the --prune from the retry - red.
+    out = CliRunner().invoke(_app(), ["api", "--prune"])
+    assert out.exit_code == 1 and "`vaf profile api --prune`" in out.output
 
 
 def test_retiring_names_only_the_speech_services_and_their_own_volumes(monkeypatch, tmp_path):

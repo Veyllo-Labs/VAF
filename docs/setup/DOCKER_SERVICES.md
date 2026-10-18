@@ -13,31 +13,44 @@ VAF uses **one** Docker Compose file for auxiliary services: **`docker-compose.m
 | STT | `vaf-stt` | 5003 | Whisper ASR for speech-to-text (local speech lane only) |
 | **Browser** | `vaf-browser` | 9222, 6901 | Headed Chromium under KasmVNC's X server (CDP on 9222, anti-bot hardened) for the `browser_agent` tool, plus the KasmVNC WebSocket stream of the display on 6901 for the web UI's interactive browser, which requires a credential VAF holds (`VAF_BROWSER_VNC_SECRET`, minted into the keyring and delivered through `compose.env`) - see [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md) |
 
-All services start by default when you run `docker compose up -d`. VAF itself starts the services its **inference profile** needs (`service_stack.needed_services`): every one under `local`, all but the two speech containers (`vaf-stt`, `vaf-tts`) under `api`, the installation without local models ([INSTALL_PROFILES.md](INSTALL_PROFILES.md)). Code execution is not a compose service: VAF creates a sandbox environment per person itself (see [Sandbox environments](#sandbox-environments)).
+VAF starts the services its **inference profile** needs (`service_stack.needed_services`): every one under `local`, all but the two speech containers (`vaf-stt`, `vaf-tts`) under `api`, the installation without local models ([INSTALL_PROFILES.md](INSTALL_PROFILES.md)). A bare `docker compose up -d` does not know the profile and starts every service in the file, so let VAF start the stack, or name the services as in the Quick Start below. Code execution is not a compose service: VAF creates a sandbox environment per person itself (see [Sandbox environments](#sandbox-environments)).
 
 ---
 
 ## Quick Start
 
-### Start All Services
+### Start the Services
+
+VAF starts the stack itself with the tray, `vaf start`, the terminal app and `vaf run`.
+To start it on its own, or after Docker was down:
 
 ```bash
-docker compose -f docker-compose.memory.yml up -d
+vaf repair            # Windows: .\run_vaf.bat repair
 ```
 
-**Windows (PowerShell):**
-```powershell
-docker compose -f docker-compose.memory.yml up -d
+It starts the container engine where it can, then the services the inference profile
+needs, with the secrets below. By hand, the same in two steps: the services
+`vaf profile --services` names, the locally built ones with `--build`:
+
+```bash
+docker compose --env-file ~/.vaf/compose.env -f docker-compose.memory.yml up -d $(vaf profile --services core)
+docker compose --env-file ~/.vaf/compose.env -f docker-compose.memory.yml up -d --build $(vaf profile --services optional)
 ```
 
-> **Redis needs `REDIS_PASSWORD`.** The compose file starts Redis with
-> `--requirepass` only when that variable is set, while VAF's client always sends the
-> password it keeps in the data keyring. VAF writes the value into an owner-only,
-> gitignored `.env` beside the compose file (`vaf/core/service_stack.py`) before every
-> `compose up` it drives, and `docker compose` reads that file automatically. Starting
-> the stack by hand on a machine that has never run VAF therefore brings Redis up with
-> no password, and the cache calls then fail to authenticate. Let VAF start the stack
-> once, or export `REDIS_PASSWORD` yourself before running compose.
+On the Full profile that is every service; on the Lean profile the speech containers
+are left out. A compose command without the service names starts them anyway, and on a
+Lean installation that pulls the 7.5 GB speech-to-text image the profile exists to avoid.
+
+> **Redis and the browser need their secrets.** The compose file starts Redis with
+> `--requirepass` only when `REDIS_PASSWORD` is set, while VAF's client always sends the
+> password it keeps in the data keyring; the browser's stream takes
+> `VAF_BROWSER_VNC_SECRET` the same way. VAF writes both into the owner-only
+> `~/.vaf/compose.env` (`compose_env_file` in `vaf/core/service_stack.py`) before every
+> `compose up` it drives and passes the file with `--env-file`; compose does not find it
+> on its own. A hand-run `up` without `--env-file` therefore recreates Redis with no
+> password (every cache call then fails to authenticate) and the browser without its
+> stream credential. On a machine that has never run VAF the file does not exist yet:
+> let VAF start the stack once.
 
 ### Verify Running Containers
 
@@ -45,7 +58,7 @@ docker compose -f docker-compose.memory.yml up -d
 docker ps --filter "name=vaf-"
 ```
 
-Expected output:
+Expected output (on the Full profile; the Lean profile runs no `vaf-tts` and `vaf-stt`):
 ```
 CONTAINER ID   IMAGE                      PORTS                          NAMES
 ...            vaf-tts-multilang:latest   127.0.0.1:5002->5000/tcp       vaf-tts
@@ -180,7 +193,7 @@ redis://localhost:6379/0
 
 The password is **not** part of `redis_url`: it lives in the data keyring and is spliced
 into the URL at connect time (`vaf/memory/cache.py`), and handed to the container through
-`REDIS_PASSWORD` in the compose `.env`. A password written into `redis_url` by hand wins
+`REDIS_PASSWORD` in `~/.vaf/compose.env`. A password written into `redis_url` by hand wins
 and is left alone.
 
 ---
@@ -274,7 +287,7 @@ docker compose -f docker-compose.memory.yml stop tts stt
 ### Start Only Database and Redis
 
 ```bash
-docker compose -f docker-compose.memory.yml up -d postgres redis
+docker compose --env-file ~/.vaf/compose.env -f docker-compose.memory.yml up -d postgres redis
 ```
 
 ### Restart TTS After Configuration Change
@@ -352,11 +365,8 @@ Why the terminal app starts it too: a terminal-only session after a tray quit us
 
 ### If Docker Wasn't Running During Install
 
-Start Docker, then apply the latest stack manually:
-
-```bash
-docker compose -f docker-compose.memory.yml up -d
-```
+Start VAF, or run `vaf repair`: both start the services the inference profile needs (see
+[Start the Services](#start-the-services) for the same by hand).
 
 ---
 

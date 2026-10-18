@@ -46,6 +46,10 @@ export default function InferenceProfileSection({ onChanged }: { onChanged?: (pr
     const [note, setNote] = useState<{ text: string; error: boolean } | null>(null);
     const closed = useRef(false);
     const following = useRef(false);
+    // The caller's callback of the CURRENT render: a switch can run for minutes, and the
+    // settings decide by their unsaved edits at the moment it ends whether to reload.
+    const onChangedRef = useRef(onChanged);
+    useEffect(() => { onChangedRef.current = onChanged; }, [onChanged]);
 
     useEffect(() => {
         closed.current = false;
@@ -95,7 +99,7 @@ export default function InferenceProfileSection({ onChanged }: { onChanged?: (pr
                     if (sw?.error) setNote({ text: sw.error, error: true });
                     else if (errors.length) setNote({ text: errors.join(' '), error: true });
                     else setNote({ text: t('done', { profile: state.profile === 'api' ? t('api') : t('local') }), error: false });
-                    onChanged?.(state.profile);
+                    onChangedRef.current?.(state.profile);
                     return;
                 }
             }
@@ -103,7 +107,7 @@ export default function InferenceProfileSection({ onChanged }: { onChanged?: (pr
             following.current = false;
             if (!closed.current) setBusy(false);
         }
-    }, [apiBase, onChanged, t]);
+    }, [apiBase, t]);
 
     useEffect(() => { void load(); }, [load]);
 

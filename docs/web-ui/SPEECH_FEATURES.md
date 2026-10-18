@@ -670,11 +670,15 @@ wizard (not part of `Config.DEFAULTS`).
 
 ## Starting Docker Services
 
-### Start All Services
+### Start the Services
 
 ```bash
-docker compose -f docker-compose.memory.yml up -d
+vaf repair
 ```
+
+It starts the services the installation profile needs: the speech containers on the Full
+profile, none on the Lean profile (there speech goes through the providers). The same by
+hand is in [DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md#start-the-services).
 
 ### Verify Services
 

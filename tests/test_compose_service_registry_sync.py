@@ -45,13 +45,17 @@ def _parse_compose() -> dict:
         m = re.match(r"^  ([a-zA-Z0-9_-]+):\s*$", line)
         if m:
             current = m.group(1)
-            services[current] = {"container_name": None, "host_ports": []}
+            services[current] = {"container_name": None, "host_ports": [], "image": None}
             continue
         if current is None:
             continue
         m = re.match(r"^\s+container_name:\s*(\S+)\s*$", line)
         if m:
             services[current]["container_name"] = m.group(1)
+            continue
+        m = re.match(r"^    image:\s*(\S+)\s*$", line)
+        if m:
+            services[current]["image"] = m.group(1)
             continue
         m = re.match(r'^\s+-\s*"127\.0\.0\.1:\$\{[A-Z_]+:-(\d+)\}:\d+"\s*$', line)
         if m:
@@ -97,3 +101,15 @@ def test_every_service_with_a_port_names_where_it_is_configured():
     for spec in SERVICES:
         if spec.default_port:
             assert spec.config_url_key or spec.env_url_var, spec.service_key
+
+
+def test_every_model_service_names_its_image():
+    """`vaf profile api --prune` removes the speech images by the name `compose config`
+    reports, and a service that is only built (no `image:` line) reports none: its image
+    would stay on the disk while the prune says it is done. MUTATION: delete the tts
+    service's `image:` line - red."""
+    compose = _parse_compose()
+    for spec in SERVICES:
+        if spec.local_inference:
+            assert compose[spec.service_key]["image"], (
+                f"{spec.service_key} runs a model and must name its image in {COMPOSE_FILENAME}")

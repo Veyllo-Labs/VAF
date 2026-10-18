@@ -105,7 +105,9 @@ each, not by checks spread over the code:
   (`inference_profile.download_guard` in each lane's progress hook), and a caller that was
   waiting on the download lock reads the profile again before it starts.
 - `ServerManager.start_server`, the one start of the local server, refuses, also for the
-  voice lane, which otherwise asks past the provider gate.
+  voice lane, which otherwise asks past the provider gate. A start that was waiting for a
+  server still loading its model ends when the profile changes, instead of waiting out the
+  readiness budget.
 - `Agent.load_model` loads no local model; a chat turn that has no provider says so in the
   chat, closes the turn and stores it, instead of promising a download. The same goes for
   an API provider whose backend could not be built (no key, a failed setup), on either
@@ -120,7 +122,8 @@ each, not by checks spread over the code:
   tokens are released by the switch itself, or at the next turn when the switch came from
   another process (`release_disallowed_local_backends`); a load that was still running
   when the profile changed reads it again before and after it loads.
-- The failover chain leaves its local link out; a backup API provider stays.
+- The failover chain leaves its local link out, also when the profile changes while a
+  request waits for its primary; a backup API provider stays.
 - `service_stack.needed_services` leaves the speech containers out. The stack start, the
   status, the repair, `vaf top` and the installers read this one list: a container the
   profile leaves out is shown as `off`, never as a fault, and a repair does not bring it

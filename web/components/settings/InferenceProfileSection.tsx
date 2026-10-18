@@ -61,14 +61,16 @@ export default function InferenceProfileSection({ onChanged, currentProfile }: {
         return () => { closed.current = true; };
     }, []);
 
-    const load = useCallback(async () => {
+    // `quiet`: a reload while the section already shows a profile keeps a failure to itself,
+    // instead of putting an error over the profile it still shows.
+    const load = useCallback(async (quiet = false) => {
         try {
             const res = await fetch(`${apiBase}/api/system/inference-profile`, { credentials: 'include' });
-            if (!res.ok) { setLoadFailed(true); return; }
+            if (!res.ok) { if (!quiet) setLoadFailed(true); return; }
             setData(await res.json());
             setLoadFailed(false);
         } catch {
-            setLoadFailed(true);
+            if (!quiet) setLoadFailed(true);
         }
     }, [apiBase]);
 
@@ -114,7 +116,18 @@ export default function InferenceProfileSection({ onChanged, currentProfile }: {
         }
     }, [apiBase, t]);
 
-    useEffect(() => { void load(); }, [load]);
+    // Another tab or the terminal can switch the profile while this section stays open: it is
+    // read again whenever the window is looked at again.
+    useEffect(() => {
+        void load();
+        const reload = () => { if (document.visibilityState === 'visible') void load(true); };
+        window.addEventListener('focus', reload);
+        document.addEventListener('visibilitychange', reload);
+        return () => {
+            window.removeEventListener('focus', reload);
+            document.removeEventListener('visibilitychange', reload);
+        };
+    }, [load]);
 
     // A switch started earlier (another tab, a reopened Settings) is followed, not offered again.
     useEffect(() => {

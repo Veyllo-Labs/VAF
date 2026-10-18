@@ -3179,12 +3179,17 @@ class Agent:
                 append_domain_log("backend", "LIBRARY_LOAD tokenizer (n_ctx=1)")
             except Exception:
                 pass
-            self._tokenizer_instance = Llama(
+            tokenizer = Llama(
                 model_path=self.model_path,
                 n_gpu_layers=0,
                 n_ctx=1, # We only need the tokenizer, not context
                 verbose=False
             )
+            # As in load_model: a switch made during the load released nothing yet, so
+            # the profile is read again before the tokenizer is kept.
+            if not inference_profile.local_inference_allowed():
+                return None
+            self._tokenizer_instance = tokenizer
             return self._tokenizer_instance
         except Exception as e:
             UI.error(f"Could not initialize tokenizer: {e}")

@@ -1678,6 +1678,16 @@ class APIBackendManager:
         for pos, idx in enumerate(order):
             link_mgr, link_model = chain[idx]
             is_last = pos == len(order) - 1
+            if link_mgr is not self and link_mgr.provider_name == "local":
+                # The chain is built when the request starts, and the primary can wait
+                # minutes for its first token: a switch to the api inference profile made
+                # meanwhile leaves the local link out here too.
+                from vaf.core.inference_profile import local_inference_allowed, refusal
+                if not local_inference_allowed():
+                    # Something must still be said when this was the only link left (the
+                    # primary cooling down): the refusal, not an empty reply.
+                    last_failure = last_failure or refusal("the local failover link")
+                    continue
             gen = link_mgr._chat_single(messages, temperature, max_tokens, stream, link_model, tools, tool_choice)
             deadline = timeout_s if (timeout_s > 0 and not is_last) else None
             first, failure = self._first_chunk(gen, deadline)

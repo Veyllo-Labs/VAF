@@ -1141,6 +1141,11 @@ class ServerManager:
             elif response.status_code == 503:
                 wait_start = time.time()
                 while time.time() - wait_start < _server_ready_budget():
+                    # A switch to the api profile stops the server this waits for; without
+                    # this the start (and the lock it holds) waited out the whole budget.
+                    if not inference_profile.local_inference_allowed():
+                        UI.event("Backend", inference_profile.refuse("the local server"), style="dim")
+                        return False
                     try:
                         response = requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
                         if response.status_code == 200:
@@ -1182,6 +1187,11 @@ class ServerManager:
                                      style="dim")
                             _wait_start = time.time()
                             while time.time() - _wait_start < _server_ready_budget():
+                                # As in the wait above: a switch to api ends it.
+                                if not inference_profile.local_inference_allowed():
+                                    UI.event("Backend", inference_profile.refuse("the local server"),
+                                             style="dim")
+                                    return False
                                 try:
                                     _r = requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
                                     if _r.status_code == 200:

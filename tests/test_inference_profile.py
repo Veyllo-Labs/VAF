@@ -816,3 +816,108 @@ def test_the_settings_get_the_profile_as_the_server_reads_it(role):
     assert Config.config_for_user({"inference_profile": "lokal"}, None, role)[
         "inference_profile"] == "local"
     assert "inference_profile" not in Config.config_for_user({}, None, role)
+
+
+class _KeptWaiting(BaseException):
+    """Raised by a stubbed sleep: the start went on waiting (not caught by `except Exception`)."""
+
+
+@pytest.mark.parametrize("lane", ["health", "pid file"])
+def test_a_start_waiting_for_a_loading_server_ends_on_a_switch(config, monkeypatch, tmp_path,
+                                                               lane):
+    """A start that found the server still loading (503) waited out the whole readiness
+    budget (600 s) after a switch to api had stopped that server, holding the start lock.
+    Both waits: the one after the health probe and the one after the pid file. MUTATION: drop
+    the profile check in either wait - red."""
+    from vaf.core import backend
+    config.update({"inference_profile": "local", "provider": "local",
+                   "auto_start_local_server": True})
+    pid_file = tmp_path / "server.pid"
+    pid_file.write_text("4242")
+    calls = []
+
+    def _get(url, timeout=None):
+        calls.append(url)
+        if lane == "pid file" and len(calls) == 1:
+            raise ConnectionError("no answer on the first probe")
+        config["inference_profile"] = "api"      # the switch lands while it loads
+        return types.SimpleNamespace(status_code=503)
+
+    def _sleep(seconds):
+        raise _KeptWaiting()
+
+    monkeypatch.setattr(backend.requests, "get", _get)
+    monkeypatch.setattr(backend.time, "sleep", _sleep)
+    fake = types.SimpleNamespace(ensure_server_exists=lambda: True, pid_file=str(pid_file),
+                                 _is_process_running=lambda pid: True, process=None)
+    try:
+        result = backend.ServerManager._start_server_locked(fake, "model.gguf")
+    except _KeptWaiting:
+        result = "kept waiting"
+    assert result is False
+
+
+def test_a_switch_during_the_request_leaves_the_local_failover_link_out(config):
+    """The chain is built when the request starts, and the primary can wait minutes for its
+    first token: the local link still ran after a switch to api. When it is the only link
+    left (the primary cooling down) the refusal is said, not nothing. MUTATION: drop the check
+    before the local link, or the refusal - red."""
+    import time as _time
+
+    from vaf.core.api_backend import APIBackendManager
+    ran = []
+
+    class _Link:
+        def __init__(self, name, script, switch=False):
+            self.provider_name, self._script, self._switch = name, script, switch
+            self.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
+
+        def _chat_single(self, *args, **kwargs):
+            ran.append(self.provider_name)
+            if self._switch:
+                config["inference_profile"] = "api"
+            yield from self._script
+
+    mgr = APIBackendManager.__new__(APIBackendManager)
+    mgr.provider_name = "openai"
+    mgr.config = {"failover_level": "basic", "failover_timeout_s": 0}
+    mgr.session_usage = {"input_tokens": 0, "output_tokens": 0}
+    mgr.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
+    mgr._failover_pinned_idx = 0
+    mgr._failover_open_until = {}
+    primary = _Link("openai", ["[API Error from openai: connection refused]"], switch=True)
+    local = _Link("local", ["from the local model"])
+    mgr._build_failover_chain = lambda model: [(primary, None), (local, None)]
+    msgs = [{"role": "user", "content": "hi"}]
+    config["inference_profile"] = "local"
+    out = list(mgr.chat_completion(msgs))
+    assert ran == ["openai"] and "from the local model" not in out
+    assert any("connection refused" in chunk for chunk in out)
+    ran.clear()
+    mgr._failover_open_until = {"openai": _time.monotonic() + 600}
+    out = list(mgr.chat_completion(msgs))
+    assert ran == [] and any("without local models" in chunk for chunk in out)
+
+
+def test_a_switch_during_the_tokenizer_load_keeps_no_tokenizer(config, monkeypatch, tmp_path):
+    """As in load_model: the switch released nothing while the tokenizer loaded, and it was
+    kept afterwards. MUTATION: drop the check after the load - red."""
+    import sys
+
+    from vaf.core import agent as agent_mod
+    gguf = tmp_path / "m.gguf"
+    gguf.write_bytes(b"x")
+
+    def _llama(**kwargs):
+        config["inference_profile"] = "api"
+        return object()
+
+    fake_llama = types.ModuleType("llama_cpp")
+    fake_llama.Llama = _llama
+    monkeypatch.setitem(sys.modules, "llama_cpp", fake_llama)
+    monkeypatch.setattr(agent_mod, "append_domain_log", lambda *a, **k: None)
+    agent = types.SimpleNamespace(_tokenizer_instance=None, use_server=False, api_backend=None,
+                                  provider="local", model_path=str(gguf))
+    config["inference_profile"] = "local"
+    assert agent_mod.Agent._get_tokenizer(agent) is None
+    assert agent._tokenizer_instance is None

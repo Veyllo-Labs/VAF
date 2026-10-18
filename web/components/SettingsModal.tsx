@@ -2737,8 +2737,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onClick={onClose}
             />
 
-            {/* Modal Window */}
-            <div className="relative bg-white/95 backdrop-blur-xl w-full max-w-[906px] h-[660px] rounded-2xl shadow-2xl border border-white/20 flex overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-md:flex-col max-md:h-[100dvh] max-md:max-w-none max-md:rounded-none max-md:border-0">
+            {/* Modal Window. 720px tall so the sidebar (title, search, twelve categories,
+                connection, log out: about 690px) fits without scrolling; never taller than
+                the viewport, so the header and its close button stay on screen. */}
+            <div className="relative bg-white/95 backdrop-blur-xl w-full max-w-[990px] h-[720px] max-h-[calc(100dvh-2rem)] rounded-2xl shadow-2xl border border-white/20 flex overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-md:flex-col max-md:h-[100dvh] max-md:max-h-none max-md:max-w-none max-md:rounded-none max-md:border-0">
 
                 {/* Sidebar */}
                 <div className="w-64 bg-gray-50/50 border-r border-gray-200 flex flex-col pt-6 pb-4 px-3 gap-1 max-md:w-full max-md:flex-row max-md:items-center max-md:overflow-x-auto max-md:border-r-0 max-md:border-b max-md:pt-2 max-md:pb-2 max-md:shrink-0">

@@ -104,6 +104,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The settings window shows its whole menu again.** With the Account tab the left column
+  had grown past the window's height, and "Log out" was cut off at the bottom. The window is
+  larger now (990 by 720 pixels instead of 906 by 660) and never taller than the screen.
 - **A chat with an API provider that is not set up says so.** With no key for the chosen
   provider, or a provider whose setup failed, the chat answered "[Error] No response was
   produced ... context too large". It now answers with the reason ("The API provider ... is

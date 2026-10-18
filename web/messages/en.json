@@ -2540,7 +2540,7 @@
     "confirmApi": "Stop the speech containers and switch?",
     "confirmLocal": "Start the speech containers and switch?",
     "prune": "Also remove the speech images and volumes (about 9 GB)",
-    "apiHint": "Lean stops the speech containers and never downloads a model.",
+    "apiHint": "Lean stops the speech containers and downloads no chat or speech model.",
     "localHint": "Full starts the speech containers again; the chat model downloads on first use.",
     "switching": "Switching...",
     "failed": "The switch did not complete.",

@@ -3,22 +3,35 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Cpu, Cloud } from 'lucide-react';
+
+interface SwitchState {
+    running: boolean;
+    profile: 'local' | 'api' | null;
+    result: { errors?: string[] } | null;
+    error: string | null;
+}
 
 interface ProfileState {
     profile: 'local' | 'api';
     services: string[];
     left_out: string[];
     conflicts: string[];
+    switch?: SwitchState;
 }
+
+// Polls without an answer before the section stops waiting (the repair dialog's limit).
+const SWITCH_POLL_MISS_LIMIT = 20;
 
 /**
  * The installation's inference profile (vaf/core/inference_profile.py, /api/system/inference-
  * profile): whether this machine runs local models at all. The switch is the same
  * implementation as `vaf profile` - Lean stops the speech containers, Full starts them - so it
- * asks once on the button before it does anything. Admin only, like the tab it sits on.
+ * asks once on the button before it does anything. The switch is a job like the repair: the
+ * POST returns at once and the section follows `switch` on GET, because a start that pulls the
+ * speech images outlasts any proxy in front of a server. Admin only, like the tab it sits on.
  */
 /** `onChanged` receives the profile now set; the caller decides what to refresh (the settings
  *  keep unsaved edits, so they update only this key while there are any). */
@@ -31,6 +44,13 @@ export default function InferenceProfileSection({ onChanged }: { onChanged?: (pr
     const [prune, setPrune] = useState(false);
     const [busy, setBusy] = useState(false);
     const [note, setNote] = useState<{ text: string; error: boolean } | null>(null);
+    const closed = useRef(false);
+    const following = useRef(false);
+
+    useEffect(() => {
+        closed.current = false;
+        return () => { closed.current = true; };
+    }, []);
 
     const load = useCallback(async () => {
         try {
@@ -43,7 +63,54 @@ export default function InferenceProfileSection({ onChanged }: { onChanged?: (pr
         }
     }, [apiBase]);
 
+    const followSwitch = useCallback(async () => {
+        if (following.current) return;
+        following.current = true;
+        setBusy(true);
+        let misses = 0;
+        try {
+            for (;;) {
+                await new Promise((r) => setTimeout(r, 1500));
+                if (closed.current) return;
+                let state: ProfileState | null = null;
+                try {
+                    const res = await fetch(`${apiBase}/api/system/inference-profile`, { credentials: 'include' });
+                    if (res.ok) state = await res.json();
+                } catch {
+                    /* the switch may restart containers under us; keep watching */
+                }
+                if (!state) {
+                    misses += 1;
+                    if (misses >= SWITCH_POLL_MISS_LIMIT) {
+                        setNote({ text: t('failed'), error: true });
+                        return;
+                    }
+                    continue;
+                }
+                misses = 0;
+                setData(state);
+                const sw = state.switch;
+                if (!sw || !sw.running) {
+                    const errors: string[] = sw?.result?.errors || [];
+                    if (sw?.error) setNote({ text: sw.error, error: true });
+                    else if (errors.length) setNote({ text: errors.join(' '), error: true });
+                    else setNote({ text: t('done', { profile: state.profile === 'api' ? t('api') : t('local') }), error: false });
+                    onChanged?.(state.profile);
+                    return;
+                }
+            }
+        } finally {
+            following.current = false;
+            if (!closed.current) setBusy(false);
+        }
+    }, [apiBase, onChanged, t]);
+
     useEffect(() => { void load(); }, [load]);
+
+    // A switch started earlier (another tab, a reopened Settings) is followed, not offered again.
+    useEffect(() => {
+        if (data?.switch?.running) void followSwitch();
+    }, [data?.switch?.running, followSwitch]);
 
     const target: 'local' | 'api' = data?.profile === 'api' ? 'local' : 'api';
 
@@ -52,6 +119,7 @@ export default function InferenceProfileSection({ onChanged }: { onChanged?: (pr
         setConfirming(false);
         setBusy(true);
         setNote(null);
+        let started = false;
         try {
             const res = await fetch(`${apiBase}/api/system/inference-profile`, {
                 method: 'POST',
@@ -59,23 +127,22 @@ export default function InferenceProfileSection({ onChanged }: { onChanged?: (pr
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ profile: target, prune: target === 'api' && prune }),
             });
-            const body = await res.json().catch(() => ({}));
             if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
                 setNote({ text: String(body.detail || t('failed')), error: true });
             } else {
-                const errors: string[] = body.errors || [];
-                setNote(errors.length
-                    ? { text: errors.join(' '), error: true }
-                    : { text: t('done', { profile: target === 'api' ? t('api') : t('local') }), error: false });
-                onChanged?.(target);
+                started = true;
             }
         } catch {
             setNote({ text: t('failed'), error: true });
         } finally {
-            setBusy(false);
             setPrune(false);
         }
-        void load();
+        if (started) await followSwitch();
+        else {
+            setBusy(false);
+            void load();
+        }
     };
 
     if (!data && !loadFailed) return null;

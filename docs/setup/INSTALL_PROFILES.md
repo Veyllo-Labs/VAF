@@ -73,7 +73,10 @@ config and the same docker directly.
 
 In the web app the profile sits at the top of **Settings > AI & Model** (admin only), with
 the same switch (`POST /api/system/inference-profile`, the same `inference_profile.apply`
-behind it). Under Lean every local choice stays listed but cannot be picked: the chat
+behind it). The switch runs as a job, like the repair: the request returns at once and the
+section follows it on `GET`, because a switch back to Full can pull the 7.5 GB speech image
+while the HTTPS proxy in front of a server ends a request after 60 seconds. A second switch,
+or a repair, is refused until it is done. Under Lean every local choice stays listed but cannot be picked: the chat
 provider, vision, sub-agents and the thinker, the voice call's model and the speech
 engines; the failover chain shows no local link. The first-run wizard says that skipping
 the provider step leaves no local model to fall back on.

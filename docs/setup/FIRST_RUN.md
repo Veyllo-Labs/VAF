@@ -98,13 +98,17 @@ Optionally paste a **Veyllo API key** to use the hosted Veyllo models - handy if
 machine has limited GPU/VRAM. The key is verified live; on success VAF sets Veyllo as the
 default provider (including vision, and speech-to-text when no STT provider was chosen
 yet - it always falls back to the local engine and an explicit later choice overrides it).
-**Skip** to keep the local default model. You can add
-this or other providers later under **Settings → AI & Model**. On an installation without
-local models (the Lean (API) profile, [INSTALL_PROFILES.md](INSTALL_PROFILES.md)) there is
-no local model to keep: the step says so, leaves out its lines about staying local (and
-the local model among the other providers), its skip button says a provider is chosen in
-Settings instead of "run locally", and after a skip a provider is set there after the
-login.
+What **Skip** does depends on the installation profile
+([INSTALL_PROFILES.md](INSTALL_PROFILES.md)):
+
+- **Full (local)**, the default: skipping keeps the local default model.
+- **Lean (API)**, an installation without local models: there is no local model to keep, so
+  skipping leaves the provider choice to **Settings → AI & Model** after the login. The step
+  says so, leaves out its lines about staying local (and the local model among the other
+  providers), and its skip button says a provider is chosen in Settings instead of "run
+  locally".
+
+On either profile you can add this or other providers later under **Settings → AI & Model**.
 
 > Discord, Telegram, and Email connections are no longer part of first-run setup - add them
 > anytime under **Settings → Connections** (see [CONNECTIONS.md](../integrations/CONNECTIONS.md)).

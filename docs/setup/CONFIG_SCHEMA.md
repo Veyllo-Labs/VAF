@@ -346,7 +346,7 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `server_mode` | `False` | Run as a standalone server. |
-| `inference_profile` | `"local"` | What this installation runs itself. `local`: the chat model, the speech containers and the voice model may run here. `api`: none of them; chat, speech-to-text and text-to-speech go to the providers set in Settings, no model is downloaded and the speech containers are not started. Anything but the literal `api` means `local`. Set with `vaf profile`, `vaf server provision --profile` or the installers; see [INSTALL_PROFILES.md](INSTALL_PROFILES.md). Admin-only. |
+| `inference_profile` | `"local"` | What this installation runs itself. `local`: the chat model, the speech containers and the voice model may run here. `api`: none of them; chat and speech-to-text go to the providers set in Settings, text-to-speech to a provider, a TTS server run elsewhere (`speech_tts_engine = chatterbox`) or the macOS voice; no chat, voice-call or speech model is downloaded and the speech containers are not started (the memory's embedding model and the speaker recognition stay). Anything but the literal `api` means `local`. Set with `vaf profile`, `vaf server provision --profile` or the installers; see [INSTALL_PROFILES.md](INSTALL_PROFILES.md). Admin-only. |
 | `server_persistence_enabled` | `False` | Persist the server process. |
 | `server_idle_timeout` | `15` | Idle minutes before idle handling. |
 | `local_network_enabled` | `False` | Allow LAN access. |

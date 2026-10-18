@@ -2540,7 +2540,7 @@
     "confirmApi": "Sprach-Container stoppen und wechseln?",
     "confirmLocal": "Sprach-Container starten und wechseln?",
     "prune": "Auch die Sprach-Images und -Volumes entfernen (etwa 9 GB)",
-    "apiHint": "Schlank stoppt die Sprach-Container und lädt nie ein Modell herunter.",
+    "apiHint": "Schlank stoppt die Sprach-Container und lädt kein Chat- oder Sprachmodell herunter.",
     "localHint": "Vollständig startet die Sprach-Container wieder; das Chat-Modell wird beim ersten Gebrauch geladen.",
     "switching": "Wird umgestellt...",
     "failed": "Die Umstellung ist nicht abgeschlossen.",

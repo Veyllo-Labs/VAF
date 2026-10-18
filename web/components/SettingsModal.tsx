@@ -4484,8 +4484,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     {leanProfile && (localConfig.speech_tts_provider || 'local') === 'local' ? (
                                         // No local voice on this installation: the container settings and
                                         // the switch that would turn on nothing stay hidden until a
-                                        // provider is chosen above.
-                                        <p className="text-xs text-gray-600">{tVoice('ttsNeedsProvider')}</p>
+                                        // provider is chosen above. Only an admin sees that choice, so
+                                        // everyone else is told who makes it.
+                                        <p className="text-xs text-gray-600">{currentUser?.role === 'admin' ? tVoice('ttsNeedsProvider') : tVoice('managedByAdmin')}</p>
                                     ) : (localConfig.speech_tts_provider || 'local') === 'local' ? (
                                         <TTSSettings
                                             ttsEnabled={localConfig.speech_tts_enabled || false}

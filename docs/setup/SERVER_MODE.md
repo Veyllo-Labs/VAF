@@ -16,7 +16,8 @@ Server mode is an installation profile for running VAF as a persistent backgroun
 Server or desktop is one choice; whether the machine runs its own models is another, the
 **inference profile** ([INSTALL_PROFILES.md](INSTALL_PROFILES.md)). Either install can be
 `local` (the models and the speech containers run here) or `api` (none of them; chat and
-speech go to the providers set in Settings). A rented server usually wants `api`.
+speech-to-text go to the providers set in Settings, text-to-speech to a provider or a TTS
+server you run elsewhere, `chatterbox`). A rented server usually wants `api`.
 
 ## Installation
 

@@ -2540,7 +2540,7 @@
     "confirmApi": "Konuşma konteynerleri durdurulup geçilsin mi?",
     "confirmLocal": "Konuşma konteynerleri başlatılıp geçilsin mi?",
     "prune": "Konuşma imajlarını ve birimlerini de kaldır (yaklaşık 9 GB)",
-    "apiHint": "Hafif profil konuşma konteynerlerini durdurur ve hiçbir model indirmez.",
+    "apiHint": "Hafif profil konuşma konteynerlerini durdurur ve sohbet ya da konuşma modeli indirmez.",
     "localHint": "Tam profil konuşma konteynerlerini yeniden başlatır; sohbet modeli ilk kullanımda indirilir.",
     "switching": "Geçiliyor...",
     "failed": "Geçiş tamamlanmadı.",

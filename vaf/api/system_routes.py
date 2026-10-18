@@ -12,7 +12,10 @@ Two shapes worth knowing before reading on:
 
 - **Repair is a job, not a request.** Starting a container engine can take
   minutes; a request held open that long dies in a proxy or a browser. POST
-  starts it, GET follows the steps as they finish.
+  starts it, GET follows the steps as they finish. A switch of the inference
+  profile is a job for the same reason: back to Full it runs `compose up` for
+  the speech containers, which pulls a 7.5 GB image after a prune, and the
+  HTTPS proxy in front of a server gives up on a request after 60 seconds.
 - **An update is spawned, not awaited.** The update stops the VAF service, and
   this server IS that service. The updater is therefore detached and outlives
   us; the client watches `GET /api/version` and sees the answer change when the
@@ -45,14 +48,24 @@ from vaf.core.update_check import (
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
-# One repair at a time, process-wide: two runs would fight over the same
-# containers, and `compose up` is only idempotent one caller at a time.
+# One container job at a time, process-wide: two runs would fight over the same
+# containers, and `compose up` is only idempotent one caller at a time. The lock
+# claims both jobs, a repair and a profile switch, so neither starts while the
+# other runs.
 _repair_lock = threading.Lock()
 _repair_state: Dict[str, Any] = {
     "running": False,
     "started_at": None,
     "finished_at": None,
     "steps": [],
+    "result": None,
+    "error": None,
+}
+_profile_state: Dict[str, Any] = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "profile": None,
     "result": None,
     "error": None,
 }
@@ -88,6 +101,7 @@ def get_inference_profile(_: Dict[str, Any] = Depends(require_admin)) -> Dict[st
         "services": [s.service_key for s in needed],
         "left_out": [s.service_key for s in service_stack.SERVICES if s not in needed],
         "conflicts": inference_profile.conflicts(),
+        "switch": dict(_profile_state),
     }
 
 
@@ -96,16 +110,44 @@ class _ProfileSwitch(BaseModel):
     prune: bool = False
 
 
-@router.post("/inference-profile")
-async def set_inference_profile(body: _ProfileSwitch,
-                                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Switch the profile: the same implementation as `vaf profile` (stopping or starting
-    the speech containers takes a while, so it runs in the threadpool)."""
+def _run_profile_switch(profile: str, prune: bool) -> None:
     from vaf.core import inference_profile
     try:
-        return await run_in_threadpool(inference_profile.apply, body.profile, prune=body.prune)
+        _profile_state["result"] = inference_profile.apply(profile, prune=prune)
+    except Exception as e:      # a switch must never take the server with it
+        _profile_state["error"] = str(e)[:300]
+    finally:
+        _profile_state["running"] = False
+        _profile_state["finished_at"] = _now()
+
+
+@router.post("/inference-profile", status_code=202)
+def set_inference_profile(body: _ProfileSwitch,
+                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Start a switch and return at once; GET on this path follows it (``switch``). The
+    same implementation as `vaf profile`; a wrong request is refused before anything runs."""
+    from vaf.core import inference_profile
+    try:
+        wanted = inference_profile.validate(body.profile, body.prune)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    with _repair_lock:
+        if _profile_state["running"]:
+            raise HTTPException(status_code=409, detail="A profile switch is already running")
+        if _repair_state["running"]:
+            raise HTTPException(status_code=409,
+                                detail="A repair is running; wait for it to finish first.")
+        _profile_state.update({
+            "running": True,
+            "started_at": _now(),
+            "finished_at": None,
+            "profile": wanted,
+            "result": None,
+            "error": None,
+        })
+    threading.Thread(target=_run_profile_switch, args=(wanted, body.prune), daemon=True,
+                     name="vaf-api-profile").start()
+    return {"started": True, "profile": wanted, "started_at": _profile_state["started_at"]}
 
 
 def _run_repair() -> None:
@@ -128,6 +170,9 @@ def start_repair(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     with _repair_lock:
         if _repair_state["running"]:
             raise HTTPException(status_code=409, detail="A repair is already running")
+        if _profile_state["running"]:
+            raise HTTPException(status_code=409,
+                                detail="A profile switch is running; wait for it to finish first.")
         _repair_state.update({
             "running": True,
             "started_at": _now(),

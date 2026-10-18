@@ -23,6 +23,10 @@ def client(monkeypatch):
         "running": False, "started_at": None, "finished_at": None,
         "steps": [], "result": None, "error": None,
     })
+    sr._profile_state.update({
+        "running": False, "started_at": None, "finished_at": None,
+        "profile": None, "result": None, "error": None,
+    })
     monkeypatch.setattr(sr, "_update_started_at", None, raising=False)
     app = FastAPI()
     app.include_router(sr.router)
@@ -318,6 +322,15 @@ def test_desktop_mode_with_a_pidfile_is_fine(monkeypatch, tmp_path):
 
 # ── the inference profile ────────────────────────────────────────────────────
 
+def _follow_switch(client):
+    for _ in range(200):
+        state = client.get("/api/system/inference-profile").json()["switch"]
+        if not state["running"]:
+            return state
+        time.sleep(0.02)
+    raise AssertionError("the switch never finished")
+
+
 def test_the_profile_is_read_and_switched_through_the_framework(client, monkeypatch):
     """The web switch is `vaf profile`'s implementation, not a second one. MUTATION: write
     the config key here instead of calling inference_profile.apply - red."""
@@ -331,16 +344,70 @@ def test_the_profile_is_read_and_switched_through_the_framework(client, monkeypa
                         lambda profile, prune=False, stack=True: calls.append((profile, prune))
                         or {"profile": profile, "errors": []})
     assert client.post("/api/system/inference-profile",
-                       json={"profile": "api", "prune": True}).status_code == 200
+                       json={"profile": "api", "prune": True}).status_code == 202
+    state = _follow_switch(client)
     assert calls == [("api", True)]
+    assert state["result"] == {"profile": "api", "errors": []} and state["error"] is None
 
 
 def test_an_unknown_profile_is_a_400_not_a_write(client, monkeypatch):
+    """Refused before the job starts, by the framework's own check. MUTATION: drop the
+    validate call - the job starts and the answer is a 202."""
     from vaf.core import inference_profile
-
-    def refuse(profile, prune=False, stack=True):
-        raise ValueError("Unknown profile")
-
-    monkeypatch.setattr(inference_profile, "apply", refuse)
+    monkeypatch.setattr(inference_profile, "apply",
+                        lambda *a, **k: pytest.fail("a wrong request reached apply"))
     answer = client.post("/api/system/inference-profile", json={"profile": "cloud"})
     assert answer.status_code == 400 and "Unknown profile" in answer.json()["detail"]
+    answer = client.post("/api/system/inference-profile", json={"profile": "local", "prune": True})
+    assert answer.status_code == 400 and sr._profile_state["running"] is False
+
+
+def test_a_switch_is_a_job_so_a_slow_stack_start_outlives_the_proxy(client, monkeypatch):
+    """Back to Full runs `compose up`, which pulls the 7.5 GB speech image after a prune;
+    the HTTPS proxy gives up after 60 seconds. The POST must answer before the work ends,
+    and a second switch must not start a second `compose up` beside it. MUTATION: run
+    apply inside the request again, or drop the running check - red."""
+    from vaf.core import inference_profile
+    release = {"go": False}
+
+    def slow_apply(profile, prune=False, stack=True):
+        deadline = time.time() + 5      # bounded: a regression fails, it does not hang
+        while not release["go"] and time.time() < deadline:
+            time.sleep(0.01)
+        return {"profile": profile, "errors": []}
+
+    monkeypatch.setattr(inference_profile, "apply", slow_apply)
+    try:
+        assert client.post("/api/system/inference-profile",
+                           json={"profile": "local"}).status_code == 202
+        assert client.get("/api/system/inference-profile").json()["switch"]["running"] is True
+        assert client.post("/api/system/inference-profile",
+                           json={"profile": "api"}).status_code == 409
+        assert client.post("/api/system/services/repair").status_code == 409
+    finally:
+        release["go"] = True
+    assert _follow_switch(client)["result"]["profile"] == "local"
+
+
+def test_no_switch_starts_while_a_repair_runs(client, monkeypatch):
+    """A repair and a switch drive the same containers. MUTATION: drop the repair check in
+    the switch - red."""
+    from vaf.core import inference_profile
+    monkeypatch.setattr(inference_profile, "apply",
+                        lambda *a, **k: pytest.fail("a switch started beside a repair"))
+    sr._repair_state["running"] = True
+    answer = client.post("/api/system/inference-profile", json={"profile": "api"})
+    assert answer.status_code == 409 and "repair" in answer.json()["detail"]
+
+
+def test_a_crashing_switch_is_reported_not_swallowed(client, monkeypatch):
+    from vaf.core import inference_profile
+
+    def boom(profile, prune=False, stack=True):
+        raise RuntimeError("docker exploded")
+
+    monkeypatch.setattr(inference_profile, "apply", boom)
+    assert client.post("/api/system/inference-profile",
+                       json={"profile": "api"}).status_code == 202
+    state = _follow_switch(client)
+    assert "docker exploded" in state["error"] and state["result"] is None

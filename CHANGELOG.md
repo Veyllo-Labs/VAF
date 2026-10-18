@@ -14,9 +14,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ### Added
 
 - **Install without local models, for small servers.** The installer now asks for a profile:
-  Full (local), as before, or Lean (API), which downloads no chat, voice or speech model and
-  does not start the speech containers; chat and speech go to the API providers set in
-  Settings. That halves
+  Full (local), as before, or Lean (API), which downloads no chat, voice-call, speech-to-text
+  or text-to-speech model and does not start the speech containers. Chat and speech-to-text go
+  to the API providers set in Settings; text-to-speech to a provider, a TTS server you run
+  elsewhere (`chatterbox`) or the macOS voice. The two small CPU models, the memory's
+  embedding model and the speaker recognition, stay in both profiles. That halves
   the container memory limits (about 4 GB instead of 8) and leaves out a 7.5 GB speech image.
   `./install.sh --server --profile api` sets up a rented server this way, `vaf profile api`
   or the switch at the top of Settings > AI & Model changes an existing installation

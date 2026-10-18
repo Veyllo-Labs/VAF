@@ -99,19 +99,27 @@ def refuse(what: str = "a local model") -> str:
     return text
 
 
+def validate(profile: str, prune: bool = False) -> str:
+    """The profile ``apply`` would switch to, or ValueError for an unknown profile or
+    ``prune`` without ``api``. Nothing is written: a caller that runs ``apply`` in the
+    background (the web switch) refuses a wrong request here, before it starts."""
+    wanted = str(profile or "").strip().lower()
+    if wanted not in PROFILES:
+        raise ValueError(f"Unknown profile {profile!r}: use local or api.")
+    if prune and wanted != API:
+        raise ValueError("Pruning goes with api: it removes what the local profile runs.")
+    return wanted
+
+
 def apply(profile: str, *, prune: bool = False, stack: bool = True) -> Dict:
     """Switch the installation to ``profile`` - the one implementation behind `vaf profile`
     and the web settings. Writes the key, then (unless ``stack`` is False, the installers'
     case) stops the speech containers for ``api`` (``prune`` also removes their containers,
     images and volumes) or starts the stack with them for ``local``.
 
-    Raises ValueError for an unknown profile, or ``prune`` without ``api``. Returns
+    Raises ValueError as ``validate`` does. Returns
     {"profile", "previous", "stopped", "started", "removed", "errors", "conflicts"}."""
-    wanted = str(profile or "").strip().lower()
-    if wanted not in PROFILES:
-        raise ValueError(f"Unknown profile {profile!r}: use local or api.")
-    if prune and wanted != API:
-        raise ValueError("Pruning goes with api: it removes what the local profile runs.")
+    wanted = validate(profile, prune)
     from vaf.core.config import Config
     previous = current()
     Config.set("inference_profile", wanted)

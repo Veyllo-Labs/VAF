@@ -86,7 +86,7 @@ Press **Enter** for **Desktop** (using VAF on this computer). Choose **Server** 
 
 The choice can also be made non-interactively with `./install.sh --server` or `./install.sh --desktop` - required for scripted installs, where there is no prompt and the default is Desktop.
 
-The installer then asks for the profile: **Full (local)**, the default, runs the models and the speech containers on this machine; **Lean (API)** runs none of them and sends chat and speech to the API providers you set after the first login - for a small server without a GPU. `--profile local` or `--profile api` answers it without a prompt, on any platform (`-InferenceProfile` on Windows); see [INSTALL_PROFILES.md](INSTALL_PROFILES.md). A server install additionally opens the OS firewall for the LAN port, enables Docker at boot, disables sleep/suspend, and offers a master passphrase for headless credential encryption; the details are in [SERVER_MODE.md](SERVER_MODE.md).
+The installer then asks for the profile: **Full (local)**, the default, runs the models and the speech containers on this machine; **Lean (API)** runs none of them - for a small server without a GPU. Chat and speech-to-text then go to the API providers you set after the first login; text-to-speech goes to a provider, a TTS server you run elsewhere (`chatterbox`) or the macOS voice. `--profile local` or `--profile api` answers it without a prompt, on any platform (`-InferenceProfile` on Windows); see [INSTALL_PROFILES.md](INSTALL_PROFILES.md). A server install additionally opens the OS firewall for the LAN port, enables Docker at boot, disables sleep/suspend, and offers a master passphrase for headless credential encryption; the details are in [SERVER_MODE.md](SERVER_MODE.md).
 
 ### 5. Start VAF
 
@@ -231,13 +231,13 @@ On macOS/Linux the terminal command is `vaf tray`; Windows doesn't add `vaf` to 
 
 ## First-run setup (all platforms)
 
-The first time VAF launches, it shows a **setup wizard** (not a login screen) at `http://localhost:3000`. On a desktop install this appears in VAF's own app window; you can also open that address in any browser. The web UI is built on this first launch and the default model is downloaded, so the first start does some extra work.
+The first time VAF launches, it shows a **setup wizard** (not a login screen) at `http://localhost:3000`. On a desktop install this appears in VAF's own app window; you can also open that address in any browser. The web UI is built on this first launch and, on the Full profile, the default model is downloaded with the first message, so the first start does some extra work.
 
 The wizard walks you through:
 1. **Language** - English or German (this only affects the UI).
 2. **Admin account** - choose your username and password; this is the owner account.
 3. **Soul** - a short questionnaire that defines the agent's personality. Every field is editable.
-4. **Veyllo API key** (optional) - paste one to use the hosted Veyllo models, or skip it to use the local model. You can add providers later under Settings -> AI & Model.
+4. **Veyllo API key** (optional) - paste one to use the hosted Veyllo models, or skip it: on the Full profile the local model is used, on the Lean profile you choose a provider under Settings -> AI & Model after the login. You can add providers there later on either.
 5. **Two-factor authentication (required, and the last step)** - scan the QR code with your authenticator app and enter the 6-digit code. The earlier steps are saved only once 2FA succeeds.
 
 After 2FA you land in the web UI, logged in, with your agent live. For a screen-by-screen walkthrough see [FIRST_RUN.md](FIRST_RUN.md).

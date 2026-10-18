@@ -2434,8 +2434,10 @@ async def browser_vnc_asset(ticket: str, path: str):
         # shows up only as a blank panel: the container was created before the
         # credential existed, or without it.
         append_domain_log("webui", "[browser-vnc] the stream backend refused our credential: this "
-                                   "container was created without VAF_BROWSER_VNC_SECRET. Recreate it "
-                                   "(docker compose -f docker-compose.memory.yml up -d --build vaf-browser).")
+                                   "container was created without VAF_BROWSER_VNC_SECRET. Recreate it with "
+                                   "VAF's env file (docker compose "
+                                   "--env-file ~/.vaf/compose.env -f docker-compose.memory.yml up -d "
+                                   "--force-recreate vaf-browser); a VAF restart does the same.")
     headers = {}
     for h in ("content-type", "cache-control"):
         if h in upstream.headers:
@@ -8165,8 +8167,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                                 "Settings > Voice did not answer, or none is set "
                                                 "(this installation runs without local models).")
                                 else:
-                                    _stt_err = ("Docker STT failed. Is the STT container running "
-                                                "(e.g. docker compose -f docker-compose.memory.yml up -d)?")
+                                    _stt_err = ("Speech-to-text gave no text: no provider answered and the "
+                                                "STT container did not either. `vaf repair` starts the "
+                                                "services this installation needs.")
                                 await websocket.send_json({"type": "stt_error", "error": _stt_err})
                                 continue
                             text = stt_text

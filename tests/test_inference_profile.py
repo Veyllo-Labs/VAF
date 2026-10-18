@@ -567,3 +567,27 @@ def test_a_switch_releases_the_in_process_models(config, monkeypatch):
     assert a.llm is not None and b.llm is not None, "the local profile keeps its models"
     ip.apply("api")
     assert a.llm is None and b.llm is None
+
+
+def test_the_download_progress_class_takes_the_hubs_name_argument():
+    """huggingface_hub 1.1 to 1.9 pass `name=` to every progress class, and plain tqdm
+    refuses it (TqdmKeyError): the download failed before its first byte. MUTATION: forward
+    `name` again - red."""
+    from vaf.core.model_download_state import make_state_tqdm
+    bar = make_state_tqdm()(total=10, name="huggingface_hub.http_get", disable=False, unit="B")
+    bar.update(1)
+    bar.close()
+
+
+def test_an_api_provider_without_a_backend_still_runs_on_a_loaded_local_server(config):
+    """On the Full profile a turn whose API provider has no backend falls back to the local
+    server that is up, as load_model does; only under api is that server refused."""
+    from vaf.core import headless_runner as hr
+    from vaf.core.agent import Agent
+    agent = types.SimpleNamespace(provider="openai", api_backend=None, llm=None,
+                                  use_server=True, _api_init_error="no key")
+    agent._no_backend_reason = lambda: Agent._no_backend_reason(agent)
+    config["inference_profile"] = "local"
+    assert hr.turn_refusal_reason(agent, types.SimpleNamespace(source=None)) == ""
+    config["inference_profile"] = "api"
+    assert "without local models" in hr.turn_refusal_reason(agent, types.SimpleNamespace(source=None))

@@ -84,6 +84,13 @@ def make_state_tqdm(should_abort=None):
     state = MODEL_DOWNLOAD
 
     class _StateTqdm(_tqdm):  # type: ignore[misc]
+        def __init__(self, *args, **kwargs):
+            # huggingface_hub below 1.10 hands every progress class a `name` its own tqdm
+            # subclass understands and plain tqdm refuses (TqdmKeyError), which failed the
+            # download before its first byte; 1.10+ leaves it out for foreign classes.
+            kwargs.pop("name", None)
+            super().__init__(*args, **kwargs)
+
         def update(self, n=1):
             if should_abort is not None:
                 should_abort()

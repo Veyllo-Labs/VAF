@@ -353,3 +353,18 @@ def test_a_switch_that_raises_names_the_retry_and_exits_1(config, monkeypatch):
     said = " ".join(out.output.split())
     assert out.exit_code == 1 and isinstance(out.exception, SystemExit)
     assert "could not be switched" in said and "`vaf profile api --prune`" in said
+
+
+def test_no_hint_in_the_code_starts_the_stack_without_vafs_env_file():
+    """A hand-run `compose up` without ~/.vaf/compose.env recreates Redis without its password
+    and the browser without its stream credential. The docs and the installers were fixed
+    for it; a hint inside the code is the same advice. MUTATION: put the bare command back
+    into a message - red."""
+    offenders = []
+    for path in (ROOT / "vaf").rglob("*.py"):
+        if "vendor" in path.parts or "coder_templates" in path.parts:
+            continue
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if "docker-compose.memory.yml up" in line and "--env-file" not in line:
+                offenders.append(f"{path.relative_to(ROOT).as_posix()}:{n}: {line.strip()}")
+    assert offenders == []

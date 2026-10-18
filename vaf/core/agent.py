@@ -1255,20 +1255,25 @@ def release_disallowed_local_backends() -> int:
     """Free the in-process model of every live agent in this process once the profile is
     ``api`` (vaf/core/inference_profile.py). Returns how many were released; never raises.
 
-    The tray unloads the llama server, but the library lane (llama-cpp-python inside the
+    The switch stops the llama server, but the library lane (llama-cpp-python inside the
     process: Linux and Windows on Python below 3.13 without force_server, the installer's
     3.12 venv included) keeps its model on the agent, and nothing else freed it.
-    chat_step and complete() already refuse to run on it; this returns the memory. A
-    generation still running keeps its own reference and ends normally."""
+    chat_step and complete() already refuse to run on it; this returns the memory. The
+    cached tokenizer goes with it: it is a second Llama on the same GGUF (_get_tokenizer),
+    whose weights load despite n_ctx=1. A generation still running keeps its own reference
+    and ends normally."""
     from vaf.core import inference_profile
     if inference_profile.local_inference_allowed():
         return 0
     released = 0
     for agent in live_agents():
         try:
-            if getattr(agent, "llm", None) is not None:
-                agent.llm = None
-                released += 1
+            freed = False
+            for attr in ("llm", "_tokenizer_instance"):
+                if getattr(agent, attr, None) is not None:
+                    setattr(agent, attr, None)
+                    freed = True
+            released += int(freed)
         except Exception:
             continue
     if released:
@@ -3128,6 +3133,12 @@ class Agent:
         Caches the instance to avoid re-initialization.
         When use_server is True we must never load the library (~8–18 GB); caller uses estimation or server /tokenize.
         """
+        # An installation without local models (inference_profile = api) loads none for
+        # counting either, also when the provider still reads "local" by hand, and does not
+        # count with one cached before the switch.
+        from vaf.core import inference_profile
+        if not inference_profile.local_inference_allowed():
+            return None
         if self._tokenizer_instance:
             return self._tokenizer_instance
         if getattr(self, "use_server", False):
@@ -5349,6 +5360,13 @@ class Agent:
             UI.error("llama-cpp-python not found. Run 'vaf install-gpu' to fix.")
             sys.exit(1)
 
+        # The profile again, right before the load: everything above can wait for a long
+        # time (a download, a server that never came), and a switch made meanwhile found no
+        # model to release (release_disallowed_local_backends).
+        if not inference_profile.local_inference_allowed():
+            UI.event("Backend", inference_profile.refuse("the local model"), style="warning")
+            return
+
         UI.event("System", f"Loading Library: {self.filename}...", style="dim")
         try:
             append_domain_log("backend", "LIBRARY_LOAD main model (force_server was False)")
@@ -5402,6 +5420,13 @@ class Agent:
             UI.error(f"Init failed: {e}")
             self.llm = Llama(model_path=self.model_path, n_gpu_layers=0, n_ctx=n_ctx, verbose=False)
             UI.event("System", "CPU Mode Active", style="warning")
+        # ...and after it: a switch made during the load (seconds to minutes) released
+        # nothing either, because self.llm is set only now. The switch writes the profile
+        # before it releases, so whichever of the two comes second sees the other - without
+        # holding the switch's lock for the length of a load.
+        if self.llm is not None and not inference_profile.local_inference_allowed():
+            self.llm = None
+            UI.event("Backend", inference_profile.refuse("the local model"), style="warning")
 
     def ensure_model_exists(self):
         """Make sure the model GGUF is on disk (download if missing) via the shared, locked, self-healing

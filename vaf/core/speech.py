@@ -634,9 +634,10 @@ $player.Close()
         # Docker/Chatterbox TTS: HTTP service (e.g. Piper in Docker or Chatterbox).
         # New: Multi-language All-in-One container uses /synthesize endpoint with language auto-detection.
         if preferred_engine in ("docker", "chatterbox"):
+            from vaf.core import speech_client
             # Chatterbox has its own URL config
             if preferred_engine == "chatterbox":
-                url = (Config.get("speech_tts_chatterbox_url") or "http://localhost:4123").strip().rstrip("/")
+                url = speech_client.chatterbox_base_url()
             else:
                 # Use the single TTS URL - multi-lang container handles language internally
                 url = (Config.get("speech_tts_docker_url") or "http://localhost:5002").strip().rstrip("/")
@@ -646,7 +647,6 @@ $player.Close()
             if url:
                 # Shared client: /synthesize POST with legacy direct-POST +
                 # base64-JSON fallback preserved (never raises, returns None).
-                from vaf.core import speech_client
                 body = speech_client.synthesize_docker(clean_text, lang_short, want_format="wav", base_url=url)
                 if body:
                     print(f"[TTS Debug] SUCCESS - returning WAV audio ({len(body)} bytes)")

@@ -36,8 +36,9 @@ the code:
 - the failover chain, whose local link is left out (``APIBackendManager``);
 - a running agent and a running server: ``Agent.chat_step`` and ``Agent.complete`` (with
   the shared ``completion.complete``) refuse a local backend that was loaded before a
-  switch, and the tray unloads the local model as it does for an API provider; an
-  in-process model is released by the switch (``agent.release_disallowed_local_backends``).
+  switch; the switch stops the llama server (``backend.stop_local_server``: the desktop
+  tray unloads it too, but only the tray runs that watchdog) and releases an in-process
+  model (``agent.release_disallowed_local_backends``).
 
 A setting that names a local lane while the profile is ``api`` is not refused when it is
 written: ``config.json`` stays editable by hand, and the choke points above are the
@@ -148,13 +149,15 @@ def without_profile_key(payload: Dict) -> Dict:
 def apply(profile: str, *, prune: bool = False, stack: bool = True) -> Dict:
     """Switch the installation to ``profile`` - the one implementation behind `vaf profile`
     and the web settings. Writes the key, then (unless ``stack`` is False, the installers'
-    case) stops the speech containers for ``api`` (``prune`` also removes their containers,
-    images and volumes) or starts the stack with them for ``local``.
+    case) stops the local model server and the speech containers for ``api`` (``prune``
+    also removes the containers, images and volumes) or starts the stack with them for
+    ``local``.
 
     The key is written first, deliberately, and stays written when the stop fails: every
     choke point above reads it, so downloads and the local server are refused from that
     moment, and keeping the old profile because Docker did not answer would leave them
-    open too. A stop, removal or start that failed is in ``errors``; callers treat a non-empty
+    open too. A stop (of the server or a container), removal or start that failed is in
+    ``errors``; callers treat a non-empty
     ``errors`` as an incomplete switch (`vaf profile` exits 1, the web switch reports it).
 
     Raises ValueError as ``validate`` does. Returns
@@ -184,9 +187,10 @@ def _apply_locked(wanted: str, prune: bool, stack: bool) -> Dict:
         from vaf.core import service_stack
         if wanted == API:
             _release_in_process_models()
+            server_error = _stop_local_server()
             result = service_stack.retire_local_inference_services(prune=prune)
             out.update({"stopped": result["stopped"], "removed": result["removed"],
-                        "errors": result["errors"]})
+                        "errors": ([server_error] if server_error else []) + result["errors"]})
         else:
             out["started"] = bool(service_stack.ensure_service_stack())
             # Without a compose file (a pip install) there is no stack to start, which is
@@ -208,6 +212,16 @@ def _release_in_process_models() -> None:
     agent_module = sys.modules.get("vaf.core.agent")
     if agent_module is not None:
         agent_module.release_disallowed_local_backends()
+
+
+def _stop_local_server() -> str:
+    """The llama server, from whichever process started it (``backend.stop_local_server``).
+    Returns why it is still running, or "". Never raises: the profile is already written."""
+    try:
+        from vaf.core.backend import stop_local_server
+        return stop_local_server()
+    except Exception as e:      # noqa: BLE001 - reported to the caller
+        return f"The local model server could not be stopped: {e}"
 
 
 def conflicts(config: Optional[Dict] = None) -> List[str]:

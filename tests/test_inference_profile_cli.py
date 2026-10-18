@@ -21,6 +21,13 @@ from vaf.core import service_stack as ss
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _no_real_server_stop(monkeypatch):
+    """apply() stops the llama server its pid file names: never a real one from here."""
+    from vaf.core import inference_profile
+    monkeypatch.setattr(inference_profile, "_stop_local_server", lambda: "")
+
+
 @pytest.fixture
 def config(monkeypatch):
     from vaf.core.config import Config

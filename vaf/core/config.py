@@ -1368,6 +1368,12 @@ class Config:
         Return a copy of config safe to send to a given user. Admins get the full config.
         Non-admins get connection data scoped to their user_scope_id only (no other users' mail, telegram, whatsapp, etc.).
         """
+        # The profile as every choke point reads it (inference_profile.current: trimmed, any
+        # case, anything else is local), not the raw value: the settings compare it with
+        # "api", and a hand-written " API " showed them the full profile on a lean server.
+        if "inference_profile" in config:
+            from vaf.core import inference_profile
+            config = {**config, "inference_profile": inference_profile.current(config)}
         if (role or "").lower() == "admin":
             # Full config MINUS every secret VALUE - for admins too. Secrets are WRITE-ONLY
             # through the config API: state travels as booleans and lossy hints via

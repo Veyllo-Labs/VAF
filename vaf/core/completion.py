@@ -120,8 +120,8 @@ def _local_complete(messages, model, max_tokens, temperature, timeout,
     """One non-streaming call against the ONE local llama server. Never starts it.
 
     None on an installation without local models (inference_profile = api): a server
-    started before a switch may still be running until the tray unloads it, and no
-    completion may run on it meanwhile."""
+    started before a switch may still be running until the switch has stopped it (or a
+    stop failed), and no completion may run on it meanwhile."""
     import requests
 
     from vaf.core import inference_profile

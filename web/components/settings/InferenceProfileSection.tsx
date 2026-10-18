@@ -122,10 +122,17 @@ export default function InferenceProfileSection({ onChanged, currentProfile }: {
     }, [data?.switch?.running, followSwitch]);
 
     // A switch that ended while this section was unmounted (its follow loop stops with it), or
-    // one made in another tab or the terminal: the caller still shows the old profile.
+    // one made in another tab or the terminal: the caller still shows the old profile. Once per
+    // loaded state: the caller reloads its configuration on it, and when that brings back a
+    // profile this state does not hold (it went stale: a switch in the terminal after it
+    // loaded), reporting again on every reload never ended.
+    const reportedFor = useRef<ProfileState | null>(null);
     useEffect(() => {
-        if (!data || data.switch?.running || !currentProfile) return;
-        if ((currentProfile === 'api' ? 'api' : 'local') !== data.profile) onChangedRef.current?.(data.profile);
+        if (!data || data.switch?.running || !currentProfile || reportedFor.current === data) return;
+        if ((currentProfile === 'api' ? 'api' : 'local') !== data.profile) {
+            reportedFor.current = data;
+            onChangedRef.current?.(data.profile);
+        }
     }, [data, currentProfile]);
 
     const target: 'local' | 'api' = data?.profile === 'api' ? 'local' : 'api';

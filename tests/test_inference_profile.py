@@ -20,6 +20,13 @@ from vaf.core import service_health as sh
 from vaf.core import service_stack as ss
 
 
+@pytest.fixture(autouse=True)
+def _no_real_server_stop(monkeypatch):
+    """apply() stops the llama server its pid file names: never a real one from here."""
+    from vaf.core import inference_profile
+    monkeypatch.setattr(inference_profile, "_stop_local_server", lambda: "")
+
+
 @pytest.fixture
 def config(monkeypatch):
     """Config values for this test only, the rest from the real defaults."""
@@ -210,6 +217,25 @@ def test_text_to_speech_never_falls_back_to_a_container_under_the_api_profile(co
     manager._clean_markdown = lambda text: text
     assert manager.synthesize_audio("Hallo", "de", force_engine="docker") is None
     assert reached == []
+
+
+def test_the_messengers_speak_through_a_chatterbox_server_under_the_api_profile(config,
+                                                                              monkeypatch):
+    """A TTS server the admin runs elsewhere stays usable without local models; the voice
+    replies in the messengers (speech_client.synthesize) refused it with the container.
+    MUTATION: refuse every engine again, or send chatterbox to the container's URL - red."""
+    from vaf.core import speech_api, speech_client
+    config.update({"inference_profile": "api", "speech_tts_engine": " Chatterbox ",
+                   "speech_tts_chatterbox_url": "http://tts.example:4123/",
+                   "speech_tts_docker_url": "http://localhost:5002"})
+    monkeypatch.setattr(speech_api, "select_tts_backend", lambda: (None, None))
+    reached = []
+    monkeypatch.setattr(speech_client, "synthesize_docker",
+                        lambda text, lang, want_format="wav", base_url=None:
+                        reached.append(base_url) or b"OggS")
+    assert speech_client.synthesize("Hallo", "de", want_format="ogg",
+                                    docker_url="http://localhost:5002") == b"OggS"
+    assert reached == ["http://tts.example:4123"]
 
 
 def test_a_local_lane_on_an_api_installation_is_named_not_refused(config):
@@ -545,13 +571,15 @@ class _LiveAgent:
 
     def __init__(self):
         self.llm = object()
+        self._tokenizer_instance = object()
 
 
 def test_a_switch_releases_the_in_process_models(config, monkeypatch):
-    """The tray unloads the llama server; an in-process model (the library lane, the
+    """The switch stops the llama server; an in-process model (the library lane, the
     installer's Python 3.12 venv on Linux among them) stayed in memory after a switch to api,
-    refused but loaded. apply() releases it in this process. MUTATION: drop the release
-    from apply, or release under local too - red."""
+    refused but loaded, and so did the tokenizer cached for counting, a second Llama on the
+    same GGUF. apply() releases both in this process. MUTATION: drop the release from apply,
+    release under local too, or leave the tokenizer - red."""
     from vaf.core import agent as agent_mod
     from vaf.core.config import Config
     monkeypatch.setattr(Config, "set", staticmethod(lambda k, v: config.__setitem__(k, v)))
@@ -565,8 +593,192 @@ def test_a_switch_releases_the_in_process_models(config, monkeypatch):
     assert agent_mod.release_disallowed_local_backends() == 0 and a.llm is not None
     ip.apply("local")
     assert a.llm is not None and b.llm is not None, "the local profile keeps its models"
+    assert a._tokenizer_instance is not None
     ip.apply("api")
     assert a.llm is None and b.llm is None
+    assert a._tokenizer_instance is None and b._tokenizer_instance is None
+
+
+def test_the_api_switch_stops_the_llama_server(config, monkeypatch):
+    """Only the desktop tray's watchdog unloaded the server: under `vaf server` (no display)
+    and the macOS app it stayed loaded after a switch to api. A stop that failed leaves the
+    switch incomplete. MUTATION: drop the stop from apply, stop under local or --no-stack
+    too, or drop its error - red."""
+    from vaf.core.config import Config
+    monkeypatch.setattr(Config, "set", staticmethod(lambda k, v: config.__setitem__(k, v)))
+    monkeypatch.setattr(Config, "load", staticmethod(lambda: {}))
+    monkeypatch.setattr(ss, "retire_local_inference_services",
+                        lambda prune=False, log=None: {"stopped": True, "removed": [],
+                                                       "errors": ["containers"]})
+    monkeypatch.setattr(ss, "ensure_service_stack", lambda log=None: True)
+    stops = []
+    monkeypatch.setattr(ip, "_stop_local_server", lambda: stops.append(1) or "server")
+    assert ip.apply("local")["errors"] == [] and stops == []
+    assert ip.apply("api")["errors"] == ["server", "containers"] and stops == [1]
+    ip.apply("api", stack=False)
+    assert stops == [1], "the installers write the setting before anything runs"
+
+
+def _sleeper(*marker):
+    """A process that looks like a llama server to the identity check when marked."""
+    import sys
+    import time as _time
+
+    from vaf.core.backend import ServerManager
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", *marker])
+    # The command line shows up only once the child has exec'd; before that it is ours.
+    deadline = _time.monotonic() + 10
+    while marker and not ServerManager(skip_cleanup=True)._looks_like_llama_server(proc.pid):
+        assert _time.monotonic() < deadline, "the stand-in never showed its command line"
+        _time.sleep(0.05)
+    return proc
+
+
+@pytest.fixture
+def pid_home(monkeypatch, tmp_path):
+    """A home whose ~/.vaf/server.pid the test writes (HOME, and USERPROFILE for Windows)."""
+    pytest.importorskip("psutil")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    (tmp_path / ".vaf").mkdir()
+    return tmp_path / ".vaf" / "server.pid"
+
+
+def test_stop_local_server_stops_the_server_its_pid_file_names(pid_home):
+    """From any process, also a terminal running `vaf profile api`. MUTATION: drop the stop -
+    red."""
+    from vaf.core.backend import stop_local_server
+    proc = _sleeper("llama-server")
+    try:
+        pid_home.write_text(str(proc.pid))
+        assert stop_local_server() == ""
+        assert proc.wait(5) is not None
+        assert not pid_home.exists()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+def test_stop_local_server_leaves_alone_what_is_no_llama_server(pid_home):
+    """A pid file left behind (a crash, a reboot) can name any process by now. MUTATION: drop
+    the identity check - red."""
+    import time as _time
+
+    from vaf.core.backend import stop_local_server
+    proc = _sleeper()
+    try:
+        pid_home.write_text(str(proc.pid))
+        assert stop_local_server() == ""
+        _time.sleep(0.5)
+        assert proc.poll() is None, "an unrelated process was killed"
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_stop_local_server_says_when_the_server_is_still_running(pid_home, monkeypatch):
+    """MUTATION: report every stop as done - red."""
+    from vaf.core import backend
+    monkeypatch.setattr(backend.ServerManager, "stop_server",
+                        lambda self, force_external=False: None)
+    proc = _sleeper("llama-server")
+    try:
+        pid_home.write_text(str(proc.pid))
+        assert str(proc.pid) in backend.stop_local_server(wait=0.3)
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_no_tokenizer_is_loaded_under_the_api_profile(config, monkeypatch, tmp_path):
+    """_get_tokenizer loaded the whole GGUF in-process just to count tokens when the provider
+    still read "local" by hand, and counted with one cached before a switch. MUTATION: drop
+    its profile check, or check after the cache - red."""
+    import sys
+
+    from vaf.core.agent import Agent
+    gguf = tmp_path / "m.gguf"
+    gguf.write_bytes(b"x")
+    loaded = []
+    fake_llama = types.ModuleType("llama_cpp")
+    fake_llama.Llama = lambda **k: loaded.append(k) or object()
+    monkeypatch.setitem(sys.modules, "llama_cpp", fake_llama)
+    agent = types.SimpleNamespace(_tokenizer_instance=None, use_server=False, api_backend=None,
+                                  provider="local", model_path=str(gguf))
+    config["inference_profile"] = "api"
+    assert Agent._get_tokenizer(agent) is None and loaded == []
+    agent._tokenizer_instance = "cached before the switch"
+    assert Agent._get_tokenizer(agent) is None
+    config["inference_profile"] = "local"
+    assert Agent._get_tokenizer(agent) == "cached before the switch"
+
+
+def _library_lane(monkeypatch, tmp_path, *, on_probe=None, on_load=None):
+    """An agent at the in-process library load (llama-cpp-python on Linux below Python 3.13),
+    with the hooks a switch can land in: the :8080 probe right before the load, and the load."""
+    import sys
+
+    from vaf.core import agent as agent_mod
+    from vaf.core import gpu_detection, user_notifications
+    gguf = tmp_path / "m.gguf"
+    gguf.write_bytes(b"x")
+    constructed = []
+
+    class _Llama:
+        def __init__(self, **kwargs):
+            if on_load:
+                on_load()
+            constructed.append(kwargs)
+
+    fake_llama = types.ModuleType("llama_cpp")
+    fake_llama.Llama = _Llama
+    monkeypatch.setitem(sys.modules, "llama_cpp", fake_llama)
+    monkeypatch.setattr(agent_mod, "sys", types.SimpleNamespace(
+        version_info=types.SimpleNamespace(major=3, minor=12), stderr=sys.stderr,
+        exit=sys.exit, executable=sys.executable))
+    monkeypatch.setattr(agent_mod.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(gpu_detection, "get_primary_gpu", lambda: None)
+    monkeypatch.setattr(agent_mod, "append_domain_log", lambda *a, **k: None)
+    monkeypatch.setattr(user_notifications, "append_notification", lambda *a, **k: None)
+
+    def _probe(*a, **k):
+        if on_probe:
+            on_probe()
+        raise ConnectionError("nothing on :8080")
+
+    monkeypatch.setattr(agent_mod.requests, "get", _probe)
+    agent = types.SimpleNamespace(provider="local", config={"force_server": False},
+                                  model_path=str(gguf), filename="m.gguf", verbose=True,
+                                  llm=None)
+    return agent, constructed
+
+
+def test_a_switch_before_the_library_load_stops_it(config, monkeypatch, tmp_path):
+    """The check at the top of load_model ran before every wait below it; a switch made
+    meanwhile found no model to release, and the load went ahead. MUTATION: drop the check
+    right before the load - red."""
+    from vaf.core.agent import Agent
+    config["inference_profile"] = "local"
+    agent, constructed = _library_lane(
+        monkeypatch, tmp_path, on_probe=lambda: config.__setitem__("inference_profile", "api"))
+    Agent.load_model(agent, skip_download_check=True)
+    assert constructed == [] and agent.llm is None
+
+
+def test_a_switch_during_the_library_load_releases_it(config, monkeypatch, tmp_path):
+    """The switch released nothing while the load ran, because the model is set on the agent
+    only once it is loaded. MUTATION: drop the check after the load - red."""
+    from vaf.core.agent import Agent
+    config["inference_profile"] = "local"
+    agent, constructed = _library_lane(
+        monkeypatch, tmp_path, on_load=lambda: config.__setitem__("inference_profile", "api"))
+    Agent.load_model(agent, skip_download_check=True)
+    assert len(constructed) == 1 and agent.llm is None
+    config["inference_profile"] = "local"
+    agent2, _ = _library_lane(monkeypatch, tmp_path)
+    Agent.load_model(agent2, skip_download_check=True)
+    assert agent2.llm is not None, "without a switch the model stays loaded"
 
 
 def test_the_download_progress_class_takes_the_hubs_name_argument():
@@ -591,3 +803,16 @@ def test_an_api_provider_without_a_backend_still_runs_on_a_loaded_local_server(c
     assert hr.turn_refusal_reason(agent, types.SimpleNamespace(source=None)) == ""
     config["inference_profile"] = "api"
     assert "without local models" in hr.turn_refusal_reason(agent, types.SimpleNamespace(source=None))
+
+
+@pytest.mark.parametrize("role", ["admin", "user"])
+def test_the_settings_get_the_profile_as_the_server_reads_it(role):
+    """The settings compare the key with "api": a hand-written " API " showed them the full
+    profile on a lean server, and the profile section reloaded the page over the difference.
+    MUTATION: send the raw value again - red."""
+    from vaf.core.config import Config
+    assert Config.config_for_user({"inference_profile": " API "}, None, role)[
+        "inference_profile"] == "api"
+    assert Config.config_for_user({"inference_profile": "lokal"}, None, role)[
+        "inference_profile"] == "local"
+    assert "inference_profile" not in Config.config_for_user({}, None, role)

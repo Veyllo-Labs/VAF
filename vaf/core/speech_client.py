@@ -114,6 +114,11 @@ def _tts_base_url() -> str:
     return (Config.get("speech_tts_docker_url") or "http://localhost:5002").strip().rstrip("/")
 
 
+def chatterbox_base_url() -> str:
+    """The TTS server of the ``chatterbox`` engine, one the admin runs elsewhere."""
+    return (Config.get("speech_tts_chatterbox_url") or "http://localhost:4123").strip().rstrip("/")
+
+
 # ---------------------------------------------------------------------------
 # STT
 # ---------------------------------------------------------------------------
@@ -256,9 +261,15 @@ def synthesize(
     except Exception as e:
         logger.warning("TTS provider lane error: %s", e)
     # Without local models (inference_profile = api) the container this falls back to does
-    # not run: the provider's audio, or nothing.
+    # not run. A TTS server the admin runs elsewhere (speech_tts_engine = chatterbox)
+    # downloads nothing here and is the lane left, as in SpeechManager.synthesize_audio;
+    # otherwise the provider's audio, or nothing.
     from vaf.core import inference_profile
     if not inference_profile.local_inference_allowed():
+        engine = str(Config.get("speech_tts_engine", "docker") or "docker").strip().lower()
+        if engine == "chatterbox":
+            return synthesize_docker(text, lang, want_format=want_format,
+                                     base_url=chatterbox_base_url())
         logger.warning("TTS: %s", inference_profile.refusal("the text-to-speech container"))
         return None
     return synthesize_docker(text, lang, want_format=want_format, base_url=docker_url)

@@ -59,14 +59,14 @@ Afterwards:
 
 ```bash
 vaf profile                # the profile, the services it runs, what contradicts it
-vaf profile api            # switch: the speech containers stop
+vaf profile api            # switch: the local model server and the speech containers stop
 vaf profile api --prune    # ... and their containers, images and volumes are removed
 vaf profile local          # switch back: the speech containers start again
 ```
 
 The profile is written first and holds from that moment, also when the speech containers
-cannot be stopped (Docker does not answer): the downloads and the local server are refused
-either way. `vaf profile api` then names what failed and exits with 1, the installers warn
+(Docker does not answer) or the model server cannot be stopped: the downloads and the local
+server are refused either way. `vaf profile api` then names what failed and exits with 1, the installers warn
 on that, and the same command run again finishes the stop.
 
 `--prune` frees the disk the speech containers took (their images and the models in their
@@ -111,11 +111,15 @@ each, not by checks spread over the code:
   an API provider whose backend could not be built (no key, a failed setup), on either
   profile (`turn_refusal_reason` in `headless_runner.py`). An agent that loaded a local
   model before the profile was switched does not run its next turn on it, nor a one-shot
-  completion (`Agent.complete`, the shared `completion.complete`), and the tray
-  unloads the model as it does for an API provider. A model loaded inside the process
-  (the llama-cpp library lane, which the installer's Python 3.12 venv on Linux takes) is
-  released by the switch itself, or at the next turn when the switch came from another
-  process (`release_disallowed_local_backends`).
+  completion (`Agent.complete`, the shared `completion.complete`). The switch stops the
+  llama server, from whichever process started it (`backend.stop_local_server`, which
+  checks that the pid in its pid file really is a llama server): the desktop tray unloads
+  it too, but only the tray runs that watchdog, so under `vaf server` and the macOS app
+  nothing else did. A model loaded inside the process (the llama-cpp library lane, which
+  the installer's Python 3.12 venv on Linux takes) and the tokenizer cached for counting
+  tokens are released by the switch itself, or at the next turn when the switch came from
+  another process (`release_disallowed_local_backends`); a load that was still running
+  when the profile changed reads it again before and after it loads.
 - The failover chain leaves its local link out; a backup API provider stays.
 - `service_stack.needed_services` leaves the speech containers out. The stack start, the
   status, the repair, `vaf top` and the installers read this one list: a container the
@@ -127,7 +131,9 @@ each, not by checks spread over the code:
 - Text-to-speech uses the provider first. When it gives no audio, the two local lanes
   stay unused: the container (`docker`) does not run, and the Piper lane, which downloads
   its binary and voices, is skipped. Two lanes that download nothing here stay usable: a
-  TTS server you run elsewhere (`speech_tts_engine = chatterbox`) and the macOS voice.
+  TTS server you run elsewhere (`speech_tts_engine = chatterbox`), which also speaks the
+  voice replies in the messengers (`speech_client.synthesize`, which on the Full profile
+  falls back to the container), and the macOS voice.
 
 ## A setting that contradicts the profile
 

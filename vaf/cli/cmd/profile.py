@@ -112,9 +112,11 @@ def profile_cmd(
         UI.warning(sentence)
     if result["errors"]:
         # The profile holds from the moment it is written; what did not happen is the
-        # container part of the switch. The retry names the same request, --prune included:
-        # a plain retry would stop the containers and leave the images on the disk. A
-        # non-zero exit says so to the installers, which warn on it.
+        # stop or start part of the switch (the containers, the local model server). The
+        # retry names the same request, --prune included: a plain retry would stop the
+        # containers and leave the images on the disk. A non-zero exit says so to the
+        # installers, which warn on it.
         retry = f"vaf profile {wanted}" + (" --prune" if prune else "")
-        UI.error(f"The switch is not complete: run `{retry}` again once Docker answers.")
+        UI.error(f"The switch is not complete: run `{retry}` again once the problem above "
+                 "is fixed.")
         raise typer.Exit(1)

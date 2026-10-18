@@ -186,6 +186,32 @@ def ensure_local_model(model_path: str, reason: str = "", skip_provider_gate: bo
             return False
 
 
+def stop_local_server(wait: float = 3.0) -> str:
+    """Stop the ONE llama server from any process: the one its pid file names, and only when
+    that pid really is a llama server (a stale file after a reboot can name anyone). For a
+    switch to the ``api`` inference profile, which may come from a terminal: the desktop
+    tray's watchdog unloads the server too, but nothing else did - under ``vaf server`` (no
+    display) and the macOS app the model stayed loaded, up to 17.9 GB. Returns "" when it
+    stopped or none ran, else why it is still running."""
+    mgr = ServerManager(skip_cleanup=True)
+    try:
+        with open(mgr.pid_file, "r", encoding="utf-8") as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return ""
+    if not mgr._looks_like_llama_server(pid):
+        return ""
+    mgr.stop_server(force_external=True)
+    # A killed child of another process stays a zombie until that process reaps it; it
+    # holds no memory, and _looks_like_llama_server answers False for it.
+    deadline = time.monotonic() + wait
+    while mgr._looks_like_llama_server(pid):
+        if time.monotonic() >= deadline:
+            return f"The local model server (PID {pid}) did not stop."
+        time.sleep(0.1)
+    return ""
+
+
 def ensure_model_available(model_name, models_dir) -> str:
     """Resolve a model ref (auto / repo/file / known bare filename) and make sure its GGUF is on disk,
     downloading it from HuggingFace when missing -- then return the local path. THE single model-download

@@ -197,8 +197,19 @@ export default function LoginPage() {
                     // If we're in the middle of onboarding (e.g. refresh after 2FA), stay and show Soul/Connections
                     if (typeof window !== 'undefined' && sessionStorage.getItem('vaf_onboarding') === 'true') {
                         const savedStep = sessionStorage.getItem('vaf_onboarding_step') as 'soul_wizard' | 'veyllo_api' | null;
-                        setStep(savedStep === 'veyllo_api' ? 'veyllo_api' : 'soul_wizard');
-                        setCheckingSetup(false);
+                        // The resumed steps need the profile as the first visit had it, but
+                        // /needs-setup stops answering it once the admin exists; the admin's own
+                        // endpoint does. The step waits for it, so a Lean installation never
+                        // flashes the local texts.
+                        fetch(`${apiPrefix}/api/system/inference-profile`, { credentials: 'include', cache: 'no-store' })
+                            .then((r) => (r.ok ? r.json() : null))
+                            .then((d) => { if (!cancelled && typeof d?.profile === 'string') setSetupProfile(d.profile); })
+                            .catch(() => {})
+                            .finally(() => {
+                                if (cancelled) return;
+                                setStep(savedStep === 'veyllo_api' ? 'veyllo_api' : 'soul_wizard');
+                                setCheckingSetup(false);
+                            });
                         return;
                     }
                     // Circuit breaker: if we land on /login and bounce to / repeatedly within a

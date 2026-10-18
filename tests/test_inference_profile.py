@@ -313,3 +313,27 @@ def test_speaking_through_piper_downloads_nothing_under_the_api_profile(config, 
     monkeypatch.setattr(speech.threading, "Thread", _Now)
     monkeypatch.setattr(speech.platform, "system", lambda: "Linux")
     manager.speak("Hallo", "de")
+
+
+def test_a_refused_turn_is_stored_so_a_reload_keeps_it(tmp_path, monkeypatch):
+    """A web turn on an installation without local models and without a provider is
+    answered with the reason. Both the message and the reason used to live only in the
+    browser: a reload lost them. MUTATION: drop the save in refuse_turn_without_backend,
+    or answer the turn inline in the runner again - red."""
+    import inspect
+
+    from vaf.core import headless_runner as hr
+    from vaf.core.session import SessionManager
+    emitted = []
+    monkeypatch.setattr(hr, "get_web_interface", lambda: types.SimpleNamespace(
+        emit_agent_message=lambda role, text, session_id=None: emitted.append(text),
+        emit_message_complete=lambda content=None, session_id=None: emitted.append("done")))
+    mgr = SessionManager(storage_dir=str(tmp_path))
+    task = types.SimpleNamespace(session_id="green123456", input_text="  hello  ")
+    hr.refuse_turn_without_backend(task, ip.refusal("the local model"), mgr)
+    hr.refuse_turn_without_backend(task, ip.refusal("the local model"), mgr)
+    stored = mgr.load("green123456").messages
+    assert [(m.role, m.content) for m in stored] == [
+        ("user", "hello"), ("assistant", ip.refusal("the local model"))] * 2
+    assert emitted[1] == "done"
+    assert "refuse_turn_without_backend(" in inspect.getsource(hr.run_headless_agent)

@@ -320,16 +320,21 @@ When a runtime is present (or has just been set up), the installer manages the s
 3. **Wait for Readiness**: The installer polls until the daemon is responsive (up to ~60–120s on a first Colima boot).
 4. **Apply Changes - two-phase**: it brings up the core registry-image services first
    (`postgres redis stt gotenberg`) so a slow local build of `tts`/`vaf-browser` can never block the
-   database the app needs to boot, then starts those optional services best-effort with `--build`.
-   The installer does not keep this list itself: it asks `vaf profile --services core` and
+   database the app needs to boot, then starts those optional services best-effort with a plain
+   `up -d`, which builds an image only when it is missing (VAF's own start adds `--build`, see
+   below). The installer does not keep this list itself: it asks `vaf profile --services core` and
    `--services optional`, so the `api` profile leaves `stt` and `tts` out here as well
-   (`tests/test_inference_profile_cli.py` refuses a service list written into an installer).
+   (`tests/test_inference_profile_cli.py` refuses a service list written into an installer). Every
+   one of these calls passes `--env-file ~/.vaf/compose.env` when the file exists, so an upgrade
+   keeps the Redis password and the browser's stream credential (the same test refuses a call
+   without it); a first install has no file yet, and VAF's first start writes it and recreates the
+   two containers.
    `up -d`:
    - Starts new services (e.g., Gotenberg after an update that adds it)
    - Recreates services whose configuration changed
    - Leaves unchanged, running services untouched
-   - Does NOT rebuild local images on its own, which is why `tts` and `vaf-browser` are started
-     with `--build`: they are built from this repository rather than pulled, so without it a
+   - Does NOT rebuild local images on its own, which is why VAF's own start runs `tts` and
+     `vaf-browser` with `--build`: they are built from this repository rather than pulled, so without it a
      checkout that moves ahead of its images keeps running the old ones and nothing says so.
      An unchanged build context is a cache hit and costs seconds. Note that `vaf update` never
      builds an image either, so an image cannot be repaired by updating.

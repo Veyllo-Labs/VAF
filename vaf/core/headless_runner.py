@@ -633,6 +633,31 @@ def deliver_stray_room_answer(agent, room_wake: dict, answer, hist_before: int) 
         return False
 
 
+def refuse_turn_without_backend(task, why: str, session_mgr) -> None:
+    """Close a turn that has no backend on this installation (inference_profile = api and
+    no provider yet): the reason goes to the chat and the turn ends. The exchange is
+    stored like any turn's, so a reload shows the message and why it got no answer
+    instead of losing both. Never raises."""
+    try:
+        get_web_interface().emit_agent_message("assistant", why, session_id=task.session_id)
+        get_web_interface().emit_message_complete(content=why, session_id=task.session_id)
+    except Exception:
+        pass
+    try:
+        try:
+            session = session_mgr.load(task.session_id)
+        except FileNotFoundError:
+            session = Session(id=task.session_id, name=task.session_id)
+        text = str(getattr(task, "input_text", "") or "").strip()
+        if text:
+            session.add_message(role="user", content=text)
+        session.add_message(role="assistant", content=why)
+        session_mgr.save(session, sync_state=False)
+    except Exception as e:
+        append_domain_log_always("headless", f"refused turn not stored for {task.session_id}: "
+                                             f"{type(e).__name__}: {e}")
+
+
 def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
     """
     Run a headless agent loop that processes tasks from the TaskQueue.
@@ -1274,14 +1299,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         # anyway ended in "[Error] No response was produced" under the
                         # reason. A messenger turn keeps its own lane: an admin's setup
                         # message is not for whoever wrote in.
-                        _why = inference_profile.refusal("the local model")
-                        try:
-                            get_web_interface().emit_agent_message(
-                                "assistant", _why, session_id=task.session_id)
-                            get_web_interface().emit_message_complete(
-                                content=_why, session_id=task.session_id)
-                        except Exception:
-                            pass
+                        refuse_turn_without_backend(
+                            task, inference_profile.refusal("the local model"), session_mgr)
                         tq.task_done()
                         continue
                     if not _no_local and agent.provider == "local" and not agent.api_backend and not agent.llm and not agent.use_server:

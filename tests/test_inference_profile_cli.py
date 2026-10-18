@@ -133,6 +133,30 @@ def test_retiring_names_only_the_speech_services_and_their_own_volumes(monkeypat
     assert stop[-2:] == ["stt", "tts"]
 
 
+def test_a_docker_cli_without_the_compose_plugin_falls_back_like_the_start(monkeypatch,
+                                                                           tmp_path):
+    """Homebrew docker + Colima has no compose plugin but a standalone docker-compose; the
+    stack start falls back to it, the retire used to fail there for good (and `vaf profile
+    api` would ask to run it again forever). MUTATION: drop the fallback - red."""
+    (tmp_path / ss.COMPOSE_FILENAME).write_text("services: {}\n", encoding="utf-8")
+    monkeypatch.setattr(ss, "find_stack_root", lambda: tmp_path)
+    monkeypatch.setattr(ss, "resolve_docker_exe", lambda: "docker")
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(list(cmd))
+        if cmd[:2] == ["docker", "compose"]:
+            return subprocess.CompletedProcess(cmd, 125, "", "unknown shorthand flag: 'f' in -f\n")
+        out = json.dumps({"services": {}, "volumes": {}}) if "config" in cmd else ""
+        return subprocess.CompletedProcess(cmd, 0, out, "")
+
+    monkeypatch.setattr(ss.subprocess, "run", fake_run)
+    result = ss.retire_local_inference_services(prune=True)
+    assert result["stopped"] is True and result["errors"] == []
+    assert [c[0] for c in seen if "stop" in c or "config" in c or "rm" in c] == \
+        ["docker", "docker-compose", "docker-compose", "docker-compose"]
+
+
 def test_a_compose_config_that_fails_is_reported_not_taken_as_nothing_to_remove(
         monkeypatch, tmp_path):
     """A failed `compose config` prints nothing on stdout, which parsed as an empty config:
@@ -167,6 +191,27 @@ def test_no_installer_keeps_its_own_list_of_services(installer):
             continue
         words = set(re.findall(r"[A-Za-z][\w-]*", line))
         if words & names:
+            offenders.append(f"{installer}:{n}: {line.strip()}")
+    assert offenders == []
+
+
+@pytest.mark.parametrize("installer, env_args", [
+    ("install.sh", '"${COMPOSE_ENV_ARGS[@]}"'),
+    ("install.ps1", "@composeEnvArgs"),
+])
+def test_every_installer_compose_up_passes_vafs_env_file(installer, env_args):
+    """VAF keeps the Redis password and the browser's stream credential in
+    ~/.vaf/compose.env, which compose reads only with --env-file. An installer `up`
+    without it recreated Redis with no password on every upgrade. MUTATION: drop the
+    env args from one call - red."""
+    offenders = []
+    for n, line in enumerate((ROOT / installer).read_text(encoding="utf-8").splitlines(), 1):
+        stripped = line.strip().lstrip("|& ").strip()
+        if "up -d" not in stripped or stripped.startswith("#") or "compose" not in stripped:
+            continue
+        if re.match(r"(print_\w+|echo|Write-\w+)\b", stripped):
+            continue
+        if env_args not in stripped:
             offenders.append(f"{installer}:{n}: {line.strip()}")
     assert offenders == []
 

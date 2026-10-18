@@ -851,7 +851,7 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
             print_success "Container engine is now running"
         else
             print_warning "Container engine did not start in time. Please start it manually."
-            print_info "Then run: ${DOCKER_BIN:-docker} compose -f docker-compose.memory.yml up -d"
+            print_info "Then run: vaf repair (it starts the services the profile needs)"
         fi
     fi
 
@@ -871,6 +871,16 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
             # the speech containers out (vaf/core/service_stack.py needed_services).
             CORE_SERVICES=$("$PROJECT_ROOT/venv/bin/python3" -m vaf.main profile --services core 2>/dev/null | tr '\n' ' ')
             OPTIONAL_SERVICES=$("$PROJECT_ROOT/venv/bin/python3" -m vaf.main profile --services optional 2>/dev/null | tr '\n' ' ')
+            # VAF keeps the Redis password and the browser's stream credential in
+            # ~/.vaf/compose.env and hands it to compose with --env-file
+            # (vaf/core/service_stack.py compose_env_file); compose does not read it on its
+            # own, and an upgrade without it recreated Redis with no password. A first
+            # install has no file yet: VAF writes it at its first start and recreates the
+            # two containers then.
+            COMPOSE_ENV_ARGS=()
+            if [[ -f "$HOME/.vaf/compose.env" ]]; then
+                COMPOSE_ENV_ARGS=(--env-file "$HOME/.vaf/compose.env")
+            fi
             if [[ -z "${CORE_SERVICES// /}" ]]; then
                 print_warning "VAF could not name its services here; it starts them at its first launch."
             else
@@ -881,7 +891,7 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
             core_up=false
             for _attempt in 1 2 3; do
                 # shellcheck disable=SC2086 - the service names are separate words on purpose
-                if $DOCKER_SUDO "$DOCKER_BIN" compose -f "$COMPOSE_FILE" up -d $CORE_SERVICES; then
+                if $DOCKER_SUDO "$DOCKER_BIN" compose "${COMPOSE_ENV_ARGS[@]}" -f "$COMPOSE_FILE" up -d $CORE_SERVICES; then
                     core_up=true; break
                 fi
                 print_warning "Core image pull/start failed (attempt $_attempt/3) - often a transient registry/TLS timeout; retrying in 10s..."
@@ -889,14 +899,14 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
             done
             if [ "$core_up" != "true" ]; then
                 # shellcheck disable=SC2086
-                $DOCKER_SUDO docker-compose -f "$COMPOSE_FILE" up -d $CORE_SERVICES \
-                    || print_warning "Core stack not up yet (network/registry). VAF retries on launch; or re-run: ${DOCKER_BIN:-docker} compose -f $COMPOSE_FILE up -d"
+                $DOCKER_SUDO docker-compose "${COMPOSE_ENV_ARGS[@]}" -f "$COMPOSE_FILE" up -d $CORE_SERVICES \
+                    || print_warning "Core stack not up yet (network/registry). VAF retries on launch; or run: vaf repair"
             fi
             if [[ -n "${OPTIONAL_SERVICES// /}" ]]; then
                 print_info "Starting optional services ($OPTIONAL_SERVICES) - these build locally and may take a while..."
                 # shellcheck disable=SC2086
-                $DOCKER_SUDO "$DOCKER_BIN" compose -f "$COMPOSE_FILE" up -d $OPTIONAL_SERVICES 2>/dev/null \
-                    || $DOCKER_SUDO docker-compose -f "$COMPOSE_FILE" up -d $OPTIONAL_SERVICES 2>/dev/null || true
+                $DOCKER_SUDO "$DOCKER_BIN" compose "${COMPOSE_ENV_ARGS[@]}" -f "$COMPOSE_FILE" up -d $OPTIONAL_SERVICES 2>/dev/null \
+                    || $DOCKER_SUDO docker-compose "${COMPOSE_ENV_ARGS[@]}" -f "$COMPOSE_FILE" up -d $OPTIONAL_SERVICES 2>/dev/null || true
             fi
             fi
 
@@ -910,7 +920,7 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
         fi
     elif [[ "$COMPOSE_CHANGED" == "true" && "$DOCKER_RUNNING" != "true" ]]; then
         print_warning "Docker stack has changes but Docker is offline."
-        print_info "Start Docker, then run: docker compose -f docker-compose.memory.yml up -d"
+        print_info "Start Docker, then run: vaf repair (it starts the services the profile needs)"
     fi
 elif [[ "$DOCKER_INSTALLED" != "true" ]]; then
     print_info "Container engine not available - skipping stack setup (VAF will retry on launch)"

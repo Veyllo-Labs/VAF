@@ -110,7 +110,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   which compose reads only with `--env-file`; the command recreated Redis without a password
   (every cache call then failed) and the browser without its stream. The docs now say
   `vaf repair`, which starts the services the installation profile needs, and show the
-  by-hand command with `--env-file` and the profile's service list.
+  by-hand command with `--env-file` and the profile's service list. The installers made the
+  same call on every upgrade, until VAF's next start put the password back; they now pass
+  the file too.
 
 ## [0.1.0a33] - 2026-10-11
 

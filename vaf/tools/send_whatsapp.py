@@ -155,7 +155,8 @@ class SendWhatsAppTool(BaseTool):
             if not voice_path:
                 return (
                     "Voice message could not be generated (TTS failed). "
-                    "Check Settings → Speech / TTS: is the TTS service running (speech_tts_docker_url, e.g. http://localhost:5002)? "
+                    "Check Settings → Voice & Speech: is a text-to-speech provider set, or, on an installation "
+                    "with local models, is the TTS service running (speech_tts_docker_url, e.g. http://localhost:5002)? "
                     "You can send the same text as a normal message without voice_lang."
                 )
             if Path(voice_path).stat().st_size == 0:

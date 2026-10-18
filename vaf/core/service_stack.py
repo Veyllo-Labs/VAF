@@ -987,6 +987,11 @@ def retire_local_inference_services(prune: bool = False,
             return False, str(e)[:200]
 
     ok, detail = run(base + ["stop", *keys])
+    if not ok and _compose_plugin_missing(detail):
+        # The start's fallback, for the same setup (Homebrew docker + Colima): a docker CLI
+        # without the compose plugin, beside a standalone docker-compose.
+        base = ["docker-compose", *env_args, "-f", COMPOSE_FILENAME]
+        ok, detail = run(base + ["stop", *keys])
     out["stopped"] = ok
     if not ok:
         out["errors"].append(f"Could not stop {', '.join(keys)}: {detail}")

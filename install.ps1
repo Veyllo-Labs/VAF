@@ -1227,17 +1227,26 @@ if (-not $SkipDocker) {
             # the speech containers out (vaf/core/service_stack.py needed_services).
             $coreServices = @(& python -m vaf.main profile --services core 2>$null | Where-Object { $_ })
             $optionalServices = @(& python -m vaf.main profile --services optional 2>$null | Where-Object { $_ })
+            # VAF keeps the Redis password and the browser's stream credential in
+            # ~/.vaf/compose.env and hands it to compose with --env-file
+            # (vaf/core/service_stack.py compose_env_file); compose does not read it on its
+            # own, and an upgrade without it recreated Redis with no password. A first
+            # install has no file yet: VAF writes it at its first start and recreates the
+            # two containers then.
+            $composeEnvArgs = @()
+            $composeEnvFile = Join-Path $env:USERPROFILE ".vaf\compose.env"
+            if (Test-Path $composeEnvFile) { $composeEnvArgs = @("--env-file", $composeEnvFile) }
             & $dockerExe compose version 2>&1 | Out-Null
             $hasPlugin = ($LASTEXITCODE -eq 0)
             if ($coreServices.Count -eq 0) {
                 Write-Warn "VAF could not name its services here; it starts them at its first launch."
                 $dcExit = 1
             } elseif ($hasPlugin) {
-                & $dockerExe compose -f docker-compose.memory.yml up -d --quiet-pull @coreServices
+                & $dockerExe compose @composeEnvArgs -f docker-compose.memory.yml up -d --quiet-pull @coreServices
                 $dcExit = $LASTEXITCODE
                 if ($optionalServices.Count -gt 0) {
                     Write-Info "Building optional services ($($optionalServices -join ', ')); if this fails the core stack still runs..."
-                    & $dockerExe compose -f docker-compose.memory.yml up -d --quiet-pull @optionalServices
+                    & $dockerExe compose @composeEnvArgs -f docker-compose.memory.yml up -d --quiet-pull @optionalServices
                     if ($LASTEXITCODE -ne 0) {
                         Write-Warn "Optional services did not build - the core stack is up; VAF will retry them later."
                         Write-Info "(Usually a VM CLOCK SKEW breaking apt in the build: fix the Windows time, then 'wsl --shutdown'.)"
@@ -1245,10 +1254,10 @@ if (-not $SkipDocker) {
                 }
             } else {
                 Write-Info "docker compose plugin not found - using standalone docker-compose."
-                & docker-compose -f docker-compose.memory.yml up -d @coreServices
+                & docker-compose @composeEnvArgs -f docker-compose.memory.yml up -d @coreServices
                 $dcExit = $LASTEXITCODE
                 if ($optionalServices.Count -gt 0) {
-                    & docker-compose -f docker-compose.memory.yml up -d @optionalServices 2>&1 | Out-Null
+                    & docker-compose @composeEnvArgs -f docker-compose.memory.yml up -d @optionalServices 2>&1 | Out-Null
                 }
             }
             $ErrorActionPreference = $prevEAP

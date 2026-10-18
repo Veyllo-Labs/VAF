@@ -68,9 +68,9 @@ DEFAULT = LOCAL
 
 
 def current(config: Optional[Dict] = None) -> str:
-    """The profile of this installation. Anything that is not the literal ``api`` is
-    ``local``: an unreadable or mistyped value must not take the local models away from
-    an installation that has run on them."""
+    """The profile of this installation: ``api`` when the value, trimmed and ignoring
+    case, is ``api``, else ``local``. An unreadable or mistyped value must not take the
+    local models away from an installation that has run on them."""
     try:
         if config is None:
             from vaf.core.config import Config
@@ -159,6 +159,21 @@ def apply(profile: str, *, prune: bool = False, stack: bool = True) -> Dict:
     Raises ValueError as ``validate`` does. Returns
     {"profile", "previous", "stopped", "started", "removed", "errors", "conflicts"}."""
     wanted = validate(profile, prune)
+    from pathlib import Path
+
+    from filelock import FileLock
+
+    from vaf.core.config import Config
+    # One switch at a time across processes (the web switch, `vaf profile`, an installer):
+    # two interleaved switches could leave the key on one profile and the containers on
+    # the other. The second one waits and then runs whole, so the last switch wins.
+    app_dir = Path(Config.APP_DIR)
+    app_dir.mkdir(parents=True, exist_ok=True)      # a fresh install may not have it yet
+    with FileLock(str(app_dir / "inference_profile.lock")):
+        return _apply_locked(wanted, prune, stack)
+
+
+def _apply_locked(wanted: str, prune: bool, stack: bool) -> Dict:
     from vaf.core.config import Config
     previous = current()
     Config.set("inference_profile", wanted)

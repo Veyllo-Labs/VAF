@@ -293,3 +293,35 @@ def test_no_compose_file_means_nothing_to_retire_not_a_failure(config, monkeypat
         "stopped": False, "removed": [], "errors": []}
     out = CliRunner().invoke(_app(), ["api"])
     assert out.exit_code == 0 and "stopped" not in out.output
+
+
+def test_two_switches_never_interleave(config, monkeypatch, tmp_path):
+    """The web switch, `vaf profile` and an installer can switch at the same time; two
+    interleaved switches could leave the key on one profile and the containers on the other.
+    The second waits and then runs whole. MUTATION: drop the lock in apply - red."""
+    import threading
+    import time as _time
+
+    from vaf.core import inference_profile
+    from vaf.core.config import Config
+    monkeypatch.setattr(Config, "APP_DIR", tmp_path)
+    events = []
+
+    def slow_retire(prune=False, log=None):
+        events.append("retire-start")
+        _time.sleep(0.3)
+        events.append("retire-end")
+        return {"stopped": True, "removed": [], "errors": []}
+
+    monkeypatch.setattr(ss, "retire_local_inference_services", slow_retire)
+    monkeypatch.setattr(ss, "ensure_service_stack",
+                        lambda log=None: events.append("start") or True)
+    first = threading.Thread(target=inference_profile.apply, args=("api",))
+    first.start()
+    _time.sleep(0.05)
+    second = threading.Thread(target=inference_profile.apply, args=("local",))
+    second.start()
+    first.join(5)
+    second.join(5)
+    assert events == ["retire-start", "retire-end", "start"]
+    assert config["inference_profile"] == "local"

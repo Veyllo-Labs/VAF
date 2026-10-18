@@ -1492,6 +1492,14 @@ class ServerManager:
                     except Exception:
                         self._log_file = None
                 _out = self._log_file if self._log_file is not None else subprocess.DEVNULL
+                # The check at the top cannot see a switch to the api profile made while
+                # the binary was fetched or a first attempt loaded: read it again here.
+                if not inference_profile.local_inference_allowed():
+                    UI.event("Backend", inference_profile.refuse("the local server"), style="dim")
+                    if self._log_file is not None:
+                        self._log_file.close()
+                        self._log_file = None
+                    return False
                 self.process = subprocess.Popen(
                     run_cmd,
                     stdout=_out,
@@ -1536,9 +1544,15 @@ class ServerManager:
                 no_response_deadline = time.monotonic() + 60.0
                 died = False
                 timed_out = False
+                switched = False
                 while True:
                     if self.process.poll() is not None:
                         died = True
+                        break
+                    # A big model loads for minutes; a switch to the api profile meanwhile
+                    # ends the load instead of leaving the model in memory.
+                    if not inference_profile.local_inference_allowed():
+                        switched = True
                         break
                     if time.monotonic() >= ready_deadline:
                         timed_out = True
@@ -1592,6 +1606,19 @@ class ServerManager:
                     except Exception:
                         pass
                 log_tail = log_full[-800:]  # user-facing snippet only
+
+                if switched:
+                    UI.event("Backend", inference_profile.refuse("the local server"), style="dim")
+                    try:
+                        self.process.terminate()
+                        try:
+                            self.process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            self.process.kill()
+                    except Exception:
+                        pass
+                    self._remove_pid()
+                    return False
 
                 if timed_out:
                     # Still alive but not ready within the budget: stop it, so no

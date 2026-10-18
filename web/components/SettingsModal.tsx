@@ -4371,10 +4371,23 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                                 <Section title={tVoice('stt')}>
                                     {currentUser?.role === 'admin' && leanProfile && !localConfig.speech_stt_provider ? (
-                                        // No local speech recognition on this installation: the switch
-                                        // that would turn on nothing and the container's URL stay hidden
-                                        // until a provider is chosen above, as for text-to-speech.
-                                        <p className="text-xs text-gray-600">{tVoice('sttNeedsProvider')}</p>
+                                        // No local speech recognition on this installation: the container's
+                                        // URL stays hidden until a provider is chosen above, as for
+                                        // text-to-speech. The switch is shown only while voice input is on
+                                        // (saved or here), so it can be turned off; turning it on would do
+                                        // nothing, and switching the profile does not clear it.
+                                        <>
+                                            <p className="text-xs text-gray-600">{tVoice('sttNeedsProvider')}</p>
+                                            {(config?.stt_enabled || localConfig.stt_enabled) && (
+                                                <div className="mt-4">
+                                                    <Switch
+                                                        label={tVoice('enableVoiceInput')}
+                                                        checked={localConfig.stt_enabled || false}
+                                                        onChange={(v: boolean) => handleChange('stt_enabled', v)}
+                                                    />
+                                                </div>
+                                            )}
+                                        </>
                                     ) : currentUser?.role === 'admin' ? (
                                         <>
                                             <Switch
@@ -4489,11 +4502,35 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                                 <Section title={tVoice('tts')}>
                                     {leanProfile && (localConfig.speech_tts_provider || 'local') === 'local' ? (
-                                        // No local voice on this installation: the container settings and
-                                        // the switch that would turn on nothing stay hidden until a
-                                        // provider is chosen above. Only an admin sees that choice, so
-                                        // everyone else is told who makes it.
-                                        <p className="text-xs text-gray-600">{currentUser?.role === 'admin' ? tVoice('ttsNeedsProvider') : tVoice('managedByAdmin')}</p>
+                                        // No local voice on this installation: the container settings stay
+                                        // hidden until a provider is chosen above. Only an admin sees that
+                                        // choice, so everyone else is told who makes it. The two switches are
+                                        // shown only while they are on (saved or here), so they can be turned
+                                        // off; turning them on would do nothing, and switching the profile
+                                        // does not clear them.
+                                        <>
+                                            <p className="text-xs text-gray-600">{currentUser?.role === 'admin' ? tVoice('ttsNeedsProvider') : tVoice('managedByAdmin')}</p>
+                                            {(config?.speech_tts_enabled || localConfig.speech_tts_enabled
+                                                || config?.tts_auto_speak || localConfig.tts_auto_speak) && (
+                                                <div className="mt-4 space-y-4">
+                                                    {(config?.speech_tts_enabled || localConfig.speech_tts_enabled) && (
+                                                        <Switch
+                                                            label={tVoice('enableTts')}
+                                                            checked={localConfig.speech_tts_enabled || false}
+                                                            onChange={(v: boolean) => handleChange('speech_tts_enabled', v)}
+                                                        />
+                                                    )}
+                                                    {(config?.tts_auto_speak || localConfig.tts_auto_speak) && (
+                                                        <Switch
+                                                            label={tVoice('autoSpeak')}
+                                                            description={tVoice('autoSpeakDesc')}
+                                                            checked={localConfig.tts_auto_speak || false}
+                                                            onChange={(v: boolean) => handleChange('tts_auto_speak', v)}
+                                                        />
+                                                    )}
+                                                </div>
+                                            )}
+                                        </>
                                     ) : (localConfig.speech_tts_provider || 'local') === 'local' ? (
                                         <TTSSettings
                                             ttsEnabled={localConfig.speech_tts_enabled || false}

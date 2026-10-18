@@ -165,6 +165,8 @@ export default function LoginPage() {
                                 }
                                 if (typeof data?.inference_profile === 'string') {
                                     setSetupProfile(data.inference_profile);
+                                    // Kept for a resumed onboarding whose profile request fails.
+                                    sessionStorage.setItem('vaf_onboarding_profile', data.inference_profile);
                                 }
                                 sessionStorage.setItem('vaf_onboarding', 'true');
                                 setStep('language');
@@ -203,8 +205,20 @@ export default function LoginPage() {
                         // flashes the local texts.
                         fetch(`${apiPrefix}/api/system/inference-profile`, { credentials: 'include', cache: 'no-store' })
                             .then((r) => (r.ok ? r.json() : null))
-                            .then((d) => { if (!cancelled && typeof d?.profile === 'string') setSetupProfile(d.profile); })
-                            .catch(() => {})
+                            .then((d) => {
+                                if (cancelled) return;
+                                if (typeof d?.profile === 'string') {
+                                    setSetupProfile(d.profile);
+                                    return;
+                                }
+                                throw new Error('no profile');
+                            })
+                            .catch(() => {
+                                // The request failed: the profile the first visit was told
+                                // decides, not the 'local' default.
+                                const kept = sessionStorage.getItem('vaf_onboarding_profile');
+                                if (!cancelled && kept) setSetupProfile(kept);
+                            })
                             .finally(() => {
                                 if (cancelled) return;
                                 setStep(savedStep === 'veyllo_api' ? 'veyllo_api' : 'soul_wizard');
@@ -424,6 +438,7 @@ export default function LoginPage() {
             if (typeof window !== 'undefined') {
                 sessionStorage.removeItem('vaf_onboarding');
                 sessionStorage.removeItem('vaf_onboarding_step');
+                sessionStorage.removeItem('vaf_onboarding_profile');
                 if (data.access_token) localStorage.setItem('vaf_token', data.access_token);
             }
             window.location.replace(`${window.location.origin}/`);

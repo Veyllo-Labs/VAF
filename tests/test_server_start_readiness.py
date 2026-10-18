@@ -324,3 +324,43 @@ def test_ready_budget_clamps():
         assert _server_ready_budget() == 600.0  # unparseable -> default
     finally:
         backend.Config = orig
+
+
+def test_a_switch_to_the_api_profile_during_the_load_ends_it(mgr, monkeypatch):
+    """The profile is checked once at the top; a big model then loads for minutes. A switch
+    to api meanwhile must end the load and leave no server behind. MUTATION: drop the check
+    in the readiness wait - red."""
+    procs = []
+
+    def health(n):
+        if n == 4:
+            mgr._test["overrides"]["inference_profile"] = "api"
+        return FakeResponse(503)
+
+    def make(cmd, out):
+        procs.append(FakeProc(4242, lambda: None))
+        return procs[-1]
+
+    _wire_http(monkeypatch, health)
+    monkeypatch.setattr(backend.subprocess, "Popen", _llama_popen([], make))
+    ft = mgr._test["time"]
+    t0 = ft.t
+    assert mgr.start_server(mgr._test["model"], n_ctx=8192) is False
+    assert len(procs) == 1 and procs[0].terminated
+    assert not os.path.exists(mgr.pid_file)
+    # Ended at the switch, not by the readiness budget running out.
+    assert ft.t - t0 < 10, f"waited {ft.t - t0:.0f}s"
+
+
+def test_a_switch_while_the_binary_is_fetched_launches_nothing(mgr, monkeypatch):
+    """ensure_server_exists may download llama-server first. MUTATION: drop the check before
+    the launch - red."""
+    spawned = []
+    overrides = mgr._test["overrides"]
+    monkeypatch.setattr(mgr, "ensure_server_exists",
+                        lambda: overrides.update(inference_profile="api") or True)
+    _wire_http(monkeypatch, lambda n: FakeResponse(200))
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        _llama_popen(spawned, lambda cmd, out: FakeProc(4242, lambda: None)))
+    assert mgr.start_server(mgr._test["model"], n_ctx=8192) is False
+    assert spawned == []

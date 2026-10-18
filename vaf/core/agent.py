@@ -1251,6 +1251,32 @@ def reload_all_api_backends(*, force: bool = False) -> int:
     return changed
 
 
+def release_disallowed_local_backends() -> int:
+    """Free the in-process model of every live agent in this process once the profile is
+    ``api`` (vaf/core/inference_profile.py). Returns how many were released; never raises.
+
+    The tray unloads the llama server, but the library lane (llama-cpp-python inside the
+    process: Linux and Windows on Python below 3.13 without force_server, the installer's
+    3.12 venv included) keeps its model on the agent, and nothing else freed it.
+    chat_step and complete() already refuse to run on it; this returns the memory. A
+    generation still running keeps its own reference and ends normally."""
+    from vaf.core import inference_profile
+    if inference_profile.local_inference_allowed():
+        return 0
+    released = 0
+    for agent in live_agents():
+        try:
+            if getattr(agent, "llm", None) is not None:
+                agent.llm = None
+                released += 1
+        except Exception:
+            continue
+    if released:
+        import gc
+        gc.collect()
+    return released
+
+
 #: The send tools that reach the OWNER from a Front Office turn (the back-channel).
 _OWNER_SEND_TOOLS = CHAT_SEND_TOOLS + ("send_to_user",)
 

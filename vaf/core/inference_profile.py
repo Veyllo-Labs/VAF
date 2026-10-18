@@ -36,7 +36,8 @@ the code:
 - the failover chain, whose local link is left out (``APIBackendManager``);
 - a running agent and a running server: ``Agent.chat_step`` and ``Agent.complete`` (with
   the shared ``completion.complete``) refuse a local backend that was loaded before a
-  switch, and the tray unloads the local model as it does for an API provider.
+  switch, and the tray unloads the local model as it does for an API provider; an
+  in-process model is released by the switch (``agent.release_disallowed_local_backends``).
 
 A setting that names a local lane while the profile is ``api`` is not refused when it is
 written: ``config.json`` stays editable by hand, and the choke points above are the
@@ -182,6 +183,7 @@ def _apply_locked(wanted: str, prune: bool, stack: bool) -> Dict:
     if stack:
         from vaf.core import service_stack
         if wanted == API:
+            _release_in_process_models()
             result = service_stack.retire_local_inference_services(prune=prune)
             out.update({"stopped": result["stopped"], "removed": result["removed"],
                         "errors": result["errors"]})
@@ -195,6 +197,17 @@ def _apply_locked(wanted: str, prune: bool, stack: bool) -> Dict:
                                      "why and starts it.")
     out["conflicts"] = conflicts()
     return out
+
+
+def _release_in_process_models() -> None:
+    """The in-process models of this process's live agents (agent.py). Only where agents
+    exist: `vaf profile` in a terminal has none and must not import the engine for it. A
+    switch made in another process is picked up there at the next refused turn
+    (headless_runner)."""
+    import sys
+    agent_module = sys.modules.get("vaf.core.agent")
+    if agent_module is not None:
+        agent_module.release_disallowed_local_backends()
 
 
 def conflicts(config: Optional[Dict] = None) -> List[str]:

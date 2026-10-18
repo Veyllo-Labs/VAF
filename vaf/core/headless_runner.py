@@ -1341,6 +1341,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     _no_local = not inference_profile.local_inference_allowed()
                     _why = turn_refusal_reason(agent, task)
                     if _why:
+                        if _no_local:
+                            # A switch made in another process (`vaf profile` in a
+                            # terminal) left the in-process models of this one loaded.
+                            from vaf.core.agent import release_disallowed_local_backends
+                            release_disallowed_local_backends()
                         refuse_turn_without_backend(task, _why, session_mgr)
                         tq.task_done()
                         continue

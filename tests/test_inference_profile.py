@@ -538,3 +538,32 @@ def test_speak_names_the_right_lane_when_no_voice_is_left(config, profile, says,
     from vaf.core.speech import tts_unavailable_message
     config["inference_profile"] = profile
     assert says in tts_unavailable_message() and never not in tts_unavailable_message()
+
+
+class _LiveAgent:
+    """A stand-in the live-agent registry can hold (it is a WeakSet)."""
+
+    def __init__(self):
+        self.llm = object()
+
+
+def test_a_switch_releases_the_in_process_models(config, monkeypatch):
+    """The tray unloads the llama server; an in-process model (the library lane, the
+    installer's Python 3.12 venv on Linux among them) stayed in memory after a switch to api,
+    refused but loaded. apply() releases it in this process. MUTATION: drop the release
+    from apply, or release under local too - red."""
+    from vaf.core import agent as agent_mod
+    from vaf.core.config import Config
+    monkeypatch.setattr(Config, "set", staticmethod(lambda k, v: config.__setitem__(k, v)))
+    monkeypatch.setattr(ss, "retire_local_inference_services",
+                        lambda prune=False, log=None: {"stopped": True, "removed": [], "errors": []})
+    monkeypatch.setattr(ss, "ensure_service_stack", lambda log=None: True)
+    a, b = _LiveAgent(), _LiveAgent()
+    for each in (a, b):
+        agent_mod._register_live_agent(each)
+    config["inference_profile"] = "local"
+    assert agent_mod.release_disallowed_local_backends() == 0 and a.llm is not None
+    ip.apply("local")
+    assert a.llm is not None and b.llm is not None, "the local profile keeps its models"
+    ip.apply("api")
+    assert a.llm is None and b.llm is None

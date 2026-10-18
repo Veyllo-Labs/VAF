@@ -112,7 +112,10 @@ each, not by checks spread over the code:
   profile (`turn_refusal_reason` in `headless_runner.py`). An agent that loaded a local
   model before the profile was switched does not run its next turn on it, nor a one-shot
   completion (`Agent.complete`, the shared `completion.complete`), and the tray
-  unloads the model as it does for an API provider.
+  unloads the model as it does for an API provider. A model loaded inside the process
+  (the llama-cpp library lane, which the installer's Python 3.12 venv on Linux takes) is
+  released by the switch itself, or at the next turn when the switch came from another
+  process (`release_disallowed_local_backends`).
 - The failover chain leaves its local link out; a backup API provider stays.
 - `service_stack.needed_services` leaves the speech containers out. The stack start, the
   status, the repair, `vaf top` and the installers read this one list: a container the

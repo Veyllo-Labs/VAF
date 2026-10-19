@@ -694,7 +694,9 @@ def _true_on_windows(node) -> Optional[bool]:
             return left == right
         if isinstance(op, ast.NotEq):
             return left != right
-        if isinstance(op, (ast.In, ast.NotIn)) and isinstance(right, (str, tuple)):
+        # A tuple takes anything; a string only a string (`1 in "win32"` would raise).
+        if isinstance(op, (ast.In, ast.NotIn)) and (
+                isinstance(right, tuple) or (isinstance(right, str) and isinstance(left, str))):
             return (left in right) == isinstance(op, ast.In)
     return None
 
@@ -1056,6 +1058,7 @@ def test_a_skip_on_the_class_covers_its_methods():
     ('"sys.platform == \'win32\'"', True),           # a string pytest evaluates, read here
     ('"os.name != \'nt\'"', False),
     ('"not valid python ("', False),
+    ('1 in sys.platform', False),                    # not a question this scan can answer
 ])
 def test_a_skip_counts_only_when_its_condition_is_true_on_windows(condition, exempt):
     """MUTATION: count any skipif that names os.name - the Windows-only test is exempted - red."""

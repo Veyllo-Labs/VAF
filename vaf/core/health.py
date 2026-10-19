@@ -19,6 +19,9 @@ Checks, each ``{name, status, reason}``:
 - ``disk``: free space where VAF keeps its data (`data_stores.roots`), its backups, and
   where the container engine keeps the database's volume (Docker's root directory, when it
   is a path on this machine);
+- ``backup``: whether the scheduled backups run (`backup_schedule.backup_check`): degraded
+  when the last scheduled run failed or the newest backup is older than the schedule allows,
+  never down (a missing backup stops nothing);
 - ``agent``: the agent loops of this process (`headless_runner.worker_status`), only in the
   process that runs them.
 
@@ -176,9 +179,15 @@ def _worker_status() -> Optional[Dict[str, int]]:
     return runner.worker_status() if runner is not None else None
 
 
+def _backup_check() -> Dict[str, str]:
+    from vaf.core.backup_schedule import backup_check
+    return backup_check()
+
+
 def collect_health(status_probe: Optional[Callable[[], Dict[str, Any]]] = None,
                    worker_probe: Callable[[], Optional[Dict[str, int]]] = _worker_status,
-                   usage: Callable[[str], Any] = shutil.disk_usage) -> Dict[str, Any]:
+                   usage: Callable[[str], Any] = shutil.disk_usage,
+                   backup_probe: Callable[[], Dict[str, str]] = _backup_check) -> Dict[str, Any]:
     """Every check and the verdict: {status, checks, checked_at}. Never raises: a check that
     cannot run says so as its own result."""
     checks: List[Dict[str, str]] = []
@@ -195,6 +204,10 @@ def collect_health(status_probe: Optional[Callable[[], Dict[str, Any]]] = None,
         checks.append(disk_check(disk_paths(status), usage=usage))
     except Exception as e:
         checks.append(_check("disk", DEGRADED, f"The free space could not be read: {e}"))
+    try:
+        checks.append(backup_probe())
+    except Exception as e:
+        checks.append(_check("backup", DEGRADED, f"The backup state could not be read: {e}"))
     try:
         agent = agent_check(worker_probe())
         if agent is not None:

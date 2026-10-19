@@ -507,12 +507,13 @@ The repair answers for the containers. Whether the installation works is a wider
 and two failures leave every container healthy while VAF stops working: the disk filling up
 (the database stops writing, a backup cannot be written) and the server's agent loop dying
 (the page loads, every request but the chat is answered, and no chat gets an answer again).
-`vaf/core/health.py` asks all three:
+`vaf/core/health.py` asks all three, and whether the scheduled backups run:
 
 | Check | What it reads | Down when | Degraded when |
 |---|---|---|---|
 | `services` | `stack_problems()` over one status snapshot, the same reading `vaf repair --check` exits on | a required service is unusable, or Docker is unreachable where VAF runs a stack | an optional service is broken or starting, or the host's IP forwarding is off |
 | `disk` | free space on the fullest disk among the data folders, the backup folder and Docker's root directory (named in `docker info`, when it is a path on this machine) | less than 1 GB free | less than 5 GB free |
+| `backup` | the scheduled backups (`backup_schedule.backup_check`) | never | the last scheduled run failed, or the newest backup is older than its interval and a day |
 | `agent` | the agent loops of the server process (`headless_runner.worker_status`) | none is left | some have stopped |
 
 The verdict is the worst check. `vaf health` asks the running VAF, because the agent loop

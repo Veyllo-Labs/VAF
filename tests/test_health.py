@@ -166,16 +166,18 @@ def _swallow(fn, kind):
 def test_the_whole_is_the_worst_check_and_never_raises(tmp_path):
     """MUTATION: take the first check's status, or let a failing probe raise - red."""
     usage = lambda p: types.SimpleNamespace(free=40 * GB)                  # noqa: E731
+    backup = lambda: {"name": "backup", "status": "ok", "reason": "fine"}    # noqa: E731
     result = health.collect_health(status_probe=lambda: _status(_svc("vaf-redis", "ok")),
                                    worker_probe=lambda: {"started": 1, "alive": 0},
-                                   usage=usage)
+                                   usage=usage, backup_probe=backup)
     assert result["status"] == "down"
-    assert [c["name"] for c in result["checks"]] == ["services", "disk", "agent"]
+    assert [c["name"] for c in result["checks"]] == ["services", "disk", "backup", "agent"]
 
     def broken():
         raise RuntimeError("docker exploded")
 
-    result = health.collect_health(status_probe=broken, worker_probe=lambda: None, usage=usage)
+    result = health.collect_health(status_probe=broken, worker_probe=lambda: None, usage=usage,
+                                   backup_probe=backup)
     assert result["status"] == "down" and "docker exploded" in result["checks"][0]["reason"]
 
 

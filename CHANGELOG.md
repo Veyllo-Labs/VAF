@@ -13,6 +13,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **Backups on a schedule.** `vaf backup schedule daily` (or `weekly`) backs up by itself
+  while VAF runs, at a time of day in your timezone, and catches up after a night the
+  machine was off. Afterwards the backup folder keeps the newest backup of each of the last
+  7 days, 4 weeks and 6 months (`backup_keep_*`; `vaf backup prune` applies it by hand). A
+  failed run reaches the admin in the web UI and on the main messenger, once per failure,
+  and the health check names it. `vaf server provision` schedules a server daily unless
+  somebody already chose.
 - **A health check a monitor can poll.** `GET /api/health` answers `ok`, `degraded` or
   `down` without an account (HTTP 503 when down), and `vaf health` prints what is behind it
   and exits 0, 1 or 2. Besides the services it checks the disk (the data, the backups and

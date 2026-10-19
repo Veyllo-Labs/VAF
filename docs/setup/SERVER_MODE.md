@@ -71,9 +71,10 @@ internet rather than behind a router. The setup that fits both:
    provider's firewall and open only the VPN's own port (and SSH) there, then run
    `vaf server provision --no-firewall`, since the provider's firewall is the one that
    faces the internet. See [Over a VPN](#over-a-vpn).
-3. **Back it up off the machine.** A backup on the server's own disk is lost with the
-   server. `vaf backup create` writes one encrypted file; copy it elsewhere
-   ([BACKUP_RESTORE.md](BACKUP_RESTORE.md)).
+3. **Back it up off the machine.** `vaf server provision` schedules a daily encrypted
+   backup with a retention (`vaf backup schedule` changes it), but a backup on the server's
+   own disk is lost with the server: copy them elsewhere
+   ([BACKUP_RESTORE.md](BACKUP_RESTORE.md#backups-on-a-schedule)).
 4. **Watch it.** Point a monitor (Uptime Kuma, a cron job, the hosting provider's own) at
    `https://<address>:<port>/api/health` over the VPN: it needs no account, answers
    `{"status": "ok"}`, `"degraded"` or `"down"`, and HTTP 503 when down. `vaf health` on

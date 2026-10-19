@@ -75,7 +75,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("vaf.core.backup")
 
@@ -838,6 +838,84 @@ def list_backups(dest: Optional[Path] = None) -> List[BackupInfo]:
         stamp = p.name[len("vaf-backup-"):-len(SUFFIX)]
         out.append(BackupInfo(p, p.stat().st_size, stamp))
     return sorted(out, key=lambda b: b.created, reverse=True)
+
+
+# ── retention ─────────────────────────────────────────────────────────────────────
+
+def backup_time(info: BackupInfo) -> Optional[_dt.datetime]:
+    """When a backup was written (UTC, from its name), or None for a name not written here."""
+    try:
+        return _dt.datetime.strptime(info.created, "%Y%m%dT%H%M%SZ").replace(
+            tzinfo=_dt.timezone.utc)
+    except ValueError:
+        return None
+
+
+def backups_to_keep(backups: List[BackupInfo], *, daily: int, weekly: int,
+                    monthly: int) -> List[Path]:
+    """Grandfather-father-son over ``backups`` (newest first, as `list_backups` returns them):
+    the newest backup of each of the last ``daily`` days that have one, of the last ``weekly``
+    ISO weeks and of the last ``monthly`` months, in UTC like the names. The newest backup
+    always stays, whatever the numbers, and so does a file whose name carries no time: it was
+    not written by this code, and what it is is not this code's to judge."""
+    keep: List[Path] = []
+
+    def add(path: Path) -> None:
+        if path not in keep:
+            keep.append(path)
+
+    if backups:
+        add(backups[0].path)
+    dated = []
+    for info in backups:
+        when = backup_time(info)
+        if when is None:
+            add(info.path)
+        else:
+            dated.append((when, info))
+    for count, bucket in ((daily, lambda t: t.date()),
+                          (weekly, lambda t: tuple(t.isocalendar())[:2]),
+                          (monthly, lambda t: (t.year, t.month))):
+        seen: List[Any] = []
+        for when, info in dated:
+            key = bucket(when)
+            if key in seen:
+                continue
+            if len(seen) >= max(0, int(count)):
+                break
+            seen.append(key)
+            add(info.path)
+    return keep
+
+
+def prune_backups(dest: Optional[Path] = None, *, daily: int, weekly: int, monthly: int,
+                  dry_run: bool = False) -> List[Path]:
+    """Delete the backups in ``dest`` (default `backup_dir()`) that `backups_to_keep` does not
+    keep, each with its ``.sha256``. Returns what was (or, with ``dry_run``, would be)
+    deleted. Takes the folder's backup lock, so it never runs while a backup into the same
+    folder is being written; the safety backups of a restore (the ``pre-restore`` folder
+    below it) are never touched."""
+    dest = Path(dest) if dest else backup_dir()
+    from vaf.core.secure_store import _get_filelock_cls
+    lock_cls = _get_filelock_cls()
+    lock = lock_cls(str(dest / ".backup.lock"), timeout=5) if lock_cls else _NoLock()
+    try:
+        lock.acquire()
+    except Exception:
+        raise BackupError("A backup is being written into this folder; prune it afterwards.")
+    try:
+        backups = list_backups(dest)
+        keep = set(backups_to_keep(backups, daily=daily, weekly=weekly, monthly=monthly))
+        gone = [b.path for b in backups if b.path not in keep]
+        if not dry_run:
+            for path in gone:
+                _discard(path)
+        return gone
+    finally:
+        try:
+            lock.release()
+        except Exception:
+            pass
 
 
 # ── restore ───────────────────────────────────────────────────────────────────────

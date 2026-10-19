@@ -139,6 +139,8 @@ STORES: Tuple[Store, ...] = (
     _s("vaf", "icons", DERIVED, "vaf/tray.py"),
     _s("vaf", "logs", LOG, "vaf/main.py"),
     _s("vaf", "main", RUNTIME, "vaf/core/main_persistence.py", "working memory of a launch from HOME"),
+    _s("vaf", "backup_schedule.json", RUNTIME, "vaf/core/backup_schedule.py",
+       "when the scheduled backup last ran, and its last error"),
     _s("vaf", "update_cache.json", RUNTIME, "vaf/core/update_check.py"),
     _s("vaf", "last_update.json", RUNTIME, "vaf/core/update_check.py"),
     _s("vaf", "update_result.json", RUNTIME, "vaf/core/update_check.py"),

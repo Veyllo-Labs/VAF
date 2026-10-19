@@ -606,6 +606,11 @@ class Config:
         "allow_plaintext_at_rest": True,                           # Accept files WITHOUT the encryption header on read. Needed while migrating; the sweep turns it off after a clean pass
         "file_encryption_enabled": True,
         "backup_dir": "",                                          # Where `vaf backup` writes its encrypted backups ("" = <data dir>/backups). Held owner-only
+        "backup_schedule": "",                                     # Backups by themselves: "daily", "weekly" (Sunday), "off"; "" = never chosen (off; `vaf server provision` makes it daily). vaf/core/backup_schedule.py
+        "backup_time": "03:00",                                    # Time of day (HH:MM) of the scheduled backup, in the admin's own timezone
+        "backup_keep_daily": 7,                                    # Retention after each scheduled backup: the newest backup of each of the last N days ...
+        "backup_keep_weekly": 4,                                   # ... of the last N ISO weeks ...
+        "backup_keep_monthly": 6,                                  # ... and of the last N months (grandfather-father-son); the newest backup always stays
         "prompt_log_full_enabled": False,                          # Log the ENTIRE assembled system prompt (profile, retrieved memories, contacts) to prompt_*.log. Debug only
         "context_archive_max_age_days": 14,                        # Age sweep for pre-compression conversation snapshots (0 = keep forever)
         "context_compress_tokens": 45000,                          # "Context effort": API providers only: compress the history once it exceeds this token budget, instead of waiting for the model window. Pay-per-token bill grows with EVERY resent token, so the window (128k) is the wrong ceiling. Settings offer it as fixed rungs from 8000 up to the model's real window (vaf/core/context.py). 0 = window-based only

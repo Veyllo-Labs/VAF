@@ -152,6 +152,43 @@ write it - what lets a scheduled backup run unattended:
 - Entries in VAF's folders that are not in the list (old copies, debris, other
   tools' files) are listed as skipped, never taken.
 
+## Backups on a schedule
+
+```
+vaf backup schedule                  # the schedule, the last run, what is kept
+vaf backup schedule daily --at 03:00 # daily (or weekly, on Sunday; or off)
+vaf backup prune --dry-run           # what the retention would delete
+vaf backup prune
+```
+
+`vaf/core/backup_schedule.py` runs the same `create_backup` by itself while VAF runs, into
+the same folder, verified the same way. It is not an automation: an automation is a prompt
+the agent runs, and a backup must neither depend on a model answering nor cost a token.
+
+- **When.** `backup_schedule` is `daily` or `weekly` (on Sunday), at `backup_time` in the
+  admin's own timezone. A run is due when no backup is newer than the most recent slot: a
+  machine that was off at that time backs up a few minutes after it starts again, and a
+  backup written by hand after the slot counts. A run that failed is tried again an hour
+  later, not every minute. Off by default on a desktop (the disk is the person's); `vaf
+  server provision` schedules a server daily, unless somebody already chose (an `off`
+  stays off).
+- **How many stay.** After every successful run the folder is pruned
+  grandfather-father-son: the newest backup of each of the last `backup_keep_daily` (7)
+  days that have one, `backup_keep_weekly` (4) ISO weeks and `backup_keep_monthly` (6)
+  months, in UTC like the file names; the newest backup always stays. The prune takes the
+  folder's backup lock, so it never runs during a backup into that folder, and it never
+  touches the safety backups of a restore (`pre-restore/`) or a file whose name carries no
+  time. A prune that fails leaves the backup standing and the files in place, which the
+  health check's disk row sees.
+- **Who hears.** A failed run reaches the admin once per failure, not once per retry: in the
+  web UI's notifications and on their main messenger. The health check (`vaf health`,
+  `/api/health`, [DOCKER_SERVICES.md](DOCKER_SERVICES.md#health)) says degraded when the last
+  scheduled run failed or the newest backup is older than one interval and a day; a missing
+  backup stops nothing, so it is never down. The runs are logged in the `backup` log.
+
+A backup on the machine's own disk is lost with the machine: copy the folder elsewhere as
+well (a mounted drive as `backup_dir`, or a copy job of your own).
+
 ## Restoring
 
 ```

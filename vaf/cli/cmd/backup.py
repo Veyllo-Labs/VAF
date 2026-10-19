@@ -105,6 +105,69 @@ def list_cmd(
         print(f"{row.created}  {_mb(row.size):>10}  {row.path.name}")
 
 
+@app.command("schedule")
+def schedule_cmd(
+    when: Optional[str] = typer.Argument(None, help="daily, weekly (on Sunday) or off; empty shows the schedule"),
+    at: Optional[str] = typer.Option(None, "--at", help="Time of day, HH:MM in your own timezone"),
+):
+    """Backups that run by themselves while VAF runs: the schedule, the last run, the retention."""
+    from vaf.core import backup_schedule as bs
+    from vaf.core.config import Config
+    if when is not None:
+        wanted = when.strip().lower()
+        if wanted not in (*bs.SCHEDULES, "off"):
+            UI.error("Use daily, weekly or off.")
+            raise typer.Exit(2)
+        Config.set("backup_schedule", wanted)
+    if at is not None:
+        try:
+            hour, minute = (int(part) for part in at.strip().split(":"))
+            if not (0 <= hour < 24 and 0 <= minute < 60):
+                raise ValueError(at)
+        except ValueError:
+            UI.error("--at takes a time of day like 03:00.")
+            raise typer.Exit(2)
+        Config.set("backup_time", f"{hour:02d}:{minute:02d}")
+    kind = bs.schedule()
+    hour, minute = bs.slot_time()
+    if kind is None:
+        UI.info("No backups are scheduled. `vaf backup schedule daily` turns them on.")
+    else:
+        day = " on Sundays" if kind == "weekly" else ""
+        UI.info(f"Scheduled {kind}{day} at {hour:02d}:{minute:02d} (your timezone), while VAF runs.")
+        keep = bs.keep_counts()
+        UI.info(f"Kept: the newest backup of each of the last {keep['daily']} days, "
+                f"{keep['weekly']} weeks and {keep['monthly']} months.")
+    state = bs.read_state()
+    if state.get("last_success_at"):
+        UI.info(f"Last scheduled backup: {state['last_success_at']} ({state.get('last_file', '')}).")
+    if state.get("last_error"):
+        UI.warning(f"Last scheduled run failed at {state.get('last_attempt_at')}: {state['last_error']}")
+    check = bs.backup_check()
+    if check["status"] != "ok":
+        UI.warning(check["reason"])
+
+
+@app.command("prune")
+def prune_cmd(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Name what would be deleted, delete nothing"),
+):
+    """Delete the backups the retention does not keep (backup_keep_daily/weekly/monthly)."""
+    from vaf.core import backup_schedule as bs
+    from vaf.core.backup import BackupError, prune_backups
+    try:
+        gone = prune_backups(dry_run=dry_run, **bs.keep_counts())
+    except BackupError as e:
+        UI.error(str(e))
+        raise typer.Exit(1)
+    if not gone:
+        UI.info("Nothing to delete: every backup is one the retention keeps.")
+        return
+    verb = "Would delete" if dry_run else "Deleted"
+    for path in gone:
+        print(f"{verb} {path.name}")
+
+
 @app.command("restore")
 def restore(
     path: Path = typer.Argument(..., help="The backup file"),

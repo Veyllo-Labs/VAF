@@ -189,6 +189,13 @@ def server_provision(
     else:
         UI.info("The database passwords are not the published defaults.")
 
+    # A server backs itself up: daily, unless somebody already chose (an "off" stays off).
+    # vaf/core/backup_schedule.py runs it while the service runs.
+    if not str(Config.get("backup_schedule", "") or "").strip():
+        Config.set("backup_schedule", "daily")
+        UI.success("Backups scheduled daily at " + str(Config.get("backup_time", "03:00"))
+                   + " (`vaf backup schedule` changes it; copy them off the server too).")
+
     try:
         from vaf.network.ssl_utils import ensure_ssl_certificates
         cert_path, _key_path = ensure_ssl_certificates()

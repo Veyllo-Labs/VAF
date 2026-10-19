@@ -1875,6 +1875,15 @@ async def startup_event():
     except Exception as e:
         log("WebServer", f"Automation scheduler start error: {e}")
 
+    # The scheduled backups (vaf/core/backup_schedule.py): one thread per process, idle while
+    # backup_schedule is off.
+    try:
+        from vaf.core import backup_schedule
+        if backup_schedule.ensure_started(origin="web_server_startup"):
+            log("WebServer", "Backup schedule started")
+    except Exception as e:
+        log("WebServer", f"Backup schedule start error: {e}")
+
     # In Docker mode, the tray app doesn't run, so we must start the headless runner here.
     if Config.is_docker_mode():
         log("WebServer", "Docker mode detected - starting headless agent runner...")

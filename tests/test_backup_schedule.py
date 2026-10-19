@@ -369,8 +369,10 @@ def system_client(monkeypatch, tmp_path):
     from fastapi.testclient import TestClient
 
     import vaf.api.system_routes as sr
+    from vaf.core import container_jobs
     for state in (sr._repair_state, sr._profile_state, sr._backup_state):
         state["running"] = False
+    monkeypatch.setattr(container_jobs, "_running", None)
     monkeypatch.setattr(backup, "backup_dir_path", lambda: tmp_path)
     monkeypatch.setattr(bs, "state_path", lambda: tmp_path / "backup_schedule.json")
     app = FastAPI()
@@ -403,9 +405,10 @@ def test_back_up_now_is_a_job_and_waits_for_a_repair(system_client, monkeypatch)
                               "warnings": []})()
 
     monkeypatch.setattr(backup, "create_backup", slow_backup)
-    sr._repair_state["running"] = True
+    from vaf.core import container_jobs
+    container_jobs.claim(container_jobs.REPAIR)
     assert client.post("/api/system/backups/run").status_code == 409
-    sr._repair_state["running"] = False
+    container_jobs.release(container_jobs.REPAIR)
     assert client.post("/api/system/backups/run").status_code == 202
     assert client.post("/api/system/backups/run").status_code == 409, "a second backup"
     assert client.post("/api/system/services/repair").status_code == 409
@@ -415,3 +418,41 @@ def test_back_up_now_is_a_job_and_waits_for_a_repair(system_client, monkeypatch)
             break
         _threading.Event().wait(0.05)
     assert sr._backup_state["result"]["name"] == "vaf-backup-x.tar.age"
+    for _ in range(100):
+        if container_jobs.running() is None:
+            break
+        _threading.Event().wait(0.05)
+    assert container_jobs.running() is None, "the finished backup kept the containers"
+
+
+
+def test_the_schedule_waits_while_a_repair_holds_the_containers(state_home, monkeypatch):
+    """A scheduled backup beside a repair could stop the database again after the repair
+    started it. MUTATION: run without the container claim, or keep the claim afterwards - red."""
+    from vaf.core import container_jobs
+    monkeypatch.setattr(container_jobs, "_running", None)
+    monkeypatch.setattr(bs, "schedule", lambda config=None: "daily")
+    monkeypatch.setattr(bs, "newest_backup", lambda: None)
+    ran = []
+    monkeypatch.setattr(bs, "run_once", lambda current=None, **k: ran.append(current) or {})
+    now = dt.datetime(2026, 10, 19, 15, 0, tzinfo=BERLIN)
+    container_jobs.claim(container_jobs.REPAIR)
+    assert bs.tick(now) is None and ran == []
+    container_jobs.release(container_jobs.REPAIR)
+    assert bs.tick(now) == {} and ran == [now]
+    assert container_jobs.running() is None, "the schedule kept the containers"
+    assert container_jobs.claim(container_jobs.REPAIR) is None
+
+
+def test_container_jobs_one_at_a_time():
+    """MUTATION: let a second kind in, or let another kind release the claim - red."""
+    from vaf.core import container_jobs
+    container_jobs.release(container_jobs.running() or "")
+    assert container_jobs.claim(container_jobs.BACKUP) is None
+    try:
+        assert container_jobs.claim(container_jobs.REPAIR) == container_jobs.BACKUP
+        container_jobs.release(container_jobs.REPAIR)
+        assert container_jobs.running() == container_jobs.BACKUP
+    finally:
+        container_jobs.release(container_jobs.BACKUP)
+    assert container_jobs.running() is None

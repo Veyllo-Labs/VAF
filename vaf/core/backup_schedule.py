@@ -251,7 +251,10 @@ def run_once(current: Optional[datetime] = None, *,
 
 
 def tick(current: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
-    """Run a backup when one is due; None when nothing is scheduled or due."""
+    """Run a backup when one is due; None when nothing is scheduled or due, or while a
+    repair, a profile switch or another backup holds the containers (container_jobs): the
+    next tick tries again."""
+    from vaf.core import container_jobs
     kind = schedule()
     if kind is None:
         return None
@@ -259,7 +262,12 @@ def tick(current: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
     hour, minute = slot_time()
     if not due(read_state(), current, kind, hour, minute, newest_backup()):
         return None
-    return run_once(current)
+    if container_jobs.claim(container_jobs.BACKUP) is not None:
+        return None
+    try:
+        return run_once(current)
+    finally:
+        container_jobs.release(container_jobs.BACKUP)
 
 
 def backup_check(config: Optional[Dict] = None, current: Optional[datetime] = None,

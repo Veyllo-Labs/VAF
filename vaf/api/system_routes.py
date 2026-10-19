@@ -36,6 +36,7 @@ from starlette.concurrency import run_in_threadpool
 
 from vaf import __version__
 from vaf.api.user_routes import require_admin
+from vaf.core import container_jobs
 from vaf.core.service_health import collect_service_status, repair_service_stack
 from vaf.core.update_check import (
     check_now,
@@ -48,11 +49,11 @@ from vaf.core.update_check import (
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
-# One container job at a time, process-wide: two runs would fight over the same
-# containers, and `compose up` is only idempotent one caller at a time. The lock
-# claims all three jobs, a repair, a profile switch and a backup (which dumps the
-# database from its container), so none starts while another runs.
-_repair_lock = threading.Lock()
+# One container job at a time, process-wide (vaf/core/container_jobs.py): two runs would
+# fight over the same containers, and `compose up` is only idempotent one caller at a time.
+# A repair, a profile switch and a backup (which dumps the database from its container) each
+# claim it, and so does the backup schedule in this process. The dicts below are what the
+# pages follow; the claim is what decides.
 _repair_state: Dict[str, Any] = {
     "running": False,
     "started_at": None,
@@ -92,6 +93,23 @@ _update_started_at: Optional[str] = None
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _claim_or_409(kind: str) -> None:
+    """Claim the container job slot for ``kind``, or answer 409 naming what runs."""
+    other = container_jobs.claim(kind)
+    if other is not None:
+        raise HTTPException(status_code=409, detail=container_jobs.busy_message(kind, other))
+
+
+def _start_job(target, args, name: str, kind: str, state: Dict[str, Any]) -> None:
+    """Run a claimed job in its thread; a thread that cannot start gives the claim back."""
+    try:
+        threading.Thread(target=target, args=args, daemon=True, name=name).start()
+    except Exception:
+        state["running"] = False
+        container_jobs.release(kind)
+        raise
 
 
 @router.get("/services")
@@ -154,27 +172,23 @@ def _run_backup() -> None:
     finally:
         _backup_state["running"] = False
         _backup_state["finished_at"] = _now()
+        container_jobs.release(container_jobs.BACKUP)
 
 
 @router.post("/backups/run", status_code=202)
 def start_backup(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Write a backup now, as a job; GET /api/system/backups follows it (``job``). Not while a
     repair or a profile switch moves the containers the backup reads."""
-    with _repair_lock:
-        if _backup_state["running"]:
-            raise HTTPException(status_code=409, detail="A backup is already running")
-        if _repair_state["running"] or _profile_state["running"]:
-            raise HTTPException(status_code=409, detail="A repair or a profile switch is "
-                                                        "running; wait for it to finish first.")
-        _backup_state.update({
-            "running": True,
-            "started_at": _now(),
-            "finished_at": None,
-            "stage": None,
-            "result": None,
-            "error": None,
-        })
-    threading.Thread(target=_run_backup, daemon=True, name="vaf-api-backup").start()
+    _claim_or_409(container_jobs.BACKUP)
+    _backup_state.update({
+        "running": True,
+        "started_at": _now(),
+        "finished_at": None,
+        "stage": None,
+        "result": None,
+        "error": None,
+    })
+    _start_job(_run_backup, (), "vaf-api-backup", container_jobs.BACKUP, _backup_state)
     return {"started": True, "started_at": _backup_state["started_at"]}
 
 
@@ -207,6 +221,7 @@ def _run_profile_switch(profile: str, prune: bool) -> None:
     finally:
         _profile_state["running"] = False
         _profile_state["finished_at"] = _now()
+        container_jobs.release(container_jobs.PROFILE_SWITCH)
 
 
 @router.post("/inference-profile", status_code=202)
@@ -219,25 +234,17 @@ def set_inference_profile(body: _ProfileSwitch,
         wanted = inference_profile.validate(body.profile, body.prune)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    with _repair_lock:
-        if _profile_state["running"]:
-            raise HTTPException(status_code=409, detail="A profile switch is already running")
-        if _repair_state["running"]:
-            raise HTTPException(status_code=409,
-                                detail="A repair is running; wait for it to finish first.")
-        if _backup_state["running"]:
-            raise HTTPException(status_code=409,
-                                detail="A backup is running; wait for it to finish first.")
-        _profile_state.update({
-            "running": True,
-            "started_at": _now(),
-            "finished_at": None,
-            "profile": wanted,
-            "result": None,
-            "error": None,
-        })
-    threading.Thread(target=_run_profile_switch, args=(wanted, body.prune), daemon=True,
-                     name="vaf-api-profile").start()
+    _claim_or_409(container_jobs.PROFILE_SWITCH)
+    _profile_state.update({
+        "running": True,
+        "started_at": _now(),
+        "finished_at": None,
+        "profile": wanted,
+        "result": None,
+        "error": None,
+    })
+    _start_job(_run_profile_switch, (wanted, body.prune), "vaf-api-profile",
+               container_jobs.PROFILE_SWITCH, _profile_state)
     return {"started": True, "profile": wanted, "started_at": _profile_state["started_at"]}
 
 
@@ -253,29 +260,22 @@ def _run_repair() -> None:
     finally:
         _repair_state["running"] = False
         _repair_state["finished_at"] = _now()
+        container_jobs.release(container_jobs.REPAIR)
 
 
 @router.post("/services/repair", status_code=202)
 def start_repair(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Start a repair run and return at once; follow it with GET on this path."""
-    with _repair_lock:
-        if _repair_state["running"]:
-            raise HTTPException(status_code=409, detail="A repair is already running")
-        if _profile_state["running"]:
-            raise HTTPException(status_code=409,
-                                detail="A profile switch is running; wait for it to finish first.")
-        if _backup_state["running"]:
-            raise HTTPException(status_code=409,
-                                detail="A backup is running; wait for it to finish first.")
-        _repair_state.update({
-            "running": True,
-            "started_at": _now(),
-            "finished_at": None,
-            "steps": [],
-            "result": None,
-            "error": None,
-        })
-    threading.Thread(target=_run_repair, daemon=True, name="vaf-api-repair").start()
+    _claim_or_409(container_jobs.REPAIR)
+    _repair_state.update({
+        "running": True,
+        "started_at": _now(),
+        "finished_at": None,
+        "steps": [],
+        "result": None,
+        "error": None,
+    })
+    _start_job(_run_repair, (), "vaf-api-repair", container_jobs.REPAIR, _repair_state)
     return {"started": True, "started_at": _repair_state["started_at"]}
 
 
@@ -340,9 +340,11 @@ def update_apply(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
                     "terminal first, so this one does not start from a half-swapped "
                     "checkout."),
         )
-    if _repair_state["running"]:
-        raise HTTPException(status_code=409,
-                            detail="A repair is running; wait for it to finish first.")
+    # The update stops this server: a repair, a profile switch or a backup running now
+    # (the scheduled one included) would be cut off halfway.
+    other = container_jobs.running()
+    if other is not None:
+        raise HTTPException(status_code=409, detail=container_jobs.busy_message("update", other))
 
     blocker = _restart_blocker()
     if blocker:

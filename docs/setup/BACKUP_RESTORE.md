@@ -169,7 +169,12 @@ the agent runs, and a backup must neither depend on a model answering nor cost a
   admin's own timezone. The attempt is recorded before the backup starts, so a run that
   takes the process down with it is retried after the hour, not at every restart. A run that
   meets another backup into the same folder (`vaf backup create`, Back up now) is skipped,
-  not failed: that one is a backup too. A run is due when no backup is newer than the most recent slot: a
+  not failed: that one is a backup too. While a repair or a profile switch moves the
+  containers, the run waits for the next minute: the backup dumps the database from its
+  container, starting it when stopped and stopping it again, so beside a repair it could stop
+  the database the repair just started. One claim decides this for the repair, the profile
+  switch, Back up now, the schedule and an update (`vaf/core/container_jobs.py`); it covers the
+  server process, not a `vaf repair` typed in a terminal at the same moment. A run is due when no backup is newer than the most recent slot: a
   machine that was off at that time backs up a few minutes after it starts again, and a
   backup written by hand after the slot counts. A run that failed is tried again an hour
   later, not every minute. Off by default on a desktop (the disk is the person's); `vaf

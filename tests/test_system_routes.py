@@ -28,6 +28,8 @@ def client(monkeypatch):
         "profile": None, "result": None, "error": None,
     })
     monkeypatch.setattr(sr, "_update_started_at", None, raising=False)
+    from vaf.core import container_jobs
+    monkeypatch.setattr(container_jobs, "_running", None)
     app = FastAPI()
     app.include_router(sr.router)
     app.dependency_overrides[sr.require_admin] = lambda: {"username": "u", "role": "admin"}
@@ -228,13 +230,14 @@ def test_apply_refuses_a_package_install(client, appliable, monkeypatch):
 
 
 def test_apply_refuses_while_a_repair_runs(client, appliable):
-    sr._repair_state["running"] = True
+    from vaf.core import container_jobs
+    assert container_jobs.claim(container_jobs.REPAIR) is None
     try:
         resp = client.post("/api/system/update/apply")
         assert resp.status_code == 409
         assert appliable == []
     finally:
-        sr._repair_state["running"] = False
+        container_jobs.release(container_jobs.REPAIR)
 
 
 def test_apply_refuses_when_the_restart_would_not_come_back(client, appliable, monkeypatch):
@@ -395,7 +398,8 @@ def test_no_switch_starts_while_a_repair_runs(client, monkeypatch):
     from vaf.core import inference_profile
     monkeypatch.setattr(inference_profile, "apply",
                         lambda *a, **k: pytest.fail("a switch started beside a repair"))
-    sr._repair_state["running"] = True
+    from vaf.core import container_jobs
+    assert container_jobs.claim(container_jobs.REPAIR) is None
     answer = client.post("/api/system/inference-profile", json={"profile": "api"})
     assert answer.status_code == 409 and "repair" in answer.json()["detail"]
 

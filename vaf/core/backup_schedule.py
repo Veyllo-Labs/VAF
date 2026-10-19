@@ -87,9 +87,12 @@ def keep_counts(config: Optional[Dict] = None) -> Dict[str, int]:
     out = {}
     for key, default in (("daily", 7), ("weekly", 4), ("monthly", 6)):
         try:
-            out[key] = max(0, int(config.get(f"backup_keep_{key}", default)))
+            value = int(config.get(f"backup_keep_{key}", default))
         except (TypeError, ValueError):
-            out[key] = default
+            value = -1
+        # A negative number is no count (someone may have meant "unlimited"): the default,
+        # never 0, which would delete that whole bucket.
+        out[key] = value if value >= 0 else default
     return out
 
 

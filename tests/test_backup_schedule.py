@@ -66,6 +66,21 @@ def test_the_newest_backup_stays_whatever_the_numbers():
     assert backup.backups_to_keep(backups, daily=0, weekly=0, monthly=0) == [backups[0].path]
 
 
+def test_the_newest_dated_backup_stays_next_to_a_foreign_name():
+    """A name without a time sorts first in the list; the guarantee is for the newest dated
+    backup. MUTATION: keep the first of the list instead - red."""
+    foreign = backup.BackupInfo(Path("/b/vaf-backup-mine.tar.age"), 1, "mine")
+    backups = [foreign] + _daily(3)
+    kept = backup.backups_to_keep(backups, daily=0, weekly=0, monthly=0)
+    assert set(kept) == {foreign.path, backups[1].path}
+
+
+@pytest.mark.parametrize("value, expected", [(-1, 7), ("x", 7), (0, 0), (3, 3)])
+def test_a_retention_value_that_is_no_count_is_the_default(value, expected):
+    """MUTATION: clamp a negative value to 0 (deleting the whole bucket) - red."""
+    assert bs.keep_counts({"backup_keep_daily": value})["daily"] == expected
+
+
 def test_a_name_without_a_time_is_never_judged():
     """A file not written by this code is not this code's to delete. MUTATION: drop it - red."""
     foreign = backup.BackupInfo(Path("/b/vaf-backup-mine.tar.age"), 1, "mine")

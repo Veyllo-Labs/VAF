@@ -864,8 +864,6 @@ def backups_to_keep(backups: List[BackupInfo], *, daily: int, weekly: int,
         if path not in keep:
             keep.append(path)
 
-    if backups:
-        add(backups[0].path)
     dated = []
     for info in backups:
         when = backup_time(info)
@@ -873,6 +871,11 @@ def backups_to_keep(backups: List[BackupInfo], *, daily: int, weekly: int,
             add(info.path)
         else:
             dated.append((when, info))
+    # The newest by its time, not the first of the list: that one is sorted by the raw name,
+    # where a name without a time ("vaf-backup-mine") comes before every dated one.
+    dated.sort(key=lambda item: item[0], reverse=True)
+    if dated:
+        add(dated[0][1].path)
     for count, bucket in ((daily, lambda t: t.date()),
                           (weekly, lambda t: tuple(t.isocalendar())[:2]),
                           (monthly, lambda t: (t.year, t.month))):

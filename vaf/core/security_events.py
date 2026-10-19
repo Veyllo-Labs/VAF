@@ -69,9 +69,11 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
                        "(`vaf backup restore`). `path` the backup file, `detail` the proof the "
                        "person gave in the terminal, the safety backup of the state before and "
                        "whose backup it was",
-    "backup_restore_failed": "A restore from a backup stopped half way: this machine holds part "
-                             "of the backup. `path` the backup file, `detail` what stopped it, "
-                             "the proof, the safety backup to go back to and whose backup it was",
+    "backup_restore_failed": "A restore from a backup did not complete: it stopped half way "
+                             "(this machine holds part of the backup), or sandbox environments "
+                             "could not be recreated. `path` the backup file, `detail` what is "
+                             "missing, the proof, the safety backup to go back to and whose "
+                             "backup it was",
     "account_seal_broken": "An account row whose seal does not verify (changed in the database "
                            "outside VAF) was refused for a login, a token or its rights. "
                            "`path` names the check",

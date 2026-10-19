@@ -249,11 +249,21 @@ def roots() -> Dict[str, Path]:
     }
 
 
-def sealed_trees() -> Dict[str, Tuple[Path, Tuple[str, ...]]]:
+# The working memory of a launch (vaf/core/main_persistence.py): under the launch directory,
+# so not a root (the named boundary above), and written through the encrypted seam all the same.
+LAUNCH_MEMORY_GLOBS = ("*.json", "*.md", "sessions/*/*")
+
+
+def sealed_trees(*, with_launch_dir: bool = False) -> Dict[str, Tuple[Path, Tuple[str, ...]]]:
     """Every store written through the encrypted seam: its entry name -> (its root, the
-    globs relative to that root). The at-rest sweep and the key probe read this one list."""
+    globs relative to that root). The at-rest sweep and the key probe read this one list;
+    ``with_launch_dir`` adds the working memory under the current directory as
+    ``main_context``."""
     named = roots()
-    return {s.pattern: (named[s.root], s.sealed) for s in STORES if s.sealed}
+    trees = {s.pattern: (named[s.root], s.sealed) for s in STORES if s.sealed}
+    if with_launch_dir:
+        trees["main_context"] = (Path.cwd() / ".vaf" / "main", LAUNCH_MEMORY_GLOBS)
+    return trees
 
 
 def hardened_dirs() -> Dict[str, Path]:

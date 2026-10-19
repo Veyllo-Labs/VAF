@@ -625,6 +625,30 @@ def test_a_restore_that_stops_half_way_is_a_security_event_too(target, monkeypat
     assert "proof: this machine's recovery key" in detail and "safety: vaf-backup-" in detail
 
 
+@pytest.mark.parametrize("readopt", ["fails", "raises"])
+def test_a_restore_whose_environments_did_not_come_back_is_not_completed(target, monkeypatch,
+                                                                         readopt):
+    """Everything is in place but sandbox environments the reaper deletes at the next start:
+    the person is told to restore again, and the log must not say "restored". MUTATION: audit
+    without what is missing - red."""
+    from vaf.core import environments, security_events
+    seen = []
+    monkeypatch.setattr(security_events, "log_security_event",
+                        lambda kind, **kw: seen.append((kind, kw)))
+
+    def _readopt(self):
+        if readopt == "raises":
+            raise RuntimeError("docker did not answer")
+        return {"failed": ["e1", "e2"]}
+
+    monkeypatch.setattr(environments.EnvironmentManager, "readopt", _readopt)
+    made = backup.create_backup(target["out"], include_volumes=False)
+    result = backup.restore_backup(made.path, pre_restore=False, proof="the admin password")
+    assert any("sandbox environments" in w for w in result.warnings)
+    assert [k for k, _ in seen] == ["backup_restore_failed"]
+    assert seen[0][1]["detail"].startswith("sandbox environments not recreated")
+
+
 def test_the_restore_event_keeps_the_origin_inside_the_logged_200_characters(monkeypatch):
     """The log keeps 200 characters of `detail`. With the longest proof the terminal gives, a
     long failure, a long host name and a dated safety backup, the origin of the backup (host,

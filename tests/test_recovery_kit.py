@@ -108,6 +108,10 @@ def test_under_a_master_passphrase_the_note_says_the_passphrase_stays_needed(
     path = recovery_kit.write_kit("AGE-SECRET-KEY-1EXAMPLE")
     text = path.read_text(encoding="utf-8")
     assert ("does not replace it" in text) == bool(passphrase)
+    # And the list of what a recovery needs names it as a third thing.
+    needs = text.split("## What you need to recover", 1)[1].split("## How to recover", 1)[0]
+    assert needs.lstrip().startswith("Three things" if passphrase else "Two things")
+    assert ("3. the master passphrase" in needs) == bool(passphrase)
 
 
 def test_the_note_ships_exactly_one_encoding_of_the_secret(_desktop):

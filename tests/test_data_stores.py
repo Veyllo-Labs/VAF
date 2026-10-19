@@ -177,7 +177,7 @@ def test_a_directory_that_cannot_be_read_is_not_passed_over(fake_roots):
 # Modules that write through the encrypted seam without owning a sealed store, and why.
 _SEAM_WRITERS_WITHOUT_A_ROW = {
     "vaf/core/main_persistence.py": "the working memory under the launch directory, which is "
-                                    "not a root; the sweep adds it as main_context",
+                                    "not a root; sealed_trees(with_launch_dir=True) adds it",
     "vaf/core/forget_secrets.py": "rewrites a file of another store in place, keeping whether "
                                   "it was encrypted",
     "vaf/core/at_rest_migration.py": "the sweep itself",
@@ -240,6 +240,18 @@ def test_the_key_probe_finds_ciphertext_in_every_sealed_store(fake_roots, rel):
     path = fake_roots["vaf"] / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data_files.FILE_MAGIC + b"\0" * 32)
+    assert data_files._encrypted_files_exist()
+
+
+def test_the_key_probe_finds_ciphertext_in_the_working_memory_of_this_launch(
+        fake_roots, tmp_path, monkeypatch):
+    """The sweep encrypts the working memory under the launch directory as well; ciphertext
+    there is ciphertext a new key would orphan. MUTATION: probe without the launch dir - red."""
+    from vaf.core import data_files
+    launch = tmp_path / "project"
+    (launch / ".vaf" / "main").mkdir(parents=True)
+    (launch / ".vaf" / "main" / "working_memory.json").write_bytes(data_files.FILE_MAGIC + b"\0" * 32)
+    monkeypatch.chdir(launch)
     assert data_files._encrypted_files_exist()
 
 

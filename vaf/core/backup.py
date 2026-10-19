@@ -1262,8 +1262,9 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
 
     Every restore that changed something is a security event, written after the files are
     in place (so into the restored log, not into one the restore then replaces):
-    `backup_restored`, or `backup_restore_failed` when it stopped half way, with ``proof``,
-    how the caller proved the person (the admin password, the recovery key)."""
+    `backup_restored`, or `backup_restore_failed` when it did not complete (it stopped half
+    way, or sandbox environments could not be recreated), with ``proof``, how the caller
+    proved the person (the admin password, the recovery key)."""
     from vaf.core.secure_store import rewrap_from_kek
 
     say = progress or (lambda _msg: None)
@@ -1365,13 +1366,19 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
         say("Recreating the sandbox environments")
         from vaf.core.environments import EnvironmentManager, _host_user
         manager = EnvironmentManager()
+        # Environments that did not come back make the restore incomplete, not failed: the
+        # rest is in place, and the security event says what is still missing.
+        incomplete = ""
         try:
             report = manager.readopt()
         except Exception as e:
             report = {}
+            incomplete = "sandbox environments not recreated"
             warnings.append(f"The sandbox environments could not be recreated ({e}). VAF "
                             "deletes them at its next start unless you run this restore again "
                             "first.")
+        if report.get("failed"):
+            incomplete = f"sandbox environments not recreated: {len(report['failed'])}"
         for key, text in (("dropped", "temporary sandbox environments were dropped (they "
                                       "would have expired)"),
                           ("missing_folder", "project environments mount a folder that does "
@@ -1396,7 +1403,7 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
                         continue          # its environment was dropped: no orphan volume
                     _restore_volume(tar_path, volume, image, owner=_host_user())
                 volumes += 1
-        _audit_restore(path, manifest, proof, pre)
+        _audit_restore(path, manifest, proof, pre, failure=incomplete)
         return RestoreResult(manifest, files, rewrapped, volumes, pre, warnings)
     except (Exception, KeyboardInterrupt) as e:
         if not changed:
@@ -1412,8 +1419,8 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
 def _audit_restore(path: Path, manifest: Dict, proof: str, pre: Optional[Path],
                    failure: str = "") -> None:
     """`backup_restored` in the security log: every account, key and chat of this machine
-    was replaced by a backup's; `backup_restore_failed` when that stopped half way. Never
-    raises: the restore is done either way."""
+    was replaced by a backup's; `backup_restore_failed` when that did not complete, with
+    ``failure`` saying what is missing. Never raises: the restore is done either way."""
     try:
         from vaf.core.security_events import log_security_event
         # The log keeps 200 characters of `detail`, so every field has its own bound and the

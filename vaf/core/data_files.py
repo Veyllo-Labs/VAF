@@ -94,13 +94,14 @@ def _encrypted_files_exist() -> bool:
     """Cheap probe: does any store already hold a VAFENC1 file?
 
     The stores are the ones the at-rest sweep encrypts, from the same list
-    (vaf/core/data_stores.py, `sealed`). A hand list here had fallen behind it:
-    a machine whose only ciphertext was an archived chat, a room or a word list
-    looked like a fresh install, and a key would have been minted over it.
+    (vaf/core/data_stores.py, `sealed`, with the working memory of this launch).
+    A hand list here had fallen behind it: a machine whose only ciphertext was an
+    archived chat, a room or a word list looked like a fresh install, and a key
+    would have been minted over it.
     """
     try:
         from vaf.core.data_stores import sealed_trees
-        trees = sealed_trees()
+        trees = sealed_trees(with_launch_dir=True)
     except Exception:
         return False
     for root, patterns in trees.values():

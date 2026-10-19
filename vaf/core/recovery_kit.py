@@ -259,11 +259,16 @@ def write_kit(secret_b64: str) -> Optional[Path]:
         ring = recovery_wrap_path()
         # Under a master passphrase the password stores are sealed with a key derived from
         # it, which the wrap does not carry: the note must not promise those stores alone.
+        passphrase = bool(_get_passphrase())
         passphrase_note = ("""
 
 The password stores on this machine are sealed under a master passphrase
 (`VAF_MASTER_PASSPHRASE`). This key does not replace it: keep the passphrase as
-well, or those stores stay closed on a new machine.""" if _get_passphrase() else "")
+well, or those stores stay closed on a new machine.""" if passphrase else "")
+        passphrase_item = ("""
+3. the master passphrase (`VAF_MASTER_PASSPHRASE`), set again on the new machine
+   before VAF starts.
+""" if passphrase else "")
         text = f"""# VAF - back this up
 
 **This file is a key. Anyone holding it can read your VAF chats.** Move it off
@@ -298,7 +303,7 @@ also opens the backups VAF writes (`vaf backup`).{passphrase_note}
 
 ## What you need to recover
 
-Two things, and the key alone is not enough:
+{"Three" if passphrase else "Two"} things, and the key alone is not enough:
 
 1. this recovery key,
 2. a backup of the folder
@@ -313,7 +318,7 @@ Two things, and the key alone is not enough:
    `vaf backup create` writes all of it, the folders and the database, into one
    file this key opens; on the new machine `vaf backup restore <file>
    --recovery-key` puts it back.
-
+{passphrase_item}
 ## How to recover
 
 On the new machine, after installing VAF, put the folder back, restore your data,

@@ -178,6 +178,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path, PureWindowsPath
+from typing import Optional
 from unittest import mock
 
 import pytest
@@ -644,26 +645,86 @@ _SHEBANG_LITERAL = re.compile(r"""["']#!/(?:bin|usr)/""")
 # chmod(0o755), TarInfo.mode = 0o755: the tell that it is meant to be STARTED. The mode
 # is read as a number rather than matched digit by digit, so 0o700 counts as well.
 _OCTAL_MODE = re.compile(r"(?:chmod\(\s*|\bmode\s*=\s*)(0o[0-7]{3,4})")
-# A skip keyed on the host being Windows, in any of the spellings this suite uses, the
-# condition read through one level of nested calls (`__import__("os").name`, `which("git")`).
-_WINDOWS_SKIP = re.compile(r"""skipif\((?:[^()]|\([^()]*\))*?"""
-                           r"""(?:os\.name|\(["']os["']\)\.name|sys\.platform|platform\.system)""",
-                           re.S)
+# What the platform probes this suite uses answer on Windows. A skip is a Windows skip when
+# its condition, evaluated with these, is true: `os.name == "nt"` and
+# `platform.system() != "Linux"` are, `os.name != "nt"` (a Windows-only test) is not.
+_ON_WINDOWS = {"os.name": "nt", "sys.platform": "win32", "platform.system()": "Windows"}
+
+
+def _probe(node) -> Optional[str]:
+    """The Windows value of a platform probe (`os.name`, `__import__("os").name`,
+    `sys.platform`, `platform.system()`), or None for anything else."""
+    if isinstance(node, ast.Call) and not node.args and isinstance(node.func, ast.Attribute):
+        if ast.unparse(node.func) == "platform.system":
+            return _ON_WINDOWS["platform.system()"]
+    if isinstance(node, ast.Attribute):
+        owner = node.value
+        if (isinstance(owner, ast.Call) and getattr(owner.func, "id", "") == "__import__"
+                and owner.args and isinstance(owner.args[0], ast.Constant)):
+            owner = ast.Name(id=str(owner.args[0].value))
+        if isinstance(owner, ast.Name):
+            return _ON_WINDOWS.get(f"{owner.id}.{node.attr}")
+    return None
+
+
+def _true_on_windows(node) -> Optional[bool]:
+    """A skip condition evaluated as on Windows: True, False, or None when it does not depend
+    on the platform alone (a missing git, a constant this scan cannot see)."""
+    if isinstance(node, ast.BoolOp):
+        values = [_true_on_windows(v) for v in node.values]
+        if isinstance(node.op, ast.Or):
+            return True if True in values else (None if None in values else False)
+        return False if False in values else (None if None in values else True)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        inner = _true_on_windows(node.operand)
+        return None if inner is None else not inner
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "startswith" and node.args
+            and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+        value = _probe(node.func.value)
+        return None if value is None else value.startswith(node.args[0].value)
+    if isinstance(node, ast.Compare) and len(node.ops) == 1:
+        left, right = node.left, node.comparators[0]
+        value = _probe(left) if _probe(left) is not None else _probe(right)
+        other = right if _probe(left) is not None else left
+        if value is None or not isinstance(other, ast.Constant):
+            return None
+        op = node.ops[0]
+        if isinstance(op, ast.Eq):
+            return value == other.value
+        if isinstance(op, ast.NotEq):
+            return value != other.value
+        if isinstance(op, (ast.In, ast.NotIn)) and isinstance(other.value, (str, tuple)):
+            return (value in other.value) == isinstance(op, ast.In)
+    return None
+
+
+def _skips_windows(node) -> bool:
+    """True when ``node`` (a decorator, a `pytestmark` value) holds a `skipif` whose
+    condition is true on Windows."""
+    for call in ast.walk(node):
+        if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "skipif"):
+            condition = call.args[0] if call.args else next(
+                (k.value for k in call.keywords if k.arg == "condition"), None)
+            if condition is not None and _true_on_windows(condition) is True:
+                return True
+    return False
 
 
 def _marks_something_executable(segment: str) -> bool:
     return any(int(m.group(1), 8) & 0o111 for m in _OCTAL_MODE.finditer(segment))
 
 
-def _module_skips_windows(tree: ast.Module, source: str) -> bool:
-    """A module-level `pytestmark` keyed on Windows. Read from the module's own statements:
-    the text before the first `def` also holds that function's decorators, and a skip on
-    the first test would then have exempted every test after it."""
+def _module_skips_windows(tree: ast.Module) -> bool:
+    """A module-level `pytestmark` that skips on Windows. Read from the module's own
+    statements: the text before the first `def` also holds that function's decorators, and a
+    skip on the first test would then have exempted every test after it."""
     for node in tree.body:
         if (isinstance(node, (ast.Assign, ast.AnnAssign))
                 and any(getattr(t, "id", "") == "pytestmark"
                         for t in (node.targets if isinstance(node, ast.Assign) else [node.target]))
-                and _WINDOWS_SKIP.search(ast.get_source_segment(source, node) or "")):
+                and node.value is not None and _skips_windows(node.value)):
             return True
     return False
 
@@ -674,7 +735,7 @@ def _exec_stub_functions(path: Path):
     if not _SHEBANG_LITERAL.search(source):
         return []
     tree = ast.parse(source)
-    if _module_skips_windows(tree, source):
+    if _module_skips_windows(tree):
         return []                                    # a module-level skip covers the file
     offenders = []
     for node in ast.walk(tree):
@@ -683,8 +744,7 @@ def _exec_stub_functions(path: Path):
         segment = ast.get_source_segment(source, node) or ""
         if not (_SHEBANG_LITERAL.search(segment) and _marks_something_executable(segment)):
             continue
-        decorators = "\n".join(ast.get_source_segment(source, d) or "" for d in node.decorator_list)
-        if _WINDOWS_SKIP.search(decorators):
+        if any(_skips_windows(d) for d in node.decorator_list):
             continue
         offenders.append((node.lineno, node.name))
     return offenders
@@ -841,20 +901,21 @@ def test_the_ftp_test_server_maps_paths_under_windows_semantics(tmp_path):
 # 9. A POSIX literal expected back from the str() of a Path
 # ---------------------------------------------------------------------------
 
-_PATH_CALLS = {"Path", "PurePath", "PosixPath", "PurePosixPath"}
+# The host-flavoured constructors. PurePosixPath renders "/" on every host, so a literal
+# asserted back from it is right everywhere and is not this guard's business.
+_PATH_CALLS = {"Path", "PurePath", "PosixPath"}
 
 
 def _posix_literal_expectations(source: str):
     """(line_no, function, literal) per literal a test passes to Path(...) and asserts bare."""
     tree = ast.parse(source)
-    if _module_skips_windows(tree, source):
+    if _module_skips_windows(tree):
         return []                                    # a module-level skip covers the file
     hits = []
     for fn in ast.walk(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        decorators = "\n".join(ast.get_source_segment(source, d) or "" for d in fn.decorator_list)
-        if _WINDOWS_SKIP.search(decorators):
+        if any(_skips_windows(d) for d in fn.decorator_list):
             continue
         wrapped, path_args = set(), set()
         for node in ast.walk(fn):
@@ -881,10 +942,34 @@ def test_the_posix_literal_class_is_real():
     assert _posix_literal_expectations(
         'def test_x():\n    p = Path("/b/old")\n    assert record(p) == ["/b/old"]\n'
     ) == [(3, "test_x", "/b/old")]
-    # The same literal compared through Path is right on every host.
+    # The same literal compared through Path is right on every host, and so is one that a
+    # PurePosixPath renders.
     assert _posix_literal_expectations(
         'def test_x():\n    p = Path("/b/old")\n    assert record(p) == [str(Path("/b/old"))]\n'
     ) == []
+    assert _posix_literal_expectations(
+        'def test_x():\n    p = PurePosixPath("/b/old")\n    assert str(p) == "/b/old"\n'
+    ) == []
+
+
+@pytest.mark.parametrize("condition, exempt", [
+    ('os.name == "nt"', True),
+    ('__import__("os").name == "nt"', True),
+    ('sys.platform == "win32"', True),
+    ('sys.platform.startswith("win")', True),
+    ('platform.system() != "Linux"', True),
+    ('os.name == "nt" or not hasattr(os, "fork")', True),
+    ('os.name != "nt"', False),                      # a Windows-only test: it RUNS there
+    ('sys.platform != "win32"', False),
+    ('shutil.which("git") is None', False),          # not about the platform
+    ('os.name == "nt" and shutil.which("x") is None', False),
+])
+def test_a_skip_counts_only_when_its_condition_is_true_on_windows(condition, exempt):
+    """MUTATION: count any skipif that names os.name - the Windows-only test is exempted - red."""
+    source = ('import os, sys, platform, shutil, pytest\n'
+              f'@pytest.mark.skipif({condition}, reason="r")\n'
+              'def test_b():\n    p = Path("/b/old")\n    assert record(p) == ["/b/old"]\n')
+    assert (_posix_literal_expectations(source) == []) is exempt
 
 
 def test_a_skip_on_the_first_test_does_not_exempt_the_file():

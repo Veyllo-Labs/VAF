@@ -86,11 +86,10 @@ def run_once(*, force: bool = False) -> Dict[str, object]:
     vaf_dir = Path(Platform.vaf_dir())
 
     # The stores and their files come from the one list (vaf/core/data_stores.py, `sealed`),
-    # which the key probe in data_files reads as well. The working memory of a launch is
-    # under the launch directory, which is not a root of that list, so it is added here.
+    # which the key probe in data_files reads as well, the working memory of this launch
+    # (`main_context`, under the launch directory) included.
     sealed = data_stores.sealed_trees()
-    trees = dict(sealed)
-    trees["main_context"] = (Path.cwd() / ".vaf" / "main", ("*.json", "*.md", "sessions/*/*"))
+    trees = data_stores.sealed_trees(with_launch_dir=True)
 
     # Modes first: they apply whether or not encryption is on, and they are the
     # only protection a second local account ever sees.

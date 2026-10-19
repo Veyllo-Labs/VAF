@@ -663,7 +663,9 @@ def test_a_restore_whose_environments_did_not_come_back_is_not_completed(
     if kind == "backup_restore_failed":
         assert seen[0][1]["detail"].startswith(result.incomplete)
         assert result.incomplete.startswith("sandbox environments not recreated")
-        assert any("sandbox environments" in w or "project environments" in w
+        # Named by id whatever the outcome, since the terminal says what is named is deleted.
+        # MUTATION: leave the ids out of the warning for a readopt that raised - red.
+        assert any(("sandbox environments" in w or "project environments" in w) and "e1" in w
                    for w in result.warnings)
 
 

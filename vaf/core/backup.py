@@ -1380,8 +1380,11 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
         except Exception as e:
             report = {}
             if staged_projects:
-                incomplete = "sandbox environments not recreated"
-            warnings.append(f"The sandbox environments could not be recreated ({e}). VAF "
+                incomplete = f"sandbox environments not recreated: {len(staged_projects)}"
+            # By id, as the other outcomes below: the terminal tells the person that what is
+            # named here is deleted at the next start.
+            named = f": {', '.join(staged_projects)}" if staged_projects else ""
+            warnings.append(f"The sandbox environments could not be recreated ({e}){named}. VAF "
                             "deletes them at its next start unless you run this restore again "
                             "first.")
         lost = len(report.get("failed") or []) + len(report.get("missing_folder") or [])

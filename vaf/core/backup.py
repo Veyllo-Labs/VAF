@@ -1403,9 +1403,8 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
             raise
         # Past the clearing, this machine holds part of the backup: whatever stopped it, the
         # person needs to know that, and where the state before it is.
-        message = _half_way(e, pre)
-        _audit_restore(path, manifest, proof, pre, failure=message)
-        raise BackupError(message) from e
+        _audit_restore(path, manifest, proof, pre, failure=_failure_reason(e))
+        raise BackupError(_half_way(e, pre)) from e
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
@@ -1416,13 +1415,15 @@ def _audit_restore(path: Path, manifest: Dict, proof: str, pre: Optional[Path],
     was replaced by a backup's, or partly. Never raises: the restore is done either way."""
     try:
         from vaf.core.security_events import log_security_event
-        outcome = f"did not finish: {failure}" if failure else "complete"
+        # The log keeps 200 characters of `detail`: what the event exists for comes first
+        # (the outcome, the proof, the safety backup), the origin of the backup last.
+        outcome = f"did not finish ({failure[:60]})" if failure else "complete"
         log_security_event(
             "backup_restored", path=Path(path).name,
-            detail=(f"{outcome}; backup of {manifest.get('host', '?')} written "
-                    f"{manifest.get('created_at', '?')} by VAF {manifest.get('vaf_version', '?')}; "
-                    f"in a terminal on this machine, proof: {proof or 'not given'}; "
-                    f"safety backup: {Path(pre).name if pre else 'none'}"))
+            detail=(f"{outcome}; proof: {proof or 'not given'}; "
+                    f"safety backup: {Path(pre).name if pre else 'none'}; "
+                    f"backup of {manifest.get('host', '?')} written "
+                    f"{manifest.get('created_at', '?')} by VAF {manifest.get('vaf_version', '?')}"))
     except Exception:
         pass
 
@@ -1434,13 +1435,17 @@ def _quiet(read: Callable[[], Optional[str]]) -> Optional[str]:
         return None
 
 
-def _half_way(error: BaseException, pre: Optional[Path]) -> str:
+def _failure_reason(error: BaseException) -> str:
+    """What stopped a restore, in a few words: the message, the person's text and the log's."""
     if isinstance(error, BackupError):
-        reason = str(error).rstrip(".")
-    elif isinstance(error, KeyboardInterrupt):
-        reason = "it was interrupted"
-    else:
-        reason = f"{type(error).__name__}: {error}"
+        return str(error).rstrip(".")
+    if isinstance(error, KeyboardInterrupt):
+        return "it was interrupted"
+    return f"{type(error).__name__}: {error}"
+
+
+def _half_way(error: BaseException, pre: Optional[Path]) -> str:
+    reason = _failure_reason(error)
     where = (f" The state before it is in the safety backup {pre}: `vaf backup restore {pre}` "
              "puts it back (with --recovery-key if this machine's key no longer opens it)."
              if pre else " There is no safety backup of the state before it "

@@ -617,7 +617,12 @@ def test_a_restore_that_stops_half_way_is_a_security_event_too(target, monkeypat
     with pytest.raises(backup.BackupError):
         backup.restore_backup(made.path, proof="this machine's recovery key")
     assert [k for k, _ in seen] == ["backup_restored"]
-    assert seen[0][1]["detail"].startswith("did not finish")
+    detail = seen[0][1]["detail"]
+    assert detail.startswith("did not finish")
+    # The log keeps 200 characters: the proof and the safety backup must be inside them.
+    # MUTATION: put the full half-way message or the origin first - red.
+    kept = detail[:200]
+    assert "proof: this machine's recovery key" in kept and "safety backup: vaf-backup-" in kept
 
 
 @pytest.mark.parametrize("failure", [OSError("No space left on device"),

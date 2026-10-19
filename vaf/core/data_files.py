@@ -106,13 +106,12 @@ def _encrypted_files_exist() -> bool:
     whose `.vaf/main` held another home's sealed working memory. What the refusal
     protects there is per-session scratch state the garbage collector removes by
     age anyway.
+
+    A failure to list the stores propagates: read as "nothing there", it would let
+    `_key` mint a key over ciphertext that exists.
     """
-    try:
-        from vaf.core.data_stores import sealed_trees
-        trees = sealed_trees()
-    except Exception:
-        return False
-    for root, patterns in trees.values():
+    from vaf.core.data_stores import sealed_trees
+    for root, patterns in sealed_trees().values():
         for path in (p for pattern in patterns for p in root.glob(pattern)):
             try:
                 with open(path, "rb") as handle:

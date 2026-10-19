@@ -258,6 +258,20 @@ def test_a_launch_directory_with_foreign_ciphertext_does_not_block_the_key(
     assert not data_files._encrypted_files_exist()
 
 
+def test_a_store_list_that_cannot_be_read_never_means_a_fresh_install(monkeypatch):
+    """`_key` mints a new file-store key when the probe says no ciphertext exists. A probe
+    that answered False because it could not list the stores would mint over existing data.
+    MUTATION: swallow the error and answer False again - red."""
+    from vaf.core import data_files
+
+    def _broken(**_kw):
+        raise OSError("the store list could not be read")
+
+    monkeypatch.setattr(ds, "sealed_trees", _broken)
+    with pytest.raises(OSError):
+        data_files._encrypted_files_exist()
+
+
 def test_a_plaintext_archived_chat_keeps_the_store_tolerant(fake_roots):
     """The sweep closes plaintext reads once it finds none left. Archived chats were not in
     its list, so it closed them over a plaintext archive, and the archive view swallowed the

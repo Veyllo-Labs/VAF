@@ -1120,9 +1120,9 @@ def test_a_skip_on_the_first_test_does_not_exempt_the_file():
 def test_no_test_expects_a_posix_literal_back_from_a_path():
     """MUTATION: assert `["/b/old"]` in tests/test_backup_schedule.py again - red."""
     hits = []
-    for path in sorted((_REPO / "tests").rglob("*.py")):
+    for rel, path in _tracked_python_files(roots=("tests/",)):
         for no, fn, literal in _posix_literal_expectations(path.read_text(encoding="utf-8")):
-            hits.append(f"{path.relative_to(_REPO).as_posix()}:{no} {fn} {literal!r}")
+            hits.append(f"{rel}:{no} {fn} {literal!r}")
     assert not hits, (
         "str() of a Path renders with the host's separator; compare with str(Path(...)) "
         "of the literal, or with .as_posix() if the record is meant to be POSIX:\n  "

@@ -684,31 +684,46 @@ def _true_on_windows(node) -> Optional[bool]:
         value = _probe(node.func.value)
         return None if value is None else value.startswith(node.args[0].value)
     if isinstance(node, ast.Compare) and len(node.ops) == 1:
-        left, right = node.left, node.comparators[0]
-        value = _probe(left) if _probe(left) is not None else _probe(right)
-        other = right if _probe(left) is not None else left
-        if value is None or not isinstance(other, ast.Constant):
+        # Each side as Windows sees it, in its own place: `"win" in sys.platform` and
+        # `sys.platform in ("win32", "cygwin")` are both membership, the other way round.
+        left, right = _operand(node.left), _operand(node.comparators[0])
+        if left is None or right is None or not (_probe(node.left) or _probe(node.comparators[0])):
             return None
         op = node.ops[0]
         if isinstance(op, ast.Eq):
-            return value == other.value
+            return left == right
         if isinstance(op, ast.NotEq):
-            return value != other.value
-        if isinstance(op, (ast.In, ast.NotIn)) and isinstance(other.value, (str, tuple)):
-            return (value in other.value) == isinstance(op, ast.In)
+            return left != right
+        if isinstance(op, (ast.In, ast.NotIn)) and isinstance(right, (str, tuple)):
+            return (left in right) == isinstance(op, ast.In)
+    return None
+
+
+def _operand(node):
+    """A comparison side as Windows sees it: a probe's value, a constant, or a tuple of
+    constants (a list or set literal counts as one). None for anything else."""
+    value = _probe(node)
+    if value is not None:
+        return value
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)) and all(
+            isinstance(e, ast.Constant) for e in node.elts):
+        return tuple(e.value for e in node.elts)
     return None
 
 
 def _skips_windows(node) -> bool:
-    """True when ``node`` (a decorator, a `pytestmark` value) holds a `skipif` whose
-    condition is true on Windows."""
-    for call in ast.walk(node):
-        if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-                and call.func.attr == "skipif"):
-            condition = call.args[0] if call.args else next(
-                (k.value for k in call.keywords if k.arg == "condition"), None)
-            if condition is not None and _true_on_windows(condition) is True:
-                return True
+    """True when ``node`` (a decorator, a `pytestmark` value or a list of marks) IS a `skipif`
+    whose condition is true on Windows. Only the mark itself: a skip inside a parametrize
+    case (`pytest.param(..., marks=...)`) skips that case, and the others still run there."""
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return any(_skips_windows(e) for e in node.elts)
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "skipif"):
+        condition = node.args[0] if node.args else next(
+            (k.value for k in node.keywords if k.arg == "condition"), None)
+        return condition is not None and _true_on_windows(condition) is True
     return False
 
 
@@ -963,6 +978,10 @@ def test_the_posix_literal_class_is_real():
     ('sys.platform != "win32"', False),
     ('shutil.which("git") is None', False),          # not about the platform
     ('os.name == "nt" and shutil.which("x") is None', False),
+    ('sys.platform in ("win32", "cygwin")', True),   # membership in a tuple literal
+    ('"win" in sys.platform', True),                 # and the other way round
+    ('"linux" in sys.platform', False),
+    ('sys.platform not in ["win32"]', False),
 ])
 def test_a_skip_counts_only_when_its_condition_is_true_on_windows(condition, exempt):
     """MUTATION: count any skipif that names os.name - the Windows-only test is exempted - red."""
@@ -970,6 +989,17 @@ def test_a_skip_counts_only_when_its_condition_is_true_on_windows(condition, exe
               f'@pytest.mark.skipif({condition}, reason="r")\n'
               'def test_b():\n    p = Path("/b/old")\n    assert record(p) == ["/b/old"]\n')
     assert (_posix_literal_expectations(source) == []) is exempt
+
+
+def test_a_skip_on_one_parametrize_case_does_not_exempt_the_others():
+    """`pytest.param(..., marks=skipif(os.name == "nt"))` skips that case only; the function
+    still runs on Windows for the rest. MUTATION: look for a skipif anywhere inside the
+    decorator again - the hit goes unreported, red."""
+    source = ('import os, pytest\n'
+              '@pytest.mark.parametrize("x", [1, pytest.param(2, marks=pytest.mark.skipif('
+              'os.name == "nt", reason="r"))])\n'
+              'def test_b(x):\n    p = Path("/b/old")\n    assert record(p) == ["/b/old"]\n')
+    assert _posix_literal_expectations(source) == [(5, "test_b", "/b/old")]
 
 
 def test_a_skip_on_the_first_test_does_not_exempt_the_file():

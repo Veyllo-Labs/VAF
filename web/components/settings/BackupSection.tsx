@@ -143,9 +143,11 @@ export default function BackupSection({ config, onChange }: {
 
     const schedule = String(config.backup_schedule || 'off').trim().toLowerCase();
     const running = !!data?.job.running;
+    // A field the admin cleared stays empty (saved as no count, which the backend replaces
+    // with the default); the default shows as its placeholder instead of filling it back in.
     const keep = (key: string, fallback: number) => {
         const value = config[key];
-        return value === undefined || value === null || value === '' ? fallback : value;
+        return value === undefined || value === null ? fallback : value;
     };
     const keepInput = (key: string, label: string, fallback: number) => (
         <label className="flex flex-col gap-1.5">
@@ -154,6 +156,7 @@ export default function BackupSection({ config, onChange }: {
                 type="number"
                 min={0}
                 value={keep(key, fallback)}
+                placeholder={String(fallback)}
                 onChange={(e) => {
                     // A cleared field stays empty, which the backend reads as "no count" and
                     // replaces with the default (keep_counts); 0 would delete that whole bucket.

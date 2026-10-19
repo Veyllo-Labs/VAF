@@ -254,10 +254,13 @@ NOW = dt.datetime(2026, 10, 19, 15, 0, tzinfo=UTC)
      {"last_success_at": "2026-10-18T03:00:00+00:00", "last_attempt_at": "2026-10-19T03:00:00+00:00",
       "last_error": "disk full"}, NOW - dt.timedelta(hours=6), "ok", "6 hours"),
 ])
-def test_the_backup_row_of_the_health_check(config, state, newest, status, says):
+def test_the_backup_row_of_the_health_check(config, state, newest, status, says, monkeypatch):
     """Never down, degraded when a run failed or the newest backup is too old; a backup by hand
     after the failed run clears it. MUTATION: ignore the failed run, the age, or the backup by
     hand - red."""
+    # `newest=None` makes backup_check look in the backup folder; the real one is not this
+    # test's, and a backup lying there turned the "none yet" case green.
+    monkeypatch.setattr(bs, "newest_backup", lambda: None)
     row = bs.backup_check(config, current=NOW, state=state, newest=newest)
     assert row["status"] == status and says in row["reason"]
 

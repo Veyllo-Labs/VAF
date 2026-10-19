@@ -65,6 +65,10 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "password_changed": "An account's password was set anew: by the account itself or by an "
                         "admin in Settings, or in a terminal on this machine (`vaf users "
                         "reset-password`, with the proof it took in `detail`)",
+    "backup_restored": "Everything VAF keeps on this machine was replaced by a backup's "
+                       "(`vaf backup restore`), or partly when it did not finish. `path` the "
+                       "backup file, `detail` the outcome, whose backup it was, the proof the "
+                       "person gave in the terminal and the safety backup of the state before",
     "account_seal_broken": "An account row whose seal does not verify (changed in the database "
                            "outside VAF) was refused for a login, a token or its rights. "
                            "`path` names the check",

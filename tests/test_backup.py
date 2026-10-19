@@ -301,6 +301,41 @@ def test_a_recovery_key_restore_over_an_admin_account_is_this_machines_key(
         assert asked == [] and "Backup of h" in out.output
 
 
+@pytest.mark.parametrize("args, stored, opens_here, proof", [
+    ([], "hash", True, "the admin password"),
+    (["--recovery-key"], "hash", True, "this machine's recovery key"),
+    (["--recovery-key"], None, False, "the recovery key (a machine without an admin account)"),
+])
+def test_the_restore_names_the_proof_it_took(monkeypatch, tmp_path, args, stored, opens_here,
+                                            proof):
+    """The security event says how the person proved it was them. MUTATION: pass no proof,
+    or the wrong one - red."""
+    from types import SimpleNamespace
+
+    from typer.testing import CliRunner
+
+    import vaf.cli.gate as gate
+    import vaf.core.instance as instance
+    from vaf.cli.cmd import backup as backup_cmd
+    given = []
+    monkeypatch.setattr(gate, "require_admin_password", lambda force=False: True)
+    monkeypatch.setattr(gate, "_stored_hash", lambda: (stored, False))
+    monkeypatch.setattr(gate, "is_interactive", lambda: True)
+    monkeypatch.setattr(instance, "find_service", lambda: None)
+    monkeypatch.setattr(recovery_kit, "unwrap_with_secret",
+                        lambda secret: b"d" * 32 if opens_here else None)
+    monkeypatch.setattr("getpass.getpass", lambda prompt="": "AGE-SECRET-KEY-1X")
+    monkeypatch.setattr(backup, "read_manifest", lambda path, identity=None: {"host": "h"})
+    monkeypatch.setattr(backup, "restore_backup", lambda path, **kw: given.append(kw["proof"])
+                        or SimpleNamespace(files=1, volumes=0, rewrapped=[], pre_restore=None,
+                                           warnings=[]))
+    archive = tmp_path / "x.tar.age"
+    archive.write_bytes(b"x")
+    out = CliRunner().invoke(backup_cmd.app, ["restore", str(archive), "--yes", *args])
+    assert out.exit_code == 0, out.output
+    assert given == [proof]
+
+
 def test_volumes_are_taken_by_name_read_only_even_without_their_container(tmp_path, monkeypatch):
     """A personal browser's container is recreated while its profile volume stays; taken by
     container, a profile whose container is gone was missing from the backup (measured: one
@@ -550,6 +585,39 @@ def test_a_failing_role_restore_stops_the_restore(tmp_path, monkeypatch):
         backup._restore_postgres(tmp_path, {"postgres": {"role": "vaf", "database": "vaf_memory"}},
                                  "vaf-memory-db")
     assert "roles" in str(err.value) and "could not connect" in str(err.value)
+
+
+def test_a_restore_is_a_security_event_with_its_proof(target, monkeypatch):
+    """Every account, key and chat of the machine was replaced: the security log says so,
+    with the proof the person gave. MUTATION: drop the event, or its proof - red."""
+    from vaf.core import security_events
+    seen = []
+    monkeypatch.setattr(security_events, "log_security_event",
+                        lambda kind, **kw: seen.append((kind, kw)))
+    made = backup.create_backup(target["out"], include_volumes=False)
+    backup.restore_backup(made.path, pre_restore=False, proof="the admin password")
+    assert [k for k, _ in seen] == ["backup_restored"]
+    detail = seen[0][1]["detail"]
+    assert detail.startswith("complete") and "proof: the admin password" in detail
+    assert seen[0][1]["path"] == made.path.name
+
+
+def test_a_restore_that_stops_half_way_is_a_security_event_too(target, monkeypatch):
+    """Half replaced is replaced. MUTATION: only log the complete ones - red."""
+    from vaf.core import security_events
+    seen = []
+    monkeypatch.setattr(security_events, "log_security_event",
+                        lambda kind, **kw: seen.append((kind, kw)))
+    made = backup.create_backup(target["out"], include_volumes=False)
+
+    def _boom(*a, **k):
+        raise backup.BackupError("The database did not take the dump.")
+
+    monkeypatch.setattr(backup, "_restore_postgres", _boom)
+    with pytest.raises(backup.BackupError):
+        backup.restore_backup(made.path, proof="this machine's recovery key")
+    assert [k for k, _ in seen] == ["backup_restored"]
+    assert seen[0][1]["detail"].startswith("did not finish")
 
 
 @pytest.mark.parametrize("failure", [OSError("No space left on device"),

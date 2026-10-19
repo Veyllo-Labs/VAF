@@ -13,6 +13,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **A restore shows in the security log.** `vaf backup restore` replaces every account, key
+  and chat of the machine; it is now the security event "Backup restored", with the backup,
+  the proof the person gave in the terminal and whether it finished.
 - **Backups on a schedule.** `vaf backup schedule daily` (or `weekly`) backs up by itself
   while VAF runs, at a time of day in your timezone, and catches up after a night the
   machine was off. Afterwards the backup folder keeps the newest backup of each of the last

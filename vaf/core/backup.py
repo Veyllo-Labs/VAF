@@ -1247,7 +1247,8 @@ def _place_files(staging: Path) -> int:
 
 def restore_backup(path: Path, *, identity: Optional[str] = None,
                    pg_container: Optional[str] = None, pre_restore: bool = True,
-                   progress: Optional[Callable[[str], None]] = None) -> RestoreResult:
+                   progress: Optional[Callable[[str], None]] = None,
+                   proof: str = "") -> RestoreResult:
     """Replace everything VAF keeps on this machine with the backup's.
 
     In this order, each step only after the one before succeeded: open and check every
@@ -1257,7 +1258,12 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
     machine's key (never overwriting it); replace the database; fill the volumes.
 
     VAF must not be running: the callers check, because a running instance would write
-    into the folders while they are replaced."""
+    into the folders while they are replaced.
+
+    Every restore that changed something is the security event `backup_restored`, written
+    after the files are in place (so into the restored log, not into one the restore then
+    replaces), with ``proof``, how the caller proved the person (the admin password, the
+    recovery key), and whether it finished."""
     from vaf.core.secure_store import rewrap_from_kek
 
     say = progress or (lambda _msg: None)
@@ -1390,15 +1396,35 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
                         continue          # its environment was dropped: no orphan volume
                     _restore_volume(tar_path, volume, image, owner=_host_user())
                 volumes += 1
+        _audit_restore(path, manifest, proof, pre)
         return RestoreResult(manifest, files, rewrapped, volumes, pre, warnings)
     except (Exception, KeyboardInterrupt) as e:
         if not changed:
             raise
         # Past the clearing, this machine holds part of the backup: whatever stopped it, the
         # person needs to know that, and where the state before it is.
-        raise BackupError(_half_way(e, pre)) from e
+        message = _half_way(e, pre)
+        _audit_restore(path, manifest, proof, pre, failure=message)
+        raise BackupError(message) from e
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+
+
+def _audit_restore(path: Path, manifest: Dict, proof: str, pre: Optional[Path],
+                   failure: str = "") -> None:
+    """`backup_restored` in the security log: every account, key and chat of this machine
+    was replaced by a backup's, or partly. Never raises: the restore is done either way."""
+    try:
+        from vaf.core.security_events import log_security_event
+        outcome = f"did not finish: {failure}" if failure else "complete"
+        log_security_event(
+            "backup_restored", path=Path(path).name,
+            detail=(f"{outcome}; backup of {manifest.get('host', '?')} written "
+                    f"{manifest.get('created_at', '?')} by VAF {manifest.get('vaf_version', '?')}; "
+                    f"in a terminal on this machine, proof: {proof or 'not given'}; "
+                    f"safety backup: {Path(pre).name if pre else 'none'}"))
+    except Exception:
+        pass
 
 
 def _quiet(read: Callable[[], Optional[str]]) -> Optional[str]:

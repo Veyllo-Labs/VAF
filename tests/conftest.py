@@ -384,6 +384,56 @@ def _no_child_processes():
         Platform.open_new_terminal = previous
 
 
+# The product's long-running background loops, as (module, qualname suffix) of the thread's
+# target. Each is started once per process and then acts on a timer: the thinking runs build
+# system prompts (and with them data keys), the scheduler fires reminders, the scan reads the
+# skills, the backup schedule writes backups.
+_PRODUCT_LOOPS = (
+    ("vaf.core.thinking_mode", "_background_loop"),
+    ("vaf.core.automation", "scheduler_loop"),
+    ("vaf.skills.rescan", "_loop"),
+    ("vaf.core.web_interface", "start_maintenance_broadcast.<locals>._loop"),
+    ("vaf.whare_wananga.eager", "_run_scanner"),
+    ("vaf.core.backup_schedule", "_loop"),
+)
+
+
+def _product_loop(thread) -> str:
+    target = getattr(thread, "_target", None)
+    module = getattr(target, "__module__", "") or ""
+    qualname = getattr(target, "__qualname__", "") or ""
+    for mod, suffix in _PRODUCT_LOOPS:
+        if module == mod and qualname.endswith(suffix):
+            return f"{mod}.{qualname}"
+    return ""
+
+
+@pytest.fixture(autouse=True)
+def _no_product_loop_outlives_its_test():
+    """No test may leave one of the product's background loops running.
+
+    Once started, a loop lives for the rest of the session and acts INSIDE the tests after
+    it, with their patched clocks, keyrings and HTTP stubs. Measured on the Windows runner:
+    a thinking run started by an earlier test minted a data key in the middle of the recovery
+    kit test and overwrote its version 1 wrap with a version 2 one, and the readiness test's
+    fake clock ran 2.5 s further than it could on its own - both green on Linux, where the
+    timing happened to miss. The source was one test that ran the web server's startup
+    (`with TestClient(web_server.app)`), which starts six of them; use `TestClient(app)`
+    without `with`. A test about a loop arms it with a stub instead of starting it.
+    """
+    import threading
+
+    before = set(threading.enumerate())
+    yield
+    leaked = sorted({_product_loop(t) for t in threading.enumerate()
+                     if t not in before and t.is_alive() and _product_loop(t)})
+    if leaked:
+        pytest.fail("This test left the product's background loops running, which then act "
+                    "inside every later test: " + ", ".join(leaked) + ". A test that ran the "
+                    "web server's startup (`with TestClient(web_server.app)`) starts them; use "
+                    "TestClient(app) without `with`.", pytrace=False)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _browser_pool_off():
     """No test may start a browser CONTAINER, so the pool is switched off for the

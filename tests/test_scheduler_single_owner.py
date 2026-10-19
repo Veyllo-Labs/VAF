@@ -11,6 +11,7 @@ each task then triggered twice and only the run lock prevented double
 execution. Callers must go through ensure_scheduler_started; start_scheduler
 additionally refuses to run on a non-singleton instance.
 """
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -42,12 +43,14 @@ def test_singleton_itself_still_starts(monkeypatch):
     monkeypatch.setattr(mgr, "list", lambda enabled_only=False: [], raising=False)
     mgr.storage_dir = Path("/tmp")
     monkeypatch.setattr(auto_mod, "_scheduler_manager", mgr)
+    # The loop is armed, not run: a real one sleeps 30 s between ticks and acted inside the
+    # tests after this one for the rest of the session.
+    armed = []
+    monkeypatch.setattr(auto_mod, "threading", SimpleNamespace(
+        Lock=threading.Lock, Thread=lambda **kw: SimpleNamespace(start=lambda: armed.append(kw))))
     mgr.start_scheduler()
-    try:
-        assert mgr._running is True
-        assert any(e.startswith("START task_count=0") for e in events), events
-    finally:
-        mgr._running = False  # stop the loop thread
+    assert mgr._running is True and len(armed) == 1
+    assert any(e.startswith("START task_count=0") for e in events), events
 
 
 def test_create_tool_uses_the_ensure_helper():

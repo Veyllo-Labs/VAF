@@ -77,8 +77,10 @@ def test_the_asset_leg_sends_the_credential(with_secret, monkeypatch):
 
     from fastapi.testclient import TestClient
     from vaf.core.web_server import app
-    with TestClient(app) as client:
-        r = client.get("/api/browser-vnc/t/tkt/index.html")
+    # Without `with`: that would run the server's startup, whose background loops (thinking,
+    # automations, backups ...) outlive this test and act inside the ones after it.
+    client = TestClient(app)
+    r = client.get("/api/browser-vnc/t/tkt/index.html")
 
     assert r.status_code == 200
     assert seen.get("headers", {}).get("Authorization") == EXPECTED, (
@@ -116,14 +118,14 @@ def test_the_stream_leg_sends_the_credential(with_secret, monkeypatch):
 
     from fastapi.testclient import TestClient
     from vaf.core.web_server import app
-    with TestClient(app) as client:
-        try:
-            with client.websocket_connect("/api/browser-vnc/t/tkt/websockify"):
-                pass
-        except Exception:
-            # The fake upstream dies on the first recv; the handshake is what
-            # this test is about, and it has already happened by then.
+    client = TestClient(app)        # not `with`: no server startup, see the asset leg
+    try:
+        with client.websocket_connect("/api/browser-vnc/t/tkt/websockify"):
             pass
+    except Exception:
+        # The fake upstream dies on the first recv; the handshake is what
+        # this test is about, and it has already happened by then.
+        pass
 
     assert seen.get("additional_headers", {}).get("Authorization") == EXPECTED, (
         "the stream leg opened the socket without the credential")

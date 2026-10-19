@@ -28,8 +28,9 @@ full, no agent loop is left).
 
 Who asks: ``GET /api/health`` (no sign-in, the status word only, HTTP 503 when down, served
 from a snapshot at most SNAPSHOT_SECONDS old so a poller cannot make it run Docker on every
-request, and waited for on the event loop so a crowd of pollers holds no worker thread), ``GET /api/system/health`` (an admin: every check) and ``vaf health`` (exit 0, 1
-or 2, the convention of monitoring plugins).
+request, and waited for on the event loop so a crowd of pollers holds no worker thread),
+``GET /api/system/health`` (an admin: every check) and ``vaf health`` (exit 0, 1 or 2, the
+convention of monitoring plugins).
 
 Not on the facade: an embedder runs its own process and watches it its own way; this is a
 rule about what an installation of the product needs.
@@ -114,7 +115,9 @@ def disk_paths(status: Optional[Dict[str, Any]] = None) -> List[Path]:
     except Exception:
         pass
     root_dir = str(((status or {}).get("docker") or {}).get("root_dir") or "").strip()
-    if root_dir:
+    # Only where it exists here: under Docker Desktop and Colima the engine's root is a path
+    # inside its VM, and the nearest ancestor on the host would measure an unrelated disk.
+    if root_dir and Path(root_dir).exists():
         paths.append(Path(root_dir))
     return paths
 
@@ -215,6 +218,10 @@ def _refresh(collect: Callable[[], Dict[str, Any]]) -> concurrent.futures.Future
     if _inflight is not None and not _inflight.done():
         return _inflight
     future: concurrent.futures.Future = concurrent.futures.Future()
+    # Running before anyone can wait on it: a running future cannot be cancelled, so a monitor
+    # that hangs up (its request task cancelled, which wrap_future passes on to this future)
+    # cannot cancel the collection every other caller is waiting for.
+    future.set_running_or_notify_cancel()
 
     def run() -> None:
         global _snapshot, _snapshot_at

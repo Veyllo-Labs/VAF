@@ -574,9 +574,11 @@ def stack_problems(status: Dict[str, Any]) -> List[Dict[str, str]]:
     `error` or `unknown` (still starting included) is DEGRADED, and so is the host's IP
     forwarding switched off (every container runs, none reaches the internet). Rows the
     profile leaves out (`off`) and optional services never installed (`absent`) are no
-    problem."""
+    problem. Without a compose file (a pip install) VAF manages no container, so their rows
+    are no problem either - `vaf repair` says the same; the host row still counts, because the
+    sandbox environments are VAF's containers there too."""
     problems: List[Dict[str, str]] = []
-    for svc in status.get("services") or []:
+    for svc in (status.get("services") or []) if status.get("stack_root") else []:
         state = str(svc.get("state") or "")
         if state in ("ok", "off", "absent") or svc.get("needed") is False:
             continue

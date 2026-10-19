@@ -331,3 +331,50 @@ def test_a_vaf_that_listens_is_never_called_not_running(monkeypatch, answer, say
         assert result is None
     else:
         assert result["status"] == "down" and says in result["checks"][0]["reason"]
+
+
+def test_without_a_stack_the_containers_are_no_problem_but_the_host_is():
+    """A pip install manages no container; their rows made it down forever (and `vaf repair
+    --check` exit 1 while the repair said there is nothing to do). MUTATION: classify the rows
+    without a stack root, or drop the host row with them - red."""
+    status = _status(_svc("vaf-memory-db", "error"), _svc("vaf-redis", "unknown"),
+                     forwarding_ok=False, root=None)
+    assert [p["name"] for p in sh.stack_problems(status)] == ["host"]
+    assert health.services_check(_status(_svc("vaf-memory-db", "error"), root=None)) == {
+        "name": "services", "status": "ok", "reason": "No service stack on this installation."}
+
+
+def test_the_engines_root_counts_only_where_it_exists(tmp_path):
+    """Under Docker Desktop the root is a path in its VM; its nearest ancestor on the host is
+    an unrelated disk. MUTATION: add the root unchecked - red."""
+    here = tmp_path / "docker"
+    here.mkdir()
+    status = {"docker": {"root_dir": str(here)}}
+    assert here in health.disk_paths(status)
+    status = {"docker": {"root_dir": str(tmp_path / "in-a-vm" / "var" / "lib" / "docker")}}
+    assert not any("in-a-vm" in str(p) for p in health.disk_paths(status))
+
+
+def test_a_caller_that_hangs_up_does_not_cancel_the_others(monkeypatch):
+    """wrap_future passes a cancelled waiter on to the shared future: one monitor hanging up
+    cancelled the collection every other caller waited for. MUTATION: leave the future
+    pending instead of running - red."""
+    import asyncio
+    monkeypatch.setattr(health, "_snapshot", {})
+    monkeypatch.setattr(health, "_inflight", None)
+    release = threading.Event()
+
+    def slow():
+        release.wait(10)
+        return {"status": "ok", "checks": []}
+
+    async def scene():
+        quitter = asyncio.ensure_future(health.snapshot(max_age=60, collect=slow))
+        stayer = asyncio.ensure_future(health.snapshot(max_age=60, collect=slow))
+        await asyncio.sleep(0.1)
+        quitter.cancel()
+        await asyncio.sleep(0.1)
+        release.set()
+        return await asyncio.wait_for(stayer, 10)
+
+    assert asyncio.run(scene())["status"] == "ok"

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Admin-only system maintenance: are the services healthy, is an update due.
+"""Admin-only system maintenance: are the services healthy, is an update due, the backups.
 
 Backs Settings -> Advanced -> Update and Repair in the Web UI. The work itself
 is the framework's (`vaf/core/service_health.py`, `vaf/core/update_check.py`)
@@ -50,8 +50,8 @@ router = APIRouter(prefix="/api/system", tags=["system"])
 
 # One container job at a time, process-wide: two runs would fight over the same
 # containers, and `compose up` is only idempotent one caller at a time. The lock
-# claims both jobs, a repair and a profile switch, so neither starts while the
-# other runs.
+# claims all three jobs, a repair, a profile switch and a backup (which dumps the
+# database from its container), so none starts while another runs.
 _repair_lock = threading.Lock()
 _repair_state: Dict[str, Any] = {
     "running": False,
@@ -66,6 +66,17 @@ _profile_state: Dict[str, Any] = {
     "started_at": None,
     "finished_at": None,
     "profile": None,
+    "result": None,
+    "error": None,
+}
+
+# "Back up now" from Settings > Advanced (vaf/core/backup.py): a job like the repair, since a
+# backup takes from seconds to minutes and a proxy gives up on a request after 60 seconds.
+_backup_state: Dict[str, Any] = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "stage": None,
     "result": None,
     "error": None,
 }
@@ -96,6 +107,75 @@ async def system_health(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str,
     `vaf health` prints and what the word at /api/health stands for."""
     from vaf.core.health import collect_health
     return await run_in_threadpool(collect_health)
+
+
+@router.get("/backups")
+def backups_overview(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The backups as Settings > Advanced shows them: the schedule and what it keeps (the
+    config keys the page saves), the health row, the last scheduled run, the backups in the
+    folder newest first, and the "Back up now" job. What `vaf backup schedule` and `vaf backup
+    list` print."""
+    from vaf.core import backup, backup_schedule
+    folder = backup.backup_dir_path()
+    rows = backup.list_backups(folder) if folder.is_dir() else []
+    hour, minute = backup_schedule.slot_time()
+    state = backup_schedule.read_state()
+    return {
+        "schedule": backup_schedule.schedule() or "off",
+        "time": f"{hour:02d}:{minute:02d}",
+        "keep": backup_schedule.keep_counts(),
+        "check": backup_schedule.backup_check(),
+        "last_run": {key: state.get(key) for key in ("last_success_at", "last_attempt_at",
+                                                       "last_error", "last_file", "last_size")},
+        "folder": str(folder),
+        "backups": [{"name": r.path.name, "size": r.size, "created": r.created}
+                    for r in rows[:BACKUP_LIST_LIMIT]],
+        "count": len(rows),
+        "job": dict(_backup_state),
+    }
+
+
+# The newest ones are what a person looks at; the folder is pruned to a few dozen anyway.
+BACKUP_LIST_LIMIT = 20
+
+
+def _run_backup() -> None:
+    from vaf.core.backup import create_backup
+
+    def progress(stage: str) -> None:
+        _backup_state["stage"] = stage
+
+    try:
+        result = create_backup(progress=progress)
+        _backup_state["result"] = {"name": result.path.name, "size": result.size,
+                                   "members": result.members, "warnings": result.warnings}
+    except Exception as e:      # a backup must never take the server with it
+        _backup_state["error"] = str(e)[:300]
+    finally:
+        _backup_state["running"] = False
+        _backup_state["finished_at"] = _now()
+
+
+@router.post("/backups/run", status_code=202)
+def start_backup(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Write a backup now, as a job; GET /api/system/backups follows it (``job``). Not while a
+    repair or a profile switch moves the containers the backup reads."""
+    with _repair_lock:
+        if _backup_state["running"]:
+            raise HTTPException(status_code=409, detail="A backup is already running")
+        if _repair_state["running"] or _profile_state["running"]:
+            raise HTTPException(status_code=409, detail="A repair or a profile switch is "
+                                                        "running; wait for it to finish first.")
+        _backup_state.update({
+            "running": True,
+            "started_at": _now(),
+            "finished_at": None,
+            "stage": None,
+            "result": None,
+            "error": None,
+        })
+    threading.Thread(target=_run_backup, daemon=True, name="vaf-api-backup").start()
+    return {"started": True, "started_at": _backup_state["started_at"]}
 
 
 @router.get("/inference-profile")
@@ -145,6 +225,9 @@ def set_inference_profile(body: _ProfileSwitch,
         if _repair_state["running"]:
             raise HTTPException(status_code=409,
                                 detail="A repair is running; wait for it to finish first.")
+        if _backup_state["running"]:
+            raise HTTPException(status_code=409,
+                                detail="A backup is running; wait for it to finish first.")
         _profile_state.update({
             "running": True,
             "started_at": _now(),
@@ -181,6 +264,9 @@ def start_repair(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
         if _profile_state["running"]:
             raise HTTPException(status_code=409,
                                 detail="A profile switch is running; wait for it to finish first.")
+        if _backup_state["running"]:
+            raise HTTPException(status_code=409,
+                                detail="A backup is running; wait for it to finish first.")
         _repair_state.update({
             "running": True,
             "started_at": _now(),

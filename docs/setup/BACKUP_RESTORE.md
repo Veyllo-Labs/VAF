@@ -166,7 +166,10 @@ the same folder, verified the same way. It is not an automation: an automation i
 the agent runs, and a backup must neither depend on a model answering nor cost a token.
 
 - **When.** `backup_schedule` is `daily` or `weekly` (on Sunday), at `backup_time` in the
-  admin's own timezone. A run is due when no backup is newer than the most recent slot: a
+  admin's own timezone. The attempt is recorded before the backup starts, so a run that
+  takes the process down with it is retried after the hour, not at every restart. A run that
+  meets another backup into the same folder (`vaf backup create`, Back up now) is skipped,
+  not failed: that one is a backup too. A run is due when no backup is newer than the most recent slot: a
   machine that was off at that time backs up a few minutes after it starts again, and a
   backup written by hand after the slot counts. A run that failed is tried again an hour
   later, not every minute. Off by default on a desktop (the disk is the person's); `vaf
@@ -185,6 +188,10 @@ the agent runs, and a backup must neither depend on a model answering nor cost a
   `/api/health`, [DOCKER_SERVICES.md](DOCKER_SERVICES.md#health)) says degraded when the last
   scheduled run failed or the newest backup is older than one interval and a day; a missing
   backup stops nothing, so it is never down. The runs are logged in the `backup` log.
+
+In the web UI the same lives under **Settings > Advanced > Backups**: the state, the
+schedule and the retention, **Back up now** (a job; it waits while a repair or a profile
+switch moves the containers) and the newest backups.
 
 A backup on the machine's own disk is lost with the machine: copy the folder elsewhere as
 well (a mounted drive as `backup_dir`, or a copy job of your own).

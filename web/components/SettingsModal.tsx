@@ -20,6 +20,7 @@ import {
 import 'reactflow/dist/style.css';
 import TTSSettings from './settings/TTSSettings';
 import InferenceProfileSection from './settings/InferenceProfileSection';
+import BackupSection from './settings/BackupSection';
 import MemoryGraph from './memory/MemoryGraph';
 import { useMemoryStore } from './memory/stores/memoryStore';
 import { SpeakerTest } from './SpeakerTest';
@@ -1231,7 +1232,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             ? [tVoice('provider'), tVoice('stt'), tVoice('tts')]
             : [tVoice('stt'), tVoice('tts')]);
         addSecs('interface', [tInterface('language'), tInterface('dateTime'), tInterface('automation')]);
-        addSecs('advanced', [tAdvanced('failover'), tAdvanced('attachments'), tAdvanced('system'), tAdvanced('updateRepair'), tAdvanced('browserPool')]);
+        addSecs('advanced', [tAdvanced('failover'), tAdvanced('attachments'), tAdvanced('system'), tAdvanced('updateRepair'), tAdvanced('backups'), tAdvanced('browserPool')]);
         addSecs('automations', [tAutomations('scheduled')]);
         addSecs('local_network', [tLocalNet('networkSettings'), tLocalNet('remoteAccess.title'), tLocalNet('userManagement'), tLocalNet('connectionDetails'), tLocalNet('networkTopology')]);
         addSecs('about', [tAbout('principles'), tAbout('credits')]);
@@ -5353,6 +5354,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </div>
                                         <ChevronRight size={16} className="text-gray-400" />
                                     </button>
+                                </Section>
+                                <Section title={tAdvanced('backups')}>
+                                    <BackupSection config={localConfig} onChange={handleChange} />
                                 </Section>
                                 <Section title={tAdvanced('browserPool')}>
                                     <p className="text-xs text-gray-500 mb-4">{tAdvanced('browserPoolIntro')}</p>

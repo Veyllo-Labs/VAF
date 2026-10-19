@@ -115,6 +115,11 @@ class BackupError(RuntimeError):
     """A backup that could not be written completely. Nothing partial is left behind."""
 
 
+class BackupBusy(BackupError):
+    """Another backup into the same folder is being written right now. Not a failure of the
+    data: the scheduled run treats it as skipped, since the other one is a backup too."""
+
+
 @dataclass
 class BackupResult:
     path: Path
@@ -240,7 +245,7 @@ def create_backup(dest: Optional[Path] = None, *, include_projects: bool = True,
     try:
         lock.acquire()
     except Exception:
-        raise BackupError("Another backup is running.")
+        raise BackupBusy("Another backup is running.")
     # The plaintext parts (database dump, SQLite copies, volume tars, the machine key) are
     # staged on THIS machine, owner-only, never in `dest`: a backup folder can be a USB stick
     # or a network mount, where a deleted plaintext copy is still recoverable.

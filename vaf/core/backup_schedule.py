@@ -203,9 +203,25 @@ def run_once(current: Optional[datetime] = None, *,
     prune = prune or backup.prune_backups
     current = current or now()
     state = read_state()
+    previous_attempt = state.get("last_attempt_at")
+    # Saved before the backup starts: a run that takes the process down with it (out of
+    # memory) still counts as an attempt, so the restart retries after RETRY_SECONDS instead
+    # of running into the same backup again at every start.
     state["last_attempt_at"] = current.isoformat()
+    write_state(state)
     try:
         result = create()
+    except backup.BackupBusy:
+        # Somebody is writing a backup into this folder right now (`vaf backup create`, the
+        # web's "Back up now"). Not a failure, and nothing to tell anyone: the next tick sees
+        # that backup and is not due, or runs again if it failed - so this was no attempt.
+        if previous_attempt is None:
+            state.pop("last_attempt_at", None)
+        else:
+            state["last_attempt_at"] = previous_attempt
+        write_state(state)
+        append_domain_log_always("backup", "scheduled backup skipped: another one is running")
+        return state
     except Exception as e:
         error = str(e) or type(e).__name__
         state["last_error"] = error[:500]

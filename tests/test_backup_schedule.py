@@ -332,3 +332,86 @@ def test_the_backup_schedule_thread_starts_once(monkeypatch):
     assert bs.ensure_started("a") is True
     assert bs.ensure_started("b") is False
     assert started == ["vaf-backup-schedule"]
+
+
+def test_an_attempt_is_saved_before_the_backup_runs(state_home):
+    """A backup that takes the process down (out of memory) must still count, or every
+    restart runs into it again. MUTATION: save the attempt only afterwards - red."""
+    now = dt.datetime(2026, 10, 19, 3, 0, tzinfo=BERLIN)
+
+    def dies():
+        assert bs.read_state()["last_attempt_at"] == now.isoformat()
+        raise SystemExit("killed")
+
+    with pytest.raises(SystemExit):
+        bs.run_once(now, create=dies, notify=lambda e: None)
+    assert bs.read_state()["last_attempt_at"] == now.isoformat()
+
+
+def test_a_run_that_meets_another_backup_is_skipped_not_failed(state_home):
+    """A backup written by hand in the same minute is a backup too: no failure, no message to
+    the admin, and no hour of waiting. MUTATION: treat the busy folder as a failure - red."""
+    told = []
+
+    def busy():
+        raise backup.BackupBusy("Another backup is running.")
+
+    state = bs.run_once(dt.datetime(2026, 10, 19, 3, 0, tzinfo=BERLIN), create=busy,
+                        notify=told.append)
+    assert told == [] and not state.get("last_error") and "last_attempt_at" not in state
+
+
+# ── the web ──────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def system_client(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import vaf.api.system_routes as sr
+    for state in (sr._repair_state, sr._profile_state, sr._backup_state):
+        state["running"] = False
+    monkeypatch.setattr(backup, "backup_dir_path", lambda: tmp_path)
+    monkeypatch.setattr(bs, "state_path", lambda: tmp_path / "backup_schedule.json")
+    app = FastAPI()
+    app.include_router(sr.router)
+    app.dependency_overrides[sr.require_admin] = lambda: {"username": "u", "role": "admin"}
+    return TestClient(app), sr, tmp_path
+
+
+def test_the_settings_page_reads_the_backups_newest_first(system_client):
+    """MUTATION: list oldest first, or drop the health row - red."""
+    client, _, folder = system_client
+    _write(folder, dt.datetime(2026, 10, 18, 3, tzinfo=UTC))
+    _write(folder, dt.datetime(2026, 10, 19, 3, tzinfo=UTC))
+    body = client.get("/api/system/backups").json()
+    assert [b["created"] for b in body["backups"]] == ["20261019T030000Z", "20261018T030000Z"]
+    assert body["count"] == 2 and body["check"]["name"] == "backup"
+    assert body["job"]["running"] is False and body["folder"] == str(folder)
+
+
+def test_back_up_now_is_a_job_and_waits_for_a_repair(system_client, monkeypatch):
+    """A backup dumps the database from its container; a repair or a profile switch moves
+    those containers. MUTATION: drop either side of the exclusion - red."""
+    import threading as _threading
+    client, sr, folder = system_client
+    release = _threading.Event()
+
+    def slow_backup(progress=None):
+        release.wait(10)
+        return type("R", (), {"path": folder / "vaf-backup-x.tar.age", "size": 1, "members": 1,
+                              "warnings": []})()
+
+    monkeypatch.setattr(backup, "create_backup", slow_backup)
+    sr._repair_state["running"] = True
+    assert client.post("/api/system/backups/run").status_code == 409
+    sr._repair_state["running"] = False
+    assert client.post("/api/system/backups/run").status_code == 202
+    assert client.post("/api/system/backups/run").status_code == 409, "a second backup"
+    assert client.post("/api/system/services/repair").status_code == 409
+    release.set()
+    for _ in range(100):
+        if not sr._backup_state["running"]:
+            break
+        _threading.Event().wait(0.05)
+    assert sr._backup_state["result"]["name"] == "vaf-backup-x.tar.age"

@@ -261,7 +261,9 @@ def backup_check(config: Optional[Dict] = None, current: Optional[datetime] = No
         newest = last_ok
     tried = _parse(state.get("last_attempt_at"))
     error = str(state.get("last_error") or "")
-    if error and tried is not None and (last_ok is None or tried > last_ok):
+    # Against the newest backup of either kind: one written by hand after the failure is a
+    # verified backup, and the schedule counts it too (`due`).
+    if error and tried is not None and (newest is None or tried > newest):
         return {"name": "backup", "status": "degraded",
                 "reason": f"The last scheduled backup failed: {error}"}
     if newest is None:

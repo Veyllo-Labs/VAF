@@ -235,10 +235,14 @@ NOW = dt.datetime(2026, 10, 19, 15, 0, tzinfo=UTC)
     ({"backup_schedule": "daily"},
      {"last_success_at": "2026-10-18T03:00:00+00:00", "last_attempt_at": "2026-10-19T03:00:00+00:00",
       "last_error": "disk full"}, NOW - dt.timedelta(days=1, hours=12), "degraded", "disk full"),
+    ({"backup_schedule": "daily"},
+     {"last_success_at": "2026-10-18T03:00:00+00:00", "last_attempt_at": "2026-10-19T03:00:00+00:00",
+      "last_error": "disk full"}, NOW - dt.timedelta(hours=6), "ok", "6 hours"),
 ])
 def test_the_backup_row_of_the_health_check(config, state, newest, status, says):
-    """Never down, degraded when a run failed or the newest backup is too old. MUTATION: ignore
-    the failed run, or the age - red."""
+    """Never down, degraded when a run failed or the newest backup is too old; a backup by hand
+    after the failed run clears it. MUTATION: ignore the failed run, the age, or the backup by
+    hand - red."""
     row = bs.backup_check(config, current=NOW, state=state, newest=newest)
     assert row["status"] == status and says in row["reason"]
 
@@ -294,8 +298,10 @@ def test_vaf_backup_schedule_sets_and_refuses(monkeypatch, state_home):
     out = CliRunner().invoke(app, ["schedule", "daily", "--at", "4:30"])
     assert out.exit_code == 0, out.output
     assert written == {"backup_schedule": "daily", "backup_time": "04:30"}
+    written.clear()
     assert CliRunner().invoke(app, ["schedule", "hourly"]).exit_code == 2
-    assert CliRunner().invoke(app, ["schedule", "daily", "--at", "25:00"]).exit_code == 2
+    assert CliRunner().invoke(app, ["schedule", "weekly", "--at", "25:00"]).exit_code == 2
+    assert written == {}, "a refused --at left the schedule written"
 
 
 def test_the_backup_schedule_thread_starts_once(monkeypatch):

@@ -113,12 +113,14 @@ def schedule_cmd(
     """Backups that run by themselves while VAF runs: the schedule, the last run, the retention."""
     from vaf.core import backup_schedule as bs
     from vaf.core.config import Config
+    # Both checked before either is written: a refused --at must not leave a schedule switched
+    # on behind an error message.
+    wanted = slot = None
     if when is not None:
         wanted = when.strip().lower()
         if wanted not in (*bs.SCHEDULES, "off"):
             UI.error("Use daily, weekly or off.")
             raise typer.Exit(2)
-        Config.set("backup_schedule", wanted)
     if at is not None:
         try:
             hour, minute = (int(part) for part in at.strip().split(":"))
@@ -127,7 +129,11 @@ def schedule_cmd(
         except ValueError:
             UI.error("--at takes a time of day like 03:00.")
             raise typer.Exit(2)
-        Config.set("backup_time", f"{hour:02d}:{minute:02d}")
+        slot = f"{hour:02d}:{minute:02d}"
+    if wanted is not None:
+        Config.set("backup_schedule", wanted)
+    if slot is not None:
+        Config.set("backup_time", slot)
     kind = bs.schedule()
     hour, minute = bs.slot_time()
     if kind is None:

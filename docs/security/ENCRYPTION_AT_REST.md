@@ -149,8 +149,9 @@ key (KEK) under which every other encrypted store is sealed - the provider API
 keys, the credentials stored for commands, and the mail, cloud and GitHub sign-ins
 where they are kept in a file (a machine without an OS keyring, such as a server).
 Sign-ins kept in the OS keyring are protected by your login instead and are not
-in the kit: on a new machine they are entered again. The machine keeps only the
-PUBLIC half of the identity.
+in the kit: on a new machine they are entered again. The key store keeps only the
+PUBLIC half of the identity; the private one is written into the note alone, which
+sits on this machine until you move it off and delete it here.
 
 Both keys, because measured: the first kit wrapped the data key alone (scrypt
 over a base64 secret), so a recovery brought the chats and memories back and lost

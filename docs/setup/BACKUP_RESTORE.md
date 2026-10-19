@@ -236,7 +236,10 @@ did not complete (it stopped half way, or sandbox environments could not be recr
 the backup file, whose backup it was, the proof the person gave (the
 admin password, this machine's recovery key, or the recovery key on a machine without an
 account) and the safety backup of the state before. It is written after the files are in
-place, so it lands in the restored log instead of in one the restore then replaces.
+place, so it lands in the restored log instead of in one the restore then replaces. When
+project sandbox environments did not come back, `vaf backup restore` says the restore is
+not complete, names them and exits with 1: run it again before you start VAF, or the
+reaper deletes them at its next start.
 
 `restore_backup` in `vaf/core/backup.py` then works in this order, each step only
 after the one before succeeded:

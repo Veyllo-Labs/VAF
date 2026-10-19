@@ -752,10 +752,33 @@ def _pytestmark_skips_windows(body) -> bool:
     return False
 
 
+# Modules that do not exist on Windows: `pytest.importorskip` of one skips there.
+_POSIX_ONLY_MODULES = frozenset({"fcntl", "grp", "posix", "pty", "pwd", "resource", "syslog",
+                                 "termios", "tty"})
+
+
+def _skips_imperatively(body) -> bool:
+    """A statement among these (a module's, a function's) that skips on Windows when it runs:
+    `if <true on Windows>: pytest.skip(...)`, or `pytest.importorskip` of a module Windows
+    does not have. The condition is read with `_true_on_windows`, never executed."""
+    for node in body:
+        if isinstance(node, ast.If) and _true_on_windows(node.test) is True and any(
+                isinstance(c, ast.Call) and getattr(c.func, "attr", getattr(c.func, "id", ""))
+                == "skip" for stmt in node.body for c in ast.walk(stmt)):
+            return True
+        value = node.value if isinstance(node, (ast.Expr, ast.Assign)) else None
+        if (isinstance(value, ast.Call) and getattr(value.func, "attr", "") == "importorskip"
+                and value.args and isinstance(value.args[0], ast.Constant)
+                and value.args[0].value in _POSIX_ONLY_MODULES):
+            return True
+    return False
+
+
 def _functions_run_on_windows(tree: ast.Module):
     """Every outermost function (a test, a helper, a method) the Windows leg runs: not under
-    the module's `pytestmark`, an enclosing class's skip (its decorator or its own
-    `pytestmark`) or its own skip decorator. A function nested in one is part of it."""
+    the module's skip (its `pytestmark`, or a statement that skips there), an enclosing
+    class's skip (its decorator or its own `pytestmark`), its own skip decorator, or a skip
+    in its own body. A function nested in one is part of it."""
     def walk(node, skipped):
         for child in ast.iter_child_nodes(node):
             if isinstance(child, ast.ClassDef):
@@ -763,11 +786,12 @@ def _functions_run_on_windows(tree: ast.Module):
                                 or any(_skips_windows(d) for d in child.decorator_list)
                                 or _pytestmark_skips_windows(child.body))
             elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                if not (skipped or any(_skips_windows(d) for d in child.decorator_list)):
+                if not (skipped or any(_skips_windows(d) for d in child.decorator_list)
+                        or _skips_imperatively(child.body)):
                     yield child
             else:
                 yield from walk(child, skipped)
-    yield from walk(tree, _pytestmark_skips_windows(tree.body))
+    yield from walk(tree, _pytestmark_skips_windows(tree.body) or _skips_imperatively(tree.body))
 
 
 def _exec_stub_functions(path: Path):
@@ -1038,6 +1062,31 @@ def test_a_skip_counts_only_when_its_condition_is_true_on_windows(condition, exe
     source = ('import os, sys, platform, shutil, pytest\n'
               f'@pytest.mark.skipif({condition}, reason="r")\n'
               'def test_b():\n    p = Path("/b/old")\n    assert record(p) == ["/b/old"]\n')
+    assert (_posix_literal_expectations(source) == []) is exempt
+
+
+@pytest.mark.parametrize("source, exempt", [
+    ('import sys, pytest\nif sys.platform == "win32":\n'
+     '    pytest.skip("posix only", allow_module_level=True)\n', True),
+    ('import pytest\npytest.importorskip("fcntl")\n', True),
+    ('import pytest\npytest.importorskip("psutil")\n', False),   # not about Windows
+    ('import pytest\nif True:\n    pytest.skip("x", allow_module_level=True)\n', False),
+])
+def test_a_module_that_skips_itself_on_windows_is_not_scanned(source, exempt):
+    """MUTATION: ignore the module's own statements - red."""
+    source += 'def test_b():\n    p = Path("/b/old")\n    assert record(p) == ["/b/old"]\n'
+    assert (_posix_literal_expectations(source) == []) is exempt
+
+
+@pytest.mark.parametrize("guard, exempt", [
+    ('if os.name == "nt":\n        pytest.skip("posix only")\n', True),
+    ('if os.name != "nt":\n        pytest.skip("windows only")\n', False),
+    ('if not shutil.which("git"):\n        pytest.skip("needs git")\n', False),
+])
+def test_a_function_that_skips_itself_on_windows_is_not_scanned(guard, exempt):
+    """MUTATION: read only decorators - the first case is reported, red."""
+    source = ('import os, shutil, pytest\ndef test_b():\n    ' + guard
+              + '    p = Path("/b/old")\n    assert record(p) == ["/b/old"]\n')
     assert (_posix_literal_expectations(source) == []) is exempt
 
 

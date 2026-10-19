@@ -17,7 +17,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and chat of the machine; it is now the security event "Backup restored", with the backup,
   the proof the person gave in the terminal and whose backup it was. A restore that did not
   complete (it stopped half way, or sandbox environments could not be recreated) is its own
-  event, so it is never shown as restored.
+  event, so it is never shown as restored; `vaf backup restore` says so too, names what is
+  missing and exits with 1.
 - **Backups on a schedule.** `vaf backup schedule daily` (or `weekly`) backs up by itself
   while VAF runs, at a time of day in your timezone, and catches up after a night the
   machine was off. Afterwards the backup folder keeps the newest backup of each of the last

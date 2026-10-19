@@ -251,11 +251,20 @@ def restore(
     except BackupError as e:
         UI.error(str(e))
         raise typer.Exit(1)
-    UI.success(f"Restored: {result.files} files, the database, {result.volumes} volumes.")
+    done = f"{result.files} files, the database, {result.volumes} volumes"
+    if result.incomplete:
+        UI.warning(f"Restored, but not completely ({result.incomplete}): {done}.")
+    else:
+        UI.success(f"Restored: {done}.")
     if result.rewrapped:
         UI.info("Opened with this machine's key: " + ", ".join(result.rewrapped) + ".")
     if result.pre_restore:
         UI.info(f"The state before the restore is in {result.pre_restore}.")
     for warning in result.warnings:
         UI.warning(warning)
+    if result.incomplete:
+        # Starting VAF now runs the reaper over what did not come back.
+        UI.error("Run this restore again before you start VAF, or what is named above is "
+                 "deleted at its next start.")
+        raise typer.Exit(1)
     UI.info("Start VAF again. `vaf secure status` shows the keys.")

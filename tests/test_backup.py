@@ -329,7 +329,7 @@ def test_the_restore_names_the_proof_it_took(monkeypatch, tmp_path, args, stored
     monkeypatch.setattr(backup, "read_manifest", lambda path, identity=None: {"host": "h"})
     monkeypatch.setattr(backup, "restore_backup", lambda path, **kw: given.append(kw["proof"])
                         or SimpleNamespace(files=1, volumes=0, rewrapped=[], pre_restore=None,
-                                           warnings=[]))
+                                           warnings=[], incomplete=""))
     archive = tmp_path / "x.tar.age"
     archive.write_bytes(b"x")
     out = CliRunner().invoke(backup_cmd.app, ["restore", str(archive), "--yes", *args])
@@ -658,10 +658,44 @@ def test_a_restore_whose_environments_did_not_come_back_is_not_completed(
     archive = _encrypt_tar(tmp_path / "envs.tar.age", members)
     result = backup.restore_backup(archive, pre_restore=False, proof="the admin password")
     assert [k for k, _ in seen] == [kind]
+    # The result says the same as the log, which is what the terminal reports.
+    assert bool(result.incomplete) == (kind == "backup_restore_failed")
     if kind == "backup_restore_failed":
-        assert seen[0][1]["detail"].startswith("sandbox environments not recreated")
+        assert seen[0][1]["detail"].startswith(result.incomplete)
+        assert result.incomplete.startswith("sandbox environments not recreated")
         assert any("sandbox environments" in w or "project environments" in w
                    for w in result.warnings)
+
+
+@pytest.mark.parametrize("incomplete", ["", "sandbox environments not recreated: 1"])
+def test_the_terminal_does_not_call_an_incomplete_restore_done(monkeypatch, tmp_path,
+                                                                incomplete):
+    """`vaf backup restore` printed "Restored" and exited 0 while it warned that environments
+    would be deleted at the next start. MUTATION: ignore `incomplete` - red."""
+    from types import SimpleNamespace
+
+    from typer.testing import CliRunner
+
+    import vaf.cli.gate as gate
+    import vaf.core.instance as instance
+    from vaf.cli.cmd import backup as backup_cmd
+    monkeypatch.setattr(gate, "require_admin_password", lambda force=False: True)
+    monkeypatch.setattr(gate, "_stored_hash", lambda: ("hash", False))
+    monkeypatch.setattr(gate, "is_interactive", lambda: True)
+    monkeypatch.setattr(instance, "find_service", lambda: None)
+    monkeypatch.setattr(backup, "read_manifest", lambda path, identity=None: {"host": "h"})
+    monkeypatch.setattr(backup, "restore_backup", lambda path, **kw: SimpleNamespace(
+        files=3, volumes=0, rewrapped=[], pre_restore=None, warnings=[], incomplete=incomplete))
+    archive = tmp_path / "x.tar.age"
+    archive.write_bytes(b"x")
+    out = CliRunner().invoke(backup_cmd.app, ["restore", str(archive), "--yes"])
+    if incomplete:
+        assert out.exit_code == 1, out.output
+        assert "not completely" in out.output and "Restored:" not in out.output
+        assert "Start VAF again" not in out.output
+    else:
+        assert out.exit_code == 0, out.output
+        assert "Restored:" in out.output
 
 
 def test_the_restore_event_keeps_the_origin_inside_the_logged_200_characters(monkeypatch):

@@ -945,6 +945,9 @@ class RestoreResult:
     volumes: int
     pre_restore: Optional[Path]
     warnings: List[str] = field(default_factory=list)
+    # What did not come back (sandbox environments the reaper deletes at the next start), the
+    # same text as the security event's; empty when the restore is complete.
+    incomplete: str = ""
 
 
 def read_manifest(path: Path, identity: Optional[str] = None) -> Dict:
@@ -1411,7 +1414,7 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
                     _restore_volume(tar_path, volume, image, owner=_host_user())
                 volumes += 1
         _audit_restore(path, manifest, proof, pre, failure=incomplete)
-        return RestoreResult(manifest, files, rewrapped, volumes, pre, warnings)
+        return RestoreResult(manifest, files, rewrapped, volumes, pre, warnings, incomplete)
     except (Exception, KeyboardInterrupt) as e:
         if not changed:
             raise

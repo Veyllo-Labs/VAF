@@ -224,12 +224,12 @@ the database container must exist (on a new machine, start VAF's services once).
 It shows what the backup is (host, time, VAF version, what it holds) and asks
 before it starts.
 
-Every restore that changed something is the security event `backup_restored`
-(the Overview of the Logs window, `vaf/core/security_events.py`): the backup file, whose backup it
-was, the proof the person gave (the admin password, this machine's recovery key, or the
-recovery key on a machine without an account), the safety backup of the state before,
-and whether it finished. It is written after the files are in place, so it lands in the
-restored log instead of in one the restore then replaces.
+Every restore that changed something is a security event (the Overview of the Logs
+window, `vaf/core/security_events.py`): `backup_restored`, or `backup_restore_failed` when it
+stopped half way, with the backup file, whose backup it was, the proof the person gave (the
+admin password, this machine's recovery key, or the recovery key on a machine without an
+account) and the safety backup of the state before. It is written after the files are in
+place, so it lands in the restored log instead of in one the restore then replaces.
 
 `restore_backup` in `vaf/core/backup.py` then works in this order, each step only
 after the one before succeeded:

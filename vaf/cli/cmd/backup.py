@@ -202,11 +202,12 @@ def restore(
                  "folders while they are replaced.")
         raise typer.Exit(1)
     identity = None
-    # How the person proved it is them, for the security log's backup_restored event.
+    # How the person proved it is them, for the security log's restore event (at most 44
+    # characters: the event's detail keeps 200, and the origin of the backup comes after).
     proof = "the admin password"
     stored, unreadable = _stored_hash()
     if recovery_key:
-        proof = "the recovery key (a machine without an admin account)"
+        proof = "the recovery key (no admin account here)"
         identity = getpass.getpass("Recovery key (from VAF-BackThisUp.md): ").strip()
         # A key that opens the backup proves nothing about THIS machine: anyone can write a
         # backup to a key of their own. Where an admin account exists (or may: an unreadable
@@ -220,7 +221,7 @@ def restore(
                            "admin account: prove it is you with the admin password.")
                 if not require_admin_password(force=True):
                     raise typer.Exit(1)
-                proof = "the admin password (the recovery key was not this machine's)"
+                proof = "the admin password (a foreign recovery key)"
     else:
         if unreadable or not stored:
             UI.error("This machine has no admin password to prove who you are. Restore with "

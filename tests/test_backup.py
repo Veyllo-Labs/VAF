@@ -14,6 +14,7 @@ import json
 import os
 import sqlite3
 import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -304,7 +305,7 @@ def test_a_recovery_key_restore_over_an_admin_account_is_this_machines_key(
 @pytest.mark.parametrize("args, stored, opens_here, proof", [
     ([], "hash", True, "the admin password"),
     (["--recovery-key"], "hash", True, "this machine's recovery key"),
-    (["--recovery-key"], None, False, "the recovery key (a machine without an admin account)"),
+    (["--recovery-key"], None, False, "the recovery key (no admin account here)"),
 ])
 def test_the_restore_names_the_proof_it_took(monkeypatch, tmp_path, args, stored, opens_here,
                                             proof):
@@ -598,12 +599,14 @@ def test_a_restore_is_a_security_event_with_its_proof(target, monkeypatch):
     backup.restore_backup(made.path, pre_restore=False, proof="the admin password")
     assert [k for k, _ in seen] == ["backup_restored"]
     detail = seen[0][1]["detail"]
-    assert detail.startswith("complete") and "proof: the admin password" in detail
+    assert detail.startswith("proof: the admin password")
     assert seen[0][1]["path"] == made.path.name
 
 
 def test_a_restore_that_stops_half_way_is_a_security_event_too(target, monkeypatch):
-    """Half replaced is replaced. MUTATION: only log the complete ones - red."""
+    """Half replaced is replaced, and it is not shown as restored: its own kind, labelled as
+    such in the Logs window. MUTATION: only log the complete ones, or log the half-way one as
+    `backup_restored` - red."""
     from vaf.core import security_events
     seen = []
     monkeypatch.setattr(security_events, "log_security_event",
@@ -616,13 +619,43 @@ def test_a_restore_that_stops_half_way_is_a_security_event_too(target, monkeypat
     monkeypatch.setattr(backup, "_restore_postgres", _boom)
     with pytest.raises(backup.BackupError):
         backup.restore_backup(made.path, proof="this machine's recovery key")
-    assert [k for k, _ in seen] == ["backup_restored"]
+    assert [k for k, _ in seen] == ["backup_restore_failed"]
     detail = seen[0][1]["detail"]
-    assert detail.startswith("did not finish")
-    # The log keeps 200 characters: the proof and the safety backup must be inside them.
-    # MUTATION: put the full half-way message or the origin first - red.
-    kept = detail[:200]
-    assert "proof: this machine's recovery key" in kept and "safety backup: vaf-backup-" in kept
+    assert detail.startswith("The database did not take the dump")
+    assert "proof: this machine's recovery key" in detail and "safety: vaf-backup-" in detail
+
+
+def test_the_restore_event_keeps_the_origin_inside_the_logged_200_characters(monkeypatch):
+    """The log keeps 200 characters of `detail`. With the longest proof the terminal gives, a
+    long failure, a long host name and a dated safety backup, the origin of the backup (host,
+    time, version) is still inside them. MUTATION: drop any one field's bound - red."""
+    from vaf.core import security_events
+    seen = []
+    monkeypatch.setattr(security_events, "log_security_event",
+                        lambda kind, **kw: seen.append(kw))
+    backup._audit_restore(
+        Path("vaf-backup-20261019T140000Z.tar.age"),
+        {"host": "h" * 80, "created_at": "2026-10-19T14:00:00+00:00", "vaf_version": "9" * 40},
+        "the admin password (a foreign recovery key)" + "!" * 40,
+        Path("vaf-backup-20261019T150000Z-and-a-name-someone-gave-it.tar.age"),
+        failure="x" * 300)
+    detail = seen[0]["detail"]
+    assert len(detail) <= 200, len(detail)
+    assert detail.endswith("2026-10-19T14:00 VAF " + "9" * 10)
+
+
+def test_a_restore_event_is_never_swallowed_by_the_throttle(monkeypatch, tmp_path):
+    """The same backup restored twice within seconds is two changes to the machine, not a
+    burst. MUTATION: take the restore kinds out of the unthrottled set - red."""
+    from vaf.core import security_events
+    monkeypatch.setattr(security_events, "get_app_log_dir", lambda: tmp_path)
+    monkeypatch.setattr(security_events, "_last_emit", {})
+    for _ in range(2):
+        security_events.log_security_event("backup_restored", path="vaf-backup-x.tar.age",
+                                           detail="proof: the admin password")
+    lines = [ln for f in tmp_path.glob("security_events_*.jsonl")
+             for ln in f.read_text(encoding="utf-8").splitlines()]
+    assert len(lines) == 2, lines
 
 
 @pytest.mark.parametrize("failure", [OSError("No space left on device"),

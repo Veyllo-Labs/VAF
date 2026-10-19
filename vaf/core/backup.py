@@ -1260,10 +1260,10 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
     VAF must not be running: the callers check, because a running instance would write
     into the folders while they are replaced.
 
-    Every restore that changed something is the security event `backup_restored`, written
-    after the files are in place (so into the restored log, not into one the restore then
-    replaces), with ``proof``, how the caller proved the person (the admin password, the
-    recovery key), and whether it finished."""
+    Every restore that changed something is a security event, written after the files are
+    in place (so into the restored log, not into one the restore then replaces):
+    `backup_restored`, or `backup_restore_failed` when it stopped half way, with ``proof``,
+    how the caller proved the person (the admin password, the recovery key)."""
     from vaf.core.secure_store import rewrap_from_kek
 
     say = progress or (lambda _msg: None)
@@ -1412,18 +1412,22 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
 def _audit_restore(path: Path, manifest: Dict, proof: str, pre: Optional[Path],
                    failure: str = "") -> None:
     """`backup_restored` in the security log: every account, key and chat of this machine
-    was replaced by a backup's, or partly. Never raises: the restore is done either way."""
+    was replaced by a backup's; `backup_restore_failed` when that stopped half way. Never
+    raises: the restore is done either way."""
     try:
         from vaf.core.security_events import log_security_event
-        # The log keeps 200 characters of `detail`: what the event exists for comes first
-        # (the outcome, the proof, the safety backup), the origin of the backup last.
-        outcome = f"did not finish ({failure[:60]})" if failure else "complete"
-        log_security_event(
-            "backup_restored", path=Path(path).name,
-            detail=(f"{outcome}; proof: {proof or 'not given'}; "
-                    f"safety backup: {Path(pre).name if pre else 'none'}; "
-                    f"backup of {manifest.get('host', '?')} written "
-                    f"{manifest.get('created_at', '?')} by VAF {manifest.get('vaf_version', '?')}"))
+        # The log keeps 200 characters of `detail`, so every field has its own bound and the
+        # longest line (198) still ends with the origin: what stopped it 40, the proof 44, the
+        # safety backup 36 (a dated name is 35), the host 20, the time to the minute, the
+        # version 10.
+        origin = (f"from {str(manifest.get('host', '?'))[:20]} "
+                  f"{str(manifest.get('created_at', '?'))[:16]} "
+                  f"VAF {str(manifest.get('vaf_version', '?'))[:10]}")
+        detail = (f"proof: {(proof or 'not given')[:44]}; "
+                  f"safety: {Path(pre).name[:36] if pre else 'none'}; {origin}")
+        log_security_event("backup_restore_failed" if failure else "backup_restored",
+                           path=Path(path).name,
+                           detail=f"{failure[:40]}; {detail}" if failure else detail)
     except Exception:
         pass
 

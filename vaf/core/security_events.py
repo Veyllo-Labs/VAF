@@ -66,9 +66,12 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
                         "admin in Settings, or in a terminal on this machine (`vaf users "
                         "reset-password`, with the proof it took in `detail`)",
     "backup_restored": "Everything VAF keeps on this machine was replaced by a backup's "
-                       "(`vaf backup restore`), or partly when it did not finish. `path` the "
-                       "backup file, `detail` the outcome, whose backup it was, the proof the "
-                       "person gave in the terminal and the safety backup of the state before",
+                       "(`vaf backup restore`). `path` the backup file, `detail` the proof the "
+                       "person gave in the terminal, the safety backup of the state before and "
+                       "whose backup it was",
+    "backup_restore_failed": "A restore from a backup stopped half way: this machine holds part "
+                             "of the backup. `path` the backup file, `detail` what stopped it, "
+                             "the proof, the safety backup to go back to and whose backup it was",
     "account_seal_broken": "An account row whose seal does not verify (changed in the database "
                            "outside VAF) was refused for a login, a token or its rights. "
                            "`path` names the check",
@@ -152,6 +155,10 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
 
 _THROTTLE_S = 5.0
 _last_emit: Dict[str, float] = {}
+# The throttle is for what arrives from outside in bursts (a rejected sender, a scanner). A
+# change a person made to the whole machine is never a burst, and a second one seconds after
+# the first (the same backup restored twice) is a second event, not a repeat.
+_NEVER_THROTTLED = frozenset({"backup_restored", "backup_restore_failed"})
 _lock = threading.Lock()
 
 
@@ -168,9 +175,10 @@ def log_security_event(kind: str, *, ip: str = "", username: str = "",
         # audit that silently drops the second is worse than no audit.
         key = f"{kind}|{ip}|{username}|{channel}|{path}"
         with _lock:
-            if now - _last_emit.get(key, 0.0) < _THROTTLE_S:
-                return
-            _last_emit[key] = now
+            if kind not in _NEVER_THROTTLED:
+                if now - _last_emit.get(key, 0.0) < _THROTTLE_S:
+                    return
+                _last_emit[key] = now
             # keep the throttle map bounded
             if len(_last_emit) > 512:
                 cutoff = now - _THROTTLE_S

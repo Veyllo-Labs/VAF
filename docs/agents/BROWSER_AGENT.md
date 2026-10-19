@@ -1068,9 +1068,11 @@ The browser can route through an upstream proxy. Both are optional environment v
 
 ```bash
 # the environment of the process that starts VAF (or of `docker compose ... up`), not a .env
-VAF_BROWSER_PROXY=http://user:pass@host:8080      # or socks5://host:1080  (empty = direct)
-VAF_BROWSER_TZ=America/New_York                    # match the proxy region (default: Europe/Berlin)
+export VAF_BROWSER_PROXY=http://user:pass@host:8080      # or socks5://host:1080  (empty = direct)
+export VAF_BROWSER_TZ=America/New_York                    # match the proxy region (default: Europe/Berlin)
 ```
+
+In a systemd unit they are `Environment=` lines, like the port above.
 
 When `VAF_BROWSER_PROXY` is set, the entrypoint adds `--proxy-server` and WebRTC leak protection (`--force-webrtc-ip-handling-policy=disable_non_proxied_udp`) so the real IP does not leak around the proxy. Set `VAF_BROWSER_TZ` to a timezone consistent with the proxy's exit region (a timezone that contradicts the IP is a tell).
 

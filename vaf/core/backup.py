@@ -1291,7 +1291,8 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
         # environment image. Without it the records would land, nothing could recreate them,
         # and the reaper would delete them with their volumes at the next start: refuse now,
         # before anything is replaced.
-        if _staged_project_environments(staging):
+        staged_projects = _staged_project_environments(staging)
+        if staged_projects:
             say("Making sure the sandbox environment image is here")
             from vaf.core import environment_image
             if not environment_image.ensure_image():
@@ -1366,23 +1367,29 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
         say("Recreating the sandbox environments")
         from vaf.core.environments import EnvironmentManager, _host_user
         manager = EnvironmentManager()
-        # Environments that did not come back make the restore incomplete, not failed: the
-        # rest is in place, and the security event says what is still missing.
+        # Project environments of the backup that did not come back make the restore
+        # incomplete, not failed: the rest is in place, the reaper deletes those records at
+        # the next start, and the security event says what is still missing. A backup without
+        # any is complete whatever readopt says; temporary ones would have expired anyway.
         incomplete = ""
         try:
             report = manager.readopt()
         except Exception as e:
             report = {}
-            incomplete = "sandbox environments not recreated"
+            if staged_projects:
+                incomplete = "sandbox environments not recreated"
             warnings.append(f"The sandbox environments could not be recreated ({e}). VAF "
                             "deletes them at its next start unless you run this restore again "
                             "first.")
-        if report.get("failed"):
-            incomplete = f"sandbox environments not recreated: {len(report['failed'])}"
+        lost = len(report.get("failed") or []) + len(report.get("missing_folder") or [])
+        if lost:
+            incomplete = f"sandbox environments not recreated: {lost}"
         for key, text in (("dropped", "temporary sandbox environments were dropped (they "
                                       "would have expired)"),
                           ("missing_folder", "project environments mount a folder that does "
-                                             "not exist on this machine"),
+                                             "not exist on this machine; VAF deletes them at "
+                                             "its next start unless the folder is put back and "
+                                             "this restore runs again"),
                           ("failed", "sandbox environments could not be recreated; VAF deletes "
                                      "them at its next start unless you run this restore again "
                                      "first")):

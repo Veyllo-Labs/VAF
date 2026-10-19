@@ -625,28 +625,43 @@ def test_a_restore_that_stops_half_way_is_a_security_event_too(target, monkeypat
     assert "proof: this machine's recovery key" in detail and "safety: vaf-backup-" in detail
 
 
-@pytest.mark.parametrize("readopt", ["fails", "raises"])
-def test_a_restore_whose_environments_did_not_come_back_is_not_completed(target, monkeypatch,
-                                                                         readopt):
-    """Everything is in place but sandbox environments the reaper deletes at the next start:
-    the person is told to restore again, and the log must not say "restored". MUTATION: audit
-    without what is missing - red."""
-    from vaf.core import environments, security_events
+@pytest.mark.parametrize("readopt, with_project, kind", [
+    ({"failed": ["e1", "e2"]}, True, "backup_restore_failed"),
+    # Left to the reaper all the same: its folder is not on this machine.
+    ({"missing_folder": ["e1"]}, True, "backup_restore_failed"),
+    ("raises", True, "backup_restore_failed"),
+    # Nothing to recreate: a readopt that cannot ask docker loses nothing.
+    ("raises", False, "backup_restored"),
+])
+def test_a_restore_whose_environments_did_not_come_back_is_not_completed(
+        target, tmp_path, monkeypatch, readopt, with_project, kind):
+    """Everything is in place but project environments the reaper deletes at the next start:
+    the person is told to restore again, and the log must not say "restored". A backup that
+    holds none is complete. MUTATION: audit without what is missing, leave missing folders
+    out, or count a readopt error on a backup without environments - red."""
+    from vaf.core import environment_image, environments, security_events
     seen = []
     monkeypatch.setattr(security_events, "log_security_event",
                         lambda kind, **kw: seen.append((kind, kw)))
+    monkeypatch.setattr(environment_image, "ensure_image", lambda: "vaf-env-image")
 
     def _readopt(self):
         if readopt == "raises":
             raise RuntimeError("docker did not answer")
-        return {"failed": ["e1", "e2"]}
+        return readopt
 
     monkeypatch.setattr(environments.EnvironmentManager, "readopt", _readopt)
-    made = backup.create_backup(target["out"], include_volumes=False)
-    result = backup.restore_backup(made.path, pre_restore=False, proof="the admin password")
-    assert any("sandbox environments" in w for w in result.warnings)
-    assert [k for k, _ in seen] == ["backup_restore_failed"]
-    assert seen[0][1]["detail"].startswith("sandbox environments not recreated")
+    members = {"postgres/database.dump": b"PGDMP", "postgres/globals.sql": b""}
+    if with_project:
+        members["files/vaf/environments/e1.json"] = json.dumps(
+            {"id": "e1", "kind": "project", "volume": "vaf-env-vol-e1"}).encode()
+    archive = _encrypt_tar(tmp_path / "envs.tar.age", members)
+    result = backup.restore_backup(archive, pre_restore=False, proof="the admin password")
+    assert [k for k, _ in seen] == [kind]
+    if kind == "backup_restore_failed":
+        assert seen[0][1]["detail"].startswith("sandbox environments not recreated")
+        assert any("sandbox environments" in w or "project environments" in w
+                   for w in result.warnings)
 
 
 def test_the_restore_event_keeps_the_origin_inside_the_logged_200_characters(monkeypatch):

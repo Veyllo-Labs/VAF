@@ -177,7 +177,7 @@ def test_a_directory_that_cannot_be_read_is_not_passed_over(fake_roots):
 # Modules that write through the encrypted seam without owning a sealed store, and why.
 _SEAM_WRITERS_WITHOUT_A_ROW = {
     "vaf/core/main_persistence.py": "the working memory under the launch directory, which is "
-                                    "not a root; sealed_trees(with_launch_dir=True) adds it",
+                                    "not a root; the sweep adds it (sealed_trees(with_launch_dir))",
     "vaf/core/forget_secrets.py": "rewrites a file of another store in place, keeping whether "
                                   "it was encrypted",
     "vaf/core/at_rest_migration.py": "the sweep itself",
@@ -243,16 +243,19 @@ def test_the_key_probe_finds_ciphertext_in_every_sealed_store(fake_roots, rel):
     assert data_files._encrypted_files_exist()
 
 
-def test_the_key_probe_finds_ciphertext_in_the_working_memory_of_this_launch(
+def test_a_launch_directory_with_foreign_ciphertext_does_not_block_the_key(
         fake_roots, tmp_path, monkeypatch):
-    """The sweep encrypts the working memory under the launch directory as well; ciphertext
-    there is ciphertext a new key would orphan. MUTATION: probe without the launch dir - red."""
+    """The working memory under the launch directory can be another installation's (a
+    project folder carried over, a checkout shared between homes). Counting it refused this
+    installation its own file-store key, and every chat save failed; the suite measured it on
+    a checkout with sealed working memory. MUTATION: probe the launch dir too - red."""
     from vaf.core import data_files
     launch = tmp_path / "project"
     (launch / ".vaf" / "main").mkdir(parents=True)
     (launch / ".vaf" / "main" / "working_memory.json").write_bytes(data_files.FILE_MAGIC + b"\0" * 32)
     monkeypatch.chdir(launch)
-    assert data_files._encrypted_files_exist()
+    (fake_roots["vaf"] / "sessions" / "web_chat-1.json").unlink()
+    assert not data_files._encrypted_files_exist()
 
 
 def test_a_plaintext_archived_chat_keeps_the_store_tolerant(fake_roots):

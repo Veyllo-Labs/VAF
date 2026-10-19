@@ -258,7 +258,8 @@ def sealed_trees(*, with_launch_dir: bool = False) -> Dict[str, Tuple[Path, Tupl
     """Every store written through the encrypted seam: its entry name -> (its root, the
     globs relative to that root). The at-rest sweep and the key probe read this one list;
     ``with_launch_dir`` adds the working memory under the current directory as
-    ``main_context``."""
+    ``main_context``, which the sweep encrypts and the key probe leaves out (its folder may
+    hold another installation's ciphertext; vaf/core/data_files.py says why)."""
     named = roots()
     trees = {s.pattern: (named[s.root], s.sealed) for s in STORES if s.sealed}
     if with_launch_dir:

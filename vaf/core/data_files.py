@@ -94,14 +94,22 @@ def _encrypted_files_exist() -> bool:
     """Cheap probe: does any store already hold a VAFENC1 file?
 
     The stores are the ones the at-rest sweep encrypts, from the same list
-    (vaf/core/data_stores.py, `sealed`, with the working memory of this launch).
-    A hand list here had fallen behind it: a machine whose only ciphertext was an
-    archived chat, a room or a word list looked like a fresh install, and a key
-    would have been minted over it.
+    (vaf/core/data_stores.py, `sealed`). A hand list here had fallen behind it:
+    a machine whose only ciphertext was an archived chat, a room or a word list
+    looked like a fresh install, and a key would have been minted over it.
+
+    Deliberately NOT the working memory under the launch directory, which the
+    sweep does encrypt: that folder belongs to wherever VAF was started from, and
+    ciphertext there can be another installation's (a project folder carried over,
+    a checkout shared between homes). Counting it refused this installation its
+    own key, and every chat it then tried to save failed; measured on a checkout
+    whose `.vaf/main` held another home's sealed working memory. What the refusal
+    protects there is per-session scratch state the garbage collector removes by
+    age anyway.
     """
     try:
         from vaf.core.data_stores import sealed_trees
-        trees = sealed_trees(with_launch_dir=True)
+        trees = sealed_trees()
     except Exception:
         return False
     for root, patterns in trees.values():

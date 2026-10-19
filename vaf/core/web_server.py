@@ -2162,9 +2162,8 @@ async def installation_health():
     most health.SNAPSHOT_SECONDS old, so a poller cannot make every request run Docker. The
     checks behind the word are at /api/system/health, for an admin."""
     from fastapi.responses import JSONResponse
-    from starlette.concurrency import run_in_threadpool
     from vaf.core import health
-    result = await run_in_threadpool(health.snapshot)
+    result = await health.snapshot()
     return JSONResponse({"status": result["status"]}, status_code=health.http_status(result))
 
 async def _open_report_in_viewer(session_id: str, file_path: str, title: Optional[str]) -> None:

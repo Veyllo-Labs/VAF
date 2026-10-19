@@ -180,15 +180,44 @@ def test_the_whole_is_the_worst_check_and_never_raises(tmp_path):
 
 
 def test_the_snapshot_runs_once_per_window(monkeypatch):
-    """A poller must not make every request run Docker. MUTATION: collect on every call - red."""
+    """A poller must not make every request run Docker, and an expired result is never handed
+    out. MUTATION: collect on every call, or serve the cache past its age - red."""
+    import asyncio
     calls = []
     monkeypatch.setattr(health, "_snapshot", {})
-    collect = lambda: calls.append(1) or {"status": "ok", "checks": []}       # noqa: E731
-    health.snapshot(max_age=60, collect=collect)
-    health.snapshot(max_age=60, collect=collect)
+    monkeypatch.setattr(health, "_inflight", None)
+    collect = lambda: calls.append(1) or {"status": "ok", "checks": [], "n": len(calls)}  # noqa: E731
+    asyncio.run(health.snapshot(max_age=60, collect=collect))
+    asyncio.run(health.snapshot(max_age=60, collect=collect))
     assert len(calls) == 1
-    health.snapshot(max_age=0, collect=collect)
-    assert len(calls) == 2
+    assert asyncio.run(health.snapshot(max_age=0, collect=collect))["n"] == 2
+
+
+def test_callers_during_a_slow_check_wait_for_the_one_collection(monkeypatch):
+    """A Docker that does not answer makes a check take seconds; the callers meanwhile must
+    share the one collection, not start their own or hold a worker thread each. MUTATION:
+    start a collection per caller - red."""
+    import asyncio
+    monkeypatch.setattr(health, "_snapshot", {})
+    monkeypatch.setattr(health, "_inflight", None)
+    calls = []
+    release = threading.Event()
+
+    def slow():
+        calls.append(1)
+        release.wait(10)
+        return {"status": "degraded", "checks": []}
+
+    async def crowd():
+        waiting = [asyncio.ensure_future(health.snapshot(max_age=60, collect=slow))
+                   for _ in range(20)]
+        await asyncio.sleep(0.2)
+        release.set()
+        return await asyncio.gather(*waiting)
+
+    results = asyncio.run(crowd())
+    assert len(calls) == 1
+    assert all(r["status"] == "degraded" for r in results)
 
 
 # ── who may ask what ─────────────────────────────────────────────────────────────
@@ -209,9 +238,11 @@ def test_a_monitor_gets_one_word_without_an_account(monkeypatch, verdict, code):
     """A monitor on the LAN or VPN holds no account. It gets the word and the code, never the
     checks (paths, container names). MUTATION: drop the exemption, return the checks, or
     answer 200 when down - red."""
-    monkeypatch.setattr(health, "snapshot", lambda: {
-        "status": verdict, "checks": [{"name": "disk", "status": verdict,
-                                       "reason": "/home/user/.vaf"}]})
+    async def _snapshot():
+        return {"status": verdict, "checks": [{"name": "disk", "status": verdict,
+                                               "reason": "/home/user/.vaf"}]}
+
+    monkeypatch.setattr(health, "snapshot", _snapshot)
     answer = TestClient(_public_app(), client=PROXY_PEER).get(
         "/api/health", headers={"X-Forwarded-For": LAN_DEVICE})
     assert answer.status_code == code
@@ -269,3 +300,34 @@ def test_vaf_health_without_a_running_vaf_says_so_first(monkeypatch):
     body = json.loads(out.output)
     assert out.exit_code == 2 and body["status"] == "down"
     assert [c["name"] for c in body["checks"]] == ["vaf", "disk"]
+
+
+@pytest.mark.parametrize("answer, says", [
+    ("refused", None),
+    ("timeout", "does not answer"),
+    (500, "answered HTTP 500"),
+    ("html", "without a health result"),
+])
+def test_a_vaf_that_listens_is_never_called_not_running(monkeypatch, answer, says):
+    """Only nothing listening is "not running"; an error status or no answer in time is a
+    running VAF in trouble. MUTATION: return None for an error status again - red."""
+    import requests
+
+    from vaf.cli.cmd import health as health_cmd
+
+    def _get(url, timeout=None):
+        if answer == "refused":
+            raise requests.ConnectionError("refused")
+        if answer == "timeout":
+            raise requests.ReadTimeout("slow")
+        if answer == "html":
+            return types.SimpleNamespace(status_code=200, json=lambda: (_ for _ in ()).throw(
+                ValueError("not json")))
+        return types.SimpleNamespace(status_code=answer, json=lambda: {})
+
+    monkeypatch.setattr(requests, "get", _get)
+    result = health_cmd.from_running_vaf()
+    if says is None:
+        assert result is None
+    else:
+        assert result["status"] == "down" and says in result["checks"][0]["reason"]

@@ -21,21 +21,33 @@ EXIT_CODES = {"ok": 0, "degraded": 1, "down": 2}
 
 
 def from_running_vaf(timeout: float = 30.0) -> Optional[Dict[str, Any]]:
-    """The running VAF's answer, or None when no VAF answers on this machine."""
+    """The running VAF's answer, or None only when nothing listens on this machine. A VAF that
+    listens and gives no health result (an error status, no answer in time) is reported as
+    that, down: telling the operator to start a process that already runs sends them the
+    wrong way."""
     import requests
 
     from vaf.core.web_interface import internal_api_base
+    path = "/api/system/health"
     try:
-        response = requests.get(f"{internal_api_base()}/api/system/health", timeout=timeout)
+        response = requests.get(f"{internal_api_base()}{path}", timeout=timeout)
+    except requests.Timeout:
+        return _vaf_down(f"VAF does not answer {path} within {timeout:.0f} seconds.")
     except requests.RequestException:
         return None
     if response.status_code != 200:
-        return None
+        return _vaf_down(f"VAF runs, but {path} answered HTTP {response.status_code}.")
     try:
         result = response.json()
     except ValueError:
-        return None
-    return result if isinstance(result, dict) and "status" in result else None
+        result = None
+    if isinstance(result, dict) and "status" in result:
+        return result
+    return _vaf_down(f"VAF runs, but {path} answered without a health result.")
+
+
+def _vaf_down(reason: str) -> Dict[str, Any]:
+    return {"status": "down", "checks": [{"name": "vaf", "status": "down", "reason": reason}]}
 
 
 def collect() -> Dict[str, Any]:

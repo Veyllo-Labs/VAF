@@ -28,7 +28,7 @@ full, no agent loop is left).
 
 Who asks: ``GET /api/health`` (no sign-in, the status word only, HTTP 503 when down, served
 from a snapshot at most SNAPSHOT_SECONDS old so a poller cannot make it run Docker on every
-request), ``GET /api/system/health`` (an admin: every check) and ``vaf health`` (exit 0, 1
+request, and waited for on the event loop so a crowd of pollers holds no worker thread), ``GET /api/system/health`` (an admin: every check) and ``vaf health`` (exit 0, 1
 or 2, the convention of monitoring plugins).
 
 Not on the facade: an embedder runs its own process and watches it its own way; this is a
@@ -36,6 +36,7 @@ rule about what an installation of the product needs.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import os
 import shutil
 import threading
@@ -203,20 +204,49 @@ def collect_health(status_probe: Optional[Callable[[], Dict[str, Any]]] = None,
 
 _snapshot: Dict[str, Any] = {}
 _snapshot_at = 0.0
+_inflight: Optional[concurrent.futures.Future] = None
+# Held for bookkeeping only, never while a collection runs.
 _snapshot_lock = threading.Lock()
 
 
-def snapshot(max_age: float = SNAPSHOT_SECONDS,
-             collect: Callable[[], Dict[str, Any]] = collect_health) -> Dict[str, Any]:
-    """A health result at most `max_age` seconds old. One caller collects at a time; the
-    others wait for it and get the same answer."""
-    global _snapshot, _snapshot_at
+def _refresh(collect: Callable[[], Dict[str, Any]]) -> concurrent.futures.Future:
+    """The collection under way, or a new one in its own thread. Caller holds the lock."""
+    global _inflight
+    if _inflight is not None and not _inflight.done():
+        return _inflight
+    future: concurrent.futures.Future = concurrent.futures.Future()
+
+    def run() -> None:
+        global _snapshot, _snapshot_at
+        try:
+            result = collect()
+        except BaseException as e:      # collect_health never raises; a substitute might
+            future.set_exception(e)
+            return
+        with _snapshot_lock:
+            _snapshot, _snapshot_at = result, time.monotonic()
+        future.set_result(result)
+
+    threading.Thread(target=run, daemon=True, name="vaf-health").start()
+    _inflight = future
+    return future
+
+
+async def snapshot(max_age: float = SNAPSHOT_SECONDS,
+                   collect: Callable[[], Dict[str, Any]] = collect_health) -> Dict[str, Any]:
+    """A health result at most `max_age` seconds old, for the endpoint that needs no account.
+
+    One collection runs at a time, in its own thread, and every caller that finds the result
+    expired waits for that one - on the event loop, not in a worker thread. A check can take
+    seconds (a Docker that does not answer: 10 s for `docker info`, 10 s for the inspect), and
+    callers blocked in the thread pool during it would hold the workers every other route
+    runs in. An expired result is never handed out: the guarantee is the point of the word."""
+    import asyncio
     with _snapshot_lock:
         if _snapshot and time.monotonic() - _snapshot_at < max_age:
             return _snapshot
-        _snapshot = collect()
-        _snapshot_at = time.monotonic()
-        return _snapshot
+        future = _refresh(collect)
+    return await asyncio.wrap_future(future)
 
 
 def http_status(health: Dict[str, Any]) -> int:

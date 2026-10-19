@@ -1025,9 +1025,11 @@ of the process that starts VAF (the shell, the systemd unit, the service wrapper
 starts the containers itself and hands its own environment to `docker compose`:
 
 ```bash
-BROWSER_CDP_PORT=9333                     # the host port compose publishes
-VAF_BROWSER_CDP_URL=ws://localhost:9333   # where VAF looks for it
+export BROWSER_CDP_PORT=9333                     # the host port compose publishes
+export VAF_BROWSER_CDP_URL=ws://localhost:9333   # where VAF looks for it
 ```
+
+In a systemd unit the same two are `Environment=` lines.
 
 Not in a `.env` file: VAF passes `--env-file ~/.vaf/compose.env`, so compose does not read
 a project `.env`, and `compose.env` itself is rewritten whole from the keyring on every

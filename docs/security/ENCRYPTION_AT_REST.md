@@ -477,10 +477,11 @@ words are not in the bytes, and recovers a deleted machine key.
 
 On every start (web/tray startup event AND the CLI start path - one lane only is
 how a repair silently never runs), VAF re-writes plaintext files of the encrypted
-file stores as ciphertext (every row of the table above that lives in a file, from
-the `sealed` column of the one list of stores, `vaf/core/data_stores.py`, which the
-check for existing ciphertext before a key is minted reads as well), tightens
-directory modes, prunes context archives past
+file stores as ciphertext (the files matched by the `sealed` globs of the one list of
+stores, `vaf/core/data_stores.py`, which the check for existing ciphertext before a
+key is minted reads as well; the credential files and the profile cache have writers
+of their own and are not part of it), tightens directory modes, prunes context
+archives past
 `context_archive_max_age_days`, and deletes orphaned sub-agent payloads. A pass
 that re-writes everything and still finds nothing plain left sets
 `allow_plaintext_at_rest` to `false` (the enforced state above); a single failed

@@ -81,7 +81,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and puts that machine's key into the recovery key's file, so the same key works the next
   time too. Sign-ins kept in the operating system's keyring (mail, cloud and GitHub on a
   desktop) are not in those stores: they are protected by the login and entered again on a
-  new machine. It is now an `age` key with a checksum, so a mistyped character is reported.
+  new machine. Under a master passphrase (`VAF_MASTER_PASSPHRASE`) the recovery note says to
+  keep the passphrase as well. It is now an `age` key with a checksum, so a mistyped
+  character is reported.
   Existing recovery keys keep working for what they covered; `vaf secure status` says what they do not, and
   `vaf secure renew-recovery-key` (in a terminal, with the admin password) replaces one.
   Backups written before a renewal keep opening with the old key, so write a new one after it.

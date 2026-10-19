@@ -644,12 +644,28 @@ _SHEBANG_LITERAL = re.compile(r"""["']#!/(?:bin|usr)/""")
 # chmod(0o755), TarInfo.mode = 0o755: the tell that it is meant to be STARTED. The mode
 # is read as a number rather than matched digit by digit, so 0o700 counts as well.
 _OCTAL_MODE = re.compile(r"(?:chmod\(\s*|\bmode\s*=\s*)(0o[0-7]{3,4})")
-# A skip keyed on the host being Windows, in any of the spellings this suite uses.
-_WINDOWS_SKIP = re.compile(r"skipif\([^)]*(?:os\.name|sys\.platform|platform\.system)", re.S)
+# A skip keyed on the host being Windows, in any of the spellings this suite uses, the
+# condition read through one level of nested calls (`__import__("os").name`, `which("git")`).
+_WINDOWS_SKIP = re.compile(r"""skipif\((?:[^()]|\([^()]*\))*?"""
+                           r"""(?:os\.name|\(["']os["']\)\.name|sys\.platform|platform\.system)""",
+                           re.S)
 
 
 def _marks_something_executable(segment: str) -> bool:
     return any(int(m.group(1), 8) & 0o111 for m in _OCTAL_MODE.finditer(segment))
+
+
+def _module_skips_windows(tree: ast.Module, source: str) -> bool:
+    """A module-level `pytestmark` keyed on Windows. Read from the module's own statements:
+    the text before the first `def` also holds that function's decorators, and a skip on
+    the first test would then have exempted every test after it."""
+    for node in tree.body:
+        if (isinstance(node, (ast.Assign, ast.AnnAssign))
+                and any(getattr(t, "id", "") == "pytestmark"
+                        for t in (node.targets if isinstance(node, ast.Assign) else [node.target]))
+                and _WINDOWS_SKIP.search(ast.get_source_segment(source, node) or "")):
+            return True
+    return False
 
 
 def _exec_stub_functions(path: Path):
@@ -657,11 +673,11 @@ def _exec_stub_functions(path: Path):
     source = path.read_text(encoding="utf-8")
     if not _SHEBANG_LITERAL.search(source):
         return []
-    header = source.split("\ndef ", 1)[0].split("\nclass ", 1)[0]
-    if _WINDOWS_SKIP.search(header) or re.search(r"pytestmark\s*=", header):
+    tree = ast.parse(source)
+    if _module_skips_windows(tree, source):
         return []                                    # a module-level skip covers the file
     offenders = []
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         segment = ast.get_source_segment(source, node) or ""
@@ -830,11 +846,11 @@ _PATH_CALLS = {"Path", "PurePath", "PosixPath", "PurePosixPath"}
 
 def _posix_literal_expectations(source: str):
     """(line_no, function, literal) per literal a test passes to Path(...) and asserts bare."""
-    header = source.split("\ndef ", 1)[0].split("\nclass ", 1)[0]
-    if _WINDOWS_SKIP.search(header):
+    tree = ast.parse(source)
+    if _module_skips_windows(tree, source):
         return []                                    # a module-level skip covers the file
     hits = []
-    for fn in ast.walk(ast.parse(source)):
+    for fn in ast.walk(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         decorators = "\n".join(ast.get_source_segment(source, d) or "" for d in fn.decorator_list)
@@ -869,6 +885,19 @@ def test_the_posix_literal_class_is_real():
     assert _posix_literal_expectations(
         'def test_x():\n    p = Path("/b/old")\n    assert record(p) == [str(Path("/b/old"))]\n'
     ) == []
+
+
+def test_a_skip_on_the_first_test_does_not_exempt_the_file():
+    """The text before the first `def` holds its decorators too. MUTATION: read the module
+    skip from that text again - red, the second test's hit goes unreported."""
+    source = ('import os, pytest\n'
+              '@pytest.mark.skipif(os.name == "nt", reason="posix only")\n'
+              'def test_a():\n    pass\n'
+              'def test_b():\n    p = Path("/b/old")\n    assert record(p) == ["/b/old"]\n')
+    assert _posix_literal_expectations(source) == [(7, "test_b", "/b/old")]
+    whole = ('import os, pytest\n'
+             'pytestmark = pytest.mark.skipif(os.name == "nt", reason="posix only")\n') + source
+    assert _posix_literal_expectations(whole) == []
 
 
 def test_no_test_expects_a_posix_literal_back_from_a_path():

@@ -97,6 +97,19 @@ def test_the_kit_is_written_once_and_not_rotated_behind_the_users_back(_desktop)
     assert (_desktop / recovery_kit.KIT_FILENAME).read_text(encoding="utf-8") == first
 
 
+@pytest.mark.parametrize("passphrase", ["a long master passphrase", None])
+def test_under_a_master_passphrase_the_note_says_the_passphrase_stays_needed(
+        _desktop, monkeypatch, passphrase):
+    """The wrap carries the machine key, not a key derived from VAF_MASTER_PASSPHRASE: under a
+    passphrase, keeping only this key leaves the password stores closed. MUTATION: drop the
+    passphrase paragraph, or write it always - red."""
+    import vaf.core.secure_store as ss
+    monkeypatch.setattr(ss, "_get_passphrase", lambda: passphrase)
+    path = recovery_kit.write_kit("AGE-SECRET-KEY-1EXAMPLE")
+    text = path.read_text(encoding="utf-8")
+    assert ("does not replace it" in text) == bool(passphrase)
+
+
 def test_the_note_ships_exactly_one_encoding_of_the_secret(_desktop):
     """It used to print 24 words AND base64 and call the words 256 bits.
 

@@ -253,10 +253,17 @@ def unwrap_with_secret(secret: str) -> Optional[bytes]:
 
 def write_kit(secret_b64: str) -> Optional[Path]:
     """Write the human-readable note next to the recovery wrap. Never raises."""
-    from vaf.core.secure_store import harden_path
+    from vaf.core.secure_store import _get_passphrase, harden_path
 
     try:
         ring = recovery_wrap_path()
+        # Under a master passphrase the password stores are sealed with a key derived from
+        # it, which the wrap does not carry: the note must not promise those stores alone.
+        passphrase_note = ("""
+
+The password stores on this machine are sealed under a master passphrase
+(`VAF_MASTER_PASSPHRASE`). This key does not replace it: keep the passphrase as
+well, or those stores stay closed on a new machine.""" if _get_passphrase() else "")
         text = f"""# VAF - back this up
 
 **This file is a key. Anyone holding it can read your VAF chats.** Move it off
@@ -287,7 +294,7 @@ encrypted store is sealed: your API keys, the credentials stored for commands, a
 the mail, cloud and GitHub sign-ins where VAF keeps them in a file. On a new machine
 all of them open again. Sign-ins kept in your operating system's keyring are
 protected by your login instead: on a new machine you sign in to those again. It
-also opens the backups VAF writes (`vaf backup`).
+also opens the backups VAF writes (`vaf backup`).{passphrase_note}
 
 ## What you need to recover
 

@@ -159,6 +159,16 @@ tests failed with "550 outside" or a closed connection, and every Linux and macO
 job was green. The rule: such a path goes through `posixpath`; the scan below
 refuses the spelling that gives it away, an `os.path` normalise or join whose
 result is then stripped, split or tested against "/".
+
+## 9. A test does not expect a POSIX literal back from the str() of a Path.
+
+The other half of section 1, on the test side. A test hands the code `Path("/b/old")`,
+the code records `str(path)` (right: an absolute path on this host, read on this host),
+and the test asserts the record equals `"/b/old"`. On Windows the record is `\\b\\old`.
+The Windows leg found exactly this in the backup schedule's prune record, an hour into
+the run, while every other job was green. The rule: compare against `str(Path(...))` of
+the same literal, or against `.as_posix()` when the record is meant to be POSIX; the scan
+below refuses a literal that a test both wraps in a Path and asserts bare.
 """
 import ast
 import ntpath
@@ -810,3 +820,65 @@ def test_the_ftp_test_server_maps_paths_under_windows_semantics(tmp_path):
     finally:
         stub._listener.close()
 
+
+# ---------------------------------------------------------------------------
+# 9. A POSIX literal expected back from the str() of a Path
+# ---------------------------------------------------------------------------
+
+_PATH_CALLS = {"Path", "PurePath", "PosixPath", "PurePosixPath"}
+
+
+def _posix_literal_expectations(source: str):
+    """(line_no, function, literal) per literal a test passes to Path(...) and asserts bare."""
+    header = source.split("\ndef ", 1)[0].split("\nclass ", 1)[0]
+    if _WINDOWS_SKIP.search(header):
+        return []                                    # a module-level skip covers the file
+    hits = []
+    for fn in ast.walk(ast.parse(source)):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        decorators = "\n".join(ast.get_source_segment(source, d) or "" for d in fn.decorator_list)
+        if _WINDOWS_SKIP.search(decorators):
+            continue
+        wrapped, path_args = set(), set()
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Call) and node.args
+                    and getattr(node.func, "id", getattr(node.func, "attr", "")) in _PATH_CALLS
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str) and "/" in node.args[0].value):
+                wrapped.add(node.args[0].value)
+                path_args.add(id(node.args[0]))
+        if not wrapped:
+            continue
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Assert):
+                continue
+            for sub in ast.walk(node.test):
+                if (isinstance(sub, ast.Constant) and sub.value in wrapped
+                        and id(sub) not in path_args):
+                    hits.append((sub.lineno, fn.name, sub.value))
+    return hits
+
+
+def test_the_posix_literal_class_is_real():
+    assert str(PureWindowsPath("/b/old")) == "\\b\\old"
+    assert _posix_literal_expectations(
+        'def test_x():\n    p = Path("/b/old")\n    assert record(p) == ["/b/old"]\n'
+    ) == [(3, "test_x", "/b/old")]
+    # The same literal compared through Path is right on every host.
+    assert _posix_literal_expectations(
+        'def test_x():\n    p = Path("/b/old")\n    assert record(p) == [str(Path("/b/old"))]\n'
+    ) == []
+
+
+def test_no_test_expects_a_posix_literal_back_from_a_path():
+    """MUTATION: assert `["/b/old"]` in tests/test_backup_schedule.py again - red."""
+    hits = []
+    for path in sorted((_REPO / "tests").rglob("*.py")):
+        for no, fn, literal in _posix_literal_expectations(path.read_text(encoding="utf-8")):
+            hits.append(f"{path.relative_to(_REPO).as_posix()}:{no} {fn} {literal!r}")
+    assert not hits, (
+        "str() of a Path renders with the host's separator; compare with str(Path(...)) "
+        "of the literal, or with .as_posix() if the record is meant to be POSIX:\n  "
+        + "\n  ".join(hits)
+    )

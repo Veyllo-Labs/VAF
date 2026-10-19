@@ -199,7 +199,8 @@ def test_a_run_writes_prunes_and_records(state_home):
                         prune=lambda **keep: pruned.append(keep) or [Path("/b/old")])
     assert pruned == [{"daily": 7, "weekly": 4, "monthly": 6}]
     assert state["last_success_at"] == now.isoformat() and state["last_error"] == ""
-    assert bs.read_state()["last_pruned"] == ["/b/old"]
+    # The host's own spelling of the path: the record is read on this host.
+    assert bs.read_state()["last_pruned"] == [str(Path("/b/old"))]
 
 
 def test_a_failure_reaches_the_admin_once_per_failure(state_home):

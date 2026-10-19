@@ -75,7 +75,8 @@ def test_the_newest_dated_backup_stays_next_to_a_foreign_name():
     assert set(kept) == {foreign.path, backups[1].path}
 
 
-@pytest.mark.parametrize("value, expected", [(-1, 7), ("x", 7), (0, 0), (3, 3)])
+@pytest.mark.parametrize("value, expected", [(-1, 7), ("x", 7), ("", 7), (None, 7), (0, 0),
+                                             (3, 3)])
 def test_a_retention_value_that_is_no_count_is_the_default(value, expected):
     """MUTATION: clamp a negative value to 0 (deleting the whole bucket) - red."""
     assert bs.keep_counts({"backup_keep_daily": value})["daily"] == expected

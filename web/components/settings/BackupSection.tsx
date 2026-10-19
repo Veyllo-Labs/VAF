@@ -154,7 +154,12 @@ export default function BackupSection({ config, onChange }: {
                 type="number"
                 min={0}
                 value={keep(key, fallback)}
-                onChange={(e) => onChange(key, Math.max(0, parseInt(e.target.value) || 0))}
+                onChange={(e) => {
+                    // A cleared field stays empty, which the backend reads as "no count" and
+                    // replaces with the default (keep_counts); 0 would delete that whole bucket.
+                    const n = parseInt(e.target.value, 10);
+                    onChange(key, Number.isNaN(n) ? '' : Math.max(0, n));
+                }}
                 className="w-full px-3 h-9 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500"
             />
         </label>

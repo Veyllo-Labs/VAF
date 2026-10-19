@@ -4,8 +4,8 @@
 """One job at a time that moves or reads the service containers, in this process.
 
 A repair starts and restarts containers, a switch of the inference profile stops or starts
-the speech containers, and a backup dumps the database from its container (starting it when
-it is stopped, stopping it again afterwards). Two of them at once fight over the same
+the speech containers, a backup dumps the database from its container (starting it when it
+is stopped, stopping it again afterwards), and an update stops this whole process. Two of them at once fight over the same
 containers: a backup that began while the database was stopped stops it again after a repair
 has started it, and a profile switch in the middle of a dump fails the backup.
 
@@ -26,6 +26,9 @@ from typing import Optional
 REPAIR = "repair"
 PROFILE_SWITCH = "profile switch"
 BACKUP = "backup"
+# An update started from the web stops this process: claimed before the updater is spawned
+# and never given back once it is, so nothing that touches the containers starts meanwhile.
+UPDATE = "update"
 
 _lock = threading.Lock()
 _running: Optional[str] = None
@@ -58,5 +61,9 @@ def running() -> Optional[str]:
 def busy_message(kind: str, other: str) -> str:
     """The refusal for starting ``kind`` while ``other`` runs, one wording for every caller."""
     if kind == other:
-        return f"A {kind} is already running"
-    return f"A {other} is running; wait for it to finish first."
+        return f"{_a(kind)} is already running"
+    return f"{_a(other)} is running; wait for it to finish first."
+
+
+def _a(kind: str) -> str:
+    return ("An " if kind[:1] in "aeiou" else "A ") + kind

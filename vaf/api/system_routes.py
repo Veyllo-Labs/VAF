@@ -340,37 +340,45 @@ def update_apply(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
                     "terminal first, so this one does not start from a half-swapped "
                     "checkout."),
         )
-    # The update stops this server: a repair, a profile switch or a backup running now
-    # (the scheduled one included) would be cut off halfway.
-    other = container_jobs.running()
+    already = HTTPException(
+        status_code=409,
+        detail=("An update was already started from here. Watch /api/version; "
+                "the server restarts when it finishes."),
+    )
+    if _update_started_at is not None:
+        raise already
+    # The update stops this server: a repair, a profile switch or a backup running now (the
+    # scheduled one included) would be cut off halfway. The slot is CLAIMED, not only read:
+    # a backup starting between this check and the stop would be cut off the same way. It is
+    # kept after a successful spawn, since this process is about to be stopped.
+    other = container_jobs.claim(container_jobs.UPDATE)
     if other is not None:
         raise HTTPException(status_code=409, detail=container_jobs.busy_message("update", other))
-
-    blocker = _restart_blocker()
-    if blocker:
-        raise HTTPException(status_code=409, detail=blocker)
-
-    # Claim the lane BEFORE spawning: two clicks, or two admins, would otherwise
-    # both pass every check above and start two updaters on one checkout.
-    with _update_lock:
-        if _update_started_at is not None:
-            raise HTTPException(
-                status_code=409,
-                detail=("An update was already started from here. Watch /api/version; "
-                        "the server restarts when it finishes."),
-            )
-        _update_started_at = _now()
-
     try:
-        spawned = spawn_update_process()
-    except RuntimeError as e:       # server mode without a way to survive the stop
+        blocker = _restart_blocker()
+        if blocker:
+            raise HTTPException(status_code=409, detail=blocker)
+
+        # Claim the lane BEFORE spawning: two clicks, or two admins, would otherwise
+        # both pass every check above and start two updaters on one checkout.
         with _update_lock:
-            _update_started_at = None
-        raise HTTPException(status_code=409, detail=str(e))
-    except Exception as e:
-        with _update_lock:
-            _update_started_at = None
-        raise HTTPException(status_code=500, detail=f"Could not start the updater: {e}")
+            if _update_started_at is not None:
+                raise already
+            _update_started_at = _now()
+
+        try:
+            spawned = spawn_update_process()
+        except RuntimeError as e:       # server mode without a way to survive the stop
+            with _update_lock:
+                _update_started_at = None
+            raise HTTPException(status_code=409, detail=str(e))
+        except Exception as e:
+            with _update_lock:
+                _update_started_at = None
+            raise HTTPException(status_code=500, detail=f"Could not start the updater: {e}")
+    except BaseException:
+        container_jobs.release(container_jobs.UPDATE)
+        raise
 
     # started_at is SERVER clock: the updater stamps the result file with the
     # same clock, so the client can accept only results from THIS run without

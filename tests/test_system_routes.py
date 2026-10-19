@@ -240,6 +240,32 @@ def test_apply_refuses_while_a_repair_runs(client, appliable):
         container_jobs.release(container_jobs.REPAIR)
 
 
+def test_a_started_update_keeps_every_container_job_out(client, appliable):
+    """The update stops this process; a backup or a repair starting between the check and
+    the stop would be cut off halfway. MUTATION: only read the slot instead of claiming it -
+    red."""
+    from vaf.core import container_jobs
+    assert client.post("/api/system/update/apply").status_code == 200
+    assert container_jobs.running() == container_jobs.UPDATE
+    assert client.post("/api/system/services/repair").status_code == 409
+    assert container_jobs.claim(container_jobs.BACKUP) == container_jobs.UPDATE
+
+
+@pytest.mark.parametrize("failure", ["blocker", "spawn"])
+def test_a_refused_update_gives_the_containers_back(client, appliable, monkeypatch, failure):
+    """MUTATION: keep the claim after a refusal - red: nothing could repair or back up until
+    the server restarts."""
+    from vaf.core import container_jobs
+    if failure == "blocker":
+        monkeypatch.setattr(sr, "_restart_blocker", lambda: "would not come back")
+    else:
+        def _boom(*a, **k):
+            raise OSError("no updater")
+        monkeypatch.setattr(sr, "spawn_update_process", _boom)
+    assert client.post("/api/system/update/apply").status_code in (409, 500)
+    assert container_jobs.running() is None
+
+
 def test_apply_refuses_when_the_restart_would_not_come_back(client, appliable, monkeypatch):
     """Without the pidfile `vaf start` writes, the updater's stop step does
     nothing and its start step adds a SECOND server."""

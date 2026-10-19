@@ -23,12 +23,12 @@ SOURCES, IN ORDER. Only the second is ever written to.
 
 WHAT "ENCRYPTED" MEANS HERE, and it belongs next to the code rather than in a release note.
 Without a master passphrase - the default, and the headless case - the KEK is a random key
-kept in `config.json` (`secure_store_kek`); `secure_store` says of itself that this is
-"equivalent to chmod-only protection". The gain over base64 is real and bounded: the secret
-no longer sits in the same file as everything else, it is not readable by eye, and a config
-backup or a screenshot no longer carries it. It is NOT "whoever can read the data directory
-cannot get the keys" - with no passphrase set, they can. Saying otherwise would be the label
-whose present tense nobody measures.
+kept outside `config.json`: in the Credential Manager on Windows, in an owner-only file
+(`~/.vaf/secure_store.kek`) on Linux and macOS. The gain over base64 is real and bounded:
+the secret no longer sits in the same file as everything else, it is not readable by eye,
+and a config backup or a screenshot no longer carries it. On Linux and macOS it is NOT
+"whoever can read the data directory cannot get the keys" - whoever can read `~/.vaf` as
+well, can. Saying otherwise would be the label whose present tense nobody measures.
 
 TWO OPPOSITE POLARITIES LIVE IN THIS FILE, and mistaking one for the other is the expensive
 mistake:

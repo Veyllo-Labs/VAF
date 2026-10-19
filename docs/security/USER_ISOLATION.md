@@ -38,8 +38,8 @@ VAF uses a **`user_scope_id`** (UUID) as the universal isolation key. Every user
 │                              │                                     │
 │  Layer 5: Filesystem                                               │
 │  ┌──────────────────────────────────────────────────────────┐      │
-│  │  ~/.vaf/users/<username>/ per user                       │      │
-│  │  Automations stored in per-user subdirectories           │      │
+│  │  <data_dir>/scopes/<scope>/ per account (mail, messages) │      │
+│  │  Automations, reminders, trust: one store per scope      │      │
 │  └──────────────────────────────────────────────────────────┘      │
 │                              │                                     │
 │  Layer 6: Sandbox (Docker)                                         │
@@ -309,17 +309,20 @@ Each user also has a username-based directory tree. This is the legacy layout, p
 Because this tree is keyed by the **username** string, a background run must bind the user's **real** account username. Thinking Mode and scheduled Automations resolve the username from `local_users` by `user_scope_id` (and fall back to a synthetic `scope_<8hex>` on an unknown scope) - **never** the literal `"admin"`. Handing a non-admin run the username `"admin"` would make `get_user_workspace("admin")` read `~/.vaf/users/admin/user_identity.json` and inject the admin's personal identity/profile (name, preferences, dos/don'ts, timezone) into that user's system prompt and RAG query seed - exposing the admin's data to that user, even though the memory database itself stays correctly scope-isolated.
 
 ```
-~/.vaf/users/<username>/
-├── user_identity.json      # Personal preferences
-├── identity.json            # Agent persona config
-├── automations/             # Automation tasks (global + per-user)
-│   └── <user_scope_id>/    # One .json file per task
-├── auth/                    # Connection credentials
-│   ├── whatsapp/
-│   ├── telegram/
-│   └── email/
-└── ...
+~/.vaf/users/<username>/       # Config.APP_DIR (vaf/auth/user_workspace.py)
+├── user_identity.json         # Personal preferences
+├── identity.json              # Agent persona config
+├── soul.md                    # The agent's character for this person
+├── logs/
+├── whatsapp/                  # The linked WhatsApp login (vaf/core/whatsapp_auth.py)
+└── whatsapp_avatars/          # Contact pictures, rebuilt on demand
 ```
+
+The other per-person stores are not in this tree. Automations are keyed by scope, not by
+name: `~/.vaf/automations/<user_scope_id>/`, one `.json` per task. The Telegram and Discord
+bot logins are in the data keyring, the mail, cloud and GitHub sign-ins in the OS keyring or
+the encrypted `*.enc` files in `<data_dir>`. And `<data_dir>/users/<username>/` is a second,
+older tree with the same name: the legacy per-name contacts, message and mail databases.
 
 A one-time migration script (`scripts/migrate_users_to_scopes.py`) copies data from `users/<username>/` to `scopes/<user_scope_id>/`. The old directories are preserved for verification and can be removed manually.
 
@@ -818,7 +821,7 @@ The connection map (`/api/network/connections`) lists every connected device's a
 | Gateway | Server-side scope extraction, client scope stripped | Transport |
 | Config read (`GET /api/config`) | Secret keys (API keys, OAuth client secrets, JWT/encryption keys, DB URLs) redacted for non-admins; admins get full config | Application |
 | Redis cache | Scope-prefixed cache keys | Caching |
-| Tool confirmation grants | Per-scope trust store `~/.vaf/trust/<scope>.json` (local admin -> `default.json`); one tenant's "always" never answers for another. A "for this chat" answer is kept in memory keyed on the person AND the chat (`vaf/core/trust.py`), so it never reaches another chat or another account; "once" remembers nothing (it used to arm the tool for every chat and account of the process). `tool_confirmation_bypass_admins` (admin-only, default off) lets an admin skip the dialog and emits `gate_bypassed` each time - it cannot widen `admin_only` or the account allowlist | Application |
+| Tool confirmation grants | Per-scope trust store `<config_dir>/trust/<scope>.json` (`~/.config/vaf` on Linux, local admin -> `default.json`); one tenant's "always" never answers for another. A "for this chat" answer is kept in memory keyed on the person AND the chat (`vaf/core/trust.py`), so it never reaches another chat or another account; "once" remembers nothing (it used to arm the tool for every chat and account of the process). `tool_confirmation_bypass_admins` (admin-only, default off) lets an admin skip the dialog and emits `gate_bypassed` each time - it cannot widen `admin_only` or the account allowlist | Application |
 | PostgreSQL | Fail-closed RLS policy (ENABLED + FORCED); active enforcement pending the app-role cutover to `vaf_app` (owner role bypasses RLS today) | Database |
 | Filesystem | Scope-based paths (`<data_dir>/scopes/<user_scope_id>/`) preferred; legacy `<data_dir>/users/<username>/` as fallback | OS |
 | Generated projects (VAF_Projects) | `~/Documents/VAF_Projects/<uid[:8]>/<session_id>/` when session context is present; legacy flat root otherwise | OS |

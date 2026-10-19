@@ -297,7 +297,10 @@ vaf ftp servers|forget          # The FTP servers your agent confirmed
 vaf users list|reset-password   # The accounts; a new admin password with the recovery key
 
 vaf secure status       # Where every at-rest key lives, and what is still open
-vaf secure recover      # Restore the data key after a reinstall (recovery key)
+vaf secure recover      # Restore the keys after a reinstall (recovery key)
+vaf backup create|verify|list|restore   # One encrypted file of everything VAF keeps
+vaf backup schedule|prune               # Daily or weekly backups, and what is kept
+vaf health              # ok, degraded or down, for a monitor (exit 0, 1, 2)
 vaf secure rotate-db    # Replace the shipped default Postgres password
 vaf memory cross-chat --query "..."   # What other chats a turn would be hinted
 vaf memory rekey --old-key-file <config-backup.json>

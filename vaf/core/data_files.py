@@ -91,15 +91,20 @@ def _key() -> bytes:
 
 
 def _encrypted_files_exist() -> bool:
-    """Cheap probe: does any store already hold a VAFENC1 file?"""
+    """Cheap probe: does any store already hold a VAFENC1 file?
+
+    The stores are the ones the at-rest sweep encrypts, from the same list
+    (vaf/core/data_stores.py, `sealed`). A hand list here had fallen behind it:
+    a machine whose only ciphertext was an archived chat, a room or a word list
+    looked like a fresh install, and a key would have been minted over it.
+    """
     try:
-        from vaf.core.platform import Platform
-        root = Path(Platform.vaf_dir())
+        from vaf.core.data_stores import sealed_trees
+        trees = sealed_trees()
     except Exception:
         return False
-    for pattern in ("sessions/*.json", "context_archive/*.json",
-                    "handoff_bundles/*/*.json", "subagent_queue/*.json"):
-        for path in root.glob(pattern):
+    for root, patterns in trees.values():
+        for path in (p for pattern in patterns for p in root.glob(pattern)):
             try:
                 with open(path, "rb") as handle:
                     if handle.read(len(FILE_MAGIC)) == FILE_MAGIC:

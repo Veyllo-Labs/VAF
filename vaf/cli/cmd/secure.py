@@ -83,7 +83,8 @@ def status():
                        "stores are sealed under your passphrase, which it does not replace.")
         elif kit_covers_machine_key():
             UI.success(f"Recovery key set up (file: {recovery_wrap_path().name}); it opens the "
-                       "key store and every password store.")
+                       "key store and every password store kept in a file (sign-ins in the "
+                       "OS keyring are protected by your login instead).")
         elif kit_version() == 2:
             UI.success(f"Recovery key set up (file: {recovery_wrap_path().name}); the password "
                        "stores are sealed under your passphrase, which it does not replace.")

@@ -35,13 +35,28 @@ on disk that this list does not know is reported, never silently taken or droppe
 owner sees it, and a test fails when the code joins a new literal name onto a root
 without a row here (tests/test_data_stores.py).
 
+Two more columns say how a store is protected at rest, and the at-rest sweep
+(vaf/core/at_rest_migration.py) reads them on every start:
+
+- ``sealed``: the files its writer puts through the encrypted seam (vaf/core/data_files.py),
+  as globs relative to the root. The sweep encrypts what is still plaintext there and turns
+  plaintext reads off once none is left; the key probe in data_files looks there for
+  existing ciphertext before it would mint a key. These used to be two hand lists that had
+  drifted apart: archived chats, word suggestions and the rooms were in neither or one.
+- ``harden``: made owner-only on every start (directories 0700, files 0600). For the stores
+  whose writers do not read through the encrypted seam (plain ``json.load``/``json.dump``),
+  so encrypting them would lock their own loaders out; modes are the half that applies to
+  them today. The list once hardened a folder no code writes while the real one sat open.
+
 What is not a file: Postgres, the Docker volumes of the sandbox environments and the
 personal browsers, and OS keyring entries. ``EXTERNAL`` names them; the backup engine
 reads each with its own tool.
 
 NAMED BOUNDARY: the working memory under the launch directory (``<cwd>/.vaf/main``) is
 per-session scratch state that the garbage collector removes by age; it is not a root
-here. Not on the facade: the stores are VAF's own; an embedder's application keeps its
+here. Neither is the desktop window's browser storage (``.vaf_webview`` beside the code,
+vaf/core/desktop_window.py): the window's size and the web login, which signing in again
+recreates. Not on the facade: the stores are VAF's own; an embedder's application keeps its
 own, and no embedder has asked for a shared registry.
 """
 from __future__ import annotations
@@ -71,10 +86,12 @@ class Store:
     kind: str
     owner: str
     note: str = ""
+    sealed: Tuple[str, ...] = ()   # globs relative to the root, written through data_files
+    harden: bool = False           # owner-only modes on every start
 
 
-def _s(root, pattern, kind, owner, note=""):
-    return Store(root, pattern, kind, owner, note)
+def _s(root, pattern, kind, owner, note="", *, sealed=(), harden=False):
+    return Store(root, pattern, kind, owner, note, tuple(sealed), harden)
 
 
 STORES: Tuple[Store, ...] = (
@@ -93,7 +110,7 @@ STORES: Tuple[Store, ...] = (
        "identity, soul, front office profile; WhatsApp logins inside"),
     _s("app", "users/*/whatsapp", RECREATABLE, "vaf/core/whatsapp_auth.py"),
     _s("app", "users/*/whatsapp_avatars", DERIVED, "vaf/api/whatsapp_bridge.py"),
-    _s("app", "user_profile_cache", DERIVED, "vaf/memory/rag.py"),
+    _s("app", "user_profile_cache", DERIVED, "vaf/memory/rag.py", harden=True),
     _s("app", "tag_links.json", DATA, "vaf/memory/tag_links.py"),
     _s("app", "compaction_state.json", DERIVED, "vaf/memory/rag.py"),
     _s("app", "maintenance", RUNTIME, "vaf/memory/reembed.py"),
@@ -102,14 +119,18 @@ STORES: Tuple[Store, ...] = (
     _s("app", "ssl", RECREATABLE, "vaf/network/ssl_utils.py", "browsers trust this authority"),
     _s("app", "tmp", DERIVED, "vaf/tools/search.py"),
     # ── vaf: Platform.vaf_dir() ──────────────────────────────────────────────────
-    _s("vaf", "sessions", DATA, "vaf/core/session.py", "the chats, encrypted"),
-    _s("vaf", "context_archive", DERIVED, "vaf/core/context.py", "removed after 14 days"),
-    _s("vaf", "handoff_bundles", RUNTIME, "vaf/core/handoff_bundle.py", "kept 7 days"),
-    _s("vaf", "subagent_queue", RUNTIME, "vaf/core/subagent_ipc.py"),
-    _s("vaf", "automations", DATA, "vaf/core/automation.py"),
+    _s("vaf", "sessions", DATA, "vaf/core/session.py", "the chats, encrypted",
+       sealed=("sessions/*.json", "sessions/archive/*/*.json")),
+    _s("vaf", "context_archive", DERIVED, "vaf/core/context.py", "removed after 14 days",
+       sealed=("context_archive/context_*.json",)),
+    _s("vaf", "handoff_bundles", RUNTIME, "vaf/core/handoff_bundle.py", "kept 7 days",
+       sealed=("handoff_bundles/*/*.json",)),
+    _s("vaf", "subagent_queue", RUNTIME, "vaf/core/subagent_ipc.py",
+       sealed=("subagent_queue/*.json", "subagent_queue/task_payloads/*.txt")),
+    _s("vaf", "automations", DATA, "vaf/core/automation.py", harden=True),
     _s("vaf", "last_automation_run.json", RUNTIME, "vaf/core/automation.py"),
-    _s("vaf", "automation_planner", DATA, "vaf/core/automation_planner.py"),
-    _s("vaf", "reminders", DATA, "vaf/core/reminders.py"),
+    _s("vaf", "automation_planner", DATA, "vaf/core/automation_planner.py", harden=True),
+    _s("vaf", "reminders", DATA, "vaf/core/reminders.py", harden=True),
     _s("vaf", "thinking_requests", DATA, "vaf/core/thinking_requests.py"),
     _s("vaf", "thinking_suggestions", DATA, "vaf/core/thinking_suggestions.py"),
     _s("vaf", "thinking_mode_logs", LOG, "vaf/core/thinking_mode.py"),
@@ -117,18 +138,26 @@ STORES: Tuple[Store, ...] = (
     _s("vaf", "security", DATA, "vaf/core/threat_db.py", "the known-bad hash list"),
     _s("vaf", "whare_wananga", DATA, "vaf/whare_wananga/store.py", "learned, expensive to relearn"),
     _s("vaf", "whare_wananga_retrain.json", DATA, "vaf/whare_wananga/retrain.py"),
-    _s("vaf", "a2a", DATA, "vaf/core/a2a/store.py", "rooms, pinned peers, seats"),
+    _s("vaf", "a2a", DATA, "vaf/core/a2a/store.py", "rooms, pinned peers, seats",
+       sealed=tuple(f"a2a/rooms/*/{p}" for p in (
+           "room.json", "log/*/*.json", "members/*.json", "cursors/*.json", "tickets/*.json",
+           "tickets/spent/*.json"))),
     _s("vaf", "a2a/session", RUNTIME, "vaf/core/a2a/session.py"),
     _s("vaf", "ssh", DATA, "vaf/core/ssh.py", "each account's key and confirmed servers"),
     _s("vaf", "ftp", DATA, "vaf/core/ftp.py"),
     _s("vaf", "environments", DATA, "vaf/core/environments.py", "ties volumes to their owners"),
-    _s("vaf", "browser_sessions", RECREATABLE, "vaf/core/browser_interactive.py"),
+    # [!.]: the agent lane's dot-prefixed .run-*.tmp.json staging files (pathlib's * DOES
+    # match a leading dot) are short-lived plaintext by design and swept by their own lane;
+    # encrypting one mid-run would crash the browser_use reader holding it.
+    _s("vaf", "browser_sessions", RECREATABLE, "vaf/core/browser_interactive.py",
+       sealed=("browser_sessions/*/[!.]*.json",)),
     _s("vaf", "speaker_profiles", DATA, "vaf/core/speaker_id.py"),
     _s("vaf", "speaker_confirm", RUNTIME, "vaf/core/speaker_confirm.py"),
     _s("vaf", "skills", DATA, "vaf/core/skills_registry.py"),
     _s("vaf", "workflows", DATA, "vaf/workflows/templates.py"),
-    _s("vaf", "autosuggest.json", DERIVED, "vaf/cli/autosuggest.py"),
-    _s("vaf", "autosuggest", DERIVED, "vaf/cli/autosuggest.py"),
+    _s("vaf", "autosuggest.json", DERIVED, "vaf/cli/autosuggest.py",
+       sealed=("autosuggest.json",)),
+    _s("vaf", "autosuggest", DERIVED, "vaf/cli/autosuggest.py", sealed=("autosuggest/*.json",)),
     _s("vaf", "history", DATA, "vaf/cli/history.py", "the terminal's prompt history"),
     _s("vaf", "output", DATA, "vaf/core/platform.py"),
     # A project's own memory, here when the project is the home folder (vaf/core/persistence.py).
@@ -137,7 +166,7 @@ STORES: Tuple[Store, ...] = (
     _s("vaf", "memory.md", DATA, "vaf/core/persistence.py"),
     _s("vaf", "snapshots", DATA, "vaf/core/snapshot.py"),
     _s("vaf", "icons", DERIVED, "vaf/tray.py"),
-    _s("vaf", "logs", LOG, "vaf/main.py"),
+    _s("vaf", "logs", LOG, "vaf/main.py", harden=True),
     _s("vaf", "main", RUNTIME, "vaf/core/main_persistence.py", "working memory of a launch from HOME"),
     _s("vaf", "backup_schedule.json", RUNTIME, "vaf/core/backup_schedule.py",
        "when the scheduled backup last ran, and its last error"),
@@ -170,7 +199,7 @@ STORES: Tuple[Store, ...] = (
     _s("data", "users", DATA, "vaf/core/contacts_store.py", "legacy per-username stores"),
     _s("data", "users/*/cloud_sync", DERIVED, "vaf/cloud/sync_manifest.py"),
     _s("data", "users/*/github_activity.json", DERIVED, "vaf/github/activity.py"),
-    _s("data", "workspaces", DATA, "vaf/core/thinking_workspace.py"),
+    _s("data", "workspaces", DATA, "vaf/core/thinking_workspace.py", harden=True),
     _s("data", "spend", DATA, "vaf/core/cost.py"),
     _s("data", "fx_rates.json", DERIVED, "vaf/core/cost.py"),
     _s("data", "notifications", RUNTIME, "vaf/core/user_notifications.py"),
@@ -182,7 +211,7 @@ STORES: Tuple[Store, ...] = (
     _s("data", "custom_tools", DATA, "vaf/core/custom_tools_registry.py"),
     _s("data", "cloud_sync_*.db*", DERIVED, "vaf/cloud/sync_worker.py"),
     _s("data", "github_activity.json", DERIVED, "vaf/github/activity.py"),
-    _s("data", "logs", LOG, "vaf/core/log_helper.py"),
+    _s("data", "logs", LOG, "vaf/core/log_helper.py", harden=True),
     _s("data", "logs/security_events_*.jsonl", AUDIT, "vaf/core/security_events.py"),
     _s("data", "logs/security_*.log", AUDIT, "vaf/core/security_events.py"),
     _s("data", "drafts", DATA, "vaf/core/headless_runner.py", "legacy drafts"),
@@ -218,6 +247,19 @@ def roots() -> Dict[str, Path]:
         "config": Platform.config_dir(),
         "projects": projects_dir(),
     }
+
+
+def sealed_trees() -> Dict[str, Tuple[Path, Tuple[str, ...]]]:
+    """Every store written through the encrypted seam: its entry name -> (its root, the
+    globs relative to that root). The at-rest sweep and the key probe read this one list."""
+    named = roots()
+    return {s.pattern: (named[s.root], s.sealed) for s in STORES if s.sealed}
+
+
+def hardened_dirs() -> Dict[str, Path]:
+    """Every store made owner-only on every start: "<root>/<entry>" -> its directory."""
+    named = roots()
+    return {f"{s.root}/{s.pattern}": named[s.root] / s.pattern for s in STORES if s.harden}
 
 
 def projects_dir() -> Path:

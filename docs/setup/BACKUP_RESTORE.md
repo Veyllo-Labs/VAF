@@ -20,6 +20,12 @@ know (the backup, its report of what it skipped) reads that list instead of a co
 On macOS `data` and `config` are both `~/Library/Application Support/vaf`; on
 Windows they are `%LOCALAPPDATA%\vaf` and `%APPDATA%\vaf`.
 
+Docker mode (`VAF_DOCKER_MODE=true`, with a mounted `VAF_CONFIG_DIR`, `/vaf-config` by
+default) moves only `app`: `vaf`, `data` and `config` stay under the home of the user VAF
+runs as inside its container, so a container that does not keep that home on a volume
+loses the chats and the keyring with it. No shipped install uses this mode; it is
+`Config.APP_DIR` in `vaf/core/config.py`.
+
 Each top-level entry is one of:
 
 | Kind | Meaning | Backed up |

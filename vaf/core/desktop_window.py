@@ -964,7 +964,8 @@ def start(icon_path: str = None) -> None:
             _log.debug("[DesktopWindow] Could not set Qt icon: %s", e)
 
     # Determine a stable storage path for cookies / localStorage so the user
-    # stays logged in across restarts.  Stored inside the VAF data dir.
+    # stays logged in across restarts. Beside the code, not in a data root (the
+    # named boundary in vaf/core/data_stores.py).
     # _ensure_state_path() already ran in init(); this keeps storage co-located with it.
     _ensure_state_path()
     _base = (_state_path.parent if _state_path

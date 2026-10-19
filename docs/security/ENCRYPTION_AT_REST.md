@@ -48,13 +48,14 @@ Manager is always reachable. On **Linux and macOS** the key stays a `0600` file:
 binds a Keychain item to the requesting binary, so an interpreter upgrade
 re-prompts or refuses).
 
-**Out-of-profile files are the Windows gap that remains.** Two paths are not
-under your profile and therefore not covered by its ACL: the `.env` holding the
-Redis password, written next to the compose file in the installation directory,
-and the per-chat working memory under the working directory. On Windows those
-are readable by other local accounts. Neither contains chat text, and the Redis
-instance they guard listens on localhost only, but the honest statement is that
-they are not protected there.
+**Out-of-profile files are the Windows gap that remains.** The per-chat working
+memory lives under the directory VAF was started from (`<cwd>/.vaf/main`), and
+when that is outside your profile (`C:\VAF`, `D:\VAF`) its ACL does not cover it:
+other local accounts can read it there. Its files are encrypted like the chats,
+so what they see is ciphertext and file names. The compose password file used to
+be the second such path, `<checkout>/.env`; it is `~/.vaf/compose.env` now, inside
+the profile, and an older `.env` loses its `REDIS_PASSWORD` line at the next stack
+start (`compose_env_file` in `vaf/core/service_stack.py`).
 
 ## Where the keys live
 
@@ -79,6 +80,8 @@ THE MASTER KEY, per platform (secure_store_kek_backend = "auto"):
         +-- github_credentials_key       the GitHub credential fallback file
         +-- local_network_jwt_secret     token signing (and, derived, the TOTP column)
         +-- redis_password               the cache that holds DECRYPTED memory
+        +-- browser_vnc_secret           the password of the browser's live view (KasmVNC),
+        |                                handed to compose through ~/.vaf/compose.env
         +-- admin_password_hash          Argon2 hash, so the terminal can verify offline
         +-- account_seal_key             seals the account rows in Postgres, so a row changed
         |                                in the database alone grants nothing
@@ -88,6 +91,14 @@ THE MASTER KEY, per platform (secure_store_kek_backend = "auto"):
         |                                setup stays closed)
         +-- channel_<name>_<field>       a messaging channel's login (the Telegram and
         |                                Discord bot tokens), vaf/core/channel_secrets.py
+        +-- a2a_signing_root_key         every room's signing key is derived from it and
+        |                                never stored (vaf/core/a2a/signing.py)
+        +-- mail_case_root_key           signs the case stamps on mail the agent sends
+        |                                (vaf/mail/case_token.py)
+        +-- backup_identity              this machine's backup key: every backup is
+        |                                encrypted to it (vaf/core/backup.py)
+        +-- backup_identities_previous   the backup keys this machine held before a restore
+        |                                replaced its keyring, so their backups still open
         +-- mcp_server.<name>.env        a local MCP server's environment (its API keys)
         +-- mcp_server.<name>.token      a remote MCP server's access token,
         |                                vaf/core/mcp_secrets.py
@@ -135,8 +146,11 @@ taken for the wrong file). Beside the keyring, `data_keys.recovery.json` is
 encrypted TO that key (`vaf/core/recovery_kit.py`, format tag
 `recovery-2-3d8a51`) and holds two keys: the keyring's data key AND the machine
 key (KEK) under which every other encrypted store is sealed - the provider API
-keys, the mail and cloud passwords, the credentials stored for commands. The
-machine keeps only the PUBLIC half of the identity.
+keys, the credentials stored for commands, and the mail, cloud and GitHub sign-ins
+where they are kept in a file (a machine without an OS keyring, such as a server).
+Sign-ins kept in the OS keyring are protected by your login instead and are not
+in the kit: on a new machine they are entered again. The machine keeps only the
+PUBLIC half of the identity.
 
 Both keys, because measured: the first kit wrapped the data key alone (scrypt
 over a base64 secret), so a recovery brought the chats and memories back and lost
@@ -199,7 +213,7 @@ reason to skip the backup - losing the keys is the unrecoverable direction.
 
 | Store | Location | State |
 |---|---|---|
-| Chat sessions | `~/.vaf/sessions/*.json` | AES-256-GCM |
+| Chat sessions, and the archived ones | `~/.vaf/sessions/*.json`, `~/.vaf/sessions/archive/<scope>/*.json` | AES-256-GCM |
 | Context archives (pre-compression snapshots) | `~/.vaf/context_archive/` | AES-256-GCM |
 | Handoff bundles | `~/.vaf/handoff_bundles/<scope>/` | AES-256-GCM |
 | Sub-agent queue and task payloads | `~/.vaf/subagent_queue/` | AES-256-GCM |
@@ -207,9 +221,10 @@ reason to skip the backup - losing the keys is the unrecoverable direction.
 | Browser sessions (live site cookies, auth tokens) | `~/.vaf/browser_sessions/<scope>/` | AES-256-GCM; the agent lane stages a decrypted 0600 temp beside the store for the duration of a run (browser_use reads and auto-saves the path itself) and folds it back encrypted - the construction the audit named |
 | Memory rows and chunk text | Postgres | AES-256-GCM (unchanged) |
 | Mail bodies | `mail.db` | AES-256-GCM (unchanged) |
-| Credentials (mail, cloud, API keys, a person's credentials for commands in `user_secrets.enc`) | `<data_dir>/*.enc` | Envelope (unchanged) |
+| Credentials | Provider API keys (`provider_keys.enc`) and a person's credentials for commands (`user_secrets.enc`): always `<data_dir>/*.enc`. Mail, cloud and GitHub sign-ins: the OS keyring where one is reachable, otherwise `email_credentials.enc`, `cloud_credentials.enc`, `github_credentials.enc` in `<data_dir>` | Envelope (unchanged) for the files; the OS keyring encrypts under your login |
 | User profile cache | `~/.vaf/user_profile_cache/` | AES-256-GCM (unchanged) |
 | Word suggestions learned from what a person types | `~/.vaf/autosuggest.json` (machine owner), `~/.vaf/autosuggest/<scope>.json` | AES-256-GCM; a plaintext corpus from before opens and is encrypted on its next write |
+| Agent rooms (A2A): the room, its log, members, read positions, invitations | `~/.vaf/a2a/rooms/<room>/` | AES-256-GCM |
 | An account's SSH key (`vaf/core/ssh.py`) | `~/.vaf/ssh/<account>/id_ed25519` | OpenSSH's own key encryption (bcrypt KDF, 64 rounds); the passphrase is in `user_secrets.enc` (envelope) under the namespace `ssh`, and reaches OpenSSH only through its prompt, never a file or a command line |
 
 File format: `VAFENC1:` ‖ 12-byte nonce ‖ ciphertext. A file WITHOUT that prefix
@@ -260,8 +275,8 @@ so the next round starts from a number rather than a memory:
 
 | Store | Location | Holds | Why it is still open |
 |---|---|---|---|
-| Channel messages | `<data_dir>/channel_messages.db` | Full WhatsApp/Telegram/Discord message bodies, sender ids | Column-level AEAD plus moving one `LIKE` search into Python (`channel_message_store.py:330`) |
-| Email sync (legacy lane) | `<data_dir>/email_sync.db` | Subject, sender, body snippet | Same, plus one legacy `LIKE` fallback (`email_sync_store.py:396`) |
+| Channel messages | `<data_dir>/channel_messages.db` (the local admin), `<data_dir>/scopes/<scope>/channel_messages.db` per account, `<data_dir>/users/<name>/channel_messages.db` (legacy per-name lane) | Full WhatsApp/Telegram/Discord message bodies, sender ids | Column-level AEAD plus moving one `LIKE` search into Python (`channel_message_store.py:330`) |
+| Email sync (legacy lane) | `<data_dir>/email_sync.db`, and the same per account under `scopes/<scope>/` and `users/<name>/` | Subject, sender, body snippet | Same, plus one legacy `LIKE` fallback (`email_sync_store.py:396`) |
 | Calendar | `<data_dir>/scopes/<scope>/calendar.db` | Event titles, descriptions, locations, contact links, the per-account sync state | Owner-only file modes like the other scope databases (`calendar_store.py`); a blob key would join `mail_store_encryption_key` |
 | Speaker profiles | `~/.vaf/speaker_profiles/<scope>/` | Voice biometrics (`.npy` centroids) and enrolled names | Twelve numpy/JSON I/O sites; the arrays need a binary wrapper, not the text helper |
 | The BROWSER's own profile, inside the container | docker volume `vaf-browser-profile-<hash>`, mounted at `/home/browser` | The live cookie database and any password Chromium itself saved, for the sites that per-user browser is logged into | Chromium encrypts these with `os_crypt`, and with no keyring in the container it falls back to the `basic` backend, whose key is a hardcoded constant - so it is plaintext to anyone who can read the volume. Closing it means giving the container a keyring (gnome-keyring plus libsecret, unlocked at start with a per-scope passphrase), not a change on VAF's side. NOT the same thing as `~/.vaf/browser_sessions/` in the table above: that is VAF's own store and it IS encrypted |
@@ -424,6 +439,15 @@ provision` runs the same rotation (`vaf/core/db_credentials.py`, which also hold
 the one check for the published passwords that `vaf secure status` and the stack
 start's warning read) whenever either role still has its published password.
 
+The two halves of a rotation live in different places and only work together: the
+role's password is in the database volume (`vaf_memory_pgdata`), the connection string
+that carries it is in `config.json`. A backup made with `vaf backup` takes both (the
+roles with their password hashes, and the config). Anything that replaces only one of
+them locks VAF out of its memories: an older `config.json` put back by hand, or a
+database volume recreated with `docker compose down -v`, which starts again with the
+published passwords. The way back from a recreated volume is in the "Reset Database"
+section of [MEMORY_SYSTEM.md](../memory/MEMORY_SYSTEM.md).
+
 ```
 $ vaf secure rotate-db --yes
 | Success Database password rotated and verified. Restart VAF so every worker
@@ -452,8 +476,11 @@ words are not in the bytes, and recovers a deleted machine key.
 ## Migration and retention
 
 On every start (web/tray startup event AND the CLI start path - one lane only is
-how a repair silently never runs), VAF re-writes plaintext files of the five file
-stores as ciphertext, tightens directory modes, prunes context archives past
+how a repair silently never runs), VAF re-writes plaintext files of the encrypted
+file stores as ciphertext (every row of the table above that lives in a file, from
+the `sealed` column of the one list of stores, `vaf/core/data_stores.py`, which the
+check for existing ciphertext before a key is minted reads as well), tightens
+directory modes, prunes context archives past
 `context_archive_max_age_days`, and deletes orphaned sub-agent payloads. A pass
 that re-writes everything and still finds nothing plain left sets
 `allow_plaintext_at_rest` to `false` (the enforced state above); a single failed
@@ -468,13 +495,16 @@ older release looks for them.
 ## Owner-only modes on the stores that are not encrypted
 
 Encryption is one half of at-rest protection and file modes are the other, and the second
-half applies whether or not the first is on. `at_rest_migration.run_once` hardens six
-stores that hold user-authored content or a record of when somebody was active, and that
-are NOT in the encrypting table: `automations`, `automation_planner`, `reminders`, `logs`,
-`user_profile_cache` and `thinking_workspace`. Directories become 0700 and files 0600, on
+half applies whether or not the first is on. `at_rest_migration.run_once` hardens the
+stores that hold user-authored content or a record of when somebody was active, and whose
+files the sweep does not encrypt (the `harden` column of `vaf/core/data_stores.py`):
+`~/.vaf/automations`, `~/.vaf/automation_planner`, `~/.vaf/reminders`, `~/.vaf/logs`,
+`<data_dir>/logs`, the thinking workspaces in `<data_dir>/workspaces`, and
+`~/.vaf/user_profile_cache` (under `VAF_CONFIG_DIR` in Docker mode; its files are encrypted
+by their own writer, with the memory key). Directories become 0700 and files 0600, on
 POSIX; on Windows this is the documented no-op.
 
-They are hardened and not encrypted for a reason worth stating rather than leaving to be
+The rest are hardened and not encrypted for a reason worth stating rather than leaving to be
 inferred: their writers use plain `json.load` and `json.dump` instead of the `data_files`
 seam, so encrypting them would lock their own loaders out - an automation the scheduler
 could no longer read is a feature that breaks silently on the next start. Bringing them

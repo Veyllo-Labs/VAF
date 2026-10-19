@@ -543,10 +543,10 @@ user-profile prompt cache on disk is encrypted the same way.
   is adopted byte-identically and the plaintext copy blanked; and only a
   genuine first run (neither) mints, logged loudly when it happens
 - **Storage**: Base64-encoded in the data keyring (`data_keys.enc`), which is
-  envelope-encrypted under a master key that by default lives in an owner-only
-  file or, opt-in via `secure_store_kek_backend`, the OS keyring (with
-  `VAF_MASTER_PASSPHRASE` set it is derived from the passphrase instead and
-  never written to disk). Not in `config.json`
+  envelope-encrypted under a master key that lives in the OS keyring on Windows
+  and in an owner-only file on Linux and macOS (`secure_store_kek_backend`
+  overrides either; with `VAF_MASTER_PASSPHRASE` set it is derived from the
+  passphrase instead and never written to disk). Not in `config.json`
 - **Key safety**: a PRESENT but corrupt/wrong-length key is a hard startup
   error and is never silently replaced - a silent regenerate would
   permanently orphan every encrypted row. The same applies to an UNREADABLE
@@ -726,6 +726,15 @@ docker compose -f docker-compose.memory.yml down -v
 docker compose --env-file ~/.vaf/compose.env -f docker-compose.memory.yml up -d postgres redis
 ```
 
+`down -v` deletes every account and every memory; `vaf backup create` first is the way
+back. The new database starts with the published passwords (`vaf_dev_secret` for the
+owner role `vaf`; VAF creates the app role `vaf_app` with `vaf_app_dev_secret` when it
+starts). If the passwords were rotated before (`vaf secure rotate-db`, or
+`vaf server provision`), `config.json` still names the rotated ones and VAF cannot
+connect: put the published passwords back into `memory_db_url` and
+`memory_db_owner_url` in `~/.vaf/config.json`, start VAF once, then run
+`vaf secure rotate-db` again.
+
 ### Connection Details
 
 **PostgreSQL:**
@@ -805,8 +814,8 @@ This incident showed that component-level stability can still fail in compositio
 
 ## Security Considerations
 
-1. **Change default password** in production (`POSTGRES_PASSWORD` in docker-compose)
-2. **Encryption key storage**: the key lives in the data keyring, not in `config.json`. Its master key is an owner-only file by default; set `secure_store_kek_backend` to `keyring` to hold it in the OS keyring on installs that start VAF from inside a desktop session
+1. **Change the shipped database passwords** with `vaf secure rotate-db` (`vaf server provision` does it on a server). `POSTGRES_PASSWORD` in the compose file only applies when the database volume is first created, and the app role (`vaf_app`) is not set by it at all
+2. **Encryption key storage**: the key lives in the data keyring, not in `config.json`. Its master key is in the OS keyring on Windows and an owner-only file on Linux and macOS; `secure_store_kek_backend` overrides either (`keyring` on Linux or macOS only for installs that start VAF from inside a desktop session)
 3. **Network isolation**: The Docker container only exposes port 5432 to localhost
 4. **Backup encryption keys** separately from data backups
 5. **User isolation - defense in depth, enforced and fail-closed at the database**: `get_db(user_scope_id=...)` sets the per-transaction `app.current_user_scope_id` GUC, and PostgreSQL Row-Level Security on the `memories` table (the `user_isolation_memories` policy) enforces it. The policy is **fail-closed**: a row is visible or writable only when its `user_scope_id` equals the GUC; an unset or empty GUC matches nothing (deny), and a row whose `user_scope_id` is NULL is not blanket-visible. RLS is `ENABLE`d and `FORCE`d on `memories`, and the application data connection uses a non-superuser role (`vaf_app`, `NOBYPASSRLS`) via `memory_db_url`, so RLS is actually enforced for every memory data path. A separate owner connection (`memory_db_owner_url`, superuser role `vaf`) is used for DDL, migrations, global maintenance, and exactly one admin-gated aggregate lane: `get_admin_isolation_metrics()` (served via `GET /api/security/overview`, admin only), which returns cross-scope METADATA only (scope counts, sizes, usernames - never memory content) and must never be exposed on a per-user route. The application-layer scope filter (see [User isolation](#user-isolation-retrieval-is-per-user-and-fails-closed)) remains the first line of defense; database RLS is an independent, fail-closed second guard. `chunks` additionally carries its **own** `user_scope_id` column and the same forced fail-closed policy (`user_isolation_chunks`): chunk rows hold the searchable text and the embedding vectors (which are practically invertible back to text), so relying on the join to `memories` alone would leave direct chunk access unprotected. The column is stamped at ingest and backfilled by DB migration v2. `connections` has no policy of its own - its queries join `memories`.

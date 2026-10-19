@@ -261,6 +261,12 @@ All data is preserved across container restarts:
 | `vaf_tts_models` | TTS model cache (all languages) | Yes |
 | `vaf_tts_config` | TTS runtime/config cache | Yes |
 | `vaf_stt_models` | STT model cache | Yes |
+| `vaf-browser-profile-<hash>` | One person's own browser: its cookies, logins and saved site data (created by VAF, not by the compose file) | **NO** - every site that browser is signed in to signs out |
+| `vaf-env-vol-<id>` | The files of a sandbox environment (`vaf env`, created by VAF) | **NO** - `vaf env delete` removes one with its environment |
+
+The last two are not in `docker-compose.memory.yml`, so `docker compose ... down -v` leaves
+them where they are; `vaf backup create` takes them, and `vaf env prune` removes the volumes
+of environments that no longer exist.
 
 **Stop containers without removing data:**
 ```bash
@@ -276,6 +282,10 @@ docker compose -f docker-compose.memory.yml down
 ```bash
 docker compose -f docker-compose.memory.yml down -v
 ```
+
+This deletes the memory database with every account, and after `vaf secure rotate-db`
+the next database starts with the published passwords while `config.json` names the
+rotated ones: see "Reset Database" in [MEMORY_SYSTEM.md](../memory/MEMORY_SYSTEM.md).
 
 ---
 

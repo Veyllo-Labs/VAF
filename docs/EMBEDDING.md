@@ -404,10 +404,11 @@ Two consequences worth knowing before you rely on it:
 **Where a key lives when VAF stores one.** Keys set through the product go into the
 same envelope-encrypted store as mail, GitHub and cloud credentials - not into
 `config.json`, which now holds no key material at all. The key that opens that
-store sits in a 0600 file (`~/.vaf/secure_store.kek`) by default, or in the OS
-keyring with `secure_store_kek_backend = "keyring"` - which is stronger, because
-the OS keyring is protected by the login password, but only reachable for installs
-that start VAF from inside the desktop session. Be precise about what the default
+store sits in the OS keyring on Windows and in a 0600 file (`~/.vaf/secure_store.kek`)
+on Linux and macOS; `secure_store_kek_backend = "keyring"` moves it into the OS keyring
+there too - which is stronger, because the OS keyring is protected by the login
+password, but only reachable for installs that start VAF from inside the desktop
+session. Be precise about what the default
 buys: protection against a copied directory, a backup, a support archive and other
 local accounts, and against a stolen disk only as far as the disk encryption
 underneath reaches. It is not protection against code already running as you. The

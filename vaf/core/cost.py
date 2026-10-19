@@ -14,7 +14,7 @@ Two deliberate properties:
   is not in the table, and an unknown model is priced HIGH on purpose, so a cap
   trips early rather than late. A cap that silently under-counts is worse than
   none, because it looks like protection.
-- The ledger is per user (`~/.vaf/spend/<scope>.json`, local admin ->
+- The ledger is per user (`<data_dir>/spend/<scope>.json`, local admin ->
   `default.json`, the shape reminders.py and thinking_workspace already use)
   and per day. One tenant cannot spend another's budget, and the owner can see
   who spent what without a database.

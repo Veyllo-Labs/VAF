@@ -1020,20 +1020,20 @@ from the scope-change half entirely - its profile belongs to one person.
 
 ### Custom CDP port
 
-If port `9222` is already in use on your machine, override it in `.env` before starting Docker:
+If port `9222` is already in use on your machine, set both variables in the environment
+of the process that starts VAF (the shell, the systemd unit, the service wrapper). VAF
+starts the containers itself and hands its own environment to `docker compose`:
 
 ```bash
-# .env
-BROWSER_CDP_PORT=9333
+BROWSER_CDP_PORT=9333                     # the host port compose publishes
+VAF_BROWSER_CDP_URL=ws://localhost:9333   # where VAF looks for it
 ```
 
-Then set the matching env var for VAF:
-
-```bash
-VAF_BROWSER_CDP_URL=ws://localhost:9333
-```
-
-`VAF_BROWSER_CDP_URL` can also be set in VAF's `config.json` or as a system environment variable.
+Not in a `.env` file: VAF passes `--env-file ~/.vaf/compose.env`, so compose does not read
+a project `.env`, and `compose.env` itself is rewritten whole from the keyring on every
+stack start. `VAF_BROWSER_CDP_URL` is read from the environment only, not from
+`config.json`. Starting the stack by hand, put the variable in front of the command:
+`BROWSER_CDP_PORT=9333 docker compose --env-file ~/.vaf/compose.env -f docker-compose.memory.yml up -d vaf-browser`.
 
 ### Remote browser (advanced)
 
@@ -1065,7 +1065,7 @@ This passes common bot-detection checks (`navigator.webdriver`, headless UA, Web
 The browser can route through an upstream proxy. Both are optional environment variables on the `vaf-browser` container (default: direct connection):
 
 ```bash
-# .env  (or the environment before `docker compose ... up`)
+# the environment of the process that starts VAF (or of `docker compose ... up`), not a .env
 VAF_BROWSER_PROXY=http://user:pass@host:8080      # or socks5://host:1080  (empty = direct)
 VAF_BROWSER_TZ=America/New_York                    # match the proxy region (default: Europe/Berlin)
 ```

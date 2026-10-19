@@ -13,22 +13,12 @@ from vaf.core.platform import Platform
 
 
 class UserConfig:
-    """User-scoped config and credentials paths."""
+    """The per-user folder under the data directory (the legacy per-name stores)."""
 
     @staticmethod
     def get_user_dir(username: str) -> Path:
         """Base directory for a user's data."""
         return Platform.data_dir() / "users" / username
-
-    @staticmethod
-    def get_config_path(username: str) -> Path:
-        """Path to user's config.json."""
-        return UserConfig.get_user_dir(username) / "config.json"
-
-    @staticmethod
-    def get_credentials_path(username: str) -> Path:
-        """Path to user's encrypted credentials."""
-        return UserConfig.get_user_dir(username) / "credentials.enc"
 
     @staticmethod
     def ensure_user_dir(username: str) -> Path:

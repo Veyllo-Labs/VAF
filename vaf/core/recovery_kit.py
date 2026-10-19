@@ -283,9 +283,11 @@ copy anywhere.
 ## What it opens
 
 The key store (chats, memories, mail) and the machine key under which every other
-encrypted store is sealed: your API keys, mail passwords and the credentials
-stored for commands. On a new machine all of them open again. It also opens the
-backups VAF writes (`vaf backup`).
+encrypted store is sealed: your API keys, the credentials stored for commands, and
+the mail, cloud and GitHub sign-ins where VAF keeps them in a file. On a new machine
+all of them open again. Sign-ins kept in your operating system's keyring are
+protected by your login instead: on a new machine you sign in to those again. It
+also opens the backups VAF writes (`vaf backup`).
 
 ## What you need to recover
 
@@ -299,6 +301,11 @@ Two things, and the key alone is not enough:
    It holds `{ring.name}`, `{ring.with_name('data_keys.enc').name}` and the other
    encrypted stores, and also the message, mail, calendar and contact databases.
    Your chats live elsewhere (`~/.vaf`), so back that folder up as well.
+
+   The memories are in the database, a Docker volume that no folder copy reaches.
+   `vaf backup create` writes all of it, the folders and the database, into one
+   file this key opens; on the new machine `vaf backup restore <file>
+   --recovery-key` puts it back.
 
 ## How to recover
 

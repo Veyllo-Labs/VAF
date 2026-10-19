@@ -15,6 +15,10 @@ so encrypting them would lock their own loaders out. Bringing them under it mean
 converting those writers first, which is its own change. This file pins the half that is
 here and the reason the other half is not, so the next reader does not mistake the gap
 for an oversight.
+
+Which stores is `harden` in the one list of stores (vaf/core/data_stores.py). A hand list
+in the sweep once named `~/.vaf/thinking_workspace`, which no code writes, while the
+thinking workspaces under the data directory and the logs there stayed as they were.
 """
 import json
 import os
@@ -23,19 +27,19 @@ import sys
 
 import pytest
 
-from vaf.core import at_rest_migration
+from vaf.core import at_rest_migration, data_stores
 from vaf.core.platform import Platform
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32",
                                 reason="POSIX modes; Windows hardening is a documented no-op")
 
-STORES = ("automations", "automation_planner", "reminders", "logs",
-          "user_profile_cache", "thinking_workspace")
+STORES = tuple(f"{s.root}/{s.pattern}" for s in data_stores.STORES if s.harden)
 
 
 @pytest.fixture()
-def home(tmp_path, monkeypatch):
-    """A scratch home, and the enforcement branch held open.
+def roots(tmp_path, monkeypatch):
+    """Every root of the store list in a scratch folder of its own, and the enforcement
+    branch held open.
 
     An empty scratch home looks to `run_once` like a machine where every store is already
     ciphertext, so it flips `allow_plaintext_at_rest` to False in the PROCESS-WIDE config
@@ -43,22 +47,26 @@ def home(tmp_path, monkeypatch):
     already handled the same way in tests/test_browser_session_at_rest.py; this is that
     pattern, not a second one.
     """
-    monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path))
+    named = {name: tmp_path / name for name in ("app", "vaf", "data", "config", "projects")}
+    monkeypatch.setattr(data_stores, "roots", lambda: named)
+    monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: named["vaf"]))
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(at_rest_migration, "_done", False)
     monkeypatch.setattr(at_rest_migration, "_any_plaintext_left", lambda trees: True)
-    return tmp_path
+    return named
 
 
 def _world_readable(path):
     return bool(stat.S_IMODE(path.stat().st_mode) & (stat.S_IRWXG | stat.S_IRWXO))
 
 
-def test_a_scheduled_store_is_closed_to_a_second_local_account(home):
+def test_a_scheduled_store_is_closed_to_a_second_local_account(roots):
     """MUTATION: leave the scheduled stores out of the sweep.
 
     The prompt of an automation says what the person asked for and the record says when
     it runs. Both were readable by any account on the machine.
     """
+    home = roots["vaf"]
     store = home / "automations" / "scope-a"
     store.mkdir(parents=True)
     os.chmod(home / "automations", 0o755)
@@ -78,13 +86,14 @@ def test_a_scheduled_store_is_closed_to_a_second_local_account(home):
 
 
 @pytest.mark.parametrize("name", STORES)
-def test_every_named_store_is_swept(home, name):
-    """MUTATION: drop one store from the list.
+def test_every_named_store_is_swept(roots, name):
+    """MUTATION: drop one store from the sweep.
 
     Each of these holds user-authored content or a record of when the user was active,
     and each is written by a lane that does not read through the encrypted seam.
     """
-    root = home / name
+    root_name, entry = name.split("/", 1)
+    root = roots[root_name] / entry
     root.mkdir(parents=True)
     os.chmod(root, 0o755)
 
@@ -93,7 +102,7 @@ def test_every_named_store_is_swept(home, name):
     assert not _world_readable(root), f"{name} was left open"
 
 
-def test_a_store_that_is_not_there_is_not_an_error(home):
+def test_a_store_that_is_not_there_is_not_an_error(roots):
     """Most installations have never used most of these. A missing directory is the
     ordinary case, not a failure to report."""
     report = at_rest_migration.run_once(force=True)
@@ -101,26 +110,44 @@ def test_a_store_that_is_not_there_is_not_an_error(home):
     assert "hardened" not in report or report["hardened"] == []
 
 
-def test_the_sweep_says_which_stores_it_closed(home):
-    for name in ("automations", "logs"):
-        (home / name).mkdir(parents=True)
+def test_the_sweep_says_which_stores_it_closed(roots):
+    (roots["vaf"] / "automations").mkdir(parents=True)
+    (roots["data"] / "logs").mkdir(parents=True)
     report = at_rest_migration.run_once(force=True)
-    assert set(report.get("hardened", [])) == {"automations", "logs"}
+    assert set(report.get("hardened", [])) == {"vaf/automations", "data/logs"}
+
+
+@pytest.mark.parametrize("root_name, entry", [
+    ("data", "workspaces"), ("data", "logs"), ("app", "user_profile_cache")])
+def test_the_stores_that_live_outside_the_vaf_folder_are_swept_where_they_are(
+        roots, root_name, entry):
+    """The thinking workspaces and the logs are under the data directory, the profile cache
+    under the app directory (its own folder in Docker mode). MUTATION: harden them under
+    the vaf folder again - red."""
+    root = roots[root_name] / entry / "scope-a"
+    root.mkdir(parents=True)
+    note = root / "notes.json"
+    note.write_text("{}", encoding="utf-8")
+    os.chmod(root.parent, 0o755)
+    os.chmod(note, 0o644)
+
+    at_rest_migration.run_once(force=True)
+
+    assert not _world_readable(root.parent) and not _world_readable(note)
 
 
 def test_these_stores_are_deliberately_not_encrypted_and_the_code_says_why():
-    """MUTATION: add them to the `trees` dict instead.
+    """MUTATION: give one of them `sealed` globs as well.
 
-    That dict encrypts as well as hardens. These writers use plain json.load, so
+    Sealed files are encrypted as well as hardened. These writers use plain json.load, so
     encrypting them would make an automation unreadable to the scheduler that has to
     run it - a silent break of the feature, on the next start, for everybody.
     """
     from pathlib import Path
 
+    for store in data_stores.STORES:
+        assert not (store.harden and store.sealed), (
+            f"{store.root}/{store.pattern} is sealed; its loader does not read ciphertext")
     source = (Path(__file__).resolve().parents[1] / "vaf" / "core"
               / "at_rest_migration.py").read_text(encoding="utf-8")
-    trees = source.split("trees = {", 1)[1].split("}", 1)[0]
-    for name in STORES:
-        assert f'"{name}"' not in trees, (
-            f"{name} joined the encrypting table; its loader does not read ciphertext")
     assert "do not read through the encrypted seam" in source, "the reason is not written down"

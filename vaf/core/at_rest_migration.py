@@ -76,6 +76,7 @@ def run_once(*, force: bool = False) -> Dict[str, object]:
         return {"skipped": True}
     _done = True
 
+    from vaf.core import data_stores
     from vaf.core.config import Config
     from vaf.core.data_files import encryption_enabled
     from vaf.core.platform import Platform
@@ -84,38 +85,30 @@ def run_once(*, force: bool = False) -> Dict[str, object]:
     report: Dict[str, object] = {}
     vaf_dir = Path(Platform.vaf_dir())
 
-    trees = {
-        "sessions": (vaf_dir / "sessions", ("*.json",)),
-        "context_archive": (vaf_dir / "context_archive", ("context_*.json",)),
-        "handoff_bundles": (vaf_dir / "handoff_bundles", ("*/*.json",)),
-        "subagent_queue": (vaf_dir / "subagent_queue", ("*.json", "task_payloads/*.txt")),
-        "main_context": (Path.cwd() / ".vaf" / "main", ("*.json", "*.md", "sessions/*/*")),
-        # Live site cookies and auth tokens, one dir per user scope. The
-        # [!.] excludes the agent lane's dot-prefixed .run-*.tmp.json staging
-        # files (measured: pathlib's * DOES match a leading dot) - they are
-        # short-lived plaintext by design and swept by their own lane, and
-        # encrypting one mid-run would crash the browser_use reader holding it.
-        "browser_sessions": (vaf_dir / "browser_sessions", ("*/[!.]*.json",)),
-    }
+    # The stores and their files come from the one list (vaf/core/data_stores.py, `sealed`),
+    # which the key probe in data_files reads as well. The working memory of a launch is
+    # under the launch directory, which is not a root of that list, so it is added here.
+    sealed = data_stores.sealed_trees()
+    trees = dict(sealed)
+    trees["main_context"] = (Path.cwd() / ".vaf" / "main", ("*.json", "*.md", "sessions/*/*"))
 
     # Modes first: they apply whether or not encryption is on, and they are the
     # only protection a second local account ever sees.
-    for name, (root, _patterns) in trees.items():
-        if root.is_dir():
-            harden_dir(root)
+    entries = [root / name for name, (root, _patterns) in sealed.items()]
+    for directory in entries + [trees["main_context"][0]]:
+        if directory.is_dir():
+            harden_dir(directory)
 
-    # And the stores that are NOT in `trees`, for a reason worth writing down: their
-    # writers do not read through the encrypted seam (automations, reminders and the
-    # planner use plain json.load/json.dump), so encrypting them would lock their own
-    # loaders out. Modes are the half that can be applied today, and they are not
-    # cosmetic here: an automation's prompt is user-authored natural language, the same
-    # content class as a chat message, and it sat world-readable in a world-listable
-    # directory while the sessions beside it were owner-only ciphertext. Bringing them
-    # under encryption means converting those writers to data_files first; that is its
-    # own change, and until it happens this is the honest half.
-    for name in ("automations", "automation_planner", "reminders", "logs",
-                 "user_profile_cache", "thinking_workspace"):
-        root = vaf_dir / name
+    # And the stores that are NOT sealed, for a reason worth writing down: their writers
+    # do not read through the encrypted seam (automations, reminders and the planner use
+    # plain json.load/json.dump), so encrypting them would lock their own loaders out.
+    # Modes are the half that can be applied today, and they are not cosmetic here: an
+    # automation's prompt is user-authored natural language, the same content class as a
+    # chat message, and it sat world-readable in a world-listable directory while the
+    # sessions beside it were owner-only ciphertext. Bringing them under encryption means
+    # converting those writers to data_files first; that is its own change, and until it
+    # happens this is the honest half. Which stores: `harden` in the same list.
+    for name, root in data_stores.hardened_dirs().items():
         if root.is_dir():
             harden_dir(root)
             report.setdefault("hardened", []).append(name)

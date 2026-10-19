@@ -67,12 +67,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **Archived chats, agent rooms and word suggestions are encrypted on disk like the chats.**
+  Their writers already encrypted every new file, but the start-up sweep that encrypts what
+  is left from before did not know them, and once it found the other stores clean it turned
+  plaintext reads off: a plaintext archived chat then vanished from the archive view. The
+  sweep and the check that guards the key now read one list of stores. The thinking
+  workspaces and the logs under the data directory are now owner-only as well; the sweep
+  had been closing a folder that no code writes.
 - **The recovery key now brings back every password store.** It used to open the key store
   alone, so after a reinstall the chats and memories came back while the stored API keys, mail
   passwords and credentials for commands were lost. A new recovery key also carries the machine
   key that seals those stores, and `vaf secure recover` opens them again on the new machine
   and puts that machine's key into the recovery key's file, so the same key works the next
-  time too. It is now an `age` key with a checksum, so a mistyped character is reported.
+  time too. Sign-ins kept in the operating system's keyring (mail, cloud and GitHub on a
+  desktop) are not in those stores: they are protected by the login and entered again on a
+  new machine. It is now an `age` key with a checksum, so a mistyped character is reported.
   Existing recovery keys keep working for what they covered; `vaf secure status` says what they do not, and
   `vaf secure renew-recovery-key` (in a terminal, with the admin password) replaces one.
   Backups written before a renewal keep opening with the old key, so write a new one after it.

@@ -74,6 +74,11 @@ internet rather than behind a router. The setup that fits both:
 3. **Back it up off the machine.** A backup on the server's own disk is lost with the
    server. `vaf backup create` writes one encrypted file; copy it elsewhere
    ([BACKUP_RESTORE.md](BACKUP_RESTORE.md)).
+4. **Watch it.** Point a monitor (Uptime Kuma, a cron job, the hosting provider's own) at
+   `https://<address>:<port>/api/health` over the VPN: it needs no account, answers
+   `{"status": "ok"}`, `"degraded"` or `"down"`, and HTTP 503 when down. `vaf health` on
+   the server prints the checks behind the word and exits 0, 1 or 2
+   ([DOCKER_SERVICES.md](DOCKER_SERVICES.md#health)).
 
 ## Service Management
 

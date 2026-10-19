@@ -495,6 +495,39 @@ instead of a sudo attempt. The forwarding switch in step 3 is the one exception,
 it is a switch, not a service: one kernel setting and one drop-in file, both named in
 the step's message, both reversible by hand.
 
+## Health
+
+```bash
+vaf health             # the checks and the verdict; exit 0 ok, 1 degraded, 2 down
+vaf health --json      # the same as JSON
+curl -sk https://<address>:<port>/api/health   # a monitor: {"status": "ok"}, 503 when down
+```
+
+The repair answers for the containers. Whether the installation works is a wider question,
+and two failures leave every container healthy while VAF stops working: the disk filling up
+(the database stops writing, a backup cannot be written) and the server's agent loop dying
+(the page loads, every request but the chat is answered, and no chat gets an answer again).
+`vaf/core/health.py` asks all three:
+
+| Check | What it reads | Down when | Degraded when |
+|---|---|---|---|
+| `services` | `stack_problems()` over one status snapshot, the same reading `vaf repair --check` exits on | a required service is unusable, or Docker is unreachable where VAF runs a stack | an optional service is broken or starting, or the host's IP forwarding is off |
+| `disk` | free space on the fullest disk among the data folders, the backup folder and Docker's root directory (named in `docker info`, when it is a path on this machine) | less than 1 GB free | less than 5 GB free |
+| `agent` | the agent loops of the server process (`headless_runner.worker_status`) | none is left | some have stopped |
+
+The verdict is the worst check. `vaf health` asks the running VAF, because the agent loop
+can only be seen inside it; when nothing answers, "VAF is not running" is the first finding
+and the services and the disk are checked from the terminal. `GET /api/health` needs no
+account and answers only the word, from a snapshot at most 15 seconds old, so a poller
+cannot make every request run Docker; the network admission still applies, so on a server
+reached over a VPN only the VPN's peers can ask. The checks themselves are at
+`GET /api/system/health`, for an admin. `GET /api/heartbeat` stays what it was: the process
+answers, nothing more.
+
+Not in the web UI, deliberately: the Update and Repair dialog shows what a repair can act
+on, and neither a full disk nor a stopped agent loop is something it can repair; they are
+reported where an operator watches a server, the monitor and the terminal.
+
 ## Configuration
 
 VAF configuration for Docker services (`~/.vaf/config.json`):

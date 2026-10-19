@@ -12,7 +12,8 @@ from typing import Any, Dict, List
 import typer
 
 from vaf.cli.ui import UI
-from vaf.core.service_health import collect_service_status, repair_service_stack
+from vaf.core.service_health import (DOWN, collect_service_status, repair_service_stack,
+                                     stack_problems)
 
 _STATE_STYLE = {
     "ok": "green",
@@ -128,8 +129,7 @@ def cmd_repair(
             emit_json(status)
             return
         print_status(status)
-        broken = [s for s in status.get("services", [])
-                  if s.get("required") and s.get("state") in ("error", "unknown")]
+        broken = [p for p in stack_problems(status) if p["severity"] == DOWN]
         if broken or host_forwarding_off(status):
             UI.print("")
             UI.warning("Run `vaf repair` to try to fix this.")

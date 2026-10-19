@@ -46,6 +46,10 @@ AUTH_EXEMPT_PATHS: set[str] = {
     # tokenless-localhost path no longer covers a browser on another device.
     "/api/auth/test-veyllo-key",
     "/api/network/ws-config",  # So frontend can build wss:// URL when TLS is on
+    # The installation's health for a monitor, which holds no account. It answers one word
+    # (ok, degraded, down) from a cached snapshot; the checks behind it are admin-only at
+    # /api/system/health. The network admission (IPValidationMiddleware) still applies.
+    "/api/health",
     # The A2A guest lane: a foreign harness holds a join ticket, not an account,
     # so it cannot authenticate here - and must not need to. Both files are
     # public by design (the CA certificate's private key never leaves this

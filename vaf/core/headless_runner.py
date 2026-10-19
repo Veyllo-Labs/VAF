@@ -706,11 +706,32 @@ def refuse_turn_without_backend(task, why: str, session_mgr) -> None:
                                              f"{type(e).__name__}: {e}")
 
 
+# The threads this process runs the agent loop in, by worker id: the health check
+# (vaf/core/health.py) asks whether they still live. A loop that died answers no chat
+# again, while the web server around it keeps answering every request but the chat.
+_WORKER_THREADS: dict = {}
+_WORKER_THREADS_LOCK = threading.Lock()
+
+
+def worker_status():
+    """{"started": n, "alive": m} over the agent loops this process started, or None when it
+    started none (a terminal, a test): then nobody here is waiting on one."""
+    with _WORKER_THREADS_LOCK:
+        threads = list(_WORKER_THREADS.values())
+    if not threads:
+        return None
+    return {"started": len(threads), "alive": sum(1 for t in threads if t.is_alive())}
+
+
 def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
     """
     Run a headless agent loop that processes tasks from the TaskQueue.
     This is designed to run in a background thread within the Tray App.
     """
+    with _WORKER_THREADS_LOCK:
+        # A loop restarted under the same id (web_server._ensure_headless_agent_runner)
+        # replaces the dead one.
+        _WORKER_THREADS[worker_id] = threading.current_thread()
     def _lifecycle(msg: str) -> None:
         """Log lifecycle events unconditionally (ignores debug_logs_enabled toggle)."""
         try:

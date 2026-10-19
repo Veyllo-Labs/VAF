@@ -13,6 +13,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **A health check a monitor can poll.** `GET /api/health` answers `ok`, `degraded` or
+  `down` without an account (HTTP 503 when down), and `vaf health` prints what is behind it
+  and exits 0, 1 or 2. Besides the services it checks the disk (the data, the backups and
+  Docker's volumes; degraded below 5 GB free, down below 1 GB) and whether the server's
+  agent loop still runs, two failures that left every container healthy while no chat got
+  an answer. The checks themselves are admin-only (`/api/system/health`).
 - **Install without local models, for small servers.** The installer now asks for a profile:
   Full (local), as before, or Lean (API), which downloads no chat, voice-call, speech-to-text
   or text-to-speech model and does not start the speech containers. Chat and speech-to-text go

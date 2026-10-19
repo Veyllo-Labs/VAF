@@ -546,6 +546,7 @@ def collect_service_status(
             "available": bool(daemon.get("ok")),
             "reason": str(daemon.get("reason") or ""),
             "detail": str(daemon.get("detail") or ""),
+            "root_dir": str(daemon.get("root_dir") or ""),
         },
         "stack_root": str(root) if root else None,
         "host": host,
@@ -556,6 +557,37 @@ def collect_service_status(
                                       for s in starting], default=0),
         "checked_at": _now_iso(),
     }
+
+
+# How bad a problem of the stack is. DOWN: something VAF depends on is unusable (a required
+# service, or Docker itself where VAF runs a stack). DEGRADED: VAF works, a part of it does not.
+DOWN = "down"
+DEGRADED = "degraded"
+
+
+def stack_problems(status: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Pure: what is wrong in a `collect_service_status` snapshot, one entry per problem
+    ({name, severity, reason}). The one reading of the snapshot both verdicts use: the exit
+    code of `vaf repair --check` (any DOWN) and the health check (vaf/core/health.py).
+
+    A required service in `error` or `unknown` is DOWN; any other needed service in `warn`,
+    `error` or `unknown` (still starting included) is DEGRADED, and so is the host's IP
+    forwarding switched off (every container runs, none reaches the internet). Rows the
+    profile leaves out (`off`) and optional services never installed (`absent`) are no
+    problem."""
+    problems: List[Dict[str, str]] = []
+    for svc in status.get("services") or []:
+        state = str(svc.get("state") or "")
+        if state in ("ok", "off", "absent") or svc.get("needed") is False:
+            continue
+        severity = DOWN if svc.get("required") and state in ("error", "unknown") else DEGRADED
+        problems.append({"name": str(svc.get("name") or svc.get("service_key") or "?"),
+                         "severity": severity, "reason": str(svc.get("reason") or state)})
+    host = status.get("host") or {}
+    if host.get("forwarding_ok") is False:
+        problems.append({"name": "host", "severity": DEGRADED,
+                         "reason": str(host.get("reason") or "IP forwarding is off.")})
+    return problems
 
 
 def _now_iso() -> str:

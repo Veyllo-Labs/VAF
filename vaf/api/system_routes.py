@@ -90,6 +90,14 @@ async def system_services(_: Dict[str, Any] = Depends(require_admin)) -> Dict[st
     return await run_in_threadpool(collect_service_status)
 
 
+@router.get("/health")
+async def system_health(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Every health check and the verdict (vaf/core/health.py), collected now: what
+    `vaf health` prints and what the word at /api/health stands for."""
+    from vaf.core.health import collect_health
+    return await run_in_threadpool(collect_health)
+
+
 @router.get("/inference-profile")
 def get_inference_profile(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The installation's inference profile (vaf/core/inference_profile.py), the services it

@@ -216,7 +216,14 @@ def diagnose_docker_daemon() -> dict:
     except Exception as e:  # a broken PATH entry, a killed subprocess
         return {"ok": False, "reason": "not_running", "detail": str(e)[:300]}
     if result.returncode == 0:
-        return {"ok": True, "reason": "ok", "detail": ""}
+        # Where the engine keeps its volumes (the database's among them), for the disk check
+        # of vaf/core/health.py; read from this one call instead of a second `docker info`.
+        root_dir = ""
+        for line in (result.stdout or "").splitlines():
+            if line.strip().startswith("Docker Root Dir:"):
+                root_dir = line.split(":", 1)[1].strip()
+                break
+        return {"ok": True, "reason": "ok", "detail": "", "root_dir": root_dir}
     err = ((result.stderr or "") + " " + (result.stdout or "")).strip()
     low = err.lower()
     if "permission denied" in low or "got permission denied" in low:

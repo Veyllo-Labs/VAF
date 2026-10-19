@@ -2151,8 +2151,21 @@ async def receive_heartbeat(hb: Heartbeat):
 
 @app.get("/api/heartbeat")
 async def healthcheck():
-    """Health check endpoint for Docker/monitoring."""
+    """Liveness only: the process answers. Whether the installation works is /api/health."""
     return {"status": "ok", "healthy": True}
+
+
+@app.get("/api/health")
+async def installation_health():
+    """The installation's health for a monitor (vaf/core/health.py): the status word only,
+    without sign-in (auth middleware exemption), HTTP 503 when down. Served from a snapshot at
+    most health.SNAPSHOT_SECONDS old, so a poller cannot make every request run Docker. The
+    checks behind the word are at /api/system/health, for an admin."""
+    from fastapi.responses import JSONResponse
+    from starlette.concurrency import run_in_threadpool
+    from vaf.core import health
+    result = await run_in_threadpool(health.snapshot)
+    return JSONResponse({"status": result["status"]}, status_code=health.http_status(result))
 
 async def _open_report_in_viewer(session_id: str, file_path: str, title: Optional[str]) -> None:
     """Open a freshly-created report (e.g. from research_agent) in the Document Viewer (sidebar) rather

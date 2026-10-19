@@ -175,7 +175,7 @@ def test_daemon_diagnosis_reports_success(monkeypatch):
         ss.subprocess, "run",
         lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr=""),
     )
-    assert ss.diagnose_docker_daemon() == {"ok": True, "reason": "ok", "detail": ""}
+    assert ss.diagnose_docker_daemon() == {"ok": True, "reason": "ok", "detail": "", "root_dir": ""}
 
 
 def test_configured_port_prefers_the_environment_then_config_then_default():

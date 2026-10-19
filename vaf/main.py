@@ -341,7 +341,7 @@ def _a2a_credential_verifier(credential: str):
 _set_credential_verifier(_a2a_credential_verifier)
 
 import typer
-from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup, a2a, repair, usage, top, inbox, outbox, secrets, ssh, ftp, audit
+from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup, a2a, repair, health, usage, top, inbox, outbox, secrets, ssh, ftp, audit
 from vaf.cli.cmd import env as env_cmd
 from vaf.cli.cmd import users as users_cmd
 from vaf.cli.cmd import backup as backup_cmd
@@ -475,6 +475,8 @@ app.command(name="info")(info.info)
 app.command(name="install-gpu")(info.install_gpu)
 app.command(name="doctor")(security.doctor)
 app.command(name="repair", help="Check and repair the Docker services")(repair.cmd_repair)
+app.command(name="health", help="Is this installation healthy (exit 0 ok, 1 degraded, 2 down)")(
+    health.cmd_health)
 app.command(name="profile", help="Local models or none: what this installation runs itself")(
     profile_cmd.profile_cmd)
 

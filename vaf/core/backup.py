@@ -137,13 +137,18 @@ class VerifyResult:
 
 # ── where, and to whom ────────────────────────────────────────────────────────────
 
-def backup_dir() -> Path:
-    """`backup_dir` from the config, else ``<data dir>/backups``; owner-only."""
+def backup_dir_path() -> Path:
+    """Where `backup_dir` points, without creating it (the health check reads its disk)."""
     from vaf.core.config import Config
     from vaf.core.platform import Platform
-    from vaf.core.secure_store import harden_dir
     configured = str(Config.get("backup_dir", "") or "").strip()
-    path = Path(os.path.expanduser(configured)) if configured else Platform.data_dir() / "backups"
+    return Path(os.path.expanduser(configured)) if configured else Platform.data_dir() / "backups"
+
+
+def backup_dir() -> Path:
+    """`backup_dir` from the config, else ``<data dir>/backups``; owner-only."""
+    from vaf.core.secure_store import harden_dir
+    path = backup_dir_path()
     path.mkdir(parents=True, exist_ok=True)
     harden_dir(path)
     return path

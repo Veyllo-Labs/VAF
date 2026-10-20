@@ -337,21 +337,28 @@ def _still_admitted(entry: str) -> list:
 
 
 def _applied_note() -> None:
-    # This command runs in the operator's shell, not in the running VAF, so it judges the
-    # install by the config both read. `vaf server provision` is named on a server only: it
-    # switches server mode on, replaces the database passwords and opens the firewall, which
-    # a desktop, or an admin who switched the firewall step off, did not ask for.
+    # This command runs in the operator's shell, not in the running VAF, so it cannot measure
+    # whether that process may gain root (vaf.network.firewall.elevation_unavailable answers
+    # it inside the service, which the web note uses); it judges the install by the config
+    # both read and says "usually", never as a fact. `vaf server provision` is named on a
+    # server only: it switches server mode on, replaces the database passwords and opens the
+    # firewall, which a desktop, or an admin who switched the firewall step off, did not ask
+    # for. Every variant says what to do when the change does not reach the OS firewall,
+    # including closing what a removed network had open.
     UI.info("The access check uses this at once; nothing restarts.")
     if not Config.get_bool("local_network_firewall_enabled", True):
         UI.info("VAF's firewall step is switched off (local_network_firewall_enabled), so the "
-                "OS firewall stays as it is: if it guards the access port, open the port by hand.")
+                "OS firewall stays as it is: if it guards the access port, bring its rules in "
+                "line with the admitted networks by hand (open new ones, close removed ones).")
     elif Config.get_bool("server_mode", False):
-        UI.info("The service the server installer sets up cannot gain root, so it leaves the OS "
-                "firewall as it is: if this server's own firewall guards the access port, run "
-                "`sudo -v && vaf server provision`.")
+        UI.info("A server install's service usually cannot change the OS firewall (it cannot "
+                "gain root): if this server's own firewall guards the access port, run "
+                "`sudo -v && vaf server provision`, which opens new networks and closes removed ones.")
     else:
         UI.info("A running VAF tries to apply this to the OS firewall within about 25 seconds "
-                "(with firewalld, a password dialog asks for it).")
+                "(with firewalld, a password dialog asks for it; ufw and iptables need "
+                "passwordless sudo). Where it cannot, bring the firewall's rules in line with "
+                "the admitted networks by hand (open new ones, close removed ones).")
 
 
 @networks_app.command("list")

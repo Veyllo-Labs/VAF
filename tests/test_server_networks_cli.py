@@ -99,6 +99,10 @@ def test_an_admission_change_points_at_provision(settings):
     said = _said(runner.invoke(server_cmd.app, ["networks", "allow", "10.20.0.0/16"]))
     assert "Admitted 10.20.0.0/16" in said
     assert "sudo -v && vaf server provision" in said
+    # The CLI cannot measure the service's privileges (a server run as root can apply the
+    # change itself), so it must not state them as fact. MUTATION: "cannot gain root" as
+    # a fact again - red.
+    assert "usually cannot change the OS firewall" in said
     assert "a running VAF re-applies the firewall within about 25 seconds. Nothing restarts." not in said
 
 
@@ -110,13 +114,16 @@ def test_provision_is_named_on_a_server_with_the_firewall_step_only(settings, se
                                                                     firewall_step, expected):
     """`vaf server provision` switches server mode on, replaces the database passwords and
     opens the firewall; a desktop, or an admin who switched the firewall step off, must not
-    be sent there. MUTATIONS: name provision whatever server_mode says; drop the
-    switched-off branch - red."""
+    be sent there. Both still say what to do when the change does not reach the firewall,
+    closing what a removed network had open included. MUTATIONS: name provision whatever
+    server_mode says; drop the switched-off branch; drop the by-hand sentence of the
+    desktop note - red."""
     settings["server_mode"] = server_mode
     settings["local_network_firewall_enabled"] = firewall_step
     said = _said(runner.invoke(server_cmd.app, ["networks", "allow", "10.20.0.0/16"]))
     assert "Admitted 10.20.0.0/16" in said
     assert expected in said
+    assert "by hand (open new ones, close removed ones)" in said
     assert "vaf server provision" not in said
 
 

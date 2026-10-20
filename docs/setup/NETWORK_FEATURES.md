@@ -250,14 +250,17 @@ addresses (`access_addresses()`: the settings, `vaf top`, `vaf server status`). 
 access check takes a change at once; the running app tries to re-apply the firewall when
 `local_network_allowed_networks` or `local_network_vpn_only` change (one password
 dialog on a desktop with firewalld; ufw and iptables need passwordless sudo), with no
-restart, where that app can gain root. The server's service cannot (Layer 1), so there the
-change reaches the OS firewall only through `sudo -v && vaf server provision`. After every
+restart, where that app can gain root. The service the server installer sets up cannot
+(Layer 1), so there the change reaches the OS firewall only through `sudo -v && vaf server provision`. After every
 change `vaf server networks` and the web settings say which of these holds: the settings
 read `firewall_after_save` from `GET /api/network/remote-access` (`automatic`, `provision`
 or `manual`), the CLI reads `server_mode` and `local_network_firewall_enabled`. The
 provision command is named on a server only, because it also switches server mode on and
 replaces the database passwords; with the firewall step switched off, or a process that
-cannot gain root on another install, the note says to open the port by hand. Certificates carry every LAN and
+cannot gain root on another install, the note says to bring the firewall's rules in line by
+hand (open new ones, close removed ones). The CLI cannot measure the service's privileges
+from the operator's shell, so on a server it says the service *usually* cannot change the
+firewall. Certificates carry every LAN and
 VPN address (see "How Auto-SSL Works").
 
 Named boundaries: Windows names a WireGuard adapter after its tunnel file, so it reads as

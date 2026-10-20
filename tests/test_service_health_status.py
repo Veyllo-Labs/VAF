@@ -311,6 +311,27 @@ def test_enabling_forwarding_is_one_elevated_shell_with_switch_and_dropin():
     assert sh.enable_host_forwarding(run=dismissed, elevation=lambda: ["fake-elevate"])["ok"] is False
 
 
+def test_forwarding_is_not_attempted_without_root(monkeypatch):
+    """A repair started from the web UI on a server runs inside the service, which cannot
+    gain root: sudo only answered "If sudo is running in a container, ...", and that line
+    was the reason shown. The default lane now does not try and names why.
+    MUTATION: remove the gate in enable_host_forwarding (run gets called) - red."""
+    import vaf.network.firewall as fw
+    calls = []
+    monkeypatch.setattr(fw, "elevation_unavailable",
+                        lambda: "the no-new-privileges flag is set on this process, as systemd's NoNewPrivileges= sets it")
+
+    def run(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 1, stdout="",
+                                           stderr="sudo: If sudo is running in a container, ...\n")
+
+    out = sh.enable_host_forwarding(run=run)
+    assert out["ok"] is False
+    assert "cannot gain root" in out["detail"] and "no-new-privileges" in out["detail"]
+    assert calls == []
+
+
 # -- the sandbox environments: next to the services, never among them -------------------
 
 def test_the_sandbox_row_reads_none_created_as_idle_not_as_a_fault():

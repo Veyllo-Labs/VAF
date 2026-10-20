@@ -328,10 +328,10 @@ Common causes: Python venv path changed after a `git pull` to a different direct
   ```
   (`sudo -v` refreshes the sudo timestamp the headless elevation relies on; in a desktop session a native password dialog appears instead.)
 - Check firewall state: `sudo firewall-cmd --list-rich-rules` (firewalld) or `sudo ufw status`
-- VAF also configures the OS firewall at runtime via `vaf/network/firewall.py`. On Linux it prefers firewalld when it is running and opens **only** the access port for the LAN subnet (a scoped rich rule), not a blanket world-open. iptables/ufw are used as a fallback when firewalld is not running.
+- VAF also configures the OS firewall at runtime via `vaf/network/firewall.py`, but only where the running process can gain root. On Linux it prefers firewalld when it is running and opens **only** the access port for the LAN subnet (a scoped rich rule), not a blanket world-open. iptables/ufw are used as a fallback when firewalld is not running.
 - Elevation differs by environment:
   - **Desktop session:** when hosting is enabled VAF prompts automatically through a native polkit/pkexec password dialog and adds the rule for you.
-  - **Headless/server:** the running service cannot elevate at all (`NoNewPrivileges`, non-interactive `sudo -n`) - that is exactly why the installer and `vaf server provision` own this step.
+  - **Headless/server:** the running service cannot elevate at all, so it does not try. Each of the unit's hardening lines (`NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectSystem=full`) on its own rules out every setuid helper, sudo and pkexec alike, whatever sudoers says; `vaf.network.firewall.elevation_unavailable()` reads that from the process itself. At each start the service logs one line instead, `Firewall not changed for port 8443: this process cannot gain root (...)`, and never runs sudo. That is exactly why the installer and `vaf server provision` own this step.
 - Manual fallback, firewalld (preferred subnet-scoped rich rule form; replace `<LAN-subnet>` with your network, e.g. `192.168.2.0`):
   ```bash
   sudo firewall-cmd --permanent --zone=public --add-rich-rule='rule family="ipv4" source address="<LAN-subnet>/24" port port="8443" protocol="tcp" accept' && sudo firewall-cmd --reload

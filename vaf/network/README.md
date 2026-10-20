@@ -53,7 +53,10 @@ It never dials loopback, where a tokenless request is the owner.
   decision, port resolution, the outbound address classifier.
 - **firewall.py**: the OS firewall for the admitted networks (firewalld, ufw, iptables,
   netsh, pf); `apply_lan_firewall()` is what the start and an admission change run;
-  `elevation_argv()` is the one privilege lane of the framework.
+  `elevation_argv()` is the one privilege lane of the framework, and
+  `elevation_unavailable()` says why that lane cannot work in this process (the
+  no-new-privileges flag, or a user namespace without root, as in the server's
+  systemd service), so no caller runs sudo there.
 - **https_proxy.py**: the integrated TLS entry point (`/api`, `/ws` to the backend,
   everything else to the frontend); it writes `X-Forwarded-For` from its own peer.
 - **ssl_utils.py**: the local CA and the server certificate, re-issued when an address is

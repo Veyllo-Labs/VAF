@@ -479,7 +479,10 @@ as it finishes:
    one elevated step of a repair, through the lane the firewall setup already uses
    (`vaf.network.firewall.elevation_argv`): a native polkit password dialog on a
    desktop, non-interactive `sudo -n` headless, never a hanging terminal prompt. A
-   refused or dismissed dialog fails the step with the two commands to run by hand.
+   refused or dismissed dialog fails the step with the two commands to run by hand. A
+   process that cannot gain root at all (a repair started from the web UI of a server
+   runs inside its systemd service: `vaf.network.firewall.elevation_unavailable()`)
+   does not try; the step names why, with the same two commands.
    First, because every restart below would succeed and change nothing while the
    switch is off.
 4. **Missing or stopped containers.** One idempotent `compose up` for the whole

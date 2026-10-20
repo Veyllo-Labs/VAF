@@ -50,6 +50,11 @@ def _sources(*, narrow_lan: bool = False) -> list:
 # admitted networks is a new key, so an admin's change is applied without a restart.
 _attempted_ports: dict = {}   # {(port, frontend, sources): "present"|"created"|True|False|None}
 _attempt_lock = threading.Lock()
+# Access ports whose "cannot gain root" line this process already wrote. Deliberate: the
+# line states a fact of the process that does not change during its life, so the TLS twin
+# lifespan and every later re-apply for the same port add nothing to the journal; the
+# per-change message belongs to the CLI and the web settings, which say it themselves.
+_no_root_reported: set = set()
 
 
 def apply_lan_firewall(log=None):
@@ -57,7 +62,9 @@ def apply_lan_firewall(log=None):
     step are on. The one place both callers go through: the server's startup and a
     change of the admitted networks (vaf/tray.py). Blocking (it may wait for a password
     dialog), so callers run it in a thread. Returns what `setup_firewall` returned, or
-    None when it was not asked to run."""
+    None when it was not asked to run. A process that cannot gain root at all (see
+    `elevation_unavailable`, the server's systemd service) changes nothing and says so
+    once per access port."""
     from vaf.core.config import Config
     say = log or (lambda msg: logger.info(msg))
     if not (Config.get_bool("local_network_enabled", False)
@@ -79,8 +86,18 @@ def apply_lan_firewall(log=None):
         register_cleanup_on_exit()
         say(f"Firewall rules created for ports {port}, {port_frontend}")
     else:
-        say(f"Firewall setup skipped for ports {port}, {port_frontend} - needs elevated "
-            "privileges (no passwordless sudo). Open the port manually or use the in-app firewall step.")
+        reason = elevation_unavailable()
+        if reason:
+            with _attempt_lock:
+                first = port not in _no_root_reported
+                _no_root_reported.add(port)
+            if first:
+                say(f"Firewall not changed for port {port}: this process cannot gain root "
+                    f"({reason}). The installer and `vaf server provision` open it from a "
+                    "login shell; a hosting provider's firewall needs nothing from VAF.")
+        else:
+            say(f"Firewall setup skipped for ports {port}, {port_frontend} - needs elevated "
+                "privileges. Open the port manually for the networks `vaf server status` lists.")
     return result
 
 
@@ -379,6 +396,13 @@ def _setup_firewall_linux(port: int, port_frontend: int):
     if _firewalld_running():
         return _setup_firewall_linux_firewalld(port, port_frontend)
 
+    # Every branch below runs `sudo -n`, which cannot work in a process that cannot gain
+    # root; asking anyway only puts sudo's refusal into the journal at every start.
+    reason = elevation_unavailable()
+    if reason:
+        logger.info("firewall: not running ufw or iptables, this process cannot gain root (%s)", reason)
+        return False
+
     # Check if ufw is available and active
     ufw_available = subprocess.run(
         ['which', 'ufw'],
@@ -515,11 +539,70 @@ def elevation_argv() -> list:
     otherwise non-interactive sudo (`sudo -n`) so a headless/server run fails fast instead of hanging on
     a TTY password prompt. The one elevation lane of the process: the firewall setup here and the
     service repair (vaf/core/service_health.py, the host's IP forwarding switch) both use it, so a
-    platform that needs a different dialog changes one function."""
+    platform that needs a different dialog changes one function. Whether the lane can work in this
+    process at all is `elevation_unavailable()`; callers ask it first."""
     if (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')) and \
        subprocess.run(['which', 'pkexec'], capture_output=True).returncode == 0:
         return ['pkexec']
     return ['sudo', '-n']
+
+
+def elevation_unavailable(status_path: str = "/proc/self/status",
+                          uid_map_path: str = "/proc/self/uid_map") -> Optional[str]:
+    """Why this process cannot gain root through `elevation_argv()`, or None when it may.
+
+    The lane's helpers, sudo and pkexec, are setuid programs, and two states of a Linux
+    process rule every setuid elevation out, whatever sudoers says:
+    - the no-new-privileges flag (`NoNewPrivs: 1` in /proc/self/status; systemd's
+      `NoNewPrivileges=`): sudo refuses with "The "no new privileges" flag is set";
+    - a user namespace that does not map root (no line of /proc/self/uid_map covers uid 0).
+      A systemd USER service gets one for `PrivateTmp=` or `ProtectSystem=` alone: root-owned
+      files then show the overflow uid 65534, sudo refuses because sudo.conf "is owned by uid
+      65534", pkexec because it "must be setuid root".
+    Measured with `systemd-run --user` and each of the server unit's hardening lines on its own
+    (install.sh writes all three): every one of them makes sudo and pkexec fail, so passwordless
+    sudo would not help either. Asking anyway only fills the journal with sudo's refusal.
+
+    A file that cannot be read or parsed counts as unknown and does not refuse: the lane then
+    runs as before (`sudo -n` fails fast), which keeps a desktop that can elevate working. A
+    rootless container, whose map gives uid 0 to a non-root user, is not refused either. Never
+    raises; not Linux is always None.
+
+    Named boundary: not on the facade (`vaf/__init__.py`), like `elevation_argv`, which
+    docs/EMBEDDING.md addresses by module path; no caller outside this tree is known. An
+    embedder whose own lane needs no setuid helper replaces this function together with
+    `elevation_argv`."""
+    if not Platform.is_linux():
+        return None
+    try:
+        with open(status_path, "rb") as fh:
+            status = fh.read().decode("ascii", "replace")
+        for line in status.splitlines():
+            if line.startswith("NoNewPrivs:"):
+                if line.split(":", 1)[1].strip() == "1":
+                    return ("the no-new-privileges flag is set on this process, as "
+                            "systemd's NoNewPrivileges= sets it")
+                break
+    except Exception:
+        pass
+    try:
+        with open(uid_map_path, "rb") as fh:
+            uid_map = fh.read().decode("ascii", "replace")
+        root_mapped = False
+        for line in uid_map.splitlines():
+            fields = line.split()
+            if not fields:
+                continue
+            inside, _outside, count = (int(f) for f in fields)
+            if inside <= 0 < inside + count:
+                root_mapped = True
+                break
+    except Exception:
+        return None
+    if not root_mapped:
+        return ("this process runs in a user namespace that does not map root, as a "
+                "systemd user service with PrivateTmp= or ProtectSystem= does")
+    return None
 
 
 # The older private name; the callers and tests that grew up with it keep working.
@@ -539,6 +622,13 @@ def _setup_firewall_linux_firewalld(port: int, port_frontend: int):
     if previous == rules:
         logger.info("firewalld: access already set up by this install (%d rule(s), port %s)", len(rules), port)
         return "present"
+    # After the marker check, so an install whose rules are in place still reports
+    # "present"; before any elevation, which cannot work here. The marker is left as it
+    # is: nothing was changed.
+    reason = elevation_unavailable()
+    if reason:
+        logger.info("firewalld: the rules changed, but this process cannot gain root (%s)", reason)
+        return False
     stale = [r for r in previous if r not in rules]
     if not rules:
         logger.warning("firewalld: no network is admitted besides this machine; opening nothing")

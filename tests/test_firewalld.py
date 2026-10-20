@@ -2,7 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """firewalld LAN opening: the rule must be scoped to the LAN subnet (RFC1918), and elevation must use
-pkexec on the desktop (native password dialog) but never an interactive sudo prompt headless."""
+pkexec on the desktop (native password dialog) but never an interactive sudo prompt headless,
+and a process that cannot gain root at all (the server's systemd service) must not try."""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
 import vaf.network.firewall as fw
 
 
@@ -43,6 +51,9 @@ def _wire_firewalld(monkeypatch, recorder, tmp_path, sources=("192.168.2.0/24",)
     monkeypatch.setattr(fw, "_sources", lambda narrow_lan=False: list(sources))
     monkeypatch.setattr(fw, "_firewalld_zones", lambda: list(zones))
     monkeypatch.setattr(fw, "_elevation_argv", lambda: ["fake-elevate"])
+    # The gate reads this process's own /proc; pinned so a run from inside a hardened
+    # service (NoNewPrivileges) tests the same thing as a run from a login shell.
+    monkeypatch.setattr(fw, "elevation_unavailable", lambda: None)
     monkeypatch.setattr(fw, "_firewalld_marker_path", lambda: tmp_path / "firewalld_lan.json")
     monkeypatch.setattr(fw.subprocess, "run", recorder)
 
@@ -398,3 +409,137 @@ def test_a_failed_removal_fails_the_setup_so_the_marker_keeps_the_rule(monkeypat
     monkeypatch.setattr(fw.subprocess, "run", failing)
     assert fw._setup_firewall_linux_firewalld(8443, 8001) is False
     assert fw._firewalld_marker_read() == sorted([LAN_RULE, tailscale])
+
+
+# ── a process that cannot gain root does not try ──
+
+_NO_NEW_PRIVS = "the no-new-privileges flag is set on this process, as systemd's NoNewPrivileges= sets it"
+
+
+def _status(flag):
+    return f"Name:\tpython3\nUid:\t1000\t1000\t1000\t1000\nNoNewPrivs:\t{flag}\nSeccomp:\t0\n"
+
+
+@pytest.mark.parametrize("linux, status, uid_map, expected", [
+    (True, _status(1), "         0          0 4294967295\n", "no-new-privileges"),
+    (True, _status(0), "      1000       1000          1\n", "user namespace"),
+    (True, _status(0), "", "user namespace"),
+    (True, _status(0), "         0          0 4294967295\n", None),
+    (True, _status(0), "         0       1000      65536\n", None),
+    (True, None, None, None),
+    (True, _status(0), "not a map\n", None),
+    (False, _status(1), "      1000       1000          1\n", None),
+], ids=["no-new-privs", "namespace-without-root", "empty-map", "plain-process",
+        "rootless-container", "files-missing", "map-unreadable", "not-linux"])
+def test_elevation_unavailable_reads_the_flag_and_the_namespace(monkeypatch, tmp_path, linux,
+                                                                status, uid_map, expected):
+    """Measured with `systemd-run --user`: the no-new-privileges flag, and a user namespace
+    that does not map root (what PrivateTmp= or ProtectSystem= alone give a user service),
+    each make sudo and pkexec fail. Anything unknown must NOT refuse, or a desktop that can
+    elevate would lose its password dialog. MUTATIONS: drop the NoNewPrivs branch; drop the
+    uid_map branch; treat an unreadable file as refusing; drop the non-Linux return - red."""
+    monkeypatch.setattr(fw.Platform, "is_linux", lambda *a: linux)
+    status_path, uid_map_path = tmp_path / "status", tmp_path / "uid_map"
+    if status is not None:
+        status_path.write_bytes(status.encode())
+    if uid_map is not None:
+        uid_map_path.write_bytes(uid_map.encode())
+    reason = fw.elevation_unavailable(status_path=str(status_path), uid_map_path=str(uid_map_path))
+    if expected is None:
+        assert reason is None
+    else:
+        assert reason and expected in reason
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="prctl and /proc are Linux")
+def test_a_process_with_no_new_privileges_is_seen_as_such():
+    """The defaults read this very process: a child that set the flag itself (what systemd's
+    NoNewPrivileges= does before exec) is refused. MUTATION: default status_path to
+    /proc/self/stat - red."""
+    repo = str(Path(__file__).resolve().parents[1])
+    env = dict(os.environ)
+    env["PYTHONPATH"] = repo + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    code = ("import ctypes\n"
+            "libc = ctypes.CDLL(None, use_errno=True)\n"
+            "assert libc.prctl(38, 1, 0, 0, 0) == 0, 'PR_SET_NO_NEW_PRIVS refused'\n"
+            "from vaf.network.firewall import elevation_unavailable\n"
+            "print(elevation_unavailable() or 'NONE')\n")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                         cwd=repo, env=env, timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert "no-new-privileges" in out.stdout, out.stdout
+
+
+def test_no_sudo_is_spawned_where_root_cannot_be_gained(monkeypatch, tmp_path):
+    """The server's service: no firewalld, ufw installed. Every ufw and iptables step is a
+    `sudo -n`, which cannot work here and only put sudo's refusal into the journal at every
+    start. MUTATION: remove the gate in _setup_firewall_linux (the ufw branch runs sudo) - red."""
+    rec = _RunRecorder()
+    monkeypatch.setattr(fw, "_firewalld_running", lambda: False)
+    monkeypatch.setattr(fw, "elevation_unavailable", lambda: _NO_NEW_PRIVS)
+    monkeypatch.setattr(fw, "_sources", lambda narrow_lan=False: ["192.168.2.0/24"])
+    monkeypatch.setattr(fw, "_ufw_marker_path", lambda: tmp_path / "ufw_sources.json")
+    monkeypatch.setattr(fw.subprocess, "run", rec)   # `which ufw` answers 0: ufw "exists"
+    assert fw._setup_firewall_linux(8443, 8001) is False
+    spawned = [a for argv in rec.calls for a in argv]
+    assert "sudo" not in spawned and "pkexec" not in spawned, rec.calls
+
+
+def test_a_marker_miss_does_not_elevate_without_root(monkeypatch, tmp_path):
+    """firewalld with a change to make, in a process that cannot gain root: no elevation,
+    and the marker keeps what it said (nothing was changed). MUTATION: remove the gate in
+    _setup_firewall_linux_firewalld (it elevates and rewrites the marker) - red."""
+    rec = _RunRecorder()
+    _wire_firewalld(monkeypatch, rec, tmp_path)
+    monkeypatch.setattr(fw, "elevation_unavailable", lambda: _NO_NEW_PRIVS)
+    fw._firewalld_marker_write([("public", fw._firewalld_rich_rule("192.168.2.0/24", 9999))])
+    before = (tmp_path / "firewalld_lan.json").read_bytes()
+    assert fw._setup_firewall_linux_firewalld(8443, 8001) is False
+    assert all(argv[0] != "fake-elevate" for argv in rec.calls), rec.calls
+    assert (tmp_path / "firewalld_lan.json").read_bytes() == before
+
+
+def test_a_marker_hit_still_reports_present_without_root(monkeypatch, tmp_path):
+    """Rules already in place need no root, so the service still says so.
+    MUTATION: move the firewalld gate above the marker check - red."""
+    rec = _RunRecorder()
+    _wire_firewalld(monkeypatch, rec, tmp_path)
+    monkeypatch.setattr(fw, "elevation_unavailable", lambda: _NO_NEW_PRIVS)
+    fw._firewalld_marker_write([LAN_RULE])
+    assert fw._setup_firewall_linux_firewalld(8443, 8001) == "present"
+    assert rec.calls == []
+
+
+def _apply_wired(monkeypatch, reason):
+    from vaf.core.config import Config
+    import vaf.network.binding as binding
+    cleanups = []
+    monkeypatch.setattr(Config, "get_bool", classmethod(lambda cls, key, default=False: True))
+    monkeypatch.setattr(binding, "resolve_lan_access_ports", lambda wait_for_proxy=False: (8443, 8001))
+    monkeypatch.setattr(fw, "setup_firewall", lambda port, port_frontend: False)
+    monkeypatch.setattr(fw, "register_cleanup_on_exit", lambda: cleanups.append(1))
+    monkeypatch.setattr(fw, "elevation_unavailable", lambda: reason)
+    monkeypatch.setattr(fw, "_no_root_reported", set())
+    return cleanups
+
+
+def test_apply_says_once_why_the_firewall_was_not_changed(monkeypatch):
+    """The start and every re-apply in the server's service: one line per process and port,
+    naming the reason and where the step lives, never "passwordless sudo" (it would not help)
+    nor an "in-app firewall step" (there is none). MUTATIONS: drop the once-guard (two lines);
+    restore the old text - red."""
+    cleanups = _apply_wired(monkeypatch, _NO_NEW_PRIVS)
+    lines = []
+    assert fw.apply_lan_firewall(log=lines.append) is False
+    assert fw.apply_lan_firewall(log=lines.append) is False
+    assert len(lines) == 1, lines
+    line = lines[0]
+    assert "8443" in line and _NO_NEW_PRIVS in line and "vaf server provision" in line
+    assert "passwordless sudo" not in line and "in-app" not in line
+    assert cleanups == []
+
+    cleanups = _apply_wired(monkeypatch, None)
+    lines = []
+    assert fw.apply_lan_firewall(log=lines.append) is False
+    assert len(lines) == 1 and "in-app" not in lines[0], lines
+    assert cleanups == []

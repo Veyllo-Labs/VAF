@@ -38,7 +38,9 @@ gets a named instruction, not a sudo attempt). The ONE elevated step is the
 host's IP forwarding switch, through the same lane the firewall setup uses
 (`vaf.network.firewall.elevation_argv`: a native polkit dialog on a desktop,
 non-interactive sudo headless, never a hanging TTY prompt): one kernel setting
-and one drop-in file, both named in the step's message, both reversible.
+and one drop-in file, both named in the step's message, both reversible. A
+process that cannot gain root at all (`elevation_unavailable`: the server's
+systemd service) does not try; the step names why and the commands instead.
 """
 from __future__ import annotations
 
@@ -248,8 +250,17 @@ def enable_host_forwarding(run: Callable[..., subprocess.CompletedProcess] = sub
 
     One elevation covers both halves: the live switch (`sysctl -w`) and the drop-in
     under /etc/sysctl.d that wins the next `sysctl --system`, which is exactly the
-    call that keeps switching it off. Returns {"ok", "detail"}; never raises."""
+    call that keeps switching it off. Returns {"ok", "detail"}; never raises.
+
+    With the default lane, a process that cannot gain root (the server's systemd service,
+    `vaf.network.firewall.elevation_unavailable`) does not try: the detail names why, and
+    the repair step adds the two commands to run by hand. An injected `elevation` is the
+    caller's own lane and is not second-guessed."""
     if elevation is None:
+        from vaf.network.firewall import elevation_unavailable
+        reason = elevation_unavailable()
+        if reason:
+            return {"ok": False, "detail": f"this process cannot gain root: {reason}"}
         from vaf.network.firewall import elevation_argv as elevation
     inner = ("sysctl -w net.ipv4.ip_forward=1 && mkdir -p /etc/sysctl.d && "
              f"printf 'net.ipv4.ip_forward = 1\\n' > {HOST_FORWARDING_DROPIN}")

@@ -581,8 +581,14 @@ What an embedded agent can and cannot do on the host - the short version of
   none existing is the normal state), and a repair switches it
   on through `vaf.network.firewall.elevation_argv`, the one privilege lane of the
   framework (a native polkit dialog on a desktop, non-interactive `sudo -n`
-  headless); an embedder with its own dialog replaces that one function. One
-  exception to know:
+  headless). Whether the lane can work at all is
+  `vaf.network.firewall.elevation_unavailable()`: it returns the reason when this
+  process cannot gain root (the no-new-privileges flag, or a user namespace that
+  does not map root, as in the server's systemd service), and then neither the
+  repair nor the firewall setup tries; the repair step names the reason and the
+  two commands to run by hand. An embedder with its own dialog replaces
+  `elevation_argv`, and one whose dialog needs no setuid helper replaces
+  `elevation_unavailable` together with it. One exception to know:
   `python_sandbox(with_vaf_tools=True)` opens a temporary tool-bridge port on
   `0.0.0.0` (random ephemeral port, per-run token auth) for the duration of
   that call.

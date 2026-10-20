@@ -4186,7 +4186,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
     When local_network_enabled=True, non-localhost requires valid JWT.
     When local_network_enabled=False, only localhost is allowed.
     """
-    from vaf.auth.crypto import token_hash_for_db
     # Use cookie if frontend didn't pass token in URL (e.g. after login from same host)
     if not token and hasattr(websocket, "cookies") and websocket.cookies:
         token = websocket.cookies.get(VAF_TOKEN_COOKIE)
@@ -4261,7 +4260,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             await websocket.close(code=4001, reason="Authentication required")
             return
         try:
-            from vaf.auth.crypto import get_jwt_secret
+            from vaf.auth.crypto import get_jwt_secret, token_hash_for_db
             import jwt
             secret = get_jwt_secret()
             payload = jwt.decode(token, secret, algorithms=["HS256"])
@@ -4291,7 +4290,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         # Local network is ENABLED - authenticate network users
         try:
             from vaf.network.binding import is_allowed_ip
-            from vaf.auth.crypto import get_jwt_secret, second_factor_done
+            from vaf.auth.crypto import get_jwt_secret, second_factor_done, token_hash_for_db
             import jwt
             
             # Validate IP is from local network

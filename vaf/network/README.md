@@ -63,7 +63,8 @@ It never dials loopback, where a tokenless request is the owner.
 - **https_proxy.py**: the integrated TLS entry point (`/api`, `/ws` to the backend,
   everything else to the frontend); it writes `X-Forwarded-For` from `connection_client_ip`
   (the device itself, or the client a relay on this machine named), on every HTTP request
-  and every WebSocket handshake.
+  and every WebSocket handshake, and adds the page security headers (`PAGE_SECURITY_HEADERS`)
+  to what the frontend serves.
 - **ssl_utils.py**: the local CA and the server certificate, re-issued when an address is
   missing from it.
 - **egress.py**: outbound fetches that never reach this machine.

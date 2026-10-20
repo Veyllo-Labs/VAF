@@ -82,6 +82,38 @@ def _logged_client(scope: Scope) -> str:
         return "?"
 
 FRONTEND_ORIGIN = "http://127.0.0.1:3000"
+
+# Headers every PAGE relayed from the frontend carries, each added only when the frontend did
+# not set it (a page that sets its own keeps it). The backend's API responses have their own
+# table (_SecurityHeadersMiddleware in vaf/core/web_server.py); pages had none at all, so the
+# login and the app could be framed by any site and carried no HSTS. Deliberately different
+# from the backend's table:
+# - no Permissions-Policy: the backend's microphone=() would switch off the web UI's own
+#   voice input, which runs in these pages;
+# - frame-ancestors 'none' on pages only: the interactive browser's viewer
+#   (/api/browser-vnc/, a backend response with X-Frame-Options: SAMEORIGIN) is framed by the
+#   UI, and a CSP frame-ancestors would override that. No page of the UI is framed by the UI
+#   (every iframe is srcDoc, about:blank or that viewer).
+# Backend responses get only HSTS when absent; this door is always TLS.
+PAGE_SECURITY_HEADERS = (
+    ("X-Content-Type-Options", "nosniff"),
+    ("X-Frame-Options", "DENY"),
+    ("Content-Security-Policy", "frame-ancestors 'none'"),
+    ("Referrer-Policy", "strict-origin-when-cross-origin"),
+    ("Strict-Transport-Security", "max-age=31536000; includeSubDomains"),
+)
+_HSTS = PAGE_SECURITY_HEADERS[-1]
+
+
+def _add_missing_headers(headers: dict, target_origin: str) -> None:
+    """Add the page set (frontend) or HSTS (backend), never over a value the upstream set."""
+    present = {k.lower() for k in headers}
+    wanted = PAGE_SECURITY_HEADERS if target_origin == FRONTEND_ORIGIN else (_HSTS,)
+    for name, value in wanted:
+        if name.lower() not in present:
+            headers[name] = value
+
+
 # Internal HTTP channel (8005) is always running when this proxy runs (TLS on); 8001 is HTTPS-only
 BACKEND_ORIGIN = "http://127.0.0.1:8005"
 
@@ -200,6 +232,7 @@ async def _forward_http(request: Request, target_origin: str) -> Response:
     body_bytes = resp.content
     # Always set Content-Length from actual (decompressed) body to avoid mismatches
     response_headers["Content-Length"] = str(len(body_bytes))
+    _add_missing_headers(response_headers, target_origin)
     return Response(
         content=body_bytes,
         status_code=resp.status_code,

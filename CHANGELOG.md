@@ -90,6 +90,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it on, and the desktop window stays your own as before. A raw port forward such as
   `ssh -R` names nobody: never put one in front of VAF. Restart VAF after updating.
 
+- **Pages through the HTTPS port can no longer be framed by another site.** The login and
+  the app served to other devices carried no anti-framing headers and no HSTS; they do now.
+
 - **Messages meant for you on Telegram no longer go to a contact.** When a contact you
   allowed, a relay contact or somebody the open Inbound answered wrote to your agent on
   Telegram, VAF took their chat as the place to reach you: your reminders, automation

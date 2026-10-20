@@ -170,6 +170,18 @@ All HTTP responses include security headers to protect against common web attack
 
 Implementation: `_SecurityHeadersMiddleware` in `vaf/core/web_server.py`
 
+That table covers the backend's API responses. The PAGES the integrated HTTPS proxy relays from the frontend carried none of it (measured: `/login` through the proxy had no frame protection and no HSTS), so the proxy adds its own set to every frontend response, each header only when the frontend did not set it (`PAGE_SECURITY_HEADERS` in `vaf/network/https_proxy.py`):
+
+| Header | Value |
+|--------|-------|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Content-Security-Policy` | `frame-ancestors 'none'` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
+
+It differs from the backend's table on purpose: no `Permissions-Policy`, because the backend's `microphone=()` would switch off the web UI's own voice input, which runs in these pages; and `frame-ancestors` only on pages, because the interactive browser's viewer (`/api/browser-vnc/`, a backend response under `SAMEORIGIN`) is framed by the UI and a CSP `frame-ancestors` would override that. No page of the UI is framed by the UI (every frame is `srcDoc`, blank or that viewer). Backend responses relayed by the proxy get only HSTS when they lack it.
+
 ### Middleware Execution Order
 
 Requests pass through middleware from outermost to innermost. Starlette puts the middleware added LAST outermost, so this is the reverse of the `add_middleware` order in `vaf/core/web_server.py` (measured on `app.user_middleware`):

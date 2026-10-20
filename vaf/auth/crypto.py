@@ -152,23 +152,6 @@ def create_access_token(
     )
 
 
-def create_refresh_token(user_id: str, expires_days: int = 7) -> str:
-    """Create JWT refresh token."""
-    now = datetime.now(timezone.utc)
-    exp = now + timedelta(days=expires_days)
-    payload = {
-        "sub": user_id,
-        "iat": int(now.timestamp()),
-        "exp": int(exp.timestamp()),
-        "type": "refresh",
-    }
-    return jwt.encode(
-        payload,
-        _get_jwt_secret(),
-        algorithm="HS256",
-    )
-
-
 def second_factor_done(payload: dict[str, Any]) -> bool:
     """Whether an ACCESS token may open anything beyond the 2FA endpoints.
 

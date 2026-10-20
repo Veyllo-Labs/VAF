@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
-Auth API: needs-setup, bootstrap, login, 2FA setup/verify, refresh, logout, me.
+Auth API: needs-setup, setup-code, bootstrap, login, 2FA setup/verify, logout, me.
 
 Endpoints:
 - GET  /api/auth/needs-setup
@@ -11,7 +11,6 @@ Endpoints:
 - POST /api/auth/login
 - POST /api/auth/setup-2fa
 - POST /api/auth/verify-2fa
-- POST /api/auth/refresh
 - POST /api/auth/logout
 - GET  /api/auth/me
 """
@@ -39,7 +38,6 @@ from vaf.auth.sessions import end_account_sessions, end_session, open_session, s
 from vaf.auth.crypto import (
     verify_password_async,
     create_access_token,
-    create_refresh_token,
     decode_token,
     token_hash_for_db,
     encrypt_totp_secret,
@@ -64,9 +62,10 @@ def _client_ip(request: Request) -> str:
 
     The integrated HTTPS proxy relays every LAN device to the backend over loopback, so
     ``request.client.host`` is 127.0.0.1 for all of them. Every decision in this module that
-    means "the person is sitting at this machine" (long-lived tokens, the 2FA shortcut on
-    refresh) and every record of "where did this come from" (the security log, session
-    provenance) must use this instead, or it applies to the whole network.
+    means "the person is sitting at this machine" (long-lived tokens, the first-run setup
+    code, the account window's exemption) and every record of "where did this come from"
+    (the security log, session provenance) must use this instead, or it applies to the whole
+    network.
 
     Delegates to the one shared resolver so this module, the auth middleware, the rate limiter,
     the WebSocket handshake and the OAuth callback exception cannot disagree.
@@ -174,10 +173,6 @@ class LoginRequest(BaseModel):
 class Verify2FARequest(BaseModel):
     code: str
     temp_token: str
-
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
 
 
 class ChangePasswordRequest(BaseModel):
@@ -308,14 +303,12 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
                 str(new_user.user_scope_id),
                 is_2fa_verified=True,
             )
-            refresh = create_refresh_token(str(new_user.id))
             await open_session(db, new_user, access, ip=_client_ip(request),
                                user_agent=request.headers.get("user-agent", ""))
 
         _set_auth_cookie(request, response, access)
         return {
             "access_token": access,
-            "refresh_token": refresh,
             "user": {
                 "id": str(new_user.id),
                 "username": new_user.username,
@@ -512,12 +505,11 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
             str(user.user_scope_id),
             is_2fa_verified=True,
         )
-        refresh = create_refresh_token(str(user.id))
         await open_session(db, user, access, ip=_client_ip(request),
                            user_agent=request.headers.get("user-agent", ""))
 
     _set_auth_cookie(request, response, access)
-    return {"access_token": access, "refresh_token": refresh}
+    return {"access_token": access}
 
 
 # How long an address that completed a sign-in for an account stays exempt from that
@@ -640,7 +632,6 @@ async def login(body: LoginRequest, request: Request, response: Response):
             expires_hours=expires_hours,
             is_2fa_verified=is_2fa_verified,
         )
-        refresh = create_refresh_token(str(user.id))
 
     if not is_2fa_verified:
         return {
@@ -656,12 +647,10 @@ async def login(body: LoginRequest, request: Request, response: Response):
 
     # NOTE: remember_me cannot extend the session beyond the JWT expiry - a cookie
     # that outlives its token only recreates the login-loop desync. A real
-    # remember-me needs a longer-lived token (local_network_jwt_expiry_hours) or a
-    # refresh-token flow in the frontend (the /refresh endpoint exists, unused).
+    # remember-me needs a longer-lived token (local_network_jwt_expiry_hours).
     _set_auth_cookie(request, response, access)
     return {
         "access_token": access,
-        "refresh_token": refresh,
         "user": {
             "id": str(user.id),
             "username": user.username,
@@ -843,34 +832,6 @@ async def logout(request: Request, response: Response):
             logger.warning("Logout could not end the session: %s", e)
     response.delete_cookie(key=COOKIE_NAME, path="/")
     return {"ok": True}
-
-
-@router.post("/refresh")
-async def refresh(body: RefreshRequest, request: Request, response: Response):
-    """Exchange refresh token for new access token."""
-    payload = decode_token(body.refresh_token)
-    if not payload or payload.get("type") != "refresh":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
-    user_id = payload.get("sub")
-    async with get_auth_db() as db:
-        result = await db.execute(select(LocalUser).where(LocalUser.id == uuid_module.UUID(user_id), LocalUser.is_active == True))
-        user = result.scalar_one_or_none()
-        if not user:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-        if not account_seal.check(user, where="/api/auth/refresh", ip=_client_ip(request)):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=account_seal.REFUSAL_LOGIN)
-        access = create_access_token(
-            str(user.id),
-            user.username,
-            user.role,
-            str(user.user_scope_id),
-            is_2fa_verified=True,
-        )
-        # A token without a session row has ended for every reader (vaf/auth/sessions.py).
-        await open_session(db, user, access, ip=_client_ip(request),
-                           user_agent=request.headers.get("user-agent", ""))
-    _set_auth_cookie(request, response, access)
-    return {"access_token": access}
 
 
 @router.post("/change-password")

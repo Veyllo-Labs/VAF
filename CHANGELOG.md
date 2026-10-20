@@ -122,6 +122,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   line break in the name wrote a second, made-up line into the readable security log (the
   Logs window); every event is one line there now.
 
+- **The unused refresh token is gone.** Every sign-in also handed out a refresh token that
+  stayed valid for 7 days, was stored nowhere, and survived signing out and a password
+  change; nothing in VAF used it. `POST /api/auth/refresh` no longer exists and the sign-in
+  answers carry no `refresh_token`. A client of your own that used it signs in again instead.
+
 - **Pages through the HTTPS port can no longer be framed by another site.** The login and
   the app served to other devices carried no anti-framing headers and no HSTS; they do now.
 

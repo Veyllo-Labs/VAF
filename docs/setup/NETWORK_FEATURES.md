@@ -208,8 +208,10 @@ Rejections from the layers above are recorded in an always-on security event log
 ### Authentication Details
 
 - **Password Hashing**: Argon2id (time_cost=2, memory_cost=64MB), run on a thread pool of its own (`vaf-argon2`, two workers, so at most 128 MB however many logins arrive) instead of the event loop that carries every chat and socket (measured before: 40 concurrent wrong logins delayed an unrelated request by about a second; after: under 0.1 s). Every login that passes the windows does exactly one verification, a name without an account against a dummy hash, so known and unknown names take the same time (measured before: 3.5 ms against 28.6 ms). `verify_password_async` / `hash_password_async` in `vaf/auth/crypto.py`; the blocking functions stay for the terminal.
-- **JWT Tokens**: HS256, configurable expiry (default 24h), refresh tokens (7 days), each access
-  token with a unique `jti`. A valid signature is not enough: every token reader (the HTTP
+- **JWT Tokens**: HS256, configurable expiry (default 24h), each access token with a unique
+  `jti`. There is no refresh token: `/api/auth/refresh` minted a 7-day credential that was
+  stored nowhere, survived a logout and a password change, and no client used; it was
+  removed, and a token it minted earlier has no session and is refused. A valid signature is not enough: every token reader (the HTTP
   middleware, both WebSocket lanes, the A2A room door) also checks that the token's account
   still exists, is active and holds the token's role, and that the token's session has not
   ended (`token_account_stands`; both cached a few seconds and cleared by whatever ends them),
@@ -224,7 +226,7 @@ Rejections from the layers above are recorded in an always-on security event log
   [USER_ISOLATION.md](../security/USER_ISOLATION.md).
 - **2FA**: TOTP (RFC 6238), secrets encrypted at rest with AES-256-GCM; a code works once and wrong codes are held per account (Layer 4)
 - **Session Tracking**: one row per completed sign-in, keyed by the token's hash (SHA-256), no plaintext tokens in DB; a token with no live row is refused (a store that cannot be asked keeps it: the desktop default)
-- **Cookies**: `vaf_token` cookie with `httponly`, `samesite=lax`, and `secure` flag (when TLS active). The cookie's `max-age` is always derived from the token's own `exp` claim at the single set point (`_cookie_max_age_for` in `auth_routes.py`), so the cookie can never outlive the JWT it carries. The login form's `remember_me` flag does NOT extend the session - a longer session requires raising `local_network_jwt_expiry_hours` or wiring the existing `/api/auth/refresh` flow into the frontend. Do not reintroduce a hardcoded longer cookie lifetime: a present-but-expired cookie desyncs the server-side route gate from the bearer token and causes a login redirect loop (live incident 2026-07-22).
+- **Cookies**: `vaf_token` cookie with `httponly`, `samesite=lax`, and `secure` flag (when TLS active). The cookie's `max-age` is always derived from the token's own `exp` claim at the single set point (`_cookie_max_age_for` in `auth_routes.py`), so the cookie can never outlive the JWT it carries. The login form's `remember_me` flag does NOT extend the session - a longer session requires raising `local_network_jwt_expiry_hours`. Do not reintroduce a hardcoded longer cookie lifetime: a present-but-expired cookie desyncs the server-side route gate from the bearer token and causes a login redirect loop (live incident 2026-07-22).
 
 **2FA persistence after restart:** Your 2FA setup is stored in two places that must persist across restarts:
 1. **Key store** (`<data_dir>/data_keys.enc` plus its master key, by default the `secure_store.kek` file in `~/.vaf` or `VAF_CONFIG_DIR`): the JWT secret that encrypts TOTP secrets lives in the data keyring, not in `config.json`, and both halves must be kept. If either is lost (new install, different user, a backup restored without the keyring), the server cannot decrypt existing 2FA data. See [ENCRYPTION_AT_REST.md](../security/ENCRYPTION_AT_REST.md) for what to back up.
@@ -561,7 +563,7 @@ vaf/
     connection_tracker.py # Real-time connection monitoring
     ssl_utils.py         # Auto-SSL certificate generation
   api/
-    auth_routes.py       # Login, 2FA, bootstrap, token refresh
+    auth_routes.py       # Login, 2FA, bootstrap and setup code, logout, own password change
     network_routes.py    # Access URL, connection list
   core/
     web_server.py        # FastAPI app, middleware stack, CORS, TLS server
@@ -713,6 +715,5 @@ is the new state. The CLI (`vaf server networks`) reads and writes the list unde
 | POST | `/api/auth/login` | No | Username/password login |
 | POST | `/api/auth/setup-2fa` | Bearer | Generate TOTP QR code |
 | POST | `/api/auth/verify-2fa` | Temp Token | Verify TOTP code, get full token |
-| POST | `/api/auth/refresh` | Refresh Token | Exchange refresh token for new access token |
 | POST | `/api/auth/logout` | Bearer/Cookie (tokenless from this machine) | End the session of each presented token, clear the auth cookie |
 | GET | `/api/auth/me` | Bearer/Cookie | Get current user info; if both are sent, **Bearer is tried before** the `vaf_token` cookie so a stale cookie does not invalidate a valid header token. |

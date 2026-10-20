@@ -18,7 +18,7 @@ authority (SEALED_COLUMNS), under a key that lives in the data keyring
 grants nothing:
 
 - Every reader that decides on a login or on authority asks `is_sealed`: the login,
-  the 2FA steps, the token refresh, the per-request standing check and the tool
+  the 2FA steps, the per-request standing check and the tool
   permissions (vaf/auth/permissions.py). A broken seal is refused and recorded as the
   security event `account_seal_broken`.
 - Every ORM write re-seals the row on its own (`install`, a mapper hook), so the

@@ -18,7 +18,7 @@ have made it three. The rules live here now; the routes call in and carry only
 what is genuinely theirs (tokens, cookies, sessions, HTTP shapes).
 
 WHAT STAYS OUT. Anything that is about a web request rather than about an
-account: access/refresh tokens, opening the UserSession row, the auth cookie. A
+account: access tokens, opening the UserSession row, the auth cookie. A
 terminal setup needs an account, not a browser session. Ending sessions is the
 exception, because it is an account rule: a reset password or second factor ends
 every session of the account, whichever door made the reset. It goes through

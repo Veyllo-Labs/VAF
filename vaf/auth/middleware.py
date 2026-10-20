@@ -38,7 +38,6 @@ AUTH_EXEMPT_PATHS: set[str] = {
     "/api/auth/bootstrap",
     "/api/auth/login",
     "/api/auth/verify-2fa",
-    "/api/auth/refresh",
     "/api/auth/setup-2fa",
     # First-run only: the onboarding wizard live-tests a Veyllo key BEFORE /bootstrap, so no token
     # can exist yet. The endpoint gates itself (403 once an admin exists) and is rate-limited, so

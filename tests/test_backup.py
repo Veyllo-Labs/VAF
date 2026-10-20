@@ -152,12 +152,19 @@ def test_a_database_in_use_is_captured_consistent(install):
     assert sqlite3.connect(copy).execute("SELECT t FROM m").fetchall() == [("still in the wal",)]
 
 
+def _broken_diagnosis():
+    raise RuntimeError("the probe broke")
+
+
 @pytest.mark.parametrize("daemon, says", [
     ({"ok": True, "reason": "ok"}, "There is no vaf-memory-db container"),
     # Measured on a fresh server: the service could not use the docker group yet, and the
     # backup blamed a missing container. MUTATION: drop the daemon check - red.
     ({"ok": False, "reason": "permission_denied", "detail": "permission denied"},
      "Docker does not answer"),
+    # The diagnosis only sharpens the message; one that breaks itself must not replace the
+    # backup's own error. MUTATION: call it without the guard - red.
+    (_broken_diagnosis, "There is no vaf-memory-db container"),
 ])
 def test_no_database_no_backup(install, monkeypatch, daemon, says):
     """A backup without the accounts and memories would be trusted and restore nothing.
@@ -167,7 +174,7 @@ def test_no_database_no_backup(install, monkeypatch, daemon, says):
     monkeypatch.setattr(data_stores, "roots", lambda: install["roots"])
     monkeypatch.setattr(data_stores, "projects_dir", lambda: install["roots"]["projects"])
     monkeypatch.setattr(containers, "container_state", lambda name: None)
-    monkeypatch.setattr(service_stack, "diagnose_docker_daemon", lambda: daemon)
+    monkeypatch.setattr(service_stack, "diagnose_docker_daemon", daemon if callable(daemon) else (lambda: daemon))
     with pytest.raises(backup.BackupError) as err:
         backup.create_backup(install["out"], include_volumes=False)
     assert "memory database" in str(err.value) and says in str(err.value)

@@ -1207,7 +1207,13 @@ EOF
                 systemctl --user list-units --type=service --state=exited --no-legend --plain 2>/dev/null; } \
                 | awk '{print $1}' | tr '\n' ' ' || true)"
             _restart=true
-            if [[ -n "${_busy// /}" ]]; then
+            # This run may itself live inside that manager: a terminal of a desktop session
+            # does (measured: its shell sits in user@<uid>.service/app.slice), an SSH login
+            # does not (session-N.scope). Restarting the manager would end the installer
+            # before it starts anything again, so it then leaves the restart to the person.
+            if grep -q "/user@${_uid}\.service/" "/proc/$$/cgroup" 2>/dev/null; then
+                _restart=false
+            elif [[ -n "${_busy// /}" ]]; then
                 _restart=false
                 if [[ -t 0 ]]; then
                     read -p "  Restart your user services ($_busy) so VAF reaches Docker now? [y/N]: " _answer

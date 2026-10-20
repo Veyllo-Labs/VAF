@@ -451,9 +451,15 @@ def _docker_unreachable() -> Optional[str]:
     """Why Docker does not answer this process, or None when it does. `container_state` says
     None for a container Docker does not have AND for a Docker it cannot reach, and the two
     need different remedies: measured on a fresh server, where the service could not use the
-    docker group yet, the first scheduled backup reported a missing database container."""
-    from vaf.core.service_stack import diagnose_docker_daemon
-    daemon = diagnose_docker_daemon()
+    docker group yet, the first scheduled backup reported a missing database container.
+    Best effort: the answer only sharpens a message, so a check that breaks itself counts as
+    "Docker answers" and the caller names the missing container as it did before."""
+    try:
+        from vaf.core.service_stack import diagnose_docker_daemon
+        daemon = diagnose_docker_daemon()
+    except Exception as e:
+        logger.debug("Docker diagnosis failed: %s", e)
+        return None
     if daemon.get("ok"):
         return None
     if daemon.get("reason") == "permission_denied":

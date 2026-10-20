@@ -80,10 +80,14 @@ def test_a_new_docker_group_reaches_the_service_without_a_reboot():
     # A service busy with other work is not cut off without the person's yes: the restart
     # waits for an answer at a terminal, or for the next reboot. MUTATION: restart anyway - red.
     assert "if [[ -n \"${_busy// /}\" ]]; then" in block and "[[ -t 0 ]]" in block
+    # Busy is any service at work, not only a running one: one still starting is cut off the
+    # same way. MUTATION: count running services only - red.
+    assert "--type=service --state=running,activating,reloading" in block
     assert block.index('if [[ "$_restart" != "true" ]]; then') < block.index("sudo systemctl restart")
     # What waited (timers, sockets, path watchers) and what was agreed to comes back, a unit
     # started by hand included. MUTATION: drop the restart of the recorded units - red.
     assert "--type=timer,socket,path --state=active" in block
+    assert "--type=service --state=exited" in block, "a finished one-shot comes back too"
     assert 'for _unit in $_busy $_waiting; do' in block and 'systemctl --user start "$_unit"' in block
 
 

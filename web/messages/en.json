@@ -1766,6 +1766,7 @@
         "vpnOnlyDesc": "Only devices from the VPN networks and your own networks get in. The home network stays out.",
         "vpnOnlyNoVpn": "No VPN connection is detected right now, so nobody but this machine gets in.",
         "saved": "Saved. The access check applies at once; VAF adjusts the firewall without a restart.",
+        "savedFirewallByHand": "Saved. The access check applies at once. The running VAF does not change this machine's firewall itself: if that firewall guards the access port, run sudo -v && vaf server provision in a terminal on the server.",
         "failed": "That did not work.",
         "changedMeanwhile": "These settings were changed in the meantime. The current state is shown now; please make your change again.",
         "loadFailed": "The current state could not be loaded.",

@@ -1766,6 +1766,7 @@
         "vpnOnlyDesc": "Yalnızca VPN ağlarındaki ve kendi ağlarındaki cihazlar girebilir. Ev ağı dışarıda kalır.",
         "vpnOnlyNoVpn": "Şu anda hiçbir VPN bağlantısı algılanmadı, bu yüzden bu cihaz dışında kimse giremez.",
         "saved": "Kaydedildi. Erişim denetimi hemen geçerli olur, VAF güvenlik duvarını yeniden başlatmadan ayarlar.",
+        "savedFirewallByHand": "Kaydedildi. Erişim denetimi hemen geçerli olur. Çalışan VAF bu makinenin güvenlik duvarını kendisi değiştirmez. Bu güvenlik duvarı erişim portunu koruyorsa sunucuda bir terminalde sudo -v && vaf server provision komutunu çalıştır.",
         "failed": "Olmadı.",
         "changedMeanwhile": "Bu ayarlar bu arada değiştirildi. Şimdi güncel durum gösteriliyor, değişikliğini lütfen yeniden yap.",
         "loadFailed": "Güncel durum şu anda yüklenemedi.",

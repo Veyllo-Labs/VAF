@@ -249,7 +249,11 @@ handshake), the OS firewall (`firewall_sources()`, see Layer 1), and the shown a
 addresses (`access_addresses()`: the settings, `vaf top`, `vaf server status`). The
 access check takes a change at once; the firewall is re-applied by the running app when
 `local_network_allowed_networks` or `local_network_vpn_only` change (one password
-dialog on a desktop with firewalld), with no restart. Certificates carry every LAN and
+dialog on a desktop with firewalld), with no restart, where that app can gain root. The
+server's service cannot (Layer 1), so there the change reaches the OS firewall only through
+`sudo -v && vaf server provision`; `vaf server networks` and the web settings name that
+command after every change (the settings read `firewall_reapplied` from
+`GET /api/network/remote-access`). Certificates carry every LAN and
 VPN address (see "How Auto-SSL Works").
 
 Named boundaries: Windows names a WireGuard adapter after its tunnel file, so it reads as

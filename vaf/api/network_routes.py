@@ -164,7 +164,10 @@ def get_connections():
 # The web half of the "Remote access (VPN)" settings; `vaf server networks` and
 # `vaf server vpn-only` are the CLI half. Both write the same two keys through the same
 # check (binding.normalize_allowed_networks). The access check reads them on every
-# request; the tray sees the save and re-applies the OS firewall, without a restart.
+# request; the tray sees the save and re-applies the OS firewall, without a restart,
+# where this process can gain root. The server's service cannot
+# (vaf.network.firewall.elevation_unavailable); `firewall_reapplied` tells the page which
+# of the two it is, so its save note does not promise a firewall change that never comes.
 
 _MESH_VPN_NETWORK = "100.64.0.0/10"
 
@@ -172,6 +175,7 @@ _MESH_VPN_NETWORK = "100.64.0.0/10"
 def _remote_access_state(request: Request) -> dict:
     from vaf.network.binding import (connection_client_ip, inbound_policy, is_allowed_ip,
                                      local_interfaces)
+    from vaf.network.firewall import elevation_unavailable
     from vaf.network.ssl_utils import certificate_ip_addresses
 
     policy = inbound_policy(detect_vpn=True)
@@ -204,6 +208,10 @@ def _remote_access_state(request: Request) -> dict:
         "mesh_vpn_network": _MESH_VPN_NETWORK,
         "mesh_vpn_admitted": any(a == _MESH_VPN_NETWORK for a in policy.allowed),
         "your_address": connection_client_ip(request),
+        # Whether a change of the admitted networks reaches the OS firewall without anyone
+        # at a terminal: the firewall step is on, and this process can gain root.
+        "firewall_reapplied": (Config.get_bool("local_network_firewall_enabled", True)
+                               and elevation_unavailable() is None),
     }
 
 

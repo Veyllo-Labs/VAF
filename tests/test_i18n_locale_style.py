@@ -97,6 +97,8 @@ _LITERALS = (
     "vaf a2a export",
     "vaf update --recover",
     "vaf secure rotate-db",
+    "vaf server provision",
+    "sudo -v",
     "trust.json",
     "SKILL.md",
     "SHA-256",

@@ -7,6 +7,9 @@ The connection map lists every connected device's address and user name; the set
 tab that shows it was admin-only, the route was not. Now every network route but the
 pre-login /ws-config answers an admin only.
 """
+import re
+from pathlib import Path
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -151,3 +154,34 @@ def test_a_page_with_an_older_list_cannot_bring_back_a_removed_network(stored):
 def test_a_save_without_a_base_is_taken_as_it_is(stored):
     r = _app().put("/api/network/remote-access", json={"allowed": ["10.20.0.0/16"], "vpn_only": False})
     assert r.status_code == 200
+
+
+_NO_NEW_PRIVS = "the no-new-privileges flag is set on this process, as systemd's NoNewPrivileges= sets it"
+
+
+@pytest.mark.parametrize("firewall_on, reason, expected", [
+    (True, None, True),
+    (True, _NO_NEW_PRIVS, False),
+    (False, None, False),
+], ids=["reapplied", "cannot-gain-root", "firewall-step-off"])
+def test_the_state_says_whether_the_firewall_is_reapplied(stored, monkeypatch, firewall_on,
+                                                          reason, expected):
+    """The save note promised "VAF adjusts the firewall" on a server whose service cannot
+    gain root. MUTATION: compute the field from the config key only - red."""
+    import vaf.network.firewall as fw
+    stored["local_network_firewall_enabled"] = firewall_on
+    monkeypatch.setattr(fw, "elevation_unavailable", lambda: reason)
+    client = _app()
+    assert client.get("/api/network/remote-access").json()["firewall_reapplied"] is expected
+    saved = client.put("/api/network/remote-access", json={"allowed": [], "vpn_only": False})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["firewall_reapplied"] is expected
+
+
+def test_the_save_note_follows_whether_the_firewall_is_reapplied():
+    """The page reads the field and picks the note that names the command.
+    MUTATION: remove the branch from the component - red."""
+    src = (Path(__file__).resolve().parents[1] / "web" / "components" / "settings"
+           / "RemoteAccessSection.tsx").read_bytes().decode("utf-8")
+    assert re.search(r"firewall_reapplied\s*:\s*boolean", src)
+    assert re.search(r"firewall_reapplied\s*===\s*false\s*\?\s*t\('savedFirewallByHand'\)\s*:\s*t\('saved'\)", src)

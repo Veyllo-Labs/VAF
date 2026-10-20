@@ -35,6 +35,9 @@ interface State {
     mesh_vpn_network: string;
     mesh_vpn_admitted: boolean;
     your_address: string;
+    // False where saving reaches no OS firewall by itself (the server's service cannot
+    // gain root): the save note then names the command instead of promising a change.
+    firewall_reapplied: boolean;
 }
 
 // The refusal codes of vaf/network/binding.py REFUSAL_REASONS, each worded in the catalogue.
@@ -114,7 +117,7 @@ export default function RemoteAccessSection({ sectionId }: { sectionId?: string 
             if (!res.ok) { setNote({ ok: false, text: t('failed') }); return false; }
             setData(body);
             setLockout(null);
-            setNote({ ok: true, text: t('saved') });
+            setNote({ ok: true, text: body.firewall_reapplied === false ? t('savedFirewallByHand') : t('saved') });
             return true;
         } catch {
             setNote({ ok: false, text: t('failed') });

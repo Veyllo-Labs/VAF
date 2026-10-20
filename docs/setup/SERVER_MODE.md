@@ -199,13 +199,15 @@ itself; it recognises the VPN interface and admits its devices
   networks of the detected VPN interfaces (plus your entries). With no VPN up, nobody
   but this machine gets in; the command says so, and so does `vaf doctor`.
 
-The access check takes a change at once. The running service re-applies the OS firewall
-within about 25 seconds, with no restart; on a headless server that needs passwordless
-sudo like every firewall step here, otherwise open the port by hand for the networks
-`vaf server status` lists. On a rented server keep the access port closed in the
-provider's firewall and open only the VPN's own port there; then run
-`vaf server provision --no-firewall`, since the provider's firewall is the one that
-faces the internet.
+The access check takes a change at once, with no restart. The running service does not
+change the OS firewall: it cannot gain root, not even with passwordless sudo (its systemd
+hardening rules every setuid helper out, see Troubleshooting below). If this machine's own
+firewall guards the access port, run `sudo -v && vaf server provision` after the change, or
+open the port by hand for the networks `vaf server status` lists; `vaf server networks` and
+the web settings say so after every change. On a rented server keep the access port closed
+in the provider's firewall and open only the VPN's own port there; then run
+`vaf server provision --no-firewall`, since the provider's firewall is the one that faces
+the internet, and nothing more is needed after an admission change.
 
 ## Locked Settings
 

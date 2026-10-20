@@ -136,6 +136,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The server service no longer calls sudo at every start.** The installed service cannot
+  gain root (its systemd hardening rules that out), yet it tried to open the OS firewall at
+  each start and the journal showed sudo refusing ("no new privileges flag is set"). It now
+  does not try and logs one line instead: the installer and `vaf server provision` open the
+  firewall from a login shell. After a change of the admitted networks, the web settings and
+  `vaf server networks` say so instead of promising an automatic firewall change, and a
+  repair started on a server names the commands to run instead of a sudo error.
 - **The web UI connects behind a port forward, and the browser window shows that it is
   starting.** A page reached over HTTPS on a port other than the one VAF's proxy listens on
   (a forwarded port on a rented server or a VM, a NAT, a load balancer) never opened its live

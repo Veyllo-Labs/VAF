@@ -24,6 +24,11 @@ exception, because it is an account rule: a reset password or second factor ends
 every session of the account, whichever door made the reset. It goes through
 vaf/auth/sessions.py, the one owner of the session rows.
 
+THE FIRST-RUN SETUP CODE. While no admin exists, a browser that is not on this
+machine must bring the code `vaf setup code` shows in a terminal on it
+(`first_run_setup_code`, `setup_code_matches`, checked by `create_first_admin`).
+The desktop window and `vaf setup` need none.
+
 NAMED BOUNDARY (Rule 0b). This is not exported on the framework facade. An
 embedder brings their own user model - EMBEDDING.md tells them `user_scope` is
 an assertion THEY make after authenticating their own users, so local account
@@ -230,6 +235,65 @@ async def reset_password_from_terminal(db, user: LocalUser, new_password: str) -
         logger.debug("Password hash was not mirrored to the keyring: %s", e)
 
 
+# ── the first-run setup code ───────────────────────────────────────────────────
+
+# While no admin exists, the web setup creates one for whoever asks first, and every admitted
+# address may ask (measured: from 10.1.2.3, needs-setup true, then bootstrap 200 with role
+# admin). On a VPS the admitted private ranges include the provider's network and the Docker
+# bridges. So a browser that is not on this machine must bring a code that only a terminal on
+# the machine can show (`vaf setup code`). The desktop window and `vaf setup` never need it.
+SETUP_CODE_NAME = "first_run_setup_code"
+# Crockford's base32: no I, L, O or U, so a code read off a screen is typed back right.
+_SETUP_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+_SETUP_CODE_LENGTH = 16          # 80 bits
+
+
+def _setup_code_shape(raw: str) -> str:
+    return "-".join(raw[i:i + 4] for i in range(0, len(raw), 4))
+
+
+def first_run_setup_code() -> str:
+    """The code a browser on another device needs to create the first admin, as
+    XXXX-XXXX-XXXX-XXXX. Minted once into the data keyring (never config.json) and shown
+    again on every call; "" once this installation has had an admin. Raises RuntimeError when
+    the keyring cannot be read."""
+    import secrets as _secrets
+
+    from vaf.auth import account_seal
+    from vaf.core.data_keyring import peek_data_secret, set_data_secret
+    stored = peek_data_secret(SETUP_CODE_NAME)
+    if account_seal.admin_established():
+        return ""
+    if not stored:
+        stored = "".join(_secrets.choice(_SETUP_CODE_ALPHABET) for _ in range(_SETUP_CODE_LENGTH))
+        set_data_secret(SETUP_CODE_NAME, stored)
+    return _setup_code_shape(stored)
+
+
+def setup_code_matches(candidate: str) -> bool:
+    """Whether `candidate` is the stored setup code: case, dashes and spaces do not matter,
+    compared in constant time. False when no code was ever shown (nobody ran `vaf setup code`)
+    or the keyring cannot be read."""
+    import hmac
+    try:
+        from vaf.core.data_keyring import peek_data_secret
+        stored = peek_data_secret(SETUP_CODE_NAME)
+    except Exception:
+        return False
+    if not stored:
+        return False
+    given = "".join(ch for ch in str(candidate or "").upper() if not ch.isspace() and ch != "-")
+    return hmac.compare_digest(given.encode("utf-8"), stored.encode("utf-8"))
+
+
+def _retire_setup_code() -> None:
+    try:
+        from vaf.core.data_keyring import delete_data_secret
+        delete_data_secret(SETUP_CODE_NAME)
+    except Exception as e:
+        logger.warning("The first-run setup code could not be removed from the keyring: %s", e)
+
+
 async def create_first_admin(
     db,
     *,
@@ -237,6 +301,8 @@ async def create_first_admin(
     password: str,
     agent_name: Optional[str] = None,
     allow_established: bool = False,
+    setup_code: Optional[str] = None,
+    require_setup_code: bool = False,
 ) -> LocalUser:
     """Create THE admin of this machine: the account plus the identity around it.
 
@@ -265,6 +331,12 @@ async def create_first_admin(
             "admin_established",
             "This installation already had an admin. Restore the database, or set the admin up "
             "again in a terminal on this machine: vaf setup", 403)
+    # Before anything is created or hashed: a stranger's attempt costs nothing and leaves no row.
+    if require_setup_code and not setup_code_matches(setup_code or ""):
+        raise UserAdminError(
+            "setup_code",
+            "The setup code is not right. Show it with `vaf setup code` in a terminal on the "
+            "machine VAF runs on.", 401)
 
     user = await create_local_user(
         db,
@@ -317,6 +389,8 @@ async def create_first_admin(
         account_seal.mark_admin_established()
     except Exception as e:
         logger.warning("The keyring did not record the first admin: %s", e)
+    # The code opened exactly this; it opens nothing more.
+    _retire_setup_code()
 
     _prepare_user_home(user.username, agent_name)
     return user

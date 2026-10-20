@@ -67,7 +67,14 @@ export default function LoginPage() {
     const [loginError, setLoginError] = useState<string | null>(null);
     const [twoFAError, setTwoFAError] = useState<string | null>(null);
     const [bootstrapError, setBootstrapError] = useState<string | null>(null);
-    const [createAdminSubStep, setCreateAdminSubStep] = useState<'username' | 'password'>('username');
+    const [createAdminSubStep, setCreateAdminSubStep] = useState<'setup_code' | 'username' | 'password'>('username');
+    // A browser that is not on the machine VAF runs on must bring the first-run setup code
+    // (`vaf setup code` in a terminal there); the server says so in /needs-setup. The code
+    // is checked at /api/auth/setup-code before the rest is typed, and travels with the
+    // bootstrap, which checks it again.
+    const [setupCodeRequired, setSetupCodeRequired] = useState(false);
+    const [setupCode, setSetupCode] = useState('');
+    const [setupCodeError, setSetupCodeError] = useState<string | null>(null);
     // The agent's name, asked the way the terminal setup asks it: an empty field
     // takes the suggestion, and the suggestion comes from the SERVER (needs-setup),
     // so its shape is never duplicated in JavaScript.
@@ -163,6 +170,9 @@ export default function LoginPage() {
                                 if (typeof data?.agent_name_suggestion === 'string') {
                                     setAgentNameSuggestion(data.agent_name_suggestion);
                                 }
+                                const codeRequired = data?.setup_code_required === true;
+                                setSetupCodeRequired(codeRequired);
+                                setCreateAdminSubStep(codeRequired ? 'setup_code' : 'username');
                                 if (typeof data?.inference_profile === 'string') {
                                     setSetupProfile(data.inference_profile);
                                     // Kept for a resumed onboarding whose profile request fails.
@@ -273,6 +283,34 @@ export default function LoginPage() {
 
     // During onboarding, onboardingConfig is built up in state (no API call without auth).
 
+    // The first-run setup code, checked before anything else is typed: a wrong one is said
+    // under the field, a held address (429) in the server's own words.
+    const handleSetupCodeStep = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!setupCode.trim()) return;
+        setIsLoading(true);
+        setSetupCodeError(null);
+        try {
+            const res = await fetch(`${getApiBase()}/api/auth/setup-code`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ code: setupCode.trim() }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok) {
+                setCreateAdminSubStep('username');
+            } else if (res.status === 401) {
+                setSetupCodeError(t('errSetupCode'));
+            } else {
+                setSetupCodeError((data?.detail as string) || t('connectionFailed'));
+            }
+        } catch {
+            setSetupCodeError(t('connectionFailed'));
+        }
+        setIsLoading(false);
+    };
+
     const handleBootstrapPasswordStep = (e: React.FormEvent) => {
         e.preventDefault();
         if (!password || password !== confirmPassword) {
@@ -308,7 +346,8 @@ export default function LoginPage() {
         setAgentName('');
         setPendingSoul(null); setOnboardingConfig({});
         setVeylloKey(''); setVeylloError(null);
-        setCreateAdminSubStep('username'); setBootstrapError(null);
+        setCreateAdminSubStep(setupCodeRequired ? 'setup_code' : 'username'); setBootstrapError(null);
+        setSetupCode(''); setSetupCodeError(null);
         if (typeof window !== 'undefined') sessionStorage.removeItem('vaf_onboarding_step');
         setStep('language');
     };
@@ -369,9 +408,18 @@ export default function LoginPage() {
                     // An empty field takes the suggestion, exactly what the input's
                     // placeholder promised the whole time.
                     agent_name: (agentName.trim() || agentNameSuggestion || undefined),
+                    ...(setupCodeRequired ? { setup_code: setupCode } : {}),
                 }),
             });
             const bootstrapData = await bootstrapRes.json().catch(() => ({}));
+            if (bootstrapRes.status === 401 && bootstrapData?.code === 'setup_code') {
+                // Back to the step that asks for the code; everything typed after it stays.
+                setSetupCodeError(t('errSetupCode'));
+                setCreateAdminSubStep('setup_code');
+                setStep('create_admin');
+                setIsLoading(false);
+                return;
+            }
             if (!bootstrapRes.ok) {
                 setBootstrapError((bootstrapData?.detail as string) || t('accountCreationFailed'));
                 setIsLoading(false);
@@ -888,6 +936,46 @@ export default function LoginPage() {
                                 <span className="text-sm font-medium text-gray-700">{t('adminHeader')}</span>
                             </div>
                             <div className="p-8">
+                                {createAdminSubStep === 'setup_code' && (
+                                    <form onSubmit={handleSetupCodeStep} className="space-y-5">
+                                        <h2 className="text-lg font-semibold text-gray-900 mb-1">{t('setupCodeTitle')}</h2>
+                                        <p className="text-sm text-gray-500 mb-6">{t('setupCodeSubtitle')}</p>
+                                        <div className="space-y-5">
+                                            <div className="space-y-1.5">
+                                                <label className="text-sm font-medium text-gray-700 ml-1">{t('setupCodeLabel')}</label>
+                                                <div className="relative">
+                                                    <KeyRound className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                                                    <input
+                                                        type="text"
+                                                        value={setupCode}
+                                                        onChange={(e) => { setSetupCode(e.target.value); setSetupCodeError(null); }}
+                                                        className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-gray-900 font-mono tracking-wider placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all"
+                                                        placeholder="XXXX-XXXX-XXXX-XXXX"
+                                                        autoComplete="off"
+                                                        autoCapitalize="characters"
+                                                        spellCheck={false}
+                                                        autoFocus
+                                                    />
+                                                </div>
+                                                {setupCodeError && (
+                                                    <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{setupCodeError}</p>
+                                                )}
+                                            </div>
+                                            <button
+                                                type="submit"
+                                                disabled={!setupCode.trim() || isLoading}
+                                                className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
+                                            >
+                                                {isLoading ? (
+                                                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                                ) : (
+                                                    <>{t('continue')} <ArrowRight size={18} /></>
+                                                )}
+                                            </button>
+                                        </div>
+                                    </form>
+                                )}
+
                                 {createAdminSubStep === 'username' && (
                                     <form
                                         onSubmit={(e) => {

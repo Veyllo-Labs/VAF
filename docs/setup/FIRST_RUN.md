@@ -71,6 +71,23 @@ language step.
 Choose an admin **username** and a **password** (confirmed). This is the owner account -
 it has full access and isolates your data under its own scope.
 
+**From another device: the setup code.** When the browser is not on the machine VAF runs
+on (a laptop opening a server's address, a phone on the LAN or the VPN), this step first
+asks for a setup code. Run this in a terminal on the machine VAF runs on (over SSH on a
+server, as the user VAF runs as):
+
+```
+vaf setup code
+```
+
+It prints a code like `7K3M-Q9PX-2DTH-W4NB` and keeps showing the same one until the admin
+exists; then it is gone and the command says so (exit code `3`). Case, dashes and spaces do
+not matter when you type it. Without it, whoever reached the setup first would become the
+admin: the first-run endpoints are open to every address VAF admits, and on a rented server
+those include the provider's network. The desktop window on the machine itself and
+`vaf setup` in a terminal need no code. A wrong code is refused like a wrong password and
+counts toward the same limit (by default five per 15 minutes per address).
+
 ### 2. Agent name
 The same question the terminal setup asks: what do you want to call your agent? First the
 agent gets its name, then its character. The field offers a generated suggestion (the

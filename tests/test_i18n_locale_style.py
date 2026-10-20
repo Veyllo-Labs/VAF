@@ -98,6 +98,7 @@ _LITERALS = (
     "vaf update --recover",
     "vaf secure rotate-db",
     "vaf server provision",
+    "vaf setup code",
     "sudo -v",
     "trust.json",
     "SKILL.md",

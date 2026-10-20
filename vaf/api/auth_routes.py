@@ -6,6 +6,7 @@ Auth API: needs-setup, bootstrap, login, 2FA setup/verify, refresh, logout, me.
 
 Endpoints:
 - GET  /api/auth/needs-setup
+- POST /api/auth/setup-code
 - POST /api/auth/bootstrap
 - POST /api/auth/login
 - POST /api/auth/setup-2fa
@@ -155,6 +156,13 @@ class BootstrapRequest(BaseModel):
     # terminal setup asks it. Optional: an empty or missing value falls back to
     # the suggestion inside create_first_admin's workspace preparation.
     agent_name: Optional[str] = None
+    # The first-run setup code (`vaf setup code`), needed from a browser that is not
+    # on this machine (vaf/auth/user_admin.py).
+    setup_code: Optional[str] = None
+
+
+class SetupCodeRequest(BaseModel):
+    code: str = ""
 
 
 class LoginRequest(BaseModel):
@@ -210,8 +218,16 @@ def _is_db_not_ready_error(exc: Exception) -> bool:
     ))
 
 
+def _setup_code_required(request: Request) -> bool:
+    """A browser that is not on this machine needs the first-run setup code, in every mode:
+    the IP check admits the LAN, the VPN and on a VPS the provider's private network, and
+    any of them would otherwise create the first admin."""
+    from vaf.network.binding import is_localhost
+    return not is_localhost(_client_ip(request))
+
+
 @router.get("/needs-setup")
-async def needs_setup():
+async def needs_setup(request: Request):
     """
     Returns whether the first admin account must be created.
     Callable without auth. When true, show Create Admin flow instead of login.
@@ -243,7 +259,8 @@ async def needs_setup():
             # The profile tells the wizard whether skipping the provider step leaves a
             # local model to fall back on (only while no admin exists, like the rest).
             return {"needs_setup": True, "agent_name_suggestion": suggest_agent_name(),
-                    "inference_profile": inference_profile()}
+                    "inference_profile": inference_profile(),
+                    "setup_code_required": _setup_code_required(request)}
         except Exception as exc:
             if not _is_db_not_ready_error(exc):
                 raise
@@ -273,8 +290,15 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
                 new_user = await create_first_admin(
                     db, username=body.username, password=body.password,
                     agent_name=(body.agent_name or "").strip() or None,
+                    setup_code=body.setup_code,
+                    require_setup_code=_setup_code_required(request),
                 )
             except UserAdminError as e:
+                if e.code == "setup_code":
+                    # A 401 the address window counts; the code lets the wizard go back to
+                    # the step that asks for it.
+                    return JSONResponse(status_code=e.http_status,
+                                        content={"detail": e.message, "code": e.code})
                 raise HTTPException(status_code=e.http_status, detail=e.message)
 
             access = create_access_token(
@@ -308,6 +332,23 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Setup failed: {e!s}",
         ) from e
+
+
+@router.post("/setup-code")
+async def check_setup_code(body: SetupCodeRequest, request: Request):
+    """First run only: whether a code is the setup code `vaf setup code` shows, so the wizard
+    can say so before the rest of the setup is typed. 401 (counted by the address window,
+    `_RATE_LIMITED_PATHS`) for a wrong one, 403 once this installation has an admin."""
+    import asyncio
+    if account_seal.admin_established():
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Setup already completed")
+    from vaf.auth.user_admin import setup_code_matches
+    if not await asyncio.to_thread(setup_code_matches, body.code):
+        return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED,
+                            content={"detail": "The setup code is not right. Show it with "
+                                               "`vaf setup code` in a terminal on the machine "
+                                               "VAF runs on.", "code": "setup_code"})
+    return {"ok": True}
 
 
 @router.post("/test-veyllo-key")

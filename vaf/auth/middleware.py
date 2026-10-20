@@ -45,6 +45,10 @@ AUTH_EXEMPT_PATHS: set[str] = {
     # exempting it opens nothing after setup. Needed for a headless/LAN first run, where the
     # tokenless-localhost path no longer covers a browser on another device.
     "/api/auth/test-veyllo-key",
+    # First run only, like /bootstrap: a browser on another device checks the setup code from
+    # `vaf setup code` before it has any account. It answers 403 once an admin exists and is
+    # rate-limited.
+    "/api/auth/setup-code",
     "/api/network/ws-config",  # So frontend can build wss:// URL when TLS is on
     # The installation's health for a monitor, which holds no account. It answers one word
     # (ok, degraded, down) from a cached snapshot; the checks behind it are admin-only at

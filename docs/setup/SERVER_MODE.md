@@ -70,7 +70,10 @@ internet rather than behind a router. The setup that fits both:
 2. **Reach it over a VPN, not the internet.** Keep the access port closed in the
    provider's firewall and open only the VPN's own port (and SSH) there, then run
    `vaf server provision --no-firewall`, since the provider's firewall is the one that
-   faces the internet. See [Over a VPN](#over-a-vpn).
+   faces the internet. See [Over a VPN](#over-a-vpn). The first admin is created either
+   with `vaf setup` over SSH or in the browser with the code `vaf setup code` prints:
+   the private ranges VAF admits include the provider's own network, and without the code
+   the first visitor from there would become the admin.
 3. **Back it up off the machine.** `vaf server provision` schedules a daily encrypted
    backup with a retention (`vaf backup schedule` changes it), but a backup on the server's
    own disk is lost with the server: copy them elsewhere
@@ -165,7 +168,7 @@ ip route get 1.1.1.1 | grep -oP 'src \K\S+'
 
 **TLS certificate:** VAF auto-generates a self-signed certificate on first start (`~/.vaf/ssl/`). Browsers will show a certificate warning on the first visit - this is expected for local networks. Accept the exception once; the certificate is then trusted for that browser.
 
-**Authentication:** All access (local and LAN) requires login. Credentials are set during the initial setup wizard at `https://<LAN-IP>:8443`.
+**Authentication:** All access (local and LAN) requires login. Credentials are set during the initial setup wizard at `https://<LAN-IP>:8443`, which first asks for the setup code that `vaf setup code` prints in an SSH session on the server (the browser is not on the machine itself, see [FIRST_RUN.md](FIRST_RUN.md#1-create-admin-account)); `vaf setup` creates the admin in the terminal instead.
 
 **Ports:**
 

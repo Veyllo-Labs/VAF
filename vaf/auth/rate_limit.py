@@ -62,6 +62,8 @@ _RATE_LIMITED_PATHS: set[str] = {
     # First-run Veyllo key validation (onboarding): unauthenticated + first-run-gated; the route
     # records a failure on a bad/invalid key, so the same per-IP window applies.
     "/api/auth/test-veyllo-key",
+    # The first-run setup code: 80 bits, and every wrong one is a 401 counted here.
+    "/api/auth/setup-code",
 }
 
 

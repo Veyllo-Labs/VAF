@@ -111,6 +111,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   deactivation and `vaf users reset-password` sign out every device of that account. Open
   chats of those devices disconnect. Signing in twice in the same second no longer fails.
 
+- **The first visitor can no longer make themselves the admin.** While no admin existed,
+  any device VAF admits could open the setup page and create the admin account, on a rented
+  server the provider's own network included. A browser on another device now needs a setup
+  code: run `vaf setup code` in a terminal on the machine VAF runs on (over SSH on a server)
+  and enter the code it shows. The window on the machine itself and `vaf setup` need no
+  code.
+
 - **Pages through the HTTPS port can no longer be framed by another site.** The login and
   the app served to other devices carried no anti-framing headers and no HSTS; they do now.
 

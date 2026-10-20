@@ -368,6 +368,28 @@ def run_first_account_setup(
     return SetupOutcome.CREATED
 
 
+@app.command("code")
+def setup_code_command():
+    """Show the code a browser on another device needs to create the first admin.
+
+    Exit codes: 0 shown, 1 the keyring cannot be read, 3 an admin already exists.
+    """
+    from vaf.auth.user_admin import first_run_setup_code
+    try:
+        code = first_run_setup_code()
+    except Exception as e:
+        UI.error(f"The setup code could not be read or created (the keyring): {e}")
+        raise typer.Exit(EXIT_CODES[SetupOutcome.FAILED])
+    if not code:
+        UI.info("This machine already has an admin account, so there is no setup code. "
+                "Sign in with it, or reset it here: vaf users reset-password NAME")
+        raise typer.Exit(EXIT_CODES[SetupOutcome.ALREADY_EXISTS])
+    print(code)
+    UI.info("Enter it in the browser to create the admin account. It works until an admin "
+            "exists; the window on this machine itself needs none.")
+    raise typer.Exit(EXIT_CODES[SetupOutcome.CREATED])
+
+
 @app.callback(invoke_without_command=True)
 def setup_command(
     ctx: typer.Context,

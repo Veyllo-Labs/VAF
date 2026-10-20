@@ -245,3 +245,22 @@ def test_the_agent_name_follows_the_configured_owner(monkeypatch, tmp_path):
 
     from vaf.cli.tui_app import app as tui_app
     assert tui_app._agent_name() == "Jarvis"
+
+
+def test_vaf_setup_code_prints_it():
+    """`vaf setup code` shows the first-run setup code in its 4x4 shape, the same one every
+    time, and says so when there is nothing to set up any more. The keyring is the test's own
+    (conftest). MUTATION: print the raw code without the shape, or exit 0 with an admin - red."""
+    import re
+
+    from vaf.auth import account_seal
+    first = runner.invoke(setup_cmd.app, ["code"])
+    assert first.exit_code == 0, first.output
+    codes = re.findall(r"\b[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}\b", first.output)
+    assert len(codes) == 1, first.output
+    again = runner.invoke(setup_cmd.app, ["code"])
+    assert codes[0] in again.output
+    account_seal.mark_admin_established()
+    done = runner.invoke(setup_cmd.app, ["code"])
+    assert done.exit_code == EXIT_CODES[SetupOutcome.ALREADY_EXISTS] == 3
+    assert codes[0] not in done.output

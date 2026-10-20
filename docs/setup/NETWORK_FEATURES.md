@@ -86,6 +86,7 @@ Network clients must authenticate via JWT tokens. The `AuthMiddleware` enforces 
 - **Localhost Bypass (tokenless only)**: A **tokenless** request from `127.0.0.1` is allowed without authentication (internal IPC and single-user desktop mode). A web page that is not VAF's own never reaches this bypass: the [Origin Guard](#origin-guard-every-mode) refuses it first. This bypass applies only when no token is presented. A present-but-invalid token rejects a network client with HTTP 401, while a localhost client with an invalid token falls through to the tokenless localhost path. VAF's OWN outbound fetches are loopback clients too: the agent's web tools, remote MCP servers and WebDAV used to reach this bypass with any URL a page, a mail or the model chose (measured: the contacts, the account list and the configuration). They now go through the destination guard (`vaf/network/egress.py`, see [SANDBOXING.md](../security/SANDBOXING.md)), which never connects to this machine. NAMED BOUNDARY: the receiving side still trusts a tokenless loopback request; a shell command the agent runs with the person's grant (`curl` through `host_bash`) is not covered by the guard, and replacing the bypass with a per-start IPC token is a separate change.
 - **Network Clients**: Must present a valid JWT via `Authorization: Bearer <token>` header or `vaf_token` cookie.
 - **Auth-Exempt Paths**: Login, bootstrap, and static asset endpoints are accessible without a token, and so is `GET /api/health`, which answers a monitor one word (`ok`, `degraded`, `down`) and HTTP 503 when down; the checks behind it are admin-only (`/api/system/health`). The network admission below still applies to all of them.
+- **Sessions**: a token whose session ended (logout, password change, reset, deactivation) is refused like an invalid one: a network client gets 401, a local client falls through to the tokenless path. The second-factor rule below is asked first, so a token from before the second factor, which has no session yet, keeps its 403.
 - **2FA Enforcement**: If `local_network_require_2fa` is enabled (the default), a token minted before the second factor was given (the `temp_token` `/login` returns for a correct password, `is_2fa_verified: false`) opens only `/api/auth/setup-2fa` and `/api/auth/verify-2fa`; every other route answers 403 "2FA verification required" to a network client. The rule is one function, `vaf.auth.crypto.second_factor_done`, asked by the middleware, the WebSocket's network lane (which still admits a localhost admin) and the A2A room door. The check used to read a `requires_2fa_setup` claim no token carries, so a password alone opened the API. The WebSocket opens only on an ACCESS token (a refresh token carries no scope and opened an unscoped socket), and "localhost" there means loopback, `binding.is_localhost`, as on HTTP: it used to include the whole private /12 block Docker's bridges use, an RFC1918 range LANs use too, which reached the localhost-admin allowances.
 - **WebSocket token in the URL, redacted from logs**: a WebSocket handshake cannot carry an `Authorization` header, so the `/ws` client passes its JWT in the query string (`/ws?token=<jwt>`). uvicorn's access log would otherwise print that live token in full (terminal and `tray_debug`); a redaction filter (`RedactTokenFilter` / `redacted_uvicorn_log_config` in `vaf/core/log_helper.py`) masks it only if EVERY uvicorn the process starts passes it: the uvicorn loggers are process-wide, and a Config built with uvicorn's defaults re-runs `dictConfig` and strips the filter from all servers, depending on which starts last (the HTTPS proxy did, and the desktop's live token was measured in `tray_debug.log`). The tray's main port and internal 8005 channel, the HTTPS proxy and `run_server` all pass it, pinned by `tests/test_ws_frame_size_pin.py`. The filter masks it to `token=***` (and the same for `access_token` / `api_key` / `password`). The URL still authenticates; only the log line is masked.
 - **User Context Propagation**: On successful authentication, the middleware populates `request.state` with both individual attributes and a consolidated `user` dict for downstream route handlers (see below).
@@ -207,14 +208,22 @@ Rejections from the layers above are recorded in an always-on security event log
 ### Authentication Details
 
 - **Password Hashing**: Argon2id (time_cost=2, memory_cost=64MB), run on a thread pool of its own (`vaf-argon2`, two workers, so at most 128 MB however many logins arrive) instead of the event loop that carries every chat and socket (measured before: 40 concurrent wrong logins delayed an unrelated request by about a second; after: under 0.1 s). Every login that passes the windows does exactly one verification, a name without an account against a dummy hash, so known and unknown names take the same time (measured before: 3.5 ms against 28.6 ms). `verify_password_async` / `hash_password_async` in `vaf/auth/crypto.py`; the blocking functions stay for the terminal.
-- **JWT Tokens**: HS256, configurable expiry (default 24h), refresh tokens (7 days). A valid
-  signature is not enough: the HTTP middleware and the WebSocket handshake also check that the
-  token's account still exists, is active and holds the token's role (cached a few seconds,
-  cleared by the admin routes), so a deactivation, a deletion or a demotion ends the token at
-  once instead of at its expiry. See "Taking access away" in
+- **JWT Tokens**: HS256, configurable expiry (default 24h), refresh tokens (7 days), each access
+  token with a unique `jti`. A valid signature is not enough: every token reader (the HTTP
+  middleware, both WebSocket lanes, the A2A room door) also checks that the token's account
+  still exists, is active and holds the token's role, and that the token's session has not
+  ended (`token_account_stands`; both cached a few seconds and cleared by whatever ends them),
+  so a deactivation, a deletion or a demotion ends the token at once instead of at its expiry.
+- **Sessions end** (`vaf/auth/sessions.py`, the one owner of `user_sessions`): a logout ends
+  the presented token's session, the account's own password change every other one (the
+  device that made it stays signed in), an admin's password or 2FA reset, a deactivation and
+  `vaf users reset-password` every session of the account. After a password change or an
+  admin reset the account's open sockets close. Before, a logout only deleted the cookie and
+  nothing ended a token (measured: the old token answered 200 after a logout and after a
+  password change). See "Taking access away" in
   [USER_ISOLATION.md](../security/USER_ISOLATION.md).
 - **2FA**: TOTP (RFC 6238), secrets encrypted at rest with AES-256-GCM; a code works once and wrong codes are held per account (Layer 4)
-- **Session Tracking**: Token hashes (SHA-256) stored in PostgreSQL, no plaintext tokens in DB
+- **Session Tracking**: one row per completed sign-in, keyed by the token's hash (SHA-256), no plaintext tokens in DB; a token with no live row is refused (a store that cannot be asked keeps it: the desktop default)
 - **Cookies**: `vaf_token` cookie with `httponly`, `samesite=lax`, and `secure` flag (when TLS active). The cookie's `max-age` is always derived from the token's own `exp` claim at the single set point (`_cookie_max_age_for` in `auth_routes.py`), so the cookie can never outlive the JWT it carries. The login form's `remember_me` flag does NOT extend the session - a longer session requires raising `local_network_jwt_expiry_hours` or wiring the existing `/api/auth/refresh` flow into the frontend. Do not reintroduce a hardcoded longer cookie lifetime: a present-but-expired cookie desyncs the server-side route gate from the bearer token and causes a login redirect loop (live incident 2026-07-22).
 
 **2FA persistence after restart:** Your 2FA setup is stored in two places that must persist across restarts:
@@ -702,5 +711,5 @@ is the new state. The CLI (`vaf server networks`) reads and writes the list unde
 | POST | `/api/auth/setup-2fa` | Bearer | Generate TOTP QR code |
 | POST | `/api/auth/verify-2fa` | Temp Token | Verify TOTP code, get full token |
 | POST | `/api/auth/refresh` | Refresh Token | Exchange refresh token for new access token |
-| POST | `/api/auth/logout` | No | Clear auth cookie |
+| POST | `/api/auth/logout` | Bearer/Cookie (tokenless from this machine) | End the session of each presented token, clear the auth cookie |
 | GET | `/api/auth/me` | Bearer/Cookie | Get current user info; if both are sent, **Bearer is tried before** the `vaf_token` cookie so a stale cookie does not invalidate a valid header token. |

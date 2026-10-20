@@ -502,3 +502,29 @@ def test_the_route_cannot_leak_a_lease_between_attach_and_the_loop():
     assert "to_thread(admit" in route
     assert "to_thread(hub.attach" in route
     assert "to_thread(room.welcome" in route
+
+
+def test_the_room_door_asks_the_session_and_the_standing(monkeypatch):
+    """The door checked the token type and the second factor, but neither the account nor the
+    session: a deactivated account's token or a signed-out one opened a room until it expired.
+    MUTATION: drop the token_account_stands call from the harness verifier - red."""
+    from vaf.auth import crypto, permissions, sessions
+    from vaf.main import _a2a_credential_verifier
+
+    monkeypatch.setattr(crypto, "_get_jwt_secret", lambda: "s" * 48)
+    token = crypto.create_access_token("u1", "alice", "user", "scope-1", is_2fa_verified=True)
+    now = {"account": ("active", "user"), "session": sessions.LIVE}
+
+    async def _account(_scope):
+        return now["account"]
+
+    async def _session(_token):
+        return now["session"]
+
+    monkeypatch.setattr(permissions, "account_standing_async", _account)
+    monkeypatch.setattr(sessions, "session_standing_async", _session)
+    assert _a2a_credential_verifier(token)["user_scope_id"] == "scope-1"
+    now["session"] = sessions.ENDED
+    assert _a2a_credential_verifier(token) is None
+    now.update(session=sessions.LIVE, account=("inactive", "user"))
+    assert _a2a_credential_verifier(token) is None

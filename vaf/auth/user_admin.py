@@ -18,8 +18,11 @@ have made it three. The rules live here now; the routes call in and carry only
 what is genuinely theirs (tokens, cookies, sessions, HTTP shapes).
 
 WHAT STAYS OUT. Anything that is about a web request rather than about an
-account: access/refresh tokens, the UserSession row, the auth cookie. A terminal
-setup needs an account, not a browser session.
+account: access/refresh tokens, opening the UserSession row, the auth cookie. A
+terminal setup needs an account, not a browser session. Ending sessions is the
+exception, because it is an account rule: a reset password or second factor ends
+every session of the account, whichever door made the reset. It goes through
+vaf/auth/sessions.py, the one owner of the session rows.
 
 NAMED BOUNDARY (Rule 0b). This is not exported on the framework facade. An
 embedder brings their own user model - EMBEDDING.md tells them `user_scope` is
@@ -210,9 +213,14 @@ async def reset_password_from_terminal(db, user: LocalUser, new_password: str) -
     outside VAF as well; the command shows such a row and asks before it gets here.
     """
     from vaf.auth import account_seal
+    from vaf.auth.sessions import end_account_sessions
     apply_terminal_reset(user, new_password)
     with account_seal.trusted_rewrite():
         await db.commit()
+    # Every session ends: the reset exists because the password is gone or no longer trusted.
+    # The running service sees it within its session cache's few seconds; a socket it has open
+    # stays until it reconnects or the service restarts (vaf/auth/sessions.py).
+    await end_account_sessions(db, user.id)
     try:
         from vaf.cli.gate import is_local_admin_account, mirror_admin_password_hash
         if is_local_admin_account(username=str(user.username or ""),

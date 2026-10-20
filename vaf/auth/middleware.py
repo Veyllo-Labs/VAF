@@ -195,18 +195,24 @@ class IPValidationMiddleware(BaseHTTPMiddleware):
 # Layer 3: JWT Authentication Middleware
 # ---------------------------------------------------------------------------
 
-async def token_account_stands(payload: dict) -> bool:
-    """Whether the account behind a decoded access token still stands.
+async def token_account_stands(payload: dict, token: str) -> bool:
+    """Whether the account behind a decoded access token still stands, and the token's own
+    session has not ended.
 
     A valid signature is not enough: the account must still exist, be active and hold the
     role the token was issued with, or a deactivation would leave a day of access and a
-    demotion would leave admin rights for the token's whole lifetime. Both lanes ask this
-    one function - the HTTP middleware below and the WebSocket handshake
-    (`vaf/core/web_server.py`). An auth store that cannot be asked keeps the token
-    (`permissions.token_still_stands`: the desktop default)."""
+    demotion would leave admin rights for the token's whole lifetime. And the session the
+    token belongs to must not have ended: a logout, a password change, an admin's reset or a
+    deactivation ends it (vaf/auth/sessions.py), and before, none of them ended a token at
+    all. Every token reader asks this one function - the HTTP middleware below, both
+    WebSocket lanes (`vaf/core/web_server.py`) and the A2A room door (`vaf/main.py`). An auth
+    store that cannot be asked keeps the token (`unknown`, the desktop default)."""
     from vaf.auth.permissions import account_standing_async, token_still_stands
-    return token_still_stands(await account_standing_async(payload.get("user_scope_id")),
-                              payload.get("role"))
+    if not token_still_stands(await account_standing_async(payload.get("user_scope_id")),
+                              payload.get("role")):
+        return False
+    from vaf.auth.sessions import ENDED, session_standing_async
+    return await session_standing_async(token) != ENDED
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -261,15 +267,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 logger.warning("Auth middleware token decode error for %s: %s", client_ip, e)
                 payload = None
 
-            if payload and payload.get("type") == "access" and not await token_account_stands(payload):
-                payload = None
-
             if payload and payload.get("type") == "access":
                 # A token from before the second factor (the login's temp_token) is for the
                 # 2FA endpoints only, which are exempt above and check it themselves. This
                 # used to read a `requires_2fa_setup` claim no token carries, so a password
                 # alone opened every route. A localhost client falls through to the tokenless
                 # path like a stale cookie does: what that path allows needs no token at all.
+                # Asked BEFORE the standing below, as in the socket lane: such a token has no
+                # session yet, and it must keep its 403 rather than read as ended.
                 from vaf.auth.crypto import second_factor_done
                 if not second_factor_done(payload):
                     if not is_localhost(client_ip):
@@ -281,6 +286,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
                             content={"detail": "2FA verification required"},
                         )
                     payload = None
+
+            if payload and payload.get("type") == "access" and not await token_account_stands(payload, token):
+                payload = None
 
             if payload and payload.get("type") == "access":
 

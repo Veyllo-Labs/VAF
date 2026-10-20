@@ -20,7 +20,7 @@ import base64
 import logging
 import socket
 import uuid as uuid_module
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Optional
 
 import pyotp
@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vaf.auth.models import LocalUser, UserSession
 from vaf.auth.database import get_auth_db
 from vaf.auth import account_seal
+from vaf.auth.sessions import end_account_sessions, end_session, open_session, signed_in_from
 from vaf.auth.crypto import (
     verify_password_async,
     create_access_token,
@@ -71,6 +72,19 @@ def _client_ip(request: Request) -> str:
     """
     from vaf.network.binding import connection_client_ip
     return connection_client_ip(request)
+
+
+def close_account_sockets(user_scope_id: str) -> None:
+    """Close every open WebSocket of an account whose sessions just ended: a socket keeps the
+    identity it was opened with, and one opened with an ended token cannot reconnect. Never
+    raises."""
+    if not user_scope_id:
+        return
+    try:
+        from vaf.core.web_interface import WebInterfaceManager
+        WebInterfaceManager().close_account_connections(user_scope_id)
+    except Exception as e:
+        logger.debug("Closing the account's sockets failed: %s", e)
 
 
 def _log_auth_failure(kind: str, request: Request, username: str = "", detail: str = "") -> None:
@@ -271,26 +285,8 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
                 is_2fa_verified=True,
             )
             refresh = create_refresh_token(str(new_user.id))
-            payload = decode_token(access)
-            exp_ts = payload.get("exp") if payload else None
-            expires_at = (
-                datetime.fromtimestamp(exp_ts, tz=timezone.utc)
-                if exp_ts
-                else datetime.now(timezone.utc) + timedelta(hours=24)
-            )
-            # DB uses TIMESTAMP WITHOUT TIME ZONE; store naive UTC
-            if expires_at.tzinfo is not None:
-                expires_at = expires_at.replace(tzinfo=None)
-            client_host = _client_ip(request) or None
-            user_agent = request.headers.get("user-agent", "")
-            session = UserSession(
-                user_id=new_user.id,
-                token_hash=token_hash_for_db(access),
-                device_info={"ip": client_host, "user_agent": user_agent, "device_type": "web"},
-                expires_at=expires_at,
-            )
-            db.add(session)
-            await db.commit()
+            await open_session(db, new_user, access, ip=_client_ip(request),
+                               user_agent=request.headers.get("user-agent", ""))
 
         _set_auth_cookie(request, response, access)
         return {
@@ -476,26 +472,8 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
             is_2fa_verified=True,
         )
         refresh = create_refresh_token(str(user.id))
-
-        payload_new = decode_token(access)
-        exp_ts = payload_new.get("exp") if payload_new else None
-        expires_at = (
-            datetime.fromtimestamp(exp_ts, tz=timezone.utc)
-            if exp_ts
-            else datetime.now(timezone.utc) + timedelta(hours=24)
-        )
-        if expires_at.tzinfo is not None:
-            expires_at = expires_at.replace(tzinfo=None)
-        client_host = _client_ip(request) or None
-        user_agent = request.headers.get("user-agent", "")
-        session = UserSession(
-            user_id=user.id,
-            token_hash=token_hash_for_db(access),
-            device_info={"ip": client_host, "user_agent": user_agent, "device_type": "web"},
-            expires_at=expires_at,
-        )
-        db.add(session)
-        await db.commit()
+        await open_session(db, user, access, ip=_client_ip(request),
+                           user_agent=request.headers.get("user-agent", ""))
 
     _set_auth_cookie(request, response, access)
     return {"access_token": access, "refresh_token": refresh}
@@ -504,25 +482,6 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
 # How long an address that completed a sign-in for an account stays exempt from that
 # account's window: the owner's own devices keep working while a stranger holds the name.
 _KNOWN_ADDRESS_DAYS = 30
-
-
-async def _signed_in_from(db, username: str, ip: str) -> bool:
-    """Whether `ip` completed a sign-in for this account name within _KNOWN_ADDRESS_DAYS.
-
-    One query keyed on the name, run the same way for a name that does not exist, so the
-    answer takes the same path for known and unknown names. A session row is written only
-    after the second factor, so a password alone never makes an address known."""
-    from vaf.auth.rate_limit import account_key
-    if not ip:
-        return False
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=_KNOWN_ADDRESS_DAYS)
-    rows = (await db.execute(
-        select(UserSession.device_info)
-        .join(LocalUser, LocalUser.id == UserSession.user_id)
-        .where(func.lower(LocalUser.username) == account_key(username),
-               UserSession.created_at >= cutoff)
-    )).all()
-    return any(isinstance(r[0], dict) and r[0].get("ip") == ip for r in rows)
 
 
 async def _account_window_refusal(db, request: Request, username: str):
@@ -540,7 +499,7 @@ async def _account_window_refusal(db, request: Request, username: str):
     if is_localhost(ip):
         return None
     try:
-        if await _signed_in_from(db, username, ip):
+        if await signed_in_from(db, username, ip, days=_KNOWN_ADDRESS_DAYS):
             return None
     except Exception as e:
         logger.warning("Known-address lookup failed, the account window holds: %s", e)
@@ -649,27 +608,10 @@ async def login(body: LoginRequest, request: Request, response: Response):
             "temp_token": access,
         }
 
-    # Create UserSession so /me can validate the token via DB (required by get_current_user_from_token)
-    payload_login = decode_token(access)
-    exp_ts_login = payload_login.get("exp") if payload_login else None
-    expires_at_login = (
-        datetime.fromtimestamp(exp_ts_login, tz=timezone.utc)
-        if exp_ts_login
-        else datetime.now(timezone.utc) + timedelta(hours=24)
-    )
-    if expires_at_login.tzinfo is not None:
-        expires_at_login = expires_at_login.replace(tzinfo=None)
-    client_host_login = _client_ip(request) or None
-    user_agent_login = request.headers.get("user-agent", "")
+    # The session row: every reader of the token asks it (vaf/auth/sessions.py).
     async with get_auth_db() as db:
-        login_session = UserSession(
-            user_id=user.id,
-            token_hash=token_hash_for_db(access),
-            device_info={"ip": client_host_login, "user_agent": user_agent_login, "device_type": "web"},
-            expires_at=expires_at_login,
-        )
-        db.add(login_session)
-        await db.commit()
+        await open_session(db, user, access, ip=_client_ip(request),
+                           user_agent=request.headers.get("user-agent", ""))
 
     # NOTE: remember_me cannot extend the session beyond the JWT expiry - a cookie
     # that outlives its token only recreates the login-loop desync. A real
@@ -844,8 +786,20 @@ async def me(request: Request, response: Response):
 
 
 @router.post("/logout")
-async def logout(response: Response):
-    """Clear auth cookie."""
+async def logout(request: Request, response: Response):
+    """End the session of every presented token (Bearer and cookie), then clear the cookie.
+
+    Logging out used to delete the cookie and nothing else: the token itself kept answering
+    200 for its whole life (measured), so a token copied from a shared or stolen device
+    outlived every sign-out. A tokenless caller only loses the cookie, as before."""
+    tokens = _access_token_candidates(request)
+    if tokens:
+        try:
+            async with get_auth_db() as db:
+                for token in tokens:
+                    await end_session(db, token)
+        except Exception as e:
+            logger.warning("Logout could not end the session: %s", e)
     response.delete_cookie(key=COOKIE_NAME, path="/")
     return {"ok": True}
 
@@ -871,6 +825,9 @@ async def refresh(body: RefreshRequest, request: Request, response: Response):
             str(user.user_scope_id),
             is_2fa_verified=True,
         )
+        # A token without a session row has ended for every reader (vaf/auth/sessions.py).
+        await open_session(db, user, access, ip=_client_ip(request),
+                           user_agent=request.headers.get("user-agent", ""))
     _set_auth_cookie(request, response, access)
     return {"access_token": access}
 
@@ -913,12 +870,20 @@ async def change_password(body: ChangePasswordRequest, request: Request):
                 # language; the sentence stays for every other client.
                 return JSONResponse(status_code=e.http_status, content={"detail": e.message, "code": e.code})
             username = user.username or ""
+            scope = str(user.user_scope_id or "")
+            # Every other session of the account ends: a password changed because it leaked
+            # must throw the intruder out (measured before: the old token still answered 200).
+            # The session that made the change stays; its own sockets reconnect with it.
+            from vaf.auth.middleware import _extract_token
+            ended = await end_account_sessions(db, user.id, keep_token=_extract_token(request))
     except HTTPException:
         raise
     except Exception as e:
         logger.error("change-password failed: %s", e)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="The password could not be changed")
+    close_account_sockets(scope)
+    logger.info("Password changed for %s; %d other session(s) ended", username, ended)
     try:
         from vaf.core.security_events import log_security_event
         log_security_event("password_changed", ip=_client_ip(request), username=username,

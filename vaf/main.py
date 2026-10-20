@@ -335,6 +335,15 @@ def _a2a_credential_verifier(credential: str):
     # A token from before the second factor opens no room, as it opens no route.
     if not second_factor_done(payload):
         return None
+    # The account must still stand and the token's session must not have ended, as on HTTP
+    # and the WebUI socket: this door checked neither, so a deactivated account's token or a
+    # signed-out one opened a room until it expired. The web server hands the handshake to a
+    # worker thread (asyncio.to_thread(admit, ...)), so the check gets a loop of its own; a
+    # call from a running loop raises, which the room door reads as a refusal.
+    import asyncio
+    from vaf.auth.middleware import token_account_stands
+    if not asyncio.run(token_account_stands(payload, credential)):
+        return None
     return payload
 
 

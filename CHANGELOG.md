@@ -103,6 +103,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   account names now take the same time to answer, and password checks no longer stall
   other chats while many logins arrive.
 
+- **Signing out really ends a session.** Signing out used to delete the browser's cookie and
+  nothing else, and a password change, an admin's reset or a deactivation ended no session at
+  all, so a token copied from a shared or stolen device kept working for its whole day. Now
+  signing out ends that session, changing your password signs out your other devices at once
+  (the one you changed it on stays signed in), and an admin's password or 2FA reset, a
+  deactivation and `vaf users reset-password` sign out every device of that account. Open
+  chats of those devices disconnect. Signing in twice in the same second no longer fails.
+
 - **Pages through the HTTPS port can no longer be framed by another site.** The login and
   the app served to other devices carried no anti-framing headers and no HSTS; they do now.
 

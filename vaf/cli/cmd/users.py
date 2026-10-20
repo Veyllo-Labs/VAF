@@ -201,5 +201,5 @@ def reset_password(
                            detail=f"reset in a terminal on this machine ({proof})")
     except Exception:
         pass
-    UI.success(f"New password set for {username}. The second factor is set up again at the "
-               "next login.")
+    UI.success(f"New password set for {username}. Every device signed in to it is signed out "
+               "(within a few seconds); the second factor is set up again at the next login.")

@@ -126,3 +126,33 @@ def test_every_token_reader_asks_the_same_question():
     main = (root / "vaf" / "main.py").read_text(encoding="utf-8")
     verifier = main.split("def _a2a_credential_verifier")[1].split("\n\n\n")[0]
     assert "if not second_factor_done(payload):" in verifier
+
+
+def test_the_middleware_asks_the_session(monkeypatch):
+    """A token whose session ended (logout, a password change, a reset, a deactivation) is
+    refused like an invalid one: 401 to a network client, the tokenless path for the machine
+    itself. A store that cannot be asked keeps the token. A token from before the second factor
+    keeps its 403: the second-factor gate is asked first (it has no session yet).
+    MUTATION: drop the session half; reorder so a pre-2FA token gets 401 - red."""
+    from vaf.auth import permissions, sessions
+    now = {"session": sessions.ENDED}
+
+    async def _account(_scope):
+        return ("active", "admin")      # the token's own role: only the session decides here
+
+    async def _session(_token):
+        return now["session"]
+
+    monkeypatch.setattr(permissions, "account_standing_async", _account)
+    monkeypatch.setattr(sessions, "session_standing_async", _session)
+    _pre_2fa(monkeypatch, verified=True)
+    lan, local = TestClient(_app(), client=LAN), TestClient(_app(), client=LOCALHOST)
+    bearer = {"Authorization": "Bearer x"}
+    assert lan.get("/api/supervisor/status", headers=bearer).status_code == 401
+    assert local.get("/api/supervisor/status", headers=bearer).status_code == 200
+    now["session"] = sessions.UNKNOWN
+    assert lan.get("/api/supervisor/status", headers=bearer).status_code == 200
+    now["session"] = sessions.ENDED
+    _pre_2fa(monkeypatch, verified=False)
+    r = lan.get("/api/supervisor/status", headers=bearer)
+    assert r.status_code == 403 and r.json()["detail"] == "2FA verification required"

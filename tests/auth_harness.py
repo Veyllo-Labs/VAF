@@ -21,6 +21,7 @@ import contextlib
 from typing import Any, Dict, List, Optional, Tuple
 
 import pyotp
+from fastapi import Request
 from sqlalchemy import create_engine
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
@@ -130,13 +131,16 @@ class Harness:
     # ── accounts ────────────────────────────────────────────────────────────
 
     def add_user(self, username: str, password: str, *, role: str = "user", totp: bool = False,
-                 active: bool = True) -> Tuple[str, Optional[str]]:
-        """An account; with `totp` a second factor that is set up. Returns (id, totp secret)."""
+                 active: bool = True, no_second_factor: bool = False) -> Tuple[str, Optional[str]]:
+        """An account; with `totp` a second factor that is set up, with `no_second_factor` one
+        that signs in with the password alone (every sign-in spends a code step otherwise).
+        Returns (id, totp secret)."""
         from vaf.auth.crypto import encrypt_totp_secret, hash_password
         secret = pyotp.random_base32() if totp else None
         with Session(self.engine) as s:
             user = LocalUser(username=username, password_hash=hash_password(password), role=role,
-                             is_active=active, requires_2fa_setup=not totp)
+                             is_active=active,
+                             requires_2fa_setup=not (totp or no_second_factor))
             if secret:
                 ct, nonce = encrypt_totp_secret(secret)
                 user.totp_secret, user.totp_nonce = ct, nonce
@@ -150,6 +154,17 @@ class Harness:
         return s.execute(select(LocalUser).where(func.lower(LocalUser.username)
                                                  == username.lower())).scalar_one()
 
+    def run_db(self, fn):
+        """Run `fn(db)` (a coroutine function) against the harness store, as a route would."""
+        import asyncio
+        import vaf.auth.database as database
+
+        async def _go():
+            async with database.get_auth_db() as db:
+                return await fn(db)
+
+        return asyncio.run(_go())
+
     def sessions(self) -> List[UserSession]:
         from sqlalchemy import select
         with Session(self.engine, expire_on_commit=False) as s:
@@ -158,7 +173,7 @@ class Harness:
     # ── the app ─────────────────────────────────────────────────────────────
 
     def app(self, extra_routes=()):
-        from fastapi import FastAPI, Request
+        from fastapi import FastAPI
 
         from vaf.api.auth_routes import router as auth_router
         from vaf.api.user_routes import router as user_router

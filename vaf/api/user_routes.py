@@ -468,6 +468,10 @@ async def update_user(user_id: str, data: UserUpdate, admin: Dict[str, Any] = De
             )
 
             await db.commit()
+            if data.is_active is False and was_active:
+                # A deactivated account's tokens end with it; a reactivation revives none.
+                from vaf.auth.sessions import end_account_sessions
+                await end_account_sessions(db, user.id)
 
             # A revocation must beat the resolver's TTL and reach what already runs.
             await _apply_access_change(
@@ -489,6 +493,17 @@ async def update_user(user_id: str, data: UserUpdate, admin: Dict[str, Any] = De
         )
 
 
+async def _end_every_session(db, user) -> None:
+    """After an admin reset the account's password or second factor: every session of it
+    ends and its open sockets close. A reset happens because the old password or phone is no
+    longer trusted, so nothing signed in with it may stay (measured before: the old token
+    still answered 200)."""
+    from vaf.api.auth_routes import close_account_sockets
+    from vaf.auth.sessions import end_account_sessions
+    await end_account_sessions(db, user.id)
+    close_account_sockets(str(user.user_scope_id or ""))
+
+
 @router.post("/{user_id}/reset-password")
 async def reset_password(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
     """Reset a user's password to a freshly generated temporary one (admin only). Returns the temporary
@@ -508,6 +523,7 @@ async def reset_password(user_id: str, _: Dict[str, Any] = Depends(require_admin
                 mirror_admin_password_hash(user.password_hash)
             user.updated_at = _utc_now_naive()
             await db.commit()
+            await _end_every_session(db, user)
             try:
                 from vaf.core.security_events import log_security_event
                 log_security_event("password_changed", username=str(user.username or ""),
@@ -582,6 +598,7 @@ async def reset_2fa(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
             user.requires_2fa_setup = True
             user.updated_at = _utc_now_naive()
             await db.commit()
+            await _end_every_session(db, user)
             return {"message": "2FA reset; the user will set it up again on next login"}
     except HTTPException:
         raise

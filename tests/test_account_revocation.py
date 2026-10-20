@@ -176,7 +176,7 @@ def test_the_socket_handshake_asks_the_same_question():
         encoding="utf-8")
     handshake = src[src.index("async def websocket_endpoint"):]
     handshake = handshake[:handshake.index("elif type == ")]
-    assert handshake.count("await token_account_stands(payload)") == 2
+    assert handshake.count("await token_account_stands(payload, token)") == 2
 
 
 # ── the admin route ──────────────────────────────────────────────────────────
@@ -191,6 +191,8 @@ def _fake_user_route(monkeypatch, *, active=True, role="user", tools=None):
                            updated_at=None)
 
     class _Result:
+        rowcount = 0
+
         def scalar_one_or_none(self):
             return user
 
@@ -232,7 +234,9 @@ def test_the_cache_is_cleared_after_the_commit_and_the_work_stopped(monkeypatch)
     calls = _fake_user_route(monkeypatch)
     asyncio.run(ur.update_user("11111111-0000-4000-8000-000000000001",
                                ur.UserUpdate(is_active=False), admin=ADMIN))
-    assert calls == ["commit", "invalidate", "revoke"]
+    # The second commit ends the account's sessions (vaf/auth/sessions.py), also before the
+    # cache is cleared.
+    assert calls == ["commit", "commit", "invalidate", "revoke"]
 
 
 def test_reactivating_lifts_the_mark(monkeypatch):

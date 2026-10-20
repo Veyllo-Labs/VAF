@@ -4261,7 +4261,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             # requires the token, so a deactivated or demoted account's token would otherwise
             # keep the identity and the role it was issued with. A standing check that fails
             # lands in the except below and closes - never in the local-admin fallback.
-            if not await token_account_stands(payload):
+            if not await token_account_stands(payload, token):
                 log("API", f"WebSocket (localhost) rejected: account no longer stands for {payload.get('username')}")
                 _emit_sec_ws("revoked account", ip=client_ip)
                 await websocket.close(code=4001, reason="Account access changed")
@@ -4334,7 +4334,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     
                     # The account must still stand: deactivated, deleted or demoted since
                     # the token was issued is refused, like the HTTP lane (middleware).
-                    if not await token_account_stands(payload):
+                    if not await token_account_stands(payload, token):
                         log("API", f"WebSocket rejected: account no longer stands for {payload.get('username')}")
                         _emit_sec_ws("revoked account", ip=client_ip)
                         await websocket.close(code=4001, reason="Account access changed")

@@ -727,7 +727,11 @@ leg of the integrated proxy, silently and with no error anywhere.
 
 The credential is either an access token (an account on the host machine) or a join
 ticket (an invitation to exactly this room). **There is no fallback**: no credential
-means no connection. A refusal is written to the security event log.
+means no connection. An access token is refused when it was minted before the second
+factor, when its account no longer stands (deactivated, deleted, demoted) or when its
+session ended (a logout, a password change, a reset): the same check the HTTP lanes and
+the WebUI socket make (`token_account_stands`). A refusal is written to the security
+event log.
 
 On accept the server sends:
 

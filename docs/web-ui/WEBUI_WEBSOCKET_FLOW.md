@@ -93,6 +93,7 @@ non-localhost client must come from an RFC1918 IP, present a valid `access` JWT,
 | Token EXPIRED, from **localhost** | accept - fall through to the local-admin floor below (see the note) |
 | Token expired (non-localhost) / token invalid (any origin) | reject - close `4001` |
 | 2FA required and not verified (and not admin+localhost) | reject - close `4003` |
+| Account deactivated, deleted or demoted, or the token's session ended (logout, password change, admin reset, deactivation; `vaf/auth/sessions.py`) | reject - close `4001` |
 | Auth-phase error (secret/import/other) for a **non-localhost** client | reject - close `4003` (fail-closed) |
 | Auth success | `manager.connect` + `set_connection_user(user_scope_id, username, role)` |
 

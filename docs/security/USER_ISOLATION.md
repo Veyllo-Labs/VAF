@@ -484,13 +484,26 @@ Now each of the three takes effect at once (`vaf/core/revocation.py`, called by 
 routes in `vaf/api/user_routes.py` AFTER the commit, with the permission cache cleared
 there too - cleared before the commit, a lookup in between re-cached the old answer):
 
-- **The token stops working.** The HTTP middleware and the WebSocket handshake check that the
-  token's account still exists, is active and still holds the token's role
-  (`permissions.account_standing_async`, cached a few seconds and cleared with the
-  allowlists). A network client then gets 401 (a socket: close code 4001, and a
-  `ws_rejected` event); the real localhost client falls back to the tokenless lane as
-  before. An unreachable auth store keeps the token: the same desktop default as the
-  allowlist lookup.
+- **The token stops working.** The HTTP middleware, the WebSocket handshake and the A2A room
+  door check that the token's account still exists, is active and still holds the token's
+  role (`permissions.account_standing_async`, cached a few seconds and cleared with the
+  allowlists), and that the token's own session has not ended (`vaf/auth/sessions.py`). A
+  network client then gets 401 (a socket: close code 4001, and a `ws_rejected` event); the
+  real localhost client falls back to the tokenless lane as before. An unreachable auth
+  store keeps the token: the same desktop default as the allowlist lookup.
+- **Sessions end.** Every completed sign-in opens one session row for exactly its token
+  (`open_session`, the one writer; each token carries a unique `jti`). A logout ends the
+  presented token's session; the account's own password change ends every other session
+  and keeps the one that made it; an admin's reset of the password or the second factor, a
+  deactivation and the terminal's `vaf users reset-password` end every session of the
+  account. A reactivation revives none. After a password change or an admin reset the
+  account's open sockets are closed too (`WebInterfaceManager.close_account_connections`),
+  so a device signed in with an ended token cannot reconnect; the device that changed the
+  password reconnects with its own. Before, none of these ended a token: it kept working for
+  its whole life (measured: 200 after a logout and after a password change). NAMED
+  BOUNDARIES: a terminal reset is seen by the service within the session cache's few seconds,
+  and a socket opened before it stays until it reconnects or the service restarts; the
+  session rows are not sealed, so whoever can write the database can reactivate one.
 - **Running work stops.** Deactivation and deletion call `revoke_account`; a demotion or a
   narrowed tool, workflow or hands-off grant calls `stop_account_work`. Both stop every chat
   the account has queued or running (generation, queued follow-ups, a waiting confirmation,

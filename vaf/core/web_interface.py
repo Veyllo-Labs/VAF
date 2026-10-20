@@ -282,9 +282,11 @@ class WebInterfaceManager:
             self.disconnect(ws)
         return len(targets)
 
-    def _on_account_revoked(self, user_scope_id: str) -> None:
-        """Revocation listener; runs on whatever thread revoked, so the close is handed to
-        the server's loop."""
+    def close_account_connections(self, user_scope_id: str) -> None:
+        """Close every socket of one account, from any thread: the close is handed to the
+        server's loop and not waited for. For an account whose sessions ended (a password
+        change, an admin's reset) or whose access was taken away: an open socket keeps the
+        identity and role it was opened with."""
         loop = self._server_loop
         if loop is None or loop.is_closed() or not loop.is_running():
             return
@@ -292,6 +294,10 @@ class WebInterfaceManager:
             asyncio.run_coroutine_threadsafe(self.close_scope_connections(user_scope_id), loop)
         except Exception:
             pass
+
+    def _on_account_revoked(self, user_scope_id: str) -> None:
+        """Revocation listener; runs on whatever thread revoked."""
+        self.close_account_connections(user_scope_id)
 
     def set_connection_user(self, websocket: WebSocket, user_id: str, username: Optional[str] = None, role: Optional[str] = None) -> None:
         """Store user id (and optionally username/role) for this connection (e.g. for RAG scope and User identity block)."""

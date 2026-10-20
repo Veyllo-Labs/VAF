@@ -292,25 +292,35 @@ def _telegram_entry_name(entry: Dict[str, Any]) -> str:
     return (entry.get("vaf_username") or "").strip() or "admin"
 
 
-def _telegram_whitelist_entry_matches(
-    entry: Dict[str, Any],
-    scope_str: Optional[str],
-    vaf_username: str,
-) -> bool:
-    """Whether a whitelist entry belongs to the account asking.
+def _telegram_admin_scope() -> str:
+    # Imported per call: tests stand in for the local admin by patching the config module.
+    from vaf.core.config import get_local_admin_scope_id
+    return get_local_admin_scope_id()
 
-    When both the call and the entry carry a scope, the scope alone decides: a scope is the
-    account, and no two accounts share one, while the username a caller passes is not always
-    the account's own (a background lane without one passes "admin" or the local admin's
-    name). Requiring both refused such a caller its own pairing. Otherwise by username,
-    case-insensitively, an empty one read as "admin"."""
-    if not isinstance(entry, dict):
-        return False
-    entry_scope = entry.get("user_scope_id")
-    entry_scope_str = str(entry_scope).strip() if entry_scope is not None else None
-    if scope_str and entry_scope_str:
-        return scope_str.strip() == entry_scope_str
-    return (vaf_username or "admin").lower() == _telegram_entry_name(entry).lower()
+
+def _telegram_owner_scope(value: Any, admin_scope: str) -> str:
+    """Whose a Telegram whitelist entry or a lane is: its scope, and the local admin's when it
+    carries none. That is how the bot's own lane switch reads a missing scope
+    (`config.is_local_admin_lane`): the Discord bridge queues the local admin's turns with
+    no scope and the name "admin", and the Telegram bridge admits an entry without a scope
+    on the local admin's lane. The name never decides: a lane without a username passes
+    "admin" or the local admin's name, an ordinary account may be named "admin" when the
+    owner registered as somebody else, and deciding by name handed one account's pairing
+    to another."""
+    scope = str(value).strip() if value is not None else ""
+    return scope or admin_scope
+
+
+def _telegram_entries(*keys: str) -> List[Dict[str, Any]]:
+    """The dict entries of these `telegram_config` lists, in order."""
+    telegram_config = Config.get("telegram_config") or {}
+    out: List[Dict[str, Any]] = []
+    if isinstance(telegram_config, dict):
+        for key in keys:
+            block = telegram_config.get(key)
+            if isinstance(block, list):
+                out.extend(e for e in block if isinstance(e, dict))
+    return out
 
 
 def _telegram_paired_entries(
@@ -318,17 +328,13 @@ def _telegram_paired_entries(
     username: Optional[str],
 ) -> List[Tuple[str, str]]:
     """(Telegram id, the name the entry is filed under) of every whitelist entry that belongs
-    to this account, in whitelist order, each id once. An entry without an id is skipped, not
-    the end of the search."""
-    telegram_config = Config.get("telegram_config") or {}
-    whitelist = telegram_config.get("whitelist") if isinstance(telegram_config, dict) else None
-    if not isinstance(whitelist, list):
-        return []
-    scope_str = str(user_scope_id).strip() if user_scope_id is not None else None
-    vaf_username = (username or "").strip() or "admin"
+    to this account by scope (`_telegram_owner_scope`), in whitelist order, each id once. An
+    entry without an id is skipped, not the end of the search. `username` does not decide."""
+    admin_scope = _telegram_admin_scope()
+    scope = _telegram_owner_scope(user_scope_id, admin_scope)
     out: List[Tuple[str, str]] = []
-    for entry in whitelist:
-        if not _telegram_whitelist_entry_matches(entry, scope_str, vaf_username):
+    for entry in _telegram_entries("whitelist"):
+        if _telegram_owner_scope(entry.get("user_scope_id"), admin_scope) != scope:
             continue
         tid = str(entry.get("telegram_user_id") or "").strip()
         if tid and all(tid != seen for seen, _ in out):
@@ -342,8 +348,9 @@ def telegram_paired_ids(
 ) -> List[str]:
     """Every Telegram user id this account paired as its own (`telegram_config.whitelist`),
     in whitelist order. Never a relay contact and never a contact: those are other people
-    the account lets in, not where it is reached. Belonging is decided by scope when both
-    sides carry one, by username otherwise (`_telegram_whitelist_entry_matches`).
+    the account lets in, not where it is reached. Belonging is decided by scope alone, a
+    missing one on the entry or the lane read as the local admin's (`_telegram_owner_scope`);
+    the username is accepted for the callers' convenience and never decides.
 
     Deliberately not `owner_endpoints`: that one gives the local admin every entry on the
     bot (the inbox's owner lane), and another account's pairing is not the admin's chat."""
@@ -366,31 +373,26 @@ def _telegram_account_names(
 ) -> Tuple[str, set]:
     """(the account's name, every `by_username` key that is this account's, lowercased).
 
-    Without a scope the name asked with is the account, as the whitelist matcher has it. With
-    one, the account's names are the ones its whitelist and relay entries are filed under,
-    plus the name asked with unless somebody else holds it: an entry of another scope, an
-    entry without a scope (filed under its name for everybody), and for any scope but the
-    local admin's the local admin's name and "admin" (what a lane without a name is read
-    as), which are the admin's keys even after the admin's own pairing was removed. A
-    background lane of account B that has no username passes exactly those names, and the
-    store keeps the admin's chat under them: reading one as B's would discard the admin's
-    chat and record it under B's name."""
+    The account is the lane's scope, a missing one read as the local admin's
+    (`_telegram_owner_scope`, the same rule as its pairing). Its names are the ones its
+    whitelist and relay entries are filed under, plus the name asked with unless somebody
+    else holds it: an entry of another scope (an entry without one is the local admin's),
+    and for any account but the local admin the local admin's name and "admin" (what a lane
+    without a name is read as), which are the admin's keys even after the admin's own
+    pairing was removed. A background lane of account B that has no username passes exactly
+    those names, and the store keeps the admin's chat under them: reading one as B's would
+    discard the admin's chat and record it under B's name. The reverse holds too: the local
+    admin's lane leaves alone the key of an ordinary account named "admin"."""
     uname = (username or "").strip() or "admin"
-    scope = str(user_scope_id).strip() if user_scope_id is not None else ""
-    if not scope:
-        return uname, {uname.lower()}
-    telegram_config = Config.get("telegram_config") or {}
-    entries: List[Dict[str, Any]] = []
-    if isinstance(telegram_config, dict):
-        for key in ("whitelist", "relay_whitelist"):
-            block = telegram_config.get(key)
-            if isinstance(block, list):
-                entries.extend(e for e in block if isinstance(e, dict))
-    own = [_telegram_entry_name(e) for e in entries if str(e.get("user_scope_id") or "").strip() == scope]
+    admin_scope = _telegram_admin_scope()
+    scope = _telegram_owner_scope(user_scope_id, admin_scope)
+    entries = _telegram_entries("whitelist", "relay_whitelist")
+    own = [_telegram_entry_name(e) for e in entries
+           if _telegram_owner_scope(e.get("user_scope_id"), admin_scope) == scope]
     taken = {_telegram_entry_name(e).lower() for e in entries
-             if str(e.get("user_scope_id") or "").strip() != scope}
-    if not is_local_admin_lane(scope):
-        from vaf.core.config import get_local_admin_username
+             if _telegram_owner_scope(e.get("user_scope_id"), admin_scope) != scope}
+    if scope != admin_scope:
+        from vaf.core.config import get_local_admin_username  # per call, as above
         taken |= {get_local_admin_username().lower(), "admin"}
     names = {n.lower() for n in own}
     if uname.lower() not in taken:

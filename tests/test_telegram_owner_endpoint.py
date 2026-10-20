@@ -36,6 +36,9 @@ STRANGER_TG = "7000000102"                        # nobody decided about them
 RELAY_TG = "7000000301"                           # Dana's relay contact
 ALICE_TG = "7000000401"
 ADMIN_TG = "7000000501"
+BOB_TG = "7000000601"                             # an entry without a scope, filed under "bob"
+B_SCOPE = "b0b0b0b0-0000-4000-8000-000000000701"  # an ordinary account that registered as "admin"
+B_TG = "7000000701"
 GROUP_CHAT = "-1001234567890"
 
 
@@ -290,12 +293,57 @@ def test_a_name_on_an_entry_without_a_scope_is_not_a_scoped_callers_key(world):
     another account holds -> Alice's lane clears Bob's key -> red."""
     world.seed(telegram_config={"enabled": True, "verified": True,
                                 "whitelist": [_owner_entry(), _owner_entry(ALICE_TG, ALICE, "alice"),
-                                              {"telegram_user_id": "7000000601", "vaf_username": "bob"}]})
+                                              {"telegram_user_id": BOB_TG, "vaf_username": "bob"}]})
     world.stored(by_scope={ALICE: ALICE_TG}, by_username={"bob": CAROL_TG})
 
     assert mc.telegram_chat_id_of(ALICE, "bob") == ALICE_TG
     assert world.on_disk()["by_username"] == {"bob": CAROL_TG}
     assert world.resets() == []
+
+
+def test_an_entry_without_a_scope_is_never_another_accounts_pairing(world):
+    """Whose a pairing is follows the scope, never the name a lane passes: an entry without
+    a scope stands for the local admin's lane, as the bot's lane switch reads it. With the
+    name deciding for such an entry, Alice's lane asking with "bob" took Bob's entry (listed
+    first, nothing stored for Alice yet), stored Bob's chat under Alice's scope and sent her
+    messages to Bob. MUTATION: let the name decide for an entry without a scope -> red."""
+    world.seed(telegram_config={"enabled": True, "verified": True,
+                                "whitelist": [{"telegram_user_id": BOB_TG, "vaf_username": "bob"},
+                                              _owner_entry(), _owner_entry(ALICE_TG, ALICE, "alice")]})
+
+    assert mc.telegram_paired_ids(ALICE, "bob") == [ALICE_TG]
+    assert mc.telegram_chat_id_of(ALICE, "bob") == ALICE_TG
+    assert world.on_disk()["by_scope"] == {ALICE: ALICE_TG}
+    assert mc.save_telegram_chat_id(ALICE, "bob", BOB_TG) is False
+    assert mc.telegram_paired_ids(None, "bob") == [BOB_TG, OWNER_TG], "the local admin's lane"
+    assert world.resets() == []
+
+
+@pytest.mark.parametrize("lane", [(None, "admin"), (None, None)])
+def test_a_lane_without_a_scope_is_the_local_admins_not_an_account_named_admin(world, monkeypatch, lane):
+    """The Discord bridge queues the local admin's turns as scope None and the name "admin"
+    (`is_local_admin_lane`). On an install whose owner registered as "dana", an ordinary
+    account may be named "admin"; matched by name, its pairing was the local admin's chat
+    and the admin's reminders went to that account's Telegram. MUTATION: read a lane
+    without a scope by its name instead of as the local admin's -> red."""
+    world.seed(telegram_config={"enabled": True, "verified": True,
+                                "whitelist": [_owner_entry(B_TG, B_SCOPE, "admin"), _owner_entry()]})
+    world.stored(by_scope={B_SCOPE: B_TG}, by_username={"admin": B_TG})
+
+    assert mc.telegram_paired_ids(*lane) == [OWNER_TG]
+    assert mc.save_telegram_chat_id(*lane, B_TG) is False
+    assert mc.telegram_chat_id_of(*lane) == OWNER_TG
+    assert world.on_disk()["by_username"] == {"admin": B_TG, "dana": OWNER_TG}, "the account's key is its own"
+    assert mc.telegram_chat_id_of(B_SCOPE, "admin") == B_TG, "the account named admin keeps its chat"
+    assert world.resets() == []
+
+    monkeypatch.setattr(mc, "get_messaging_connections",
+                        lambda **kw: {"available": ["telegram"], "outbound": [], "main_messenger": "telegram"})
+    sent = []
+    import vaf.core.telegram_reply as tr
+    monkeypatch.setattr(tr, "send_telegram_reply", lambda chat_id, text, **kw: sent.append(str(chat_id)) or True)
+    assert mc.send_to_main_messenger(*lane, "Reminder", record=False) == (True, "telegram")
+    assert sent == [OWNER_TG]
 
 
 def test_the_reminder_reaches_the_owner_and_stays_out_of_the_contacts_chat(world, monkeypatch):

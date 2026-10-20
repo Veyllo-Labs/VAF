@@ -90,7 +90,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   kept in their chat. Only your own paired Telegram now decides where VAF reaches you, and a
   chat that pointed somewhere else is put back to your paired Telegram before VAF next
   writes to you, with an entry in the security log ("Delivery chat corrected"). Writing to
-  your agent from a group chat no longer moves where it reaches you either. If your
+  your agent from a Telegram group chat no longer moves where it reaches you either. If your
   Telegram is not paired under Settings, Connections, Telegram, pair it there so VAF can
   reach you. Restart VAF after updating so the fix takes effect.
 

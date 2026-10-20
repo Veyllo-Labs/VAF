@@ -123,7 +123,7 @@ it. Review generated phrasings before shipping - machine translations of casual 
 
 Not exhaustive - the full set of shipped keys is described in the prose above (the
 `voice_*`, `speaker_confirm_*`, `speaker_enroll_*`, `stopwords` and reflex keys). The
-table below spells out the nudge and voice-reflex keys.
+table below spells out the nudge, voice-reflex and Front Office keys.
 
 | Key | Used by | Placeholders |
 |-----|---------|--------------|
@@ -138,6 +138,7 @@ table below spells out the nudge and voice-reflex keys.
 | `capability_denial` | Matched lexicon (not spoken): phrases in which a reply claims the agent CANNOT do something (`voice_agent.denies_capability`). Consumed by the belt that replaces such a denial with the delegate acknowledgement when a delegation survived every gate, so the spoken words follow the deed | none (phrase lists) |
 | `engage_guest_cmd` | Voice reflex deterministic engage command: owner-to-agent imperatives ("answer her", "talk to the other person") matched as full lists to arm guest engagement without the LLM marker (`voice_agent.engage_command_match`); ~35 langs | none (phrase lists) |
 | `speaker_recheck_confirm` | Voice reflex spoken line when a "did you mean me?" reply is affirmative but the voice did not verify: asks the owner to confirm on the screen/messenger card (`voice_agent.speaker_recheck_confirm_line`); ~35 langs | none |
+| `contact_turn_failed` | The fixed sentence a contact gets on WhatsApp, Telegram or Discord instead of the error when the agent's turn for them failed (`_turn_error_text` in `vaf/core/headless_runner.py`, see [FRONT_OFFICE.md](../agents/FRONT_OFFICE.md#when-front-office-activates)), in the language on the contact's record, English otherwise. ONE phrasing per language on purpose: it is a fixed apology, and a rotating variant would only read as a different answer to the same failure. Polite address (German "Sie"), because the reader may be a stranger. The seven UI languages plus fr, es, ar | none |
 
 ## Related documentation
 

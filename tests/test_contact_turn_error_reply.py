@@ -74,7 +74,8 @@ def test_the_sentence_follows_the_contacts_language():
     language. MUTATION: pass no language to `vocab.pick` and the German contact reads English."""
     meta = {"from_contact": True}
     de = hr._turn_error_text(meta, _ERROR, {"preferred_language": "de"})
-    assert de.startswith("Entschuldigung") and "ab12cd34" not in de
+    # The polite form: the reader may be a stranger. MUTATION: the du/infinitive wording - red.
+    assert de == "Entschuldigung, ich kann gerade nicht antworten. Bitte versuchen Sie es später noch einmal."
     assert hr._turn_error_text(meta, _ERROR, {"preferred_language": "en-GB"}).startswith("Sorry, I can't")
     assert hr._turn_error_text(meta, _ERROR, {}).startswith("Sorry, I can't")
     assert hr._turn_error_text(meta, _ERROR, None).startswith("Sorry, I can't")

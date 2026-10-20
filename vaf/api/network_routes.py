@@ -50,12 +50,13 @@ def _access_port() -> int:
 
 @router.get("/ws-config")
 def get_ws_config(request: Request):
-    """Return the WebSocket transport the CALLER should use — and it differs for LAN vs the local desktop.
+    """Return the WebSocket transport the CALLER should use, which differs for LAN vs the local desktop.
 
     LAN clients reach us through the integrated HTTPS proxy, which stamps `X-Forwarded-Proto: https`; they
     get a wss:// URL on the effective proxy port (e.g. 8443 after the 443 fallback) - same secure origin.
-    The web UI on an HTTPS page does not ask: it dials its own origin, because a port forward or a NAT
-    makes the port it dialled differ from the one the proxy bound, and only the page knows the former.
+    The web UI does not ask from any HTTPS page, nor from an HTTP page on port 80 or with no explicit
+    port in its URL: it dials its own origin, because a proxy served that page, and a port forward or a
+    NAT makes the port it dialled differ from the one the proxy bound; only the page knows the former.
 
     The local DESKTOP window loads the frontend on plain http://127.0.0.1:3000, and its /api calls hit the
     internal 8005 channel WITHOUT that header. It must get a PLAIN ws:// URL to a local port, never wss://:

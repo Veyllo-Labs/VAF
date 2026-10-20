@@ -67,3 +67,32 @@ def test_an_https_page_dials_its_own_origin():
     condition = same_origin.group(1)
     assert "window.location.protocol === 'https:'" in condition
     assert "8443" not in condition
+
+
+def test_the_docs_name_the_same_three_same_origin_cases():
+    """The client dials its own origin from any HTTPS page AND from an HTTP page on port 80 or
+    with no explicit port (`window.location.port` is '' then). The two docs and the route's
+    docstring each said less, or something vaguer ("the default port"), than the condition
+    does. MUTATION: drop "port 80" from NETWORK_FEATURES.md, or `port === ''` from page.tsx,
+    and this goes red."""
+    import inspect
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    src = (root / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    condition = re.search(r"if \(([^{]*)\) \{\s*base = '';", src).group(1)
+    parts = {p.strip() for p in condition.split("||")}
+    assert parts == {"window.location.protocol === 'https:'", "port === '80'", "port === ''"}, parts
+
+    def flat(text):
+        return " ".join(text.split())
+
+    for name, text in (
+        ("WEBUI_WEBSOCKET_FLOW.md", (root / "docs" / "web-ui" / "WEBUI_WEBSOCKET_FLOW.md").read_text(encoding="utf-8")),
+        ("NETWORK_FEATURES.md", (root / "docs" / "setup" / "NETWORK_FEATURES.md").read_text(encoding="utf-8")),
+        ("get_ws_config", inspect.getdoc(nr.get_ws_config)),
+    ):
+        text = flat(text)
+        assert "HTTPS page" in text, name
+        assert "HTTP page on port 80 or with no explicit port" in text, name
+        assert "the default port" not in text, name

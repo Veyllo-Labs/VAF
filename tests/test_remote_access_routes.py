@@ -159,29 +159,38 @@ def test_a_save_without_a_base_is_taken_as_it_is(stored):
 _NO_NEW_PRIVS = "the no-new-privileges flag is set on this process, as systemd's NoNewPrivileges= sets it"
 
 
-@pytest.mark.parametrize("firewall_on, reason, expected", [
-    (True, None, True),
-    (True, _NO_NEW_PRIVS, False),
-    (False, None, False),
-], ids=["reapplied", "cannot-gain-root", "firewall-step-off"])
-def test_the_state_says_whether_the_firewall_is_reapplied(stored, monkeypatch, firewall_on,
-                                                          reason, expected):
+@pytest.mark.parametrize("firewall_on, server_mode, reason, expected", [
+    (True, False, None, "automatic"),
+    (True, True, None, "automatic"),
+    (True, True, _NO_NEW_PRIVS, "provision"),
+    (True, False, _NO_NEW_PRIVS, "manual"),
+    (False, True, None, "manual"),
+    (False, True, _NO_NEW_PRIVS, "manual"),
+], ids=["desktop", "server-run-as-root", "server-service", "no-root-off-a-server",
+        "firewall-step-off", "firewall-step-off-on-a-server"])
+def test_the_state_says_what_a_save_does_to_the_firewall(stored, monkeypatch, firewall_on,
+                                                         server_mode, reason, expected):
     """The save note promised "VAF adjusts the firewall" on a server whose service cannot
-    gain root. MUTATION: compute the field from the config key only - red."""
+    gain root. `vaf server provision` is named on a server only: it also switches server mode
+    on and replaces the database passwords, which a desktop, or an admin who switched the
+    firewall step off, did not ask for. MUTATIONS: compute it from the config key only;
+    name provision whatever server_mode says; drop the switched-off branch - red."""
     import vaf.network.firewall as fw
     stored["local_network_firewall_enabled"] = firewall_on
+    stored["server_mode"] = server_mode
     monkeypatch.setattr(fw, "elevation_unavailable", lambda: reason)
     client = _app()
-    assert client.get("/api/network/remote-access").json()["firewall_reapplied"] is expected
+    assert client.get("/api/network/remote-access").json()["firewall_after_save"] == expected
     saved = client.put("/api/network/remote-access", json={"allowed": [], "vpn_only": False})
     assert saved.status_code == 200, saved.text
-    assert saved.json()["firewall_reapplied"] is expected
+    assert saved.json()["firewall_after_save"] == expected
 
 
-def test_the_save_note_follows_whether_the_firewall_is_reapplied():
-    """The page reads the field and picks the note that names the command.
-    MUTATION: remove the branch from the component - red."""
+def test_the_save_note_follows_what_a_save_does_to_the_firewall():
+    """The page reads the field and picks one note per answer.
+    MUTATIONS: remove either branch from the component - red."""
     src = (Path(__file__).resolve().parents[1] / "web" / "components" / "settings"
            / "RemoteAccessSection.tsx").read_bytes().decode("utf-8")
-    assert re.search(r"firewall_reapplied\s*:\s*boolean", src)
-    assert re.search(r"firewall_reapplied\s*===\s*false\s*\?\s*t\('savedFirewallByHand'\)\s*:\s*t\('saved'\)", src)
+    assert re.search(r"firewall_after_save\s*:\s*'automatic'\s*\|\s*'provision'\s*\|\s*'manual'", src)
+    assert re.search(r"after\s*===\s*'provision'\s*\?\s*t\('savedFirewallProvision'\)", src)
+    assert re.search(r"after\s*===\s*'manual'\s*\?\s*t\('savedFirewallManual'\)\s*:\s*t\('saved'\)", src)

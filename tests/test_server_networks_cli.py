@@ -95,10 +95,29 @@ def _said(result) -> str:
 def test_an_admission_change_points_at_provision(settings):
     """"A running VAF re-applies the firewall" was false on a server, whose service cannot
     gain root; the note says where the step lives there. MUTATION: restore the old note - red."""
+    settings["server_mode"] = True
     said = _said(runner.invoke(server_cmd.app, ["networks", "allow", "10.20.0.0/16"]))
     assert "Admitted 10.20.0.0/16" in said
     assert "sudo -v && vaf server provision" in said
     assert "a running VAF re-applies the firewall within about 25 seconds. Nothing restarts." not in said
+
+
+@pytest.mark.parametrize("server_mode, firewall_step, expected", [
+    (False, True, "tries to apply this to the OS firewall"),
+    (True, False, "local_network_firewall_enabled"),
+], ids=["desktop", "firewall-step-off"])
+def test_provision_is_named_on_a_server_with_the_firewall_step_only(settings, server_mode,
+                                                                    firewall_step, expected):
+    """`vaf server provision` switches server mode on, replaces the database passwords and
+    opens the firewall; a desktop, or an admin who switched the firewall step off, must not
+    be sent there. MUTATIONS: name provision whatever server_mode says; drop the
+    switched-off branch - red."""
+    settings["server_mode"] = server_mode
+    settings["local_network_firewall_enabled"] = firewall_step
+    said = _said(runner.invoke(server_cmd.app, ["networks", "allow", "10.20.0.0/16"]))
+    assert "Admitted 10.20.0.0/16" in said
+    assert expected in said
+    assert "vaf server provision" not in said
 
 
 def test_status_shows_the_interfaces_with_their_access_url(settings):

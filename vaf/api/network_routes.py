@@ -164,18 +164,37 @@ def get_connections():
 # The web half of the "Remote access (VPN)" settings; `vaf server networks` and
 # `vaf server vpn-only` are the CLI half. Both write the same two keys through the same
 # check (binding.normalize_allowed_networks). The access check reads them on every
-# request; the tray sees the save and re-applies the OS firewall, without a restart,
-# where this process can gain root. The server's service cannot
-# (vaf.network.firewall.elevation_unavailable); `firewall_reapplied` tells the page which
-# of the two it is, so its save note does not promise a firewall change that never comes.
+# request; the tray sees the save and tries to apply it to the OS firewall, without a
+# restart, where this process can gain root. The server's service cannot
+# (vaf.network.firewall.elevation_unavailable); `firewall_after_save` tells the page what
+# a save does to the firewall, so its note neither promises a change that never comes nor
+# sends anyone to a command that does more than they asked for.
 
 _MESH_VPN_NETWORK = "100.64.0.0/10"
+
+
+def _firewall_after_save() -> str:
+    """What a saved change does to the OS firewall, for the note the page shows.
+
+    "automatic": the firewall step is on and this process may gain root, so the running
+    VAF tries to apply it (a password dialog with firewalld; ufw and iptables still need
+    passwordless sudo, so it is an attempt, not a promise). "provision": a server whose
+    service cannot gain root; `vaf server provision` from a login shell is that install's
+    firewall step. "manual": VAF does not touch the OS firewall here, because its step is
+    switched off or this process cannot gain root on an install that is not a server.
+    Deliberate: provision is named on a server only, since it also switches server mode on
+    and replaces the database passwords."""
+    from vaf.network.firewall import elevation_unavailable
+    if not Config.get_bool("local_network_firewall_enabled", True):
+        return "manual"
+    if elevation_unavailable() is None:
+        return "automatic"
+    return "provision" if Config.get_bool("server_mode", False) else "manual"
 
 
 def _remote_access_state(request: Request) -> dict:
     from vaf.network.binding import (connection_client_ip, inbound_policy, is_allowed_ip,
                                      local_interfaces)
-    from vaf.network.firewall import elevation_unavailable
     from vaf.network.ssl_utils import certificate_ip_addresses
 
     policy = inbound_policy(detect_vpn=True)
@@ -208,10 +227,7 @@ def _remote_access_state(request: Request) -> dict:
         "mesh_vpn_network": _MESH_VPN_NETWORK,
         "mesh_vpn_admitted": any(a == _MESH_VPN_NETWORK for a in policy.allowed),
         "your_address": connection_client_ip(request),
-        # Whether a change of the admitted networks reaches the OS firewall without anyone
-        # at a terminal: the firewall step is on, and this process can gain root.
-        "firewall_reapplied": (Config.get_bool("local_network_firewall_enabled", True)
-                               and elevation_unavailable() is None),
+        "firewall_after_save": _firewall_after_save(),
     }
 
 

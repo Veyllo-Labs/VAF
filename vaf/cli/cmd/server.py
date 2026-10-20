@@ -279,10 +279,11 @@ def server_provision(
 #
 # The CLI half of the "Remote access (VPN)" settings. Both write the same two keys and
 # go through the same check (binding.normalize_allowed_networks). The access check reads
-# the file on every request, without a restart. A VAF in a desktop session re-applies the
-# OS firewall within about 25 seconds (the tray polls the file); the server's service
-# cannot gain root (vaf.network.firewall.elevation_unavailable), so there the operator
-# runs `vaf server provision`, which _applied_note says. Named boundary: like the rest of this group there is no
+# the file on every request, without a restart. A VAF in a desktop session tries to apply
+# it to the OS firewall within about 25 seconds (the tray polls the file); the service the
+# server installer sets up cannot gain root (vaf.network.firewall.elevation_unavailable),
+# so there the operator runs `vaf server provision`, which _applied_note says on a server
+# only. Named boundary: like the rest of this group there is no
 # admin-password door, because install.sh runs it without a terminal, and the config
 # file is writable only by the same OS user anyway.
 
@@ -336,12 +337,21 @@ def _still_admitted(entry: str) -> list:
 
 
 def _applied_note() -> None:
-    # True on both kinds of install: this command runs in the operator's shell and cannot
-    # tell which VAF is running, and only a desktop session's VAF can gain root.
+    # This command runs in the operator's shell, not in the running VAF, so it judges the
+    # install by the config both read. `vaf server provision` is named on a server only: it
+    # switches server mode on, replaces the database passwords and opens the firewall, which
+    # a desktop, or an admin who switched the firewall step off, did not ask for.
     UI.info("The access check uses this at once; nothing restarts.")
-    UI.info("A VAF in a desktop session re-applies the OS firewall within about 25 seconds. "
-            "A server's service cannot gain root: if the server's own firewall guards the "
-            "access port, run `sudo -v && vaf server provision`.")
+    if not Config.get_bool("local_network_firewall_enabled", True):
+        UI.info("VAF's firewall step is switched off (local_network_firewall_enabled), so the "
+                "OS firewall stays as it is: if it guards the access port, open the port by hand.")
+    elif Config.get_bool("server_mode", False):
+        UI.info("The service the server installer sets up cannot gain root, so it leaves the OS "
+                "firewall as it is: if this server's own firewall guards the access port, run "
+                "`sudo -v && vaf server provision`.")
+    else:
+        UI.info("A running VAF tries to apply this to the OS firewall within about 25 seconds "
+                "(with firewalld, a password dialog asks for it).")
 
 
 @networks_app.command("list")

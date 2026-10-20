@@ -247,13 +247,17 @@ entries, and a "VPN only" with no VPN up and nothing listed.
 **Who reads it.** The IP check (`is_allowed_ip`, every request and every WebSocket
 handshake), the OS firewall (`firewall_sources()`, see Layer 1), and the shown access
 addresses (`access_addresses()`: the settings, `vaf top`, `vaf server status`). The
-access check takes a change at once; the firewall is re-applied by the running app when
+access check takes a change at once; the running app tries to re-apply the firewall when
 `local_network_allowed_networks` or `local_network_vpn_only` change (one password
-dialog on a desktop with firewalld), with no restart, where that app can gain root. The
-server's service cannot (Layer 1), so there the change reaches the OS firewall only through
-`sudo -v && vaf server provision`; `vaf server networks` and the web settings name that
-command after every change (the settings read `firewall_reapplied` from
-`GET /api/network/remote-access`). Certificates carry every LAN and
+dialog on a desktop with firewalld; ufw and iptables need passwordless sudo), with no
+restart, where that app can gain root. The server's service cannot (Layer 1), so there the
+change reaches the OS firewall only through `sudo -v && vaf server provision`. After every
+change `vaf server networks` and the web settings say which of these holds: the settings
+read `firewall_after_save` from `GET /api/network/remote-access` (`automatic`, `provision`
+or `manual`), the CLI reads `server_mode` and `local_network_firewall_enabled`. The
+provision command is named on a server only, because it also switches server mode on and
+replaces the database passwords; with the firewall step switched off, or a process that
+cannot gain root on another install, the note says to open the port by hand. Certificates carry every LAN and
 VPN address (see "How Auto-SSL Works").
 
 Named boundaries: Windows names a WireGuard adapter after its tunnel file, so it reads as
@@ -487,7 +491,7 @@ With this lock enabled, attempts to disable hosting in the UI/API are ignored an
 
 Changes to network settings trigger an automatic, orchestrated restart of the frontend and backend services to apply new bindings (e.g., switching from `127.0.0.1` to `0.0.0.0`). Enabling or disabling Local Network flips several config keys in one save; VAF coalesces them into a single restart. Disabling Local Network actually **stops** the integrated HTTPS proxy (8443) and the internal 8005 channel, so LAN access truly closes. The permanent firewalld rule remains (harmless - nothing is listening on the port).
 
-Who is admitted (`local_network_allowed_networks`, `local_network_vpn_only`) restarts nothing: the IP check reads it on every request, and the running app re-applies the OS firewall for the new networks (`apply_lan_firewall` in `vaf/network/firewall.py`, also what the start runs) where it can gain root; the server's service cannot and logs once why instead. The key lists live once in `vaf/core/config.py` (`NETWORK_RESTART_KEYS`, `NETWORK_ADMISSION_KEYS`); the tray and its file poll read them.
+Who is admitted (`local_network_allowed_networks`, `local_network_vpn_only`) restarts nothing: the IP check reads it on every request, and the running app tries to re-apply the OS firewall for the new networks (`apply_lan_firewall` in `vaf/network/firewall.py`, also what the start runs) where it can gain root; the server's service cannot and logs once why instead. The key lists live once in `vaf/core/config.py` (`NETWORK_RESTART_KEYS`, `NETWORK_ADMISSION_KEYS`); the tray and its file poll read them.
 
 When TLS is enabled, firewall setup uses the effective HTTPS access port (`local_network_https_port`, or `8443` when `443` is privileged on any platform) so LAN clients can reach the proxy entry point. On Linux, firewalld is preferred: it opens only that effective proxy port for the LAN subnet via a rich rule, elevating through pkexec (desktop GUI dialog) or `sudo -n` (headless); a process that cannot gain root (`elevation_unavailable()`: the no-new-privileges flag, or a user namespace without root, as in the server's systemd service) does not try and logs once why.
 On Windows, creating firewall rules via `netsh advfirewall` requires elevated rights. If VAF is not started as Administrator, LAN access can fail even when hosting is enabled.

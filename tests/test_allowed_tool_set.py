@@ -325,3 +325,75 @@ def test_the_facade_passes_the_set_to_a_live_engine(agent):
     assert agent.execute_tool("list_contacts", {}).startswith("Security Error:")
     facade.set_allowed_tools(None)
     assert agent._allowed_tools is None
+
+
+# ── the lanes that start tools without the model's call ──────────────────────
+
+def _facade_turn(monkeypatch, tmp_path, allowed):
+    """`vaf.Agent.run("@youtube_summary <url>")`, the explicit workflow prefix. Every tool
+    the turn dispatches is recorded instead of run; a workflow process is never started."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
+    # The facade setdefaults this; deleting it first makes monkeypatch restore the absence.
+    monkeypatch.delenv("VAF_NONINTERACTIVE", raising=False)
+    import vaf.core.tool_dispatch as td
+    import vaf.workflows.background as bg
+    ran, spawned, tried = [], [], []
+    monkeypatch.setattr(bg, "enabled", lambda *a, **kw: False)
+    monkeypatch.setattr(bg, "spawn_saved", lambda *a, **kw: spawned.append(a))
+    monkeypatch.setattr(td, "run_tool_bounded",
+                        lambda tool, args, tool_name=None, **kw: ran.append(tool_name) or f"ran {tool_name}")
+    facade = vaf.Agent(config={"provider": "deepseek", "api_key_deepseek": "sk-test"})
+    if allowed is not None:
+        facade.set_allowed_tools(allowed)
+    core = facade.core
+    real = core._try_workflow
+    monkeypatch.setattr(core, "_try_workflow", lambda *a, **kw: tried.append(a) or real(*a, **kw))
+    core.api_backend.chat_completion = lambda messages=None, **kw: iter(["Gern."])
+    facade.run("@youtube_summary https://www.youtube.com/watch?v=abc123")
+    return ran, spawned, tried
+
+
+def test_an_explicit_workflow_runs_without_a_set(monkeypatch, tmp_path):
+    """Control: the prefix runs the workflow with no model call in between."""
+    ran, _, tried = _facade_turn(monkeypatch, tmp_path, None)
+    assert tried, "the workflow router was not asked"
+    assert ran, "the workflow ran no step"
+
+
+def test_an_explicit_workflow_does_not_run_past_the_set(monkeypatch, tmp_path):
+    """MEASURED: with the set EMBEDDING.md's own example gives, `@youtube_summary <url>`
+    ran python_sandbox, coding_agent and write_file - the explicit lane builds its engine
+    from the whole registry plus the coder-only tools, inline or in a process of its own."""
+    allowed = {"web_search", "send_telegram", "contact_history"}
+    ran, spawned, tried = _facade_turn(monkeypatch, tmp_path, allowed)
+    assert set(ran) <= allowed, f"dispatched outside the set: {sorted(set(ran) - allowed)}"
+    assert tried == [], "the workflow router ran under a set"
+    assert spawned == []
+
+
+def test_the_python_exec_fallback_stays_off_outside_the_set(agent, monkeypatch):
+    """python_sandbox refusing a piece of code is answered by offering python_exec. Under a
+    set without python_exec that call is refused, and the answer used to wrap the refusal in
+    "it went to python_exec, which runs it UNSANDBOXED"."""
+    monkeypatch.delenv("VAF_IN_SUBAGENT_TERMINAL", raising=False)
+
+    class _Sandbox(vaf.BaseTool):
+        name = "python_sandbox"
+        description = "runs code"
+        permission_level = "read"
+        parameters = {"type": "object", "properties": {"code": {"type": "string"}}}
+
+        def run(self, **kwargs):
+            return "Security Error: the sandbox refused this code"
+
+    agent.tools["python_sandbox"] = _Sandbox()
+    agent._current_chat_source = "web"
+    agent._noninteractive = True      # nobody to ask: the gate answers with a refusal string
+    assert "python_exec" in agent.execute_tool("python_sandbox", {"code": "print(1)"}), (
+        "control: without a set the fallback is offered")
+
+    agent.set_allowed_tools({"python_sandbox", "web_search"})
+    out = agent.execute_tool("python_sandbox", {"code": "print(1)"})
+    assert out.startswith("Security Error: the sandbox refused"), out
+    assert "python_exec" not in out, out

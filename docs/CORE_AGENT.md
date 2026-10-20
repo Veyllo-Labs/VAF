@@ -229,7 +229,10 @@ the dispatch funnel (`ToolCaller(allowed_tools=)`), which refuses any other name
 `Security Error: ...` before the policy stage. No identity is exempt, unlike the account
 allowlist: the set exists for an agent that answers somebody else under its owner's
 identity. An empty set allows nothing; a bare string raises `TypeError`. Every call clears
-the current step's tool scope. In-process only, like the authorizer. Contract:
+the current step's tool scope. While a set holds, `chat_step` does not run the workflow
+router (an explicit `@workflow_id` would otherwise run a workflow past the set) and
+handles `thinking_done` inline only when it is inside the set. Not inherited by a
+sub-agent or a workflow that a tool in the set starts. Contract:
 [EMBEDDING.md](EMBEDDING.md), "Which tools this agent may use".
 
 ## Putting state back after a compaction

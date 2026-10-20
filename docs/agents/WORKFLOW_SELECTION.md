@@ -52,6 +52,8 @@ Before the LLM router runs, `_try_workflow()` checks cheap fast guards. If any m
 | `VAF_IN_AUTOMATION` env var is set | Automation tasks have their own `workflow_steps`; routing would double-execute. |
 | `"CURRENT DOCUMENT (Editor)"` in input | User is editing a document; use `replace_editor_selection` / `document_editor` tools instead. |
 
+One step earlier, `chat_step` does not call `_try_workflow()` at all for a background thinking run, an internal step (`skip_input`), a caller that passes `disable_workflows=True` (the headless runner does for chat channels and mail), and while the agent has an allowed tool set (`set_allowed_tools`). The last one includes the explicit `@workflow_id` prefix: that lane runs a workflow with no model call in between, on an engine built from the whole registry plus the coder-only tools, so under a set it would run every step past the set (measured: `@youtube_summary <url>` reached `python_sandbox`, `coding_agent` and `write_file`). The workflow and skill suggestions are skipped with it. Guard: `tests/test_allowed_tool_set.py`.
+
 ### Step 2 - LLM Router
 
 ```

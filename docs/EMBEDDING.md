@@ -1542,10 +1542,16 @@ The contract:
   the model has written a plan with `update_working_memory`; a set without that
   tool turns the gate off for the agent, because a gate whose only way out is a
   refused tool would hold every write tool for good.
-- **In-process only, like the authorizer.** A sub-agent or a workflow process
-  started while the set holds does not inherit it, so a set meant to contain an
-  agent should not name a tool that starts one (`coding_agent`,
-  `execute_workflow`, ...).
+- **Nothing starts a workflow behind the model's back.** While a set holds, the
+  workflow router does not run: an explicit `@workflow_id` at the start of the
+  input is left to the model like any other text, and no workflow or skill
+  suggestion is added. Without this, the prefix ran the workflow on its own
+  engine, built from the whole registry, with no model call in between.
+- **Not inherited by what a tool starts.** The set binds the agent's own calls.
+  A sub-agent, or a workflow a tool in the set starts (inline or in a process of
+  its own), runs its steps without it, so a set meant to contain an agent should
+  not name a tool that starts one (`coding_agent`, `execute_workflow`,
+  `create_agent_workflow`, ...).
 
 VAF's own product uses exactly this for its Front Office: when the agent answers
 a contact on WhatsApp, Telegram, Discord or mail, the queue runner calls
@@ -2275,7 +2281,8 @@ Stable public surface (safe to build on):
   with `deny()` / `ask()` / `allow()` and its context fields.
 - `set_allowed_tools(names)` on both `Agent` and `CoreAgent`, and `ToolCaller(allowed_tools=)` -
   the agent's allowed tool set, with the contract its section documents (offering and
-  execution, no identity exempt, `None` lifts, empty allows nothing, in-process only).
+  execution, no identity exempt, `None` lifts, empty allows nothing, no workflow router while
+  it holds, not inherited by what a tool starts).
 - `vaf.set_account_allowlist_resolver(fn)` - the per-account tool allowlist hook,
   with the contract its section documents (None/unregistered = unrestricted,
   empty = nothing, exemptions framework-side, raising = refusal, and the

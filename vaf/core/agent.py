@@ -9947,6 +9947,13 @@ class Agent:
         # because "script" sits inside "description", and pushed host_bash out of the capped
         # set). A tool the notes point at is pinned instead (_note_tools_this_turn).
         _route_text = raw_user_input or user_input
+        # Not while the agent has an allowed set (set_allowed_tools): the explicit
+        # `@workflow_id` lane runs a workflow with no model call in between, on an engine
+        # built from the whole registry plus the coder-only tools, inline or in a process
+        # of its own - every step past the set. The suggestion notes go with it: the tools
+        # they point at are outside the set unless it names them.
+        if getattr(self, "_allowed_tools", None) is not None:
+            disable_workflows = True
         # Never run the workflow router during a background thinking run: it would match the thinking
         # PROMPT itself (which contains phrases like "automatisch um 7:00"/"create automation") and prepend
         # a "[WORKFLOW SUGGESTION] Create Scheduled Task" nudge — with garbage variables (every var "07:00")
@@ -11761,7 +11768,16 @@ class Agent:
                     # ═══════════════════════════════════════════════════════════════
                     # THINKING DONE PROTECTION: Hardcoded break
                     # ═══════════════════════════════════════════════════════════════
-                    if function_name == "thinking_done":
+                    # Only in a thinking turn, and only inside the agent's allowed set. This
+                    # branch runs BEFORE execute_tool, so neither its thinking-only guard nor the
+                    # funnel's allowed set sees the call; matched on the name alone, a contact's
+                    # turn could deliver a message to the owner's messenger and record a
+                    # proposal the owner's next "yes" would carry out. Anywhere else the call
+                    # takes the normal path below, where it is refused.
+                    if (function_name == "thinking_done"
+                            and getattr(self, "_current_turn_thinking_mode", False)
+                            and (getattr(self, "_allowed_tools", None) is None
+                                 or function_name in self._allowed_tools)):
                         raw_args = tc['function']['arguments']
                         try:
                             arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
@@ -13761,7 +13777,9 @@ class Agent:
             and not is_channel_session
             and isinstance(result, str)
             and result.startswith("Security Error:")
-            and "python_exec" in self.tools
+            # Visible, not merely registered: outside the agent's allowed set python_exec is
+            # refused, and the answer would wrap that refusal in "it went to python_exec".
+            and "python_exec" in self.visible_tools()
         ):
             # A sub-agent cannot put a question to a person reliably, so the fallback is not
             # offered there at all.
@@ -13884,9 +13902,12 @@ class Agent:
 
         No identity is exempt, unlike the account allowlist (which exempts admins and
         callers with no scope): the set exists for an agent that answers a third party
-        under its owner's identity. In-process only, like the authorizer: a sub-agent or a
-        workflow process started while a set holds does not inherit it, so a set meant to
-        contain a turn should not name a tool that starts one.
+        under its owner's identity. Nothing starts tools behind the model's back while a set
+        holds: ``chat_step`` skips the workflow router (whose explicit ``@workflow_id`` lane
+        runs a workflow with no model call in between) and handles ``thinking_done`` before
+        dispatch only when the set names it. Not inherited by what a tool starts: a sub-agent
+        or a workflow started by a tool in the set runs without it, so a set meant to contain
+        a turn should not name a tool that starts one.
 
         Every call also clears the current step's tool scope (``_active_tools``), so the
         next step starts from the new set instead of a scope chosen before it.

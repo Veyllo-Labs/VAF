@@ -14,8 +14,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ### Added
 
 - **`Agent.set_allowed_tools(names)`** fixes which tools an agent offers and runs, for every
-  identity, until lifted with `None`; `ToolCaller(allowed_tools=)` is the same for a lane of
-  your own. See "Which tools this agent may use" in `docs/EMBEDDING.md`.
+  identity, until lifted with `None`, so an agent that answers a stranger cannot use your
+  own tools; `ToolCaller(allowed_tools=)` is the same for a lane of your own. See "Which
+  tools this agent may use" in `docs/EMBEDDING.md`.
 
 - **A restore shows in the security log.** `vaf backup restore` replaces every account, key
   and chat of the machine; it is now the security event "Backup restored", with the backup,
@@ -73,12 +74,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
-- **Inbound answers contacts with their tools only.** When the agent answers a contact, the
-  tool router used to replace the Inbound tool list with the owner's memory, contact and
-  identity tools, and any other tool the model named still ran. A contact's turn now gets
-  exactly the Inbound tools (the send tools for the back-channel, web search, the contact's
-  own history), everything else is refused, and the note to the owner no longer waits for
-  a plan.
+- **Inbound answers contacts with their tools only.** When the agent answered a contact, it
+  could still reach your memory, your contact book and your identity settings, any other
+  tool the model named still ran, and a contact could make it send you a suggestion as if
+  it came from the agent's own background thinking, which your next "yes" would have
+  carried out. A contact's turn now gets exactly the Inbound tools (the send tools for the
+  note to you, web search, the contact's own history) and everything else is refused. The
+  note to you about a contact now reaches you on the first try. Restart VAF after updating
+  so the fix takes effect.
 
 - **Archived chats, agent rooms and word suggestions are encrypted on disk like the chats.**
   Their writers already encrypted every new file, but the start-up sweep that encrypts what

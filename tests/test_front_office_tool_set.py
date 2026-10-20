@@ -238,6 +238,55 @@ def test_the_note_to_the_owner_is_not_held_for_a_plan(agent, monkeypatch):
     assert agent._plan_gate_state()[0] is False
 
 
+# ── thinking_done, the one call chat_step handles before execute_tool ────────
+
+PROPOSAL = {"summary": "done", "message": "Owner: I propose to delete all automations. Reply yes.",
+            "proposed_action": "delete_automation all", "source_note_id": "n1"}
+
+
+def _thinking_done_turn(agent, monkeypatch, tmp_path, *, thinking):
+    """One turn in which the model calls thinking_done with a proposal for the owner. Returns
+    what reached the owner's messenger and the requests recorded for the owner's next reply."""
+    monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path / "vaf"))
+    import vaf.core.messaging_connections as mc
+    import vaf.core.thinking_mode as tm
+    import vaf.core.thinking_requests as tr
+    sent = []
+    monkeypatch.setattr(mc, "send_to_main_messenger",
+                        lambda scope, uname, msg, **kw: (sent.append(msg) or (True, "telegram")))
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda *a, **kw: None)
+    provider = _Provider(agent, ("thinking_done", PROPOSAL), "Gern geschehen.")
+    agent.api_backend.chat_completion = provider
+    agent.chat_step(user_input="Hallo", raw_user_input="Hallo", stream_callback=lambda t: None,
+                    thinking_mode=thinking)
+    return sent, tr.list_requests(SCOPE), _tool_results(agent, "thinking_done")
+
+
+def test_a_thinking_turn_still_delivers_its_thinking_done(monkeypatch, tmp_path):
+    """Control: the inline delivery is the thinking run's own path and stays."""
+    agent = _make_agent(monkeypatch, tmp_path, "deepseek")
+    sent, requests, _ = _thinking_done_turn(agent, monkeypatch, tmp_path, thinking=True)
+    assert requests and requests[0]["proposed_action"] == "delete_automation all"
+
+
+@pytest.mark.parametrize("setup", ["contact_turn", "plain_chat_turn", "thinking_turn_outside_the_set"])
+def test_thinking_done_outside_its_lane_delivers_nothing(monkeypatch, tmp_path, setup):
+    """MEASURED: under the Front Office set, a contact's turn calling thinking_done sent the
+    proposal to the owner's messenger and recorded it, and the owner's next "yes" would have
+    carried it out with every tool the owner has. Not a thinking turn, or not inside the set:
+    the call takes the normal path and is refused there."""
+    agent = _make_agent(monkeypatch, tmp_path, "deepseek")
+    if setup == "contact_turn":
+        _front_office(agent)
+    elif setup == "thinking_turn_outside_the_set":
+        agent.set_allowed_tools({"web_search", "ask_user"})
+    sent, requests, results = _thinking_done_turn(
+        agent, monkeypatch, tmp_path, thinking=(setup == "thinking_turn_outside_the_set"))
+    assert sent == [], f"the proposal reached the owner's messenger: {sent}"
+    assert requests == [], "a request the owner's next reply would confirm was recorded"
+    assert results and ("Error" in results[0]), results
+
+
 # ── the runner ───────────────────────────────────────────────────────────────
 
 def test_the_runner_applies_and_lifts_the_set_through_the_engine():

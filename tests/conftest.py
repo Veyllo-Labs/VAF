@@ -561,13 +561,15 @@ def _isolated_threat_db(tmp_path_factory):
 #
 # `execute_tool` itself is in the list because the dispatcher re-enters itself: the
 # `multi_tool_use.parallel` wrapper runs each call it carries through the front door again,
-# so a fake that can be dispatched must also be re-enterable.
+# so a fake that can be dispatched must also be re-enterable. `visible_tools` is the answer
+# the stages ask about what the model may see (the python_exec fallback asks it), and the
+# real one reads the fake's own registry, exclusions and allowed set.
 CHAT_STAGES = (
     "execute_tool", "_dispatch_session_id", "_is_channel_turn",
     "_chat_turn_gates", "_chat_session_plumbing", "_chat_post_dispatch",
     "_chat_after_dispatch_bookkeeping", "_ask_user_about_gate",
     "_push_gate_to_websocket", "_run_multi_tool_use", "_announce_held_send",
-    "_close_turn", "_close_turn_if_declared", "_fanout_for",
+    "_close_turn", "_close_turn_if_declared", "_fanout_for", "visible_tools",
 )
 
 

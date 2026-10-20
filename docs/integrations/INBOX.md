@@ -188,7 +188,9 @@ search mail with `find_mail`, never call `inbox` again for the same request), th
 counts and one line per conversation, then the "IDs by index" block `read_mail` needs; mail
 rows pass the same phishing filter the mail tools apply. The Telegram and Discord indexes
 are re-projected from the session files before listing, as their tools did; nothing waits on
-a bridge. The tool is not in the Front Office allow-list.
+a bridge. A failed turn's stored text is not projected (`session.model_text`): it never went
+out on the channel, so it is no outgoing row, and a contact's message it failed to answer
+stands unanswered. The tool is not in the Front Office allow-list.
 
 ## Command line
 

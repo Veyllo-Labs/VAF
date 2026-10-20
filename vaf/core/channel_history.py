@@ -63,14 +63,19 @@ def _session_rows(session, channel: str) -> List[Dict[str, Any]]:
         chat_name = str(meta.get("chat_name") or getattr(session, "name", "") or "").strip()
     except Exception:
         chat_name = ""
+    from vaf.core.session import model_text
     rows: List[Dict[str, Any]] = []
     for idx, m in enumerate(getattr(session, "messages", []) or []):
         role = getattr(m, "role", "")
         if role not in ("user", "assistant"):
             continue
-        body = getattr(m, "content", "")
-        if not isinstance(body, str):
-            body = str(body)
+        # What a model may read of the message (session.model_text). A failed turn's stored
+        # text never left on the channel (a contact got a fixed sentence), and this index
+        # feeds tools a model reads, `contact_history` on a contact's own turn among them;
+        # an answer loses the failure that followed it.
+        body = model_text(m)
+        if body is None:
+            continue
         body = body.strip()
         if not body:
             continue

@@ -62,6 +62,18 @@ def is_error_reply(text) -> bool:
     return _ERROR_SENTINEL in text or _ENGINE_ERROR in text
 
 
+def is_stop_note(text) -> bool:
+    """True when a text IS a loop-protection stop note: it begins with the
+    `[LOOP_PROTECTION]` marker (`vaf.markers.LOOP_PROTECTION`), after the warning sign the
+    engine puts in front. A reply that mentions the marker further in, explaining what such
+    a stop means, is an answer and not a stop."""
+    if not isinstance(text, str):
+        return False
+    from vaf.markers import LOOP_PROTECTION
+    head = text.lstrip().removeprefix("⚠").removeprefix("️").lstrip()
+    return head.startswith(LOOP_PROTECTION)
+
+
 def is_failure_chunk(chunk) -> bool:
     """True for the content chunk a provider yields in place of an answer when it fails: the
     `[API Error from <provider>: ...]` sentinel, which api_backend yields as one whole chunk,

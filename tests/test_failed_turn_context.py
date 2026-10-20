@@ -131,6 +131,46 @@ def test_the_backends_own_error_chunk_ends_the_round(engine):
     assert not any("SDK missing" in str(m.get("content")) for m in engine.history)
 
 
+@pytest.mark.parametrize("second, trace", [
+    (_fails_with_the_sentinel, "sk-proj-****abcd"),
+    (_raises, _PATH_ERROR),
+], ids=["sentinel", "raises"])
+def test_a_turn_that_answered_before_a_round_failed_keeps_its_answer(engine, monkeypatch,
+                                                                    second, trace):
+    """The auto-continue re-enters a turn after an answer was validated, committed and
+    shown. When that later round fails, the turn HAS answered: it returns the answer and is
+    not failed, so a contact gets the answer. The failure stays in the stream (nothing
+    streamed is erased) and in `_turn_failure`, never in the history, and a stored copy
+    reads back as the answer alone. MUTATION: drop the `if kept_turn_answers` branch of
+    `_end_turn_without_answer` - red."""
+    from vaf.core.session import Message, failed_turn_meta, model_text
+    calls = {"n": 0}
+
+    def answers_then_fails():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            yield "Ihr Termin ist am Montag um 10 Uhr."
+            return
+        yield from second()
+
+    # One open step in the working memory makes the turn continue after its answer.
+    monkeypatch.setattr(engine.main_persistence, "_current_step",
+                        lambda tasks: (0, "Termin bestätigen", 0, 2))
+    monkeypatch.setattr(engine, "_reply_needs_user", lambda text: False)
+    streamed, returned = engine.turn("Wann ist mein Termin?", answers_then_fails)
+    assert calls["n"] == 2, "the turn did not continue after its answer"
+    assert returned.strip() == "Ihr Termin ist am Montag um 10 Uhr."
+    assert engine._turn_failed is False and trace in engine._turn_failure
+    assert "Ihr Termin" in streamed and trace in streamed
+    assert any("Ihr Termin" in str(m.get("content")) for m in engine.history)
+    assert not any(trace in str(m.get("content")) for m in engine.history)
+
+    stored = Message(role="assistant", content=streamed,
+                     metadata=failed_turn_meta(engine._turn_failed, engine._turn_failure))
+    assert model_text(stored).startswith("Ihr Termin ist am Montag um 10 Uhr.")
+    assert trace not in model_text(stored)
+
+
 def test_a_loop_protection_stop_is_not_in_the_next_turns_context(engine, monkeypatch):
     """The budget stop names the owner's spend and a config key. MUTATION: put
     `self.history.append({"role": "assistant", "content": _sp_msg})` back - red."""
@@ -187,6 +227,7 @@ def test_the_replay_keeps_answers_and_drops_failures(engine):
                                             f"(~${_SPEND} of $5.00 estimated).")
     s.add_message(role="user", content="vier")
     s.add_message(role="assistant", content="Das Log zeigt: [Error] disk full. Ich räume auf.")
+    s.add_message(role="assistant", content="Ein [LOOP_PROTECTION]-Stopp heißt: die Runde war zu lang.")
     s.add_message(role="assistant", content="[API Error from x: y]",
                   tool_calls=[{"id": "call_9", "type": "function",
                                "function": {"name": "list_tools", "arguments": "{}"}}])
@@ -196,7 +237,9 @@ def test_the_replay_keeps_answers_and_drops_failures(engine):
 
     engine.reload(s.id)
     assistants = [str(m.get("content")) for m in engine.history if m.get("role") == "assistant"]
-    assert assistants == ["Das Log zeigt: [Error] disk full. Ich räume auf.", "[API Error from x: y]"]
+    assert assistants == ["Das Log zeigt: [Error] disk full. Ich räume auf.",
+                          "Ein [LOOP_PROTECTION]-Stopp heißt: die Runde war zu lang.",
+                          "[API Error from x: y]"]
     assert [m.get("content") for m in engine.history if m.get("role") == "user"] == [
         "eins", "zwei", "drei", "vier"]
 
@@ -226,6 +269,33 @@ def test_the_other_transcript_readers_skip_a_failed_turn(tmp_path, monkeypatch):
     assert [m["content"] for m in scanned] == ["Hallo", "Und?", "Erledigt."]
 
 
+def test_a_stop_note_is_one_that_begins_with_the_marker():
+    """A real answer that explains the marker is an answer. MUTATION: test for the marker
+    anywhere in the text - red."""
+    from vaf.core.completion import is_stop_note
+    assert is_stop_note("\u26a0\ufe0f [LOOP_PROTECTION] Hard stop enforced after 75 tool turns.")
+    assert is_stop_note("  [LOOP_PROTECTION] Wall-clock stop")
+    assert not is_stop_note("Ein [LOOP_PROTECTION]-Stopp heißt: die Runde war zu lang.")
+    assert not is_stop_note(None)
+
+
+def test_model_text():
+    """An answer that a later failure followed reads back without it; a failure the stored
+    text no longer holds verbatim drops the whole message, the safe side."""
+    from vaf.core.session import Message, failed_turn_meta, model_text
+    assert failed_turn_meta(False, "x") == {"turn_failure": "x"}
+    assert failed_turn_meta(True, "x") == {"turn_failed": True}
+    answered = Message(role="assistant", content="Erledigt.\n\n" + _KEY_ERROR,
+                       metadata=failed_turn_meta(False, _KEY_ERROR))
+    assert model_text(answered) == "Erledigt."
+    altered = Message(role="assistant", content="Erledigt. [API Error from openai: gekürzt]",
+                      metadata=failed_turn_meta(False, _KEY_ERROR))
+    assert model_text(altered) is None
+    assert model_text(Message(role="assistant", content=_KEY_ERROR,
+                              metadata=failed_turn_meta(True))) is None
+    assert model_text(Message(role="user", content="Hallo")) == "Hallo"
+
+
 def test_is_failed_turn():
     from vaf.core.session import Message, failed_turn_meta, is_failed_turn
     assert failed_turn_meta(False) is None
@@ -240,30 +310,42 @@ def test_is_failed_turn():
 def test_the_hosts_that_store_the_stream_mark_a_failed_turn():
     """The queue runner stores the streamed text (both of its save branches), the CLI and
     the TUI theirs (`_process_agent_message`, and `vaf run -p` with a saved session). Each
-    marks the copy from the engine's flag, read by the runner before anything else runs a
-    chat_step on that agent. MUTATION: drop the metadata from one save - red."""
+    marks the copy from the engine's flag and failure text, read by the runner before
+    anything else runs a chat_step on that agent, and the runner hands both to delivery.
+    MUTATION: drop the metadata from one save - red."""
     from vaf.cli.cmd import run
     from vaf.core import headless_runner as hr
     loop = inspect.getsource(hr.run_headless_agent)
-    assert loop.count("metadata=failed_turn_meta(_turn_failed))") == 2
+    assert loop.count("metadata=failed_turn_meta(_turn_failed, _turn_failure))") == 2
     assert loop.count('add_message(role="assistant", content=_clean_response') == 2
-    flag = '_turn_failed = bool(getattr(agent, "_turn_failed", False))'
-    assert loop.index(flag) < loop.index("_hallucination_detected = (")
-    assert "turn_failed=_turn_failed)" in loop
-    cli = inspect.getsource(run._process_agent_message) + inspect.getsource(run.prompt_once)
-    assert cli.count('metadata=failed_turn_meta(getattr(agent, "_turn_failed", False))') == 3
+    for flag in ('_turn_failed = bool(getattr(agent, "_turn_failed", False))',
+                 '_turn_failure = str(getattr(agent, "_turn_failure", "") or "")'):
+        assert loop.index(flag) < loop.index("_hallucination_detected = ("), flag
+    assert "turn_failed=_turn_failed, turn_failure=_turn_failure)" in loop
+    cli = " ".join((inspect.getsource(run._process_agent_message)
+                    + inspect.getsource(run.prompt_once)).split())
+    assert cli.count('metadata=failed_turn_meta(getattr(agent, "_turn_failed", False), '
+                     'getattr(agent, "_turn_failure", "")))') == 3
     assert cli.count('add_message("assistant"') == 3
 
 
-def test_every_engine_failure_exit_sets_the_flag():
-    """Every exit that returns the engine's text instead of an answer sets `_turn_failed`;
-    none of them appends that text to the history. MUTATION: drop the flag from one - red."""
+def test_every_engine_failure_exit_goes_through_the_one_closure():
+    """Every exit that ends a turn on the engine's text returns through
+    `_end_turn_without_answer`, which alone sets `_turn_failed`, and none of them appends
+    that text to the history. MUTATION: return one exit's text directly - red."""
     src = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
-    for exit_text in ('return "[Error] Server unavailable after retries.',
-                      "return err_msg", "return _sp_msg", "return _wc_msg", "return _kill_msg"):
-        for at in [i for i in range(len(src)) if src.startswith(exit_text, i)]:
-            before = src[max(0, at - 700):at]
-            assert "self._turn_failed = True" in before, exit_text
+    for exit_text in ("_end_turn_without_answer(_round_failure)",
+                      "_end_turn_without_answer(err_msg)",
+                      '_end_turn_without_answer("[Error] Server rejected the request',
+                      '_end_turn_without_answer("[Error] Server unavailable after retries.',
+                      "_end_turn_without_answer(_sp_msg)", "_end_turn_without_answer(_wc_msg)",
+                      "_end_turn_without_answer(_kill_msg)"):
+        assert f"return {exit_text}" in src, exit_text
+    assert src.count("return _end_turn_without_answer(err_msg)") == 2
+    assert src.count("self._turn_failed = True") == 1
+    for bare in ("return err_msg", "return _sp_msg", "return _wc_msg", "return _kill_msg",
+                 'return "[Error] Server'):
+        assert bare not in src, bare
     for stop in ("_sp_msg", "_wc_msg", "_kill_msg"):
         assert f'"content": {stop}}}' not in src, stop
 
@@ -273,3 +355,79 @@ def test_a_failure_chunk_is_a_chunk_that_begins_with_the_sentinel():
     assert is_failure_chunk(_KEY_ERROR)
     assert not is_failure_chunk("Die Meldung war " + _KEY_ERROR)
     assert not is_failure_chunk(None) and not is_failure_chunk({"content": _KEY_ERROR})
+
+
+# ── the Telegram and Discord message index, which contact_history reads ──────────────
+
+_SCOPE = "11111111-2222-3333-4444-555555555555"
+_TG = "7000000101"
+
+
+@pytest.fixture
+def index_world(monkeypatch, tmp_path):
+    """A Telegram contact chat on disk with a failed turn and a turn that answered before a
+    failure, the contact pinned the way the runner pins it. Isolated: tmp data dir and a
+    config of its own."""
+    import vaf.core.config as cfg_mod
+    from types import SimpleNamespace
+
+    from vaf.core import channel_message_store as cms
+    from vaf.core import contacts_store
+    from vaf.core.platform import Platform
+    from vaf.core.session import SessionManager, failed_turn_meta
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
+    state = {"local_admin_scope_id": _SCOPE, "local_admin_username": "alice"}
+    monkeypatch.setattr(cfg_mod.Config, "get",
+                        classmethod(lambda cls, key, default=None: state.get(key, default)))
+    monkeypatch.setattr(cfg_mod.Config, "load", classmethod(lambda cls: dict(state)))
+    cms._reset_announce_state()
+    bob = contacts_store.create_contact("Bob", "alice", user_scope_id=_SCOPE, telegram_user_id=_TG,
+                                        allow_as_assistant_user=True)
+    sm = SessionManager()
+    s = sm.new(model="m", project_path=str(tmp_path))
+    s.id = f"telegram_{_TG}"
+    s.metadata = dict(s.metadata or {}, username="alice", user_scope_id=_SCOPE)
+    s.add_message("user", "Können Sie die Bestellung prüfen?", metadata={"channel_message_id": "42"})
+    s.add_message("assistant", _KEY_ERROR, metadata=failed_turn_meta(True))
+    s.add_message("user", "Und mein Termin?")
+    s.add_message("assistant", "Ihr Termin ist am Montag.\n\n" + _PATH_ERROR,
+                  metadata=failed_turn_meta(False, _PATH_ERROR))
+    sm.save(s)
+    return SimpleNamespace(_front_office_contact=bob, _front_office_mode=True)
+
+
+def _contact_history(agent) -> str:
+    from vaf.tools.contact_history import ContactHistoryTool
+    return ContactHistoryTool().run(_agent=agent, username="alice", user_scope_id=_SCOPE)
+
+
+def test_the_owners_inbox_refresh_does_not_hand_a_contact_the_failure(index_world):
+    """The owner's `inbox` and `find_telegram_messages` rebuild the index from the stored
+    chats, and `contact_history` on the contact's next turn reads it. MUTATION: project
+    every stored assistant message in `_session_rows` (no `model_text`) - red."""
+    from vaf.core.telegram_history import sync_telegram_history
+    assert sync_telegram_history() > 0
+    out = _contact_history(index_world)
+    assert "Ihr Termin ist am Montag." in out and "Können Sie die Bestellung" in out
+    assert "sk-proj-****abcd" not in out and _PATH_ERROR not in out
+
+
+def test_a_contacts_own_edit_does_not_hand_them_the_failure(index_world):
+    """No owner action needed: the contact edits an earlier Telegram message, the bridge
+    patches the stored chat and re-syncs that chat's index (`edit_channel_message`).
+    MUTATION: as above - red."""
+    from vaf.core.channel_history import edit_channel_message
+    assert edit_channel_message("telegram", _TG, "Können Sie meine Bestellung prüfen?",
+                                message_id="42")
+    out = _contact_history(index_world)
+    assert "meine Bestellung" in out and "Ihr Termin ist am Montag." in out
+    assert "sk-proj-****abcd" not in out and _PATH_ERROR not in out
+
+
+def test_the_read_tools_see_what_a_model_may_read(index_world):
+    """`read_telegram_chat` and `read_discord_chat` read the stored chat through the same
+    projection."""
+    from vaf.core.channel_history import read_channel_session
+    bodies = [r["body"] for r in read_channel_session("telegram", _TG)]
+    assert "Ihr Termin ist am Montag." in bodies
+    assert not any("sk-proj" in b or _PATH_ERROR in b for b in bodies)

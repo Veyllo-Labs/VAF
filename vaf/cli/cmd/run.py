@@ -908,7 +908,8 @@ def prompt_once(prompt: str, output_format: str = "text", session: str = None,
                 s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
                 s.add_message("user", prompt)
                 s.add_message("assistant", result_text or "",
-                              metadata=failed_turn_meta(getattr(agent, "_turn_failed", False)))
+                              metadata=failed_turn_meta(getattr(agent, "_turn_failed", False),
+                                                        getattr(agent, "_turn_failure", "")))
                 mgr.save(s)
             raise typer.Exit(0)
 
@@ -919,7 +920,8 @@ def prompt_once(prompt: str, output_format: str = "text", session: str = None,
         s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
         s.add_message("user", prompt)
         s.add_message("assistant", result_text or "",
-                      metadata=failed_turn_meta(getattr(agent, "_turn_failed", False)))
+                      metadata=failed_turn_meta(getattr(agent, "_turn_failed", False),
+                                                getattr(agent, "_turn_failure", "")))
         mgr.save(s)
         ndjson_emit({"type": "session_saved", "id": s.id})
 
@@ -2584,7 +2586,8 @@ def _process_agent_message(agent, user_input: str, tui, session):
         # A failed turn is marked so a resumed chat does not replay it as an answer
         # (session.is_failed_turn); the transcript still shows it.
         session.add_message("assistant", full_response_clean,
-                            metadata=failed_turn_meta(getattr(agent, "_turn_failed", False)))
+                            metadata=failed_turn_meta(getattr(agent, "_turn_failed", False),
+                                                      getattr(agent, "_turn_failure", "")))
         
         # AUTO-SAVE SESSION (Critical for Web UI persistence)
         # We assume session object handles its own persistence path if it was loaded/created properly.

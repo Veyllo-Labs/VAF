@@ -374,7 +374,7 @@ def _send_turn_error_reply(task, error, contact=None) -> None:
 
 
 def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=None,
-                           turn_failed: bool = False) -> None:
+                           turn_failed: bool = False, turn_failure: str = "") -> None:
     """Send a finished turn's answer back where the task came from: Telegram, Discord,
     WhatsApp, or the mail outbox (`_deliver_email_reply`); a web turn sends nothing here.
 
@@ -383,12 +383,14 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
     That is a turn the engine marked (`turn_failed`, chat_step's `_turn_failed`: the backend
     failed or loop protection stopped it), or one whose outgoing text is a failure
     (`completion.is_error_reply`, which also covers the runner's own "[Error] No response
-    ...") or a stop (`markers.LOOP_PROTECTION`). The text is judged as the contact would
-    receive it, after `_prepare_channel_outbound`: the model's reasoning never leaves, so
-    reasoning that quotes an "[Error] ..." tool result does not decide the turn. The owner's
-    own chats get the text as it is, and so does the web UI, which the runner fed before
-    this. `contact` is the record pinned for THIS turn. `session_mgr` serves the WhatsApp
-    fallback that reads the chat's JID off the session. Never raises."""
+    ...") or a stop note (`completion.is_stop_note`). A turn that had answered before such a
+    failure ended it (`turn_failure`, chat_step's `_turn_failure`) is sent its answer, without
+    that text. The text is judged as the contact would receive it, after
+    `_prepare_channel_outbound`: the model's reasoning never leaves, so reasoning that quotes
+    an "[Error] ..." tool result does not decide the turn. The owner's own chats get the text
+    as it is, and so does the web UI, which the runner fed before this. `contact` is the
+    record pinned for THIS turn. `session_mgr` serves the WhatsApp fallback that reads the
+    chat's JID off the session. Never raises."""
     try:
         task_source = getattr(task, "source", None)
         meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
@@ -399,10 +401,12 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
         except Exception:
             pass
         if meta.get("from_contact"):
-            from vaf.core.completion import is_error_reply
-            from vaf.markers import LOOP_PROTECTION
+            from vaf.core.completion import is_error_reply, is_stop_note
+            if turn_failure and not turn_failed:
+                # Answered, then a later round failed: the answer goes out, the failure not.
+                final_text = str(final_text or "").replace(turn_failure, "").strip()
             visible = _prepare_channel_outbound(final_text)
-            if turn_failed or is_error_reply(visible) or LOOP_PROTECTION in visible:
+            if turn_failed or is_error_reply(visible) or is_stop_note(visible):
                 _send_turn_error_reply(task, final_text, contact=contact)
                 return
         if task_source == "telegram" and chat_id:
@@ -2495,9 +2499,12 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # A call ended the turn (a question to the person, a draft): the answer is
                     # what the tool declared, not a text the person asked to have written.
                     _turn_closed = bool(getattr(agent, "_turn_closed_by_tool", False))
-                    # The turn produced no answer (backend failure, loop-protection stop): read
-                    # NOW, before anything below runs another chat_step on the same agent.
+                    # The turn produced no answer (backend failure, loop-protection stop), or
+                    # answered and then such a failure ended it (`_turn_failure`, the text as
+                    # streamed): read NOW, before anything below runs another chat_step on the
+                    # same agent.
                     _turn_failed = bool(getattr(agent, "_turn_failed", False))
+                    _turn_failure = str(getattr(agent, "_turn_failure", "") or "")
                     if response_text.startswith("[ASYNC_ACK]"):
                         clean_ack = response_text.replace("[ASYNC_ACK]", "").strip()
                         final_text = clean_ack or response_text
@@ -2694,7 +2701,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         _deliver_channel_reply(
                             task, final_text, session_mgr=session_mgr,
                             contact=getattr(agent, "_front_office_contact", None),
-                            turn_failed=_turn_failed)
+                            turn_failed=_turn_failed, turn_failure=_turn_failure)
 
                     # Send token/context stats to WebUI
                     try:
@@ -2892,7 +2899,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                                       f"{task.session_id}: {type(_ctx_e).__name__}: {_ctx_e}")
                                 if _clean_response:
                                     session.add_message(role="assistant", content=_clean_response,
-                                                        metadata=failed_turn_meta(_turn_failed))
+                                                        metadata=failed_turn_meta(_turn_failed, _turn_failure))
                                 session_mgr.save(session)
                                 if is_debug_logging_enabled():
                                     logging.getLogger(__name__).debug(f"Session saved: +1 user, +1 assistant for {task.session_id}, turn_count={session.runtime_state.get('user_turn_count', 0)}")
@@ -2904,7 +2911,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         break
                                 if last_assistant_msg != _clean_response:
                                     session.add_message(role="assistant", content=_clean_response,
-                                                        metadata=failed_turn_meta(_turn_failed))
+                                                        metadata=failed_turn_meta(_turn_failed, _turn_failure))
                                 # sync_state=True ensures the ContextManager state is saved to runtime_state
                                 session_mgr.save(session, sync_state=True)
                     except Exception as e:

@@ -96,29 +96,35 @@ class Message:
 # text apart from the history (the queue runner and the CLI, for their transcripts) marks its
 # copy with this, so the transcript still shows it and no model context reads it back.
 FAILED_TURN_KEY = "turn_failed"
+# The key for a turn that HAD answered when a later round failed or was stopped (chat_step's
+# `_turn_failure` with `_turn_failed` unset): its value is the failure text as streamed. The
+# stored message keeps the whole text, so the transcript shows it as one bubble, the way the
+# person saw it; a model reads the message without that part (`model_text`).
+TURN_FAILURE_KEY = "turn_failure"
 
 
-def failed_turn_meta(failed) -> Optional[Dict[str, Any]]:
-    """The metadata for a stored answer: the failed-turn mark when `failed`, else None (an
-    ordinary answer keeps the shape it always had)."""
-    return {FAILED_TURN_KEY: True} if failed else None
+def failed_turn_meta(failed, failure="") -> Optional[Dict[str, Any]]:
+    """The metadata for a stored answer: the failed-turn mark when `failed`, the failure that
+    followed an answer when only `failure` is given, else None (an ordinary answer keeps the
+    shape it always had). A host passes chat_step's `_turn_failed` and `_turn_failure`."""
+    if failed:
+        return {FAILED_TURN_KEY: True}
+    if failure:
+        return {TURN_FAILURE_KEY: str(failure)}
+    return None
 
 
 def is_failed_turn(msg) -> bool:
     """True for a stored assistant message that is a failed turn's text, not an answer.
 
-    Read by everything that builds a model's context from a stored transcript: the replay in
-    `CoreAgent.load_session_context`, the chat compaction's transcript
-    (`vaf.memory.rag.session_dialogue_excerpt`) and the Cross Chat Hint scan. The web UI's
-    projection does not ask: the person keeps seeing what their chat showed.
-
     A message with the mark is one. So is an unmarked message whose text, reasoning removed,
-    BEGINS with the engine's status or a provider's failure, or carries the loop-protection
-    marker: transcripts stored before the mark existed hold those as plain answers. A real
-    answer that merely quotes a status further down is kept. Named boundary: an unmarked
-    message from before the mark whose failure followed streamed text ("One moment.\\n[API
-    Error from ...]") is not recognised. A message with tool calls never counts, because its
-    calls anchor the tool results that follow it. Accepts a `Message` or its dict form."""
+    BEGINS with the engine's status, a provider's failure or a loop-protection stop note
+    (`completion.is_stop_note`): transcripts stored before the mark existed hold those as
+    plain answers. A real answer that merely quotes a status or the stop marker further in
+    is kept. Named boundary: an unmarked message from before the mark whose failure followed
+    streamed text ("One moment.\\n[API Error from ...]") is not recognised. A message with
+    tool calls never counts, because its calls anchor the tool results that follow it.
+    Accepts a `Message` or its dict form. Readers ask `model_text`, which builds on this."""
     get = msg.get if isinstance(msg, dict) else (lambda k, d=None: getattr(msg, k, d))
     if get("role") != "assistant" or get("tool_calls"):
         return False
@@ -127,10 +133,40 @@ def is_failed_turn(msg) -> bool:
         return True
     import re
 
-    from vaf.core.completion import _ENGINE_ERROR, _ERROR_SENTINEL
-    from vaf.markers import LOOP_PROTECTION
+    from vaf.core.completion import _ENGINE_ERROR, _ERROR_SENTINEL, is_stop_note
     text = re.sub(r"<think>.*?</think>", "", str(get("content") or ""), flags=re.DOTALL).lstrip()
-    return text.startswith((_ENGINE_ERROR, _ERROR_SENTINEL)) or LOOP_PROTECTION in text
+    return text.startswith((_ENGINE_ERROR, _ERROR_SENTINEL)) or is_stop_note(text)
+
+
+def model_text(msg) -> Optional[str]:
+    """What a model may read of a stored message, or None when it may read none of it.
+
+    None for a failed turn's text (`is_failed_turn`). For an answer that a later round's
+    failure followed (`metadata.turn_failure`), the content without that failure; when the
+    failure is not found verbatim in the content, None, the safe side, since the text would
+    otherwise reach a model. Every other message: its content, as stored.
+
+    Asked by everything that builds a model's context, or a tool result a model reads, from
+    a stored chat: the replay in `CoreAgent.load_session_context`, `Session.get_history`, the
+    chat compaction's transcript (`vaf.memory.rag.session_dialogue_excerpt`), the Cross Chat
+    Hint scan and the Telegram and Discord message index (`vaf.core.channel_history`, which
+    `contact_history`, the inbox and the find and read tools read). The web UI's projection
+    does not ask: the person keeps seeing what their chat showed. Named boundary: the voice
+    call's chat digest (`voice_agent.build_chat_digest`) does not ask either; it serves the
+    owner's own open chat and reads nothing on the live path today, because it receives
+    `Message` objects where it expects dicts. Accepts a `Message` or its dict form."""
+    if is_failed_turn(msg):
+        return None
+    get = msg.get if isinstance(msg, dict) else (lambda k, d=None: getattr(msg, k, d))
+    content = get("content")
+    content = content if isinstance(content, str) else str(content or "")
+    meta = get("metadata")
+    failure = meta.get(TURN_FAILURE_KEY) if isinstance(meta, dict) else None
+    if isinstance(failure, str) and failure:
+        if failure not in content:
+            return None
+        content = content.replace(failure, "").strip()
+    return content
 
 
 @dataclass
@@ -192,15 +228,17 @@ class Session:
 
         Preserves tool-call linkage (`tool_calls` on assistant messages,
         `tool_call_id`/`name` on role:"tool" results) so restored history keeps
-        valid tool_use/tool_result pairs. A failed turn's stored text
-        (`is_failed_turn`) is left out: it was never the model's answer.
+        valid tool_use/tool_result pairs. Each message carries what a model may read of
+        it (`model_text`): a failed turn's stored text is left out, it was never the model's
+        answer, and an answer loses the failure that followed it.
         """
         messages = self.messages[-limit:] if limit else self.messages
         out: List[Dict] = []
         for m in messages:
-            if is_failed_turn(m):
+            readable = model_text(m)
+            if readable is None:
                 continue
-            entry: Dict[str, Any] = {"role": m.role, "content": m.content}
+            entry: Dict[str, Any] = {"role": m.role, "content": readable}
             if getattr(m, "tool_calls", None):
                 entry["tool_calls"] = m.tool_calls
             if getattr(m, "tool_call_id", None):

@@ -242,7 +242,7 @@ def test_the_runner_delivers_through_the_one_function():
     assert ('_deliver_channel_reply(\n                            task, final_text, '
             'session_mgr=session_mgr,\n                            '
             'contact=getattr(agent, "_front_office_contact", None),\n                            '
-            'turn_failed=_turn_failed)') in loop
+            'turn_failed=_turn_failed, turn_failure=_turn_failure)') in loop
     assert "_deliver_email_reply(" not in loop
 
 
@@ -308,3 +308,21 @@ def test_a_failed_turn_after_a_telegram_voice_note_is_not_read_out(delivered):
     finally:
         with tb._voice_reply_lock:
             tb._voice_reply_pending.pop(key, None)
+
+
+def test_a_contact_gets_the_answer_a_later_failure_followed(delivered):
+    """The turn answered, then a later round failed (chat_step's `_turn_failure`, the turn
+    not failed): the contact gets the answer and never the failure. MUTATION: do not take
+    `turn_failure` off the text - the sentinel is in it, so the contact gets the fixed
+    sentence instead of the answer, red."""
+    hr._deliver_channel_reply(_delivery_task("whatsapp", from_contact=True),
+                              "Ihr Termin ist am Montag.\n\n" + _KEY_ERROR, turn_failure=_KEY_ERROR)
+    assert delivered == [("whatsapp", "Ihr Termin ist am Montag.")]
+
+
+def test_an_answer_that_explains_the_stop_marker_is_sent(delivered):
+    """Only a text that IS a stop note is held back; an answer that mentions the marker
+    further in is an answer. MUTATION: hold back any text containing the marker - red."""
+    text = "Ein [LOOP_PROTECTION]-Hinweis heißt: die Runde wurde nach zu vielen Schritten beendet."
+    hr._deliver_channel_reply(_delivery_task("telegram", from_contact=True), text)
+    assert delivered == [("telegram", text)]

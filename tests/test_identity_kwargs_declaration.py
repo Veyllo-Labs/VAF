@@ -518,7 +518,7 @@ def test_the_rule_exists_once_and_the_dispatcher_asks_it():
 
 REMAINING_LITERAL_NAME_SOURCES = {
     # file:line -> why the shared rule cannot see it
-    "vaf/core/channel_history.py:90":
+    "vaf/core/channel_history.py:97":
         "_session_identity reads meta.get('username') or 'admin' and is the WRITER of the "
         "channel message store, while the reader gets its name from the assigner. For a "
         "session with no username the two now disagree - writer literal, reader owner or "

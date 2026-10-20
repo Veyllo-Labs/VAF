@@ -255,14 +255,22 @@ A turn ends without the model's answer in two ways: the backend fails (it raises
 returns the local server's `[Error] ...`, or a provider's `[API Error from <provider>: ...]`
 arrives as a content chunk of its own, `completion.is_failure_chunk`, also after text the
 round already streamed), or loop protection stops it (the spend cap, the wall clock, the
-hard stop, all carrying `[LOOP_PROTECTION]`). Every one of these exits does the same three
-things: the text is the return value (and is in the stream where it was streamed), NOTHING
-of it is committed to the history, and the turn-local `_turn_failed` is set (reset at the
-start of every `chat_step`, like `_turn_closed_by_tool`). A failed round's tool calls do
-not run: they are a stream cut off mid-way. The text is the engine's, not something the
-model said: in the next turn's context the model would repeat a provider's raw answer, a
-masked key or the owner's spend as its own words, to whoever the chat is with. The queue
-runner and the CLI store the streamed text for their transcripts and mark that copy
-(`session.failed_turn_meta`), so the replay skips it too (`session.is_failed_turn`); the
-runner also answers a contact's failed turn with a fixed sentence (FRONT_OFFICE.md).
-Guard: `tests/test_failed_turn_context.py`.
+hard stop, all carrying `[LOOP_PROTECTION]`). Every one of these exits returns through one
+closure, `_end_turn_without_answer`: NOTHING of the text is committed to the history (it is
+in the stream where it was streamed), the text is recorded in the turn-local
+`_turn_failure`, and the turn ends. What it returns depends on whether the turn had already
+answered. A turn that validated an answer in an earlier round (the pending-task
+auto-continue, a reply kept under correction) has answered: it returns that answer and is
+not failed. Any other turn failed: `_turn_failed` is set and the text is the return value.
+Both flags are reset at the start of every `chat_step`, like `_turn_closed_by_tool`. A
+failed round's tool calls do not run: they are a stream cut off mid-way. The text is the
+engine's, not something the model said: in the next turn's context the model would repeat a
+provider's raw answer, a masked key or the owner's spend as its own words, to whoever the
+chat is with. So the model also does not know a failure happened: asked "what went wrong?",
+it sees its request with no answer after it and usually answers that request again, which
+is what "try again" needs. The person's screen shows the error. The queue runner and the
+CLI store the streamed text for their transcripts as one message, the way it was shown, and
+mark that copy (`session.failed_turn_meta`); every reader that builds a model's context
+from a stored chat reads it through `session.model_text` (SESSION_MANAGEMENT.md). The runner
+also answers a contact's failed turn with a fixed sentence, and a turn that answered first
+with that answer (FRONT_OFFICE.md). Guard: `tests/test_failed_turn_context.py`.

@@ -60,7 +60,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from vaf.core.channels import CHAT_SESSION_PREFIXES
-from vaf.core.session import is_failed_turn
+from vaf.core.session import model_text
 from vaf.core.text_match import fold, fold_all
 
 # A hint quotes at most this much of the matched message.
@@ -195,12 +195,13 @@ def _scannable_messages(data: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
         if (msg.get("kind") or "") in _NON_TYPED_KINDS:
             continue
-        if is_failed_turn(msg):   # a failed turn's text: nobody said it either
+        # What a model may read of it: a failed turn's text, nobody said that either.
+        content = model_text(msg)
+        if content is None:
             continue
-        content = msg.get("content")
         if not isinstance(content, str) or not content.strip():
             continue
-        out.append(msg)
+        out.append(msg if content == msg.get("content") else dict(msg, content=content))
     return out
 
 

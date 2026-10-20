@@ -5572,7 +5572,7 @@ class Agent:
         from the version the store no longer holds.
         """
         from vaf.core.subagent_ipc import set_current_session_id
-        from vaf.core.session import is_failed_turn, take_transcript_changed
+        from vaf.core.session import model_text, take_transcript_changed
 
         # A background lane appended to this session's FILE behind this agent's
         # in-memory history (see session.note_transcript_changed): rebuild from
@@ -5648,17 +5648,19 @@ class Agent:
 
                     # Strip think blocks from LLM context (saved for UI display only)
                     if role == "assistant":
+                        # What a model may read of it (session.model_text): nothing of a
+                        # failed turn's stored text, which chat_step never committed, and an
+                        # answer without the failure that followed it in the same turn.
+                        _readable = model_text(msg)
+                        if _readable is None:
+                            continue
+                        content = _readable
                         import re as _re
                         content = _re.sub(r'<think>.*?</think>', '', content, flags=_re.DOTALL)
                         content = content.strip()
                         # Keep tool-call messages even if their text is empty — their
                         # tool_calls are what anchor the following role:"tool" result.
                         if not content and not _tool_calls:
-                            continue
-                        # The stored text of a turn that failed or was stopped: the
-                        # transcript shows it, and chat_step never committed it, so a
-                        # replay must not hand it back as the model's own answer.
-                        if is_failed_turn(msg):
                             continue
 
                     entry = {"role": role, "content": content}
@@ -9630,6 +9632,11 @@ class Agent:
         # text apart from the history marks its copy (session.failed_turn_meta) so no later
         # context reads it back as something the model said.
         self._turn_failed = False
+        # The failure or stop text that ended this turn, as streamed (or returned). Set with
+        # `_turn_failed`, and ALSO when the turn had already answered: then the answer stands,
+        # the turn is not failed, and a host strips this text from its stored copy and from
+        # what it sends (session.failed_turn_meta / session.model_text).
+        self._turn_failure = ""
         # Forced-resolution node (thinking-mode decision tree): when the caller forces a tool call, also
         # block the gather tools immediately so "required" can ONLY be satisfied by a decisive/progress
         # tool (ask_user / delete_* / thinking_done) — the model cannot escape into search/prose.
@@ -10232,6 +10239,19 @@ class Agent:
         # re-enters after an answer was already validated and committed - this
         # list is what keeps those answers part of the reply (_join_turn_answers).
         kept_turn_answers: list = []
+
+        def _end_turn_without_answer(text):
+            """Every exit that ends the turn on the engine's own text (a backend failure, a
+            loop-protection stop) goes through here. Nothing of it is committed to the
+            history. A turn that already validated an answer this turn (the auto-continue,
+            a kept reply under correction) has answered: it returns those answers, and the
+            text only marks where it ended. Otherwise the turn failed and returns the text."""
+            self._turn_failure = str(text or "")
+            if kept_turn_answers:
+                return _join_turn_answers(kept_turn_answers[:-1], kept_turn_answers[-1])
+            self._turn_failed = True
+            return text
+
         # True from the moment a tool round finished until the next round starts
         # streaming. The post-tool buffer clear below keys on THIS, not on the
         # shape of the history tail: a deferred error nudge, an anti-spin or
@@ -10527,19 +10547,18 @@ class Agent:
                             # handler runs (cooldown + retry) instead of exiting chat_step.
 
                     # A round the backend failed ends the turn here, the way the exception
-                    # below does: its text is the return value and is in the stream, and
-                    # NOTHING of the round is committed. It is not something the model said,
-                    # and in the next turn's context it is internal detail (a provider's raw
-                    # answer, a masked key, a path) the model would repeat as its own words, to
-                    # whoever the chat is with. Its tool calls are a stream cut off mid-way and
-                    # do not run.
+                    # below does: its text is in the stream, and NOTHING of the round is
+                    # committed (_end_turn_without_answer decides what the turn returns). It
+                    # is not something the model said, and in the next turn's context it is
+                    # internal detail (a provider's raw answer, a masked key, a path) the
+                    # model would repeat as its own words, to whoever the chat is with. Its
+                    # tool calls are a stream cut off mid-way and do not run.
                     if _round_failure:
-                        self._turn_failed = True
                         if stream_callback and _round_failure not in full_response:
                             stream_callback(_round_failure)
-                        append_domain_log("backend", "round_failed: the backend's failure is the "
-                                                     "turn's text, not committed to the history")
-                        return _join_turn_answers(kept_turn_answers, _round_failure)
+                        append_domain_log("backend", "round_failed: the backend's failure is "
+                                                     "not committed to the history")
+                        return _end_turn_without_answer(_round_failure)
 
                     # POST-LOOP: Convert accumulator to list
                     for idx, tc_data in sorted(tool_call_accumulator.items()):
@@ -10569,8 +10588,7 @@ class Agent:
                             UI.error(err_msg)
                             if stream_callback:
                                 stream_callback(err_msg)
-                            self._turn_failed = True
-                            return err_msg
+                            return _end_turn_without_answer(err_msg)
 
                     if stream_callback: stream_callback("\n")
                     
@@ -10579,8 +10597,7 @@ class Agent:
                     UI.error(err_msg)
                     if stream_callback:
                         stream_callback(err_msg)
-                    self._turn_failed = True
-                    return err_msg
+                    return _end_turn_without_answer(err_msg)
             
             elif self.use_server:
                 # Proactive Context Management: Compress before request to prevent overflow
@@ -10899,10 +10916,9 @@ class Agent:
                         pass
                     status = getattr(response, 'status_code', None) if response else None
                     UI.error("Server unavailable after retries.")
-                    self._turn_failed = True
                     if status == 400:
-                        return "[Error] Server rejected the request (HTTP 400). The context may be too large. Try closing the Document Editor or starting a new chat."
-                    return "[Error] Server unavailable after retries. Try again or reduce context (e.g. close Document Editor, new chat)."
+                        return _end_turn_without_answer("[Error] Server rejected the request (HTTP 400). The context may be too large. Try closing the Document Editor or starting a new chat.")
+                    return _end_turn_without_answer("[Error] Server unavailable after retries. Try again or reduce context (e.g. close Document Editor, new chat).")
 
                 # DIAGNOSTIC: Check what the server actually gave us
                 # UI.event("Debug", f"Status: {response.status_code} | History: {len(self.history)}")
@@ -12416,14 +12432,13 @@ class Agent:
                             UI.event("Emergency", _sp_msg, style="bold red")
                             append_domain_log("backend",
                                               f"[LOOP_PROTECTION] spend stop at ~${_spent:.4f}")
-                            # Each stop below ends the turn without an answer: the stop text
-                            # is the return value, for the caller to show. Like a backend
-                            # failure it is not committed as the assistant's answer: it is the
+                            # Each stop below ends the turn on the engine's text, for the caller
+                            # to show (_end_turn_without_answer). Like a backend failure it
+                            # is not committed as the assistant's answer: it is the
                             # engine's note (this one names the owner's spend and a config
                             # key), and from the history the model would repeat it as its own
                             # words in the next turn, to whoever the chat is with.
-                            self._turn_failed = True
-                            return _sp_msg
+                            return _end_turn_without_answer(_sp_msg)
                 except Exception:
                     pass  # accounting must never break a turn
 
@@ -12432,8 +12447,7 @@ class Agent:
                     _wc_msg = f"⚠️ [LOOP_PROTECTION] Wall-clock stop after ~{_wc_budget:.0f}s in a single turn ({tool_turn_count} tool turns) — task aborted to keep the agent responsive."
                     UI.event("Emergency", _wc_msg, style="bold red")
                     append_domain_log("backend", f"[LOOP_PROTECTION] wall-clock stop at {_wc_budget:.0f}s / turn {tool_turn_count}")
-                    self._turn_failed = True
-                    return _wc_msg
+                    return _end_turn_without_answer(_wc_msg)
 
                 if not _unlimited_loop and tool_turn_count >= MAX_TOOL_TURNS_PER_STEP:
                     if _hard_stop_injected:
@@ -12441,8 +12455,7 @@ class Agent:
                         _kill_msg = f"⚠️ [LOOP_PROTECTION] Hard stop enforced after {MAX_TOOL_TURNS_PER_STEP} tool turns."
                         UI.event("Emergency", _kill_msg, style="bold red")
                         append_domain_log("backend", _kill_msg)
-                        self._turn_failed = True
-                        return _kill_msg
+                        return _end_turn_without_answer(_kill_msg)
 
                     # First time hitting the limit: inject a message so the agent can inform the user.
                     _hard_stop_injected = True

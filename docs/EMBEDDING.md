@@ -454,7 +454,9 @@ That text is not part of the conversation. The history keeps your message and no
 answer, so the next `run()` neither shows the model the failure (it would repeat it as
 its own words when asked what happened) nor does `save_session()` store it. The same holds
 for a loop-protection stop (`vaf.markers.LOOP_PROTECTION`): its note can name your daily
-API spend and a config key. If you keep your own transcript of what `on_token` streamed,
+API spend and a config key. When the turn had already answered in an earlier round (the
+pending-task auto-continue) and a later round failed, `run()` returns that answer; the
+failure was only streamed. If you keep your own transcript of what `on_token` streamed,
 keep these out of whatever you hand a model later.
 Some other *handled* failures (e.g. the API returning empty responses repeatedly) also
 come back as a short status string instead of raising:

@@ -9,7 +9,13 @@ user_identity.json).
 Used by the system prompt to inform the agent and by the per-channel send tools.
 
 Also persists and resolves user -> telegram_chat_id for proactive Telegram sends
-(messaging_endpoints.json under Platform.data_dir()).
+(messaging_endpoints.json under Platform.data_dir()). The stored Telegram chat of an account
+is only ever one of that account's own paired Telegram ids (`telegram_paired_ids`): the
+writer refuses anything else and the reader drops anything else it finds. The bridge saves
+the chat of every sender it admits, and three of the four kinds it admits are not the owner
+(an allowed contact, a relay contact, a stranger the open Front Office answers) while their
+entries carry the owner's scope and name; the store is where that is decided, so no bridge
+call site has to remember it.
 """
 import json
 import threading
@@ -244,17 +250,46 @@ def save_telegram_chat_id(
     user_scope_id: Optional[Any],
     username: Optional[str],
     chat_id: str,
-) -> None:
-    """Persist telegram_chat_id for this user (by scope and username). Called from Telegram bridge when a message is received."""
-    if not chat_id:
-        return
+) -> bool:
+    """Remember the chat this account last wrote from on Telegram, when it is one of the
+    account's own paired Telegram ids (`telegram_paired_ids`); anything else is not written,
+    and the answer is False.
+
+    In a private chat the chat id is the sender's user id, so the owner's own chat is always
+    one of their paired ids. An allowed contact, a relay contact, a sender the open Front
+    Office answers, a group chat (a negative id) or another account's pairing never is. The
+    Telegram bridge calls this for every sender it admits, and every one of those entries
+    carries the OWNER's scope and name: written unchecked, one message from a contact made
+    the contact the place VAF reaches the owner (the owner's reminders, automation results,
+    background questions and the Front Office notes about other contacts). With two paired
+    ids, the one the account last wrote from is kept.
+
+    The name key written is the one the account is paired under, never the caller's: a
+    background lane that has the scope but no username passes "admin" or the local admin's
+    name, and writing under it would file this account's chat under somebody else's name.
+    """
+    cid = str(chat_id or "").strip()
+    if not cid:
+        return False
+    name = next((n for tid, n in _telegram_paired_entries(user_scope_id, username) if tid == cid), None)
+    if name is None:
+        return False
     with _ENDPOINTS_LOCK:
         data = _load_endpoints()
         if user_scope_id is not None:
-            data["by_scope"][str(user_scope_id)] = chat_id
-        uname = (username or "").strip() or "admin"
-        data["by_username"][uname] = chat_id
+            data["by_scope"][str(user_scope_id)] = cid
+        # One key per name: a variant in other letter case would otherwise keep an older chat
+        # that a lookup under that spelling finds first.
+        for key in [k for k in data["by_username"] if k != name and str(k).strip().lower() == name.lower()]:
+            del data["by_username"][key]
+        data["by_username"][name] = cid
         _save_endpoints(data)
+    return True
+
+
+def _telegram_entry_name(entry: Dict[str, Any]) -> str:
+    """The VAF username a Telegram whitelist or relay entry is filed under ("admin" when empty)."""
+    return (entry.get("vaf_username") or "").strip() or "admin"
 
 
 def _telegram_whitelist_entry_matches(
@@ -262,45 +297,122 @@ def _telegram_whitelist_entry_matches(
     scope_str: Optional[str],
     vaf_username: str,
 ) -> bool:
-    """True if this whitelist entry matches the request (loose: case-insensitive username, normalized scope)."""
+    """Whether a whitelist entry belongs to the account asking.
+
+    When both the call and the entry carry a scope, the scope alone decides: a scope is the
+    account, and no two accounts share one, while the username a caller passes is not always
+    the account's own (a background lane without one passes "admin" or the local admin's
+    name). Requiring both refused such a caller its own pairing. Otherwise by username,
+    case-insensitively, an empty one read as "admin"."""
     if not isinstance(entry, dict):
         return False
     entry_scope = entry.get("user_scope_id")
     entry_scope_str = str(entry_scope).strip() if entry_scope is not None else None
-    entry_name = (entry.get("vaf_username") or "").strip() or "admin"
-    scope_ok = (not scope_str and not entry_scope_str) or (
-        scope_str and entry_scope_str and scope_str.strip() == entry_scope_str
-    )
-    name_ok = (vaf_username or "admin").lower() == (entry_name or "admin").lower()
     if scope_str and entry_scope_str:
-        return scope_ok and name_ok
-    return name_ok
+        return scope_str.strip() == entry_scope_str
+    return (vaf_username or "admin").lower() == _telegram_entry_name(entry).lower()
+
+
+def _telegram_paired_entries(
+    user_scope_id: Optional[Any],
+    username: Optional[str],
+) -> List[Tuple[str, str]]:
+    """(Telegram id, the name the entry is filed under) of every whitelist entry that belongs
+    to this account, in whitelist order, each id once. An entry without an id is skipped, not
+    the end of the search."""
+    telegram_config = Config.get("telegram_config") or {}
+    whitelist = telegram_config.get("whitelist") if isinstance(telegram_config, dict) else None
+    if not isinstance(whitelist, list):
+        return []
+    scope_str = str(user_scope_id).strip() if user_scope_id is not None else None
+    vaf_username = (username or "").strip() or "admin"
+    out: List[Tuple[str, str]] = []
+    for entry in whitelist:
+        if not _telegram_whitelist_entry_matches(entry, scope_str, vaf_username):
+            continue
+        tid = str(entry.get("telegram_user_id") or "").strip()
+        if tid and all(tid != seen for seen, _ in out):
+            out.append((tid, _telegram_entry_name(entry)))
+    return out
+
+
+def telegram_paired_ids(
+    user_scope_id: Optional[Any],
+    username: Optional[str],
+) -> List[str]:
+    """Every Telegram user id this account paired as its own (`telegram_config.whitelist`),
+    in whitelist order. Never a relay contact and never a contact: those are other people
+    the account lets in, not where it is reached. Belonging is decided by scope when both
+    sides carry one, by username otherwise (`_telegram_whitelist_entry_matches`).
+
+    Deliberately not `owner_endpoints`: that one gives the local admin every entry on the
+    bot (the inbox's owner lane), and another account's pairing is not the admin's chat."""
+    return [tid for tid, _ in _telegram_paired_entries(user_scope_id, username)]
 
 
 def get_telegram_chat_id_from_whitelist(
     user_scope_id: Optional[Any],
     username: Optional[str],
 ) -> Optional[str]:
-    """
-    Resolve Telegram chat_id from the Telegram whitelist (connected bot config).
-    For private chats (DM), chat_id equals telegram_user_id.
-    Matching is loose: case-insensitive username, normalized scope, so the verified
-    account owner (who linked their Telegram) is found even if session identity differs slightly.
-    Returns telegram_user_id as string, or None if no matching whitelist entry.
-    """
+    """The first Telegram id this account paired (`telegram_paired_ids`), or None. In a
+    private chat the chat id equals the user id, so this is the account's own chat."""
+    ids = telegram_paired_ids(user_scope_id, username)
+    return ids[0] if ids else None
+
+
+def _telegram_account_names(
+    user_scope_id: Optional[Any],
+    username: Optional[str],
+) -> Tuple[str, set]:
+    """(the account's name, every `by_username` key that is this account's, lowercased).
+
+    Without a scope the name asked with is the account, as the whitelist matcher has it. With
+    one, the account's names are the ones its whitelist and relay entries are filed under,
+    plus the name asked with unless another account's entry is filed under it: a background
+    lane of account B that has no username passes the local admin's name, and the store keeps
+    the admin's chat under that key. Reading it as B's would discard the admin's chat."""
+    uname = (username or "").strip() or "admin"
+    scope = str(user_scope_id).strip() if user_scope_id is not None else ""
+    if not scope:
+        return uname, {uname.lower()}
     telegram_config = Config.get("telegram_config") or {}
-    if not isinstance(telegram_config, dict) or not telegram_config.get("whitelist"):
-        return None
-    whitelist = telegram_config.get("whitelist") or []
-    scope_str = str(user_scope_id).strip() if user_scope_id is not None else None
-    vaf_username = (username or "").strip() or "admin"
-    for entry in whitelist:
-        if not isinstance(entry, dict):
-            continue
-        if _telegram_whitelist_entry_matches(entry, scope_str, vaf_username):
-            tid = entry.get("telegram_user_id")
-            return str(tid) if tid is not None else None
-    return None
+    entries: List[Dict[str, Any]] = []
+    if isinstance(telegram_config, dict):
+        for key in ("whitelist", "relay_whitelist"):
+            block = telegram_config.get(key)
+            if isinstance(block, list):
+                entries.extend(e for e in block if isinstance(e, dict))
+    own = [_telegram_entry_name(e) for e in entries if str(e.get("user_scope_id") or "").strip() == scope]
+    taken = {_telegram_entry_name(e).lower() for e in entries
+             if str(e.get("user_scope_id") or "").strip() not in ("", scope)}
+    names = {n.lower() for n in own}
+    if uname.lower() not in taken:
+        names.add(uname.lower())
+    return (own[0] if own else uname), names
+
+
+def _report_owner_endpoint_reset(user_scope_id: Optional[Any], account: str, discarded: str,
+                                 has_paired: bool) -> None:
+    """One `owner_endpoint_reset` security event for a stored chat that was not the account's
+    own: whose it was (a contact of the account, by name, when the book has one), and what
+    the account is reached on now. Never raises."""
+    what = "not a paired Telegram of this account"
+    try:
+        from vaf.core.contacts_store import find_contact_by_channel
+        rec = find_contact_by_channel("telegram", discarded, account,
+                                      str(user_scope_id) if user_scope_id is not None else None)
+        name = str((rec or {}).get("name") or "").strip()
+        if name:
+            what = f"contact {name}"
+    except Exception:
+        pass
+    outcome = "reset to the paired chat" if has_paired else "no paired chat"
+    try:
+        from vaf.core.security_events import log_security_event
+        log_security_event("owner_endpoint_reset", channel="telegram", username=account,
+                           path=discarded, detail=f"{what}; {outcome}")
+    except Exception:
+        pass
 
 
 def get_telegram_chat_id(
@@ -321,47 +433,51 @@ def telegram_chat_id_of(
     user_scope_id: Optional[Any],
     username: Optional[str],
 ) -> Optional[str]:
-    """
-    Return telegram_chat_id for this user, switched on or not.
-    Lookup: 1) persisted endpoints (from past Telegram message), 2) Telegram whitelist
-    (loose match: case-insensitive username, normalized scope). The verified account owner
-    (who linked their Telegram with the bot) does not need to be manually re-added to the
-    whitelist – the bot recognizes them by the existing link.
+    """The Telegram chat this account is reached on, switched on or not: the stored chat (the
+    one it last wrote from) while that is one of its own paired ids, else the first paired id,
+    else None.
+
+    A stored chat that is not a paired id of the account is never returned. It is removed from
+    the account's keys before anything is sent and recorded once as the security event
+    `owner_endpoint_reset`. Until the writer checked, the bridge stored the chat of every
+    sender it admitted under the owner's scope and name, so an install that ran a released
+    version can hold a contact's chat here; every delivery lane asks here first, which makes
+    this the repair as well, with no migration step to forget.
     """
     uname = (username or "").strip() or "admin"
-    scope_str = str(user_scope_id).strip() if user_scope_id is not None else None
-
+    scope_key = str(user_scope_id) if user_scope_id is not None else None
+    paired = telegram_paired_ids(user_scope_id, username)
+    account, names = _telegram_account_names(user_scope_id, username)
+    found: Optional[str] = None
+    discarded: List[str] = []
     with _ENDPOINTS_LOCK:
         data = _load_endpoints()
-        if user_scope_id is not None:
-            cid = data["by_scope"].get(str(user_scope_id))
-            if cid:
-                return cid
-        cid = data["by_username"].get(uname)
-        if cid:
-            return cid
-        # Case-insensitive username lookup (session may send different casing)
-        for key, val in (data.get("by_username") or {}).items():
-            if (key or "").strip().lower() == uname.lower():
-                return val
-    # Fallback: Telegram whitelist (verified/linked user; loose match)
-    chat_id = get_telegram_chat_id_from_whitelist(user_scope_id, username)
-    if chat_id:
-        save_telegram_chat_id(user_scope_id, username, chat_id)
-        return chat_id
-    # Single verified user: exactly one whitelist entry = the account that linked the bot;
-    # they don't need to be manually on the whitelist – match them loosely.
-    telegram_config = Config.get("telegram_config") or {}
-    if isinstance(telegram_config, dict):
-        whitelist = telegram_config.get("whitelist") or []
-        if len(whitelist) == 1 and isinstance(whitelist[0], dict):
-            entry = whitelist[0]
-            if _telegram_whitelist_entry_matches(entry, scope_str, uname):
-                tid = entry.get("telegram_user_id")
-                chat_id = str(tid) if tid is not None else None
-                if chat_id:
-                    save_telegram_chat_id(user_scope_id, username, chat_id)
-                    return chat_id
+        by_scope, by_username = data["by_scope"], data["by_username"]
+        # The name asked with first, then its other spellings: the order the lookup always had.
+        keys = sorted((k for k in by_username if str(k).strip().lower() in names), key=lambda k: k != uname)
+        stored = ([by_scope.get(scope_key)] if scope_key is not None else []) + [by_username.get(k) for k in keys]
+        for value in stored:
+            cid = str(value or "").strip()
+            if not cid:
+                continue
+            if cid in paired:
+                found = found or cid
+            elif cid not in discarded:
+                discarded.append(cid)
+        if discarded:
+            if scope_key is not None and str(by_scope.get(scope_key) or "").strip() in discarded:
+                del by_scope[scope_key]
+            for key in keys:
+                if str(by_username.get(key) or "").strip() in discarded:
+                    del by_username[key]
+            _save_endpoints(data)
+    for cid in discarded:
+        _report_owner_endpoint_reset(user_scope_id, account, cid, bool(paired))
+    if found:
+        return found
+    if paired:
+        save_telegram_chat_id(user_scope_id, username, paired[0])
+        return paired[0]
     return None
 
 
@@ -370,7 +486,16 @@ def save_whatsapp_chat_jid(
     username: Optional[str],
     chat_jid: str,
 ) -> None:
-    """Persist WhatsApp chat JID for this user. Called from WhatsApp bridge when a message is received."""
+    """Persist WhatsApp chat JID for this user. Called from WhatsApp bridge when a message is received.
+
+    Named boundary: unlike `save_telegram_chat_id`, this writer does not check the JID
+    against the account's registered numbers. Its one caller saves only for `explicit_allow`,
+    the owner's registered number (whatsapp_bridge.py, guarded by
+    tests/test_whatsapp_outbound_model.py), and it decides that from the Node-resolved
+    `fromE164`, which never reaches the store: an owner writing from an @lid JID is
+    recognised there, while the LID-to-number map is written only after this save. A check
+    here would refuse the owner's first @lid message. Re-measure if a second writer appears.
+    """
     if not chat_jid:
         return
     with _ENDPOINTS_LOCK:
@@ -427,6 +552,13 @@ def get_whatsapp_chat_jid(
     """
     Return WhatsApp chat JID for this user. Used by send_whatsapp tool.
     Lookup order: 1) persisted endpoints, 2) whitelist (phone_number -> JID).
+
+    Named boundary: the stored JID is returned without the repair `telegram_chat_id_of`
+    makes. Until v0.1.0a28 the bridge stored every accepted sender here, so an older install
+    can still hold a contact's JID; it can also hold the self-chat of the agent's own linked
+    number, which the earlier model used as the owner's chat. Dropping every JID that is not
+    a registered number would remove both, and with no number registered proactive WhatsApp
+    messages would then go to the web UI only. That trade is not made here.
     """
     with _ENDPOINTS_LOCK:
         data = _load_endpoints()

@@ -535,6 +535,7 @@
     "ovChLastUsed": "ล่าสุด",
     "ovEvChannelPaired": "ให้สิทธิ์เข้าถึงช่องทาง",
     "ovEvChannelUnpaired": "ยกเลิกสิทธิ์เข้าถึงช่องทาง",
+    "ovEvOwnerEndpointReset": "แก้ไขแชทที่ใช้ส่งข้อความถึงคุณ",
     "ovEvContactAccess": "เปลี่ยนสิทธิ์ผู้ช่วยของผู้ติดต่อ",
     "ovEvFrontOffice": "เปิดหรือปิดอินบาวด์",
     "ovEvIpBlocked": "บล็อก IP",

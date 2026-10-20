@@ -83,6 +83,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **Messages meant for you on Telegram no longer go to a contact.** When a contact you
+  allowed, a relay contact or somebody the open Inbound answered wrote to your agent on
+  Telegram, VAF took their chat as the place to reach you: your reminders, automation
+  results, background questions and the agent's notes to you went to that person and were
+  kept in their chat. Only your own paired Telegram now decides where VAF reaches you, and a
+  chat that pointed somewhere else is put back to your paired Telegram before VAF next
+  writes to you, with an entry in the security log ("Delivery chat corrected"). Restart VAF
+  after updating so the fix takes effect.
+
 - **Inbound answers contacts with their tools only.** When the agent answered a contact, it
   could still reach your memory, your contact book and your identity settings, any other
   tool the model named still ran, and a contact could make it send you a suggestion as if

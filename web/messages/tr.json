@@ -535,6 +535,7 @@
     "ovChLastUsed": "son",
     "ovEvChannelPaired": "Kanal erişimi verildi",
     "ovEvChannelUnpaired": "Kanal erişimi kaldırıldı",
+    "ovEvOwnerEndpointReset": "Teslim sohbeti düzeltildi",
     "ovEvContactAccess": "Kişinin asistan erişimi değiştirildi",
     "ovEvFrontOffice": "Inbound açıldı veya kapatıldı",
     "ovEvIpBlocked": "IP engellendi",

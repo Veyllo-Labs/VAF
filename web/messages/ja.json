@@ -535,6 +535,7 @@
     "ovChLastUsed": "最終",
     "ovEvChannelPaired": "チャンネルのアクセスを許可",
     "ovEvChannelUnpaired": "チャンネルのアクセスを取り消し",
+    "ovEvOwnerEndpointReset": "配信先チャットを修正",
     "ovEvContactAccess": "連絡先のアシスタント利用権限を変更",
     "ovEvFrontOffice": "インバウンドのオン／オフを切り替え",
     "ovEvIpBlocked": "IPをブロック",

@@ -535,6 +535,7 @@
     "ovChLastUsed": "마지막",
     "ovEvChannelPaired": "채널 접근 허용",
     "ovEvChannelUnpaired": "채널 접근 해제",
+    "ovEvOwnerEndpointReset": "메시지 받을 채팅 수정",
     "ovEvContactAccess": "연락처의 어시스턴트 접근 변경",
     "ovEvFrontOffice": "인바운드 켜짐 또는 꺼짐",
     "ovEvIpBlocked": "IP 차단",

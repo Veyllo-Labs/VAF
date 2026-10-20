@@ -535,6 +535,7 @@
     "ovChLastUsed": "zuletzt",
     "ovEvChannelPaired": "Kanalzugang erteilt",
     "ovEvChannelUnpaired": "Kanalzugang entzogen",
+    "ovEvOwnerEndpointReset": "Zustellchat korrigiert",
     "ovEvContactAccess": "Assistenten-Zugang eines Kontakts geändert",
     "ovEvFrontOffice": "Inbound ein- oder ausgeschaltet",
     "ovEvIpBlocked": "IP blockiert",

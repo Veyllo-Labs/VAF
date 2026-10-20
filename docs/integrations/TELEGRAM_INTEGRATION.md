@@ -120,7 +120,7 @@ In addition, any Telegram user whose ID is stored in a VAF user's **Contacts** a
 
 ### Proactive send (send_telegram)
 
-The agent can send you messages via Telegram (e.g. "send me the result via Telegram") using the `send_telegram` tool. Resolution uses: (1) persisted chat IDs (from a message you sent), (2) whitelist match (case-insensitive username, normalized scope), or (3) when there is exactly one whitelist entry, that verified account owner is used so they do not need a separate manual whitelist step. The bot recognizes the account that linked Telegram and can reach them without re-adding them to the whitelist.
+The agent can send you messages via Telegram (e.g. "send me the result via Telegram") using the `send_telegram` tool. Resolution (`messaging_connections.telegram_chat_id_of`) uses: (1) the stored chat (the one you last wrote from), only while it is one of your own paired Telegram ids, or (2) your first paired id. Your paired ids are the whitelist entries of your account: matched by scope when both sides carry one, by username (case-insensitive) otherwise. The relay whitelist and your contacts are never among them. The bridge offers the chat of every sender it admits, and the store keeps it only when it is one of your paired ids, so a contact, a relay contact, somebody the open Inbound answered or a group chat never becomes the place VAF reaches you. A stored chat that is not one of your paired ids (released versions stored every admitted sender's) is removed before anything is sent and recorded once as the security event `owner_endpoint_reset`.
 
 Proactive delivery now works in both the main VAF process and in background/subprocess runs such as scheduled automations. When the current process has the live Telegram bridge callback, `send_telegram` uses the normal in-process queue. When it does not, the tool falls back to a direct Telegram Bot API send using the configured bot token. This avoids false "sent" reports from background runs and makes delivery errors visible to the caller.
 
@@ -443,7 +443,7 @@ VAF tracks Telegram activity for session management:
    `telegram_config.enabled` and `telegram_config.verified` must be set and a bot token must be stored (the key ring, see Token Security).
 
 2. **Check that the user can be resolved:**
-   `send_telegram` still needs a valid chat target. The user must either have a persisted chat ID from an earlier Telegram message or match a whitelist entry.
+   `send_telegram` still needs a valid chat target: a whitelist entry of the user's own account with a Telegram id (paired in Settings, Connections, Telegram). A stored chat from an earlier message counts only while it is one of those ids.
 
 3. **Interpret the error literally:**
    If `send_telegram` returns a failure, delivery did not succeed. Background runs no longer silently treat a missing bridge callback as success.

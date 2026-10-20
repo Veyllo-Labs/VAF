@@ -1446,6 +1446,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
       case 'foreign_origin_blocked': return t('ovEvForeignOrigin');
       case 'channel_paired': return t('ovEvChannelPaired');
       case 'channel_unpaired': return t('ovEvChannelUnpaired');
+      case 'owner_endpoint_reset': return t('ovEvOwnerEndpointReset');
       case 'contact_access_changed': return t('ovEvContactAccess');
       case 'front_office_changed': return t('ovEvFrontOffice');
       case 'mail_high_risk_send_blocked': return t('ovEvMailSend');

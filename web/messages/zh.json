@@ -535,6 +535,7 @@
     "ovChLastUsed": "最近",
     "ovEvChannelPaired": "已授予渠道访问权限",
     "ovEvChannelUnpaired": "已撤销渠道访问权限",
+    "ovEvOwnerEndpointReset": "已更正接收消息的聊天",
     "ovEvContactAccess": "联系人的助手访问权限已更改",
     "ovEvFrontOffice": "入站已开启或关闭",
     "ovEvIpBlocked": "IP 已封禁",

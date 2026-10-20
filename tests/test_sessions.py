@@ -380,3 +380,57 @@ def test_the_machine_itself_keeps_its_tokenless_path(h):
     local = h.client(None)
     local.cookies.set("vaf_token", a)
     assert local.get("/api/probe").status_code == 200
+
+
+# ── what this process ended stays ended when the store goes away ─────────────────
+
+def _store_goes_away(monkeypatch):
+    import contextlib
+
+    import vaf.auth.database as database
+    from vaf.auth import permissions, sessions
+
+    @contextlib.asynccontextmanager
+    async def _down(*_a, **_k):
+        raise ConnectionError("the database is gone")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(database, "get_auth_db", _down)
+    permissions.invalidate_permissions_cache()
+    sessions.forget_cached_sessions()
+
+
+def test_an_ended_session_stays_ended_when_the_store_cannot_be_asked(h, monkeypatch):
+    """A store that cannot be asked keeps a token (a database restart must not sign every
+    device out), but not one whose session this process ended: a burst that takes the
+    connections must not let a signed-out token back in. MUTATION: ask the store before the
+    remembered endings, or stop remembering them - red."""
+    _id, a, b = _two_devices(h)
+    h.client("192.168.11.1").post("/api/auth/logout", headers={"Authorization": f"Bearer {a}"})
+    c = h.sign_in(h.client("192.168.11.3"), "alice", "alice-password-1", None)
+    r = h.client("192.168.11.3").post(
+        "/api/auth/change-password", headers={"Authorization": f"Bearer {c}"},
+        json={"current_password": "alice-password-1", "new_password": "alice-password-2"})
+    assert r.status_code == 200
+    _store_goes_away(monkeypatch)
+    assert _probe(h, a) == 401          # logged out here
+    assert _probe(h, b) == 401          # ended by the password change here
+    assert _probe(h, c) == 200          # still live, the store cannot be asked: kept
+
+
+def test_the_sign_out_route_remembers_an_ending_written_elsewhere(h, monkeypatch):
+    """The terminal's reset ends the rows in its own process; the service, told through the
+    sign-out route, holds them too. MUTATION: drop remember_account_endings - red."""
+    from sqlalchemy import update
+    from sqlalchemy.orm import Session
+
+    from vaf.auth import sessions
+    from vaf.auth.models import UserSession
+    user_id, a, _b = _two_devices(h)
+    with Session(h.engine) as s:                      # another process's write
+        s.execute(update(UserSession).values(is_active=False))
+        s.commit()
+    sessions.forget_cached_sessions()
+    assert h.client(None).post(f"/api/users/{user_id}/sign-out").status_code == 200
+    _store_goes_away(monkeypatch)
+    assert _probe(h, a) == 401

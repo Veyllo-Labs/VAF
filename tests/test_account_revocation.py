@@ -196,6 +196,10 @@ def _fake_user_route(monkeypatch, *, active=True, role="user", tools=None):
         def scalar_one_or_none(self):
             return user
 
+        def scalars(self):
+            # The ending's UPDATE ... RETURNING token_hash (vaf/auth/sessions.py).
+            return SimpleNamespace(all=lambda: [])
+
     class _Session:
         async def execute(self, _query):
             return _Result()

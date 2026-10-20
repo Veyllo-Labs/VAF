@@ -171,7 +171,8 @@ def _own_change(monkeypatch, user, caller_user_id=None):
     class _Db:
         async def execute(self, *_a, **_k):
             # rowcount: the change also ends the account's other sessions (an UPDATE).
-            return SimpleNamespace(scalar_one_or_none=lambda: user, rowcount=0)
+            return SimpleNamespace(scalar_one_or_none=lambda: user, rowcount=0,
+                                   scalars=lambda: SimpleNamespace(all=lambda: []))
 
         async def commit(self):
             user.committed = True

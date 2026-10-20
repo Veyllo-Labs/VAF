@@ -25,7 +25,11 @@ ending in this process, so an ending here takes effect on the next request.
 NAMED BOUNDARIES:
 - A store that cannot be asked keeps the token (`unknown`), the same desktop default as the
   account standing (vaf/auth/permissions.py): a stopped database stack means nobody can sign
-  in either.
+  in either. Failing closed instead would sign every device out on each database restart,
+  and the refused cookie is deleted (vaf/auth/middleware.py), so that sign-out would stick.
+  What this process ended stays ended regardless: the hashes of the sessions it ended are
+  remembered (`_ended`, bounded) and answered `ended` without asking the store, so a token
+  signed out here cannot ride on a store that went away afterwards.
 - Another process (the terminal's `vaf users reset-password`) ends the rows in the database
   and then asks the running service, through the loopback lane the CLI uses
   (`POST /api/users/<id>/sign-out`), to forget its cache and close the account's sockets: a
@@ -47,6 +51,27 @@ UNKNOWN = "unknown"
 
 _cache: dict = {}        # token hash -> (monotonic ts, standing)
 _cache_lock = threading.Lock()
+# Hashes of the sessions this process ended, newest last. A session never comes back (a
+# reactivation revives none), so the answer stays right; bounded, oldest dropped first: a
+# token lives at most 30 days, and the store answers for anything dropped.
+_ended: dict = {}
+_ENDED_MAX = 20_000
+
+
+def _remember_ended(hashes) -> None:
+    with _cache_lock:
+        for h in hashes:
+            if h:
+                _ended.pop(h, None)
+                _ended[h] = True
+        while len(_ended) > _ENDED_MAX:
+            _ended.pop(next(iter(_ended)))
+
+
+def forget_ended_sessions() -> None:
+    """Testing hook."""
+    with _cache_lock:
+        _ended.clear()
 
 
 def _ttl() -> float:
@@ -91,6 +116,8 @@ async def session_standing_async(token: str) -> str:
     key = token_hash_for_db(str(token or ""))
     now = time.monotonic()
     with _cache_lock:
+        if key in _ended:
+            return ENDED
         hit = _cache.get(key)
         if hit and now - hit[0] < _ttl():
             return hit[1]
@@ -125,13 +152,15 @@ async def end_session(db, token: str) -> int:
     from vaf.auth.crypto import token_hash_for_db
     from vaf.auth.models import UserSession
 
+    key = token_hash_for_db(str(token or ""))
     result = await db.execute(
         update(UserSession)
-        .where(UserSession.token_hash == token_hash_for_db(str(token or "")),
+        .where(UserSession.token_hash == key,
                UserSession.is_active == True)  # noqa: E712 - SQLAlchemy column comparison
         .values(is_active=False)
         .execution_options(synchronize_session=False))
     await db.commit()
+    _remember_ended([key])
     forget_cached_sessions()
     return int(result.rowcount or 0)
 
@@ -150,10 +179,29 @@ async def end_account_sessions(db, user_id, *, keep_token: Optional[str] = None)
     if keep_token:
         stmt = stmt.where(UserSession.token_hash != token_hash_for_db(keep_token))
     result = await db.execute(stmt.values(is_active=False)
+                              .returning(UserSession.token_hash)
                               .execution_options(synchronize_session=False))
+    ended = [h for h in result.scalars().all()]
     await db.commit()
+    _remember_ended(ended)
     forget_cached_sessions()
-    return int(result.rowcount or 0)
+    return len(ended)
+
+
+async def remember_account_endings(db, user_id) -> None:
+    """Note every ended, unexpired session of an account as ended in THIS process: for an
+    ending another process wrote (the terminal's reset), so the service holds it even when
+    the store cannot be asked later."""
+    from sqlalchemy import select
+
+    from vaf.auth.models import UserSession
+    rows = (await db.execute(
+        select(UserSession.token_hash)
+        .where(UserSession.user_id == user_id,
+               UserSession.is_active == False,  # noqa: E712 - SQLAlchemy column comparison
+               UserSession.expires_at > _utc_naive()))).scalars().all()
+    _remember_ended(rows)
+    forget_cached_sessions()
 
 
 async def signed_in_from(db, username: str, ip: str, *, days: int = 30) -> bool:

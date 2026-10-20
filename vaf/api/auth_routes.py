@@ -644,26 +644,42 @@ async def _sign_in(body: LoginRequest, request: Request, response: Response,
     """The login past the account window. Sets attempt["failed"] for a wrong password or an
     unknown name, the only outcomes the account window keeps."""
     from vaf.auth.rate_limit import record_account_failure
+
+    def _refuse(detail: str):
+        attempt["failed"] = True
+        if attempt["mark"] is None:
+            record_account_failure(username_clean)
+        _log_auth_failure("login_failed", request, username=username_clean, detail=detail)
+        return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
+
+    # The lookup, the password check and the writes are three steps, and no database session
+    # is open while the check waits: the Argon2 pool has two workers, so a burst of logins
+    # queues there, and logins from many addresses for many names pass both windows. Each one
+    # held its session, a connection on the service's off-main-thread engines, for the whole
+    # wait (measured: 40 sessions open at once for 40 logins), so a burst could take the
+    # connections the session and standing checks of every other request need.
     async with get_auth_db() as db:
-        result = await db.execute(
-            select(LocalUser).where(
+        row = (await db.execute(
+            select(LocalUser.id, LocalUser.password_hash).where(
                 func.lower(LocalUser.username) == username_clean.lower(),
                 LocalUser.is_active == True,
             )
-        )
-        user = result.scalar_one_or_none()
-        # Exactly one Argon2 verification per login that passes the windows, a name without an
-        # account included (against a dummy hash), so the answer's timing does not say which
-        # names exist; on its own pool, so logins never stall the chats on this loop.
-        password_ok = await verify_password_async(user.password_hash if user else None,
-                                                  body.password or "")
-        if not user or not password_ok:
-            attempt["failed"] = True
-            if attempt["mark"] is None:
-                record_account_failure(username_clean)
-            _log_auth_failure("login_failed", request, username=username_clean,
-                              detail="unknown user" if not user else "wrong password")
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
+        )).first()
+    # Exactly one Argon2 verification per login that passes the windows, a name without an
+    # account included (against a dummy hash), so the answer's timing does not say which
+    # names exist; on its own pool, so logins never stall the chats on this loop.
+    password_ok = await verify_password_async(row.password_hash if row else None,
+                                              body.password or "")
+    if not row or not password_ok:
+        raise _refuse("unknown user" if not row else "wrong password")
+    async with get_auth_db() as db:
+        user = (await db.execute(
+            select(LocalUser).where(LocalUser.id == row.id, LocalUser.is_active == True)
+        )).scalar_one_or_none()
+        # Deactivated or given a new password while the check ran: the password that was
+        # checked is not this account's any more.
+        if user is None or user.password_hash != row.password_hash:
+            raise _refuse("account changed during the login")
         # After the password, so a stranger learns nothing about a row; before the terminal
         # door's hash copy below and before any token, so a hash set in the database alone
         # neither signs in nor unlocks the terminal.

@@ -224,7 +224,8 @@ def test_a_login_on_a_row_changed_outside_vaf_is_refused_after_the_password(seal
 
     class _Db:
         async def execute(self, *_a, **_k):
-            return SimpleNamespace(scalar_one_or_none=lambda: user)
+            # first(): the login's lookup reads the id and the hash; the row serves as both.
+            return SimpleNamespace(scalar_one_or_none=lambda: user, first=lambda: user)
 
         async def commit(self):
             pass

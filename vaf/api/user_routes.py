@@ -519,8 +519,10 @@ async def sign_out_everywhere(user_id: str, _: Dict[str, Any] = Depends(require_
         user = (await db.execute(select(LocalUser).where(LocalUser.id == wanted))).scalar_one_or_none()
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-        from vaf.auth.sessions import end_account_sessions
+        from vaf.auth.sessions import end_account_sessions, remember_account_endings
         ended = await end_account_sessions(db, user.id)
+        # The terminal's reset ended the rows in its own process: this one holds them too.
+        await remember_account_endings(db, user.id)
         from vaf.api.auth_routes import close_account_sockets
         close_account_sockets(str(user.user_scope_id or ""))
     return {"ended": ended}

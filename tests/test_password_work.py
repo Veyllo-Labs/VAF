@@ -132,3 +132,71 @@ def test_the_dummy_hash_costs_what_a_real_one_does():
     from vaf.auth import crypto
     assert crypto._ph.check_needs_rehash(crypto._DUMMY_HASH) is False
     assert crypto._verify_or_dummy(None, "anything") is False
+
+
+def test_a_login_holds_no_database_session_while_it_waits_for_argon2(h, monkeypatch):
+    """The Argon2 pool has two workers, so a burst of logins queues there, and logins from
+    many addresses for many names pass both windows. Each queued login held its database
+    session (a connection: the service runs the backend off the main thread, on NullPool
+    engines) for the whole wait, so a burst could take the connections every other request,
+    the session and standing checks included, needs. MUTATION: verify inside the session
+    again - red."""
+    import asyncio
+    import contextlib
+
+    import httpx
+
+    import vaf.api.auth_routes as auth_routes
+    h.add_user("alice", "alice-password-1")
+    inner = auth_routes.get_auth_db
+    open_now, peak = [0], [0]
+
+    @contextlib.asynccontextmanager
+    async def _counting(*a, **k):
+        async with inner(*a, **k) as db:
+            open_now[0] += 1
+            peak[0] = max(peak[0], open_now[0])
+            try:
+                yield db
+            finally:
+                open_now[0] -= 1
+
+    monkeypatch.setattr(auth_routes, "get_auth_db", _counting)
+    app = h.app()
+
+    async def main():
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 40000))
+        async with httpx.AsyncClient(transport=transport, base_url="http://vaf") as c:
+            async def one(i):
+                return await c.post("/api/auth/login",
+                                    json={"username": f"name-{i}", "password": "guess"},
+                                    headers={"X-Forwarded-For": f"10.31.{i // 200}.{i % 200 + 1}"})
+            return await asyncio.gather(*[one(i) for i in range(40)])
+
+    statuses = [r.status_code for r in asyncio.run(main())]
+    assert statuses.count(401) == 40, statuses
+    assert peak[0] <= 2, f"{peak[0]} database sessions were open at once"
+
+
+def test_a_password_changed_during_the_check_is_not_signed_in(h, monkeypatch):
+    """The lookup and the writes are separate steps now: when the account got a new password
+    while the old one was being checked, the login fails. MUTATION: drop the comparison of
+    the hash read before and after - red."""
+    from sqlalchemy.orm import Session
+
+    import vaf.api.auth_routes as auth_routes
+    from vaf.auth.crypto import hash_password
+    h.add_user("alice", "alice-password-1", no_second_factor=True)
+    real = auth_routes.verify_password_async
+
+    async def _while_checking(password_hash, password):
+        ok = await real(password_hash, password)
+        with Session(h.engine) as s:
+            user = s.get(type(h.user("alice")), h.user("alice").id)
+            user.password_hash = hash_password("alice-password-2")
+            s.commit()
+        return ok
+
+    monkeypatch.setattr(auth_routes, "verify_password_async", _while_checking)
+    r = h.login(h.client("192.168.10.9"), "alice", "alice-password-1")
+    assert r.status_code == 401

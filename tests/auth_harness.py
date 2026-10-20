@@ -120,9 +120,9 @@ class Harness:
         from vaf.auth import second_factor
         monkeypatch.setattr(second_factor, "_last_step", {})
         permissions.invalidate_permissions_cache()
-        with contextlib.suppress(Exception):
-            from vaf.auth import sessions
-            sessions.forget_cached_sessions()
+        from vaf.auth import sessions
+        sessions.forget_cached_sessions()
+        monkeypatch.setattr(sessions, "_ended", {})
 
     @staticmethod
     def _trackers(rate_limit):

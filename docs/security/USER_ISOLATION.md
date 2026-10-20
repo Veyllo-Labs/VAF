@@ -490,7 +490,9 @@ there too - cleared before the commit, a lookup in between re-cached the old ans
   allowlists), and that the token's own session has not ended (`vaf/auth/sessions.py`). A
   network client then gets 401 (a socket: close code 4001, and a `ws_rejected` event); the
   real localhost client falls back to the tokenless lane as before. An unreachable auth
-  store keeps the token: the same desktop default as the allowlist lookup.
+  store keeps the token: the same desktop default as the allowlist lookup. A session this
+  process ended (a logout, a password change, a reset, a sign-out) stays refused even then:
+  the hashes of the sessions it ended are remembered in the process.
 - **Sessions end.** Every completed sign-in opens one session row for exactly its token
   (`open_session`, the one writer; each token carries a unique `jti`). A logout ends the
   presented token's session; the account's own password change ends every other session
